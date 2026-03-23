@@ -2,7 +2,7 @@
 
 - Status: draft
 - Last updated: 2026-03-23
-- Related specs: `docs/specs/geometry-policy-v0.md`, `docs/specs/exchange-bc-policy-v0.md`
+- Related specs: `docs/specs/geometry-policy-v0.md`, `docs/specs/exchange-bc-policy-v0.md`, `docs/specs/material-assignment-and-spatial-fields-v0.md`
 
 ## 1. Problem statement
 
@@ -20,9 +20,26 @@ They are not energy terms by themselves, but errors here invalidate material ass
 
 Imported geometry is voxelized onto a regular grid, and regions become masks over cells.
 
+However, regions are not sufficient as the sole representation of spatially varying material
+coefficients.
+
+The intended Fullmag model is:
+
+- regions for topology,
+- material assignment for piecewise-constant domain ownership,
+- parameter fields for smooth or sampled spatial variation.
+
+This avoids an architecture where gradients of `Ms`, `A`, or `alpha` require artificial
+fragmentation into many regions.
+
 ### 3.2 FEM
 
 Imported geometry is meshed, and regions become domain markers over elements or mesh attributes.
+
+The same semantic split must hold:
+
+- topology by region/domain markers,
+- coefficient variability by piecewise constants or coefficient fields.
 
 ### 3.3 Hybrid
 
@@ -33,6 +50,9 @@ Hybrid execution needs explicit projection semantics between FEM mesh representa
 - The Python API must keep `ImportedGeometry`, `Region`, `Material`, and `Ferromagnet` distinct.
 - `ProblemIR` stores geometry references and named region bindings without forcing a grid or element layout.
 - The planner owns voxelization, meshing, and projection decisions.
+- The long-term architecture must keep region topology separate from continuous coefficient
+  variation; this is now specified explicitly in
+  `docs/specs/material-assignment-and-spatial-fields-v0.md`.
 
 ## 5. Validation strategy
 
@@ -59,3 +79,6 @@ Hybrid execution needs explicit projection semantics between FEM mesh representa
 - No production geometry import or mesh repair pipeline exists yet.
 - Curved-geometry fidelity and tolerance policy are still deferred.
 - This note documents semantic intent only; numerical implementation remains future work.
+- The current bootstrap implementation still lowers only a single realized FDM material payload and
+  does not yet implement the full region/material/parameter-field architecture described in the
+  related material-assignment spec.

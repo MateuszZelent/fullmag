@@ -27,6 +27,7 @@ The web app is therefore not only a post-run dashboard. It is the live observabi
 - **Live visualization is first-class.** The first meaningful frontend slice must support watching a running simulation, not only opening finished artifacts.
 - **One session model for local and remote.** Local `fullmag script.py` and future cluster jobs should expose the same run/session concepts and as much of the same API as possible.
 - **Physics docs stay canonical in `docs/physics/`.** The frontend renders them; it does not re-author them.
+- **Canonical sampled-output containers are `.zarr` and `.h5`.** Current JSON/CSV artifacts are bootstrap-only and must be treated as a temporary compatibility layer.
 
 ## Desired user experience
 
@@ -96,6 +97,12 @@ That means the frontend must never:
   - `m_final.json`
   - `fields/m/*.json`
   - `fields/H_ex/*.json`
+
+Important clarification:
+
+- these JSON/CSV outputs are the current bootstrap reality,
+- they are not the long-term canonical sampled-output contract,
+- the target application contract is `.zarr` and `.h5` for sampled scientific run data.
 
 Because of that, the frontend should start with a **realistic live FDM control room** for the current executable subset, not with a speculative all-backend UI.
 
@@ -274,6 +281,12 @@ The planner or runner should own sampling cadence. The frontend only consumes wh
 ## Frontend data model
 
 The frontend needs a **normalized view model**, but it must be explicitly adapted from backend artifacts rather than treated as the native artifact schema.
+
+The adapter layer must be designed to support three storage generations:
+
+- current bootstrap JSON/CSV,
+- canonical `.zarr`,
+- canonical `.h5`.
 
 ### Raw artifact reality today
 

@@ -92,3 +92,29 @@ Both FDM and FEM backends must:
 2. Store fields in the same SI units regardless of internal representation.
 3. Report `time`, `step`, and `solver_dt` with every output snapshot.
 4. Include a provenance header linking the output to the `ProblemIR` and `ExecutionPlanIR` that produced it.
+
+## 7. Container independence
+
+The canonical observable names in this document are independent of storage container.
+
+Current bootstrap reality:
+
+- some outputs are still written as JSON/CSV.
+
+Canonical product target:
+
+- sampled scientific outputs should be storable in `.zarr` and `.h5`.
+- OVF / OVF2 is the required interoperability format for field snapshots in OOMMF/MuMax-style
+  workflows.
+
+The observable names and SI semantics from this document must stay identical regardless of whether
+the concrete container is JSON, CSV, Zarr, or HDF5.
+
+Container-role clarification:
+
+- `.zarr` is the preferred native container for time-sampled run data.
+- `.h5` is the preferred portable scientific package/export container.
+- OVF/OVF2 is the interchange format for individual field snapshots, especially for regular-grid FDM
+  data.
+- FEM outputs may provide OVF-compatible sampled field exports, but the canonical FEM artifact model
+  must also preserve coordinates, connectivity, and FE metadata outside the OVF abstraction.

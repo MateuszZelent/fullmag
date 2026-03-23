@@ -237,7 +237,9 @@ backend.
 - No adaptive time stepping yet.
 - No demag, DMI, anisotropy, Zeeman, torque terms, or thermal noise.
 - No FEM or hybrid execution path.
-- The current artifact layer is JSON/CSV only; HDF5/VTK/XDMF export is future work.
+- The current artifact layer is JSON/CSV only as a bootstrap implementation.
+- The canonical product target for sampled run outputs is `.zarr` and `.h5`; JSON/CSV should be
+  treated as transitional compatibility output, not the final scientific storage contract.
 - The current application smoke path is still headless; the live browser control room launched
   from `fullmag script.py` is planned but not implemented yet.
 - The production CUDA FDM backend is not implemented yet; the current public executable path still

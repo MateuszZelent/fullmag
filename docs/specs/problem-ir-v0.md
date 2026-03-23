@@ -58,6 +58,13 @@ Current bootstrap coverage includes:
 - backend target and execution mode
 - execution precision policy
 
+Current limitation:
+
+- the bootstrap IR separates `RegionIR` and `MaterialIR`, but it does not yet contain the full
+  semantic model for heterogeneous material assignment and spatial parameter fields.
+- that long-term policy is defined in:
+  - `docs/specs/material-assignment-and-spatial-fields-v0.md`
+
 
 ## `GeometryIR`
 
@@ -199,3 +206,9 @@ Rust-side validation currently guarantees:
 - `LLG` parameters are structurally valid (see § DynamicsIR::Llg above),
 - hybrid backend and hybrid mode stay coupled,
 - only Python-authored IR is accepted by the bootstrap CLI and PyO3 helper.
+
+Future IR expansion should preserve this rule:
+
+- shared `ProblemIR` stores semantic relationships between regions, materials, and parameter
+  variation,
+- execution plans store the backend-specific realized cell/element data.

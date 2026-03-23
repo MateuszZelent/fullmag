@@ -95,6 +95,12 @@ This means the public layer can expose:
 - discretization hints,
 - execution policy.
 
+Important clarification:
+
+- regions define topology and domain structure,
+- materials define base material identities,
+- smooth spatial parameter variation must not be forced through artificial region fragmentation.
+
 It must not expose backend-specific storage primitives as shared concepts, such as:
 
 - direct cell indexing,
@@ -503,7 +509,32 @@ At the application level, artifacts must always preserve:
 - solver/version provenance,
 - sampling context.
 
-The current storage format may evolve, but the product contract around provenance must not weaken.
+Canonical artifact-container policy:
+
+- `.zarr` is the primary native container for time-sampled run data:
+  - chunked field snapshots,
+  - scalar traces,
+  - append-friendly live or incremental output.
+- `.h5` / HDF5 is the canonical portable container for packaged scientific results and export.
+- OVF / OVF2 compatibility is a first-class interoperability requirement:
+  - regular-grid FDM field snapshots must be exportable to OVF without semantic loss,
+  - Fullmag should be able to import and export OVF-compatible field snapshots for OOMMF/MuMax
+    workflows,
+  - FEM field snapshots may expose an OVF-compatible view when the target data model is representable
+    as sampled vector values, but OVF is not the canonical raw container for FEM run state because
+    Fullmag must also preserve mesh topology and finite-element metadata.
+- JSON may still be used for lightweight metadata/manifests.
+
+Important clarification:
+
+- the current JSON/CSV artifact writer is a bootstrap implementation only,
+- JSON/CSV must not be treated as the long-term canonical format for sampled scientific outputs,
+- the long-term product contract is that sampled outputs should be representable in `.zarr` and
+  `.h5`,
+- OVF remains an interchange/export contract, not the native multi-time-step storage contract.
+
+The storage implementation may evolve, but the product contract around provenance, naming, and
+scientific usability must not weaken.
 
 ## 11. Documentation Architecture
 

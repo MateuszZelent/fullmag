@@ -702,10 +702,18 @@ Artifacts must not be backend-specific by default.
 Recommended artifact split:
 
 - metadata JSON
-- dense field arrays in HDF5
+- dense field arrays in Zarr/HDF5
 - mesh snapshots in VTK/XDMF or equivalent
-- regular-grid snapshots in OVF/HDF5
-- scalar traces in CSV/Parquet
+- regular-grid snapshots in OVF/Zarr/HDF5
+- scalar traces in Zarr/HDF5
+
+Current honest bootstrap note:
+
+- the repository still writes JSON/CSV for the first executable slice,
+- but JSON/CSV are transitional bootstrap formats,
+- the canonical product target for sampled outputs is `.zarr` and `.h5`,
+- OVF / OVF2 compatibility is still required for field-snapshot interchange with OOMMF/MuMax-style
+  tooling, especially for regular-grid FDM outputs.
 
 ### 14.3 Required provenance
 
