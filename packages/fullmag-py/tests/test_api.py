@@ -10,7 +10,7 @@ import fullmag as fm
 
 class ProblemApiTests(unittest.TestCase):
     def _build_problem(self) -> fm.Problem:
-        geometry = fm.ImportedGeometry("track.step")
+        geometry = fm.Box(size=(200e-9, 20e-9, 5e-9), name="track")
         material = fm.Material(
             name="Py",
             Ms=800e3,
@@ -23,7 +23,7 @@ class ProblemApiTests(unittest.TestCase):
             name="track",
             geometry=geometry,
             material=material,
-            m0=fm.uniform((1.0, 0.0, 0.0)),
+            m0=fm.init.uniform((1.0, 0.0, 0.0)),
         )
         return fm.Problem(
             name="dw_track",
@@ -50,13 +50,32 @@ class ProblemApiTests(unittest.TestCase):
         problem = self._build_problem()
         ir = problem.to_ir()
 
+        self.assertEqual(ir["ir_version"], "0.2.0")
         self.assertEqual(ir["problem_meta"]["script_language"], "python")
         self.assertEqual(ir["backend_policy"]["requested_backend"], "auto")
         self.assertEqual(ir["validation_profile"]["execution_mode"], "strict")
-        self.assertEqual(ir["geometry"]["imports"][0]["format"], "step")
+        self.assertEqual(ir["geometry"]["entries"][0]["kind"], "box")
+        self.assertEqual(ir["geometry"]["entries"][0]["size"], [200e-9, 20e-9, 5e-9])
         self.assertEqual(ir["energy_terms"][2]["kind"], "interfacial_dmi")
         self.assertEqual(ir["dynamics"]["integrator"], "heun")
         self.assertEqual(ir["sampling"]["outputs"][0]["name"], "m")
+
+    def test_random_initializer_serializes_to_ir(self) -> None:
+        initializer = fm.init.random(seed=42)
+
+        self.assertEqual(initializer.to_ir(), {"kind": "random_seeded", "seed": 42})
+
+    def test_cylinder_serializes_to_ir(self) -> None:
+        geometry = fm.Cylinder(radius=50e-9, height=10e-9, name="pillar")
+
+        self.assertEqual(
+            geometry.to_ir(),
+            {"kind": "cylinder", "name": "pillar", "radius": 50e-9, "height": 10e-9},
+        )
+
+    def test_from_function_is_deferred_stub(self) -> None:
+        with self.assertRaises(NotImplementedError):
+            fm.init.from_function(lambda point: point)
 
     def test_simulation_overrides_backend_and_mode(self) -> None:
         problem = self._build_problem()
@@ -72,7 +91,7 @@ class ProblemApiTests(unittest.TestCase):
         import fullmag as fm
 
         def build():
-            geom = fm.ImportedGeometry("track.step")
+            geom = fm.Box(size=(200e-9, 20e-9, 5e-9), name="track")
             material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
             magnet = fm.Ferromagnet(name="track", geometry=geom, material=material)
             return fm.Problem(
@@ -98,7 +117,7 @@ class ProblemApiTests(unittest.TestCase):
         script = """
         import fullmag as fm
 
-        geom = fm.ImportedGeometry("track.step")
+        geom = fm.Box(size=(200e-9, 20e-9, 5e-9), name="track")
         material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
         magnet = fm.Ferromagnet(name="track", geometry=geom, material=material)
         problem = fm.Problem(

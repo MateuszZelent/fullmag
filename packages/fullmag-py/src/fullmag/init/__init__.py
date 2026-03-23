@@ -1,3 +1,19 @@
-from .magnetization import UniformMagnetization, uniform
+from .magnetization import (
+    InitialMagnetization,
+    RandomMagnetization,
+    SampledMagnetization,
+    UniformMagnetization,
+    from_function,
+    random,
+    uniform,
+)
 
-__all__ = ["UniformMagnetization", "uniform"]
+__all__ = [
+    "InitialMagnetization",
+    "RandomMagnetization",
+    "SampledMagnetization",
+    "UniformMagnetization",
+    "from_function",
+    "random",
+    "uniform",
+]

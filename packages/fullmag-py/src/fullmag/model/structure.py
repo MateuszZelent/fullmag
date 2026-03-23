@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
 
 from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive
-from fullmag.init import UniformMagnetization, uniform
-from fullmag.model.geometry import ImportedGeometry
+from fullmag.init import InitialMagnetization, uniform
+from fullmag.model.geometry import Geometry
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +40,7 @@ class Material:
 @dataclass(frozen=True, slots=True)
 class Region:
     name: str
-    geometry: ImportedGeometry
+    geometry: Geometry
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
@@ -53,10 +52,10 @@ class Region:
 @dataclass(frozen=True, slots=True)
 class Ferromagnet:
     name: str
-    geometry: ImportedGeometry
+    geometry: Geometry
     material: Material
     region: Region | None = None
-    m0: UniformMagnetization | None = None
+    m0: InitialMagnetization | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))

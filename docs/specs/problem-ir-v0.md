@@ -57,6 +57,55 @@ Current bootstrap coverage includes:
 - FDM/FEM/Hybrid discretization hints
 - backend target and execution mode
 
+
+## `GeometryIR`
+
+`GeometryIR` stores a canonical list of geometry entries:
+
+- imported geometry references,
+- analytic primitives (`box`, `cylinder`).
+
+Canonical shape:
+
+```json
+{
+  "geometry": {
+    "entries": [
+      {"kind": "imported_geometry", "name": "track", "source": "track.step", "format": "step"},
+      {"kind": "box", "name": "strip", "size": [2.0e-7, 2.0e-8, 5.0e-9]},
+      {"kind": "cylinder", "name": "pillar", "radius": 5.0e-8, "height": 1.0e-8}
+    ]
+  }
+}
+```
+
+Validation rules:
+
+- at least one geometry entry is required,
+- geometry names must be unique across all entry kinds,
+- `Box.size` components must be positive,
+- `Cylinder.radius` and `Cylinder.height` must be positive.
+
+## `InitialMagnetizationIR`
+
+Canonical magnetization variants:
+
+- `Uniform { value: [f64; 3] }`,
+- `RandomSeeded { seed: u64 }`,
+- `SampledField { values: Vec<[f64; 3]> }`.
+
+Public Python mapping:
+
+- `fm.init.uniform(...)` -> `Uniform`,
+- `fm.init.random(seed=...)` -> `RandomSeeded`,
+- `fm.init.from_function(...)` -> `SampledField` once lowering-time sampling is implemented.
+
+Validation rules:
+
+- `Uniform.value` must contain exactly 3 components,
+- `RandomSeeded.seed` must be positive,
+- `SampledField.values` must be non-empty.
+
 ## `DynamicsIR::Llg` parameter policy
 
 The LLG dynamics section carries the parameters needed for time integration.

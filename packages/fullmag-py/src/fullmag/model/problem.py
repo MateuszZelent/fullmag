@@ -12,9 +12,9 @@ from fullmag.model.energy import Demag, Exchange, InterfacialDMI, Zeeman
 from fullmag.model.outputs import SaveField, SaveScalar
 from fullmag.model.structure import Ferromagnet, Material, Region
 
-IR_VERSION = "0.1.0"
-API_VERSION = "0.1.0"
-SERIALIZER_VERSION = "0.1.0"
+IR_VERSION = "0.2.0"
+API_VERSION = "0.2.0"
+SERIALIZER_VERSION = "0.2.0"
 
 
 class ExecutionMode(str, Enum):
@@ -69,7 +69,7 @@ class Problem:
     ) -> dict[str, object]:
         materials = self._collect_materials()
         regions = self._collect_regions()
-        geometry_imports = self._collect_geometry_imports()
+        geometries = self._collect_geometries()
         source_hash = sha256(script_source.encode("utf-8")).hexdigest() if script_source else None
 
         return {
@@ -87,7 +87,7 @@ class Problem:
                 "backend_revision": None,
                 "seeds": [],
             },
-            "geometry": {"imports": [geometry.to_ir() for geometry in geometry_imports]},
+            "geometry": {"entries": [geometry.to_ir() for geometry in geometries]},
             "regions": [region.to_ir() for region in regions],
             "materials": [material.to_ir() for material in materials],
             "magnets": [magnet.to_ir() for magnet in self.magnets],
@@ -101,26 +101,26 @@ class Problem:
             "validation_profile": {"execution_mode": execution_mode.value},
         }
 
-    def _collect_geometry_imports(self) -> list[object]:
-        imports: list[object] = []
+    def _collect_geometries(self) -> list[object]:
+        geometries: list[object] = []
         seen: set[str] = set()
         for magnet in self.magnets:
             name = magnet.geometry.geometry_name
             if name not in seen:
-                imports.append(magnet.geometry)
+                geometries.append(magnet.geometry)
                 seen.add(name)
-        return imports
+        return geometries
 
     def _validate_geometry_consistency(self) -> None:
-        seen: dict[str, tuple[str, str]] = {}
+        seen: dict[str, dict[str, object]] = {}
         for magnet in self.magnets:
             geometry = magnet.geometry
-            signature = (geometry.source, geometry.to_ir()["format"])
-            if geometry.geometry_name in seen and seen[geometry.geometry_name] != signature:
+            geometry_ir = geometry.to_ir()
+            if geometry.geometry_name in seen and seen[geometry.geometry_name] != geometry_ir:
                 raise ValueError(
-                    f"geometry '{geometry.geometry_name}' is defined with conflicting sources"
+                    f"geometry '{geometry.geometry_name}' is defined multiple times with different values"
                 )
-            seen[geometry.geometry_name] = signature
+            seen[geometry.geometry_name] = geometry_ir
 
     def _collect_materials(self) -> list[Material]:
         materials: list[Material] = []

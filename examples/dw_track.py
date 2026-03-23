@@ -2,7 +2,7 @@ import fullmag as fm
 
 
 def build() -> fm.Problem:
-    geometry = fm.ImportedGeometry("track.step")
+    geometry = fm.Box(size=(200e-9, 20e-9, 5e-9), name="track")
     material = fm.Material(
         name="Py",
         Ms=800e3,
@@ -15,7 +15,7 @@ def build() -> fm.Problem:
         name="track",
         geometry=geometry,
         material=material,
-        m0=fm.uniform((1.0, 0.0, 0.0)),
+        m0=fm.init.uniform((1.0, 0.0, 0.0)),
     )
 
     return fm.Problem(

@@ -17,6 +17,12 @@ def require_positive(value: float, field_name: str) -> float:
     return value
 
 
+def require_positive_int(value: int, field_name: str) -> int:
+    if value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return int(value)
+
+
 def require_non_negative(value: float, field_name: str) -> float:
     if value < 0.0:
         raise ValueError(f"{field_name} must be non-negative")

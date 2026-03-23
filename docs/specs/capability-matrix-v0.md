@@ -18,8 +18,11 @@ The capability matrix answers two questions before execution:
 | Feature | FDM | FEM | Hybrid | Modes | Notes |
 |---------|-----|-----|--------|-------|-------|
 | Imported geometry reference | planned | planned | planned | strict, extended, hybrid | Shared semantics only |
+| Analytic primitive geometry (`Box`, `Cylinder`) | planned | planned | planned | strict, extended, hybrid | Planner-owned voxelization/meshing from shared primitives |
 | Material constants (`Ms`, `A`, `alpha`, `Ku1`, `anisU`) | planned | planned | planned | strict, extended, hybrid | Serialized in canonical IR |
 | Ferromagnet + uniform `m0` | planned | planned | planned | strict, extended, hybrid | Shared bootstrap surface |
+| Ferromagnet + seeded-random `m0` | planned | planned | planned | strict, extended, hybrid | Shared seed semantics; backend-specific discretization allowed |
+| Ferromagnet + sampled-field `m0` | planned | planned | planned | strict, extended, hybrid | Canonical sampled values; lowering-time sampling/projection still evolving |
 | `Exchange` | planned | planned | planned | strict, extended, hybrid | Shared term; internal CPU/FDM reference operator exists, public lowering still pending |
 | `Demag` | planned | planned | planned | strict, extended, hybrid | Planned, not numerically implemented |
 | `InterfacialDMI` | planned | planned | planned | strict, extended, hybrid | Planned, not numerically implemented |

@@ -10,7 +10,7 @@ from pathlib import Path
 from fullmag import Simulation, load_problem_from_script
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_EXAMPLE = ROOT / "examples" / "dw_track.py"
+DEFAULT_EXAMPLE = ROOT / "examples" / "exchange_relax.py"
 
 
 def run_cli(cli_path: Path, command: str, ir_path: Path, *, backend: str | None = None) -> None:
