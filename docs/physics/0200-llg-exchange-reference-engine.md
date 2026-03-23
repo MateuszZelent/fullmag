@@ -1,10 +1,10 @@
 # LLG and exchange reference engine
 
-- Status: draft
+- Status: draft (internal-reference; Phase 1 target: public-executable)
 - Owners: Fullmag core
 - Last updated: 2026-03-23
 - Related ADRs: `docs/adr/0001-physics-first-python-api.md`
-- Related specs: `docs/specs/problem-ir-v0.md`, `docs/specs/capability-matrix-v0.md`, `docs/specs/exchange-only-full-solver-architecture-v1.md`
+- Related specs: `docs/specs/problem-ir-v0.md`, `docs/specs/capability-matrix-v0.md`, `docs/specs/exchange-only-full-solver-architecture-v1.md`, `docs/specs/phase-0-1-implementation-plan.md`
 
 ## 1. Problem statement
 
