@@ -4,11 +4,12 @@
 //! Everything else is rejected with an honest error.
 
 use fullmag_ir::{
-    BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR,
-    ExchangeBoundaryCondition, ExecutionMode, ExecutionPlanIR, FdmPlanIR, GeometryEntryIR,
-    GridDimensions, InitialMagnetizationIR, IntegratorChoice, OutputPlanIR, ProblemIR,
+    BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, ExchangeBoundaryCondition,
+    ExecutionMode, ExecutionPlanIR, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GeometryEntryIR,
+    GridDimensions, InitialMagnetizationIR, IntegratorChoice, OutputIR, OutputPlanIR, ProblemIR,
     ProvenancePlanIR, IR_VERSION,
 };
+use std::collections::BTreeSet;
 use std::fmt;
 
 #[derive(Debug)]
@@ -96,9 +97,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
 
     // 6. Check FDM hints exist
     let cell_size = match &problem.backend_policy.discretization_hints {
-        Some(DiscretizationHintsIR {
-            fdm: Some(fdm), ..
-        }) => fdm.cell,
+        Some(DiscretizationHintsIR { fdm: Some(fdm), .. }) => fdm.cell,
         _ => {
             errors.push(
                 "FDM discretization hints (cell size) are required for Phase 1 execution"
@@ -114,6 +113,14 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
             "Phase 1 supports exactly one magnet, found {}",
             problem.magnets.len()
         ));
+    }
+
+    validate_executable_outputs(&problem.sampling.outputs, &mut errors);
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+        errors.push(
+            "execution_precision='single' is reserved for the Phase 2 CUDA path; the current CPU reference runner supports only 'double'"
+                .to_string(),
+        );
     }
 
     if !errors.is_empty() {
@@ -139,12 +146,10 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
             let n = (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize;
             vec![*value; n]
         }
-        Some(InitialMagnetizationIR::RandomSeeded { seed }) => {
-            generate_random_unit_vectors(
-                *seed,
-                (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize,
-            )
-        }
+        Some(InitialMagnetizationIR::RandomSeeded { seed }) => generate_random_unit_vectors(
+            *seed,
+            (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize,
+        ),
         Some(InitialMagnetizationIR::SampledField { values }) => values.clone(),
         None => {
             let n = (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize;
@@ -172,11 +177,25 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } => *fixed_timestep,
     };
 
+    let gyromagnetic_ratio = match &problem.dynamics {
+        fullmag_ir::DynamicsIR::Llg {
+            gyromagnetic_ratio, ..
+        } => *gyromagnetic_ratio,
+    };
+
     let fdm_plan = FdmPlanIR {
         grid: GridDimensions { cells: grid_cells },
         cell_size,
         region_mask: vec![0; (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize],
         initial_magnetization,
+        material: FdmMaterialIR {
+            name: material.name.clone(),
+            saturation_magnetisation: material.saturation_magnetisation,
+            exchange_stiffness: material.exchange_stiffness,
+            damping: material.damping,
+        },
+        gyromagnetic_ratio,
+        precision: problem.backend_policy.execution_precision,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         integrator,
         fixed_timestep,
@@ -196,10 +215,52 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         provenance: ProvenancePlanIR {
             notes: vec![
                 "Phase 1 reference FDM planner".to_string(),
-                format!("Box geometry lowered to {}x{}x{} grid", grid_cells[0], grid_cells[1], grid_cells[2]),
+                format!(
+                    "Box geometry lowered to {}x{}x{} grid",
+                    grid_cells[0], grid_cells[1], grid_cells[2]
+                ),
             ],
         },
     })
+}
+
+fn validate_executable_outputs(outputs: &[OutputIR], errors: &mut Vec<String>) {
+    let allowed_fields = ["m", "H_ex"];
+    let allowed_scalars = ["E_ex", "time", "step", "solver_dt"];
+    let mut seen = BTreeSet::new();
+
+    for output in outputs {
+        match output {
+            OutputIR::Field { name, .. } => {
+                if !allowed_fields.contains(&name.as_str()) {
+                    errors.push(format!(
+                        "field output '{}' is not executable in Phase 1; allowed fields are m and H_ex",
+                        name
+                    ));
+                }
+                if !seen.insert(format!("field:{name}")) {
+                    errors.push(format!(
+                        "field output '{}' is declared more than once in Phase 1",
+                        name
+                    ));
+                }
+            }
+            OutputIR::Scalar { name, .. } => {
+                if !allowed_scalars.contains(&name.as_str()) {
+                    errors.push(format!(
+                        "scalar output '{}' is not executable in Phase 1; allowed scalars are E_ex, time, step, and solver_dt",
+                        name
+                    ));
+                }
+                if !seen.insert(format!("scalar:{name}")) {
+                    errors.push(format!(
+                        "scalar output '{}' is declared more than once in Phase 1",
+                        name
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// Generate deterministic random unit vectors from a seed.
@@ -248,10 +309,11 @@ mod tests {
                 // Box(200e-9, 20e-9, 5e-9) with cell(2e-9, 2e-9, 5e-9)
                 assert_eq!(fdm.grid.cells, [100, 10, 1]);
                 assert_eq!(fdm.cell_size, [2e-9, 2e-9, 5e-9]);
-                assert_eq!(
-                    fdm.initial_magnetization.len(),
-                    (100 * 10 * 1) as usize
-                );
+                assert_eq!(fdm.material.name, "Py");
+                assert_eq!(fdm.material.exchange_stiffness, 13e-12);
+                assert_eq!(fdm.gyromagnetic_ratio, 2.211e5);
+                assert_eq!(fdm.precision, ExecutionPrecision::Double);
+                assert_eq!(fdm.initial_magnetization.len(), (100 * 10 * 1) as usize);
             }
             _ => panic!("expected FDM plan"),
         }
@@ -288,5 +350,33 @@ mod tests {
             let norm = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
             assert!((norm - 1.0).abs() < 1e-10, "vector not unit: norm={}", norm);
         }
+    }
+
+    #[test]
+    fn non_canonical_output_is_rejected_for_execution() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.sampling.outputs.push(OutputIR::Scalar {
+            name: "E_total".to_string(),
+            every_seconds: 1e-12,
+        });
+
+        let err = plan(&ir).expect_err("non-canonical phase 1 output should be rejected");
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("not executable in Phase 1")));
+    }
+
+    #[test]
+    fn single_precision_is_rejected_for_phase_one_cpu_execution() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy.execution_precision = ExecutionPrecision::Single;
+
+        let err =
+            plan(&ir).expect_err("single precision should not be executable on CPU reference");
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("execution_precision='single'")));
     }
 }

@@ -39,7 +39,9 @@ Every feature carries one of three statuses:
 | `InterfacialDMI` | planned | planned | planned | semantic-only | Not numerically implemented |
 | `Zeeman` | planned | planned | planned | semantic-only | Not numerically implemented |
 | `LLG` (Heun) | ✅ exec | planned | planned | **public-executable** (FDM) | Heun stepper in `fullmag-engine` |
-| Field/scalar outputs (`m`, `H_ex`, `E_ex`) | ✅ exec | planned | planned | **public-executable** (FDM) | Artifacts: `metadata.json`, `scalars.csv`, `m_final.json` |
+| Execution precision `double` | ✅ exec | planned | planned | **public-executable** (FDM) | Current CPU reference precision and calibration baseline |
+| Execution precision `single` | planned | planned | planned | semantic-only | Defined in Python API and `ProblemIR`; reserved for Phase 2 CUDA FDM |
+| Field/scalar outputs (`m`, `H_ex`, `E_ex`) | ✅ exec | planned | planned | **public-executable** (FDM) | Artifacts: `metadata.json`, `scalars.csv`, `m_initial.json`, `m_final.json`, `fields/m/`, `fields/H_ex/` |
 | FDM hints | ✅ exec | n/a | planned | **public-executable** | Cell size → grid dims in planner |
 | FEM hints | n/a | planned | planned | semantic-only | FEM execution deferred to Phase 2 |
 | Hybrid hints | n/a | n/a | planned | semantic-only | Requires hybrid mode and backend |

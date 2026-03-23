@@ -3,10 +3,13 @@
 - Status: active
 - Last updated: 2026-03-23
 - Related architecture spec: `docs/specs/exchange-only-full-solver-architecture-v1.md`
-- Related active plan: `docs/plans/active/phase-0-1-implementation-plan.md`
+- Related active plans:
+  - `docs/plans/active/phase-0-1-implementation-plan.md`
+  - `docs/plans/active/phase-2-gpu-fdm-calibrated-rollout.md`
 - Related physics notes:
   - `docs/physics/0150-exchange-only-geometry-and-magnetization-bootstrap.md`
   - `docs/physics/0200-llg-exchange-reference-engine.md`
+  - `docs/physics/0300-gpu-fdm-precision-and-calibration.md`
 
 ## 1. Why this document exists
 
@@ -80,59 +83,46 @@ The following are still not fully executable:
 - backend-neutral comparison tooling,
 - full field artifact publication according to the output policy.
 
-## 4. Important implementation gaps found in the audit
+## 4. Phase 1 closeout update
 
-These gaps are important enough that the old phase plan must remain **active**, not archived.
+Plan A has now been implemented.
 
-### 4.1 Material parameters are not yet fully carried by the FDM execution plan
+The following honesty gaps are closed:
 
-`crates/fullmag-runner/src/lib.rs` still contains a hardcoded Phase 1 shortcut:
+- `FdmPlanIR` carries the runtime material payload used by the runner,
+- the runner no longer hardcodes material defaults,
+- the runner consumes the planned `gyromagnetic_ratio`,
+- scheduled field artifacts are written for `m` and `H_ex`,
+- `metadata.json` now records the real execution plan used for the run,
+- the executable output subset is validated against the canonical output dictionary.
 
-- the runner creates `MaterialParameters::new(800e3, 13e-12, 0.5)`
-- a TODO explicitly states that the planner should embed material parameters in the plan
+The public FDM path is therefore now semantically honest for the supported Phase 1 subset.
 
-This means the public execution path is real, but not yet semantically honest for arbitrary
-material values.
+## 4.1 Newly frozen Phase 2 priority
 
-### 4.2 Artifact publication is not yet aligned with the output policy
+The next execution priority is now explicit:
 
-The runner writes:
+> calibrated GPU-first FDM/CUDA rollout, with user-selected `single` or `double` precision
+> carried through Python API, `ProblemIR`, planning, provenance, and artifact metadata.
 
-- `metadata.json`
-- `scalars.csv`
-- `m_final.json`
+This priority is captured in:
 
-but it does **not** yet publish:
-
-- scheduled `H_ex` field artifacts,
-- scheduled `m` snapshots,
-- a fully backend-neutral field artifact layout matching the output policy.
-
-So the current system is executable, but still below the standard declared in
-`docs/specs/output-naming-policy-v0.md`.
-
-### 4.3 The phase plan is ahead of the code in a few places
-
-The active phase plan and capability matrix currently imply a slightly cleaner state than the code
-actually delivers.
-
-That is not a disaster, but it must be corrected by implementation or by more precise status labels.
+- `docs/plans/active/phase-2-gpu-fdm-calibrated-rollout.md`
+- `docs/physics/0300-gpu-fdm-precision-and-calibration.md`
 
 ## 5. Decision on plan archival
 
 ### 5.1 `phase-0-1-implementation-plan.md`
 
-This plan is **not moved to completed**.
+This plan remains in:
+
+- `docs/plans/active/phase-0-1-implementation-plan.md`
 
 Reason:
 
-- Phase 0 is complete.
-- Phase 1 is materially implemented.
-- But Phase 1 closeout is not finished because of the material-parameter and artifact gaps above.
-
-The plan therefore remains in:
-
-- `docs/plans/active/phase-0-1-implementation-plan.md`
+- it now acts as the completed record for Phase 1 and the launch point for Phase 2,
+- the file status is updated to `phase-1-complete, phase-2-planning`,
+- moving it immediately would create churn without adding clarity.
 
 ### 5.2 Completed-plans archive
 
@@ -149,46 +139,36 @@ An empty archive is better than archiving an unfinished plan and losing executio
 
 To avoid document sprawl, we keep the next work split into **three active planning streams** only.
 
-## 6A. Plan A — Phase 1 closeout and honesty hardening
+## 6A. Plan B — Phase 2 GPU FDM/CUDA execution
 
 ### Goal
 
-Make the current public FDM execution path fully truthful with respect to its own semantics and
-docs, then close the Phase 1 plan.
+Make Fullmag a calibrated GPU solver before expanding backend scope again.
 
-### Deliverables
+### Canonical plan
 
-1. Embed material parameters into `FdmPlanIR`.
-2. Remove runner-side hardcoded material defaults.
-3. Publish scheduled field artifacts for:
-   - `m`
-   - `H_ex`
-4. Align artifact writing with output naming policy.
-5. Guarantee provenance includes the real execution plan and material values actually used.
-6. Re-audit the capability matrix so `public-executable` means exactly what the code does.
+- `docs/plans/active/phase-2-gpu-fdm-calibrated-rollout.md`
 
-### Technical tasks
+### Scope
 
-- Extend `crates/fullmag-ir/src/lib.rs`:
-  - add FDM plan material payload
-  - version/compatibility notes if needed
-- Update `crates/fullmag-plan/src/lib.rs`:
-  - material lookup from `ProblemIR`
-  - embed material data into `FdmPlanIR`
-- Update `crates/fullmag-runner/src/lib.rs`:
-  - consume material payload from plan
-  - write field snapshots on schedule
-  - remove Phase 1 hardcoded material shortcut
-- Update Python/runtime tests to assert real material propagation.
+- CUDA FDM backend,
+- user-selected execution precision (`double` then `single`),
+- CPU vs GPU calibration,
+- runner dispatch and artifact parity.
 
-### Acceptance criteria
+### Important sequencing rule
 
-- no hardcoded material constants remain in the runner,
-- `Simulation.run()` respects material values authored in Python,
-- artifact set includes scheduled `m` and `H_ex`,
-- Phase 1 plan can be moved to `docs/plans/completed/`.
+FEM is not the next executable priority.
+GPU FDM is.
 
-## 6B. Plan B — Phase 2 FEM exchange execution
+The execution order is:
+
+1. CPU `double` reference,
+2. GPU `double` parity,
+3. GPU `single` qualification,
+4. only then broader backend expansion.
+
+## 6B. Plan C — Phase 3 FEM exchange execution
 
 ### Goal
 
@@ -227,7 +207,7 @@ Keep the first FEM executable path intentionally narrow:
 - cross-backend comparison exists,
 - backend differences are documented under physics notes.
 
-## 6C. Plan C — Physics publication program
+## 6C. Plan D — Physics publication program
 
 ### Goal
 

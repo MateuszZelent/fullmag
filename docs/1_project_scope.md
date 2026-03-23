@@ -1,5 +1,9 @@
 # Project scope
 
+Canonical application architecture:
+
+- `docs/specs/fullmag-application-architecture-v1.md`
+
 ## Mission
 
 Fullmag aims to describe one physical micromagnetic problem and make that problem executable through:
@@ -142,6 +146,24 @@ The web app should eventually handle:
 - **auto-generated documentation** from `docs/physics/` notes.
 
 It must not become a second source of solver semantics.
+
+### Primary user experience
+
+The primary frontend experience is a local control room launched from the CLI:
+
+```text
+fullmag script.py
+```
+
+In the intended product flow, this command should:
+
+- load the Python script,
+- build and validate `ProblemIR`,
+- start the run,
+- start a local API/web session,
+- open the browser automatically to the live run page.
+
+That means the browser is not only a post-run dashboard. It is the main live observability surface for local execution, while Python remains the only public scripting interface.
 
 ### Auto-documentation pipeline
 

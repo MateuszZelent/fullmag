@@ -65,11 +65,19 @@ def smoke_run_json(cli_path: Path, script: Path) -> None:
         # Verify artifacts were created
         metadata = output_dir / "metadata.json"
         scalars = output_dir / "scalars.csv"
+        m_initial = output_dir / "m_initial.json"
         m_final = output_dir / "m_final.json"
+        m_snapshots = output_dir / "fields" / "m"
+        h_ex_snapshots = output_dir / "fields" / "H_ex"
 
-        for artifact in [metadata, scalars, m_final]:
+        for artifact in [metadata, scalars, m_initial, m_final]:
             if not artifact.exists():
                 raise AssertionError(f"Missing artifact: {artifact.name}")
+        for snapshot_dir in [m_snapshots, h_ex_snapshots]:
+            if not snapshot_dir.exists():
+                raise AssertionError(f"Missing snapshot directory: {snapshot_dir}")
+            if not any(snapshot_dir.glob("step_*.json")):
+                raise AssertionError(f"No field snapshots written to: {snapshot_dir}")
 
         print(f"  ✓ {script.name} [fdm/strict] run-json → artifacts")
 

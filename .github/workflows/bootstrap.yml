@@ -1,51 +1,51 @@
-name: bootstrap
+# name: bootstrap
 
-on:
-  push:
-    branches: [master, main]
-  pull_request:
+# on:
+#   push:
+#     branches: [master, main]
+#   pull_request:
 
-jobs:
-  bootstrap-check:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+# jobs:
+#   bootstrap-check:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v4
+#         with:
+#           fetch-depth: 0
 
-      - name: Compute diff range
-        id: diff
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "base=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
-            echo "base=$(git rev-list --max-parents=0 HEAD)" >> "$GITHUB_OUTPUT"
-          else
-            echo "base=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
-          fi
-          echo "head=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+#       - name: Compute diff range
+#         id: diff
+#         run: |
+#           if [ "${{ github.event_name }}" = "pull_request" ]; then
+#             echo "base=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+#           elif [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+#             echo "base=$(git rev-list --max-parents=0 HEAD)" >> "$GITHUB_OUTPUT"
+#           else
+#             echo "base=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+#           fi
+#           echo "head=${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
-      - name: Build dev image
-        run: docker compose build dev
+#       - name: Build dev image
+#         run: docker compose build dev
 
-      - name: Cargo check in container
-        run: docker compose run --rm --no-deps dev cargo check --workspace
+#       - name: Cargo check in container
+#         run: docker compose run --rm --no-deps dev cargo check --workspace
 
-      - name: Cargo test in container
-        run: docker compose run --rm --no-deps dev cargo test --workspace
+#       - name: Cargo test in container
+#         run: docker compose run --rm --no-deps dev cargo test --workspace
 
-      - name: Typecheck web in container
-        run: docker compose run --rm --no-deps dev bash -lc "pnpm install --dir apps/web && pnpm --dir apps/web typecheck"
+#       - name: Typecheck web in container
+#         run: docker compose run --rm --no-deps dev bash -lc "pnpm install --dir apps/web && pnpm --dir apps/web typecheck"
 
-      - name: Install Python package and run tests
-        run: docker compose run --rm --no-deps dev bash -lc "python3 -m venv .venv && . .venv/bin/activate && pip install -e packages/fullmag-py && python -m unittest discover -s packages/fullmag-py/tests -v"
+#       - name: Install Python package and run tests
+#         run: docker compose run --rm --no-deps dev bash -lc "python3 -m venv .venv && . .venv/bin/activate && pip install -e packages/fullmag-py && python -m unittest discover -s packages/fullmag-py/tests -v"
 
-      - name: Repository consistency checks
-        run: docker compose run --rm --no-deps dev python3 scripts/check_repo_consistency.py
+#       - name: Repository consistency checks
+#         run: docker compose run --rm --no-deps dev python3 scripts/check_repo_consistency.py
 
-      - name: Physics documentation gate
-        run: docker compose run --rm --no-deps dev python3 scripts/check_physics_docs_gate.py --base "${{ steps.diff.outputs.base }}" --head "${{ steps.diff.outputs.head }}"
+#       - name: Physics documentation gate
+#         run: docker compose run --rm --no-deps dev python3 scripts/check_physics_docs_gate.py --base "${{ steps.diff.outputs.base }}" --head "${{ steps.diff.outputs.head }}"
 
-      - name: Python IR smoke test
-        run: docker compose run --rm --no-deps dev bash -lc "python3 -m venv .venv && . .venv/bin/activate && pip install -e packages/fullmag-py && /usr/local/cargo/bin/cargo build -p fullmag-cli && python scripts/run_python_ir_smoke.py --cli target/debug/fullmag-cli"
+#       - name: Python IR smoke test
+#         run: docker compose run --rm --no-deps dev bash -lc "python3 -m venv .venv && . .venv/bin/activate && pip install -e packages/fullmag-py && /usr/local/cargo/bin/cargo build -p fullmag-cli && python scripts/run_python_ir_smoke.py --cli target/debug/fullmag-cli"

@@ -1,5 +1,9 @@
 # Repo blueprint
 
+Canonical application architecture:
+
+- `docs/specs/fullmag-application-architecture-v1.md`
+
 ## Authoring model
 
 Fullmag uses an embedded Python DSL as the only public scripting surface.

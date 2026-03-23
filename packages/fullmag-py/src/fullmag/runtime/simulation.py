@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from fullmag._core import run_problem_json
-from fullmag.model import BackendTarget, ExecutionMode, Problem
+from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision, Problem
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +25,7 @@ class Result:
     status: str
     backend: BackendTarget
     mode: ExecutionMode
+    precision: ExecutionPrecision
     notes: Sequence[str] = ()
     steps: Sequence[StepStats] = ()
     final_magnetization: list[list[float]] | None = None
@@ -36,10 +37,12 @@ class Simulation:
     problem: Problem
     backend: BackendTarget | str = BackendTarget.AUTO
     mode: ExecutionMode | str = ExecutionMode.STRICT
+    precision: ExecutionPrecision | str = ExecutionPrecision.DOUBLE
 
     def __post_init__(self) -> None:
         self.backend = BackendTarget(self.backend)
         self.mode = ExecutionMode(self.mode)
+        self.precision = ExecutionPrecision(self.precision)
         if self.backend is BackendTarget.HYBRID and self.mode is not ExecutionMode.HYBRID:
             raise ValueError("backend='hybrid' requires mode='hybrid'")
         if self.mode is ExecutionMode.HYBRID and self.backend is not BackendTarget.HYBRID:
@@ -49,6 +52,7 @@ class Simulation:
         return self.problem.to_ir(
             requested_backend=self.backend,
             execution_mode=self.mode,
+            execution_precision=self.precision,
             script_source=script_source,
             entrypoint_kind=entrypoint_kind,
         )
@@ -58,6 +62,7 @@ class Simulation:
             status="planned",
             backend=self.backend,
             mode=self.mode,
+            precision=self.precision,
             notes=[
                 "Public script lowering is still planning-only.",
                 "Use Simulation.run(until=...) to execute on the reference FDM engine.",
@@ -79,6 +84,7 @@ class Simulation:
                 status="planned",
                 backend=self.backend,
                 mode=self.mode,
+                precision=self.precision,
                 notes=["No stop time provided. Call .run(until=<seconds>) to execute."],
             )
 
@@ -93,6 +99,7 @@ class Simulation:
                 status="not-executable",
                 backend=self.backend,
                 mode=self.mode,
+                precision=self.precision,
                 notes=[
                     "Native runner (fullmag-py-core) is not installed.",
                     "Install it via 'maturin develop' in crates/fullmag-py-core/ to enable execution.",
@@ -117,6 +124,7 @@ class Simulation:
             status=run_result.get("status", "completed"),
             backend=self.backend,
             mode=self.mode,
+            precision=self.precision,
             steps=step_stats,
             final_magnetization=run_result.get("final_magnetization"),
             output_dir=output_dir or "run_output",

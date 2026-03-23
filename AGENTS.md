@@ -10,9 +10,21 @@
 Fullmag describes a physical micromagnetic problem, not a numerical storage layout.
 Every change must preserve that contract across Python API, `ProblemIR`, planning, and backend execution.
 
+## Current execution priority
+
+The current top execution priority is a calibrated GPU-first FDM/CUDA path.
+
+That means:
+
+1. CPU exchange-only FDM remains the trusted `double` reference.
+2. CUDA FDM lands before FEM execution work resumes.
+3. User-selected execution precision (`single` / `double`) must be explicit in Python API, `ProblemIR`, planning, and provenance.
+4. GPU `double` parity is required before GPU `single` becomes public-executable.
+
 ## Canonical instruction sources
 
 - **`AGENTS.md` (this file)** is the canonical source of all project rules.
+- `docs/specs/fullmag-application-architecture-v1.md` is the canonical application architecture document.
 - `.agents/` contains agent workflows and skills that extend these rules.
 - `.github/copilot-instructions.md` and `.github/instructions/` mirror a summary for Copilot.
 - `docs/physics/TEMPLATE.md` is the only canonical template for publication-style physics notes.

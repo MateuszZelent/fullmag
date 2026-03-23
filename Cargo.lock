@@ -245,6 +245,7 @@ dependencies = [
  "clap",
  "fullmag-engine",
  "fullmag-ir",
+ "fullmag-runner",
  "serde_json",
 ]
 
@@ -261,11 +262,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "fullmag-plan"
+version = "0.1.0"
+dependencies = [
+ "fullmag-ir",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fullmag-py-core"
 version = "0.1.0"
 dependencies = [
  "fullmag-ir",
+ "fullmag-runner",
  "pyo3",
+ "serde_json",
+]
+
+[[package]]
+name = "fullmag-runner"
+version = "0.1.0"
+dependencies = [
+ "fullmag-engine",
+ "fullmag-ir",
+ "fullmag-plan",
+ "serde",
  "serde_json",
 ]
 

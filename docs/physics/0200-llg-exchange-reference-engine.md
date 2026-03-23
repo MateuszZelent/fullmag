@@ -1,6 +1,6 @@
 # LLG and exchange reference engine
 
-- Status: draft (internal-reference; Phase 1 target: public-executable)
+- Status: draft (public-executable reference FDM slice; production CUDA backend deferred)
 - Owners: Fullmag core
 - Last updated: 2026-03-23
 - Related ADRs: `docs/adr/0001-physics-first-python-api.md`
@@ -146,6 +146,7 @@ all backends, even though only the FDM reference implementation exists today.
 - `gamma`,
 - `integrator`,
 - optional fixed time step.
+- execution precision remains a backend policy and is therefore not part of `DynamicsIR`.
 
 `Exchange` remains a backend-neutral energy term with parameters sourced from material data.
 
@@ -163,16 +164,28 @@ all backends, even though only the FDM reference implementation exists today.
 - `damping`,
 - `saturation_magnetisation`.
 
+`BackendPolicyIR` carries:
+
+- requested backend,
+- execution precision.
+
 No grid-centric indexing should leak into shared `ProblemIR`.
 Reference-engine-only grid shape and field storage stay below the IR boundary for now.
 
 ### 4.3 Planner and capability-matrix impact
 
 - `Exchange` and `LLG` remain legal shared terms in `strict` mode.
-- End-to-end execution from public Python scripts is still planner-first because voxelizers and
-  richer initial conditions are not implemented yet.
-- A reference FDM engine may exist before public `ProblemIR -> backend` lowering is complete.
-  That is acceptable as long as the docs are explicit.
+- The current public-executable slice is:
+  - one ferromagnet,
+  - `Box` geometry,
+  - `fdm/strict`,
+  - `Exchange`,
+  - `LLG(heun)`,
+  - canonical outputs limited to `m`, `H_ex`, `E_ex`, `time`, `step`, and `solver_dt`.
+- The FDM execution plan now carries the actual runtime material payload (`M_s`, `A`, `alpha`)
+  and the chosen `gyromagnetic_ratio`; the runner must not reintroduce defaults.
+- The CPU reference runner remains `double` only; `single` is reserved for the CUDA FDM rollout.
+- Imported geometry, FEM, hybrid execution, and richer lowering paths remain deferred.
 
 ## 5. Validation strategy
 
@@ -202,7 +215,7 @@ Reference-engine-only grid shape and field storage stay below the IR boundary fo
 
 - [x] Python API
 - [x] ProblemIR
-- [ ] Planner
+- [x] Planner
 - [x] Capability matrix
 - [x] FDM backend
 - [ ] FEM backend
@@ -217,11 +230,11 @@ backend.
 ## 7. Known limits and deferred work
 
 - No voxelizer or geometry-to-grid lowering yet.
-- No non-uniform initial magnetization in the public Python API yet.
+- No imported-geometry execution yet.
 - No adaptive time stepping yet.
 - No demag, DMI, anisotropy, Zeeman, torque terms, or thermal noise.
 - No FEM or hybrid execution path.
-- No public Python `Simulation.run()` wiring into the reference engine yet.
+- The current artifact layer is JSON/CSV only; HDF5/VTK/XDMF export is future work.
 
 ## 8. References
 

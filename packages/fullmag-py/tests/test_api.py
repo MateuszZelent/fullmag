@@ -53,6 +53,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(ir["ir_version"], "0.2.0")
         self.assertEqual(ir["problem_meta"]["script_language"], "python")
         self.assertEqual(ir["backend_policy"]["requested_backend"], "auto")
+        self.assertEqual(ir["backend_policy"]["execution_precision"], "double")
         self.assertEqual(ir["validation_profile"]["execution_mode"], "strict")
         self.assertEqual(ir["geometry"]["entries"][0]["kind"], "box")
         self.assertEqual(ir["geometry"]["entries"][0]["size"], [200e-9, 20e-9, 5e-9])
@@ -77,13 +78,19 @@ class ProblemApiTests(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             fm.init.from_function(lambda point: point)
 
-    def test_simulation_overrides_backend_and_mode(self) -> None:
+    def test_simulation_overrides_backend_mode_and_precision(self) -> None:
         problem = self._build_problem()
-        simulation = fm.Simulation(problem, backend="hybrid", mode="hybrid")
+        simulation = fm.Simulation(
+            problem,
+            backend="hybrid",
+            mode="hybrid",
+            precision="single",
+        )
 
         ir = simulation.to_ir()
 
         self.assertEqual(ir["backend_policy"]["requested_backend"], "hybrid")
+        self.assertEqual(ir["backend_policy"]["execution_precision"], "single")
         self.assertEqual(ir["validation_profile"]["execution_mode"], "hybrid")
 
     def test_build_entrypoint_is_preferred(self) -> None:

@@ -56,6 +56,7 @@ Current bootstrap coverage includes:
 - field/scalar sampling
 - FDM/FEM/Hybrid discretization hints
 - backend target and execution mode
+- execution precision policy
 
 
 ## `GeometryIR`
@@ -154,6 +155,36 @@ $$
 $$
 
 Must be positive. The validator rejects non-positive values.
+
+---
+
+## `BackendPolicyIR` precision policy
+
+Execution precision is part of backend/runtime policy, not part of the physical LLG definition.
+
+Canonical field:
+
+- `backend_policy.execution_precision`
+
+Legal values:
+
+- `"double"`
+- `"single"`
+
+Semantics:
+
+- `double` means the backend is asked to execute in double precision,
+- `single` means the backend is asked to execute in single precision.
+
+Current bootstrap state:
+
+- CPU reference FDM is public-executable only for `double`,
+- `single` is legal in Python API and canonical IR,
+- `single` is reserved for the Phase 2 CUDA FDM path and is therefore not executable on the
+  current CPU reference runner.
+
+This field belongs to `BackendPolicyIR` because precision is an execution choice made by the user,
+not a change in the physical problem description.
 
 ---
 

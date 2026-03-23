@@ -35,6 +35,7 @@ Recommended filenames:
 - `0050-shared-problem-semantics-and-embedded-python-api.md`
 - `0100-mesh-and-region-discretization.md`
 - `0200-llg-exchange-reference-engine.md`
-- `0300-demagnetization.md`
+- `0300-gpu-fdm-precision-and-calibration.md`
+- `0400-demagnetization.md`
 
 The numbering is semantic, not bureaucratic.

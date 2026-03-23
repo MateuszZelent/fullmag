@@ -6,10 +6,10 @@ const pillars = [
 ];
 
 const roadmap = [
-  'Stabilize the embedded Python API and script entrypoints',
+  'Launch a live local control room from fullmag script.py',
+  'Stream run status, E_ex(t), and field snapshots into the browser',
   'Keep ProblemIR typed and planner-ready in Rust',
   'Enforce docs/physics as a hard repository gate',
-  'Stand up planning-only smoke coverage before solver depth',
   'Expand backend capability checks before feature sprawl',
 ];
 
@@ -22,7 +22,9 @@ export default function HomePage() {
         <p className="lead">
           Fullmag is being scaffolded as a micromagnetics platform where Python scripts describe
           geometry, materials, energies, dynamics, and outputs, then serialize into a canonical
-          ProblemIR for Rust-side validation and planning.
+          ProblemIR for Rust-side validation and planning. The intended local workflow is
+          `fullmag script.py`, which starts a live browser control room for run status, charts,
+          artifacts, and 3D field views.
         </p>
       </section>
 

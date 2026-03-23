@@ -23,6 +23,13 @@ pub enum BackendTarget {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum ExecutionPrecision {
+    Single,
+    Double,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum IntegratorChoice {
     Heun,
 }
@@ -154,6 +161,7 @@ pub enum OutputIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BackendPolicyIR {
     pub requested_backend: BackendTarget,
+    pub execution_precision: ExecutionPrecision,
     pub discretization_hints: Option<DiscretizationHintsIR>,
 }
 
@@ -242,9 +250,20 @@ pub struct FdmPlanIR {
     pub cell_size: [f64; 3],
     pub region_mask: Vec<u32>,
     pub initial_magnetization: Vec<[f64; 3]>,
+    pub material: FdmMaterialIR,
+    pub gyromagnetic_ratio: f64,
+    pub precision: ExecutionPrecision,
     pub exchange_bc: ExchangeBoundaryCondition,
     pub integrator: IntegratorChoice,
     pub fixed_timestep: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmMaterialIR {
+    pub name: String,
+    pub saturation_magnetisation: f64,
+    pub exchange_stiffness: f64,
+    pub damping: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -305,9 +324,7 @@ impl ProblemIR {
                 name: "strip".to_string(),
                 region: "strip".to_string(),
                 material: "Py".to_string(),
-                initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded {
-                    seed: 42,
-                }),
+                initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded { seed: 42 }),
             }],
             energy_terms: vec![EnergyTermIR::Exchange],
             dynamics: DynamicsIR::Llg {
@@ -321,6 +338,10 @@ impl ProblemIR {
                         name: "m".to_string(),
                         every_seconds: 100e-12,
                     },
+                    OutputIR::Field {
+                        name: "H_ex".to_string(),
+                        every_seconds: 100e-12,
+                    },
                     OutputIR::Scalar {
                         name: "E_ex".to_string(),
                         every_seconds: 10e-12,
@@ -329,6 +350,7 @@ impl ProblemIR {
             },
             backend_policy: BackendPolicyIR {
                 requested_backend: BackendTarget::Fdm,
+                execution_precision: ExecutionPrecision::Double,
                 discretization_hints: Some(DiscretizationHintsIR {
                     fdm: Some(FdmHintsIR {
                         cell: [2e-9, 2e-9, 5e-9],
@@ -422,6 +444,38 @@ impl ProblemIR {
         if self.sampling.outputs.is_empty() {
             errors.push("at least one output is required".to_string());
         }
+        for output in &self.sampling.outputs {
+            match output {
+                OutputIR::Field {
+                    name,
+                    every_seconds,
+                } => {
+                    if name.trim().is_empty() {
+                        errors.push("field output name must not be empty".to_string());
+                    }
+                    if *every_seconds <= 0.0 {
+                        errors.push(format!(
+                            "field output '{}' must have positive every_seconds",
+                            name
+                        ));
+                    }
+                }
+                OutputIR::Scalar {
+                    name,
+                    every_seconds,
+                } => {
+                    if name.trim().is_empty() {
+                        errors.push("scalar output name must not be empty".to_string());
+                    }
+                    if *every_seconds <= 0.0 {
+                        errors.push(format!(
+                            "scalar output '{}' must have positive every_seconds",
+                            name
+                        ));
+                    }
+                }
+            }
+        }
         match &self.dynamics {
             DynamicsIR::Llg {
                 gyromagnetic_ratio,
@@ -446,7 +500,9 @@ impl ProblemIR {
             if let Some(ref init_mag) = magnet.initial_magnetization {
                 match init_mag {
                     InitialMagnetizationIR::Uniform { value } => {
-                        let norm = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
+                        let norm =
+                            (value[0] * value[0] + value[1] * value[1] + value[2] * value[2])
+                                .sqrt();
                         if norm <= 0.0 {
                             errors.push(format!(
                                 "magnet '{}': uniform initial magnetization must be non-zero",
@@ -475,10 +531,7 @@ impl ProblemIR {
         }
 
         validate_unique_names(
-            self.geometry
-                .entries
-                .iter()
-                .map(|entry| entry.name()),
+            self.geometry.entries.iter().map(|entry| entry.name()),
             "geometry entries",
             &mut errors,
         );
@@ -824,6 +877,14 @@ mod tests {
                 cell_size: [2e-9, 2e-9, 2e-9],
                 region_mask: vec![0, 0, 1],
                 initial_magnetization: vec![[1.0, 0.0, 0.0]],
+                material: FdmMaterialIR {
+                    name: "Py".to_string(),
+                    saturation_magnetisation: 800e3,
+                    exchange_stiffness: 13e-12,
+                    damping: 0.5,
+                },
+                gyromagnetic_ratio: 2.211e5,
+                precision: ExecutionPrecision::Double,
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
                 integrator: IntegratorChoice::Heun,
                 fixed_timestep: Some(1e-13),
@@ -843,5 +904,21 @@ mod tests {
         let decoded: ExecutionPlanIR =
             serde_json::from_str(&encoded).expect("execution plan should deserialize");
         assert_eq!(decoded, plan);
+    }
+
+    #[test]
+    fn outputs_require_positive_schedule() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.sampling.outputs[0] = OutputIR::Field {
+            name: "m".to_string(),
+            every_seconds: 0.0,
+        };
+
+        let errors = ir
+            .validate()
+            .expect_err("non-positive output schedule must fail validation");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("must have positive every_seconds")));
     }
 }

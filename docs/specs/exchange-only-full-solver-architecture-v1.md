@@ -8,10 +8,13 @@
   - `docs/physics/0050-shared-problem-semantics-and-embedded-python-api.md`
   - `docs/physics/0100-mesh-and-region-discretization.md`
   - `docs/physics/0200-llg-exchange-reference-engine.md`
+  - `docs/physics/0300-gpu-fdm-precision-and-calibration.md`
 - Related specs:
+  - `docs/specs/fullmag-application-architecture-v1.md`
   - `docs/specs/problem-ir-v0.md`
   - `docs/specs/capability-matrix-v0.md`
   - `docs/plans/active/phase-0-1-implementation-plan.md`
+  - `docs/plans/active/phase-2-gpu-fdm-calibrated-rollout.md`
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
   - `docs/adr/0002-container-first-monorepo.md`
@@ -42,16 +45,17 @@ It is the architectural blueprint for building a solver that is already shaped l
 while keeping the first physics term limited to exchange.
 
 > **Current bootstrap state.**
-> The repository already contains a working reference exchange-only CPU engine
+> The repository contains a working reference exchange-only CPU engine
 > (`crates/fullmag-engine`) with Heun stepping, exchange field, exchange energy, LLG RHS,
 > unit-norm preservation, and four reference tests.
-> This plan extends and hardens that engine into a full-stack product.
+> This engine serves as a **test reference** for validating GPU kernels.
+> Production execution targets the CUDA backend in `native/fdm-cuda/` (Phase 2).
 
 > **Implementation phasing.**
-> The full north star (§2) is a **Phase 2** target. Phase 1 delivers public execution on the
-> reference FDM CPU path only. FDM and FEM remain semantic peers in `ProblemIR` at all times,
-> but execution symmetry is not required until Phase 2.
-> See `docs/plans/active/phase-0-1-implementation-plan.md` for the execution-first phasing.
+> The full north star (§2) is a **Phase 3** target. Phase 1 delivered a public CPU
+> execution path to validate the architecture end-to-end. Phase 2 replaces the CPU
+> engine with GPU/CUDA kernels for FDM. FEM execution lands in Phase 3.
+> See `docs/plans/active/phase-0-1-implementation-plan.md` for the full phasing.
 
 ## 2. North-Star Outcome
 
@@ -71,7 +75,8 @@ The goal is one micromagnetic product with two discretization engines under a co
 > numerical output, canonical artifacts, and provenance.
 
 Phase 1 proves the full pipeline: Python → IR → plan → runner → engine → artifacts.
-Phase 2 adds the second discretization engine (FEM) and imported geometry.
+Phase 2 adds calibrated GPU/CUDA execution for FDM, including explicit precision selection.
+Phase 3 adds FEM execution and imported geometry.
 
 ## 3. Scope and Non-Goals
 
@@ -784,6 +789,8 @@ Validation must be layered.
 - ship explicit architecture targets
 - keep a minimum supported driver policy
 - validate on both oldest-supported and current drivers
+- define public execution precision modes explicitly (`double`, `single`)
+- calibrate GPU `double` against CPU `double` before promoting GPU `single`
 
 ### 17.2 Native ABI policy
 

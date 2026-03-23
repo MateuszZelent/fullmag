@@ -30,6 +30,11 @@ class BackendTarget(str, Enum):
     HYBRID = "hybrid"
 
 
+class ExecutionPrecision(str, Enum):
+    SINGLE = "single"
+    DOUBLE = "double"
+
+
 EnergyTerm = Exchange | Demag | InterfacialDMI | Zeeman
 OutputSpec = SaveField | SaveScalar
 
@@ -64,6 +69,7 @@ class Problem:
         *,
         requested_backend: BackendTarget = BackendTarget.AUTO,
         execution_mode: ExecutionMode = ExecutionMode.STRICT,
+        execution_precision: ExecutionPrecision = ExecutionPrecision.DOUBLE,
         script_source: str | None = None,
         entrypoint_kind: str = "direct",
     ) -> dict[str, object]:
@@ -96,6 +102,7 @@ class Problem:
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
             "backend_policy": {
                 "requested_backend": requested_backend.value,
+                "execution_precision": execution_precision.value,
                 "discretization_hints": self.discretization.to_ir() if self.discretization else None,
             },
             "validation_profile": {"execution_mode": execution_mode.value},

@@ -69,7 +69,7 @@ fn main() -> Result<()> {
             println!("- canonical ProblemIR: typed + validated");
             println!("- physics-first documentation gate: scaffolded");
             println!("- reference LLG + exchange engine: CPU/FDM slice");
-            println!("- public backends: still planning-first");
+            println!("- public execution: Box + Exchange + LLG(heun) + fdm/strict");
         }
         Command::ExampleIr => {
             let example = ProblemIR::bootstrap_example();
@@ -110,8 +110,8 @@ fn main() -> Result<()> {
             output_dir,
         } => {
             let ir = read_ir(&path)?;
-            let result =
-                fullmag_runner::run_problem(&ir, until, &output_dir).map_err(|e| anyhow!("{}", e))?;
+            let result = fullmag_runner::run_problem(&ir, until, &output_dir)
+                .map_err(|e| anyhow!("{}", e))?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({

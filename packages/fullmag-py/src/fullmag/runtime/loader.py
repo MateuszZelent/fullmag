@@ -21,10 +21,12 @@ class LoadedProblem:
         *,
         requested_backend,
         execution_mode,
+        execution_precision,
     ) -> dict[str, object]:
         return self.problem.to_ir(
             requested_backend=requested_backend,
             execution_mode=execution_mode,
+            execution_precision=execution_precision,
             script_source=self.script_source,
             entrypoint_kind=self.entrypoint_kind,
         )

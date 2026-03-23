@@ -18,8 +18,8 @@ The project maintains an explicit separation between three levels of implementat
 | Layer | Scope | Example |
 |-------|-------|---------|
 | **Shared semantics** | Python API + `ProblemIR` + validation + planning. Legal to author, serialize, validate, and plan. | `Demag`, `InterfacialDMI`, `Zeeman`, `FEM`, `Hybrid` |
-| **Internal reference** | Numerically implemented inside a Rust crate, but not wired to `Simulation.run()`. | `Exchange` operator and Heun stepper in `fullmag-engine` |
-| **Public executable** | Fully wired: `Simulation.run()` → plan → runner → engine → artifacts. End-to-end in CI. | Phase 1 target: `Exchange + LLG(heun) + Box + fdm/strict` |
+| **Internal reference** | Numerically implemented inside a Rust crate as a reusable numerical baseline, whether or not a public runner exists yet. | Exchange stencil and Heun stepping primitives in `fullmag-engine` |
+| **Public executable** | Fully wired: `Simulation.run()` → plan → runner → engine → artifacts. End-to-end in CI. | `Exchange + LLG(heun) + Box + fdm/strict` |
 
 This model prevents the public API surface from silently implying more execution capability than
 actually exists. The capability matrix (`docs/specs/capability-matrix-v0.md`) tracks the status
@@ -73,7 +73,7 @@ The shared problem lowers into explicitly coupled representations where some ope
 
 - The canonical public surface is split into `model` and `runtime`.
 - Shared `model` objects are `Problem`, `ImportedGeometry`, `Material`, `Region`, `Ferromagnet`, energy terms, `LLG`, outputs, and discretization hints.
-- Shared `runtime` objects are `Simulation`, backend target selection, execution mode selection, and result handles.
+- Shared `runtime` objects are `Simulation`, backend target selection, execution mode selection, execution precision selection, and result handles.
 - Planning-only smoke coverage must pass for `fdm/strict`, `fem/strict`, and `hybrid/hybrid`.
 - Any change to the shared physics-facing surface must ship with a same-diff update under `docs/physics/`.
 
@@ -90,16 +90,16 @@ The shared problem lowers into explicitly coupled representations where some ope
 - [x] ProblemIR (shared semantics layer)
 - [x] Planner-facing validation (shared semantics layer)
 - [x] Capability matrix with three-tier statuses
-- [ ] FDM backend (internal-reference exists; public-executable in Phase 1)
+- [x] FDM backend (narrow public-executable slice)
 - [ ] FEM backend (deferred to Phase 2)
 - [ ] Hybrid backend (deferred to Phase 2+)
-- [ ] Outputs / observables (canonical naming defined; public-executable in Phase 1)
+- [x] Outputs / observables (canonical names + scheduled `m`/`H_ex` artifacts)
 - [x] Tests / smoke flow
 - [x] Documentation
 
 ## 7. Known limits and deferred work
 
-- The current runtime is planning-only. Phase 1 target: wire to reference engine for Box+Exchange+fdm/strict.
+- The current public runtime is intentionally narrow: Box + one ferromagnet + Exchange + LLG(heun) + `fdm/strict` + `precision="double"`.
 - Backend execution depth is intentionally deferred until the shared semantics are stable.
 - The private PyO3 module is a seam, not yet the full hosted execution stack.
 - The public API exports `Demag`, `InterfacialDMI`, `Zeeman`, `FEM`, `Hybrid` — all semantic-only.

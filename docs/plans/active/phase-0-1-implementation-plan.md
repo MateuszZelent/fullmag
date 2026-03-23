@@ -1,6 +1,6 @@
-# Phase 0–2 Implementation Plan: Execution-First FDM v1
+# Phase 0–3 Implementation Plan: Exchange-Only Solver
 
-- Status: phase-0-complete, phase-1-partially-implemented (kept active until closeout gaps are fixed)
+- Status: phase-1-complete, phase-2-planning (GPU-first FDM/CUDA)
 - Last updated: 2026-03-23
 - Parent spec: `docs/specs/exchange-only-full-solver-architecture-v1.md`
 - Audit note: see `docs/plans/active/implementation-status-and-next-plans-2026-03-23.md`
@@ -15,12 +15,14 @@
 ## Guiding principle
 
 > **First milestone = public execution on reference exchange-only FDM CPU with artifacts,
-> diagnostics, and provenance.**
+> diagnostics, and provenance.** ✅ Achieved in Phase 1.
+>
+> **Second milestone = GPU execution via CUDA.** Every new physics term after exchange
+> is implemented on GPU first. The CPU reference engine is frozen and used only
+> for convergence verification.
 
 The architecture spec's north star — one problem running on FDM and FEM with shared semantics —
-remains the long-term target (Phase 2+). But Phase 1's Definition of Done is intentionally
-narrower: one exchange-only problem authored in Python must actually **compute** through the
-public API, produce real numerical output, and carry full provenance.
+remains the long-term target (Phase 3). Phase 2 delivers production GPU/CUDA execution for FDM.
 
 FDM and FEM remain semantic peers in `ProblemIR`. Execution symmetry is deferred.
 
@@ -32,7 +34,7 @@ Every feature in the capability matrix must carry one of three statuses:
 |--------|---------|
 | `semantic-only` | Legal in Python API and `ProblemIR`; can be serialized, validated, and planned. Not numerically implemented. |
 | `internal-reference` | Numerically implemented inside `fullmag-engine` or equivalent crate, but not wired to the public `Simulation.run()` path. |
-| `public-executable` | Fully wired: Python `Simulation.run()` → plan → runner → engine → artifacts. End-to-end. In the current audit, material propagation and field-artifact closeout still remain. |
+| `public-executable` | Fully wired: Python `Simulation.run()` → plan → runner → engine → artifacts. End-to-end. |
 
 This model prevents the API surface from silently implying more than the solver can deliver.
 
@@ -445,72 +447,181 @@ Move to `examples/semantic/dw_track.py` or add a comment header:
 
 ### Acceptance criteria
 
-- [ ] `fm.Box(size=(200e-9, 20e-9, 5e-9))` serializes to valid IR
-- [ ] `fm.init.random(seed=42)` serializes to valid IR
-- [ ] Rust deserializes and validates both new geometry and m0 variants
-- [ ] `IR_VERSION` is `"0.2.0"` in both Python and Rust
-- [ ] `fullmag-plan` compiles with `ReferenceFdmPlanIR` and planner for Box geometry
-- [ ] `fullmag-runner` compiles and can execute a Box+Exchange problem via `fullmag-engine`
-- [ ] **`fm.Simulation(problem, backend="fdm").run(until=2e-9)` returns real numerical StepStats**
-- [ ] **`fullmag-cli run-json exchange_relax.json --until 2e-9` produces artifacts**
-- [ ] `examples/exchange_relax.py` runs end-to-end in CI (Python→IR→plan→run→artifacts)
-- [ ] Artifact output includes `metadata.json`, `scalars.csv`, `m_final.json`
-- [ ] Capability matrix updated with three-tier statuses
-- [ ] `Simulation.run()` for non-executable subsets returns honest error, not silent planning note
-- [ ] All existing tests pass (no regressions)
-- [ ] `make py-test` and `make cargo-test` pass
+- [x] `fm.Box(size=(200e-9, 20e-9, 5e-9))` serializes to valid IR
+- [x] `fm.init.random(seed=42)` serializes to valid IR
+- [x] Rust deserializes and validates both new geometry and m0 variants
+- [x] `IR_VERSION` is `"0.2.0"` in both Python and Rust
+- [x] `fullmag-plan` compiles with `FdmPlanIR` and planner for Box geometry
+- [x] `fullmag-runner` compiles and can execute a Box+Exchange problem via `fullmag-engine`
+- [x] **`fm.Simulation(problem, backend="fdm").run(until=2e-9)` returns real numerical StepStats**
+- [x] **`fullmag-cli run-json exchange_relax.json --until 2e-9` produces artifacts**
+- [x] `examples/exchange_relax.py` runs end-to-end in CI (Python→IR→plan→run→artifacts)
+- [x] Artifact output includes `metadata.json`, `scalars.csv`, `m_initial.json`, `m_final.json`, and scheduled `m`/`H_ex` field snapshots
+- [x] Capability matrix updated with three-tier statuses
+- [x] `Simulation.run()` for non-executable subsets returns honest error, not silent planning note
+- [x] All existing tests pass (no regressions)
+- [x] `make py-test` and `make cargo-test` pass
 
----
-
-## Phase 2: FEM path, voxelizer, and imported geometry (deferred)
+## Phase 2: GPU-first FDM/CUDA execution
 
 ### Goal
 
-Extend execution symmetry to FEM. Add imported geometry execution path.
-The north-star from the architecture spec lands here, not in Phase 1.
+Replace the CPU reference engine with a production CUDA backend for FDM.
+After Phase 2, `Simulation.run()` executes exchange-only LLG on GPU on a single device.
 
-### Deliverables (sketch — detailed plan written after Phase 1 closes)
+> [!IMPORTANT]
+> The canonical and up-to-date Phase 2 execution plan now lives in
+> `docs/plans/active/phase-2-gpu-fdm-calibrated-rollout.md`.
+> The section below is retained as historical bootstrap context only.
 
-#### D2.1 — Imported geometry voxelizer (FDM path)
+The CPU reference engine (`fullmag-engine`) is **not deleted** — it becomes the
+test-reference for convergence studies (GPU vs CPU must agree within tolerance).
+
+### Guiding principle
+
+> **GPU from day one.** Every new physics term after exchange is implemented on GPU first.
+> The CPU reference path is frozen at exchange-only and used only for verification.
+
+### Deliverables
+
+#### D2.1 — CUDA FDM exchange kernel and C ABI boundary
+
+This is the **highest-priority** deliverable. It makes Fullmag a real GPU solver.
+
+##### Directory structure
+
+```
+native/
+  fdm-cuda/
+    include/
+      fullmag_fdm.h           ← C ABI header (stable contract)
+    src/
+      exchange_kernel.cu       ← 6-point stencil exchange field on GPU
+      llg_kernel.cu            ← LLG RHS + Heun stepper on GPU
+      device_state.cu          ← GPU memory management (m, H_eff, etc.)
+      api.cpp                  ← extern "C" wrappers calling CUDA
+    CMakeLists.txt
+    tests/
+      test_exchange.cu         ← standalone CUDA tests
+```
+
+##### C ABI contract (`fullmag_fdm.h`)
+
+```c
+typedef struct FdmContext FdmContext;
+
+// Lifecycle
+FdmContext* fdm_create(
+    int nx, int ny, int nz,
+    double dx, double dy, double dz,
+    double Ms, double A, double alpha, double gamma
+);
+void fdm_destroy(FdmContext* ctx);
+
+// Data transfer
+int fdm_set_magnetization(FdmContext* ctx, const double* m, int count);
+int fdm_get_magnetization(const FdmContext* ctx, double* m, int count);
+int fdm_get_exchange_field(const FdmContext* ctx, double* h, int count);
+
+// Compute
+int fdm_exchange_field(FdmContext* ctx);
+int fdm_heun_step(FdmContext* ctx, double dt);
+double fdm_exchange_energy(const FdmContext* ctx);
+```
+
+##### Rust FFI wrapper (`crates/fullmag-runner/src/gpu_fdm.rs`)
+
+```rust
+extern "C" {
+    fn fdm_create(...) -> *mut FdmContext;
+    fn fdm_heun_step(ctx: *mut FdmContext, dt: f64) -> c_int;
+    // ...
+}
+```
+
+##### Runner adaptation
+
+- `fullmag-runner` detects GPU availability at plan time
+- If GPU available: calls `native/fdm-cuda/` via C ABI
+- If GPU not available: falls back to `fullmag-engine` (CPU reference)
+- `RunResult` output is identical regardless of backend
+
+#### D2.2 — GPU memory management and stream orchestration
+
+- CUDA device state: persistent GPU buffers for m, H_eff, torque
+- Host↔device transfers only at init and output schedule
+- Single CUDA stream for exchange-only (multi-stream not needed yet)
+- Error handling: device OOM, kernel launch failures → `RunError`
+
+#### D2.3 — GPU vs CPU convergence verification
+
+- Same Box + random m0 problem run on both CPU and GPU
+- Compare: exchange energy (1% tolerance), magnetization L2 norm (1%), max |m|-1 (1e-6)
+- Convergence study: refine grid, verify both converge to same answer
+- Results documented in `docs/physics/gpu-cpu-exchange-convergence.md`
+
+#### D2.4 — Imported geometry voxelizer (FDM path)
 
 - STEP/STL → voxel mask pipeline
 - `ImportedGeometry` becomes `public-executable` for FDM
-- Region mask assignment
+- Region mask assignment from geometry overlaps
 
-#### D2.2 — `from_function` initializer
+#### D2.5 — `from_function` initializer
 
 - `fm.init.from_function(fn)` → sample at cell centers during lowering
-- Requires grid knowledge from planner
-- `SampledField` IR variant populated by planner, not user
-
-#### D2.3 — FEM exchange operator and mesh pipeline
-
-- `FemPlanIR` with mesh path, quadrature order, element type
-- FEM exchange operator using Galerkin weak form
-- `fullmag-runner` extended with `run_reference_fem()`
-- Requires MFEM or equivalent library in container
-
-#### D2.4 — Cross-backend comparison tooling
-
-- `fullmag-compare` crate or script
-- FDM vs FEM projection and L2 norm comparison
-- Convergence-rate study for exchange-only Box problem
-
-#### D2.5 — C ABI native backend layer
-
-- `native/backends/fdm/` with CUDA exchange kernel
-- Stable C ABI between Rust runner and native backends
-- Performance parity testing against reference CPU
+- Requires grid knowledge from planner → populate `SampledField` IR variant
+- Runs on host, transfers result to GPU
 
 #### D2.6 — Expanded artifact formats
 
-- HDF5 or VTK field output
-- XDMF metadata
-- Checkpoint/restart support
+- HDF5 field output (per-quantity files, zarr-compatible structure)
+- XDMF metadata for ParaView visualization
+- Checkpoint/restart support (serialize GPU state)
 
 ### What is explicitly NOT in Phase 2
 
-- Demag, DMI, Zeeman, anisotropy (these remain `semantic-only`)
-- Web/control-plane expansion beyond `/healthz`
+- FEM execution (deferred to Phase 3)
+- Demag, DMI, Zeeman, anisotropy (remain `semantic-only`)
 - Multi-GPU, MPI, adaptive mesh refinement
-- Hybrid execution
+- Hybrid FDM/FEM execution
+- Web/control-plane expansion beyond scaffolding
+
+### File change summary
+
+| File/Directory | Action |
+|----------------|--------|
+| `native/fdm-cuda/` | **[NEW]** CUDA FDM backend with C ABI |
+| `native/fdm-cuda/include/fullmag_fdm.h` | **[NEW]** Stable C ABI header |
+| `native/fdm-cuda/CMakeLists.txt` | **[NEW]** CUDA build config |
+| `crates/fullmag-runner/src/gpu_fdm.rs` | **[NEW]** Rust FFI wrapper for CUDA |
+| `crates/fullmag-runner/src/lib.rs` | Detect GPU, dispatch to GPU or CPU |
+| `docs/physics/gpu-cpu-exchange-convergence.md` | **[NEW]** Convergence study |
+| `docker-compose.yml` | Add CUDA-capable container |
+
+### Acceptance criteria
+
+- [ ] `native/fdm-cuda/` compiles with `nvcc` and produces `libfullmag_fdm.so`
+- [ ] CUDA exchange kernel matches CPU reference within 1% energy tolerance
+- [ ] CUDA Heun stepper matches CPU reference within 1% magnetization L2
+- [ ] `Simulation.run()` transparently uses GPU when available
+- [ ] `fullmag-cli run-json` works with GPU backend
+- [ ] Same artifacts produced (metadata, scalars, m_final) regardless of CPU/GPU
+- [ ] CI container includes CUDA toolkit and runs GPU tests on available hardware
+- [ ] Convergence study documented in `docs/physics/`
+
+---
+
+## Phase 3: FEM path and cross-backend comparison (sketch)
+
+### Goal
+
+Extend execution to FEM. Add imported geometry support for FEM meshing.
+North-star from architecture spec (FDM + FEM with shared semantics) lands here.
+
+### Deliverables (detailed plan written after Phase 2 closes)
+
+- D3.1 — FEM exchange operator (Galerkin weak form, MFEM/libCEED)
+- D3.2 — `FemPlanIR` with mesh path, quadrature, element type
+- D3.3 — FEM mesh generation from imported geometry
+- D3.4 — cross-backend comparison tooling (`fullmag-compare`)
+- D3.5 — FDM vs FEM convergence study for exchange-only Box

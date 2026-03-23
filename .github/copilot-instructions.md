@@ -9,6 +9,7 @@
 - The only public scripting surface is the embedded Python DSL in `packages/fullmag-py`.
 - Python builds `ProblemIR`; Rust validates, normalizes, and plans it.
 - The shared API must describe physics, not grid internals or FEM-only implementation details.
+- Current execution priority is calibrated GPU-first FDM/CUDA, with explicit user-selected precision carried through API, IR, planning, and provenance.
 - Treat `docs/1_project_scope.md`, `docs/specs/problem-ir-v0.md`, `docs/physics/`, and the ADRs as the canonical architecture and physics reference.
 - Assume container-first verification through `docker compose` and `Makefile`.
 - **Keep source files under ~1000 lines.** Split growing modules into focused submodules rather than creating monolithic files.
