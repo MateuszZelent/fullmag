@@ -1,7 +1,7 @@
 """Public embedded Python DSL for Fullmag."""
 
 from . import init
-from .init import from_function, random, uniform
+from .init import random, uniform
 from .model import (
     Box,
     Cylinder,
@@ -48,7 +48,6 @@ __all__ = [
     "SaveScalar",
     "Simulation",
     "Zeeman",
-    "from_function",
     "init",
     "load_problem_from_script",
     "random",

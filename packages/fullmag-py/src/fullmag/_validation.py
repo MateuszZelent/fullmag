@@ -18,6 +18,10 @@ def require_positive(value: float, field_name: str) -> float:
 
 
 def require_positive_int(value: int, field_name: str) -> int:
+    import numbers
+
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+        raise TypeError(f"{field_name} must be an integer, got {type(value).__name__}")
     if value <= 0:
         raise ValueError(f"{field_name} must be a positive integer")
     return int(value)
