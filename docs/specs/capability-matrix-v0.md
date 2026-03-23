@@ -7,28 +7,42 @@ The capability matrix answers two questions before execution:
 1. Is a Python-authored `ProblemIR` legal for the requested backend and mode?
 2. If it is legal, what planning path should be selected?
 
+## Three-tier feature status model
+
+Every feature carries one of three statuses:
+
+| Status | Meaning |
+|--------|---------|
+| **`semantic-only`** | Legal in Python API and `ProblemIR`. Can be serialized, validated, and planned. Not numerically implemented. |
+| **`internal-reference`** | Numerically implemented inside `fullmag-engine` or equivalent crate, but not wired to the public `Simulation.run()` path. |
+| **`public-executable`** | Fully wired end-to-end: Python `Simulation.run()` → plan → runner → engine → artifacts. |
+
 ## Current bootstrap policy
 
 - `strict` means backend-neutral semantics only.
 - `extended` is reserved for future backend-specific features.
 - `hybrid` is explicit and requires both hybrid mode and hybrid backend.
 
-## Bootstrap matrix
+## Capability matrix
 
-| Feature | FDM | FEM | Hybrid | Modes | Notes |
-|---------|-----|-----|--------|-------|-------|
-| Imported geometry reference | planned | planned | planned | strict, extended, hybrid | Shared semantics only |
-| Material constants (`Ms`, `A`, `alpha`, `Ku1`, `anisU`) | planned | planned | planned | strict, extended, hybrid | Serialized in canonical IR |
-| Ferromagnet + uniform `m0` | planned | planned | planned | strict, extended, hybrid | Shared bootstrap surface |
-| `Exchange` | planned | planned | planned | strict, extended, hybrid | Shared term; internal CPU/FDM reference operator exists, public lowering still pending |
-| `Demag` | planned | planned | planned | strict, extended, hybrid | Planned, not numerically implemented |
-| `InterfacialDMI` | planned | planned | planned | strict, extended, hybrid | Planned, not numerically implemented |
-| `Zeeman` | planned | planned | planned | strict, extended, hybrid | Planned, not numerically implemented |
-| `LLG` | planned | planned | planned | strict, extended, hybrid | Shared semantics defined; internal Heun-based CPU/FDM reference stepper exists, public lowering still pending |
-| Field/scalar outputs | planned | planned | planned | strict, extended, hybrid | Canonical output naming only |
-| FDM hints | planned | n/a | planned | strict, extended | Shared hints, backend-specific use later |
-| FEM hints | n/a | planned | planned | strict, extended | Shared hints, backend-specific use later |
-| Hybrid hints | n/a | n/a | planned | hybrid | Requires hybrid mode and backend |
+| Feature | FDM | FEM | Hybrid | Tier | Notes |
+|---------|-----|-----|--------|------|-------|
+| `Box` geometry | planned | planned | planned | semantic-only | **Phase 1 target: public-executable for FDM** |
+| `Cylinder` geometry | planned | planned | planned | semantic-only | Requires voxelizer for FDM execution |
+| Imported geometry ref | planned | planned | planned | semantic-only | Requires voxelizer/mesher pipeline |
+| Material constants (`Ms`, `A`, `alpha`) | planned | planned | planned | semantic-only | Serialized in canonical IR |
+| Material constants (`Ku1`, `anisU`) | planned | planned | planned | semantic-only | Anisotropy not in exchange-only scope |
+| Ferromagnet + uniform `m0` | planned | planned | planned | semantic-only | **Phase 1 target: public-executable for FDM** |
+| Ferromagnet + random `m0` | planned | planned | planned | semantic-only | **Phase 1 target: public-executable for FDM** |
+| `Exchange` | planned | planned | planned | internal-reference | CPU/FDM reference operator exists in `fullmag-engine`; **Phase 1 target: public-executable** |
+| `Demag` | planned | planned | planned | semantic-only | Not numerically implemented |
+| `InterfacialDMI` | planned | planned | planned | semantic-only | Not numerically implemented |
+| `Zeeman` | planned | planned | planned | semantic-only | Not numerically implemented |
+| `LLG` (Heun) | planned | planned | planned | internal-reference | Heun stepper exists in `fullmag-engine`; **Phase 1 target: public-executable** |
+| Field/scalar outputs (`m`, `H_ex`, `E_ex`) | planned | planned | planned | semantic-only | Canonical naming defined; **Phase 1 target: public-executable** |
+| FDM hints | planned | n/a | planned | semantic-only | Shared hints, lowering in Phase 1 |
+| FEM hints | n/a | planned | planned | semantic-only | Shared hints, FEM execution in Phase 2 |
+| Hybrid hints | n/a | n/a | planned | semantic-only | Requires hybrid mode and backend |
 
 ## Early planner rules
 

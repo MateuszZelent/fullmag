@@ -2,7 +2,7 @@
 
 - Status: draft
 - Last updated: 2026-03-23
-- Revision: 1.1 — corrections from repo audit
+- Revision: 1.2 — execution-first phasing correction
 - Owners: Fullmag core
 - Related physics notes:
   - `docs/physics/0050-shared-problem-semantics-and-embedded-python-api.md`
@@ -11,6 +11,7 @@
 - Related specs:
   - `docs/specs/problem-ir-v0.md`
   - `docs/specs/capability-matrix-v0.md`
+  - `docs/specs/phase-0-1-implementation-plan.md`
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
   - `docs/adr/0002-container-first-monorepo.md`
@@ -46,6 +47,12 @@ while keeping the first physics term limited to exchange.
 > unit-norm preservation, and four reference tests.
 > This plan extends and hardens that engine into a full-stack product.
 
+> **Implementation phasing.**
+> The full north star (§2) is a **Phase 2** target. Phase 1 delivers public execution on the
+> reference FDM CPU path only. FDM and FEM remain semantic peers in `ProblemIR` at all times,
+> but execution symmetry is not required until Phase 2.
+> See `docs/specs/phase-0-1-implementation-plan.md` for the execution-first phasing.
+
 ## 2. North-Star Outcome
 
 The target outcome of this plan is:
@@ -56,6 +63,15 @@ The target outcome of this plan is:
 
 The goal is not merely "two codes in one repo."
 The goal is one micromagnetic product with two discretization engines under a common physical contract.
+
+### 2.1 Phase 1 subset of North Star
+
+> A user writes one Python problem definition using `Box` geometry, `Exchange`, and `LLG(heun)`,
+> and executes it publicly via `Simulation.run()` on the reference FDM CPU backend with real
+> numerical output, canonical artifacts, and provenance.
+
+Phase 1 proves the full pipeline: Python → IR → plan → runner → engine → artifacts.
+Phase 2 adds the second discretization engine (FEM) and imported geometry.
 
 ## 3. Scope and Non-Goals
 
