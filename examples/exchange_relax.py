@@ -32,12 +32,14 @@ def build() -> fm.Problem:
         name="exchange_relax",
         magnets=[magnet],
         energy=[fm.Exchange()],
-        dynamics=fm.LLG(),
-        outputs=[
-            fm.SaveField("m", every=100e-12),
-            fm.SaveField("H_ex", every=100e-12),
-            fm.SaveScalar("E_ex", every=10e-12),
-        ],
+        study=fm.TimeEvolution(
+            dynamics=fm.LLG(),
+            outputs=[
+                fm.SaveField("m", every=100e-12),
+                fm.SaveField("H_ex", every=100e-12),
+                fm.SaveScalar("E_ex", every=10e-12),
+            ],
+        ),
         discretization=fm.DiscretizationHints(
             fdm=fm.FDM(cell=(2e-9, 2e-9, 5e-9)),
         ),

@@ -9,7 +9,16 @@ use fullmag_ir::{FdmPlanIR, OutputIR};
 
 use crate::cpu_reference;
 use crate::native_fdm;
-use crate::types::{ExecutedRun, RunError};
+#[cfg(feature = "cuda")]
+use crate::native_fdm::NativeFdmBackend;
+#[cfg(feature = "cuda")]
+use crate::schedules::{
+    advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
+    OutputSchedule,
+};
+use crate::types::{ExecutedRun, RunError, StepUpdate};
+#[cfg(feature = "cuda")]
+use crate::types::{ExecutionProvenance, FieldSnapshot, RunResult, RunStatus, StepStats};
 
 /// Which execution engine to use for FDM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,13 +66,283 @@ pub(crate) fn execute_fdm(
         FdmEngine::CpuReference => {
             cpu_reference::execute_reference_fdm(plan, until_seconds, outputs)
         }
+        FdmEngine::CudaFdm => execute_cuda_fdm(plan, until_seconds, outputs),
+    }
+}
+
+/// Execute FDM with a per-step callback for live streaming.
+pub(crate) fn execute_fdm_with_callback(
+    engine: FdmEngine,
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    grid: [u32; 3],
+    field_every_n: u64,
+    on_step: &mut impl FnMut(StepUpdate),
+) -> Result<ExecutedRun, RunError> {
+    match engine {
+        FdmEngine::CpuReference => cpu_reference::execute_reference_fdm_with_callback(
+            plan,
+            until_seconds,
+            outputs,
+            grid,
+            field_every_n,
+            on_step,
+        ),
         FdmEngine::CudaFdm => {
-            // Phase 2 WP6: full CUDA execution loop
-            // For now, error honestly
-            Err(RunError {
-                message: "CUDA FDM execution loop not yet implemented (WP5/WP6 pending)"
-                    .to_string(),
-            })
+            let executed = execute_cuda_fdm(plan, until_seconds, outputs)?;
+            let emit_every = field_every_n.max(1);
+            for stats in &executed.result.steps {
+                let magnetization = if stats.step % emit_every == 0 {
+                    Some(
+                        executed
+                            .result
+                            .final_magnetization
+                            .iter()
+                            .flat_map(|vector| vector.iter().copied())
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+                on_step(StepUpdate {
+                    stats: stats.clone(),
+                    grid,
+                    magnetization,
+                    finished: false,
+                });
+            }
+            Ok(executed)
         }
     }
+}
+
+#[cfg(feature = "cuda")]
+fn execute_cuda_fdm(
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+) -> Result<ExecutedRun, RunError> {
+    if until_seconds <= 0.0 {
+        return Err(RunError {
+            message: "until_seconds must be positive".to_string(),
+        });
+    }
+
+    let mut backend = NativeFdmBackend::create(plan)?;
+    let device_info = backend.device_info()?;
+    let cell_count = (plan.grid.cells[0] as usize)
+        * (plan.grid.cells[1] as usize)
+        * (plan.grid.cells[2] as usize);
+    let initial_magnetization = backend.copy_m(cell_count)?;
+    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+
+    let mut steps = Vec::new();
+    let mut field_snapshots = Vec::new();
+    let mut scalar_schedules = collect_scalar_schedules(outputs)?;
+    let mut field_schedules = collect_field_schedules(outputs)?;
+    let default_scalar_trace = scalar_schedules.is_empty();
+    capture_initial_cuda_fields(
+        &backend,
+        cell_count,
+        &mut field_schedules,
+        &mut field_snapshots,
+    )?;
+
+    let mut latest_stats: Option<StepStats> = None;
+    let mut current_time = 0.0;
+    while current_time < until_seconds {
+        let stats = backend.step(dt)?;
+        current_time = stats.time;
+        latest_stats = Some(stats.clone());
+        record_cuda_due_outputs(
+            &backend,
+            cell_count,
+            &stats,
+            &mut scalar_schedules,
+            &mut field_schedules,
+            &mut steps,
+            &mut field_snapshots,
+        )?;
+    }
+
+    record_cuda_final_outputs(
+        &backend,
+        cell_count,
+        latest_stats,
+        default_scalar_trace,
+        &field_schedules,
+        &mut steps,
+        &mut field_snapshots,
+    )?;
+
+    let final_magnetization = backend.copy_m(cell_count)?;
+
+    Ok(ExecutedRun {
+        result: RunResult {
+            status: RunStatus::Completed,
+            steps,
+            final_magnetization,
+        },
+        initial_magnetization,
+        field_snapshots,
+        provenance: ExecutionProvenance {
+            execution_engine: "cuda_fdm".to_string(),
+            precision: match plan.precision {
+                fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
+                fullmag_ir::ExecutionPrecision::Double => "double".to_string(),
+            },
+            device_name: Some(device_info.name),
+            compute_capability: Some(device_info.compute_capability),
+            cuda_driver_version: Some(device_info.driver_version),
+            cuda_runtime_version: Some(device_info.runtime_version),
+        },
+    })
+}
+
+#[cfg(not(feature = "cuda"))]
+fn execute_cuda_fdm(
+    _plan: &FdmPlanIR,
+    _until_seconds: f64,
+    _outputs: &[OutputIR],
+) -> Result<ExecutedRun, RunError> {
+    Err(RunError {
+        message:
+            "CUDA FDM backend requested but fullmag-runner was built without the 'cuda' feature"
+                .to_string(),
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn capture_initial_cuda_fields(
+    backend: &NativeFdmBackend,
+    cell_count: usize,
+    field_schedules: &mut [OutputSchedule],
+    field_snapshots: &mut Vec<FieldSnapshot>,
+) -> Result<(), RunError> {
+    let due_field_names = field_schedules
+        .iter()
+        .filter(|schedule| is_due(0.0, schedule.next_time))
+        .map(|schedule| schedule.name.clone())
+        .collect::<Vec<_>>();
+
+    for name in due_field_names {
+        if name == "m" {
+            field_snapshots.push(FieldSnapshot {
+                name: name.clone(),
+                step: 0,
+                time: 0.0,
+                solver_dt: 0.0,
+                values: backend.copy_m(cell_count)?,
+            });
+        }
+    }
+    advance_due_schedules(field_schedules, 0.0);
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn record_cuda_due_outputs(
+    backend: &NativeFdmBackend,
+    cell_count: usize,
+    stats: &StepStats,
+    scalar_schedules: &mut [OutputSchedule],
+    field_schedules: &mut [OutputSchedule],
+    steps: &mut Vec<StepStats>,
+    field_snapshots: &mut Vec<FieldSnapshot>,
+) -> Result<(), RunError> {
+    let scalar_due = scalar_schedules
+        .iter()
+        .any(|schedule| is_due(stats.time, schedule.next_time));
+    if scalar_due {
+        steps.push(stats.clone());
+        advance_due_schedules(scalar_schedules, stats.time);
+    }
+
+    let due_field_names = field_schedules
+        .iter()
+        .filter(|schedule| is_due(stats.time, schedule.next_time))
+        .map(|schedule| schedule.name.clone())
+        .collect::<Vec<_>>();
+    for name in due_field_names {
+        let values = match name.as_str() {
+            "m" => backend.copy_m(cell_count)?,
+            "H_ex" => backend.copy_h_ex(cell_count)?,
+            other => {
+                return Err(RunError {
+                    message: format!("unsupported CUDA field snapshot '{}'", other),
+                })
+            }
+        };
+        field_snapshots.push(FieldSnapshot {
+            name: name.clone(),
+            step: stats.step,
+            time: stats.time,
+            solver_dt: stats.dt,
+            values,
+        });
+    }
+    advance_due_schedules(field_schedules, stats.time);
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn record_cuda_final_outputs(
+    backend: &NativeFdmBackend,
+    cell_count: usize,
+    latest_stats: Option<StepStats>,
+    default_scalar_trace: bool,
+    field_schedules: &[OutputSchedule],
+    steps: &mut Vec<StepStats>,
+    field_snapshots: &mut Vec<FieldSnapshot>,
+) -> Result<(), RunError> {
+    let Some(latest_stats) = latest_stats else {
+        return Ok(());
+    };
+
+    let need_scalar = default_scalar_trace
+        || steps
+            .last()
+            .map(|stats| !same_time(stats.time, latest_stats.time))
+            .unwrap_or(true);
+    if need_scalar {
+        steps.push(latest_stats.clone());
+    }
+
+    let requested_field_names = field_schedules
+        .iter()
+        .map(|schedule| schedule.name.clone())
+        .collect::<Vec<_>>();
+    let missing_field_names = requested_field_names
+        .into_iter()
+        .filter(|name| {
+            field_snapshots
+                .iter()
+                .rev()
+                .find(|snapshot| snapshot.name == *name)
+                .map(|snapshot| !same_time(snapshot.time, latest_stats.time))
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+
+    for name in missing_field_names {
+        let values = match name.as_str() {
+            "m" => backend.copy_m(cell_count)?,
+            "H_ex" => backend.copy_h_ex(cell_count)?,
+            other => {
+                return Err(RunError {
+                    message: format!("unsupported CUDA field snapshot '{}'", other),
+                })
+            }
+        };
+        field_snapshots.push(FieldSnapshot {
+            name,
+            step: latest_stats.step,
+            time: latest_stats.time,
+            solver_dt: latest_stats.dt,
+            values,
+        });
+    }
+
+    Ok(())
 }

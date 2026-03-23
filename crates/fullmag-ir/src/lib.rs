@@ -153,6 +153,29 @@ pub struct SamplingIR {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StudyIR {
+    TimeEvolution {
+        dynamics: DynamicsIR,
+        sampling: SamplingIR,
+    },
+}
+
+impl StudyIR {
+    pub fn dynamics(&self) -> &DynamicsIR {
+        match self {
+            StudyIR::TimeEvolution { dynamics, .. } => dynamics,
+        }
+    }
+
+    pub fn sampling(&self) -> &SamplingIR {
+        match self {
+            StudyIR::TimeEvolution { sampling, .. } => sampling,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OutputIR {
     Field { name: String, every_seconds: f64 },
     Scalar { name: String, every_seconds: f64 },
@@ -202,8 +225,7 @@ pub struct ProblemIR {
     pub materials: Vec<MaterialIR>,
     pub magnets: Vec<MagnetIR>,
     pub energy_terms: Vec<EnergyTermIR>,
-    pub dynamics: DynamicsIR,
-    pub sampling: SamplingIR,
+    pub study: StudyIR,
     pub backend_policy: BackendPolicyIR,
     pub validation_profile: ValidationProfileIR,
 }
@@ -327,26 +349,28 @@ impl ProblemIR {
                 initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded { seed: 42 }),
             }],
             energy_terms: vec![EnergyTermIR::Exchange],
-            dynamics: DynamicsIR::Llg {
-                gyromagnetic_ratio: 2.211e5,
-                integrator: "heun".to_string(),
-                fixed_timestep: None,
-            },
-            sampling: SamplingIR {
-                outputs: vec![
-                    OutputIR::Field {
-                        name: "m".to_string(),
-                        every_seconds: 100e-12,
-                    },
-                    OutputIR::Field {
-                        name: "H_ex".to_string(),
-                        every_seconds: 100e-12,
-                    },
-                    OutputIR::Scalar {
-                        name: "E_ex".to_string(),
-                        every_seconds: 10e-12,
-                    },
-                ],
+            study: StudyIR::TimeEvolution {
+                dynamics: DynamicsIR::Llg {
+                    gyromagnetic_ratio: 2.211e5,
+                    integrator: "heun".to_string(),
+                    fixed_timestep: None,
+                },
+                sampling: SamplingIR {
+                    outputs: vec![
+                        OutputIR::Field {
+                            name: "m".to_string(),
+                            every_seconds: 100e-12,
+                        },
+                        OutputIR::Field {
+                            name: "H_ex".to_string(),
+                            every_seconds: 100e-12,
+                        },
+                        OutputIR::Scalar {
+                            name: "E_ex".to_string(),
+                            every_seconds: 10e-12,
+                        },
+                    ],
+                },
             },
             backend_policy: BackendPolicyIR {
                 requested_backend: BackendTarget::Fdm,
@@ -441,10 +465,10 @@ impl ProblemIR {
         if self.energy_terms.is_empty() {
             errors.push("at least one energy term is required".to_string());
         }
-        if self.sampling.outputs.is_empty() {
+        if self.study.sampling().outputs.is_empty() {
             errors.push("at least one output is required".to_string());
         }
-        for output in &self.sampling.outputs {
+        for output in &self.study.sampling().outputs {
             match output {
                 OutputIR::Field {
                     name,
@@ -476,7 +500,7 @@ impl ProblemIR {
                 }
             }
         }
-        match &self.dynamics {
+        match self.study.dynamics() {
             DynamicsIR::Llg {
                 gyromagnetic_ratio,
                 integrator,
@@ -802,10 +826,13 @@ mod tests {
     #[test]
     fn llg_requires_supported_integrator() {
         let mut ir = ProblemIR::bootstrap_example();
-        ir.dynamics = DynamicsIR::Llg {
-            gyromagnetic_ratio: 2.211e5,
-            integrator: "rk4".to_string(),
-            fixed_timestep: None,
+        ir.study = StudyIR::TimeEvolution {
+            dynamics: DynamicsIR::Llg {
+                gyromagnetic_ratio: 2.211e5,
+                integrator: "rk4".to_string(),
+                fixed_timestep: None,
+            },
+            sampling: ir.study.sampling().clone(),
         };
 
         let errors = ir
@@ -909,9 +936,14 @@ mod tests {
     #[test]
     fn outputs_require_positive_schedule() {
         let mut ir = ProblemIR::bootstrap_example();
-        ir.sampling.outputs[0] = OutputIR::Field {
-            name: "m".to_string(),
-            every_seconds: 0.0,
+        ir.study = StudyIR::TimeEvolution {
+            dynamics: ir.study.dynamics().clone(),
+            sampling: SamplingIR {
+                outputs: vec![OutputIR::Field {
+                    name: "m".to_string(),
+                    every_seconds: 0.0,
+                }],
+            },
         };
 
         let errors = ir

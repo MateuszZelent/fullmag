@@ -15,7 +15,7 @@ use crate::schedules::{
 };
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
-    StateObservables, StepStats,
+    StateObservables, StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -349,4 +349,173 @@ fn max_vector_norm(values: &[Vector3]) -> f64 {
         .iter()
         .map(|value| (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt())
         .fold(0.0, f64::max)
+}
+
+/// Execute FDM on CPU with a per-step callback for live WebSocket streaming.
+///
+/// This mirrors `execute_reference_fdm` but emits `StepUpdate` after each step.
+/// Magnetization data is included every `field_every_n` steps.
+pub(crate) fn execute_reference_fdm_with_callback(
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    grid: [u32; 3],
+    field_every_n: u64,
+    on_step: &mut impl FnMut(StepUpdate),
+) -> Result<ExecutedRun, RunError> {
+    if until_seconds <= 0.0 {
+        return Err(RunError {
+            message: "until_seconds must be positive".to_string(),
+        });
+    }
+    if plan.precision != ExecutionPrecision::Double {
+        return Err(RunError {
+            message: "CPU reference runner supports only 'double' precision".to_string(),
+        });
+    }
+
+    let grid_shape = GridShape::new(
+        plan.grid.cells[0] as usize,
+        plan.grid.cells[1] as usize,
+        plan.grid.cells[2] as usize,
+    )
+    .map_err(|e| RunError {
+        message: format!("Grid: {}", e),
+    })?;
+
+    let cell_size = CellSize::new(plan.cell_size[0], plan.cell_size[1], plan.cell_size[2])
+        .map_err(|e| RunError {
+            message: format!("CellSize: {}", e),
+        })?;
+
+    let material = MaterialParameters::new(
+        plan.material.saturation_magnetisation,
+        plan.material.exchange_stiffness,
+        plan.material.damping,
+    )
+    .map_err(|e| RunError {
+        message: format!("Material: {}", e),
+    })?;
+
+    let integrator = match plan.integrator {
+        IntegratorChoice::Heun => TimeIntegrator::Heun,
+    };
+
+    let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator).map_err(|e| RunError {
+        message: format!("LLG: {}", e),
+    })?;
+
+    let problem = ExchangeLlgProblem::new(grid_shape, cell_size, material, dynamics);
+
+    let mut state =
+        ExchangeLlgState::new(grid_shape, plan.initial_magnetization.clone()).map_err(|e| {
+            RunError {
+                message: format!("State: {}", e),
+            }
+        })?;
+    let initial_magnetization = state.magnetization().to_vec();
+
+    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let mut steps: Vec<StepStats> = Vec::new();
+    let mut field_snapshots: Vec<FieldSnapshot> = Vec::new();
+    let mut step_count: u64 = 0;
+
+    let mut scalar_schedules = collect_scalar_schedules(outputs)?;
+    let mut field_schedules = collect_field_schedules(outputs)?;
+    let default_scalar_trace = scalar_schedules.is_empty();
+
+    if default_scalar_trace {
+        record_scalar_snapshot(&problem, &state, 0, 0.0, 0, &mut steps)?;
+    } else {
+        record_due_outputs(
+            &problem,
+            &state,
+            0,
+            0.0,
+            0,
+            &mut scalar_schedules,
+            &mut field_schedules,
+            &mut steps,
+            &mut field_snapshots,
+        )?;
+    }
+
+    while state.time_seconds < until_seconds {
+        let wall_start = Instant::now();
+        problem.step(&mut state, dt).map_err(|e| RunError {
+            message: format!("Step {}: {}", step_count, e),
+        })?;
+        let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
+        step_count += 1;
+
+        if !default_scalar_trace || !field_schedules.is_empty() {
+            record_due_outputs(
+                &problem,
+                &state,
+                step_count,
+                dt,
+                wall_elapsed,
+                &mut scalar_schedules,
+                &mut field_schedules,
+                &mut steps,
+                &mut field_snapshots,
+            )?;
+        }
+
+        // Emit live update
+        let observables = observe_state(&problem, &state)?;
+        let include_field = field_every_n > 0 && step_count % field_every_n == 0;
+        let magnetization = if include_field {
+            Some(
+                observables
+                    .magnetization
+                    .iter()
+                    .flat_map(|v| v.iter().copied())
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        on_step(StepUpdate {
+            stats: make_step_stats(
+                step_count,
+                state.time_seconds,
+                dt,
+                wall_elapsed,
+                &observables,
+            ),
+            grid,
+            magnetization,
+            finished: false,
+        });
+    }
+
+    record_final_outputs(
+        &problem,
+        &state,
+        step_count,
+        dt,
+        default_scalar_trace,
+        &field_schedules,
+        &mut steps,
+        &mut field_snapshots,
+    )?;
+
+    Ok(ExecutedRun {
+        result: RunResult {
+            status: RunStatus::Completed,
+            steps,
+            final_magnetization: state.magnetization().to_vec(),
+        },
+        initial_magnetization,
+        field_snapshots,
+        provenance: ExecutionProvenance {
+            execution_engine: "cpu_reference".to_string(),
+            precision: "double".to_string(),
+            device_name: None,
+            compute_capability: None,
+            cuda_driver_version: None,
+            cuda_runtime_version: None,
+        },
+    })
 }

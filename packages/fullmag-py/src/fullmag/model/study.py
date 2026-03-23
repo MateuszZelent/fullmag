@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from fullmag._validation import require_non_empty
 from fullmag.model.dynamics import LLG
 from fullmag.model.outputs import SaveField, SaveScalar
 
@@ -18,8 +17,6 @@ class TimeEvolution:
     def __post_init__(self) -> None:
         if not self.outputs:
             raise ValueError("TimeEvolution requires at least one output")
-        for output in self.outputs:
-            require_non_empty(getattr(output, "name", ""), "output name")
 
     def to_ir(self) -> dict[str, object]:
         return {

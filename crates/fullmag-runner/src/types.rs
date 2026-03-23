@@ -30,6 +30,22 @@ pub struct StepStats {
     pub wall_time_ns: u64,
 }
 
+/// Lightweight update emitted by the runner for live WebSocket streaming.
+/// Contains step stats plus optional field snapshot for 3D preview.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepUpdate {
+    pub stats: StepStats,
+    /// Grid dimensions [nx, ny, nz] for client-side reconstruction.
+    pub grid: [u32; 3],
+    /// Magnetization snapshot as flat [mx,my,mz, mx,my,mz, ...].
+    /// Sent periodically (not every step) to limit bandwidth.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub magnetization: Option<Vec<f64>>,
+    /// true when simulation has completed.
+    #[serde(default)]
+    pub finished: bool,
+}
+
 #[derive(Debug)]
 pub struct RunError {
     pub message: String,

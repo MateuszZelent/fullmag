@@ -15,7 +15,7 @@ mod schedules;
 mod types;
 
 // Public re-exports (unchanged API surface).
-pub use types::{ExecutionProvenance, RunError, RunResult, RunStatus, StepStats};
+pub use types::{ExecutionProvenance, RunError, RunResult, RunStatus, StepStats, StepUpdate};
 
 use fullmag_ir::{BackendPlanIR, FdmPlanIR, OutputIR, ProblemIR};
 
@@ -48,6 +48,72 @@ pub fn run_problem(
             message: format!("Failed to write artifacts: {}", e),
         });
     }
+
+    Ok(executed.result)
+}
+
+/// Run a problem with a per-step callback for live streaming.
+///
+/// The callback receives a `StepUpdate` after each simulation step.
+/// Magnetization data is included every `field_every_n` steps (default: 10).
+pub fn run_problem_with_callback(
+    problem: &ProblemIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    mut on_step: impl FnMut(StepUpdate),
+) -> Result<RunResult, RunError> {
+    let plan = fullmag_plan::plan(problem)?;
+
+    let fdm = match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => fdm,
+        _ => {
+            return Err(RunError {
+                message: "Phase 1 runner only supports FDM backend plan".to_string(),
+            })
+        }
+    };
+
+    let grid = fdm.grid.cells;
+    let engine = dispatch::resolve_fdm_engine()?;
+    let executed = dispatch::execute_fdm_with_callback(
+        engine,
+        fdm,
+        until_seconds,
+        &plan.output_plan.outputs,
+        grid,
+        field_every_n,
+        &mut on_step,
+    )?;
+
+    if let Err(e) = artifacts::write_artifacts(output_dir, problem, &plan, &executed) {
+        return Err(RunError {
+            message: format!("Failed to write artifacts: {}", e),
+        });
+    }
+
+    // Emit final update with finished flag
+    let final_stats = executed.result.steps.last().cloned().unwrap_or(StepStats {
+        step: 0,
+        time: 0.0,
+        dt: 0.0,
+        e_ex: 0.0,
+        max_dm_dt: 0.0,
+        max_h_eff: 0.0,
+        wall_time_ns: 0,
+    });
+    let final_m: Vec<f64> = executed
+        .result
+        .final_magnetization
+        .iter()
+        .flat_map(|v| v.iter().copied())
+        .collect();
+    on_step(StepUpdate {
+        stats: final_stats,
+        grid: [grid[0], grid[1], grid[2]],
+        magnetization: Some(final_m),
+        finished: true,
+    });
 
     Ok(executed.result)
 }

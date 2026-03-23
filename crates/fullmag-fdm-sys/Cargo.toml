@@ -6,6 +6,8 @@ version.workspace = true
 publish.workspace = true
 links = "fullmag_fdm"
 
+[features]
+default = []
+build-native = []
+
 [build-dependencies]
-# cmake crate for native build integration (Phase 2)
-# cmake = "0.1"

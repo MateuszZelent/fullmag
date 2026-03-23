@@ -52,10 +52,11 @@ It is the normal live observability surface for local runs.
 
 Current code is still earlier than the target product shell:
 
-- `apps/web` is still mostly a landing page,
-- `fullmag-api` exposes only bootstrap endpoints,
-- there is no session manager or session stream yet,
-- the current public `fullmag` command is still Python-owned in code,
+- `apps/web` is still mostly a bootstrap shell,
+- `apps/web` now includes `/runs/[id]` as the first target route,
+- `fullmag-api` now exposes bootstrap session/run endpoints,
+- the Rust host and Python helper path now exist in code,
+- there is still no live browser-opened local session loop yet,
 - the executable solver slice is still narrow:
   - `Box`
   - one ferromagnet

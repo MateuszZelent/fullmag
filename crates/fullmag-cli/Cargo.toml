@@ -10,4 +10,5 @@ clap.workspace = true
 fullmag-engine = { path = "../fullmag-engine" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-runner = { path = "../fullmag-runner" }
+serde.workspace = true
 serde_json.workspace = true

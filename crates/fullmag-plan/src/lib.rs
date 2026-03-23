@@ -115,7 +115,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         ));
     }
 
-    validate_executable_outputs(&problem.sampling.outputs, &mut errors);
+    validate_executable_outputs(&problem.study.sampling().outputs, &mut errors);
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
         errors.push(
             "execution_precision='single' is reserved for the Phase 2 CUDA path; the current CPU reference runner supports only 'double'"
@@ -158,7 +158,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     };
 
     // Check integrator
-    let integrator = match &problem.dynamics {
+    let integrator = match problem.study.dynamics() {
         fullmag_ir::DynamicsIR::Llg { integrator, .. } => {
             if integrator == "heun" {
                 IntegratorChoice::Heun
@@ -173,11 +173,11 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         }
     };
 
-    let fixed_timestep = match &problem.dynamics {
+    let fixed_timestep = match problem.study.dynamics() {
         fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } => *fixed_timestep,
     };
 
-    let gyromagnetic_ratio = match &problem.dynamics {
+    let gyromagnetic_ratio = match problem.study.dynamics() {
         fullmag_ir::DynamicsIR::Llg {
             gyromagnetic_ratio, ..
         } => *gyromagnetic_ratio,
@@ -210,7 +210,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         },
         backend_plan: BackendPlanIR::Fdm(fdm_plan),
         output_plan: OutputPlanIR {
-            outputs: problem.sampling.outputs.clone(),
+            outputs: problem.study.sampling().outputs.clone(),
         },
         provenance: ProvenancePlanIR {
             notes: vec![
@@ -355,10 +355,15 @@ mod tests {
     #[test]
     fn non_canonical_output_is_rejected_for_execution() {
         let mut ir = ProblemIR::bootstrap_example();
-        ir.sampling.outputs.push(OutputIR::Scalar {
+        let mut outputs = ir.study.sampling().outputs.clone();
+        outputs.push(OutputIR::Scalar {
             name: "E_total".to_string(),
             every_seconds: 1e-12,
         });
+        ir.study = fullmag_ir::StudyIR::TimeEvolution {
+            dynamics: ir.study.dynamics().clone(),
+            sampling: fullmag_ir::SamplingIR { outputs },
+        };
 
         let err = plan(&ir).expect_err("non-canonical phase 1 output should be rejected");
         assert!(err

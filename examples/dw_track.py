@@ -32,11 +32,13 @@ def build() -> fm.Problem:
             fm.InterfacialDMI(D=3e-3),
             fm.Zeeman(B=(0.0, 0.0, 0.1)),
         ],
-        dynamics=fm.LLG(),
-        outputs=[
-            fm.SaveField("m", every=10e-12),
-            fm.SaveScalar("E_total", every=10e-12),
-        ],
+        study=fm.TimeEvolution(
+            dynamics=fm.LLG(),
+            outputs=[
+                fm.SaveField("m", every=10e-12),
+                fm.SaveScalar("E_total", every=10e-12),
+            ],
+        ),
         discretization=fm.DiscretizationHints(
             fdm=fm.FDM(cell=(2e-9, 2e-9, 1e-9)),
             fem=fm.FEM(order=1, hmax=2e-9),

@@ -4,7 +4,7 @@ export default function DashboardPage() {
       <div className="page-header">
         <h1 className="page-title">Dashboard</h1>
         <p className="page-subtitle">
-          Execution overview and recent activity
+          Session-backed execution overview and recent activity
         </p>
       </div>
 
@@ -47,7 +47,7 @@ export default function DashboardPage() {
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
               <span>
-                No runs yet. Execute a simulation to see results here.
+                No session-backed runs yet. Execute a simulation through the Rust host to see results here.
               </span>
               <code
                 style={{
@@ -96,9 +96,17 @@ export default function DashboardPage() {
                 <span className="badge-dot" />
                 CPU reference
               </span>
+              <span className="badge badge-success">
+                <span className="badge-dot" />
+                Rust host + Python helper
+              </span>
+              <span className="badge badge-success">
+                <span className="badge-dot" />
+                Session manifests
+              </span>
               <span className="badge badge-warning">
                 <span className="badge-dot" />
-                CUDA FDM (Phase 2)
+                CUDA FDM calibration
               </span>
               <span className="badge badge-info">
                 <span className="badge-dot" />

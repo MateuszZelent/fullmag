@@ -30,12 +30,15 @@ What exists:
 
 - public CPU reference execution for the narrow exchange-only FDM slice,
 - precision policy in Python API, `ProblemIR`, planning, and metadata,
-- documentation for GPU precision and calibration.
+- documentation for GPU precision and calibration,
+- native CUDA/FDM backend source and tests,
+- Rust-owned script host plus Python helper bridge,
+- bootstrap file-backed session manifests and API routes.
 
 What does not exist yet:
 
-- production CUDA backend,
-- Rust dispatch into CUDA,
+- fully qualified production CUDA backend,
+- finished public GPU qualification,
 - GPU parity and calibration harness,
 - GPU-backed session/run shell,
 - GPU-backed control-room flow.

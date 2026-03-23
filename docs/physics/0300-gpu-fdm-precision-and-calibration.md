@@ -236,18 +236,19 @@ precision mode, not an equivalent `fp64` implementation.
 - [x] Python API
 - [x] ProblemIR
 - [x] Planner
-- [ ] Capability matrix
-- [ ] FDM backend
+- [x] Capability matrix
+- [x] FDM backend source tree and ABI
 - [ ] FEM backend
 - [ ] Hybrid backend
-- [ ] Outputs / observables
-- [ ] Tests / benchmarks
+- [x] Outputs / observables contract
+- [x] Native CUDA tests / benchmarks scaffold
 - [x] Documentation
 
 ## 7. Known limits and deferred work
 
 - The current CPU reference runner remains `double` only.
-- CUDA kernels are not implemented yet.
+- The native CUDA backend now exists, but the product-facing GPU qualification is not complete.
+- The Rust runner now has a CUDA dispatch path, but calibration and public qualification remain in progress.
 - Public `mixed` precision is intentionally deferred.
 - Precision-specific performance claims must not be made before Nsight-backed profiling exists.
 - Precision policy for FEM and hybrid backends is deferred until those backends exist.

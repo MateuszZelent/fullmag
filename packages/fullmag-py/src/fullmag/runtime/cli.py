@@ -14,8 +14,8 @@ from fullmag.runtime.simulation import Simulation, result_from_run_payload
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="fullmag",
-        description="Run a Fullmag Python script through the current executable solver path.",
+        prog="fullmag-python",
+        description="Legacy Python-owned launcher kept for direct package use and testing.",
     )
     parser.add_argument("script", help="Path to a Python script exposing build() or problem")
     parser.add_argument(

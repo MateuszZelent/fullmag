@@ -11,6 +11,7 @@
 #[cfg(feature = "cuda")]
 use fullmag_fdm_sys as ffi;
 
+#[cfg(feature = "cuda")]
 use crate::types::RunError;
 
 #[cfg(feature = "cuda")]
@@ -91,9 +92,7 @@ impl NativeFdmBackend {
         // Check for deferred creation errors
         let err = unsafe { ffi::fullmag_fdm_backend_last_error(handle) };
         if !err.is_null() {
-            let msg = unsafe { CStr::from_ptr(err) }
-                .to_string_lossy()
-                .to_string();
+            let msg = unsafe { CStr::from_ptr(err) }.to_string_lossy().to_string();
             unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
             return Err(RunError { message: msg });
         }
@@ -151,12 +150,23 @@ impl NativeFdmBackend {
         }
 
         // Re-pack flat f64 → [f64; 3]
-        let result: Vec<[f64; 3]> = flat
-            .chunks_exact(3)
-            .map(|c| [c[0], c[1], c[2]])
-            .collect();
+        let result: Vec<[f64; 3]> = flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
 
         Ok(result)
+    }
+
+    pub fn copy_m(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_field(
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
+            cell_count,
+        )
+    }
+
+    pub fn copy_h_ex(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_field(
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
+            cell_count,
+        )
     }
 
     /// Query device info.
@@ -169,9 +179,8 @@ impl NativeFdmBackend {
             runtime_version: 0,
         };
 
-        let rc = unsafe {
-            ffi::fullmag_fdm_backend_get_device_info(self.handle as *mut _, &mut info)
-        };
+        let rc =
+            unsafe { ffi::fullmag_fdm_backend_get_device_info(self.handle as *mut _, &mut info) };
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("get_device_info failed"));
         }
@@ -196,9 +205,7 @@ impl NativeFdmBackend {
         let msg = if err.is_null() {
             fallback.to_string()
         } else {
-            unsafe { CStr::from_ptr(err) }
-                .to_string_lossy()
-                .to_string()
+            unsafe { CStr::from_ptr(err) }.to_string_lossy().to_string()
         };
         RunError { message: msg }
     }
@@ -215,6 +222,7 @@ impl Drop for NativeFdmBackend {
 }
 
 /// Parsed device info.
+#[cfg(feature = "cuda")]
 #[derive(Debug, Clone)]
 pub(crate) struct DeviceInfo {
     pub name: String,

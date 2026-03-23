@@ -104,10 +104,7 @@ pub struct fullmag_fdm_backend {
 
 // ── Functions ──
 
-#[cfg_attr(
-    not(feature = "link-native"),
-    allow(dead_code)
-)]
+#[cfg_attr(not(feature = "build-native"), allow(dead_code))]
 extern "C" {
     pub fn fullmag_fdm_is_available() -> i32;
 
@@ -133,11 +130,7 @@ extern "C" {
         out_info: *mut fullmag_fdm_device_info,
     ) -> i32;
 
-    pub fn fullmag_fdm_backend_last_error(
-        handle: *mut fullmag_fdm_backend,
-    ) -> *const c_char;
+    pub fn fullmag_fdm_backend_last_error(handle: *mut fullmag_fdm_backend) -> *const c_char;
 
-    pub fn fullmag_fdm_backend_destroy(
-        handle: *mut fullmag_fdm_backend,
-    );
+    pub fn fullmag_fdm_backend_destroy(handle: *mut fullmag_fdm_backend);
 }

@@ -28,6 +28,10 @@ This document keeps the project honest by recording:
 The following are implemented:
 
 - embedded Python authoring API,
+- canonical public model split:
+  - model
+  - study
+  - runtime
 - analytic geometries:
   - `Box`
   - `Cylinder`
@@ -35,11 +39,19 @@ The following are implemented:
   - `uniform`
   - `random(seed)`
 - typed `ProblemIR`,
+- typed `StudyIR`,
 - typed `ExecutionPlanIR`,
 - Box-to-FDM planning,
 - reference CPU/FDM exchange-only engine,
 - runner and artifact writing,
-- public executable narrow slice through Python runtime,
+- Rust-hosted `fullmag script.py` flow through a spawned Python helper,
+- bootstrap file-based session manifests:
+  - `session.json`
+  - `run.json`
+  - `events.ndjson`
+- bootstrap session/run API routes in `fullmag-api`,
+- `/runs/[id]` bootstrap control-room route in the web app,
+- public executable narrow slice through the Rust host and Python runtime,
 - precision contract:
   - `single`
   - `double`
@@ -58,14 +70,10 @@ It is not yet the target application shell.
 
 The following are not yet implemented:
 
-- Rust-owned public `fullmag script.py` host,
-- Python helper bridge invoked by the Rust host,
-- `Study` as a canonical public model layer,
-- `StudyIR`,
-- session manager,
-- session/run API,
-- live browser control room,
-- GPU/CUDA FDM backend,
+- browser-opened live local session loop,
+- rich in-memory session manager beyond file-backed manifests,
+- streaming `/runs/[id]` control room,
+- fully integrated GPU/CUDA FDM product path,
 - FEM execution,
 - remote session model.
 
@@ -74,20 +82,20 @@ The following are not yet implemented:
 The biggest remaining mismatches are:
 
 1. **launcher ownership**
-   - current code: Python package owns the public `fullmag` entrypoint
-   - target: Rust host owns `fullmag script.py` and calls Python as a helper
+   - current code: Rust host owns `fullmag script.py` and calls Python as a helper
+   - remaining gap: packaging and browser-opener behavior still need polishing
 
 2. **public model shape**
-   - current code: `Problem(..., dynamics=..., outputs=...)`
-   - target: `Model + Study + Runtime`, with compatibility shim from the old shape
+   - current code: `Model + Study + Runtime`
+   - compatibility shim from `Problem(..., dynamics=..., outputs=...)` still exists intentionally
 
 3. **runtime spine**
-   - current code: direct run path with artifacts
-   - target: session-owned execution with event stream and run API
+   - current code: file-backed session/run manifests plus bootstrap API
+   - target: richer session-owned execution with live event stream and local browser loop
 
 4. **frontend role**
-   - current code: landing page
-   - target: `/runs/[id]` as the first real product screen
+   - current code: landing page plus bootstrap `/runs/[id]`
+   - target: `/runs/[id]` as the live first-class product screen
 
 ## 4. Decision on currently active plans
 
@@ -132,15 +140,15 @@ The project should now move in this order:
    - stop treating older architecture docs as competing truths
 
 2. **runtime shell contract**
-   - Rust host for `fullmag script.py`
-   - Python helper bridge
-   - session model
-   - session/run API contract
+   - harden the Rust host for `fullmag script.py`
+   - harden the Python helper bridge
+   - deepen the session model beyond file manifests
+   - harden session/run API behavior
 
 3. **public model migration**
-   - add `Study`
-   - add compatibility shim from the old `dynamics/outputs` shape
-   - prepare `StudyIR`
+   - keep `Study`
+   - preserve the compatibility shim from the old `dynamics/outputs` shape
+   - keep `StudyIR` stable while planner/runtime expand
 
 4. **control-room shell**
    - `/runs/[id]`
@@ -171,15 +179,16 @@ What exists:
 - precision policy,
 - CPU reference baseline,
 - narrow public CPU execution path,
-- rollout and playbook docs.
+- rollout and playbook docs,
+- native CUDA/FDM backend source tree,
+- Rust-owned launcher and bootstrap session shell.
 
 What does not exist yet:
 
-- production CUDA backend,
-- Rust-to-CUDA runner dispatch,
+- fully qualified production CUDA backend,
 - GPU calibration harness,
 - GPU-backed `fullmag script.py` product path,
-- session-owned live runtime shell.
+- live browser session shell.
 
 ## 8. Completed plans archive
 

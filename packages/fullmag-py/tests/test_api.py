@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import fullmag as fm
 from fullmag.runtime import cli as runtime_cli
+from fullmag.runtime import helper as runtime_helper
 
 
 class ProblemApiTests(unittest.TestCase):
@@ -39,11 +40,13 @@ class ProblemApiTests(unittest.TestCase):
                 fm.InterfacialDMI(D=3e-3),
                 fm.Zeeman(B=(0.0, 0.0, 0.1)),
             ],
-            dynamics=fm.LLG(),
-            outputs=[
-                fm.SaveField("m", every=10e-12),
-                fm.SaveScalar("E_total", every=10e-12),
-            ],
+            study=fm.TimeEvolution(
+                dynamics=fm.LLG(),
+                outputs=[
+                    fm.SaveField("m", every=10e-12),
+                    fm.SaveScalar("E_total", every=10e-12),
+                ],
+            ),
             discretization=fm.DiscretizationHints(
                 fdm=fm.FDM(cell=(2e-9, 2e-9, 1e-9)),
                 fem=fm.FEM(order=1, hmax=2e-9),
@@ -63,13 +66,32 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(ir["geometry"]["entries"][0]["kind"], "box")
         self.assertEqual(ir["geometry"]["entries"][0]["size"], [200e-9, 20e-9, 5e-9])
         self.assertEqual(ir["energy_terms"][2]["kind"], "interfacial_dmi")
-        self.assertEqual(ir["dynamics"]["integrator"], "heun")
-        self.assertEqual(ir["sampling"]["outputs"][0]["name"], "m")
+        self.assertEqual(ir["study"]["kind"], "time_evolution")
+        self.assertEqual(ir["study"]["dynamics"]["integrator"], "heun")
+        self.assertEqual(ir["study"]["sampling"]["outputs"][0]["name"], "m")
 
     def test_random_initializer_serializes_to_ir(self) -> None:
         initializer = fm.init.random(seed=42)
 
         self.assertEqual(initializer.to_ir(), {"kind": "random_seeded", "seed": 42})
+
+    def test_legacy_dynamics_and_outputs_are_normalized_to_time_evolution(self) -> None:
+        geometry = fm.Box(size=(100e-9, 20e-9, 5e-9), name="track")
+        material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
+        magnet = fm.Ferromagnet(name="track", geometry=geometry, material=material)
+
+        problem = fm.Problem(
+            name="legacy_shape",
+            magnets=[magnet],
+            energy=[fm.Exchange()],
+            dynamics=fm.LLG(),
+            outputs=[fm.SaveField("m", every=1e-12)],
+        )
+
+        self.assertIsInstance(problem.study, fm.TimeEvolution)
+        ir = problem.to_ir()
+        self.assertEqual(ir["study"]["kind"], "time_evolution")
+        self.assertEqual(ir["study"]["sampling"]["outputs"][0]["name"], "m")
 
     def test_cylinder_serializes_to_ir(self) -> None:
         geometry = fm.Cylinder(radius=50e-9, height=10e-9, name="pillar")
@@ -110,8 +132,10 @@ class ProblemApiTests(unittest.TestCase):
                 name="from_build",
                 magnets=[magnet],
                 energy=[fm.Exchange(), fm.Demag()],
-                dynamics=fm.LLG(),
-                outputs=[fm.SaveField("m", every=1e-12)],
+                study=fm.TimeEvolution(
+                    dynamics=fm.LLG(),
+                    outputs=[fm.SaveField("m", every=1e-12)],
+                ),
             )
 
         problem = build()
@@ -136,8 +160,10 @@ class ProblemApiTests(unittest.TestCase):
             name="from_problem",
             magnets=[magnet],
             energy=[fm.Exchange(), fm.Demag()],
-            dynamics=fm.LLG(),
-            outputs=[fm.SaveField("m", every=1e-12)],
+            study=fm.TimeEvolution(
+                dynamics=fm.LLG(),
+                outputs=[fm.SaveField("m", every=1e-12)],
+            ),
         )
         """
 
@@ -173,8 +199,10 @@ class ProblemApiTests(unittest.TestCase):
                 name="cli_problem",
                 magnets=[magnet],
                 energy=[fm.Exchange()],
-                dynamics=fm.LLG(),
-                outputs=[fm.SaveField("m", every=1e-12)],
+                study=fm.TimeEvolution(
+                    dynamics=fm.LLG(),
+                    outputs=[fm.SaveField("m", every=1e-12)],
+                ),
                 discretization=fm.DiscretizationHints(
                     fdm=fm.FDM(cell=(5e-9, 5e-9, 5e-9)),
                 ),
@@ -248,8 +276,10 @@ class ProblemApiTests(unittest.TestCase):
             name="json_problem",
             magnets=[magnet],
             energy=[fm.Exchange()],
-            dynamics=fm.LLG(),
-            outputs=[fm.SaveField("m", every=1e-12)],
+            study=fm.TimeEvolution(
+                dynamics=fm.LLG(),
+                outputs=[fm.SaveField("m", every=1e-12)],
+            ),
             discretization=fm.DiscretizationHints(
                 fdm=fm.FDM(cell=(5e-9, 5e-9, 5e-9)),
             ),
@@ -278,6 +308,53 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(payload["problem_name"], "json_problem")
         self.assertEqual(payload["status"], "completed")
         self.assertEqual(payload["precision"], "double")
+
+    def test_helper_exports_ir_for_rust_host(self) -> None:
+        script = """
+        import fullmag as fm
+
+        def build():
+            geom = fm.Box(size=(100e-9, 20e-9, 5e-9), name="track")
+            material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.1)
+            magnet = fm.Ferromagnet(name="track", geometry=geom, material=material)
+            return fm.Problem(
+                name="helper_problem",
+                magnets=[magnet],
+                energy=[fm.Exchange()],
+                study=fm.TimeEvolution(
+                    dynamics=fm.LLG(),
+                    outputs=[fm.SaveField("m", every=1e-12)],
+                ),
+                discretization=fm.DiscretizationHints(
+                    fdm=fm.FDM(cell=(5e-9, 5e-9, 5e-9)),
+                ),
+            )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_helper.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = runtime_helper.main(
+                    [
+                        "export-ir",
+                        "--script",
+                        str(path),
+                        "--backend",
+                        "fdm",
+                        "--mode",
+                        "strict",
+                        "--precision",
+                        "double",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        ir = json.loads(stdout.getvalue())
+        self.assertEqual(ir["problem_meta"]["name"], "helper_problem")
+        self.assertEqual(ir["study"]["kind"], "time_evolution")
 
 
 if __name__ == "__main__":

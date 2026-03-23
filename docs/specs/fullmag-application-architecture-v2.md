@@ -25,10 +25,11 @@ drifted.
 What exists today is still narrower than the desired product shell:
 
 - CPU/FDM reference execution exists for a narrow exchange-only slice,
-- the browser is still not a real control room,
-- there is still no session/run shell,
-- launcher ownership is still not implemented the way the target product requires,
-- the public model still needs the explicit `Study` layer.
+- the browser is still not a real live control room,
+- a bootstrap file-based session/run shell now exists,
+- launcher ownership is now implemented through the Rust host plus Python helper bridge,
+- the public model now has the explicit `Study` layer,
+- GPU/FDM and rich control-room behavior still need to be hardened under that shell.
 
 That means the project needs one reset rule:
 

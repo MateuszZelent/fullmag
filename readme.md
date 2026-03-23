@@ -11,7 +11,7 @@ Users write ordinary Python scripts and notebooks, but those objects serialize i
 
 - `packages/fullmag-py` — embedded Python DSL and runtime scaffolding
 - `crates/fullmag-ir` — typed `ProblemIR`, validation, and planning summaries
-- `crates/fullmag-cli` — local validation and planning CLI
+- `crates/fullmag-cli` — Rust-hosted local launcher, validation, planning, and session bootstrap
 - `crates/fullmag-api` — control-plane HTTP API
 - `crates/fullmag-py-core` — private PyO3 bridge for Python/Rust integration
 - `apps/web` — Next.js control room
@@ -22,16 +22,16 @@ Users write ordinary Python scripts and notebooks, but those objects serialize i
 ## Execution chain
 
 ```text
-Python script / notebook
+fullmag script.py
+        |
+        +--> Rust host
+        |      |
+        |      +--> spawn Python helper in the active environment
+        |             |
+        |             +--> load script + build canonical ProblemIR
         |
         v
-embedded Python DSL (fullmag)
-        |
-        v
-Python-built ProblemIR
-        |
-        v
-Rust validation + normalization + planning
+Rust validation + normalization + planning + session bootstrap
         |
         +--> FDM backend
         +--> FEM backend
@@ -48,13 +48,16 @@ The note must cover equations, symbols, SI units, assumptions, backend interpret
 The repository now includes:
 
 - a real Python package scaffold in `packages/fullmag-py`,
-- typed `ProblemIR` sections in Rust,
-- CLI commands for JSON validation and planning summaries,
+- `Model + Study + Runtime` public API with `TimeEvolution`,
+- typed `ProblemIR` and `StudyIR` sections in Rust,
+- a Rust-hosted `fullmag script.py` launcher path with a spawned Python helper,
+- bootstrap file-based session manifests and session/run API routes,
 - a canonical Python example in `examples/dw_track.py`,
 - mirrored agent instructions between `.agents` and `.github`,
 - repo consistency checks and a hard `docs/physics` gate in CI.
 
-This is still a foundation milestone. It is intentionally planning-first, not solver-depth-first.
+This is still a foundation milestone. The shell of the application now exists, but live control-room
+behavior and GPU/FEM depth are still in progress.
 
 ## Quick start
 
@@ -81,10 +84,11 @@ cargo test --workspace
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e packages/fullmag-py
-python -m unittest discover -s packages/fullmag-py/tests -v
+PYTHONPATH=packages/fullmag-py/src python -m unittest discover -s packages/fullmag-py/tests -v
 python3 scripts/check_repo_consistency.py
 python scripts/run_python_ir_smoke.py --cli target/debug/fullmag-cli
 /usr/local/cargo/bin/cargo run -p fullmag-cli -- reference-exchange-demo --steps 10 --dt 1e-13
+/usr/local/cargo/bin/cargo run -p fullmag-cli -- examples/exchange_relax.py --until 2e-9 --json
 ```
 
 ### 4. Inspect the canonical example
