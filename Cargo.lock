@@ -243,9 +243,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "fullmag-engine",
  "fullmag-ir",
  "serde_json",
 ]
+
+[[package]]
+name = "fullmag-engine"
+version = "0.1.0"
 
 [[package]]
 name = "fullmag-ir"

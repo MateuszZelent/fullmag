@@ -52,6 +52,29 @@ If the note does not exist or is incomplete, the task is not ready for implement
 - `docs/physics` — publication-style physics documentation and validation notes.
 - `.agents/skills` — canonical agent skills.
 - `.agents/workflows` — canonical agent workflows.
+- `external_solvers/` — **reference solver codebases** (not part of Fullmag, gitignored).
+
+## Reference solvers
+
+`external_solvers/` contains full source trees of existing micromagnetic solvers. These are **read-only references** — study them for patterns and best practices, never copy code verbatim.
+
+| Directory | Solver | Language | Method | Learn from |
+|-----------|--------|----------|--------|------------|
+| `external_solvers/3/` | **mumax3** | Go + CUDA | FDM | Lightweight workflow, CUDA kernel patterns, cuFFT demag, batch/server mode, `engine/` module structure |
+| `external_solvers/plus/` | **mumax+** | C++/CUDA + Python | FDM | **Python API design** (`mumaxplus/` package), extensible core, C++/CUDA kernel architecture, `src/` operator layout |
+| `external_solvers/BORIS/` | **BORIS** | C++/CUDA | FDM | Multiphysics design, multi-GPU path, spin transport, `Boris/` module organization, CUDA library patterns |
+| `external_solvers/tetmag/` | **tetmag** | C++ | FEM | FEM mesh pipeline, GPU operator assembly, tetrahedral discretization, `gpu/` kernels, boundary conditions |
+| `external_solvers/tetrax/` | **tetrax** | Python | FEM | Python-first FEM workflow, `tetrax/` package structure, test patterns, pyproject packaging |
+
+### When to consult reference solvers
+
+- **Designing a new CUDA kernel** → check `3/cuda/`, `plus/src/`, `BORIS/BorisCUDALib/`
+- **Designing Python API classes** → check `plus/mumaxplus/` (closest to our architecture)
+- **Implementing energy terms** → compare operator structures across all solvers
+- **FEM discretization** → check `tetmag/` and `tetrax/tetrax/`
+- **Demag/FFT pipeline** → check `3/engine/` and `plus/src/`
+- **Time integrators** → compare approaches in `3/engine/`, `plus/src/`, `BORIS/Boris/`
+- **Writing validation tests** → check `3/test/`, `plus/test/`, `tetmag/examples/`, `tetrax/tests/`
 
 ## Definition of done for foundation changes
 

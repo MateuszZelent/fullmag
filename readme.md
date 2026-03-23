@@ -16,6 +16,7 @@ Users write ordinary Python scripts and notebooks, but those objects serialize i
 - `crates/fullmag-py-core` — private PyO3 bridge for Python/Rust integration
 - `apps/web` — Next.js control room
 - `native/` — native FDM/FEM/hybrid backend seams behind C ABI
+- `external_solvers/` — reference solver codebases (gitignored): mumax3, mumax+, BORIS, tetmag, tetrax
 - `docs/` — specs, ADRs, and publication-style physics notes
 
 ## Execution chain
@@ -83,6 +84,7 @@ pip install -e packages/fullmag-py
 python -m unittest discover -s packages/fullmag-py/tests -v
 python3 scripts/check_repo_consistency.py
 python scripts/run_python_ir_smoke.py --cli target/debug/fullmag-cli
+/usr/local/cargo/bin/cargo run -p fullmag-cli -- reference-exchange-demo --steps 10 --dt 1e-13
 ```
 
 ### 4. Inspect the canonical example

@@ -92,10 +92,14 @@ pub enum EnergyTermIR {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DynamicsIR {
-    Llg,
+    Llg {
+        gyromagnetic_ratio: f64,
+        integrator: String,
+        fixed_timestep: Option<f64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -218,7 +222,11 @@ impl ProblemIR {
                 EnergyTermIR::InterfacialDmi { d: 3e-3 },
                 EnergyTermIR::Zeeman { b: [0.0, 0.0, 0.1] },
             ],
-            dynamics: DynamicsIR::Llg,
+            dynamics: DynamicsIR::Llg {
+                gyromagnetic_ratio: 2.211e5,
+                integrator: "heun".to_string(),
+                fixed_timestep: None,
+            },
             sampling: SamplingIR {
                 outputs: vec![
                     OutputIR::Field {
@@ -290,6 +298,25 @@ impl ProblemIR {
         }
         if self.sampling.outputs.is_empty() {
             errors.push("at least one output is required".to_string());
+        }
+        match &self.dynamics {
+            DynamicsIR::Llg {
+                gyromagnetic_ratio,
+                integrator,
+                fixed_timestep,
+            } => {
+                if *gyromagnetic_ratio <= 0.0 {
+                    errors.push("llg.gyromagnetic_ratio must be positive".to_string());
+                }
+                if integrator.trim().is_empty() {
+                    errors.push("llg.integrator must not be empty".to_string());
+                } else if integrator != "heun" {
+                    errors.push("llg.integrator must currently be 'heun'".to_string());
+                }
+                if fixed_timestep.is_some_and(|value| value <= 0.0) {
+                    errors.push("llg.fixed_timestep must be positive when provided".to_string());
+                }
+            }
         }
 
         validate_unique_names(
@@ -510,5 +537,22 @@ mod tests {
         assert_eq!(plan.requested_backend, BackendTarget::Fem);
         assert_eq!(plan.resolved_backend, BackendTarget::Fem);
         assert_eq!(plan.execution_mode, ExecutionMode::Strict);
+    }
+
+    #[test]
+    fn llg_requires_supported_integrator() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.dynamics = DynamicsIR::Llg {
+            gyromagnetic_ratio: 2.211e5,
+            integrator: "rk4".to_string(),
+            fixed_timestep: None,
+        };
+
+        let errors = ir
+            .validate()
+            .expect_err("unsupported llg integrator must fail validation");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("llg.integrator must currently be 'heun'")));
     }
 }

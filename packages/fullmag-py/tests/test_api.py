@@ -55,6 +55,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(ir["validation_profile"]["execution_mode"], "strict")
         self.assertEqual(ir["geometry"]["imports"][0]["format"], "step")
         self.assertEqual(ir["energy_terms"][2]["kind"], "interfacial_dmi")
+        self.assertEqual(ir["dynamics"]["integrator"], "heun")
         self.assertEqual(ir["sampling"]["outputs"][0]["name"], "m")
 
     def test_simulation_overrides_backend_and_mode(self) -> None:
@@ -116,6 +117,13 @@ class ProblemApiTests(unittest.TestCase):
 
         self.assertEqual(loaded.problem.name, "from_problem")
         self.assertEqual(loaded.entrypoint_kind, "problem")
+
+    def test_llg_requires_supported_integrator_and_positive_timestep(self) -> None:
+        with self.assertRaisesRegex(ValueError, "integrator must be one of"):
+            fm.LLG(integrator="rk4")
+
+        with self.assertRaisesRegex(ValueError, "fixed_timestep"):
+            fm.LLG(fixed_timestep=0.0)
 
 
 if __name__ == "__main__":

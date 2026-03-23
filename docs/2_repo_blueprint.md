@@ -23,6 +23,7 @@ The canonical bootstrap flow is:
 - `crates/fullmag-py-core` — private PyO3 bridge for Python/Rust validation helpers.
 - `apps/web` — script editor, jobs, logs, and artifact UI.
 - `native/` — backend ABI and native implementation seams.
+- `external_solvers/` — **reference solver codebases** (gitignored, read-only): mumax3, mumax+, BORIS, tetmag, tetrax.
 - `docs/specs` — canonical architecture and IR specs.
 - `docs/physics` — publication-style physics documentation and validation notes.
 

@@ -52,7 +52,7 @@ Current bootstrap coverage includes:
 - material constants
 - ferromagnets with uniform initial magnetization
 - `Exchange`, `Demag`, `InterfacialDMI`, `Zeeman`
-- `LLG`
+- `LLG` with gyromagnetic ratio, integrator, and optional fixed timestep
 - field/scalar sampling
 - FDM/FEM/Hybrid discretization hints
 - backend target and execution mode
@@ -65,5 +65,6 @@ Rust-side validation currently guarantees:
 - names are unique where required,
 - magnets reference known regions and materials,
 - discretization hints are structurally valid,
+- `LLG` parameters are structurally valid,
 - hybrid backend and hybrid mode stay coupled,
 - only Python-authored IR is accepted by the bootstrap CLI and PyO3 helper.

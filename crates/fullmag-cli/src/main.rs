@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use fullmag_engine::run_reference_exchange_demo;
 use fullmag_ir::{BackendTarget, ProblemIR};
 use std::{fs, path::PathBuf};
 
@@ -15,6 +16,12 @@ struct Cli {
 enum Command {
     Doctor,
     ExampleIr,
+    ReferenceExchangeDemo {
+        #[arg(long, default_value_t = 10)]
+        steps: usize,
+        #[arg(long, default_value_t = 1e-13)]
+        dt: f64,
+    },
     ValidateJson {
         path: PathBuf,
     },
@@ -54,11 +61,28 @@ fn main() -> Result<()> {
             println!("- public package fullmag: scaffolded");
             println!("- canonical ProblemIR: typed + validated");
             println!("- physics-first documentation gate: scaffolded");
-            println!("- backends: planning-only");
+            println!("- reference LLG + exchange engine: CPU/FDM slice");
+            println!("- public backends: still planning-first");
         }
         Command::ExampleIr => {
             let example = ProblemIR::bootstrap_example();
             println!("{}", serde_json::to_string_pretty(&example)?);
+        }
+        Command::ReferenceExchangeDemo { steps, dt } => {
+            let report = run_reference_exchange_demo(steps, dt)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "steps": report.steps,
+                    "dt": report.dt,
+                    "initial_exchange_energy_joules": report.initial_exchange_energy_joules,
+                    "final_exchange_energy_joules": report.final_exchange_energy_joules,
+                    "final_time_seconds": report.final_time_seconds,
+                    "final_center_magnetization": report.final_center_magnetization,
+                    "max_effective_field_amplitude": report.max_effective_field_amplitude,
+                    "max_rhs_amplitude": report.max_rhs_amplitude,
+                }))?
+            );
         }
         Command::ValidateJson { path } => {
             let ir = read_ir(&path)?;

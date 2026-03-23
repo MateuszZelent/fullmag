@@ -41,11 +41,17 @@ class Simulation:
             status="planned",
             backend=self.backend,
             mode=self.mode,
-            notes=["Execution backends are not wired yet; returning planning-only result."],
+            notes=[
+                "Public script lowering is still planning-only.",
+                "The internal reference LLG + exchange engine exists in Rust but is not wired to Simulation.run() yet.",
+            ],
         )
 
     def run(self, *, until: float | None = None) -> Result:
-        notes = ["Execution backends are not wired yet; returning planning-only result."]
+        notes = [
+            "Public script lowering is still planning-only.",
+            "The internal reference LLG + exchange engine exists in Rust but is not wired to Simulation.run() yet.",
+        ]
         if until is not None:
             notes = [*notes, f"Requested stop time: {until} s"]
         return Result(status="planned", backend=self.backend, mode=self.mode, notes=notes)

@@ -20,11 +20,11 @@ The capability matrix answers two questions before execution:
 | Imported geometry reference | planned | planned | planned | strict, extended, hybrid | Shared semantics only |
 | Material constants (`Ms`, `A`, `alpha`, `Ku1`, `anisU`) | planned | planned | planned | strict, extended, hybrid | Serialized in canonical IR |
 | Ferromagnet + uniform `m0` | planned | planned | planned | strict, extended, hybrid | Shared bootstrap surface |
-| `Exchange` | planned | planned | planned | strict, extended, hybrid | Treated as backend-neutral MVP term |
+| `Exchange` | planned | planned | planned | strict, extended, hybrid | Shared term; internal CPU/FDM reference operator exists, public lowering still pending |
 | `Demag` | planned | planned | planned | strict, extended, hybrid | Planned, not numerically implemented |
 | `InterfacialDMI` | planned | planned | planned | strict, extended, hybrid | Planned, not numerically implemented |
 | `Zeeman` | planned | planned | planned | strict, extended, hybrid | Planned, not numerically implemented |
-| `LLG` | planned | planned | planned | strict, extended, hybrid | Planner-level bootstrap only |
+| `LLG` | planned | planned | planned | strict, extended, hybrid | Shared semantics defined; internal Heun-based CPU/FDM reference stepper exists, public lowering still pending |
 | Field/scalar outputs | planned | planned | planned | strict, extended, hybrid | Canonical output naming only |
 | FDM hints | planned | n/a | planned | strict, extended | Shared hints, backend-specific use later |
 | FEM hints | n/a | planned | planned | strict, extended | Shared hints, backend-specific use later |

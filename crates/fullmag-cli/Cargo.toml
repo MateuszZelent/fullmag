@@ -7,5 +7,6 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+fullmag-engine = { path = "../fullmag-engine" }
 fullmag-ir = { path = "../fullmag-ir" }
 serde_json.workspace = true
