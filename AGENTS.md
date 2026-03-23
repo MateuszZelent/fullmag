@@ -1,5 +1,10 @@
 # Fullmag agents guide
 
+> **This file is the single source of truth for all AI models working on Fullmag**
+> (Antigravity, Codex, Copilot, and any future model).
+> All other instruction files (`.github/copilot-instructions.md`,
+> `.github/instructions/*.md`) must reference this file and must not contradict it.
+
 ## North star
 
 Fullmag describes a physical micromagnetic problem, not a numerical storage layout.
@@ -7,8 +12,9 @@ Every change must preserve that contract across Python API, `ProblemIR`, plannin
 
 ## Canonical instruction sources
 
-- `.agents/` is the canonical source for Fullmag agent workflows and skills.
-- `.github/` mirrors the same rules for GitHub and Copilot surfaces.
+- **`AGENTS.md` (this file)** is the canonical source of all project rules.
+- `.agents/` contains agent workflows and skills that extend these rules.
+- `.github/copilot-instructions.md` and `.github/instructions/` mirror a summary for Copilot.
 - `docs/physics/TEMPLATE.md` is the only canonical template for publication-style physics notes.
 
 ## Golden rule: physics before implementation
@@ -44,12 +50,16 @@ If the note does not exist or is incomplete, the task is not ready for implement
 
 - `packages/fullmag-py` — public embedded Python DSL and runtime scaffolding.
 - `crates/fullmag-ir` — typed canonical `ProblemIR`, validation, and planning summaries.
-- `crates/fullmag-cli` — bootstrap CLI for IR validation and planning.
+- `crates/fullmag-plan` — execution planner: lowers `ProblemIR` into backend-specific plans.
+- `crates/fullmag-runner` — reference runner: executes planned simulations via `fullmag-engine`.
+- `crates/fullmag-engine` — reference CPU solver (exchange-only LLG + Heun).
+- `crates/fullmag-cli` — CLI for IR validation, planning, and execution.
 - `crates/fullmag-api` — control-plane HTTP API.
 - `crates/fullmag-py-core` — private PyO3 bridge for Python/Rust integration.
 - `apps/web` — Next.js control room for scripts, jobs, and artifacts.
 - `native/` — native backends and C ABI.
 - `docs/specs` — canonical architecture and IR specs.
+- `docs/plans` — active and archived implementation plans.
 - `docs/physics` — publication-style physics documentation and validation notes.
 - `.agents/skills` — canonical agent skills.
 - `.agents/workflows` — canonical agent workflows.
@@ -83,4 +93,4 @@ If the note does not exist or is incomplete, the task is not ready for implement
 - Physics-facing changes include a corresponding `docs/physics/` update.
 - README, AGENTS, skills, prompts, and web/CLI copy stay aligned.
 - Containerized checks cover Rust, Python, repo consistency, and smoke flow.
-- No source file exceeds ~500 lines; large modules are split into focused submodules.
+- No source file exceeds ~1000 lines; large modules are split into focused submodules.

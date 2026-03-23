@@ -11,7 +11,7 @@
 - Related specs:
   - `docs/specs/problem-ir-v0.md`
   - `docs/specs/capability-matrix-v0.md`
-  - `docs/specs/phase-0-1-implementation-plan.md`
+  - `docs/plans/active/phase-0-1-implementation-plan.md`
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
   - `docs/adr/0002-container-first-monorepo.md`
@@ -51,7 +51,7 @@ while keeping the first physics term limited to exchange.
 > The full north star (§2) is a **Phase 2** target. Phase 1 delivers public execution on the
 > reference FDM CPU path only. FDM and FEM remain semantic peers in `ProblemIR` at all times,
 > but execution symmetry is not required until Phase 2.
-> See `docs/specs/phase-0-1-implementation-plan.md` for the execution-first phasing.
+> See `docs/plans/active/phase-0-1-implementation-plan.md` for the execution-first phasing.
 
 ## 2. North-Star Outcome
 

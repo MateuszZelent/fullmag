@@ -4,7 +4,7 @@
 - Last updated: 2026-03-23
 - Related specs:
   - `docs/specs/capability-matrix-v0.md`
-  - `docs/specs/phase-0-1-implementation-plan.md`
+  - `docs/plans/active/phase-0-1-implementation-plan.md`
 
 ## 1. Problem statement
 

@@ -25,6 +25,7 @@ The canonical bootstrap flow is:
 - `native/` — backend ABI and native implementation seams.
 - `external_solvers/` — **reference solver codebases** (gitignored, read-only): mumax3, mumax+, BORIS, tetmag, tetrax.
 - `docs/specs` — canonical architecture and IR specs.
+- `docs/plans` — active and archived implementation plans.
 - `docs/physics` — publication-style physics documentation and validation notes.
 
 ## Python package split

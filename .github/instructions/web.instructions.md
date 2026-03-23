@@ -3,6 +3,8 @@ applyTo: "apps/web/**/*.{ts,tsx,js,jsx,json}"
 description: "Use when editing the Fullmag web app. Keep the web layer as an operator console for scripts, jobs, logs, artifacts, and comparisons — not the home of solver physics."
 ---
 
+> **Canonical source: [`AGENTS.md`](../../AGENTS.md)** — this file adds context-scoped detail.
+
 # Web instructions
 
 - The web app edits or visualizes `ProblemIR`; it does not define solver semantics.

@@ -3,6 +3,8 @@ applyTo: "**"
 description: "Use when working anywhere in Fullmag to preserve the embedded Python DSL, mandatory docs/physics documentation, strict/extended/hybrid modes, Rust control plane, C ABI backend boundary, and container-first workflow."
 ---
 
+> **Canonical source: [`AGENTS.md`](../../AGENTS.md)** — this file adds context-scoped detail.
+
 # Architecture instructions
 
 - Prefer changes that strengthen the embedded Python DSL to `ProblemIR` boundary.

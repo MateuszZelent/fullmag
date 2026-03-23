@@ -3,6 +3,8 @@ applyTo: "crates/**/*.rs"
 description: "Use when editing Rust files in Fullmag. Keep Rust as the typed control plane with explicit domain models, planner seams, and stable interfaces."
 ---
 
+> **Canonical source: [`AGENTS.md`](../../AGENTS.md)** — this file adds context-scoped detail.
+
 # Rust instructions
 
 - Prefer domain types over free-form maps and raw JSON.

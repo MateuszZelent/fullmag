@@ -1,8 +1,9 @@
 # Phase 0–2 Implementation Plan: Execution-First FDM v1
 
-- Status: phase-0-complete, phase-1-ready
+- Status: phase-0-complete, phase-1-partially-implemented (kept active until closeout gaps are fixed)
 - Last updated: 2026-03-23
 - Parent spec: `docs/specs/exchange-only-full-solver-architecture-v1.md`
+- Audit note: see `docs/plans/active/implementation-status-and-next-plans-2026-03-23.md`
 - Phase 0 policy documents:
   - `docs/specs/geometry-policy-v0.md` (D0.1)
   - `docs/specs/magnetization-init-policy-v0.md` (D0.2)
@@ -31,7 +32,7 @@ Every feature in the capability matrix must carry one of three statuses:
 |--------|---------|
 | `semantic-only` | Legal in Python API and `ProblemIR`; can be serialized, validated, and planned. Not numerically implemented. |
 | `internal-reference` | Numerically implemented inside `fullmag-engine` or equivalent crate, but not wired to the public `Simulation.run()` path. |
-| `public-executable` | Fully wired: Python `Simulation.run()` → plan → runner → engine → artifacts. End-to-end. |
+| `public-executable` | Fully wired: Python `Simulation.run()` → plan → runner → engine → artifacts. End-to-end. In the current audit, material propagation and field-artifact closeout still remain. |
 
 This model prevents the API surface from silently implying more than the solver can deliver.
 
