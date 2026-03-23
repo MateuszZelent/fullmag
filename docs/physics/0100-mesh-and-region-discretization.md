@@ -2,6 +2,7 @@
 
 - Status: draft
 - Last updated: 2026-03-23
+- Related specs: `docs/specs/geometry-policy-v0.md`, `docs/specs/exchange-bc-policy-v0.md`
 
 ## 1. Problem statement
 

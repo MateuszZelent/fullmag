@@ -57,6 +57,57 @@ Current bootstrap coverage includes:
 - FDM/FEM/Hybrid discretization hints
 - backend target and execution mode
 
+## `DynamicsIR::Llg` parameter policy
+
+The LLG dynamics section carries the parameters needed for time integration.
+
+### `integrator`
+
+Type: `String` (enum-like).
+
+Currently the only legal value is `"heun"` (explicit Heun / improved Euler).
+Future values may include `"rk4"`, `"semi_implicit"`, or `"adaptive_rkf45"`.
+
+The validator rejects unknown integrator names.
+
+### `fixed_timestep`
+
+Type: `Option<f64>`, unit: seconds.
+
+Semantics:
+
+- `None` — the runner picks `dt` (adaptive or default heuristic).
+- `Some(dt)` — the runner calls the stepper with exactly this `dt` each step.
+
+This is a **hint for the runner**, not a stepper-internal detail.
+The stepper itself receives `dt` as a parameter and does not store it.
+
+When provided, `fixed_timestep` must be positive.
+
+### `gyromagnetic_ratio`
+
+Type: `f64`, unit: m/(A·s).
+
+Default value: `2.211e5` (Gilbert-form reduced gyromagnetic ratio).
+
+This is the $\gamma$ in the reduced Gilbert-form LLG equation:
+
+$$
+\frac{\partial \mathbf{m}}{\partial t}
+=
+-\frac{\gamma}{1 + \alpha^2}
+\left(
+\mathbf{m} \times \mathbf{H}_{\mathrm{eff}}
++
+\alpha \, \mathbf{m} \times
+\left(\mathbf{m} \times \mathbf{H}_{\mathrm{eff}}\right)
+\right)
+$$
+
+Must be positive. The validator rejects non-positive values.
+
+---
+
 ## Validation policy
 
 Rust-side validation currently guarantees:
@@ -65,6 +116,6 @@ Rust-side validation currently guarantees:
 - names are unique where required,
 - magnets reference known regions and materials,
 - discretization hints are structurally valid,
-- `LLG` parameters are structurally valid,
+- `LLG` parameters are structurally valid (see § DynamicsIR::Llg above),
 - hybrid backend and hybrid mode stay coupled,
 - only Python-authored IR is accepted by the bootstrap CLI and PyO3 helper.

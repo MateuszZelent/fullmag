@@ -1,8 +1,13 @@
 # Phase 0–1 Implementation Plan
 
-- Status: draft
+- Status: phase-0-complete
 - Last updated: 2026-03-23
 - Parent spec: `docs/specs/exchange-only-full-solver-architecture-v1.md`
+- Phase 0 policy documents:
+  - `docs/specs/geometry-policy-v0.md` (D0.1)
+  - `docs/specs/magnetization-init-policy-v0.md` (D0.2)
+  - `docs/specs/exchange-bc-policy-v0.md` (D0.3)
+  - `docs/specs/output-naming-policy-v0.md` (D0.5)
 
 ---
 
@@ -79,10 +84,16 @@ Add a section to `docs/specs/capability-matrix-v0.md`:
 
 ### Acceptance criteria
 
-- [ ] All six policy documents exist
-- [ ] `docs/specs/problem-ir-v0.md` updated with D0.4 clarifications
-- [ ] `docs/specs/capability-matrix-v0.md` updated with D0.6 tolerances
-- [ ] No code changes required (policy freeze only)
+- [x] All six policy documents exist
+  - [x] D0.1: `docs/specs/geometry-policy-v0.md`
+  - [x] D0.2: `docs/specs/magnetization-init-policy-v0.md`
+  - [x] D0.3: `docs/specs/exchange-bc-policy-v0.md`
+  - [x] D0.4: LLG params clarified in `docs/specs/problem-ir-v0.md`
+  - [x] D0.5: `docs/specs/output-naming-policy-v0.md`
+  - [x] D0.6: Tolerances added to `docs/specs/capability-matrix-v0.md`
+- [x] `docs/specs/problem-ir-v0.md` updated with D0.4 clarifications
+- [x] `docs/specs/capability-matrix-v0.md` updated with D0.6 tolerances
+- [x] No code changes required (policy freeze only)
 
 ---
 
