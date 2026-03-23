@@ -30,6 +30,13 @@ enum Command {
         #[arg(long)]
         backend: Option<BackendArg>,
     },
+    RunJson {
+        path: PathBuf,
+        #[arg(long)]
+        until: f64,
+        #[arg(long, default_value = "run_output")]
+        output_dir: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -96,6 +103,24 @@ fn main() -> Result<()> {
                 .plan_for(backend.map(BackendTarget::from))
                 .map_err(join_errors)?;
             println!("{}", serde_json::to_string_pretty(&plan)?);
+        }
+        Command::RunJson {
+            path,
+            until,
+            output_dir,
+        } => {
+            let ir = read_ir(&path)?;
+            let result =
+                fullmag_runner::run_problem(&ir, until, &output_dir).map_err(|e| anyhow!("{}", e))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "status": result.status,
+                    "total_steps": result.steps.len(),
+                    "final_energy": result.steps.last().map(|s| s.e_ex),
+                    "output_dir": output_dir.display().to_string(),
+                }))?
+            );
         }
     }
 

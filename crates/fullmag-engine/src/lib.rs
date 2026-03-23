@@ -347,7 +347,7 @@ impl ExchangeLlgProblem {
         scale(add(precession, scale(damping, alpha)), -gamma_bar)
     }
 
-    fn exchange_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
+    pub fn exchange_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
         let cell_volume = self.cell_size.volume();
         let mut energy = 0.0;
 

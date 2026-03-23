@@ -1,13 +1,12 @@
 [package]
-name = "fullmag-cli"
+name = "fullmag-runner"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-anyhow.workspace = true
-clap.workspace = true
 fullmag-engine = { path = "../fullmag-engine" }
 fullmag-ir = { path = "../fullmag-ir" }
-fullmag-runner = { path = "../fullmag-runner" }
-serde_json.workspace = true
+fullmag-plan = { path = "../fullmag-plan" }
+serde = { workspace = true }
+serde_json = { workspace = true }

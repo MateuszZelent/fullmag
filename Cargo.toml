@@ -4,7 +4,9 @@ members = [
   "crates/fullmag-cli",
   "crates/fullmag-engine",
   "crates/fullmag-ir",
+  "crates/fullmag-plan",
   "crates/fullmag-py-core",
+  "crates/fullmag-runner",
 ]
 resolver = "2"
 

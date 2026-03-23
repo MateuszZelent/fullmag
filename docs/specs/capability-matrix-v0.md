@@ -27,21 +27,21 @@ Every feature carries one of three statuses:
 
 | Feature | FDM | FEM | Hybrid | Tier | Notes |
 |---------|-----|-----|--------|------|-------|
-| `Box` geometry | planned | planned | planned | semantic-only | **Phase 1 target: public-executable for FDM** |
+| `Box` geometry | ✅ exec | planned | planned | **public-executable** (FDM) | Box→grid lowering in `fullmag-plan` |
 | `Cylinder` geometry | planned | planned | planned | semantic-only | Requires voxelizer for FDM execution |
 | Imported geometry ref | planned | planned | planned | semantic-only | Requires voxelizer/mesher pipeline |
-| Material constants (`Ms`, `A`, `alpha`) | planned | planned | planned | semantic-only | Serialized in canonical IR |
+| Material constants (`Ms`, `A`, `alpha`) | ✅ exec | planned | planned | **public-executable** (FDM) | Used by runner for exchange-only |
 | Material constants (`Ku1`, `anisU`) | planned | planned | planned | semantic-only | Anisotropy not in exchange-only scope |
-| Ferromagnet + uniform `m0` | planned | planned | planned | semantic-only | **Phase 1 target: public-executable for FDM** |
-| Ferromagnet + random `m0` | planned | planned | planned | semantic-only | **Phase 1 target: public-executable for FDM** |
-| `Exchange` | planned | planned | planned | internal-reference | CPU/FDM reference operator exists in `fullmag-engine`; **Phase 1 target: public-executable** |
+| Ferromagnet + uniform `m0` | ✅ exec | planned | planned | **public-executable** (FDM) | Lowered to per-cell vectors by planner |
+| Ferromagnet + random `m0` | ✅ exec | planned | planned | **public-executable** (FDM) | Deterministic xorshift64 RNG in planner |
+| `Exchange` | ✅ exec | planned | planned | **public-executable** (FDM) | CPU 6-point stencil in `fullmag-engine` |
 | `Demag` | planned | planned | planned | semantic-only | Not numerically implemented |
 | `InterfacialDMI` | planned | planned | planned | semantic-only | Not numerically implemented |
 | `Zeeman` | planned | planned | planned | semantic-only | Not numerically implemented |
-| `LLG` (Heun) | planned | planned | planned | internal-reference | Heun stepper exists in `fullmag-engine`; **Phase 1 target: public-executable** |
-| Field/scalar outputs (`m`, `H_ex`, `E_ex`) | planned | planned | planned | semantic-only | Canonical naming defined; **Phase 1 target: public-executable** |
-| FDM hints | planned | n/a | planned | semantic-only | Shared hints, lowering in Phase 1 |
-| FEM hints | n/a | planned | planned | semantic-only | Shared hints, FEM execution in Phase 2 |
+| `LLG` (Heun) | ✅ exec | planned | planned | **public-executable** (FDM) | Heun stepper in `fullmag-engine` |
+| Field/scalar outputs (`m`, `H_ex`, `E_ex`) | ✅ exec | planned | planned | **public-executable** (FDM) | Artifacts: `metadata.json`, `scalars.csv`, `m_final.json` |
+| FDM hints | ✅ exec | n/a | planned | **public-executable** | Cell size → grid dims in planner |
+| FEM hints | n/a | planned | planned | semantic-only | FEM execution deferred to Phase 2 |
 | Hybrid hints | n/a | n/a | planned | semantic-only | Requires hybrid mode and backend |
 
 ## Early planner rules

@@ -73,11 +73,11 @@ pub enum GeometryEntryIR {
 }
 
 impl GeometryEntryIR {
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         match self {
-            Self::ImportedGeometry { name, .. }
-            | Self::Box { name, .. }
-            | Self::Cylinder { name, .. } => name,
+            GeometryEntryIR::ImportedGeometry { name, .. } => name,
+            GeometryEntryIR::Box { name, .. } => name,
+            GeometryEntryIR::Cylinder { name, .. } => name,
         }
     }
 }
@@ -269,16 +269,14 @@ pub struct ProvenancePlanIR {
 impl ProblemIR {
     pub fn bootstrap_example() -> Self {
         Self {
-            ir_version: IR_VERSION.to_string(),
+            ir_version: "0.2.0".to_string(),
             problem_meta: ProblemMeta {
                 name: "exchange_relax".to_string(),
-                description: Some("Exchange-only relaxation bootstrap example.".to_string()),
+                description: Some("Exchange-only relaxation on a Box geometry.".to_string()),
                 script_language: "python".to_string(),
-                script_source: Some(
-                    include_str!("../../../examples/exchange_relax.py").to_string(),
-                ),
-                script_api_version: IR_VERSION.to_string(),
-                serializer_version: IR_VERSION.to_string(),
+                script_source: None,
+                script_api_version: "0.2.0".to_string(),
+                serializer_version: "0.2.0".to_string(),
                 entrypoint_kind: "build".to_string(),
                 source_hash: None,
                 runtime_metadata: BTreeMap::new(),
@@ -299,7 +297,7 @@ impl ProblemIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,
                 exchange_stiffness: 13e-12,
-                damping: 0.02,
+                damping: 0.5,
                 uniaxial_anisotropy: None,
                 anisotropy_axis: None,
             }],
@@ -307,42 +305,35 @@ impl ProblemIR {
                 name: "strip".to_string(),
                 region: "strip".to_string(),
                 material: "Py".to_string(),
-                initial_magnetization: Some(InitialMagnetizationIR::Uniform {
-                    value: [1.0, 0.2, 0.0],
+                initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded {
+                    seed: 42,
                 }),
             }],
             energy_terms: vec![EnergyTermIR::Exchange],
             dynamics: DynamicsIR::Llg {
                 gyromagnetic_ratio: 2.211e5,
                 integrator: "heun".to_string(),
-                fixed_timestep: Some(1e-13),
+                fixed_timestep: None,
             },
             sampling: SamplingIR {
                 outputs: vec![
                     OutputIR::Field {
                         name: "m".to_string(),
-                        every_seconds: 1e-12,
-                    },
-                    OutputIR::Field {
-                        name: "H_ex".to_string(),
-                        every_seconds: 1e-12,
+                        every_seconds: 100e-12,
                     },
                     OutputIR::Scalar {
                         name: "E_ex".to_string(),
-                        every_seconds: 1e-12,
+                        every_seconds: 10e-12,
                     },
                 ],
             },
             backend_policy: BackendPolicyIR {
-                requested_backend: BackendTarget::Auto,
+                requested_backend: BackendTarget::Fdm,
                 discretization_hints: Some(DiscretizationHintsIR {
                     fdm: Some(FdmHintsIR {
-                        cell: [2e-9, 2e-9, 2e-9],
+                        cell: [2e-9, 2e-9, 5e-9],
                     }),
-                    fem: Some(FemHintsIR {
-                        order: 1,
-                        hmax: 2e-9,
-                    }),
+                    fem: None,
                     hybrid: None,
                 }),
             },
@@ -375,6 +366,46 @@ impl ProblemIR {
         }
         if self.geometry.entries.is_empty() {
             errors.push("at least one geometry entry is required".to_string());
+        }
+        for entry in &self.geometry.entries {
+            match entry {
+                GeometryEntryIR::Box { size, .. } => {
+                    if size.iter().any(|c| *c <= 0.0) {
+                        errors.push(format!(
+                            "geometry '{}': box size components must be positive",
+                            entry.name()
+                        ));
+                    }
+                }
+                GeometryEntryIR::Cylinder { radius, height, .. } => {
+                    if *radius <= 0.0 {
+                        errors.push(format!(
+                            "geometry '{}': cylinder radius must be positive",
+                            entry.name()
+                        ));
+                    }
+                    if *height <= 0.0 {
+                        errors.push(format!(
+                            "geometry '{}': cylinder height must be positive",
+                            entry.name()
+                        ));
+                    }
+                }
+                GeometryEntryIR::ImportedGeometry { source, format, .. } => {
+                    if source.trim().is_empty() {
+                        errors.push(format!(
+                            "geometry '{}': imported geometry source must not be empty",
+                            entry.name()
+                        ));
+                    }
+                    if format.trim().is_empty() {
+                        errors.push(format!(
+                            "geometry '{}': imported geometry format must not be empty",
+                            entry.name()
+                        ));
+                    }
+                }
+            }
         }
         if self.regions.is_empty() {
             errors.push("at least one region is required".to_string());
@@ -411,8 +442,43 @@ impl ProblemIR {
             }
         }
 
+        for magnet in &self.magnets {
+            if let Some(ref init_mag) = magnet.initial_magnetization {
+                match init_mag {
+                    InitialMagnetizationIR::Uniform { value } => {
+                        let norm = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
+                        if norm <= 0.0 {
+                            errors.push(format!(
+                                "magnet '{}': uniform initial magnetization must be non-zero",
+                                magnet.name
+                            ));
+                        }
+                    }
+                    InitialMagnetizationIR::RandomSeeded { seed } => {
+                        if *seed == 0 {
+                            errors.push(format!(
+                                "magnet '{}': random_seeded seed must be > 0",
+                                magnet.name
+                            ));
+                        }
+                    }
+                    InitialMagnetizationIR::SampledField { values } => {
+                        if values.is_empty() {
+                            errors.push(format!(
+                                "magnet '{}': sampled_field values must not be empty",
+                                magnet.name
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
         validate_unique_names(
-            self.geometry.entries.iter().map(GeometryEntryIR::name),
+            self.geometry
+                .entries
+                .iter()
+                .map(|entry| entry.name()),
             "geometry entries",
             &mut errors,
         );
@@ -431,58 +497,6 @@ impl ProblemIR {
             "magnets",
             &mut errors,
         );
-
-        for geometry in &self.geometry.entries {
-            match geometry {
-                GeometryEntryIR::ImportedGeometry {
-                    name,
-                    source,
-                    format,
-                } => {
-                    if name.trim().is_empty() {
-                        errors.push("imported geometry name must not be empty".to_string());
-                    }
-                    if source.trim().is_empty() {
-                        errors.push(format!("geometry '{}' source must not be empty", name));
-                    }
-                    if format.trim().is_empty() {
-                        errors.push(format!("geometry '{}' format must not be empty", name));
-                    }
-                }
-                GeometryEntryIR::Box { name, size } => {
-                    if name.trim().is_empty() {
-                        errors.push("box geometry name must not be empty".to_string());
-                    }
-                    if size.iter().any(|component| *component <= 0.0) {
-                        errors.push(format!(
-                            "box geometry '{}' size components must be positive",
-                            name
-                        ));
-                    }
-                }
-                GeometryEntryIR::Cylinder {
-                    name,
-                    radius,
-                    height,
-                } => {
-                    if name.trim().is_empty() {
-                        errors.push("cylinder geometry name must not be empty".to_string());
-                    }
-                    if *radius <= 0.0 {
-                        errors.push(format!(
-                            "cylinder geometry '{}' radius must be positive",
-                            name
-                        ));
-                    }
-                    if *height <= 0.0 {
-                        errors.push(format!(
-                            "cylinder geometry '{}' height must be positive",
-                            name
-                        ));
-                    }
-                }
-            }
-        }
 
         let geometry_names: BTreeSet<&str> = self
             .geometry
@@ -677,11 +691,26 @@ mod tests {
         let decoded: ProblemIR =
             serde_json::from_str(&json).expect("bootstrap example should deserialize");
         assert_eq!(decoded.problem_meta.script_language, "python");
-        assert_eq!(decoded.ir_version, IR_VERSION);
+        assert_eq!(decoded.ir_version, "0.2.0");
         assert_eq!(
             decoded.validation_profile.execution_mode,
             ExecutionMode::Strict
         );
+        // Verify Box geometry round-trips
+        match &decoded.geometry.entries[0] {
+            GeometryEntryIR::Box { name, size } => {
+                assert_eq!(name, "strip");
+                assert_eq!(size, &[200e-9, 20e-9, 5e-9]);
+            }
+            other => panic!("expected Box geometry, got {:?}", other),
+        }
+        // Verify RandomSeeded m0 round-trips
+        match &decoded.magnets[0].initial_magnetization {
+            Some(InitialMagnetizationIR::RandomSeeded { seed }) => {
+                assert_eq!(*seed, 42);
+            }
+            other => panic!("expected RandomSeeded m0, got {:?}", other),
+        }
     }
 
     #[test]
@@ -745,7 +774,7 @@ mod tests {
             .expect_err("zero random seed must fail validation");
         assert!(errors
             .iter()
-            .any(|error| error.contains("random_seeded seed must be positive")));
+            .any(|error| error.contains("random_seeded seed must be > 0")));
     }
 
     #[test]
@@ -776,7 +805,7 @@ mod tests {
             .expect_err("negative cylinder radius must fail validation");
         assert!(errors
             .iter()
-            .any(|error| error.contains("cylinder geometry 'strip' radius must be positive")));
+            .any(|error| error.contains("cylinder radius must be positive")));
     }
 
     #[test]

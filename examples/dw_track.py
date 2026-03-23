@@ -1,3 +1,8 @@
+# Semantic / planning-only example.
+# Uses energy terms (Demag, DMI, Zeeman) that are not yet numerically implemented.
+# This example validates IR serialization and planning, not execution.
+# For an executable example, see examples/exchange_relax.py.
+
 import fullmag as fm
 
 

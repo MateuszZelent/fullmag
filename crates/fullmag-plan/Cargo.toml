@@ -1,0 +1,10 @@
+[package]
+name = "fullmag-plan"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fullmag-ir = { path = "../fullmag-ir" }
+serde = { workspace = true }
+serde_json = { workspace = true }
