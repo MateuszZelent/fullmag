@@ -1,0 +1,11 @@
+[package]
+name = "fullmag-fdm-sys"
+description = "Raw FFI bindings to the native Fullmag FDM CUDA backend"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+links = "fullmag_fdm"
+
+[build-dependencies]
+# cmake crate for native build integration (Phase 2)
+# cmake = "0.1"

@@ -1,0 +1,54 @@
+# Containerfile for building and testing the native CUDA FDM backend.
+#
+# Build (Podman or Docker):
+#   podman build -f native/Containerfile -t fullmag-cuda-test native/
+#
+# Run (with GPU access):
+#   podman run --rm --device nvidia.com/gpu=all fullmag-cuda-test
+#
+# Run with Docker:
+#   docker run --rm --gpus all fullmag-cuda-test
+
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS build
+
+# Ubuntu 22.04 ships cmake 3.22 which is too old for CMAKE_CUDA_ARCHITECTURES.
+# Install modern cmake via pip.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3-pip \
+    && pip3 install --no-cache-dir 'cmake>=3.28' \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . /src/
+
+# Verify cmake version
+RUN cmake --version
+
+RUN cmake -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DFULLMAG_ENABLE_CUDA=ON \
+    && cmake --build build -j$(nproc)
+
+# Run CTest within the build container (no GPU needed for compilation check)
+# Actual GPU tests require --device/--gpus at runtime.
+
+# ── Slim test stage ──
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS test
+
+COPY --from=build /src/build/backends/fdm/libfullmag_fdm.so* /usr/local/lib/
+COPY --from=build /src/build/backends/fdm/smoke_context /usr/local/bin/
+COPY --from=build /src/build/backends/fdm/exchange_fp64_parity /usr/local/bin/
+COPY --from=build /src/build/backends/fdm/heun_fp64_parity /usr/local/bin/
+COPY --from=build /src/build/backends/fdm/tier_a_compare /usr/local/bin/
+COPY --from=build /src/build/backends/fdm/tier_b_compare /usr/local/bin/
+
+RUN ldconfig
+
+CMD ["sh", "-c", "\
+echo '=== Smoke test ===' && smoke_context \
+&& echo '=== Exchange fp64 parity ===' && exchange_fp64_parity \
+&& echo '=== Heun fp64 parity ===' && heun_fp64_parity \
+&& echo '=== Tier A: CPU vs GPU f64 ===' && tier_a_compare \
+&& echo '=== Tier B: GPU f64 vs GPU f32 ===' && tier_b_compare \
+&& echo '=== ALL TESTS PASSED ==='"]

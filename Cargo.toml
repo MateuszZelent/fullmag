@@ -3,6 +3,7 @@ members = [
   "crates/fullmag-api",
   "crates/fullmag-cli",
   "crates/fullmag-engine",
+  "crates/fullmag-fdm-sys",
   "crates/fullmag-ir",
   "crates/fullmag-plan",
   "crates/fullmag-py-core",

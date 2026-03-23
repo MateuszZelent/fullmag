@@ -2,7 +2,7 @@
 
 Canonical application architecture:
 
-- `docs/specs/fullmag-application-architecture-v1.md`
+- `docs/specs/fullmag-application-architecture-v2.md`
 
 ## Mission
 
@@ -25,6 +25,8 @@ This means:
 - the graph serializes into canonical `ProblemIR`,
 - Rust validates, normalizes, and plans that IR,
 - native backends remain behind Rust and C ABI seams.
+- the public local product workflow is still `fullmag script.py`, hosted by Rust and fed by a
+  Python helper in the user's environment.
 
 There is no separate text DSL, no AST parsing phase, and no source-code inference.
 
@@ -34,13 +36,12 @@ There is no separate text DSL, no AST parsing phase, and no source-code inferenc
 Python script / notebook / generated template
                 |
                 v
-      fullmag embedded Python DSL
+Rust host: fullmag script.py
+                |
+                +--> Python helper -> fullmag embedded Python DSL -> ProblemIR
                 |
                 v
-       Python-built canonical ProblemIR
-                |
-                v
-Rust validation + normalization + planning
+Rust validation + normalization + planning + session runtime
       |                |                |
       v                v                v
    FDM plan         FEM plan        Hybrid plan
@@ -51,7 +52,7 @@ Rust validation + normalization + planning
 
 ## Public Python model
 
-The public API is split into two layers.
+The public API is split into three layers.
 
 ### Model layer
 
@@ -74,6 +75,15 @@ This layer answers: what physical problem are we solving?
 - `FEM`
 - `Hybrid`
 
+### Study layer
+
+This layer answers: what computation are we asking for?
+
+- `TimeEvolution`
+- `Relaxation`
+- `Eigenmodes` later
+- `StaticSolve` later
+
 ### Runtime layer
 
 This layer answers: how and where do we plan or run it?
@@ -82,6 +92,7 @@ This layer answers: how and where do we plan or run it?
 - `Result`
 - `BackendTarget`
 - `ExecutionMode`
+- session-aware execution behavior defined by `docs/specs/session-run-api-v1.md`
 
 ## Execution semantics
 
@@ -130,6 +141,7 @@ The canonical IR is organized around these sections:
 - C++/CUDA remains the heavy FDM compute layer.
 - MFEM + libCEED + hypre remain the intended FEM path.
 - Rust communicates with native backends through stable C ABI boundaries.
+- session lifecycle and browser-facing runtime state are part of Rust control-plane ownership.
 
 ## Web role
 

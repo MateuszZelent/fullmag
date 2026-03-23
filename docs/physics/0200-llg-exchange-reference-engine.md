@@ -4,7 +4,7 @@
 - Owners: Fullmag core
 - Last updated: 2026-03-23
 - Related ADRs: `docs/adr/0001-physics-first-python-api.md`
-- Related specs: `docs/specs/problem-ir-v0.md`, `docs/specs/capability-matrix-v0.md`, `docs/specs/exchange-only-full-solver-architecture-v1.md`, `docs/plans/active/phase-0-1-implementation-plan.md`
+- Related specs: `docs/specs/problem-ir-v0.md`, `docs/specs/capability-matrix-v0.md`, `docs/specs/exchange-only-full-solver-architecture-v1.md`, `docs/plans/completed/phase-0-1-implementation-plan.md`
 
 ## 1. Problem statement
 

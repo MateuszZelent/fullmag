@@ -4,25 +4,26 @@ This directory contains **canonical, long-lived specifications** for Fullmag.
 
 If you are looking for the main architecture document for the whole application, start here:
 
-- **Primary application architecture:** `docs/specs/fullmag-application-architecture-v1.md`
+- **Primary application architecture:** `docs/specs/fullmag-application-architecture-v2.md`
 
 ## Reading order
 
 When you need to understand Fullmag quickly, read in this order:
 
-1. `docs/specs/fullmag-application-architecture-v1.md`
-2. `docs/1_project_scope.md`
-3. `docs/2_repo_blueprint.md`
-4. `docs/specs/problem-ir-v0.md`
-5. `docs/specs/capability-matrix-v0.md`
-6. the relevant `docs/physics/` notes
-7. the relevant `docs/plans/active/` plan
+1. `docs/specs/fullmag-application-architecture-v2.md`
+2. `docs/specs/session-run-api-v1.md`
+3. `docs/1_project_scope.md`
+4. `docs/2_repo_blueprint.md`
+5. `docs/specs/problem-ir-v0.md`
+6. `docs/specs/capability-matrix-v0.md`
+7. the relevant `docs/physics/` notes
+8. the relevant `docs/plans/active/` plan
 
 ## Document hierarchy
 
 ### 1. Canonical application architecture
 
-- `docs/specs/fullmag-application-architecture-v1.md`
+- `docs/specs/fullmag-application-architecture-v2.md`
 
 This is the highest-level, canonical description of the whole Fullmag application.
 
@@ -49,6 +50,7 @@ It is subordinate to the application architecture and should be read as:
 
 ### 3. Stable cross-cutting specs
 
+- `docs/specs/session-run-api-v1.md`
 - `docs/specs/problem-ir-v0.md`
 - `docs/specs/capability-matrix-v0.md`
 
@@ -57,6 +59,7 @@ These define shared contracts used across multiple subsystems.
 ### 4. Policy specs
 
 - `docs/specs/geometry-policy-v0.md`
+- `docs/specs/material-assignment-and-spatial-fields-v0.md`
 - `docs/specs/magnetization-init-policy-v0.md`
 - `docs/specs/output-naming-policy-v0.md`
 - `docs/specs/exchange-bc-policy-v0.md`
@@ -93,7 +96,7 @@ Use `docs/specs/` for:
 
 ## Maintenance rule
 
-Whenever one of these changes, update `docs/specs/fullmag-application-architecture-v1.md`:
+Whenever one of these changes, update `docs/specs/fullmag-application-architecture-v2.md`:
 
 - the main user workflow,
 - the role of the frontend,

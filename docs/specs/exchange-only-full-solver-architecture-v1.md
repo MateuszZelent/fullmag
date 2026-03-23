@@ -10,10 +10,10 @@
   - `docs/physics/0200-llg-exchange-reference-engine.md`
   - `docs/physics/0300-gpu-fdm-precision-and-calibration.md`
 - Related specs:
-  - `docs/specs/fullmag-application-architecture-v1.md`
+  - `docs/specs/fullmag-application-architecture-v2.md`
   - `docs/specs/problem-ir-v0.md`
   - `docs/specs/capability-matrix-v0.md`
-  - `docs/plans/active/phase-0-1-implementation-plan.md`
+  - `docs/plans/completed/phase-0-1-implementation-plan.md`
   - `docs/plans/active/phase-2-gpu-fdm-calibrated-rollout.md`
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
@@ -55,7 +55,8 @@ while keeping the first physics term limited to exchange.
 > The full north star (§2) is a **Phase 3** target. Phase 1 delivered a public CPU
 > execution path to validate the architecture end-to-end. Phase 2 replaces the CPU
 > engine with GPU/CUDA kernels for FDM. FEM execution lands in Phase 3.
-> See `docs/plans/active/phase-0-1-implementation-plan.md` for the full phasing.
+> See `docs/plans/completed/phase-0-1-implementation-plan.md` for the historical Phase 0-1
+> baseline.
 
 ## 2. North-Star Outcome
 

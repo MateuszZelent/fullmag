@@ -24,7 +24,8 @@ That means:
 ## Canonical instruction sources
 
 - **`AGENTS.md` (this file)** is the canonical source of all project rules.
-- `docs/specs/fullmag-application-architecture-v1.md` is the canonical application architecture document.
+- `docs/specs/fullmag-application-architecture-v2.md` is the canonical application architecture document.
+- `docs/specs/session-run-api-v1.md` is the canonical session/run runtime contract.
 - `.agents/` contains agent workflows and skills that extend these rules.
 - `.github/copilot-instructions.md` and `.github/instructions/` mirror a summary for Copilot.
 - `docs/physics/TEMPLATE.md` is the only canonical template for publication-style physics notes.

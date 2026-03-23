@@ -2,7 +2,7 @@
 
 Canonical application architecture:
 
-- `docs/specs/fullmag-application-architecture-v1.md`
+- `docs/specs/fullmag-application-architecture-v2.md`
 
 ## Authoring model
 
@@ -12,11 +12,13 @@ There is no separate text DSL, no AST parsing phase, and no source-code inferenc
 The canonical bootstrap flow is:
 
 1. Author a Python script or notebook with `import fullmag as fm`.
-2. Build a declarative object graph describing the physical problem.
-3. Serialize that object graph into canonical `ProblemIR`.
-4. Deserialize and validate the IR in Rust.
-5. Run capability checks and lower into an execution-plan summary.
-6. Dispatch to FDM, FEM, or hybrid backends later in the stack.
+2. Build a declarative object graph describing the physical model and study.
+3. Invoke `fullmag script.py` through the Rust host or run through notebook/library mode.
+4. Load the script through a Python helper in the active environment.
+5. Serialize canonical `ProblemIR`.
+6. Deserialize and validate the IR in Rust.
+7. Run capability checks, create a session, and lower into an execution-plan summary.
+8. Dispatch to FDM, FEM, or hybrid backends later in the stack.
 
 ## Top-level layout
 
@@ -36,13 +38,15 @@ The canonical bootstrap flow is:
 
 The Python package is intentionally split into:
 
-- `fullmag.model` — declarative problem description
+- `fullmag.model` — declarative physical model description
+- `fullmag.study` — requested computation description
 - `fullmag.runtime` — loading, simulation, result, and runner helpers
 
 Bootstrap MVP classes:
 
 - model: `Problem`, `ImportedGeometry`, `Material`, `Region`, `Ferromagnet`
 - energy: `Exchange`, `Demag`, `InterfacialDMI`, `Zeeman`
+- study: `TimeEvolution` first, later `Relaxation`, `Eigenmodes`, `StaticSolve`
 - dynamics: `LLG`
 - outputs: `SaveField`, `SaveScalar`
 - hints: `DiscretizationHints`, `FDM`, `FEM`, `Hybrid`
@@ -52,6 +56,8 @@ Bootstrap MVP classes:
 
 - Python describes physics and configuration, never backend storage layout.
 - `ProblemIR` is the execution contract, not the Python source text.
+- session and run semantics are part of the stable control-plane contract defined in
+  `docs/specs/session-run-api-v1.md`.
 - Any physics-facing change must carry a `docs/physics/` update.
 - `docs/physics/` notes are auto-rendered into frontend documentation — no separate doc-writing step.
 - `.agents` is canonical for skills and workflows; `.github` mirrors it.

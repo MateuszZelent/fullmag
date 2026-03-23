@@ -3,459 +3,176 @@
 - Status: active
 - Priority: P0
 - Last updated: 2026-03-23
-- Parent architecture spec: `docs/specs/exchange-only-full-solver-architecture-v1.md`
-- Related bootstrap plan: `docs/plans/active/phase-0-1-implementation-plan.md`
-- Detailed implementation playbook: `docs/plans/active/phase-2-gpu-fdm-implementation-playbook.md`
+- Parent target architecture: `docs/specs/fullmag-application-architecture-v2.md`
+- Parent solver architecture: `docs/specs/exchange-only-full-solver-architecture-v1.md`
+- Related plans:
+  - `docs/plans/active/implementation-status-and-next-plans-2026-03-23.md`
+  - `docs/plans/active/frontend-architecture.md`
+  - `docs/plans/active/phase-2-gpu-fdm-implementation-playbook.md`
 - Related physics notes:
   - `docs/physics/0200-llg-exchange-reference-engine.md`
   - `docs/physics/0300-gpu-fdm-precision-and-calibration.md`
 
-## 1. Why this plan exists
+## 1. Purpose
 
-The repository now has a real public CPU execution path for exchange-only FDM.
-That was the correct first milestone, but it is no longer the bottleneck.
+The next backend priority remains clear:
 
-The bottleneck is now clear:
+> deliver a calibrated CUDA/FDM backend that preserves the semantics of the current CPU reference
+> slice and fits inside the v2 application shell.
 
-> Fullmag needs a calibrated, production-oriented CUDA FDM backend with explicit user-selected
-> precision and trustworthy equivalence to the CPU reference.
+This plan exists to make that rollout explicit and honest.
 
-This plan exists to make that migration explicit, sequenced, and testable.
+## 2. Current status checkpoint
 
-## 1.1 Current status checkpoint
+GPU FDM is not complete.
 
-Phase 2 is **not completed**.
+What exists:
 
-Current honest state:
+- public CPU reference execution for the narrow exchange-only FDM slice,
+- precision policy in Python API, `ProblemIR`, planning, and metadata,
+- documentation for GPU precision and calibration.
 
-- Stage 2A is materially complete:
-  - precision is part of Python API,
-  - precision is part of `ProblemIR`,
-  - planner preserves precision into `FdmPlanIR`,
-  - the CPU reference path rejects unsupported `single` honestly.
-- Stages 2B through 2G are still outstanding:
-  - there is no `native/fdm-cuda/` production backend yet,
-  - there is no CUDA runner dispatch path yet,
-  - there is no GPU parity/calibration harness yet,
-  - `Simulation.run()` still executes the CPU reference path only.
+What does not exist yet:
 
-So the answer to "is Phase 2 GPU FDM fully realized?" is:
+- production CUDA backend,
+- Rust dispatch into CUDA,
+- GPU parity and calibration harness,
+- GPU-backed session/run shell,
+- GPU-backed control-room flow.
 
-> **No. The policy and precision contract are in place, but the actual CUDA backend has not landed yet.**
+## 3. v2-aligned public contract
 
-## 2. Non-negotiable rules
-
-1. The CUDA backend must implement the same discrete exchange-only LLG model as the CPU reference.
-2. GPU `double` parity is required before GPU `single` can be promoted to public-executable.
-3. Precision is a user-visible execution policy, not a hidden backend detail.
-4. Python API and `ProblemIR` remain backend-neutral; no CUDA arrays or grid internals leak out.
-5. CPU reference stays in the repo and remains the calibration baseline.
-6. Artifact semantics and provenance must be identical across CPU and GPU paths.
-
-## 3. Public contract for Phase 2
-
-### 3.1 User-facing runtime contract
-
-The public runtime selector becomes:
-
-```python
-fm.Simulation(problem, backend="fdm", mode="strict", precision="double")
-fm.Simulation(problem, backend="fdm", mode="strict", precision="single")
-```
-
-Semantics:
-
-- `double`
-  - public-executable on CPU now,
-  - first public-executable precision on GPU.
-- `single`
-  - canonical in Python API and `ProblemIR` now,
-  - promoted to GPU public-executable only after calibration against GPU `double`.
-
-### 3.2 IR and planner contract
-
-- `BackendPolicyIR.execution_precision` is canonical.
-- `FdmPlanIR.precision` is the executable backend contract.
-- Planner must never invent or silently override precision.
-- The current CPU runner must reject `single` honestly.
-- The future CUDA runner must accept both `double` and `single`.
-
-### 3.3 Artifact and provenance contract
-
-All runs, CPU and GPU, must record:
-
-- `execution_precision`,
-- resolved backend,
-- device name,
-- compute capability,
-- driver version,
-- toolkit version,
-- backend revision,
-- output schedule,
-- observable names and units.
-
-## 4. Delivery strategy
-
-This rollout is intentionally staged.
-We do not jump directly from CPU reference to "fast single-precision CUDA solver".
-
-### Stage 2A — Precision plumbing and policy freeze
-
-Purpose:
-
-- define precision before CUDA kernels land.
-
-Deliverables:
-
-- `ExecutionPrecision` enum in Python API and Rust IR,
-- planner propagation into `FdmPlanIR`,
-- CPU reference restricted to `double`,
-- physics note for precision and calibration,
-- updated architecture/spec docs.
-
-Completion target:
-
-- already in progress during this planning update.
-
-### Stage 2B — Native CUDA backend skeleton
-
-Purpose:
-
-- create the stable native boundary before kernel complexity grows.
-
-Deliverables:
-
-- `native/fdm-cuda/`
-- CMake project with pinned toolkit assumptions,
-- `include/fullmag_fdm.h`,
-- `src/api.cpp`,
-- `src/context.cpp`,
-- `src/context.cu`,
-- `src/error.cpp`,
-- standalone smoke binary or tests that load a context and round-trip magnetization.
-
-Required design choice:
-
-- the native implementation is templated internally by scalar type,
-- the C ABI stays stable and non-templated.
-
-### Stage 2C — GPU `double` exchange operator
-
-Purpose:
-
-- port the exchange field itself before time stepping.
-
-Deliverables:
-
-- SoA device layout for `m` and `H_ex`,
-- GPU kernel for 6-point Laplacian with Neumann boundary handling,
-- `fdm_exchange_field()` implementation,
-- `fdm_exchange_energy()` implementation,
-- parity tests against CPU reference on small deterministic problems.
-
-Acceptance gate:
-
-- CPU `double` vs GPU `double` exchange field parity under Tier A tolerances.
-
-### Stage 2D — GPU `double` Heun stepping
-
-Purpose:
-
-- complete the first production execution loop on CUDA in the safest precision mode.
-
-Deliverables:
-
-- device kernels for LLG RHS,
-- predictor and corrector buffers,
-- renormalization kernel,
-- `fdm_heun_step()` implementation,
-- runner dispatch path from Rust into CUDA backend,
-- identical artifact production to CPU path.
-
-Acceptance gate:
-
-- `Simulation.run()` on FDM uses CUDA when available and configured,
-- CPU `double` vs GPU `double` full-run parity under Tier A tolerances.
-
-### Stage 2E — GPU `single` mode
-
-Purpose:
-
-- add the performance-oriented mode only after the reference CUDA path is correct.
-
-Deliverables:
-
-- `fp32` state buffers and kernels,
-- precision-aware context creation,
-- scalar reduction policy documented and provenanced,
-- GPU `single` vs GPU `double` validation suite.
-
-Acceptance gate:
-
-- Tier B calibration passes,
-- output/provenance clearly records `execution_precision="single"`.
-
-### Stage 2F — Calibration and regression harness
-
-Purpose:
-
-- make correctness permanent rather than one-off.
-
-Deliverables:
-
-- reusable benchmark cases,
-- CPU/GPU parity runner,
-- GPU precision-comparison runner,
-- stored baseline tolerances,
-- CI commands for non-GPU and GPU lanes.
-
-### Stage 2G — Performance qualification
-
-Purpose:
-
-- confirm that the CUDA path is worth shipping.
-
-Deliverables:
-
-- Nsight Systems trace for a representative run,
-- Nsight Compute study for exchange and Heun kernels,
-- occupancy and bandwidth report,
-- comparison of CPU double, GPU double, and GPU single throughput.
-
-No performance claim is official until this stage exists.
-
-## 5. Native backend architecture
-
-### 5.1 Directory layout
+The product-facing target is still:
 
 ```text
-native/
-  fdm-cuda/
-    include/
-      fullmag_fdm.h
-    src/
-      api.cpp
-      context.hpp
-      context.cpp
-      context.cu
-      exchange.cuh
-      exchange_fp64.cu
-      exchange_fp32.cu
-      llg_fp64.cu
-      llg_fp32.cu
-      reductions_fp64.cu
-      reductions_fp32.cu
-      error.cpp
-    tests/
-      smoke_context.cpp
-      exchange_parity.cu
-      heun_parity.cu
-    CMakeLists.txt
+fullmag script.py
 ```
 
-### 5.2 Device data layout
+with Rust as the launcher host and Python used through a helper bridge.
 
-Required layout for Phase 2:
+The preferred canonical problem shape is moving toward:
 
-- `mx`, `my`, `mz`
-- `hex`, `hey`, `hez`
-- `k1x`, `k1y`, `k1z`
-- `tmpx`, `tmpy`, `tmpz`
-
-Rationale:
-
-- SoA is friendlier for coalesced access in stencil kernels,
-- it aligns with future extension to additional field terms,
-- it avoids repeated pack/unpack cost in hot loops.
-
-### 5.3 Precision strategy
-
-Internal native code should be templated on scalar type:
-
-- `float`
-- `double`
-
-Public C ABI should expose an enum:
-
-```c
-typedef enum {
-    FULLMAG_PRECISION_SINGLE = 1,
-    FULLMAG_PRECISION_DOUBLE = 2
-} fullmag_precision;
+```python
+Problem(..., study=TimeEvolution(...))
+Simulation(problem, backend="fdm", mode="strict", precision="double")
 ```
 
-`fdm_create()` must therefore accept:
+Compatibility with the older `Problem(..., dynamics=..., outputs=...)` shape may remain during the
+transition, but Phase 2 must not deepen dependence on that older model.
 
-- grid shape,
-- cell size,
-- material constants,
-- `gamma`,
-- precision enum.
+## 4. Non-negotiable rules
 
-### 5.4 Stable C ABI
+1. CUDA must implement the same discrete exchange-only LLG model as the CPU reference.
+2. GPU `double` parity is required before GPU `single` becomes public-executable.
+3. Precision remains user-visible and explicit.
+4. Python API and `ProblemIR` stay backend-neutral.
+5. Rust continues to own validation, planning, session state, artifact writing, and provenance.
+6. CUDA work must fit under the session/run/control-room model rather than bypassing it.
+7. CPU `double` remains in-repo and testable as the calibration baseline.
 
-Target shape:
+## 5. Delivery stages
 
-```c
-typedef struct FdmContext FdmContext;
+### Stage 2A - freeze runtime-shell compatibility
 
-FdmContext* fdm_create(
-    int nx, int ny, int nz,
-    double dx, double dy, double dz,
-    double Ms, double A, double alpha, double gamma,
-    fullmag_precision precision
-);
+Before deep CUDA work lands, the runtime contract must be treated as fixed:
 
-void fdm_destroy(FdmContext* ctx);
+- Rust-owned public launcher target,
+- Python helper bridge target,
+- session-owned execution model,
+- runner-owned artifacts and provenance.
 
-int fdm_set_magnetization(FdmContext* ctx, const double* m, int count);
-int fdm_get_magnetization(const FdmContext* ctx, double* m, int count);
-int fdm_get_exchange_field(const FdmContext* ctx, double* h, int count);
-int fdm_heun_step(FdmContext* ctx, double dt);
-double fdm_exchange_energy(const FdmContext* ctx);
-```
+This stage is mostly architectural and documentation-driven.
 
-Notes:
+### Stage 2B - native CUDA backend skeleton
 
-- host-side transfer buffers use `double` in the ABI for stability and simplicity,
-- internal conversion to `float` is allowed only when precision mode is `single`,
-- ABI error codes must map cleanly to Rust `RunError`.
+Deliver:
 
-## 6. Rust runner integration
+- concrete FDM native backend under the existing native backend tree,
+- stable FDM ABI,
+- context creation and teardown,
+- precision-aware backend initialization,
+- smoke tests that round-trip state through the backend.
 
-### 6.1 New module split
+### Stage 2C - GPU `double` exchange operator
 
-`crates/fullmag-runner` should be split before Phase 2 grows further:
+Deliver:
 
-- `src/lib.rs`
-- `src/cpu_reference.rs`
-- `src/gpu_fdm.rs`
-- `src/artifacts.rs`
-- `src/outputs.rs`
+- device layout for `m` and `H_ex`,
+- exchange field kernel,
+- exchange energy computation,
+- deterministic parity tests against the CPU reference.
 
-Reason:
+### Stage 2D - GPU `double` Heun stepping
 
-- current runner is still under the 1000-line limit,
-- Phase 2 would otherwise push it into a monolith.
+Deliver:
 
-### 6.2 Dispatch policy
+- LLG RHS kernels,
+- predictor/corrector stepping,
+- renormalization,
+- Rust runner dispatch into CUDA,
+- identical observable and artifact semantics relative to CPU.
 
-The runner must make dispatch explicit.
+### Stage 2E - GPU `single`
 
-Required policy:
+Deliver only after Stage 2D passes:
 
-1. planner emits a backend plan including precision,
-2. runner checks whether CUDA backend is compiled and available,
-3. if GPU requested/available and plan is legal, dispatch to CUDA,
-4. otherwise:
-   - use CPU reference only for `double`,
-   - reject `single` honestly.
+- `fp32` state path,
+- precision-aware context creation,
+- qualification against GPU `double`,
+- metadata and provenance proving the chosen execution precision.
 
-Metadata must state which path actually ran:
+### Stage 2F - calibration and regression harness
 
-- `cpu_reference_fdm`
-- `cuda_fdm`
+Deliver:
 
-## 7. Calibration matrix
+- repeatable CPU/GPU parity cases,
+- GPU `single` vs GPU `double` cases,
+- stable tolerance policy,
+- CI or documented commands for recurring calibration.
 
-### 7.1 Benchmark set
+### Stage 2G - performance qualification
 
-At minimum:
+Deliver:
 
-1. uniform magnetization on small 3D box,
-2. single flipped cell in 1D-like strip,
-3. random seeded strip used by `exchange_relax.py`,
-4. refinement study on at least two grid resolutions.
+- profiler-backed kernel studies,
+- throughput comparison between CPU `double`, GPU `double`, and GPU `single`,
+- evidence that the CUDA path is worth shipping as the product backend.
 
-### 7.2 Tier A: CPU `double` vs GPU `double`
+## 6. Relationship to the application shell
 
-Acceptance targets:
+Phase 2 is not a license to ship a backend that only works through an internal path.
 
-- `E_ex` relative error `<= 1e-9`,
-- magnetization L2 difference `<= 1e-9`,
-- per-cell norm drift `<= 1e-12`.
+The target product flow remains:
 
-### 7.3 Tier B: GPU `double` vs GPU `single`
+1. Rust host receives `fullmag script.py`,
+2. Python helper returns `ProblemIR`,
+3. Rust validates, plans, and creates a session,
+4. runner dispatch selects CPU or CUDA FDM,
+5. browser control room and artifacts observe the same run contract.
 
-Acceptance targets:
+If shell pieces land after some CUDA internals, the CUDA implementation must still preserve this
+shape and must not hard-code an older Python-owned entrypoint model.
 
-- `E_ex` relative error `<= 1e-4`,
-- magnetization L2 difference `<= 1e-4`,
-- per-cell norm drift `<= 1e-6`.
+## 7. Acceptance criteria
 
-### 7.4 Artifact parity
+Phase 2 is complete only when all of these are true:
 
-CPU and GPU runs must produce the same logical artifact set:
+1. GPU `double` runs the narrow FDM slice with parity against CPU `double`,
+2. GPU `single` is qualified against GPU `double`,
+3. artifact semantics and provenance match the CPU path,
+4. the CUDA backend fits under the Rust-owned launcher and session model,
+5. the control-room path can observe CUDA-backed runs through the same session/run contract,
+6. capability and status docs still honestly distinguish implemented versus planned behavior.
 
-- `metadata.json`
-- `scalars.csv`
-- `m_initial.json`
-- `m_final.json`
-- `fields/m/`
-- `fields/H_ex/`
+## 8. Explicit non-goals
 
-Permitted differences:
+Do not mix these into Phase 2:
 
-- device/toolkit/driver provenance,
-- small floating-point numerical differences within the calibration tolerances.
-
-## 8. Build, packaging, and deployment policy
-
-### 8.1 Toolkit policy
-
-- pin to one CUDA major line for the release,
-- initial recommendation: CUDA 12.x,
-- do not target "latest driver only".
-
-### 8.2 Architecture targets
-
-Initial production target set:
-
-- `sm_80`
-- `sm_86`
-- `sm_89`
-- `sm_90`
-
-Add PTX only as a forward-compatibility aid, not as the primary tested path.
-
-### 8.3 Driver support policy
-
-- define and test a minimum supported driver,
-- test also on a current/newer driver lane,
-- fail clearly at runtime when driver or compute capability is unsupported.
-
-## 9. Explicit non-goals for this plan
-
-- FEM execution
-- demag
-- DMI
-- Zeeman
-- anisotropy
-- multi-GPU
-- MPI
-- adaptive timestepping
-- public mixed-precision mode
-
-## 10. Acceptance criteria
-
-- [ ] `ExecutionPrecision` is part of Python API, `ProblemIR`, planner output, and provenance
-- [ ] CUDA native backend builds as `libfullmag_fdm.so`
-- [ ] GPU `double` exchange field matches CPU `double` within Tier A tolerances
-- [ ] GPU `double` Heun stepping matches CPU `double` within Tier A tolerances
-- [ ] Rust runner dispatches to CUDA FDM when available
-- [ ] `Simulation.run()` preserves user precision selection in metadata
-- [ ] GPU `single` matches GPU `double` within Tier B tolerances
-- [ ] CPU and GPU publish identical logical artifact sets
-- [ ] Nsight-backed performance report exists
-- [ ] calibration results are documented in `docs/physics/`
-
-## 11. Immediate implementation order
-
-1. Finish precision policy plumbing and docs.
-2. Split `fullmag-runner` into CPU/GPU/artifact modules before CUDA code lands.
-3. Create `native/fdm-cuda/` skeleton and C ABI.
-4. Land GPU `double` exchange field parity.
-5. Land GPU `double` Heun stepping.
-6. Wire Rust runner dispatch and artifact parity.
-7. Land GPU `single`.
-8. Add CI/profiling/performance baselines.
+- FEM execution,
+- hybrid execution,
+- new physics terms,
+- new integrators,
+- multi-GPU,
+- MPI,
+- editor-first browser work,
+- remote cluster stack.

@@ -1,12 +1,18 @@
 # Completed Plans
 
-This directory is the archive for plans whose primary implementation goals are already delivered.
+This directory archives plans whose main implementation purpose is no longer active.
 
-At the moment, no plan has been moved here because the current implementation audit still found
-active technical gaps in the FDM execution slice.
+Completed plans remain subordinate to the same target application contract:
 
-When a plan is archived here, keep it unchanged except for:
+- `docs/specs/fullmag-application-architecture-v2.md`
 
-- final status line,
-- archive date,
-- link to the replacement active plan if one exists.
+When a plan is archived here:
+
+1. keep the historical content intact,
+2. add or update only the final status line,
+3. add an archive date if useful,
+4. link to the active successor plan when one exists.
+
+Do not move a plan here just because part of it shipped.
+
+Archive it only when it has stopped steering current work.
