@@ -435,14 +435,18 @@ pub struct FdmMaterialIR {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemPlanIR {
-    pub mesh_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_source: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mesh: Option<MeshIR>,
+    pub mesh: MeshIR,
     pub fe_order: u32,
     pub hmax: f64,
     pub initial_magnetization: Vec<[f64; 3]>,
+    pub material: MaterialIR,
+    pub enable_exchange: bool,
+    pub enable_demag: bool,
+    pub external_field: Option<[f64; 3]>,
+    pub gyromagnetic_ratio: f64,
+    pub precision: ExecutionPrecision,
     pub exchange_bc: ExchangeBoundaryCondition,
     pub integrator: IntegratorChoice,
     pub fixed_timestep: Option<f64>,

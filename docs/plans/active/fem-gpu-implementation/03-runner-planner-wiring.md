@@ -18,11 +18,12 @@
 
 ## 2. Planner — lowering FEM
 
-### Obecny stan (stub)
+### Obecny stan (2026-03-24)
 
 ```rust
 // crates/fullmag-plan/src/lib.rs
-// BackendTarget::Fem → validates FEM hints → returns PlanError::NotExecutable
+// BackendTarget::Fem → planner buduje bootstrapowy FemPlanIR z precomputed MeshIR,
+// ale crates/fullmag-runner nadal nie wykonuje BackendPlanIR::Fem
 ```
 
 ### Docelowy stan

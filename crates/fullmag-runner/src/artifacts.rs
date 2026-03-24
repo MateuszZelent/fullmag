@@ -152,12 +152,12 @@ fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Value {
         }),
         BackendPlanIR::Fem(fem) => serde_json::json!({
             "backend": "fem",
-            "mesh_name": fem.mesh_name,
+            "mesh_name": fem.mesh.mesh_name,
             "mesh_source": fem.mesh_source,
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
-            "n_nodes": fem.mesh.as_ref().map(|mesh| mesh.nodes.len()),
-            "n_elements": fem.mesh.as_ref().map(|mesh| mesh.elements.len()),
+            "n_nodes": fem.mesh.nodes.len(),
+            "n_elements": fem.mesh.elements.len(),
         }),
     }
 }

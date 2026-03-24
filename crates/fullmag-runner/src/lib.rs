@@ -35,7 +35,9 @@ pub fn run_problem(
         BackendPlanIR::Fdm(fdm) => fdm,
         _ => {
             return Err(RunError {
-                message: "Phase 1 runner only supports FDM backend plan".to_string(),
+                message:
+                    "current runner supports only FDM backend execution; FEM plans are planner-ready but not executable yet"
+                        .to_string(),
             })
         }
     };
@@ -69,7 +71,9 @@ pub fn run_problem_with_callback(
         BackendPlanIR::Fdm(fdm) => fdm,
         _ => {
             return Err(RunError {
-                message: "Phase 1 runner only supports FDM backend plan".to_string(),
+                message:
+                    "current runner supports only FDM backend execution; FEM plans are planner-ready but not executable yet"
+                        .to_string(),
             })
         }
     };

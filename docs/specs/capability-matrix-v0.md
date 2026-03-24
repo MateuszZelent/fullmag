@@ -29,7 +29,7 @@ Every feature carries one of three statuses:
 |---------|-----|-----|--------|------|-------|
 | `Box` geometry | ✅ exec | planned | planned | **public-executable** (FDM) | Box→grid lowering in `fullmag-plan` |
 | `Cylinder` geometry | planned | planned | planned | semantic-only | Requires active-mask voxelizer for accurate curved-boundary FDM execution |
-| Imported geometry ref | planned | planned | planned | semantic-only | Requires voxelizer/mesher pipeline |
+| Imported geometry ref | planned | planned | planned | semantic-only | FDM planner accepts it when a precomputed grid asset is attached; public execution still depends on voxelization extras |
 | Material constants (`Ms`, `A`, `alpha`) | ✅ exec | planned | planned | **public-executable** (FDM) | Used by the CPU reference FDM runner |
 | Material constants (`Ku1`, `anisU`) | planned | planned | planned | semantic-only | Anisotropy not in exchange-only scope |
 | Ferromagnet + uniform `m0` | ✅ exec | planned | planned | **public-executable** (FDM) | Lowered to per-cell vectors by planner |
@@ -43,7 +43,7 @@ Every feature carries one of three statuses:
 | Execution precision `single` | planned | planned | planned | semantic-only | Defined in Python API and `ProblemIR`; reserved for Phase 2 CUDA FDM |
 | Field/scalar outputs (`m`, `H_ex`, `H_demag`, `H_ext`, `H_eff`, `E_ex`, `E_demag`, `E_ext`, `E_total`) | ✅ exec | planned | planned | **public-executable** (FDM) | Artifacts: `metadata.json`, expanded `scalars.csv`, and per-field snapshots under `fields/` |
 | FDM hints | ✅ exec | n/a | planned | **public-executable** | Cell size → grid dims in planner |
-| FEM hints | n/a | planned | planned | semantic-only | FEM execution deferred to Phase 2 |
+| FEM hints | n/a | planned | planned | semantic-only | Planner can build `FemPlanIR` from precomputed `MeshIR`; runner execution remains deferred |
 | Hybrid hints | n/a | n/a | planned | semantic-only | Requires hybrid mode and backend |
 
 ## Early planner rules

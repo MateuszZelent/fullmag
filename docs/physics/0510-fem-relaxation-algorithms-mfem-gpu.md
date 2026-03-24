@@ -21,6 +21,13 @@
 This note defines a roadmap for **better relaxation / energy-minimization algorithms**
 for the FEM backend beyond explicit damped LLG alone.
 
+Current repo status relevant to this note:
+
+- the planner can now construct a bootstrap `FemPlanIR` from a precomputed `MeshIR`,
+- `FemPlanIR` already carries mesh data, per-node initial magnetization, material payload,
+  active term flags, precision, and LLG timing parameters,
+- the runner still does **not** execute FEM plans yet.
+
 For FEM, relaxation is especially important because:
 
 - curved geometries and open-boundary demag often make static equilibria the main target,

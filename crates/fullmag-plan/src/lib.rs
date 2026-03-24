@@ -3,12 +3,13 @@
 //! Phase 1 scope: `Box/Cylinder/(ImportedGeometry + precomputed grid asset) +
 //! (Exchange | Demag | Zeeman combinations) + fdm/strict`
 //! is the legal executable path.
-//! Everything else is rejected with an honest error.
+//! Additionally, `backend='fem'` can now produce a planner-ready `FemPlanIR`
+//! when a precomputed `MeshIR` asset is attached, but runner execution remains deferred.
 
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, ExchangeBoundaryCondition,
     ExecutionMode, ExecutionPlanIR, ExecutionPrecision, FdmGridAssetIR, FdmMaterialIR, FdmPlanIR,
-    GeometryEntryIR, GridDimensions, InitialMagnetizationIR, IntegratorChoice, OutputIR,
+    FemPlanIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR, IntegratorChoice, OutputIR,
     OutputPlanIR, ProblemIR, ProvenancePlanIR, IR_VERSION,
 };
 use std::collections::BTreeSet;
@@ -34,9 +35,11 @@ impl std::error::Error for PlanError {}
 
 /// Plans a `ProblemIR` into an `ExecutionPlanIR`.
 ///
-/// Phase 1 only supports:
-/// `Box | Cylinder | ImportedGeometry + precomputed active_mask` + executable FDM
-/// interaction subset + `fdm/strict` + `Heun`.
+/// Current planner coverage:
+/// - executable FDM: `Box | Cylinder | ImportedGeometry + precomputed active_mask`
+///   with the narrow interaction subset and `Heun`,
+/// - planner-ready FEM: explicit `backend='fem'` with precomputed `MeshIR`.
+///
 /// Returns a detailed error for anything outside this subset.
 pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     // 1. Validate IR first
@@ -51,10 +54,11 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     // 2. Check backend target
     let resolved_backend = match problem.backend_policy.requested_backend {
         BackendTarget::Fdm => BackendTarget::Fdm,
-        BackendTarget::Auto => BackendTarget::Fdm, // default to FDM in Phase 1
+        BackendTarget::Auto => BackendTarget::Fdm, // default to FDM in current public slice
+        BackendTarget::Fem => BackendTarget::Fem,
         other => {
             errors.push(format!(
-                "backend '{}' is not executable in Phase 1; only 'fdm' is supported",
+                "backend '{}' is not yet supported by the current planner entry point",
                 other.as_str()
             ));
             BackendTarget::Fdm
@@ -64,6 +68,14 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     // 3. Check execution mode
     if problem.validation_profile.execution_mode != ExecutionMode::Strict {
         errors.push("only execution_mode='strict' is executable in Phase 1".to_string());
+    }
+
+    if !errors.is_empty() {
+        return Err(PlanError { reasons: errors });
+    }
+
+    if resolved_backend == BackendTarget::Fem {
+        return plan_fem(problem, resolved_backend);
     }
 
     // 4. Check energy terms — executable subset is Exchange / Demag / Zeeman
@@ -164,10 +176,6 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
             "execution_precision='single' is reserved for the Phase 2 CUDA path; the current CPU reference runner supports only 'double'"
                 .to_string(),
         );
-    }
-
-    if !errors.is_empty() {
-        return Err(PlanError { reasons: errors });
     }
 
     // ---- lowering: geometry → grid + active_mask ----
@@ -413,6 +421,218 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     })
 }
 
+fn plan_fem(problem: &ProblemIR, resolved_backend: BackendTarget) -> Result<ExecutionPlanIR, PlanError> {
+    let mut errors = Vec::new();
+
+    if problem.geometry.entries.len() != 1 {
+        errors.push(format!(
+            "current FEM planning baseline supports exactly one geometry entry, found {}",
+            problem.geometry.entries.len()
+        ));
+    }
+    if problem.magnets.len() != 1 {
+        errors.push(format!(
+            "current FEM planning baseline supports exactly one magnet, found {}",
+            problem.magnets.len()
+        ));
+    }
+
+    let fem_hints = match &problem.backend_policy.discretization_hints {
+        Some(DiscretizationHintsIR { fem: Some(fem), .. }) => fem,
+        _ => {
+            errors.push(
+                "FEM discretization hints (order + hmax) are required for backend='fem'"
+                    .to_string(),
+            );
+            if !errors.is_empty() {
+                return Err(PlanError { reasons: errors });
+            }
+            unreachable!();
+        }
+    };
+
+    let geometry = &problem.geometry.entries[0];
+    let magnet = &problem.magnets[0];
+    let material = problem
+        .materials
+        .iter()
+        .find(|candidate| candidate.name == magnet.material)
+        .cloned()
+        .expect("validation should have caught missing FEM material");
+
+    let mesh_asset = problem
+        .geometry_assets
+        .as_ref()
+        .and_then(|assets| {
+            assets
+                .fem_mesh_assets
+                .iter()
+                .find(|asset| asset.geometry_name == geometry.name())
+        })
+        .cloned();
+
+    let mesh_asset = match mesh_asset {
+        Some(asset) => asset,
+        None => {
+            errors.push(format!(
+                "geometry '{}' requires a precomputed FEM mesh asset; no MeshIR was provided",
+                geometry.name()
+            ));
+            if !errors.is_empty() {
+                return Err(PlanError { reasons: errors });
+            }
+            unreachable!();
+        }
+    };
+
+    let mut enable_exchange = false;
+    let mut enable_demag = false;
+    let mut external_field = None;
+    for term in &problem.energy_terms {
+        match term {
+            fullmag_ir::EnergyTermIR::Exchange => {
+                if enable_exchange {
+                    errors.push("Exchange is declared more than once".to_string());
+                }
+                enable_exchange = true;
+            }
+            fullmag_ir::EnergyTermIR::Demag => {
+                if enable_demag {
+                    errors.push("Demag is declared more than once".to_string());
+                }
+                enable_demag = true;
+            }
+            fullmag_ir::EnergyTermIR::Zeeman { b } => {
+                if external_field.is_some() {
+                    errors.push("Zeeman is declared more than once".to_string());
+                }
+                external_field = Some([b[0] / MU0, b[1] / MU0, b[2] / MU0]);
+            }
+            other => {
+                errors.push(format!(
+                    "energy term '{:?}' is semantic-only in the current FEM planning baseline",
+                    other
+                ));
+            }
+        }
+    }
+    if !(enable_exchange || enable_demag || external_field.is_some()) {
+        errors.push(
+            "the current FEM planning baseline requires at least one of Exchange, Demag, or Zeeman"
+                .to_string(),
+        );
+    }
+
+    validate_executable_outputs(
+        &problem.study.sampling().outputs,
+        enable_exchange,
+        enable_demag,
+        external_field.is_some(),
+        &mut errors,
+    );
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+        errors.push(
+            "execution_precision='single' is not yet supported by the FEM planning baseline"
+                .to_string(),
+        );
+    }
+
+    let n_nodes = mesh_asset.mesh.nodes.len();
+    let initial_magnetization = match &magnet.initial_magnetization {
+        Some(InitialMagnetizationIR::Uniform { value }) => vec![*value; n_nodes],
+        Some(InitialMagnetizationIR::RandomSeeded { seed }) => {
+            generate_random_unit_vectors(*seed, n_nodes)
+        }
+        Some(InitialMagnetizationIR::SampledField { values }) => {
+            if values.len() != n_nodes {
+                errors.push(format!(
+                    "sampled_field initial magnetization has {} vectors, but FEM mesh '{}' has {} nodes",
+                    values.len(),
+                    mesh_asset.mesh.mesh_name,
+                    n_nodes
+                ));
+            }
+            values.clone()
+        }
+        None => vec![[1.0, 0.0, 0.0]; n_nodes],
+    };
+
+    let integrator = match problem.study.dynamics() {
+        fullmag_ir::DynamicsIR::Llg { integrator, .. } => {
+            if integrator == "heun" {
+                IntegratorChoice::Heun
+            } else {
+                errors.push(format!(
+                    "integrator '{}' is not supported; only 'heun' is available",
+                    integrator
+                ));
+                IntegratorChoice::Heun
+            }
+        }
+    };
+
+    let fixed_timestep = match problem.study.dynamics() {
+        fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } => *fixed_timestep,
+    };
+
+    let gyromagnetic_ratio = match problem.study.dynamics() {
+        fullmag_ir::DynamicsIR::Llg {
+            gyromagnetic_ratio, ..
+        } => *gyromagnetic_ratio,
+    };
+
+    if !errors.is_empty() {
+        return Err(PlanError { reasons: errors });
+    }
+
+    let mesh = mesh_asset.mesh;
+    let n_elements = mesh.elements.len();
+    let mesh_name = mesh.mesh_name.clone();
+    let fem_plan = FemPlanIR {
+        mesh_source: mesh_asset.mesh_source,
+        mesh,
+        fe_order: fem_hints.order,
+        hmax: fem_hints.hmax,
+        initial_magnetization,
+        material,
+        enable_exchange,
+        enable_demag,
+        external_field,
+        gyromagnetic_ratio,
+        precision: problem.backend_policy.execution_precision,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        integrator,
+        fixed_timestep,
+    };
+
+    Ok(ExecutionPlanIR {
+        common: CommonPlanMeta {
+            ir_version: IR_VERSION.to_string(),
+            requested_backend: problem.backend_policy.requested_backend,
+            resolved_backend,
+            execution_mode: problem.validation_profile.execution_mode,
+        },
+        backend_plan: BackendPlanIR::Fem(fem_plan),
+        output_plan: OutputPlanIR {
+            outputs: problem.study.sampling().outputs.clone(),
+        },
+        provenance: ProvenancePlanIR {
+            notes: vec![
+                "Bootstrap FEM planner with precomputed MeshIR asset".to_string(),
+                format!("mesh asset: {mesh_name} ({n_nodes} nodes, {n_elements} elements)"),
+                format!(
+                    "active terms: exchange={}, demag={}, zeeman={}",
+                    enable_exchange,
+                    enable_demag,
+                    external_field.is_some()
+                ),
+                "FEM execution is not yet wired in the runner; this plan is planner-ready only"
+                    .to_string(),
+            ],
+        },
+    })
+}
+
 fn validate_executable_outputs(
     outputs: &[OutputIR],
     enable_exchange: bool,
@@ -608,6 +828,55 @@ mod tests {
                 assert_eq!(fdm.active_mask.unwrap().len(), 8);
             }
             _ => panic!("expected FDM plan"),
+        }
+    }
+
+    #[test]
+    fn fem_backend_with_mesh_asset_plans_successfully() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy.requested_backend = BackendTarget::Fem;
+        ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+            fdm: Some(fullmag_ir::FdmHintsIR {
+                cell: [2e-9, 2e-9, 5e-9],
+            }),
+            fem: Some(fullmag_ir::FemHintsIR {
+                order: 1,
+                hmax: 2e-9,
+                mesh: Some("meshes/unit_tet.msh".to_string()),
+            }),
+            hybrid: None,
+        });
+        ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: vec![],
+            fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
+                geometry_name: "strip".to_string(),
+                mesh_source: Some("meshes/unit_tet.msh".to_string()),
+                mesh: fullmag_ir::MeshIR {
+                    mesh_name: "strip".to_string(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    elements: vec![[0, 1, 2, 3]],
+                    element_markers: vec![1],
+                    boundary_faces: vec![[0, 1, 2]],
+                    boundary_markers: vec![1],
+                },
+            }],
+        });
+
+        let plan = plan(&ir).expect("FEM mesh asset should produce a FemPlanIR");
+        match plan.backend_plan {
+            BackendPlanIR::Fem(fem) => {
+                assert_eq!(fem.mesh.mesh_name, "strip");
+                assert_eq!(fem.material.name, "Py");
+                assert_eq!(fem.initial_magnetization.len(), 4);
+                assert!(fem.enable_exchange);
+                assert!(!fem.enable_demag);
+            }
+            _ => panic!("expected FEM plan"),
         }
     }
 
