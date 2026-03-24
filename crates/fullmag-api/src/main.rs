@@ -7,6 +7,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -70,6 +71,53 @@ struct ArtifactEntry {
     kind: String,
 }
 
+#[derive(Debug, Serialize)]
+struct ScalarRow {
+    step: u64,
+    time: f64,
+    solver_dt: f64,
+    e_ex: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct LiveState {
+    status: String,
+    updated_at_unix_ms: u128,
+    latest_step: StepUpdateView,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct StepUpdateView {
+    step: u64,
+    time: f64,
+    dt: f64,
+    e_ex: f64,
+    max_dm_dt: f64,
+    max_h_eff: f64,
+    wall_time_ns: u64,
+    grid: [u32; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    magnetization: Option<Vec<f64>>,
+    finished: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionStateResponse {
+    session: SessionManifest,
+    run: Option<RunManifest>,
+    live_state: Option<LiveState>,
+    metadata: Option<Value>,
+    scalar_rows: Vec<ScalarRow>,
+    latest_fields: LatestFields,
+    artifacts: Vec<ArtifactEntry>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct LatestFields {
+    m: Option<Value>,
+    h_ex: Option<Value>,
+}
+
 #[derive(Debug, Deserialize)]
 struct RunRequest {
     problem: fullmag_ir::ProblemIR,
@@ -105,11 +153,12 @@ async fn main() {
         .route("/healthz", get(healthz))
         .route("/v1/meta/vision", get(vision))
         .route("/v1/sessions", get(list_sessions))
-        .route("/v1/sessions/:session_id", get(get_session))
-        .route("/v1/sessions/:session_id/events", get(get_session_events))
+        .route("/v1/sessions/{session_id}", get(get_session))
+        .route("/v1/sessions/{session_id}/state", get(get_session_state))
+        .route("/v1/sessions/{session_id}/events", get(get_session_events))
         .route("/v1/runs", get(list_runs))
-        .route("/v1/runs/:run_id", get(get_run))
-        .route("/v1/runs/:run_id/artifacts", get(list_run_artifacts))
+        .route("/v1/runs/{run_id}", get(get_run))
+        .route("/v1/runs/{run_id}/artifacts", get(list_run_artifacts))
         .route("/v1/docs/physics", get(list_physics_docs))
         .route("/v1/run", post(start_run))
         .route("/ws/live", get(ws_live))
@@ -233,6 +282,39 @@ async fn get_session(
 ) -> Result<Json<SessionManifest>, ApiError> {
     let path = state.sessions_root.join(&session_id).join("session.json");
     Ok(Json(read_json_file(&path)?))
+}
+
+async fn get_session_state(
+    State(state): State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<SessionStateResponse>, ApiError> {
+    let session_dir = state.sessions_root.join(&session_id);
+    let session: SessionManifest = read_json_file(&session_dir.join("session.json"))?;
+    let run = read_optional_json_file::<RunManifest>(&session_dir.join("run.json"))?;
+    let artifact_dir = PathBuf::from(&session.artifact_dir);
+
+    let mut artifacts = Vec::new();
+    if artifact_dir.exists() {
+        collect_artifacts(&artifact_dir, &artifact_dir, &mut artifacts)?;
+    }
+
+    let metadata = read_optional_json_value(&artifact_dir.join("metadata.json"))?;
+    let scalar_rows = read_scalar_rows(&artifact_dir.join("scalars.csv"))?;
+    let live_state = read_optional_json_file::<LiveState>(&session_dir.join("live_state.json"))?;
+    let latest_fields = LatestFields {
+        m: read_latest_field_json(&artifact_dir, "m")?,
+        h_ex: read_latest_field_json(&artifact_dir, "H_ex")?,
+    };
+
+    Ok(Json(SessionStateResponse {
+        session,
+        run,
+        live_state,
+        metadata,
+        scalar_rows,
+        latest_fields,
+        artifacts,
+    }))
 }
 
 async fn get_session_events(
@@ -390,6 +472,87 @@ fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, ApiErr
     serde_json::from_str(&text).map_err(|error| {
         ApiError::internal(format!("invalid JSON in {}: {}", path.display(), error))
     })
+}
+
+fn read_optional_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>, ApiError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_json_file(path).map(Some)
+}
+
+fn read_optional_json_value(path: &Path) -> Result<Option<Value>, ApiError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|_| ApiError::not_found(format!("missing {}", path.display())))?;
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|error| ApiError::internal(format!("invalid JSON in {}: {}", path.display(), error)))
+}
+
+fn read_scalar_rows(path: &Path) -> Result<Vec<ScalarRow>, ApiError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let text = std::fs::read_to_string(path)
+        .map_err(|_| ApiError::not_found(format!("missing {}", path.display())))?;
+    let mut rows = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        if index == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let columns = line.split(',').collect::<Vec<_>>();
+        if columns.len() != 4 {
+            return Err(ApiError::internal(format!(
+                "invalid scalar row {} in {}",
+                index + 1,
+                path.display()
+            )));
+        }
+        rows.push(ScalarRow {
+            step: columns[0].parse().map_err(|error| {
+                ApiError::internal(format!("invalid scalar step in {}: {}", path.display(), error))
+            })?,
+            time: columns[1].parse().map_err(|error| {
+                ApiError::internal(format!("invalid scalar time in {}: {}", path.display(), error))
+            })?,
+            solver_dt: columns[2].parse().map_err(|error| {
+                ApiError::internal(format!("invalid scalar dt in {}: {}", path.display(), error))
+            })?,
+            e_ex: columns[3].parse().map_err(|error| {
+                ApiError::internal(format!("invalid scalar E_ex in {}: {}", path.display(), error))
+            })?,
+        });
+    }
+    Ok(rows)
+}
+
+fn read_latest_field_json(artifact_dir: &Path, observable: &str) -> Result<Option<Value>, ApiError> {
+    let observable_dir = artifact_dir.join("fields").join(observable);
+    if !observable_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut latest: Option<PathBuf> = None;
+    for entry in std::fs::read_dir(&observable_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        match &latest {
+            Some(current) if current.file_name() >= path.file_name() => {}
+            _ => latest = Some(path),
+        }
+    }
+
+    match latest {
+        Some(path) => read_optional_json_value(&path),
+        None => Ok(None),
+    }
 }
 
 fn repo_root() -> PathBuf {

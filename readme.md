@@ -38,6 +38,26 @@ Rust validation + normalization + planning + session bootstrap
         +--> Hybrid backend
 ```
 
+In the current bootstrap shell, the normal local workflow is:
+
+```bash
+fullmag examples/exchange_relax.py --until 2e-9
+fullmag -i examples/exchange_relax.py --until 2e-9
+```
+
+By default this attempts to:
+
+- run the simulation,
+- create a local session under `.fullmag/sessions/`,
+- start the bootstrap control room,
+- open the browser to `/runs/<session_id>`.
+
+The control room now reuses one local web server URL when possible, instead of allocating a new
+port for every run.
+
+Use `--headless` to suppress the UI bootstrap.
+Use `-i` / `--interactive` to keep the CLI open after the run completes.
+
 ## Golden rule
 
 Before implementing any new physics or numerics feature, create or update a publication-style note in `docs/physics/`.
@@ -80,18 +100,41 @@ make shell
 ```bash
 cargo check --workspace
 cargo test --workspace
-/usr/local/cargo/bin/cargo build -p fullmag-cli
+/usr/local/cargo/bin/cargo build -p fullmag-cli --bin fullmag
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e packages/fullmag-py
 PYTHONPATH=packages/fullmag-py/src python -m unittest discover -s packages/fullmag-py/tests -v
 python3 scripts/check_repo_consistency.py
-python scripts/run_python_ir_smoke.py --cli target/debug/fullmag-cli
-/usr/local/cargo/bin/cargo run -p fullmag-cli -- reference-exchange-demo --steps 10 --dt 1e-13
-/usr/local/cargo/bin/cargo run -p fullmag-cli -- examples/exchange_relax.py --until 2e-9 --json
+python scripts/run_python_ir_smoke.py --cli target/debug/fullmag
+/usr/local/cargo/bin/cargo run -p fullmag-cli --bin fullmag -- reference-exchange-demo --steps 10 --dt 1e-13
+/usr/local/cargo/bin/cargo run -p fullmag-cli --bin fullmag -- examples/exchange_relax.py --until 2e-9 --json
 ```
 
-### 4. Inspect the canonical example
+### 4. Install the local launcher on your PATH
+
+```bash
+make install-cli
+export PATH="$PWD/.fullmag/local/bin:$PATH"
+fullmag --help
+```
+
+### 5. Run the bootstrap control room manually
+
+```bash
+./scripts/dev-control-room.sh
+# or for a specific completed session:
+./scripts/dev-control-room.sh session-1234567890-12345
+# stop stale local control-room processes if needed:
+make control-room-stop
+```
+
+This starts:
+
+- `fullmag-api` on `http://127.0.0.1:8080`
+- the Next.js control room on `http://127.0.0.1:3000`
+
+### 6. Inspect the canonical example
 
 ```bash
 python3 -m venv .venv

@@ -7,14 +7,21 @@ use fullmag_ir::{
 use serde::Serialize;
 use std::ffi::OsString;
 use std::fs;
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
+use std::process::{Command as ProcessCommand, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Parser)]
 #[command(name = "fullmag")]
 #[command(
     about = "Rust-hosted Fullmag CLI for Python-authored ProblemIR validation, planning, and execution"
+)]
+#[command(
+    override_usage = "fullmag <COMMAND>\n       fullmag [-i|--interactive] <script.py> --until <seconds> [--backend <auto|fdm|fem|hybrid>] [--mode <strict|extended|hybrid>] [--precision <single|double>] [--headless]"
+)]
+#[command(
+    after_help = "Script mode examples:\n  fullmag examples/exchange_relax.py --until 2e-9\n  fullmag -i examples/exchange_relax.py --until 2e-9\n\nDefault behavior starts the bootstrap control room unless --headless is passed.\nUse -i / --interactive to keep the CLI open after the run completes."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -24,6 +31,8 @@ struct Cli {
 #[derive(Parser, Debug)]
 struct ScriptCli {
     script: PathBuf,
+    #[arg(short = 'i', long, default_value_t = false)]
+    interactive: bool,
     #[arg(long)]
     until: f64,
     #[arg(long, value_enum, default_value_t = BackendArg::Fdm)]
@@ -36,6 +45,8 @@ struct ScriptCli {
     output_dir: Option<PathBuf>,
     #[arg(long, default_value = ".fullmag/sessions")]
     session_root: PathBuf,
+    #[arg(long, default_value_t = false)]
+    headless: bool,
     #[arg(long)]
     json: bool,
 }
@@ -133,6 +144,27 @@ struct RunManifest {
     final_time: Option<f64>,
     final_e_ex: Option<f64>,
     artifact_dir: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LiveStateManifest {
+    status: String,
+    updated_at_unix_ms: u128,
+    latest_step: LiveStepView,
+}
+
+#[derive(Debug, Serialize)]
+struct LiveStepView {
+    step: u64,
+    time: f64,
+    dt: f64,
+    e_ex: f64,
+    max_dm_dt: f64,
+    max_h_eff: f64,
+    wall_time_ns: u64,
+    grid: [u32; 3],
+    magnetization: Option<Vec<f64>>,
+    finished: bool,
 }
 
 impl From<BackendArg> for BackendTarget {
@@ -241,21 +273,58 @@ fn main() -> Result<()> {
 }
 
 fn is_script_mode(raw_args: &[OsString]) -> bool {
-    let Some(first) = raw_args.get(1).and_then(|value| value.to_str()) else {
-        return false;
-    };
-    if first.starts_with('-') {
-        return false;
+    const SUBCOMMANDS: &[&str] = &[
+        "doctor",
+        "example-ir",
+        "reference-exchange-demo",
+        "validate-json",
+        "plan-json",
+        "run-json",
+    ];
+    const FLAG_ONLY: &[&str] = &["-i", "--interactive", "--headless", "--json"];
+    const VALUE_FLAGS: &[&str] = &[
+        "--until",
+        "--backend",
+        "--mode",
+        "--precision",
+        "--output-dir",
+        "--session-root",
+    ];
+
+    let mut index = 1usize;
+    while index < raw_args.len() {
+        let Some(arg) = raw_args[index].to_str() else {
+            return false;
+        };
+
+        if SUBCOMMANDS.contains(&arg) {
+            return false;
+        }
+        if FLAG_ONLY.contains(&arg) {
+            index += 1;
+            continue;
+        }
+        if VALUE_FLAGS.contains(&arg) {
+            index += 2;
+            continue;
+        }
+        if VALUE_FLAGS
+            .iter()
+            .any(|flag| arg.starts_with(&format!("{flag}=")))
+        {
+            index += 1;
+            continue;
+        }
+        if arg == "--" {
+            return raw_args.get(index + 1).is_some();
+        }
+        if arg.starts_with('-') {
+            return false;
+        }
+        return true;
     }
-    !matches!(
-        first,
-        "doctor"
-            | "example-ir"
-            | "reference-exchange-demo"
-            | "validate-json"
-            | "plan-json"
-            | "run-json"
-    )
+
+    false
 }
 
 fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
@@ -282,6 +351,10 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let plan_summary = ir
         .plan_for(Some(args.backend.into()))
         .map_err(join_errors)?;
+    let session_manifest_path = session_dir.join("session.json");
+    let run_manifest_path = session_dir.join("run.json");
+    let live_state_path = session_dir.join("live_state.json");
+    let live_scalars_path = session_dir.join("live_scalars.csv");
 
     append_event(
         &session_dir.join("events.ndjson"),
@@ -293,11 +366,127 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             "started_at_unix_ms": started_at_unix_ms,
         }),
     )?;
+    write_json_file(
+        &session_manifest_path,
+        &SessionManifest {
+            session_id: session_id.clone(),
+            run_id: run_id.clone(),
+            status: "running".to_string(),
+            script_path: script_path.display().to_string(),
+            problem_name: ir.problem_meta.name.clone(),
+            requested_backend: args
+                .backend
+                .to_possible_value()
+                .unwrap()
+                .get_name()
+                .to_string(),
+            execution_mode: args
+                .mode
+                .to_possible_value()
+                .unwrap()
+                .get_name()
+                .to_string(),
+            precision: args
+                .precision
+                .to_possible_value()
+                .unwrap()
+                .get_name()
+                .to_string(),
+            artifact_dir: artifact_dir.display().to_string(),
+            started_at_unix_ms,
+            finished_at_unix_ms: started_at_unix_ms,
+            plan_summary: plan_summary.clone(),
+        },
+    )?;
+    write_json_file(
+        &run_manifest_path,
+        &RunManifest {
+            run_id: run_id.clone(),
+            session_id: session_id.clone(),
+            status: "running".to_string(),
+            total_steps: 0,
+            final_time: None,
+            final_e_ex: None,
+            artifact_dir: artifact_dir.display().to_string(),
+        },
+    )?;
+    initialise_live_scalars(&live_scalars_path)?;
 
-    let result = match fullmag_runner::run_problem(&ir, args.until, &artifact_dir) {
+    if !args.headless {
+        if let Err(error) = spawn_control_room(&session_id) {
+            eprintln!(
+                "warning: failed to auto-start control room for session {}: {}",
+                session_id, error
+            );
+        }
+    }
+
+    let field_every_n = 10;
+    let result = match fullmag_runner::run_problem_with_callback(
+        &ir,
+        args.until,
+        &artifact_dir,
+        field_every_n,
+        |update| {
+            if update.stats.step <= 1 || update.stats.step % field_every_n == 0 || update.finished {
+                let _ = update_running_run_manifest(
+                    &run_manifest_path,
+                    &run_id,
+                    &session_id,
+                    &artifact_dir,
+                    &update,
+                );
+                let _ = update_live_state(&live_state_path, &update);
+                let _ = append_live_scalar_row(&live_scalars_path, &update);
+                if update.stats.step % 100 == 0 || update.finished {
+                    let _ = append_event(
+                        &session_dir.join("events.ndjson"),
+                        &serde_json::json!({
+                            "kind": if update.finished { "run_finished_step" } else { "run_progress" },
+                            "session_id": session_id.clone(),
+                            "run_id": run_id.clone(),
+                            "step": update.stats.step,
+                            "time": update.stats.time,
+                            "e_ex": update.stats.e_ex,
+                            "finished": update.finished,
+                        }),
+                    );
+                }
+            }
+        },
+    ) {
         Ok(result) => result,
         Err(error) => {
             let failed_at_unix_ms = unix_time_millis()?;
+            let _ = write_json_file(
+                &run_manifest_path,
+                &RunManifest {
+                    run_id: run_id.clone(),
+                    session_id: session_id.clone(),
+                    status: "failed".to_string(),
+                    total_steps: 0,
+                    final_time: None,
+                    final_e_ex: None,
+                    artifact_dir: artifact_dir.display().to_string(),
+                },
+            );
+            let _ = write_json_file(
+                &session_manifest_path,
+                &SessionManifest {
+                    session_id: session_id.clone(),
+                    run_id: run_id.clone(),
+                    status: "failed".to_string(),
+                    script_path: script_path.display().to_string(),
+                    problem_name: ir.problem_meta.name.clone(),
+                    requested_backend: args.backend.to_possible_value().unwrap().get_name().to_string(),
+                    execution_mode: args.mode.to_possible_value().unwrap().get_name().to_string(),
+                    precision: args.precision.to_possible_value().unwrap().get_name().to_string(),
+                    artifact_dir: artifact_dir.display().to_string(),
+                    started_at_unix_ms,
+                    finished_at_unix_ms: failed_at_unix_ms,
+                    plan_summary: plan_summary.clone(),
+                },
+            );
             append_event(
                 &session_dir.join("events.ndjson"),
                 &serde_json::json!({
@@ -345,7 +534,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     };
 
     write_json_file(
-        &session_dir.join("session.json"),
+        &session_manifest_path,
         &SessionManifest {
             session_id: session_id.clone(),
             run_id: run_id.clone(),
@@ -362,7 +551,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         },
     )?;
     write_json_file(
-        &session_dir.join("run.json"),
+        &run_manifest_path,
         &RunManifest {
             run_id: run_id.clone(),
             session_id: session_id.clone(),
@@ -392,6 +581,10 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         print_script_summary(&summary);
     }
 
+    if args.interactive {
+        pause_after_run(&summary.session_id, args.headless)?;
+    }
+
     Ok(())
 }
 
@@ -415,6 +608,8 @@ fn print_script_summary(summary: &ScriptRunSummary) {
     }
     println!("- artifact_dir: {}", summary.artifact_dir);
     println!("- session_dir: {}", summary.session_dir);
+    println!("- web_ui: bootstrap auto-launch attempted for this session");
+    println!("- control_room_hint: if the browser did not open, run `./scripts/dev-control-room.sh {}` from the repo root", summary.session_id);
 }
 
 fn export_problem_ir_via_python(script_path: &Path, args: &ScriptCli) -> Result<ProblemIR> {
@@ -493,6 +688,48 @@ fn run_python_helper(args: &[String]) -> Result<std::process::Output> {
     ))
 }
 
+fn spawn_control_room(session_id: &str) -> Result<()> {
+    let script = repo_root().join("scripts").join("dev-control-room.sh");
+    if !script.exists() {
+        bail!("missing control-room bootstrap script at {}", script.display());
+    }
+
+    ProcessCommand::new(script)
+        .arg(session_id)
+        .current_dir(repo_root())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to spawn control-room bootstrap")?;
+
+    Ok(())
+}
+
+fn pause_after_run(session_id: &str, headless: bool) -> Result<()> {
+    if !io::stdin().is_terminal() {
+        return Ok(());
+    }
+
+    println!();
+    println!("interactive mode enabled");
+    if headless {
+        println!("- headless run finished; press Enter to exit the CLI");
+    } else {
+        println!(
+            "- control room session: {}",
+            session_id
+        );
+        println!("- press Enter to exit the CLI and leave background services running");
+    }
+
+    let mut buffer = String::new();
+    io::stdin()
+        .read_line(&mut buffer)
+        .context("failed while waiting for interactive exit")?;
+    Ok(())
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -512,6 +749,78 @@ fn unix_time_millis() -> Result<u128> {
 fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let text = serde_json::to_string_pretty(value)?;
     fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn initialise_live_scalars(path: &Path) -> Result<()> {
+    let mut file =
+        fs::File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
+    writeln!(file, "step,time,solver_dt,E_ex")
+        .with_context(|| format!("failed to initialize {}", path.display()))
+}
+
+fn append_live_scalar_row(path: &Path, update: &fullmag_runner::StepUpdate) -> Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    writeln!(
+        file,
+        "{},{:.15e},{:.15e},{:.15e}",
+        update.stats.step, update.stats.time, update.stats.dt, update.stats.e_ex
+    )
+    .with_context(|| format!("failed to append {}", path.display()))
+}
+
+fn update_live_state(path: &Path, update: &fullmag_runner::StepUpdate) -> Result<()> {
+    write_json_file(
+        path,
+        &LiveStateManifest {
+            status: if update.finished {
+                "completed".to_string()
+            } else {
+                "running".to_string()
+            },
+            updated_at_unix_ms: unix_time_millis()?,
+            latest_step: LiveStepView {
+                step: update.stats.step,
+                time: update.stats.time,
+                dt: update.stats.dt,
+                e_ex: update.stats.e_ex,
+                max_dm_dt: update.stats.max_dm_dt,
+                max_h_eff: update.stats.max_h_eff,
+                wall_time_ns: update.stats.wall_time_ns,
+                grid: update.grid,
+                magnetization: update.magnetization.clone(),
+                finished: update.finished,
+            },
+        },
+    )
+}
+
+fn update_running_run_manifest(
+    path: &Path,
+    run_id: &str,
+    session_id: &str,
+    artifact_dir: &Path,
+    update: &fullmag_runner::StepUpdate,
+) -> Result<()> {
+    write_json_file(
+        path,
+        &RunManifest {
+            run_id: run_id.to_string(),
+            session_id: session_id.to_string(),
+            status: if update.finished {
+                "completed".to_string()
+            } else {
+                "running".to_string()
+            },
+            total_steps: update.stats.step as usize,
+            final_time: Some(update.stats.time),
+            final_e_ex: Some(update.stats.e_ex),
+            artifact_dir: artifact_dir.display().to_string(),
+        },
+    )
 }
 
 fn append_event(path: &Path, event: &serde_json::Value) -> Result<()> {

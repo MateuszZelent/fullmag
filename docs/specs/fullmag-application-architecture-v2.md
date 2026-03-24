@@ -51,9 +51,20 @@ The user story is:
 
 - write one Python script,
 - run it with `fullmag script.py`,
-- watch the run live in the browser,
+- watch the magnetization structure live in 2D and 3D in the browser,
 - or run headlessly from Jupyter / Python,
 - with one physical model and one artifact/provenance model regardless of backend.
+
+The browser control room is not a secondary admin panel.
+For local simulation work it is the primary visual interface of the product, in the same spirit as
+amumax/mmDisp-style workflows:
+
+- live 2D structure view,
+- live 3D magnetization view,
+- selectable quantities and components,
+- scalar traces,
+- field snapshot browsing,
+- provenance and artifacts around that visual core.
 
 ---
 
@@ -173,6 +184,47 @@ result = fm.Simulation(problem, backend="fdm", ui=False).run()
 ```
 
 Same control plane, but no browser unless explicitly requested.
+
+## 6.5 Visualization-first control room
+
+The `/runs/<session_id>` screen must be designed around field visualization first.
+
+The priority order is:
+
+1. quantity selection,
+2. 2D structure view of the selected quantity,
+3. 3D structure view of the selected quantity,
+4. scalar curves,
+5. run status and logs,
+6. artifacts and provenance.
+
+This ordering is deliberate.
+For Fullmag, 2D/3D field visualization is a core simulation interface, not an auxiliary panel.
+
+The control room must therefore be designed around a **quantity selector**, not around one hardcoded
+field.
+
+From the user perspective, the same viewer surface should be able to switch between:
+
+- magnetization `m`,
+- effective field contributions such as:
+  - `H_ex`
+  - later `H_demag`, `H_dmi`, `H_ani`, `H_zee`
+  - later `H_eff_total`
+- scalar and density quantities such as:
+  - `E_ex`
+  - later `E_demag`, `E_dmi`, `E_ani`, `E_zee`, `E_total`
+- later torque or auxiliary quantities such as:
+  - `dm/dt`
+  - current-related fields
+  - FEM auxiliary fields
+
+This means Fullmag should evolve like an amumax-style quantity browser:
+
+- one run,
+- one scene,
+- many selectable physical quantities,
+- with the available set determined by the actually implemented solver terms.
 
 ## 6.4 Future remote mode
 

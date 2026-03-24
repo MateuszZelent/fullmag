@@ -55,6 +55,7 @@ artifacts/
 data/
 tmp/
 coverage/
+.fullmag/
 
 # === CUDA ===
 *.cubin

@@ -53,6 +53,7 @@ It is subordinate to the application architecture and should be read as:
 - `docs/specs/session-run-api-v1.md`
 - `docs/specs/problem-ir-v0.md`
 - `docs/specs/capability-matrix-v0.md`
+- `docs/specs/visualization-quantities-v1.md`
 
 These define shared contracts used across multiple subsystems.
 

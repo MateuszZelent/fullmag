@@ -82,9 +82,11 @@ the full application shell already exists.
 The frontend is responsible for:
 
 - session status presentation,
+- quantity selection UI,
 - planner diagnostics display,
+- 2D field visualization,
+- 3D field visualization,
 - scalar charts,
-- field visualization,
 - logs,
 - provenance panels,
 - artifact browsing,
@@ -182,15 +184,21 @@ The first meaningful frontend milestone is:
 /runs/[id]
 ```
 
+This route is not mainly a metadata screen.
+It is the first real Fullmag simulation interface and must be visualization-first.
+
 Phase-1 run page contents:
 
+- quantity selector
+- component / magnitude selector for vector quantities
+- dominant 2D magnetization structure view
+- dominant 3D magnetization structure view
+- live or historical `E_ex(t)` chart
+- latest `H_ex` snapshot selector
 - session status
 - backend, mode, and precision badges
 - normalized problem summary
 - planner diagnostics
-- live or historical `E_ex(t)` chart
-- latest `m` snapshot view
-- latest `H_ex` snapshot selector
 - logs
 - artifact browser
 - provenance panel
@@ -220,6 +228,25 @@ Long-term inputs:
 
 The frontend must not treat its internal view model as the canonical artifact schema.
 
+The adapter layer must also normalize **visualization quantities** so the control room can expose
+an amumax-style selector:
+
+```text
+backend artifacts + live fields -> quantity registry -> UI selector + 2D/3D viewers
+```
+
+The control room must not be hardcoded around `m`.
+It must be able to grow by registering new quantities as solver terms become executable:
+
+- `m`
+- `H_ex`
+- later `H_demag`
+- later `H_dmi`
+- later `H_ani`
+- later `H_zee`
+- later `H_eff_total`
+- energy-related scalar/density quantities
+
 ## 10. Implementation phases
 
 ### Phase A0 - contract freeze
@@ -229,6 +256,7 @@ Deliver:
 - written session/run API contract,
 - event stream contract,
 - artifact-to-view-model adapter contract,
+- quantity registry contract,
 - route contract for `/runs/[id]`.
 
 Do not build feature UI before this is frozen.
@@ -238,9 +266,12 @@ Do not build feature UI before this is frozen.
 Deliver:
 
 - `/runs/[id]` route,
+- quantity selector for currently available quantities,
+- real 2D magnetization slice view from artifact data,
+- real 3D magnetization view from artifact data,
 - artifact-backed rendering of completed runs,
 - scalar chart from current `scalars.csv`,
-- field viewer backed by current JSON field snapshots,
+- field viewers backed by current JSON field snapshots,
 - logs and provenance panels.
 
 This phase may use polling or static fetches first.
@@ -252,7 +283,7 @@ Deliver:
 - Rust-created session ids,
 - session event stream,
 - browser auto-open from `fullmag script.py`,
-- live updates for status, logs, scalar chart, and snapshot availability.
+- live updates for quantity selector state, 2D view, 3D view, status, logs, scalar chart, and snapshot availability.
 
 ### Phase A3 - docs integration
 
