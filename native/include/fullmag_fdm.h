@@ -85,6 +85,23 @@ typedef struct {
     int                        has_external_field;
     double                     external_field_am[3]; /* H_ext in A/m */
 
+    /*
+     * Optional precomputed Newell tensor spectra, interleaved as
+     * [re0, im0, re1, im1, ...] in host-side f64 for each component.
+     * If absent, the backend falls back to the legacy spectral projection path.
+     */
+    const double              *demag_kernel_xx_spectrum;
+    const double              *demag_kernel_yy_spectrum;
+    const double              *demag_kernel_zz_spectrum;
+    const double              *demag_kernel_xy_spectrum;
+    const double              *demag_kernel_xz_spectrum;
+    const double              *demag_kernel_yz_spectrum;
+    uint64_t                   demag_kernel_spectrum_len; /* = 2 * fft_cell_count */
+
+    /* Optional active geometry mask: 1 = active cell, 0 = inactive cell. */
+    const uint8_t             *active_mask;
+    uint64_t                   active_mask_len; /* = cell_count when present */
+
     /* Initial m in AoS layout: [m0x, m0y, m0z, m1x, m1y, m1z, ...] */
     const double              *initial_magnetization_xyz;
     uint64_t                   initial_magnetization_len; /* = 3 * cell_count */
@@ -101,7 +118,8 @@ typedef struct {
     double   external_energy_joules;
     double   total_energy_joules;
     double   max_effective_field_amplitude;  /* max |H_eff| */
-    double   max_rhs_amplitude;             /* max |dm/dt| */
+    double   max_demag_field_amplitude;      /* max |H_demag| */
+    double   max_rhs_amplitude;              /* max |dm/dt| */
     uint64_t wall_time_ns;
 } fullmag_fdm_step_stats;
 

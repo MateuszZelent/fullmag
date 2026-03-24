@@ -42,6 +42,7 @@ export interface LiveState {
   e_total: number;
   max_dm_dt: number;
   max_h_eff: number;
+  max_h_demag: number;
   wall_time_ns: number;
   grid: [number, number, number];
   fem_mesh: FemLiveMesh | null;
@@ -65,6 +66,7 @@ export interface ScalarRow {
   e_total: number;
   max_dm_dt: number;
   max_h_eff: number;
+  max_h_demag: number;
 }
 
 export interface QuantityDescriptor {
@@ -150,6 +152,7 @@ function normalizeSessionState(raw: any): SessionState {
         e_total: rawLive.latest_step?.e_total ?? 0,
         max_dm_dt: rawLive.latest_step?.max_dm_dt ?? 0,
         max_h_eff: rawLive.latest_step?.max_h_eff ?? 0,
+        max_h_demag: rawLive.latest_step?.max_h_demag ?? 0,
         wall_time_ns: rawLive.latest_step?.wall_time_ns ?? 0,
         grid: rawLive.latest_step?.grid ?? fallbackGrid ?? [0, 0, 0],
         fem_mesh: rawLive.latest_step?.fem_mesh ?? null,

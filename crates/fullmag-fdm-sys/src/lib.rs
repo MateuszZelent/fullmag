@@ -72,6 +72,15 @@ pub struct fullmag_fdm_plan_desc {
     pub enable_demag: i32,
     pub has_external_field: i32,
     pub external_field_am: [f64; 3],
+    pub demag_kernel_xx_spectrum: *const f64,
+    pub demag_kernel_yy_spectrum: *const f64,
+    pub demag_kernel_zz_spectrum: *const f64,
+    pub demag_kernel_xy_spectrum: *const f64,
+    pub demag_kernel_xz_spectrum: *const f64,
+    pub demag_kernel_yz_spectrum: *const f64,
+    pub demag_kernel_spectrum_len: u64,
+    pub active_mask: *const u8,
+    pub active_mask_len: u64,
     pub initial_magnetization_xyz: *const f64,
     pub initial_magnetization_len: u64,
 }
@@ -89,6 +98,7 @@ pub struct fullmag_fdm_step_stats {
     pub external_energy_joules: f64,
     pub total_energy_joules: f64,
     pub max_effective_field_amplitude: f64,
+    pub max_demag_field_amplitude: f64,
     pub max_rhs_amplitude: f64,
     pub wall_time_ns: u64,
 }

@@ -12,12 +12,14 @@ When you need to understand Fullmag quickly, read in this order:
 
 1. `docs/specs/fullmag-application-architecture-v2.md`
 2. `docs/specs/session-run-api-v1.md`
-3. `docs/1_project_scope.md`
-4. `docs/2_repo_blueprint.md`
-5. `docs/specs/problem-ir-v0.md`
-6. `docs/specs/capability-matrix-v0.md`
-7. the relevant `docs/physics/` notes
-8. the relevant `docs/plans/active/` plan
+3. `docs/specs/runtime-distribution-and-managed-backends-v1.md`
+4. `docs/specs/hpc-cluster-execution-v1.md`
+5. `docs/1_project_scope.md`
+6. `docs/2_repo_blueprint.md`
+7. `docs/specs/problem-ir-v0.md`
+8. `docs/specs/capability-matrix-v0.md`
+9. the relevant `docs/physics/` notes
+10. the relevant `docs/plans/active/` plan
 
 ## Document hierarchy
 
@@ -51,6 +53,8 @@ It is subordinate to the application architecture and should be read as:
 ### 3. Stable cross-cutting specs
 
 - `docs/specs/session-run-api-v1.md`
+- `docs/specs/runtime-distribution-and-managed-backends-v1.md`
+- `docs/specs/hpc-cluster-execution-v1.md`
 - `docs/specs/problem-ir-v0.md`
 - `docs/specs/capability-matrix-v0.md`
 - `docs/specs/visualization-quantities-v1.md`

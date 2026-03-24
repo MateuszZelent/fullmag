@@ -33,6 +33,10 @@ This spec does not define:
 - artifact container schemas,
 - detailed `.zarr`, `.h5`, or OVF layouts.
 
+Cluster-specific scheduler/runtime semantics are expanded in:
+
+- `docs/specs/hpc-cluster-execution-v1.md`
+
 ## 3. Core runtime model
 
 ### 3.1 Session
@@ -91,6 +95,8 @@ Rules:
 - IDs must be stable for the lifetime of the session/run.
 - Every event emitted for a run must carry the owning `session_id`.
 - Browser routes should be session-oriented first and may derive the run identity from session data.
+- Remote execution must preserve identifier stability even when scheduler job ids or staging paths
+  change underneath the session.
 
 ## 5. Session lifecycle
 
@@ -104,6 +110,16 @@ The canonical session states are:
 - `completed`
 - `failed`
 - `cancelled`
+
+Remote-capable deployments may extend this with intermediate states such as:
+
+- `staging_input`
+- `submitting`
+- `queued`
+- `allocating`
+- `staging_runtime`
+- `running_remote`
+- `staging_output`
 
 Rules:
 
@@ -131,6 +147,14 @@ The session resource must expose, at minimum:
 - `diagnostics`
 - `latest_artifacts`
 - `cancel_allowed`
+
+Remote-capable session resources should additionally expose, when relevant:
+
+- `target_id`
+- `scheduler`
+- `scheduler_job_id`
+- `remote_workdir`
+- `runtime_image_id`
 
 The exact JSON envelope may evolve, but these concepts are the stable contract.
 

@@ -64,9 +64,12 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     ctx->enable_exchange = plan->enable_exchange != 0;
     ctx->enable_demag = plan->enable_demag != 0;
     ctx->has_external_field = plan->has_external_field != 0;
+    ctx->has_active_mask = plan->active_mask != nullptr;
+    ctx->has_demag_tensor_kernel = plan->demag_kernel_spectrum_len != 0;
     ctx->external_field[0] = plan->external_field_am[0];
     ctx->external_field[1] = plan->external_field_am[1];
     ctx->external_field[2] = plan->external_field_am[2];
+    ctx->active_cell_count = ctx->cell_count;
 
     // Validate
     if (ctx->cell_count == 0) {
@@ -80,9 +83,60 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             + ", got " + std::to_string(plan->initial_magnetization_len);
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    if (ctx->has_active_mask && plan->active_mask_len != ctx->cell_count) {
+        ctx->last_error = "active_mask_len mismatch: expected "
+            + std::to_string(ctx->cell_count)
+            + ", got " + std::to_string(plan->active_mask_len);
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (ctx->has_active_mask) {
+        ctx->active_mask_host.assign(plan->active_mask, plan->active_mask + plan->active_mask_len);
+        ctx->active_cell_count = 0;
+        for (uint8_t value : ctx->active_mask_host) {
+            if (value != 0) {
+                ctx->active_cell_count++;
+            }
+        }
+    }
+    uint64_t expected_fft_cell_count =
+        static_cast<uint64_t>(ctx->nx * 2) * (ctx->ny * 2) * (ctx->nz * 2);
+    if (ctx->has_demag_tensor_kernel) {
+        if (!plan->demag_kernel_xx_spectrum || !plan->demag_kernel_yy_spectrum
+            || !plan->demag_kernel_zz_spectrum || !plan->demag_kernel_xy_spectrum
+            || !plan->demag_kernel_xz_spectrum || !plan->demag_kernel_yz_spectrum)
+        {
+            ctx->last_error = "demag kernel spectra pointers must all be present when demag_kernel_spectrum_len is set";
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
+        if (plan->demag_kernel_spectrum_len != expected_fft_cell_count * 2) {
+            ctx->last_error = "demag_kernel_spectrum_len mismatch: expected "
+                + std::to_string(expected_fft_cell_count * 2)
+                + ", got " + std::to_string(plan->demag_kernel_spectrum_len);
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
+    }
 
     // Allocate device buffers
     if (!context_alloc_device(*ctx)) {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+
+    if (ctx->has_active_mask &&
+        !context_upload_active_mask(*ctx, plan->active_mask, plan->active_mask_len))
+    {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (ctx->has_demag_tensor_kernel &&
+        !context_upload_demag_kernel_spectra(
+            *ctx,
+            plan->demag_kernel_xx_spectrum,
+            plan->demag_kernel_yy_spectrum,
+            plan->demag_kernel_zz_spectrum,
+            plan->demag_kernel_xy_spectrum,
+            plan->demag_kernel_xz_spectrum,
+            plan->demag_kernel_yz_spectrum,
+            plan->demag_kernel_spectrum_len))
+    {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
 

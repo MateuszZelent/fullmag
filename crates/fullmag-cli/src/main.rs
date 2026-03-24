@@ -176,6 +176,7 @@ struct LiveStepView {
     e_total: f64,
     max_dm_dt: f64,
     max_h_eff: f64,
+    max_h_demag: f64,
     wall_time_ns: u64,
     grid: [u32; 3],
     fem_mesh: Option<fullmag_runner::FemMeshPayload>,
@@ -980,7 +981,7 @@ fn initialise_live_scalars(path: &Path) -> Result<()> {
         fs::File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
     writeln!(
         file,
-        "step,time,solver_dt,E_ex,E_demag,E_ext,E_total,max_dm_dt,max_h_eff"
+        "step,time,solver_dt,E_ex,E_demag,E_ext,E_total,max_dm_dt,max_h_eff,max_h_demag"
     )
     .with_context(|| format!("failed to initialize {}", path.display()))
 }
@@ -993,7 +994,7 @@ fn append_live_scalar_row(path: &Path, update: &fullmag_runner::StepUpdate) -> R
         .with_context(|| format!("failed to open {}", path.display()))?;
     writeln!(
         file,
-        "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
+        "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
         update.stats.step,
         update.stats.time,
         update.stats.dt,
@@ -1002,7 +1003,8 @@ fn append_live_scalar_row(path: &Path, update: &fullmag_runner::StepUpdate) -> R
         update.stats.e_ext,
         update.stats.e_total,
         update.stats.max_dm_dt,
-        update.stats.max_h_eff
+        update.stats.max_h_eff,
+        update.stats.max_h_demag
     )
     .with_context(|| format!("failed to append {}", path.display()))
 }
@@ -1027,6 +1029,7 @@ fn update_live_state(path: &Path, update: &fullmag_runner::StepUpdate) -> Result
                 e_total: update.stats.e_total,
                 max_dm_dt: update.stats.max_dm_dt,
                 max_h_eff: update.stats.max_h_eff,
+                max_h_demag: update.stats.max_h_demag,
                 wall_time_ns: update.stats.wall_time_ns,
                 grid: update.grid,
                 fem_mesh: update.fem_mesh.clone(),

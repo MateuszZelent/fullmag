@@ -1,4 +1,5 @@
 pub mod fem;
+pub mod newell;
 pub mod studies;
 
 use rustfft::num_complex::Complex;
@@ -192,18 +193,74 @@ pub struct FftWorkspace {
     buf_hx: Vec<Complex<f64>>,
     buf_hy: Vec<Complex<f64>>,
     buf_hz: Vec<Complex<f64>>,
+    /// Precomputed Newell kernel spectra (FFT of real-space demagnetization tensors).
+    kern_xx: Vec<Complex<f64>>,
+    kern_yy: Vec<Complex<f64>>,
+    kern_zz: Vec<Complex<f64>>,
+    kern_xy: Vec<Complex<f64>>,
+    kern_xz: Vec<Complex<f64>>,
+    kern_yz: Vec<Complex<f64>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DemagKernelSpectra {
+    pub px: usize,
+    pub py: usize,
+    pub pz: usize,
+    /// Interleaved complex spectra: [re0, im0, re1, im1, ...]
+    pub n_xx: Vec<f64>,
+    pub n_yy: Vec<f64>,
+    pub n_zz: Vec<f64>,
+    pub n_xy: Vec<f64>,
+    pub n_xz: Vec<f64>,
+    pub n_yz: Vec<f64>,
 }
 
 impl FftWorkspace {
-    pub fn new(nx: usize, ny: usize, nz: usize) -> Self {
+    pub fn new(nx: usize, ny: usize, nz: usize, dx: f64, dy: f64, dz: f64) -> Self {
         let px = nx * 2;
         let py = ny * 2;
         let pz = nz * 2;
         let padded_len = px * py * pz;
         let mut planner = FftPlanner::<f64>::new();
         let zero = Complex::new(0.0, 0.0);
+
+        let fwd_x = planner.plan_fft_forward(px);
+        let fwd_y = planner.plan_fft_forward(py);
+        let fwd_z = planner.plan_fft_forward(pz);
+
+        // Precompute Newell kernels in real space, then FFT each component.
+        let nk = newell::compute_newell_kernels(nx, ny, nz, dx, dy, dz);
+
+        let fft_kernel = |real: Vec<f64>| -> Vec<Complex<f64>> {
+            let mut buf: Vec<Complex<f64>> =
+                real.into_iter().map(|v| Complex::new(v, 0.0)).collect();
+            // 3D FFT: x then y then z, same as fft3_m_forward
+            let mut line_y_tmp = vec![zero; py];
+            let mut line_z_tmp = vec![zero; pz];
+            fft3_core(
+                &mut buf,
+                px,
+                py,
+                pz,
+                &*fwd_x,
+                &*fwd_y,
+                &*fwd_z,
+                &mut line_y_tmp,
+                &mut line_z_tmp,
+            );
+            buf
+        };
+
+        let kern_xx = fft_kernel(nk.n_xx);
+        let kern_yy = fft_kernel(nk.n_yy);
+        let kern_zz = fft_kernel(nk.n_zz);
+        let kern_xy = fft_kernel(nk.n_xy);
+        let kern_xz = fft_kernel(nk.n_xz);
+        let kern_yz = fft_kernel(nk.n_yz);
+
         Self {
-            fwd_x: planner.plan_fft_forward(px),
+            fwd_x,
             fwd_y: planner.plan_fft_forward(py),
             fwd_z: planner.plan_fft_forward(pz),
             inv_x: planner.plan_fft_inverse(px),
@@ -220,6 +277,12 @@ impl FftWorkspace {
             buf_hx: vec![zero; padded_len],
             buf_hy: vec![zero; padded_len],
             buf_hz: vec![zero; padded_len],
+            kern_xx,
+            kern_yy,
+            kern_zz,
+            kern_xy,
+            kern_xz,
+            kern_yz,
         }
     }
 
@@ -314,6 +377,37 @@ impl FftWorkspace {
     }
 }
 
+pub fn compute_newell_kernel_spectra(
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    dx: f64,
+    dy: f64,
+    dz: f64,
+) -> DemagKernelSpectra {
+    let workspace = FftWorkspace::new(nx, ny, nz, dx, dy, dz);
+    let flatten = |values: &[Complex<f64>]| -> Vec<f64> {
+        let mut flat = Vec::with_capacity(values.len() * 2);
+        for value in values {
+            flat.push(value.re);
+            flat.push(value.im);
+        }
+        flat
+    };
+
+    DemagKernelSpectra {
+        px: workspace.px,
+        py: workspace.py,
+        pz: workspace.pz,
+        n_xx: flatten(&workspace.kern_xx),
+        n_yy: flatten(&workspace.kern_yy),
+        n_zz: flatten(&workspace.kern_zz),
+        n_xy: flatten(&workspace.kern_xy),
+        n_xz: flatten(&workspace.kern_xz),
+        n_yz: flatten(&workspace.kern_yz),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExchangeLlgState {
     grid: GridShape,
@@ -387,6 +481,7 @@ pub struct ExchangeLlgProblem {
     pub material: MaterialParameters,
     pub dynamics: LlgConfig,
     pub terms: EffectiveFieldTerms,
+    pub active_mask: Option<Vec<bool>>,
 }
 
 impl ExchangeLlgProblem {
@@ -412,17 +507,47 @@ impl ExchangeLlgProblem {
         dynamics: LlgConfig,
         terms: EffectiveFieldTerms,
     ) -> Self {
-        Self {
+        Self::with_terms_and_mask(grid, cell_size, material, dynamics, terms, None)
+            .expect("unmasked problem construction should be infallible")
+    }
+
+    pub fn with_terms_and_mask(
+        grid: GridShape,
+        cell_size: CellSize,
+        material: MaterialParameters,
+        dynamics: LlgConfig,
+        terms: EffectiveFieldTerms,
+        active_mask: Option<Vec<bool>>,
+    ) -> Result<Self> {
+        if let Some(mask) = active_mask.as_ref() {
+            if mask.len() != grid.cell_count() {
+                return Err(EngineError::new(format!(
+                    "active_mask length {} does not match grid cell count {}",
+                    mask.len(),
+                    grid.cell_count()
+                )));
+            }
+        }
+        Ok(Self {
             grid,
             cell_size,
             material,
             dynamics,
             terms,
-        }
+            active_mask,
+        })
     }
 
     pub fn new_state(&self, magnetization: Vec<Vector3>) -> Result<ExchangeLlgState> {
-        ExchangeLlgState::new(self.grid, magnetization)
+        let mut state = ExchangeLlgState::new(self.grid, magnetization)?;
+        if let Some(mask) = self.active_mask.as_ref() {
+            for (index, is_active) in mask.iter().enumerate() {
+                if !is_active {
+                    state.magnetization[index] = [0.0, 0.0, 0.0];
+                }
+            }
+        }
+        Ok(state)
     }
 
     pub fn uniform_state(&self, value: Vector3) -> Result<ExchangeLlgState> {
@@ -431,7 +556,14 @@ impl ExchangeLlgProblem {
 
     /// Build a reusable FFT workspace matching this problem's grid.
     pub fn create_workspace(&self) -> FftWorkspace {
-        FftWorkspace::new(self.grid.nx, self.grid.ny, self.grid.nz)
+        FftWorkspace::new(
+            self.grid.nx,
+            self.grid.ny,
+            self.grid.nz,
+            self.cell_size.dx,
+            self.cell_size.dy,
+            self.cell_size.dz,
+        )
     }
 
     pub fn exchange_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
@@ -649,6 +781,13 @@ impl ExchangeLlgProblem {
         }
     }
 
+    fn is_active(&self, flat_index: usize) -> bool {
+        self.active_mask
+            .as_ref()
+            .map(|mask| mask[flat_index])
+            .unwrap_or(true)
+    }
+
     fn exchange_field_from_vectors(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
         let prefactor =
             2.0 * self.material.exchange_stiffness / (MU0 * self.material.saturation_magnetisation);
@@ -658,16 +797,27 @@ impl ExchangeLlgProblem {
         let grid = self.grid;
 
         let compute_cell = |flat_index: usize| -> Vector3 {
+            if !self.is_active(flat_index) {
+                return [0.0, 0.0, 0.0];
+            }
             let x = flat_index % grid.nx;
             let y = (flat_index / grid.nx) % grid.ny;
             let z = flat_index / (grid.nx * grid.ny);
             let center = magnetization[flat_index];
-            let x_minus = magnetization[grid.index(x.saturating_sub(1), y, z)];
-            let x_plus = magnetization[grid.index((x + 1).min(grid.nx - 1), y, z)];
-            let y_minus = magnetization[grid.index(x, y.saturating_sub(1), z)];
-            let y_plus = magnetization[grid.index(x, (y + 1).min(grid.ny - 1), z)];
-            let z_minus = magnetization[grid.index(x, y, z.saturating_sub(1))];
-            let z_plus = magnetization[grid.index(x, y, (z + 1).min(grid.nz - 1))];
+            let sample_neighbor = |nx: usize, ny: usize, nz: usize| -> Vector3 {
+                let neighbor_index = grid.index(nx, ny, nz);
+                if self.is_active(neighbor_index) {
+                    magnetization[neighbor_index]
+                } else {
+                    center
+                }
+            };
+            let x_minus = sample_neighbor(x.saturating_sub(1), y, z);
+            let x_plus = sample_neighbor((x + 1).min(grid.nx - 1), y, z);
+            let y_minus = sample_neighbor(x, y.saturating_sub(1), z);
+            let y_plus = sample_neighbor(x, (y + 1).min(grid.ny - 1), z);
+            let z_minus = sample_neighbor(x, y, z.saturating_sub(1));
+            let z_plus = sample_neighbor(x, y, (z + 1).min(grid.nz - 1));
 
             let mut laplacian = [0.0, 0.0, 0.0];
             for component in 0..3 {
@@ -715,10 +865,14 @@ impl ExchangeLlgProblem {
                 for x in 0..self.grid.nx {
                     let src_index = self.grid.index(x, y, z);
                     let dst_index = padded_index(px, py, x, y, z);
-                    let moment = scale(
-                        magnetization[src_index],
-                        self.material.saturation_magnetisation,
-                    );
+                    let moment = if self.is_active(src_index) {
+                        scale(
+                            magnetization[src_index],
+                            self.material.saturation_magnetisation,
+                        )
+                    } else {
+                        [0.0, 0.0, 0.0]
+                    };
                     ws.buf_mx[dst_index] = Complex::new(moment[0], 0.0);
                     ws.buf_my[dst_index] = Complex::new(moment[1], 0.0);
                     ws.buf_mz[dst_index] = Complex::new(moment[2], 0.0);
@@ -728,29 +882,15 @@ impl ExchangeLlgProblem {
 
         ws.fft3_m_forward();
 
-        let lx = px as f64 * self.cell_size.dx;
-        let ly = py as f64 * self.cell_size.dy;
-        let lz = pz as f64 * self.cell_size.dz;
-
-        for z in 0..pz {
-            let kz = 2.0 * PI * frequency_index(z, pz) as f64 / lz;
-            for y in 0..py {
-                let ky = 2.0 * PI * frequency_index(y, py) as f64 / ly;
-                for x in 0..px {
-                    let kx = 2.0 * PI * frequency_index(x, px) as f64 / lx;
-                    let k2 = kx * kx + ky * ky + kz * kz;
-                    if k2 == 0.0 {
-                        continue;
-                    }
-
-                    let index = padded_index(px, py, x, y, z);
-                    let kdotm =
-                        ws.buf_mx[index] * kx + ws.buf_my[index] * ky + ws.buf_mz[index] * kz;
-                    ws.buf_hx[index] = -kdotm * (kx / k2);
-                    ws.buf_hy[index] = -kdotm * (ky / k2);
-                    ws.buf_hz[index] = -kdotm * (kz / k2);
-                }
-            }
+        // Newell tensor convolution in Fourier space:
+        // H_i(k) = -Σ_j N_ij(k) · M_j(k)
+        for i in 0..padded_len {
+            let mx = ws.buf_mx[i];
+            let my = ws.buf_my[i];
+            let mz = ws.buf_mz[i];
+            ws.buf_hx[i] = -(ws.kern_xx[i] * mx + ws.kern_xy[i] * my + ws.kern_xz[i] * mz);
+            ws.buf_hy[i] = -(ws.kern_xy[i] * mx + ws.kern_yy[i] * my + ws.kern_yz[i] * mz);
+            ws.buf_hz[i] = -(ws.kern_xz[i] * mx + ws.kern_yz[i] * my + ws.kern_zz[i] * mz);
         }
 
         ws.fft3_h_inverse();
@@ -762,11 +902,15 @@ impl ExchangeLlgProblem {
                 for x in 0..self.grid.nx {
                     let src_index = padded_index(px, py, x, y, z);
                     let dst_index = self.grid.index(x, y, z);
-                    field[dst_index] = [
-                        ws.buf_hx[src_index].re * normalisation,
-                        ws.buf_hy[src_index].re * normalisation,
-                        ws.buf_hz[src_index].re * normalisation,
-                    ];
+                    field[dst_index] = if self.is_active(dst_index) {
+                        [
+                            ws.buf_hx[src_index].re * normalisation,
+                            ws.buf_hy[src_index].re * normalisation,
+                            ws.buf_hz[src_index].re * normalisation,
+                        ]
+                    } else {
+                        [0.0, 0.0, 0.0]
+                    };
                 }
             }
         }
@@ -775,7 +919,16 @@ impl ExchangeLlgProblem {
     }
 
     fn external_field_vectors(&self) -> Vec<Vector3> {
-        vec![self.terms.external_field.unwrap_or([0.0, 0.0, 0.0]); self.grid.cell_count()]
+        let external = self.terms.external_field.unwrap_or([0.0, 0.0, 0.0]);
+        (0..self.grid.cell_count())
+            .map(|i| {
+                if self.is_active(i) {
+                    external
+                } else {
+                    [0.0, 0.0, 0.0]
+                }
+            })
+            .collect()
     }
 
     fn effective_field_from_vectors(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
@@ -837,22 +990,34 @@ impl ExchangeLlgProblem {
         let dz2 = self.cell_size.dz * self.cell_size.dz;
 
         let compute_cell_energy = |flat_index: usize| -> f64 {
+            if !self.is_active(flat_index) {
+                return 0.0;
+            }
             let x = flat_index % grid.nx;
             let y = (flat_index / grid.nx) % grid.ny;
             let z = flat_index / (grid.nx * grid.ny);
             let center = magnetization[flat_index];
             let mut e = 0.0;
             if x + 1 < grid.nx {
-                let neighbor = magnetization[grid.index(x + 1, y, z)];
-                e += a * cell_volume * squared_norm(sub(neighbor, center)) / dx2;
+                let neighbor_index = grid.index(x + 1, y, z);
+                if self.is_active(neighbor_index) {
+                    let neighbor = magnetization[neighbor_index];
+                    e += a * cell_volume * squared_norm(sub(neighbor, center)) / dx2;
+                }
             }
             if y + 1 < grid.ny {
-                let neighbor = magnetization[grid.index(x, y + 1, z)];
-                e += a * cell_volume * squared_norm(sub(neighbor, center)) / dy2;
+                let neighbor_index = grid.index(x, y + 1, z);
+                if self.is_active(neighbor_index) {
+                    let neighbor = magnetization[neighbor_index];
+                    e += a * cell_volume * squared_norm(sub(neighbor, center)) / dy2;
+                }
             }
             if z + 1 < grid.nz {
-                let neighbor = magnetization[grid.index(x, y, z + 1)];
-                e += a * cell_volume * squared_norm(sub(neighbor, center)) / dz2;
+                let neighbor_index = grid.index(x, y, z + 1);
+                if self.is_active(neighbor_index) {
+                    let neighbor = magnetization[neighbor_index];
+                    e += a * cell_volume * squared_norm(sub(neighbor, center)) / dz2;
+                }
             }
             e
         };
@@ -1047,20 +1212,12 @@ fn fft3_with_workspace(data: &mut [Complex<f64>], ws: &mut FftWorkspace, inverse
 /// Legacy wrapper — creates workspace on the fly (used only in tests).
 #[allow(dead_code)]
 fn fft3_in_place(data: &mut [Complex<f64>], nx: usize, ny: usize, nz: usize, inverse: bool) {
-    let mut ws = FftWorkspace::new(nx / 2, ny / 2, nz / 2);
+    let mut ws = FftWorkspace::new(nx / 2, ny / 2, nz / 2, 1.0, 1.0, 1.0);
     fft3_with_workspace(data, &mut ws, inverse);
 }
 
 fn padded_index(nx: usize, ny: usize, x: usize, y: usize, z: usize) -> usize {
     x + nx * (y + ny * z)
-}
-
-fn frequency_index(index: usize, n: usize) -> isize {
-    if index <= n / 2 {
-        index as isize
-    } else {
-        index as isize - n as isize
-    }
 }
 
 fn zero_vectors(len: usize) -> Vec<Vector3> {
@@ -1191,6 +1348,40 @@ mod tests {
         )
     }
 
+    fn masked_exchange_problem(mask: Vec<bool>) -> ExchangeLlgProblem {
+        let grid = GridShape::new(3, 1, 1).expect("valid grid");
+        ExchangeLlgProblem::with_terms_and_mask(
+            grid,
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(1.0, 0.5 * MU0, 0.1).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: true,
+                demag: false,
+                external_field: None,
+            },
+            Some(mask),
+        )
+        .expect("masked problem should build")
+    }
+
+    fn masked_demag_problem(mask: Vec<bool>) -> ExchangeLlgProblem {
+        let grid = GridShape::new(3, 1, 1).expect("valid grid");
+        ExchangeLlgProblem::with_terms_and_mask(
+            grid,
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(1.0, 0.5 * MU0, 0.1).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: true,
+                external_field: Some([0.0, 0.0, 1.0]),
+            },
+            Some(mask),
+        )
+        .expect("masked problem should build")
+    }
+
     fn assert_vector_close(actual: Vector3, expected: Vector3, tolerance: f64) {
         for component in 0..3 {
             assert!(
@@ -1238,6 +1429,37 @@ mod tests {
             .expect("exchange field should evaluate");
 
         assert_vector_close(field[1], [2.0, -2.0, 0.0], 1e-12);
+    }
+
+    #[test]
+    fn masked_exchange_treats_inactive_neighbor_as_free_surface() {
+        let problem = masked_exchange_problem(vec![true, true, false]);
+        let state = problem
+            .new_state(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.7, 0.3, 0.0]])
+            .expect("state should build");
+
+        let field = problem
+            .exchange_field(&state)
+            .expect("exchange field should evaluate");
+
+        assert_vector_close(field[1], [1.0, -1.0, 0.0], 1e-12);
+        assert_vector_close(field[2], [0.0, 0.0, 0.0], 1e-12);
+        assert_vector_close(state.magnetization()[2], [0.0, 0.0, 0.0], 1e-12);
+    }
+
+    #[test]
+    fn masked_demag_and_external_fields_are_zero_outside_active_domain() {
+        let problem = masked_demag_problem(vec![true, true, false]);
+        let state = problem
+            .new_state(vec![[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+            .expect("state should build");
+
+        let obs = problem.observe(&state).expect("observables");
+
+        assert_vector_close(obs.external_field[2], [0.0, 0.0, 0.0], 1e-12);
+        assert_vector_close(obs.demag_field[2], [0.0, 0.0, 0.0], 1e-12);
+        assert_vector_close(obs.effective_field[2], [0.0, 0.0, 0.0], 1e-12);
+        assert_vector_close(obs.magnetization[2], [0.0, 0.0, 0.0], 1e-12);
     }
 
     #[test]
@@ -1423,7 +1645,6 @@ mod tests {
             .demag_field(&state)
             .expect("demag field should evaluate");
         // Compute via workspace
-        let mut ws = problem.create_workspace();
         let obs_ws = problem.observe(&state).expect("observables");
 
         for (i, (direct, ws_val)) in field_direct

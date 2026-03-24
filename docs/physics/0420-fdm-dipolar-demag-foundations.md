@@ -399,12 +399,15 @@ $$
 
 with analogous equations for $\widehat{H}_{y}$ and $\widehat{H}_{z}$.
 
-#### 3.1.4a Current implementation: spectral projection (interim)
+#### 3.1.4a ~~Current~~ Previous implementation: spectral projection (superseded)
 
-> **Status**: the `fullmag-engine` CPU reference uses a **spectral projection** demag operator,
-> not the full Newell tensor convolution described above.
+> **Status**:
+> - the `fullmag-engine` CPU reference uses the **full Newell tensor convolution**
+>   described in §3.1.2;
+> - the native CUDA FDM backend now consumes the same precomputed Newell tensor spectra and
+>   applies the same tensor FFT convolution with cuFFT.
 
-The current algorithm computes the demag field in Fourier space via the closed-form
+The legacy spectral algorithm computes the demag field in Fourier space via the closed-form
 continuum projection:
 
 $$
@@ -420,7 +423,7 @@ This is equivalent to solving $\Delta u = \nabla\cdot\mathbf{M}$ spectrally and 
 $\mathbf{H}_{\mathrm{d}}=-\nabla u$, which is the exact continuum dipolar operator on a periodic
 domain.
 
-**Implementation steps** (in `fullmag-engine/src/lib.rs`, `demag_field_from_vectors_ws`):
+**Legacy implementation steps** (today mirrored by the native CUDA FDM backend, not by the CPU reference):
 
 1. Zero-pad $\mathbf{M} = M_s \mathbf{m}$ into reusable workspace buffers of size $(2N_x, 2N_y, 2N_z)$.
 2. Forward FFT all three components using cached FFT plans (`FftWorkspace`).
@@ -437,9 +440,8 @@ domain.
   tensor gives more accurate near-field interactions.
 - **Con**: Assumes periodic zero-padded boundaries rather than truly cell-averaged open boundaries.
 
-For the current development stage, spectral projection provides correct physics and passes all
-validation tests (positive energy, thin-film shape anisotropy, relaxation energy decrease).
-The upgrade to Newell tensor convolution (§3.1.2) is planned as a future refinement.
+This section is retained as historical context and as a fallback/reference implementation shape.
+The canonical FDM demag path for both CPU and CUDA is now the Newell tensor FFT realization.
 
 The standard open-boundary realization is zero-padding to at least
 
@@ -610,12 +612,10 @@ For calibrated FFT demag, tolerances should be defined against:
 
 ## 7. Known limits and deferred work
 
-- **Newell kernel not yet implemented**: the current `fullmag-engine` CPU reference uses the
-  spectral projection operator $H_k = -k(k \cdot M_k)/|k|^2$ (§3.1.4a).
-  This is exact for the continuum dipolar field but does not include cell-averaging corrections.
-  The Newell $f/g$ base functions and antidifference kernel builder (§3.1.2) are documented
-  above but not yet implemented in any Rust crate.
-  Upgrade to cell-averaged Newell tensor convolution is planned as a future refinement.
+- **Newell kernel implemented**: the `fullmag-engine` CPU reference now uses the Boris-style
+  27-point stencil Newell tensor convolution (§3.1.2), replacing the spectral projection
+  operator. The `newell.rs` module implements `newell_f`, `newell_g`, `ldia`, and
+  `compute_newell_kernels`. The precomputed kernel spectra are stored in `FftWorkspace`.
 - periodic demag is out of scope for this contract;
   the baseline is free-space/open-boundary demag,
 - nonuniform cell sizes are out of scope for the first FDM dipolar implementation,

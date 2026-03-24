@@ -91,6 +91,7 @@ struct ScalarRow {
     e_total: f64,
     max_dm_dt: f64,
     max_h_eff: f64,
+    max_h_demag: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -111,6 +112,8 @@ struct StepUpdateView {
     e_total: f64,
     max_dm_dt: f64,
     max_h_eff: f64,
+    #[serde(default)]
+    max_h_demag: f64,
     wall_time_ns: u64,
     grid: [u32; 3],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1039,6 +1042,7 @@ fn read_scalar_rows(path: &Path) -> Result<Vec<ScalarRow>, ApiError> {
             e_total: parse_f64("E_total")?,
             max_dm_dt: parse_f64("max_dm_dt")?,
             max_h_eff: parse_f64("max_h_eff")?,
+            max_h_demag: parse_f64("max_h_demag")?,
         });
     }
     Ok(rows)

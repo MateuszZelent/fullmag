@@ -107,6 +107,7 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
     (typeof session?.requested_backend === "string" ? session.requested_backend : null);
   const isFemBackend = resolvedBackend === "fem";
   const metadata = state?.metadata as Record<string, unknown> | null;
+  const artifactLayout = (metadata?.artifact_layout as Record<string, unknown> | undefined) ?? undefined;
   const executionPlan = (metadata?.execution_plan as Record<string, unknown> | undefined) ?? undefined;
   const backendPlan = (executionPlan?.backend_plan as Record<string, unknown> | undefined) ?? undefined;
 
@@ -119,6 +120,16 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
     [_rawGrid?.[0], _rawGrid?.[1], _rawGrid?.[2]],
   );
   const totalCells = !isFemBackend ? grid[0] * grid[1] * grid[2] : null;
+  const activeCells = useMemo(() => {
+    if (typeof artifactLayout?.active_cell_count === "number") return artifactLayout.active_cell_count;
+    return totalCells;
+  }, [artifactLayout, totalCells]);
+  const inactiveCells = useMemo(() => {
+    if (typeof artifactLayout?.inactive_cell_count === "number") return artifactLayout.inactive_cell_count;
+    if (activeCells != null && totalCells != null) return Math.max(totalCells - activeCells, 0);
+    return null;
+  }, [activeCells, artifactLayout, totalCells]);
+  const activeMaskPresent = artifactLayout?.active_mask_present === true;
 
   /* Keyboard shortcuts: 1=3D, 2=2D, 3=Mesh */
   useEffect(() => {
@@ -189,19 +200,19 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
     if (!isFemBackend || !femMesh || !flatNodes || !flatFaces) return null;
     const nNodes = femMesh.nodes.length;
     const nElements = femMesh.elements.length;
-    let magnetization: FemMeshData["magnetization"] | undefined;
+    let fieldData: FemMeshData["fieldData"] | undefined;
     if (selectedVectors && selectedVectors.length >= nNodes * 3) {
-      const mx = new Array<number>(nNodes);
-      const my = new Array<number>(nNodes);
-      const mz = new Array<number>(nNodes);
+      const x = new Array<number>(nNodes);
+      const y = new Array<number>(nNodes);
+      const z = new Array<number>(nNodes);
       for (let i = 0; i < nNodes; i++) {
-        mx[i] = selectedVectors[i * 3] ?? 0;
-        my[i] = selectedVectors[i * 3 + 1] ?? 0;
-        mz[i] = selectedVectors[i * 3 + 2] ?? 0;
+        x[i] = selectedVectors[i * 3] ?? 0;
+        y[i] = selectedVectors[i * 3 + 1] ?? 0;
+        z[i] = selectedVectors[i * 3 + 2] ?? 0;
       }
-      magnetization = { mx, my, mz };
+      fieldData = { x, y, z };
     }
-    return { nodes: flatNodes, boundaryFaces: flatFaces, nNodes, nElements, magnetization };
+    return { nodes: flatNodes, boundaryFaces: flatFaces, nNodes, nElements, fieldData };
   }, [isFemBackend, femMesh, flatNodes, flatFaces, selectedVectors]);
 
   const femTopologyKey = useMemo(() => {
@@ -419,11 +430,12 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
             <FemMeshView3D
               topologyKey={femTopologyKey ?? undefined}
               meshData={femMeshData}
+              fieldLabel={quantityDescriptor?.label ?? selectedQuantity}
               colorField={
-                component === "x" ? "mx"
-                  : component === "y" ? "my"
-                  : component === "z" ? "mz"
-                  : "|m|"
+                component === "x" ? "x"
+                  : component === "y" ? "y"
+                  : component === "z" ? "z"
+                  : "magnitude"
               }
             />
           ) : viewMode === "2D" && isFemBackend && femMeshData ? (
@@ -480,6 +492,14 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
               }}>
                 {fmtExp(liveState?.max_dm_dt ?? 0)}
               </span>
+            </div>
+            <div className={s.fieldCell}>
+              <span className={s.fieldLabel}>max |H_eff|</span>
+              <span className={s.fieldValue}>{fmtExp(liveState?.max_h_eff ?? 0)}</span>
+            </div>
+            <div className={s.fieldCell}>
+              <span className={s.fieldLabel}>max |H_demag|</span>
+              <span className={s.fieldValue}>{fmtExp(liveState?.max_h_demag ?? 0)}</span>
             </div>
           </div>
           {dmDtSpark.length > 1 && (
@@ -625,6 +645,16 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
                   <span className={s.fieldLabel}>Cells</span>
                   <span className={s.fieldValue}>{totalCells?.toLocaleString() ?? "—"}</span>
                 </div>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>{activeMaskPresent ? "Active cells" : "Magnetic cells"}</span>
+                  <span className={s.fieldValue}>{activeCells?.toLocaleString() ?? "—"}</span>
+                </div>
+                {activeMaskPresent && (
+                  <div className={s.fieldCell}>
+                    <span className={s.fieldLabel}>Inactive cells</span>
+                    <span className={s.fieldValue}>{inactiveCells?.toLocaleString() ?? "—"}</span>
+                  </div>
+                )}
               </>
             )}
           </div>

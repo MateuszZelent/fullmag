@@ -105,7 +105,7 @@ fn execute_reference_fdm_impl(
         message: format!("LLG: {}", e),
     })?;
 
-    let problem = ExchangeLlgProblem::with_terms(
+    let problem = ExchangeLlgProblem::with_terms_and_mask(
         grid,
         cell_size,
         material,
@@ -115,10 +115,15 @@ fn execute_reference_fdm_impl(
             demag: plan.enable_demag,
             external_field: plan.external_field,
         },
-    );
+        plan.active_mask.clone(),
+    )
+    .map_err(|e| RunError {
+        message: format!("Problem construction: {}", e),
+    })?;
 
-    let mut state =
-        ExchangeLlgState::new(grid, plan.initial_magnetization.clone()).map_err(|e| RunError {
+    let mut state = problem
+        .new_state(plan.initial_magnetization.clone())
+        .map_err(|e| RunError {
             message: format!("State: {}", e),
         })?;
     let initial_magnetization = state.magnetization().to_vec();
@@ -230,7 +235,7 @@ fn execute_reference_fdm_impl(
             execution_engine: "cpu_reference".to_string(),
             precision: "double".to_string(),
             demag_operator_kind: if plan.enable_demag {
-                Some("spectral_fft_open_boundary".to_string())
+                Some("tensor_fft_newell".to_string())
             } else {
                 None
             },
@@ -621,5 +626,80 @@ mod tests {
     #[test]
     fn helper_max_vector_norm_handles_empty_input() {
         assert_eq!(max_vector_norm(&[]), 0.0);
+    }
+
+    #[test]
+    fn active_mask_keeps_inactive_cells_zero_and_excludes_them_from_fields() {
+        let active_mask = vec![
+            true, true, false, false, true, true, false, false, true, true, false, false, true,
+            true, false, false,
+        ];
+        let plan = FdmPlanIR {
+            active_mask: Some(active_mask.clone()),
+            initial_magnetization: vec![
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.5, 0.5, 0.5],
+                [0.5, 0.5, 0.5],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.5, 0.5, 0.5],
+                [0.5, 0.5, 0.5],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.5, 0.5, 0.5],
+                [0.5, 0.5, 0.5],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.5, 0.5, 0.5],
+                [0.5, 0.5, 0.5],
+            ],
+            enable_demag: true,
+            external_field: Some([1e5, 0.0, 0.0]),
+            ..make_test_plan()
+        };
+
+        let outputs = [
+            OutputIR::Field {
+                name: "m".to_string(),
+                every_seconds: 1e-13,
+            },
+            OutputIR::Field {
+                name: "H_demag".to_string(),
+                every_seconds: 1e-13,
+            },
+            OutputIR::Field {
+                name: "H_ext".to_string(),
+                every_seconds: 1e-13,
+            },
+        ];
+
+        let executed =
+            execute_reference_fdm(&plan, 2e-13, &outputs).expect("masked run should succeed");
+
+        let is_zero = |vector: [f64; 3]| vector.iter().all(|value| value.abs() <= 1e-12);
+
+        for (index, is_active) in active_mask.iter().enumerate() {
+            if !is_active {
+                assert!(
+                    is_zero(executed.result.final_magnetization[index]),
+                    "inactive cell {index} should stay zero in final magnetization"
+                );
+            }
+        }
+
+        for snapshot in &executed.field_snapshots {
+            if snapshot.name == "H_demag" || snapshot.name == "H_ext" || snapshot.name == "m" {
+                for (index, is_active) in active_mask.iter().enumerate() {
+                    if !is_active {
+                        assert!(
+                            is_zero(snapshot.values[index]),
+                            "inactive cell {index} should stay zero in snapshot '{}'",
+                            snapshot.name
+                        );
+                    }
+                }
+            }
+        }
     }
 }

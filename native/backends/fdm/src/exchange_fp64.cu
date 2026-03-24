@@ -12,9 +12,10 @@
 
 #include <cuda_runtime.h>
 #include <cmath>
-
 namespace fullmag {
 namespace fdm {
+
+extern double reduce_exchange_energy_fp64(Context &ctx);
 
 /* ── Exchange field kernel ── */
 
@@ -22,10 +23,12 @@ __global__ void exchange_field_fp64_kernel(
     const double * __restrict__ mx,
     const double * __restrict__ my,
     const double * __restrict__ mz,
+    const uint8_t * __restrict__ active_mask,
     double * __restrict__ hx,
     double * __restrict__ hy,
     double * __restrict__ hz,
     int nx, int ny, int nz,
+    int has_active_mask,
     double inv_dx2, double inv_dy2, double inv_dz2,
     double prefactor)
 {
@@ -39,13 +42,29 @@ __global__ void exchange_field_fp64_kernel(
     int y = rem / nx;
     int x = rem - y * nx;
 
-    // Clamped-neighbor indices (Neumann BC)
+    if (has_active_mask && active_mask[idx] == 0) {
+        hx[idx] = 0.0;
+        hy[idx] = 0.0;
+        hz[idx] = 0.0;
+        return;
+    }
+
+    // Clamped-neighbor indices (Neumann BC) with inactive neighbors treated as free surfaces.
     int xm = (x > 0)      ? idx - 1        : idx;
     int xp = (x < nx - 1) ? idx + 1        : idx;
     int ym = (y > 0)      ? idx - nx       : idx;
     int yp = (y < ny - 1) ? idx + nx       : idx;
     int zm = (z > 0)      ? idx - nx * ny  : idx;
     int zp = (z < nz - 1) ? idx + nx * ny  : idx;
+
+    if (has_active_mask) {
+        if (active_mask[xm] == 0) xm = idx;
+        if (active_mask[xp] == 0) xp = idx;
+        if (active_mask[ym] == 0) ym = idx;
+        if (active_mask[yp] == 0) yp = idx;
+        if (active_mask[zm] == 0) zm = idx;
+        if (active_mask[zp] == 0) zp = idx;
+    }
 
     double cx = mx[idx], cy = my[idx], cz = mz[idx];
 
@@ -66,49 +85,6 @@ __global__ void exchange_field_fp64_kernel(
     hz[idx] = prefactor * lap_z;
 }
 
-/* ── Exchange energy kernel (per-cell partial contribution) ── */
-
-__global__ void exchange_energy_fp64_kernel(
-    const double * __restrict__ mx,
-    const double * __restrict__ my,
-    const double * __restrict__ mz,
-    double * __restrict__ partial_energy,
-    int nx, int ny, int nz,
-    double A_times_V,
-    double inv_dx2, double inv_dy2, double inv_dz2)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = nx * ny * nz;
-    if (idx >= total) return;
-
-    int z = idx / (ny * nx);
-    int rem = idx - z * ny * nx;
-    int y = rem / nx;
-    int x = rem - y * nx;
-
-    double energy = 0.0;
-    double cx = mx[idx], cy = my[idx], cz = mz[idx];
-
-    // Forward neighbors only (avoid double-counting)
-    if (x + 1 < nx) {
-        int ni = idx + 1;
-        double dx_ = mx[ni] - cx, dy_ = my[ni] - cy, dz_ = mz[ni] - cz;
-        energy += A_times_V * (dx_ * dx_ + dy_ * dy_ + dz_ * dz_) * inv_dx2;
-    }
-    if (y + 1 < ny) {
-        int ni = idx + nx;
-        double dx_ = mx[ni] - cx, dy_ = my[ni] - cy, dz_ = mz[ni] - cz;
-        energy += A_times_V * (dx_ * dx_ + dy_ * dy_ + dz_ * dz_) * inv_dy2;
-    }
-    if (z + 1 < nz) {
-        int ni = idx + nx * ny;
-        double dx_ = mx[ni] - cx, dy_ = my[ni] - cy, dz_ = mz[ni] - cz;
-        energy += A_times_V * (dx_ * dx_ + dy_ * dy_ + dz_ * dz_) * inv_dz2;
-    }
-
-    partial_energy[idx] = energy;
-}
-
 /* ── Host-side launch wrappers ── */
 
 static const int BLOCK_SIZE = 256;
@@ -127,41 +103,18 @@ void launch_exchange_field_fp64(Context &ctx) {
         static_cast<const double*>(ctx.m.x),
         static_cast<const double*>(ctx.m.y),
         static_cast<const double*>(ctx.m.z),
+        ctx.active_mask,
         static_cast<double*>(ctx.h_ex.x),
         static_cast<double*>(ctx.h_ex.y),
         static_cast<double*>(ctx.h_ex.z),
         ctx.nx, ctx.ny, ctx.nz,
+        ctx.has_active_mask ? 1 : 0,
         inv_dx2, inv_dy2, inv_dz2,
         prefactor);
 }
 
-double launch_exchange_energy_fp64(Context &ctx, double *d_partial) {
-    int n = static_cast<int>(ctx.cell_count);
-    int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-
-    double cell_volume = ctx.dx * ctx.dy * ctx.dz;
-    double A_times_V = ctx.A * cell_volume;
-    double inv_dx2 = 1.0 / (ctx.dx * ctx.dx);
-    double inv_dy2 = 1.0 / (ctx.dy * ctx.dy);
-    double inv_dz2 = 1.0 / (ctx.dz * ctx.dz);
-
-    exchange_energy_fp64_kernel<<<grid, BLOCK_SIZE>>>(
-        static_cast<const double*>(ctx.m.x),
-        static_cast<const double*>(ctx.m.y),
-        static_cast<const double*>(ctx.m.z),
-        d_partial,
-        ctx.nx, ctx.ny, ctx.nz,
-        A_times_V, inv_dx2, inv_dy2, inv_dz2);
-
-    // Simple host-side reduction (sufficient for Phase 2; optimize in Phase 2G)
-    std::vector<double> h_partial(n);
-    cudaMemcpy(h_partial.data(), d_partial, n * sizeof(double), cudaMemcpyDeviceToHost);
-
-    double total = 0.0;
-    for (int i = 0; i < n; i++) {
-        total += h_partial[i];
-    }
-    return total;
+double launch_exchange_energy_fp64(Context &ctx) {
+    return reduce_exchange_energy_fp64(ctx);
 }
 
 } // namespace fdm

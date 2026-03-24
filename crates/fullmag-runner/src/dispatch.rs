@@ -307,7 +307,7 @@ fn execute_cuda_fdm(
                 fullmag_ir::ExecutionPrecision::Double => "double".to_string(),
             },
             demag_operator_kind: if plan.enable_demag {
-                Some("spectral_fft_open_boundary".to_string())
+                Some("tensor_fft_newell".to_string())
             } else {
                 None
             },

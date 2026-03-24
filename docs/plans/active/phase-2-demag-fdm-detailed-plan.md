@@ -136,7 +136,9 @@ Na dziś repo ma rzeczywiście działający wąski FDM slice:
 
 Mimo działającego execution path, kilka rzeczy nadal jest tylko bootstrapem:
 
-1. **Demag w CPU/CUDA jest dziś spectral-projection FFT**, a nie kanoniczny cell-averaged Newell tensor z `0420`.
+1. **Demag FDM jest już wyrównane do jednego realization level**:
+   - CPU reference używa kanonicznego `Newell tensor FFT`,
+   - native CUDA używa tego samego operatora przez upload precomputed Newell spectra i cuFFT tensor convolution.
 2. **Geometria wykonawcza nadal praktycznie kończy się na `Box`**.
 3. **Aktywna maska magnetyczna nie jest jeszcze centralnym elementem planu FDM**.
 4. **Krzywizny i geometrie zakrzywione nie są jeszcze uczciwie realizowane**.

@@ -136,6 +136,59 @@ class MeshData:
                 fp.write(struct.pack("<H", 0))  # attribute byte count
         return target
 
+    def export_vtk(
+        self,
+        path: str | Path,
+        fields: dict[str, NDArray] | None = None,
+    ) -> Path:
+        """Export full tetrahedral mesh as VTK legacy file.
+
+        Args:
+            path: Destination file path.
+            fields: Optional dict of per-node field data to include.
+                    Keys are field names (e.g. "m", "H_ex").
+                    Values are arrays of shape (n_nodes, 3) for vectors
+                    or (n_nodes,) for scalars.
+        """
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        n = self.n_nodes
+        m = self.n_elements
+        with open(target, "w", encoding="utf-8") as fp:
+            fp.write("# vtk DataFile Version 3.0\n")
+            fp.write("fullmag tetrahedral mesh\n")
+            fp.write("ASCII\n")
+            fp.write("DATASET UNSTRUCTURED_GRID\n")
+            fp.write(f"POINTS {n} double\n")
+            for node in self.nodes:
+                fp.write(f"{node[0]:.15e} {node[1]:.15e} {node[2]:.15e}\n")
+            fp.write(f"\nCELLS {m} {m * 5}\n")
+            for tet in self.elements:
+                fp.write(f"4 {tet[0]} {tet[1]} {tet[2]} {tet[3]}\n")
+            fp.write(f"\nCELL_TYPES {m}\n")
+            for _ in range(m):
+                fp.write("10\n")  # VTK_TETRA = 10
+            fp.write(f"\nCELL_DATA {m}\n")
+            fp.write("SCALARS region int 1\n")
+            fp.write("LOOKUP_TABLE default\n")
+            for marker in self.element_markers:
+                fp.write(f"{marker}\n")
+            # Per-node field data
+            if fields:
+                fp.write(f"\nPOINT_DATA {n}\n")
+                for name, data in fields.items():
+                    arr = np.asarray(data)
+                    if arr.ndim == 2 and arr.shape[1] == 3:
+                        fp.write(f"VECTORS {name} double\n")
+                        for vec in arr:
+                            fp.write(f"{vec[0]:.15e} {vec[1]:.15e} {vec[2]:.15e}\n")
+                    elif arr.ndim == 1:
+                        fp.write(f"SCALARS {name} double 1\n")
+                        fp.write("LOOKUP_TABLE default\n")
+                        for val in arr:
+                            fp.write(f"{val:.15e}\n")
+        return target
+
     @classmethod
     def load(cls, path: str | Path) -> "MeshData":
         source = Path(path)

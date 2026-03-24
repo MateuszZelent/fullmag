@@ -91,7 +91,7 @@ pub struct ExecutionProvenance {
     pub execution_engine: String,
     /// Numeric precision used: "double" or "single".
     pub precision: String,
-    /// Demag operator kind: "spectral_fft_open_boundary" or "tensor_fft_newell".
+    /// Demag operator kind: e.g. "tensor_fft_newell".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_operator_kind: Option<String>,
     /// FFT backend used: "rustfft" (CPU) or "cuFFT" (CUDA).

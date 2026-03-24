@@ -56,22 +56,22 @@ function toPoints(nodes: number[]): Point3[] {
 }
 
 function nodeScalar(meshData: FemMeshData, nodeIndex: number, component: VectorComponent): number {
-  const magnetization = meshData.magnetization;
-  if (!magnetization) {
+  const fld = meshData.fieldData;
+  if (!fld) {
     return 0;
   }
-  const mx = magnetization.mx[nodeIndex] ?? 0;
-  const my = magnetization.my[nodeIndex] ?? 0;
-  const mz = magnetization.mz[nodeIndex] ?? 0;
+  const fx = fld.x[nodeIndex] ?? 0;
+  const fy = fld.y[nodeIndex] ?? 0;
+  const fz = fld.z[nodeIndex] ?? 0;
   switch (component) {
     case "x":
-      return mx;
+      return fx;
     case "y":
-      return my;
+      return fy;
     case "z":
-      return mz;
+      return fz;
     case "magnitude":
-      return Math.sqrt(mx * mx + my * my + mz * mz);
+      return Math.sqrt(fx * fx + fy * fy + fz * fz);
   }
 }
 
@@ -281,7 +281,7 @@ function collectSegments(
     valueMax = 0;
   }
 
-  const isMagnetization = !!meshData.magnetization;
+  const hasFieldData = !!meshData.fieldData;
   const effectiveRange =
     component === "magnitude"
       ? { min: 0, max: Math.max(1, valueMax) }
@@ -299,7 +299,7 @@ function collectSegments(
     vLabel: axisLabel(v),
     bounds: { uMin, uMax, vMin, vMax },
     segments,
-    valueRange: isMagnetization ? effectiveRange : effectiveRange,
+    valueRange: hasFieldData ? effectiveRange : effectiveRange,
   };
 }
 

@@ -15,14 +15,14 @@ namespace fdm {
 
 // Forward declarations from exchange_fp32.cu
 extern void launch_exchange_field_fp32(Context &ctx);
-extern double launch_exchange_energy_fp32(Context &ctx, double *d_partial);
+extern double launch_exchange_energy_fp32(Context &ctx);
 extern void launch_demag_field_fp32(Context &ctx);
 extern void launch_effective_field_fp32(Context &ctx);
 extern double launch_demag_energy_fp32(Context &ctx);
 extern double launch_external_energy_fp32(Context &ctx);
 
 // Forward declaration from reductions_fp64.cu (reads fp32 as well via separate path)
-double reduce_max_norm_fp32(const void *vx, const void *vy, const void *vz, uint64_t n);
+double reduce_max_norm_fp32(Context &ctx, const void *vx, const void *vy, const void *vz, uint64_t n);
 
 /* ── LLG RHS kernel (fp32) ── */
 
@@ -195,16 +195,17 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
     double e_ex = 0.0;
     if (ctx.enable_exchange) {
-        double *d_partial = nullptr;
-        cudaMalloc(&d_partial, n * sizeof(double));
-        e_ex = launch_exchange_energy_fp32(ctx, d_partial);
-        cudaFree(d_partial);
+        e_ex = launch_exchange_energy_fp32(ctx);
     }
     double e_demag = launch_demag_energy_fp32(ctx);
     double e_ext = launch_external_energy_fp32(ctx);
     double e_total = e_ex + e_demag + e_ext;
 
-    double max_h_eff = reduce_max_norm_fp32(ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
+    double max_h_eff = reduce_max_norm_fp32(ctx, ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
+    double max_h_demag =
+        ctx.enable_demag
+            ? reduce_max_norm_fp32(ctx, ctx.h_demag.x, ctx.h_demag.y, ctx.h_demag.z, ctx.cell_count)
+            : 0.0;
 
     llg_rhs_fp32_kernel<<<grid, BLOCK_SIZE>>>(
         (const float*)ctx.m.x, (const float*)ctx.m.y, (const float*)ctx.m.z,
@@ -212,7 +213,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (float*)ctx.k1.x, (float*)ctx.k1.y, (float*)ctx.k1.z,
         n, gamma_bar_f, alpha_f);
 
-    double max_dm_dt = reduce_max_norm_fp32(ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
+    double max_dm_dt = reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 
     cudaDeviceSynchronize();
 
@@ -227,6 +228,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     stats->external_energy_joules = e_ext;
     stats->total_energy_joules = e_total;
     stats->max_effective_field_amplitude = max_h_eff;
+    stats->max_demag_field_amplitude = max_h_demag;
     stats->max_rhs_amplitude = max_dm_dt;
 }
 

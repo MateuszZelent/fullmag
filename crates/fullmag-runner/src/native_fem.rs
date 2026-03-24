@@ -436,8 +436,8 @@ mod tests {
             plan.material.damping,
         )
         .expect("material");
-        let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, TimeIntegrator::Heun)
-            .expect("dynamics");
+        let dynamics =
+            LlgConfig::new(plan.gyromagnetic_ratio, TimeIntegrator::Heun).expect("dynamics");
         let problem = FemLlgProblem::with_terms(
             topology,
             material,
@@ -525,7 +525,9 @@ mod tests {
             .expect("native exchange-only fem step");
         let actual_m = backend.copy_m(plan.mesh.nodes.len()).expect("copy m");
         let actual_h_ex = backend.copy_h_ex(plan.mesh.nodes.len()).expect("copy H_ex");
-        let actual_h_eff = backend.copy_h_eff(plan.mesh.nodes.len()).expect("copy H_eff");
+        let actual_h_eff = backend
+            .copy_h_eff(plan.mesh.nodes.len())
+            .expect("copy H_eff");
 
         assert_vector_field_close("m", &actual_m, &expected_m, 5e-8, 1e-10);
         assert_vector_field_close("H_ex", &actual_h_ex, &expected_h_ex, 5e-8, 1e-6);

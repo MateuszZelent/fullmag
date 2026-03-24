@@ -14,6 +14,12 @@ For lightweight paths this can mean bundled binaries/libraries.
 For heavyweight GPU paths, especially FEM on `MFEM + libCEED + hypre`, the canonical direction is a
 managed runtime container rather than one giant monolithic executable.
 
+For HPC, the primary assumption is **external dispatch**:
+
+- systems such as Microlab may place one task on one node,
+- and the node-local executable is still simply:
+  - `fullmag task1.py`
+
 The public authoring surface is an embedded, declarative Python DSL in `packages/fullmag-py`.
 Users write ordinary Python scripts and notebooks, but those objects serialize into a canonical `ProblemIR` that Rust validates, normalizes, and lowers into backend-specific plans.
 
@@ -189,6 +195,8 @@ PY
 - `docs/1_project_scope.md`
 - `docs/2_repo_blueprint.md`
 - `docs/adr/0001-physics-first-python-api.md`
+- `docs/specs/runtime-distribution-and-managed-backends-v1.md`
+- `docs/specs/hpc-cluster-execution-v1.md`
 - `docs/specs/problem-ir-v0.md`
 - `docs/specs/capability-matrix-v0.md`
 - `docs/physics/README.md`

@@ -74,6 +74,23 @@ impl NativeFdmBackend {
             .iter()
             .flat_map(|v| v.iter().copied())
             .collect();
+        let active_mask_flat: Option<Vec<u8>> = plan.active_mask.as_ref().map(|mask| {
+            mask.iter()
+                .map(|is_active| if *is_active { 1u8 } else { 0u8 })
+                .collect()
+        });
+        let demag_kernel_spectra = if plan.enable_demag {
+            Some(fullmag_engine::compute_newell_kernel_spectra(
+                plan.grid.cells[0] as usize,
+                plan.grid.cells[1] as usize,
+                plan.grid.cells[2] as usize,
+                plan.cell_size[0],
+                plan.cell_size[1],
+                plan.cell_size[2],
+            ))
+        } else {
+            None
+        };
 
         let plan_desc = ffi::fullmag_fdm_plan_desc {
             grid,
@@ -84,6 +101,33 @@ impl NativeFdmBackend {
             enable_demag: if plan.enable_demag { 1 } else { 0 },
             has_external_field: if plan.external_field.is_some() { 1 } else { 0 },
             external_field_am: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
+            demag_kernel_xx_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_xx.as_ptr()),
+            demag_kernel_yy_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_yy.as_ptr()),
+            demag_kernel_zz_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_zz.as_ptr()),
+            demag_kernel_xy_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_xy.as_ptr()),
+            demag_kernel_xz_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_xz.as_ptr()),
+            demag_kernel_yz_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_yz.as_ptr()),
+            demag_kernel_spectrum_len: demag_kernel_spectra
+                .as_ref()
+                .map_or(0, |kernels| kernels.n_xx.len() as u64),
+            active_mask: active_mask_flat
+                .as_ref()
+                .map_or(std::ptr::null(), |mask| mask.as_ptr()),
+            active_mask_len: active_mask_flat
+                .as_ref()
+                .map_or(0, |mask| mask.len() as u64),
             initial_magnetization_xyz: m_flat.as_ptr(),
             initial_magnetization_len: m_flat.len() as u64,
         };
@@ -117,6 +161,7 @@ impl NativeFdmBackend {
             external_energy_joules: 0.0,
             total_energy_joules: 0.0,
             max_effective_field_amplitude: 0.0,
+            max_demag_field_amplitude: 0.0,
             max_rhs_amplitude: 0.0,
             wall_time_ns: 0,
         };
@@ -135,7 +180,7 @@ impl NativeFdmBackend {
             e_ext: stats.external_energy_joules,
             e_total: stats.total_energy_joules,
             max_h_eff: stats.max_effective_field_amplitude,
-            max_h_demag: 0.0, // TODO(WP2): wire from C ABI max_demag_field_amplitude
+            max_h_demag: stats.max_demag_field_amplitude,
             max_dm_dt: stats.max_rhs_amplitude,
             wall_time_ns: stats.wall_time_ns,
         })
@@ -263,4 +308,318 @@ pub(crate) struct DeviceInfo {
     pub compute_capability: String,
     pub driver_version: i32,
     pub runtime_version: i32,
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod tests {
+    use super::*;
+    use fullmag_engine::{
+        CellSize, EffectiveFieldTerms, ExchangeLlgProblem, LlgConfig, MaterialParameters,
+        TimeIntegrator,
+    };
+    use fullmag_ir::{
+        ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
+        IntegratorChoice,
+    };
+
+    fn make_masked_test_plan(enable_demag: bool) -> FdmPlanIR {
+        FdmPlanIR {
+            grid: GridDimensions { cells: [3, 3, 1] },
+            cell_size: [5e-9, 5e-9, 10e-9],
+            region_mask: vec![0; 9],
+            active_mask: Some(vec![true, true, true, true, false, true, true, true, false]),
+            initial_magnetization: vec![
+                [1.0, 0.0, 0.0],
+                [0.9950041652780258, 0.09983341664682815, 0.0],
+                [0.9800665778412416, 0.19866933079506122, 0.0],
+                [0.9992009587217894, 0.0, 0.03996803834887158],
+                [0.9937606691655043, 0.09970865087213879, 0.04972948160146045],
+                [0.9778332467629838, 0.19771314245924698, 0.06988589031642899],
+                [
+                    0.9968017063026194,
+                    -0.039904089712529575,
+                    0.06972124896577284,
+                ],
+                [0.9892364775387807, 0.05946310942269411, 0.1338082836649087],
+                [0.9711213242426827, 0.15730105252897553, 0.17902957342582418],
+            ],
+            material: FdmMaterialIR {
+                name: "Py".to_string(),
+                saturation_magnetisation: 800e3,
+                exchange_stiffness: 13e-12,
+                damping: 0.1,
+            },
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            integrator: IntegratorChoice::Heun,
+            fixed_timestep: Some(2.5e-13),
+            enable_exchange: true,
+            enable_demag,
+            external_field: Some([1.5e3, -2.0e3, 7.5e2]),
+        }
+    }
+
+    fn assert_scalar_close(label: &str, actual: f64, expected: f64, rel_tol: f64, abs_tol: f64) {
+        let diff = (actual - expected).abs();
+        let scale = expected.abs().max(actual.abs()).max(1.0);
+        assert!(
+            diff <= abs_tol.max(rel_tol * scale),
+            "{} mismatch: actual={} expected={} diff={}",
+            label,
+            actual,
+            expected,
+            diff
+        );
+    }
+
+    fn assert_vector_field_close(
+        label: &str,
+        actual: &[[f64; 3]],
+        expected: &[[f64; 3]],
+        rel_tol: f64,
+        abs_tol: f64,
+    ) {
+        assert_eq!(actual.len(), expected.len(), "{} length mismatch", label);
+        for (index, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            for component in 0..3 {
+                assert_scalar_close(
+                    &format!("{}[{}][{}]", label, index, component),
+                    a[component],
+                    e[component],
+                    rel_tol,
+                    abs_tol,
+                );
+            }
+        }
+    }
+
+    fn cpu_reference_single_step(
+        plan: &FdmPlanIR,
+    ) -> (
+        Vec<[f64; 3]>,
+        Vec<[f64; 3]>,
+        Vec<[f64; 3]>,
+        Vec<[f64; 3]>,
+        Vec<[f64; 3]>,
+        fullmag_engine::StepReport,
+    ) {
+        let grid = fullmag_engine::GridShape::new(
+            plan.grid.cells[0] as usize,
+            plan.grid.cells[1] as usize,
+            plan.grid.cells[2] as usize,
+        )
+        .expect("grid");
+        let cell_size =
+            CellSize::new(plan.cell_size[0], plan.cell_size[1], plan.cell_size[2]).expect("cell");
+        let material = MaterialParameters::new(
+            plan.material.saturation_magnetisation,
+            plan.material.exchange_stiffness,
+            plan.material.damping,
+        )
+        .expect("material");
+        let dynamics =
+            LlgConfig::new(plan.gyromagnetic_ratio, TimeIntegrator::Heun).expect("dynamics");
+        let problem = ExchangeLlgProblem::with_terms_and_mask(
+            grid,
+            cell_size,
+            material,
+            dynamics,
+            EffectiveFieldTerms {
+                exchange: plan.enable_exchange,
+                demag: plan.enable_demag,
+                external_field: plan.external_field,
+            },
+            plan.active_mask.clone(),
+        )
+        .expect("problem");
+
+        let mut state = problem
+            .new_state(plan.initial_magnetization.clone())
+            .expect("state");
+        let mut workspace = problem.create_workspace();
+        let report = problem
+            .step_with_workspace(
+                &mut state,
+                plan.fixed_timestep.expect("fixed dt"),
+                &mut workspace,
+            )
+            .expect("cpu step");
+        let observables = problem.observe(&state).expect("observe");
+        (
+            state.magnetization().to_vec(),
+            observables.exchange_field,
+            observables.demag_field,
+            observables.external_field,
+            observables.effective_field,
+            report,
+        )
+    }
+
+    #[test]
+    fn native_fdm_masked_exchange_only_matches_cpu_reference_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM masked parity test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let plan = make_masked_test_plan(false);
+        let active_mask = plan.active_mask.clone().expect("active mask");
+        let cell_count = plan.initial_magnetization.len();
+        let (
+            expected_m,
+            expected_h_ex,
+            _expected_h_demag,
+            expected_h_ext,
+            expected_h_eff,
+            expected_report,
+        ) = cpu_reference_single_step(&plan);
+
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm step");
+        let actual_m = backend.copy_m(cell_count).expect("copy m");
+        let actual_h_ex = backend.copy_h_ex(cell_count).expect("copy H_ex");
+        let actual_h_ext = backend.copy_h_ext(cell_count).expect("copy H_ext");
+        let actual_h_eff = backend.copy_h_eff(cell_count).expect("copy H_eff");
+
+        assert_vector_field_close("m", &actual_m, &expected_m, 5e-6, 1e-8);
+        assert_vector_field_close("H_ex", &actual_h_ex, &expected_h_ex, 5e-5, 1e-2);
+        assert_vector_field_close("H_ext", &actual_h_ext, &expected_h_ext, 1e-12, 1e-12);
+        assert_vector_field_close("H_eff", &actual_h_eff, &expected_h_eff, 5e-5, 1e-2);
+
+        for (index, is_active) in active_mask.iter().enumerate() {
+            if !is_active {
+                assert_eq!(
+                    actual_m[index],
+                    [0.0, 0.0, 0.0],
+                    "inactive m leak at {index}"
+                );
+                assert_eq!(
+                    actual_h_ex[index],
+                    [0.0, 0.0, 0.0],
+                    "inactive H_ex leak at {index}"
+                );
+                assert_eq!(
+                    actual_h_ext[index],
+                    [0.0, 0.0, 0.0],
+                    "inactive H_ext leak at {index}"
+                );
+                assert_eq!(
+                    actual_h_eff[index],
+                    [0.0, 0.0, 0.0],
+                    "inactive H_eff leak at {index}"
+                );
+            }
+        }
+
+        assert_scalar_close(
+            "time_seconds",
+            stats.time,
+            expected_report.time_seconds,
+            1e-12,
+            1e-18,
+        );
+        assert_scalar_close(
+            "exchange_energy_joules",
+            stats.e_ex,
+            expected_report.exchange_energy_joules,
+            5e-6,
+            1e-18,
+        );
+        assert_scalar_close(
+            "external_energy_joules",
+            stats.e_ext,
+            expected_report.external_energy_joules,
+            1e-6,
+            1e-18,
+        );
+        assert_scalar_close(
+            "total_energy_joules",
+            stats.e_total,
+            expected_report.total_energy_joules,
+            5e-6,
+            1e-18,
+        );
+        assert_scalar_close(
+            "max_effective_field_amplitude",
+            stats.max_h_eff,
+            expected_report.max_effective_field_amplitude,
+            5e-5,
+            1e-4,
+        );
+        assert_scalar_close(
+            "max_rhs_amplitude",
+            stats.max_dm_dt,
+            expected_report.max_rhs_amplitude,
+            5e-5,
+            1e-4,
+        );
+    }
+
+    #[test]
+    fn native_fdm_masked_demag_fields_stay_zero_outside_active_domain_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM masked demag test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let plan = make_masked_test_plan(true);
+        let active_mask = plan.active_mask.clone().expect("active mask");
+        let cell_count = plan.initial_magnetization.len();
+
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm step");
+
+        let actual_m = backend.copy_m(cell_count).expect("copy m");
+        let actual_h_demag = backend.copy_h_demag(cell_count).expect("copy H_demag");
+        let actual_h_ext = backend.copy_h_ext(cell_count).expect("copy H_ext");
+        let actual_h_eff = backend.copy_h_eff(cell_count).expect("copy H_eff");
+
+        for (index, is_active) in active_mask.iter().enumerate() {
+            if !is_active {
+                assert_eq!(
+                    actual_m[index],
+                    [0.0, 0.0, 0.0],
+                    "inactive m leak at {index}"
+                );
+                assert_eq!(
+                    actual_h_demag[index],
+                    [0.0, 0.0, 0.0],
+                    "inactive H_demag leak at {index}"
+                );
+                assert_eq!(
+                    actual_h_ext[index],
+                    [0.0, 0.0, 0.0],
+                    "inactive H_ext leak at {index}"
+                );
+                assert_eq!(
+                    actual_h_eff[index],
+                    [0.0, 0.0, 0.0],
+                    "inactive H_eff leak at {index}"
+                );
+            } else {
+                assert_eq!(
+                    actual_h_ext[index],
+                    plan.external_field.expect("external field"),
+                    "active H_ext mismatch at {index}"
+                );
+            }
+        }
+
+        assert!(
+            actual_h_demag
+                .iter()
+                .zip(active_mask.iter())
+                .any(|(value, is_active)| *is_active && *value != [0.0, 0.0, 0.0]),
+            "expected at least one active cell to carry non-zero H_demag"
+        );
+    }
 }

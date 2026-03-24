@@ -29,6 +29,15 @@ struct DeviceVectorField {
     void *z = nullptr;
 };
 
+struct DeviceDemagKernel {
+    void *xx = nullptr;
+    void *yy = nullptr;
+    void *zz = nullptr;
+    void *xy = nullptr;
+    void *xz = nullptr;
+    void *yz = nullptr;
+};
+
 struct Context {
     // Grid
     uint32_t nx, ny, nz;
@@ -40,7 +49,10 @@ struct Context {
     bool enable_exchange = true;
     bool enable_demag = false;
     bool has_external_field = false;
+    bool has_active_mask = false;
+    bool has_demag_tensor_kernel = false;
     double external_field[3] = {0.0, 0.0, 0.0};
+    uint64_t active_cell_count = 0;
 
     // Execution
     fullmag_fdm_precision precision;
@@ -57,6 +69,10 @@ struct Context {
     DeviceVectorField k1;     // predictor RHS
     DeviceVectorField tmp;    // predictor state
     DeviceVectorField work;   // effective field / scratch
+    uint8_t *active_mask = nullptr;
+    double *reduction_scratch = nullptr;
+    uint64_t reduction_scratch_len = 0;
+    std::vector<uint8_t> active_mask_host;
 
     // Demag FFT resources
     uint32_t fft_nx = 0;
@@ -66,6 +82,7 @@ struct Context {
     void *fft_x = nullptr;
     void *fft_y = nullptr;
     void *fft_z = nullptr;
+    DeviceDemagKernel demag_kernel;
     cufftHandle fft_plan = 0;
     bool fft_plan_valid = false;
 
@@ -87,6 +104,20 @@ void context_free_device(Context &ctx);
 
 /// Upload initial magnetization (AoS f64 host → SoA device).
 bool context_upload_magnetization(Context &ctx, const double *m_xyz, uint64_t len);
+
+/// Upload active cell mask (host u8 -> device u8).
+bool context_upload_active_mask(Context &ctx, const uint8_t *mask, uint64_t len);
+
+/// Upload precomputed Newell tensor spectra (host f64 interleaved complex -> device complex).
+bool context_upload_demag_kernel_spectra(
+    Context &ctx,
+    const double *kxx,
+    const double *kyy,
+    const double *kzz,
+    const double *kxy,
+    const double *kxz,
+    const double *kyz,
+    uint64_t len);
 
 /// Download a field observable from device to host as f64 AoS.
 bool context_download_field_f64(

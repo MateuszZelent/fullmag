@@ -132,6 +132,10 @@ The correct product boundary is therefore:
 
 The user should not need to think in terms of MFEM, libCEED, hypre, CUDA images, or ABI seams.
 
+The detailed canonical distribution/runtime contract lives in:
+
+- `docs/specs/runtime-distribution-and-managed-backends-v1.md`
+
 ---
 
 ## 4. The single most important architectural correction
@@ -299,11 +303,24 @@ This means Fullmag should evolve like an amumax-style quantity browser:
 ## 6.4 Future remote mode
 
 ```bash
-fullmag submit my_problem.py --target cluster-a
+fullmag my_problem.py --headless
 ```
 
-This is the same application model with a different execution target.
-Not a different product.
+On HPC systems, the canonical assumption is now:
+
+- Fullmag does **not** need to own the cluster orchestrator,
+- an external system such as Microlab may dispatch one job per node,
+- the node-local executable task is still just `fullmag my_problem.py`.
+
+That means remote/HPC execution is still the same application model, but the execution target is
+reached through an external dispatcher rather than a mandatory Fullmag-owned submit layer.
+
+An optional future `fullmag submit ...` convenience wrapper may still exist, but it is not the core
+architectural requirement.
+
+The detailed canonical cluster contract lives in:
+
+- `docs/specs/hpc-cluster-execution-v1.md`
 
 ---
 

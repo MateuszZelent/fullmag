@@ -22,6 +22,7 @@ pub(crate) fn write_artifacts(
         "source_hash": problem.problem_meta.source_hash,
         "problem_meta": problem.problem_meta,
         "execution_plan": plan,
+        "artifact_layout": field_layout(plan),
         "execution_provenance": executed.provenance,
         "engine_version": env!("CARGO_PKG_VERSION"),
         "status": executed.result.status,
@@ -36,12 +37,12 @@ pub(crate) fn write_artifacts(
     let mut csv_file = fs::File::create(&csv_path)?;
     writeln!(
         csv_file,
-        "step,time,solver_dt,E_ex,E_demag,E_ext,E_total,max_dm_dt,max_h_eff"
+        "step,time,solver_dt,E_ex,E_demag,E_ext,E_total,max_dm_dt,max_h_eff,max_h_demag"
     )?;
     for step in &executed.result.steps {
         writeln!(
             csv_file,
-            "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
+            "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
             step.step,
             step.time,
             step.dt,
@@ -50,7 +51,8 @@ pub(crate) fn write_artifacts(
             step.e_ext,
             step.e_total,
             step.max_dm_dt,
-            step.max_h_eff
+            step.max_h_eff,
+            step.max_h_demag
         )?;
     }
 
@@ -145,11 +147,31 @@ fn write_field_file(
 
 fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Value {
     match &plan.backend_plan {
-        BackendPlanIR::Fdm(fdm) => serde_json::json!({
-            "backend": "fdm",
-            "grid_cells": fdm.grid.cells,
-            "cell_size": fdm.cell_size,
-        }),
+        BackendPlanIR::Fdm(fdm) => {
+            let total_cells = fdm.grid.cells[0] as usize
+                * fdm.grid.cells[1] as usize
+                * fdm.grid.cells[2] as usize;
+            let active_cell_count = fdm
+                .active_mask
+                .as_ref()
+                .map(|mask| mask.iter().filter(|is_active| **is_active).count())
+                .unwrap_or(total_cells);
+            let inactive_cell_count = total_cells.saturating_sub(active_cell_count);
+            serde_json::json!({
+                "backend": "fdm",
+                "grid_cells": fdm.grid.cells,
+                "cell_size": fdm.cell_size,
+                "total_cell_count": total_cells,
+                "active_mask_present": fdm.active_mask.is_some(),
+                "active_cell_count": active_cell_count,
+                "inactive_cell_count": inactive_cell_count,
+                "active_fraction": if total_cells > 0 {
+                    active_cell_count as f64 / total_cells as f64
+                } else {
+                    0.0
+                },
+            })
+        }
         BackendPlanIR::Fem(fem) => serde_json::json!({
             "backend": "fem",
             "mesh_name": fem.mesh.mesh_name,
@@ -167,5 +189,73 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
         "m" => "dimensionless",
         "H_ex" | "H_demag" | "H_ext" | "H_eff" => "A/m",
         other => panic!("unsupported observable '{}'", other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fullmag_ir::{
+        BackendPlanIR, CommonPlanMeta, ExchangeBoundaryCondition, ExecutionMode, ExecutionPlanIR,
+        ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions, IntegratorChoice,
+        OutputPlanIR, ProvenancePlanIR,
+    };
+
+    fn test_execution_plan(active_mask: Option<Vec<bool>>) -> ExecutionPlanIR {
+        ExecutionPlanIR {
+            common: CommonPlanMeta {
+                ir_version: "v0".to_string(),
+                requested_backend: fullmag_ir::BackendTarget::Fdm,
+                resolved_backend: fullmag_ir::BackendTarget::Fdm,
+                execution_mode: ExecutionMode::Strict,
+            },
+            backend_plan: BackendPlanIR::Fdm(FdmPlanIR {
+                grid: GridDimensions { cells: [4, 2, 1] },
+                cell_size: [2e-9, 2e-9, 5e-9],
+                region_mask: vec![0; 8],
+                active_mask,
+                initial_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+                material: FdmMaterialIR {
+                    name: "Py".to_string(),
+                    saturation_magnetisation: 800e3,
+                    exchange_stiffness: 13e-12,
+                    damping: 0.02,
+                },
+                enable_exchange: true,
+                enable_demag: true,
+                external_field: None,
+                gyromagnetic_ratio: 2.211e5,
+                precision: ExecutionPrecision::Double,
+                exchange_bc: ExchangeBoundaryCondition::Neumann,
+                integrator: IntegratorChoice::Heun,
+                fixed_timestep: Some(1e-13),
+            }),
+            output_plan: OutputPlanIR {
+                outputs: Vec::new(),
+            },
+            provenance: ProvenancePlanIR { notes: Vec::new() },
+        }
+    }
+
+    #[test]
+    fn fdm_field_layout_reports_active_mask_counts() {
+        let layout = field_layout(&test_execution_plan(Some(vec![
+            true, true, false, false, true, false, true, false,
+        ])));
+        assert_eq!(layout["backend"], "fdm");
+        assert_eq!(layout["total_cell_count"], 8);
+        assert_eq!(layout["active_mask_present"], true);
+        assert_eq!(layout["active_cell_count"], 4);
+        assert_eq!(layout["inactive_cell_count"], 4);
+        assert_eq!(layout["active_fraction"], serde_json::json!(0.5));
+    }
+
+    #[test]
+    fn fdm_field_layout_defaults_to_full_domain_without_mask() {
+        let layout = field_layout(&test_execution_plan(None));
+        assert_eq!(layout["active_mask_present"], false);
+        assert_eq!(layout["active_cell_count"], 8);
+        assert_eq!(layout["inactive_cell_count"], 0);
+        assert_eq!(layout["active_fraction"], serde_json::json!(1.0));
     }
 }

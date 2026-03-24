@@ -14,20 +14,21 @@ export interface FemMeshData {
   boundaryFaces: number[];   // flattened [n0,n1,n2, ...]
   nNodes: number;
   nElements: number;
-  magnetization?: {
-    mx: number[];
-    my: number[];
-    mz: number[];
+  fieldData?: {
+    x: number[];
+    y: number[];
+    z: number[];
   };
 }
 
-export type FemColorField = "mz" | "mx" | "my" | "|m|" | "quality" | "none";
+export type FemColorField = "x" | "y" | "z" | "magnitude" | "quality" | "none";
 export type RenderMode = "surface" | "surface+edges" | "wireframe" | "points";
 export type ClipAxis = "x" | "y" | "z";
 
 interface Props {
   meshData: FemMeshData;
   colorField?: FemColorField;
+  fieldLabel?: string;
   showWireframe?: boolean;
   topologyKey?: string;
   sessionId?: string;
@@ -53,12 +54,12 @@ const RENDER_OPTIONS: { value: RenderMode; label: string }[] = [
 ];
 
 const COLOR_OPTIONS: { value: FemColorField; label: string }[] = [
-  { value: "mz",       label: "mz" },
-  { value: "mx",       label: "mx" },
-  { value: "my",       label: "my" },
-  { value: "|m|",      label: "|m|" },
-  { value: "quality",  label: "Q" },
-  { value: "none",     label: "—" },
+  { value: "z",          label: "Fz" },
+  { value: "x",          label: "Fx" },
+  { value: "y",          label: "Fy" },
+  { value: "magnitude",  label: "|F|" },
+  { value: "quality",    label: "Q" },
+  { value: "none",       label: "—" },
 ];
 
 /* ── Color helpers ─────────────────────────────────────────────────── */
@@ -116,7 +117,8 @@ function computeFaceAspectRatios(nodes: number[], faces: number[]): Float32Array
 
 export default function FemMeshView3D({
   meshData,
-  colorField = "mz",
+  colorField = "z",
+  fieldLabel,
   topologyKey,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -165,7 +167,7 @@ export default function FemMeshView3D({
     /* Vertex colors */
     const colors = new Float32Array(nNodes * 3);
     const _c = new THREE.Color();
-    const mag = meshData.magnetization;
+    const fld = meshData.fieldData;
 
     if (field === "quality") {
       // Compute AR per face, then average per vertex
@@ -192,17 +194,17 @@ export default function FemMeshView3D({
       }
     } else {
       for (let i = 0; i < nNodes; i++) {
-        if (!mag || field === "none") {
+        if (!fld || field === "none") {
           _c.setHSL(0, 0, 0.6);
         } else {
-          const mx = mag.mx[i] ?? 0;
-          const my = mag.my[i] ?? 0;
-          const mz = mag.mz[i] ?? 0;
+          const fx = fld.x[i] ?? 0;
+          const fy = fld.y[i] ?? 0;
+          const fz = fld.z[i] ?? 0;
           switch (field) {
-            case "mx": divergingColor(mx, _c); break;
-            case "my": divergingColor(my, _c); break;
-            case "mz": divergingColor(mz, _c); break;
-            case "|m|": magnitudeColor(Math.sqrt(mx*mx + my*my + mz*mz), _c); break;
+            case "x": divergingColor(fx, _c); break;
+            case "y": divergingColor(fy, _c); break;
+            case "z": divergingColor(fz, _c); break;
+            case "magnitude": magnitudeColor(Math.sqrt(fx*fx + fy*fy + fz*fz), _c); break;
           }
         }
         colors[i * 3] = _c.r;
@@ -446,8 +448,8 @@ export default function FemMeshView3D({
       arrowGroupRef.current = null;
     }
 
-    const mag = meshData.magnetization;
-    if (!showArrows || !mag) return;
+    const fld = meshData.fieldData;
+    if (!showArrows || !fld) return;
 
     const { nodes, boundaryFaces, nNodes } = meshData;
     const maxDim = maxDimRef.current;
@@ -477,9 +479,9 @@ export default function FemMeshView3D({
       const px = nodes[ni * 3] - center.x;
       const py = nodes[ni * 3 + 1] - center.y;
       const pz = nodes[ni * 3 + 2] - center.z;
-      const vx = mag.mx[ni] ?? 0;
-      const vy = mag.my[ni] ?? 0;
-      const vz = mag.mz[ni] ?? 0;
+      const vx = fld.x[ni] ?? 0;
+      const vy = fld.y[ni] ?? 0;
+      const vz = fld.z[ni] ?? 0;
       const len = Math.sqrt(vx * vx + vy * vy + vz * vz);
       if (len < 1e-6) continue;
 
@@ -497,7 +499,7 @@ export default function FemMeshView3D({
 
     scene.add(group);
     arrowGroupRef.current = group;
-  }, [showArrows, meshData.magnetization, meshData]);
+  }, [showArrows, meshData.fieldData, meshData]);
 
   /* ── Camera presets ──────────────────────────────────────────────── */
   const setCameraPreset = useCallback((view: "reset" | "front" | "top" | "right") => {

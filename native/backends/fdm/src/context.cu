@@ -30,6 +30,10 @@ static size_t scalar_size(fullmag_fdm_precision prec) {
     return (prec == FULLMAG_FDM_PRECISION_SINGLE) ? sizeof(float) : sizeof(double);
 }
 
+static size_t complex_size(fullmag_fdm_precision prec) {
+    return (prec == FULLMAG_FDM_PRECISION_SINGLE) ? sizeof(cufftComplex) : sizeof(cufftDoubleComplex);
+}
+
 /* ── Allocate one SoA vector field (3 components) ── */
 
 static bool alloc_vector_field(Context &ctx, DeviceVectorField &field) {
@@ -52,6 +56,74 @@ static void free_vector_field(DeviceVectorField &field) {
     if (field.x) { cudaFree(field.x); field.x = nullptr; }
     if (field.y) { cudaFree(field.y); field.y = nullptr; }
     if (field.z) { cudaFree(field.z); field.z = nullptr; }
+}
+
+static bool alloc_demag_kernel(Context &ctx) {
+    if (!ctx.has_demag_tensor_kernel) {
+        return true;
+    }
+    size_t bytes = ctx.fft_cell_count * complex_size(ctx.precision);
+    cudaError_t err = cudaMalloc(&ctx.demag_kernel.xx, bytes);
+    if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(kern_xx)", err); return false; }
+    err = cudaMalloc(&ctx.demag_kernel.yy, bytes);
+    if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(kern_yy)", err); return false; }
+    err = cudaMalloc(&ctx.demag_kernel.zz, bytes);
+    if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(kern_zz)", err); return false; }
+    err = cudaMalloc(&ctx.demag_kernel.xy, bytes);
+    if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(kern_xy)", err); return false; }
+    err = cudaMalloc(&ctx.demag_kernel.xz, bytes);
+    if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(kern_xz)", err); return false; }
+    err = cudaMalloc(&ctx.demag_kernel.yz, bytes);
+    if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(kern_yz)", err); return false; }
+    return true;
+}
+
+static void free_demag_kernel(Context &ctx) {
+    if (ctx.demag_kernel.xx) { cudaFree(ctx.demag_kernel.xx); ctx.demag_kernel.xx = nullptr; }
+    if (ctx.demag_kernel.yy) { cudaFree(ctx.demag_kernel.yy); ctx.demag_kernel.yy = nullptr; }
+    if (ctx.demag_kernel.zz) { cudaFree(ctx.demag_kernel.zz); ctx.demag_kernel.zz = nullptr; }
+    if (ctx.demag_kernel.xy) { cudaFree(ctx.demag_kernel.xy); ctx.demag_kernel.xy = nullptr; }
+    if (ctx.demag_kernel.xz) { cudaFree(ctx.demag_kernel.xz); ctx.demag_kernel.xz = nullptr; }
+    if (ctx.demag_kernel.yz) { cudaFree(ctx.demag_kernel.yz); ctx.demag_kernel.yz = nullptr; }
+}
+
+static bool alloc_active_mask(Context &ctx) {
+    if (!ctx.has_active_mask) {
+        return true;
+    }
+    size_t bytes = ctx.cell_count * sizeof(uint8_t);
+    cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&ctx.active_mask), bytes);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(active_mask)", err);
+        return false;
+    }
+    return true;
+}
+
+static void free_active_mask(Context &ctx) {
+    if (ctx.active_mask) {
+        cudaFree(ctx.active_mask);
+        ctx.active_mask = nullptr;
+    }
+}
+
+static bool alloc_reduction_scratch(Context &ctx) {
+    cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&ctx.reduction_scratch),
+        ctx.cell_count * sizeof(double));
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(reduction_scratch)", err);
+        return false;
+    }
+    ctx.reduction_scratch_len = ctx.cell_count;
+    return true;
+}
+
+static void free_reduction_scratch(Context &ctx) {
+    if (ctx.reduction_scratch) {
+        cudaFree(ctx.reduction_scratch);
+        ctx.reduction_scratch = nullptr;
+    }
+    ctx.reduction_scratch_len = 0;
 }
 
 static bool alloc_fft_workspace(Context &ctx) {
@@ -118,6 +190,8 @@ static void free_fft_workspace(Context &ctx) {
 /* ── Public context functions ── */
 
 bool context_alloc_device(Context &ctx) {
+    if (!alloc_active_mask(ctx)) return false;
+    if (!alloc_reduction_scratch(ctx)) return false;
     if (!alloc_vector_field(ctx, ctx.m))    return false;
     if (!alloc_vector_field(ctx, ctx.h_ex)) return false;
     if (!alloc_vector_field(ctx, ctx.h_demag)) return false;
@@ -125,6 +199,7 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_vector_field(ctx, ctx.tmp))  return false;
     if (!alloc_vector_field(ctx, ctx.work)) return false;
     if (!alloc_fft_workspace(ctx)) return false;
+    if (!alloc_demag_kernel(ctx)) return false;
 
     // Zero out working buffers
     size_t bytes = ctx.cell_count * scalar_size(ctx.precision);
@@ -155,6 +230,93 @@ void context_free_device(Context &ctx) {
     free_vector_field(ctx.tmp);
     free_vector_field(ctx.work);
     free_fft_workspace(ctx);
+    free_demag_kernel(ctx);
+    free_active_mask(ctx);
+    free_reduction_scratch(ctx);
+}
+
+bool context_upload_active_mask(Context &ctx, const uint8_t *mask, uint64_t len) {
+    if (!ctx.has_active_mask) {
+        return true;
+    }
+    if (!mask || len != ctx.cell_count) {
+        ctx.last_error = "active_mask length mismatch";
+        return false;
+    }
+    cudaError_t err = cudaMemcpy(
+        ctx.active_mask,
+        mask,
+        ctx.cell_count * sizeof(uint8_t),
+        cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMemcpy(active_mask)", err);
+        return false;
+    }
+    return true;
+}
+
+bool context_upload_demag_kernel_spectra(
+    Context &ctx,
+    const double *kxx,
+    const double *kyy,
+    const double *kzz,
+    const double *kxy,
+    const double *kxz,
+    const double *kyz,
+    uint64_t len)
+{
+    if (!ctx.has_demag_tensor_kernel) {
+        return true;
+    }
+    if (!kxx || !kyy || !kzz || !kxy || !kxz || !kyz || len != ctx.fft_cell_count * 2) {
+        ctx.last_error = "demag kernel spectrum length mismatch";
+        return false;
+    }
+
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        auto upload = [&](void *dst, const double *src, const char *label) -> bool {
+            cudaError_t err = cudaMemcpy(
+                dst,
+                src,
+                len * sizeof(double),
+                cudaMemcpyHostToDevice);
+            if (err != cudaSuccess) {
+                set_cuda_error(ctx, label, err);
+                return false;
+            }
+            return true;
+        };
+        return upload(ctx.demag_kernel.xx, kxx, "cudaMemcpy(kern_xx)")
+            && upload(ctx.demag_kernel.yy, kyy, "cudaMemcpy(kern_yy)")
+            && upload(ctx.demag_kernel.zz, kzz, "cudaMemcpy(kern_zz)")
+            && upload(ctx.demag_kernel.xy, kxy, "cudaMemcpy(kern_xy)")
+            && upload(ctx.demag_kernel.xz, kxz, "cudaMemcpy(kern_xz)")
+            && upload(ctx.demag_kernel.yz, kyz, "cudaMemcpy(kern_yz)");
+    }
+
+    auto convert_and_upload = [&](void *dst, const double *src, const char *label) -> bool {
+        std::vector<float> converted(len);
+        for (uint64_t i = 0; i < len; i++) {
+            converted[i] = static_cast<float>(src[i]);
+        }
+        cudaError_t err = cudaMemcpy(
+            dst,
+            converted.data(),
+            len * sizeof(float),
+            cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, label, err);
+            return false;
+        }
+        return true;
+    };
+
+    return convert_and_upload(ctx.demag_kernel.xx, kxx, "cudaMemcpy(kern_xx)")
+        && convert_and_upload(ctx.demag_kernel.yy, kyy, "cudaMemcpy(kern_yy)")
+        && convert_and_upload(ctx.demag_kernel.zz, kzz, "cudaMemcpy(kern_zz)")
+        && convert_and_upload(ctx.demag_kernel.xy, kxy, "cudaMemcpy(kern_xy)")
+        && convert_and_upload(ctx.demag_kernel.xz, kxz, "cudaMemcpy(kern_xz)")
+        && convert_and_upload(ctx.demag_kernel.yz, kyz, "cudaMemcpy(kern_yz)");
 }
 
 bool context_upload_magnetization(Context &ctx, const double *m_xyz, uint64_t len) {
@@ -171,9 +333,10 @@ bool context_upload_magnetization(Context &ctx, const double *m_xyz, uint64_t le
         // Deinterleave on host, then copy
         std::vector<double> hx(n), hy(n), hz(n);
         for (uint64_t i = 0; i < n; i++) {
-            hx[i] = m_xyz[3 * i + 0];
-            hy[i] = m_xyz[3 * i + 1];
-            hz[i] = m_xyz[3 * i + 2];
+            bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
+            hx[i] = is_active ? m_xyz[3 * i + 0] : 0.0;
+            hy[i] = is_active ? m_xyz[3 * i + 1] : 0.0;
+            hz[i] = is_active ? m_xyz[3 * i + 2] : 0.0;
         }
         cudaMemcpy(ctx.m.x, hx.data(), bytes, cudaMemcpyHostToDevice);
         cudaMemcpy(ctx.m.y, hy.data(), bytes, cudaMemcpyHostToDevice);
@@ -182,9 +345,10 @@ bool context_upload_magnetization(Context &ctx, const double *m_xyz, uint64_t le
         // f64 → f32 conversion + deinterleave
         std::vector<float> hx(n), hy(n), hz(n);
         for (uint64_t i = 0; i < n; i++) {
-            hx[i] = static_cast<float>(m_xyz[3 * i + 0]);
-            hy[i] = static_cast<float>(m_xyz[3 * i + 1]);
-            hz[i] = static_cast<float>(m_xyz[3 * i + 2]);
+            bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
+            hx[i] = is_active ? static_cast<float>(m_xyz[3 * i + 0]) : 0.0f;
+            hy[i] = is_active ? static_cast<float>(m_xyz[3 * i + 1]) : 0.0f;
+            hz[i] = is_active ? static_cast<float>(m_xyz[3 * i + 2]) : 0.0f;
         }
         cudaMemcpy(ctx.m.x, hx.data(), bytes, cudaMemcpyHostToDevice);
         cudaMemcpy(ctx.m.y, hy.data(), bytes, cudaMemcpyHostToDevice);
@@ -211,9 +375,13 @@ bool context_download_field_f64(
         case FULLMAG_FDM_OBSERVABLE_H_EFF: field = &ctx.work; break;
         case FULLMAG_FDM_OBSERVABLE_H_EXT: {
             for (uint64_t i = 0; i < n; i++) {
-                out_xyz[3 * i + 0] = ctx.has_external_field ? ctx.external_field[0] : 0.0;
-                out_xyz[3 * i + 1] = ctx.has_external_field ? ctx.external_field[1] : 0.0;
-                out_xyz[3 * i + 2] = ctx.has_external_field ? ctx.external_field[2] : 0.0;
+                bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
+                out_xyz[3 * i + 0] =
+                    (ctx.has_external_field && is_active) ? ctx.external_field[0] : 0.0;
+                out_xyz[3 * i + 1] =
+                    (ctx.has_external_field && is_active) ? ctx.external_field[1] : 0.0;
+                out_xyz[3 * i + 2] =
+                    (ctx.has_external_field && is_active) ? ctx.external_field[2] : 0.0;
             }
             return true;
         }
