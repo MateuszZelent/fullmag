@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -136,7 +137,7 @@ class MeshScaffoldTests(unittest.TestCase):
             path = Path(tmp_dir) / "mesh.vtk"
             path.write_text("# vtk DataFile Version 2.0\nplaceholder\n", encoding="utf-8")
 
-            with unittest.mock.patch(
+            with patch(
                 "fullmag.meshing.asset_pipeline.generate_mesh_from_file",
                 return_value=MeshData(
                     nodes=np.asarray(

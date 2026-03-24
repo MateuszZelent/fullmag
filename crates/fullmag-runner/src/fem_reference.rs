@@ -2,7 +2,7 @@
 //!
 //! Current executable slice:
 //! - precomputed `MeshIR`
-//! - `Exchange` and optional `Zeeman`
+//! - `Exchange`, optional bootstrap `Demag`, and optional `Zeeman`
 //! - `LLG(heun)`
 //! - `double` precision
 
@@ -16,7 +16,7 @@ use crate::schedules::{
 };
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
-    StateObservables, StepStats,
+    StateObservables, StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -26,6 +26,35 @@ pub(crate) fn execute_reference_fem(
     until_seconds: f64,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
+    execute_reference_fem_impl(
+        plan,
+        until_seconds,
+        outputs,
+        None::<([u32; 3], u64, &mut dyn FnMut(StepUpdate))>,
+    )
+}
+
+pub(crate) fn execute_reference_fem_with_callback(
+    plan: &FemPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    field_every_n: u64,
+    on_step: &mut impl FnMut(StepUpdate),
+) -> Result<ExecutedRun, RunError> {
+    execute_reference_fem_impl(
+        plan,
+        until_seconds,
+        outputs,
+        Some(([0, 0, 0], field_every_n, on_step)),
+    )
+}
+
+fn execute_reference_fem_impl(
+    plan: &FemPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    mut live: Option<([u32; 3], u64, &mut dyn FnMut(StepUpdate))>,
+) -> Result<ExecutedRun, RunError> {
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -34,11 +63,6 @@ pub(crate) fn execute_reference_fem(
     if plan.precision != ExecutionPrecision::Double {
         return Err(RunError {
             message: "execution_precision='single' is not executable in the FEM CPU reference runner; use 'double'".to_string(),
-        });
-    }
-    if plan.enable_demag {
-        return Err(RunError {
-            message: "FEM CPU reference runner does not implement Demag() yet".to_string(),
         });
     }
 
@@ -66,7 +90,7 @@ pub(crate) fn execute_reference_fem(
         dynamics,
         EffectiveFieldTerms {
             exchange: plan.enable_exchange,
-            demag: false,
+            demag: plan.enable_demag,
             external_field: plan.external_field,
         },
     );
@@ -123,6 +147,34 @@ pub(crate) fn execute_reference_fem(
                 &mut field_snapshots,
             )?;
         }
+
+        if let Some((grid, field_every_n, on_step)) = live.as_mut() {
+            let observables = observe_state(&problem, &state)?;
+            let emit_every = (*field_every_n).max(1);
+            let include_field = step_count % emit_every == 0;
+            let magnetization = if include_field {
+                Some(
+                    observables
+                        .magnetization
+                        .iter()
+                        .flat_map(|vector| vector.iter().copied())
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            on_step(StepUpdate {
+                stats: make_step_stats(step_count, state.time_seconds, dt_step, wall_elapsed, &observables),
+                grid: *grid,
+                fem_mesh: Some(crate::types::FemMeshPayload {
+                    nodes: plan.mesh.nodes.clone(),
+                    elements: plan.mesh.elements.clone(),
+                    boundary_faces: plan.mesh.boundary_faces.clone(),
+                }),
+                magnetization,
+                finished: false,
+            });
+        }
     }
 
     record_final_outputs(
@@ -147,7 +199,11 @@ pub(crate) fn execute_reference_fem(
         provenance: ExecutionProvenance {
             execution_engine: "cpu_reference_fem".to_string(),
             precision: "double".to_string(),
-            demag_operator_kind: None,
+            demag_operator_kind: if plan.enable_demag {
+                Some("fem_scalar_potential_robin".to_string())
+            } else {
+                None
+            },
             fft_backend: None,
             device_name: None,
             compute_capability: None,
@@ -288,7 +344,10 @@ fn record_final_outputs(
     Ok(())
 }
 
-fn observe_state(problem: &FemLlgProblem, state: &FemLlgState) -> Result<StateObservables, RunError> {
+fn observe_state(
+    problem: &FemLlgProblem,
+    state: &FemLlgState,
+) -> Result<StateObservables, RunError> {
     let observables = problem.observe(state).map_err(|e| RunError {
         message: format!("FEM engine observables: {}", e),
     })?;
@@ -334,6 +393,7 @@ fn select_field_values(observables: &StateObservables, name: &str) -> Vec<[f64; 
     match name {
         "m" => observables.magnetization.clone(),
         "H_ex" => observables.exchange_field.clone(),
+        "H_demag" => observables.demag_field.clone(),
         "H_ext" => observables.external_field.clone(),
         "H_eff" => observables.effective_field.clone(),
         other => panic!("unsupported FEM field snapshot '{}'", other),
@@ -348,7 +408,7 @@ mod tests {
         MeshIR,
     };
 
-    fn make_test_plan() -> FemPlanIR {
+    fn make_test_plan(enable_demag: bool) -> FemPlanIR {
         FemPlanIR {
             mesh_source: Some("meshes/unit_tet.msh".to_string()),
             mesh: MeshIR {
@@ -376,7 +436,7 @@ mod tests {
                 anisotropy_axis: None,
             },
             enable_exchange: true,
-            enable_demag: false,
+            enable_demag,
             external_field: None,
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -387,8 +447,8 @@ mod tests {
     }
 
     #[test]
-    fn uniform_fem_relaxation_produces_zero_exchange_energy() {
-        let plan = make_test_plan();
+    fn uniform_fem_relaxation_produces_near_zero_exchange_energy() {
+        let plan = make_test_plan(false);
         let result = execute_reference_fem(&plan, 1e-12, &[]).expect("FEM run should succeed");
         assert_eq!(result.result.status, RunStatus::Completed);
         assert!(!result.result.steps.is_empty());
@@ -398,5 +458,29 @@ mod tests {
                 "uniform FEM state should have near-zero exchange energy"
             );
         }
+    }
+
+    #[test]
+    fn demag_outputs_are_nonzero_when_enabled() {
+        let plan = make_test_plan(true);
+        let result = execute_reference_fem(&plan, 1e-12, &[]).expect("FEM demag run should succeed");
+        assert_eq!(result.result.status, RunStatus::Completed);
+        let last = result.result.steps.last().expect("at least one step");
+        assert!(last.e_demag >= 0.0);
+        assert!(last.max_h_demag > 0.0);
+    }
+
+    #[test]
+    fn fem_callback_emits_live_updates() {
+        let plan = make_test_plan(true);
+        let mut seen = 0usize;
+        let result = execute_reference_fem_with_callback(&plan, 5e-13, &[], 2, &mut |update| {
+            seen += 1;
+            assert_eq!(update.grid, [0, 0, 0]);
+        })
+        .expect("callback FEM run should succeed");
+
+        assert_eq!(result.result.status, RunStatus::Completed);
+        assert!(seen > 0, "expected at least one live FEM callback update");
     }
 }

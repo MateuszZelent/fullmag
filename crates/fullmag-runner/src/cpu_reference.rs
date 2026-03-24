@@ -189,6 +189,7 @@ fn execute_reference_fdm_impl(
             on_step(StepUpdate {
                 stats: make_step_stats(step_count, state.time_seconds, dt_step, wall_elapsed, &observables),
                 grid: [live_grid[0], live_grid[1], live_grid[2]],
+                fem_mesh: None,
                 magnetization,
                 finished: false,
             });

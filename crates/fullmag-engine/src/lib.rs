@@ -7,6 +7,9 @@ use std::f64::consts::PI;
 use std::fmt;
 use std::sync::Arc;
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 pub const MU0: f64 = 4.0 * PI * 1e-7;
 pub const DEFAULT_GYROMAGNETIC_RATIO: f64 = 2.211e5;
 
@@ -464,18 +467,22 @@ impl ExchangeLlgProblem {
         let initial = state.magnetization.clone();
         let k1 = self.llg_rhs_from_vectors_ws(&initial, ws);
 
-        let predicted = initial
-            .iter()
-            .zip(k1.iter())
-            .map(|(m, rhs)| normalized(add(*m, scale(*rhs, dt))))
-            .collect::<Result<Vec<_>>>()?;
+        let predicted = {
+            let compute = |i: usize| normalized(add(initial[i], scale(k1[i], dt)));
+            #[cfg(feature = "parallel")]
+            { (0..initial.len()).into_par_iter().map(compute).collect::<Result<Vec<_>>>()? }
+            #[cfg(not(feature = "parallel"))]
+            { (0..initial.len()).map(compute).collect::<Result<Vec<_>>>()? }
+        };
 
         let k2 = self.llg_rhs_from_vectors_ws(&predicted, ws);
-        let corrected = initial
-            .iter()
-            .zip(k1.iter().zip(k2.iter()))
-            .map(|(m, (rhs1, rhs2))| normalized(add(*m, scale(add(*rhs1, *rhs2), 0.5 * dt))))
-            .collect::<Result<Vec<_>>>()?;
+        let corrected = {
+            let compute = |i: usize| normalized(add(initial[i], scale(add(k1[i], k2[i]), 0.5 * dt)));
+            #[cfg(feature = "parallel")]
+            { (0..initial.len()).into_par_iter().map(compute).collect::<Result<Vec<_>>>()? }
+            #[cfg(not(feature = "parallel"))]
+            { (0..initial.len()).map(compute).collect::<Result<Vec<_>>>()? }
+        };
 
         state.magnetization = corrected;
         state.time_seconds += dt;
@@ -525,11 +532,13 @@ impl ExchangeLlgProblem {
         };
         let external_field = self.external_field_vectors();
         let effective_field = combine_fields(&exchange_field, &demag_field, &external_field);
-        let rhs = magnetization
-            .iter()
-            .zip(effective_field.iter())
-            .map(|(m, h)| self.llg_rhs_from_field(*m, *h))
-            .collect::<Vec<_>>();
+        let rhs = {
+            let compute = |i: usize| self.llg_rhs_from_field(magnetization[i], effective_field[i]);
+            #[cfg(feature = "parallel")]
+            { (0..magnetization.len()).into_par_iter().map(compute).collect::<Vec<_>>() }
+            #[cfg(not(feature = "parallel"))]
+            { (0..magnetization.len()).map(compute).collect::<Vec<_>>() }
+        };
 
         let exchange_energy_joules = if self.terms.exchange {
             self.exchange_energy_from_vectors(magnetization)
@@ -575,39 +584,41 @@ impl ExchangeLlgProblem {
         let dx2 = self.cell_size.dx * self.cell_size.dx;
         let dy2 = self.cell_size.dy * self.cell_size.dy;
         let dz2 = self.cell_size.dz * self.cell_size.dz;
+        let grid = self.grid;
 
-        let mut field = vec![[0.0, 0.0, 0.0]; self.grid.cell_count()];
-        for z in 0..self.grid.nz {
-            for y in 0..self.grid.ny {
-                for x in 0..self.grid.nx {
-                    let center_index = self.grid.index(x, y, z);
-                    let center = magnetization[center_index];
-                    let x_minus = magnetization[self.grid.index(x.saturating_sub(1), y, z)];
-                    let x_plus =
-                        magnetization[self.grid.index((x + 1).min(self.grid.nx - 1), y, z)];
-                    let y_minus = magnetization[self.grid.index(x, y.saturating_sub(1), z)];
-                    let y_plus =
-                        magnetization[self.grid.index(x, (y + 1).min(self.grid.ny - 1), z)];
-                    let z_minus = magnetization[self.grid.index(x, y, z.saturating_sub(1))];
-                    let z_plus =
-                        magnetization[self.grid.index(x, y, (z + 1).min(self.grid.nz - 1))];
+        let compute_cell = |flat_index: usize| -> Vector3 {
+            let x = flat_index % grid.nx;
+            let y = (flat_index / grid.nx) % grid.ny;
+            let z = flat_index / (grid.nx * grid.ny);
+            let center = magnetization[flat_index];
+            let x_minus = magnetization[grid.index(x.saturating_sub(1), y, z)];
+            let x_plus = magnetization[grid.index((x + 1).min(grid.nx - 1), y, z)];
+            let y_minus = magnetization[grid.index(x, y.saturating_sub(1), z)];
+            let y_plus = magnetization[grid.index(x, (y + 1).min(grid.ny - 1), z)];
+            let z_minus = magnetization[grid.index(x, y, z.saturating_sub(1))];
+            let z_plus = magnetization[grid.index(x, y, (z + 1).min(grid.nz - 1))];
 
-                    let mut laplacian = [0.0, 0.0, 0.0];
-                    for component in 0..3 {
-                        laplacian[component] = (x_plus[component] - 2.0 * center[component]
-                            + x_minus[component])
-                            / dx2
-                            + (y_plus[component] - 2.0 * center[component] + y_minus[component])
-                                / dy2
-                            + (z_plus[component] - 2.0 * center[component] + z_minus[component])
-                                / dz2;
-                    }
-
-                    field[center_index] = scale(laplacian, prefactor);
-                }
+            let mut laplacian = [0.0, 0.0, 0.0];
+            for component in 0..3 {
+                laplacian[component] = (x_plus[component] - 2.0 * center[component]
+                    + x_minus[component])
+                    / dx2
+                    + (y_plus[component] - 2.0 * center[component] + y_minus[component])
+                        / dy2
+                    + (z_plus[component] - 2.0 * center[component] + z_minus[component])
+                        / dz2;
             }
+            scale(laplacian, prefactor)
+        };
+
+        #[cfg(feature = "parallel")]
+        {
+            (0..grid.cell_count()).into_par_iter().map(compute_cell).collect()
         }
-        field
+        #[cfg(not(feature = "parallel"))]
+        {
+            (0..grid.cell_count()).map(compute_cell).collect()
+        }
     }
 
     fn demag_field_from_vectors(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
@@ -747,55 +758,51 @@ impl ExchangeLlgProblem {
 
     pub fn exchange_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
         let cell_volume = self.cell_size.volume();
-        let mut energy = 0.0;
+        let grid = self.grid;
+        let a = self.material.exchange_stiffness;
+        let dx2 = self.cell_size.dx * self.cell_size.dx;
+        let dy2 = self.cell_size.dy * self.cell_size.dy;
+        let dz2 = self.cell_size.dz * self.cell_size.dz;
 
-        for z in 0..self.grid.nz {
-            for y in 0..self.grid.ny {
-                for x in 0..self.grid.nx {
-                    let index = self.grid.index(x, y, z);
-                    let center = magnetization[index];
-
-                    if x + 1 < self.grid.nx {
-                        let neighbor = magnetization[self.grid.index(x + 1, y, z)];
-                        energy += self.material.exchange_stiffness
-                            * cell_volume
-                            * squared_norm(sub(neighbor, center))
-                            / (self.cell_size.dx * self.cell_size.dx);
-                    }
-                    if y + 1 < self.grid.ny {
-                        let neighbor = magnetization[self.grid.index(x, y + 1, z)];
-                        energy += self.material.exchange_stiffness
-                            * cell_volume
-                            * squared_norm(sub(neighbor, center))
-                            / (self.cell_size.dy * self.cell_size.dy);
-                    }
-                    if z + 1 < self.grid.nz {
-                        let neighbor = magnetization[self.grid.index(x, y, z + 1)];
-                        energy += self.material.exchange_stiffness
-                            * cell_volume
-                            * squared_norm(sub(neighbor, center))
-                            / (self.cell_size.dz * self.cell_size.dz);
-                    }
-                }
+        let compute_cell_energy = |flat_index: usize| -> f64 {
+            let x = flat_index % grid.nx;
+            let y = (flat_index / grid.nx) % grid.ny;
+            let z = flat_index / (grid.nx * grid.ny);
+            let center = magnetization[flat_index];
+            let mut e = 0.0;
+            if x + 1 < grid.nx {
+                let neighbor = magnetization[grid.index(x + 1, y, z)];
+                e += a * cell_volume * squared_norm(sub(neighbor, center)) / dx2;
             }
-        }
+            if y + 1 < grid.ny {
+                let neighbor = magnetization[grid.index(x, y + 1, z)];
+                e += a * cell_volume * squared_norm(sub(neighbor, center)) / dy2;
+            }
+            if z + 1 < grid.nz {
+                let neighbor = magnetization[grid.index(x, y, z + 1)];
+                e += a * cell_volume * squared_norm(sub(neighbor, center)) / dz2;
+            }
+            e
+        };
 
-        energy
+        #[cfg(feature = "parallel")]
+        {
+            (0..grid.cell_count()).into_par_iter().map(compute_cell_energy).sum()
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            (0..grid.cell_count()).map(compute_cell_energy).sum()
+        }
     }
 
     fn demag_energy_from_fields(&self, magnetization: &[Vector3], demag_field: &[Vector3]) -> f64 {
         let cell_volume = self.cell_size.volume();
-        magnetization
-            .iter()
-            .zip(demag_field.iter())
-            .map(|(m, h)| {
-                -0.5
-                    * MU0
-                    * self.material.saturation_magnetisation
-                    * dot(*m, *h)
-                    * cell_volume
-            })
-            .sum()
+        let ms = self.material.saturation_magnetisation;
+        let compute = |i: usize| -0.5 * MU0 * ms * dot(magnetization[i], demag_field[i]) * cell_volume;
+        #[cfg(feature = "parallel")]
+        { (0..magnetization.len()).into_par_iter().map(compute).sum() }
+        #[cfg(not(feature = "parallel"))]
+        { (0..magnetization.len()).map(compute).sum() }
     }
 
     fn external_energy_from_fields(
@@ -804,16 +811,12 @@ impl ExchangeLlgProblem {
         external_field: &[Vector3],
     ) -> f64 {
         let cell_volume = self.cell_size.volume();
-        magnetization
-            .iter()
-            .zip(external_field.iter())
-            .map(|(m, h)| {
-                -MU0
-                    * self.material.saturation_magnetisation
-                    * dot(*m, *h)
-                    * cell_volume
-            })
-            .sum()
+        let ms = self.material.saturation_magnetisation;
+        let compute = |i: usize| -MU0 * ms * dot(magnetization[i], external_field[i]) * cell_volume;
+        #[cfg(feature = "parallel")]
+        { (0..magnetization.len()).into_par_iter().map(compute).sum() }
+        #[cfg(not(feature = "parallel"))]
+        { (0..magnetization.len()).map(compute).sum() }
     }
 }
 
@@ -968,11 +971,21 @@ fn combine_fields(
     demag_field: &[Vector3],
     external_field: &[Vector3],
 ) -> Vec<Vector3> {
-    exchange_field
-        .iter()
-        .zip(demag_field.iter().zip(external_field.iter()))
-        .map(|(h_ex, (h_demag, h_ext))| add(add(*h_ex, *h_demag), *h_ext))
-        .collect()
+    #[cfg(feature = "parallel")]
+    {
+        (0..exchange_field.len())
+            .into_par_iter()
+            .map(|i| add(add(exchange_field[i], demag_field[i]), external_field[i]))
+            .collect()
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        exchange_field
+            .iter()
+            .zip(demag_field.iter().zip(external_field.iter()))
+            .map(|(h_ex, (h_demag, h_ext))| add(add(*h_ex, *h_demag), *h_ext))
+            .collect()
+    }
 }
 
 fn normalized(vector: Vector3) -> Result<Vector3> {
@@ -986,10 +999,20 @@ fn normalized(vector: Vector3) -> Result<Vector3> {
 }
 
 fn max_norm(vectors: &[Vector3]) -> f64 {
-    vectors
-        .iter()
-        .map(|vector| norm(*vector))
-        .fold(0.0, f64::max)
+    #[cfg(feature = "parallel")]
+    {
+        vectors
+            .par_iter()
+            .map(|vector| norm(*vector))
+            .reduce(|| 0.0, f64::max)
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        vectors
+            .iter()
+            .map(|vector| norm(*vector))
+            .fold(0.0, f64::max)
+    }
 }
 
 fn add(left: Vector3, right: Vector3) -> Vector3 {

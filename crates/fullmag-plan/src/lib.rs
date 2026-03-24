@@ -54,7 +54,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     // 2. Check backend target
     let resolved_backend = match problem.backend_policy.requested_backend {
         BackendTarget::Fdm => BackendTarget::Fdm,
-        BackendTarget::Auto => BackendTarget::Fdm, // default to FDM in current public slice
+        BackendTarget::Auto => resolve_auto_backend(problem),
         BackendTarget::Fem => BackendTarget::Fem,
         other => {
             errors.push(format!(
@@ -631,6 +631,25 @@ fn plan_fem(problem: &ProblemIR, resolved_backend: BackendTarget) -> Result<Exec
             ],
         },
     })
+}
+
+fn resolve_auto_backend(problem: &ProblemIR) -> BackendTarget {
+    let hints = problem.backend_policy.discretization_hints.as_ref();
+    let has_fdm = hints.and_then(|value| value.fdm.as_ref()).is_some()
+        || problem
+            .geometry_assets
+            .as_ref()
+            .is_some_and(|assets| !assets.fdm_grid_assets.is_empty());
+    let has_fem = hints.and_then(|value| value.fem.as_ref()).is_some()
+        || problem
+            .geometry_assets
+            .as_ref()
+            .is_some_and(|assets| !assets.fem_mesh_assets.is_empty());
+
+    match (has_fdm, has_fem) {
+        (false, true) => BackendTarget::Fem,
+        _ => BackendTarget::Fdm,
+    }
 }
 
 fn validate_executable_outputs(

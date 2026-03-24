@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numbers
 from pathlib import Path
 from typing import Iterable, Sequence
 

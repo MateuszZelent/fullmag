@@ -6,8 +6,6 @@ import Header from "../ui/Header";
 import ConsolePanel from "../panels/ConsolePanel";
 import SolverPanel from "../panels/SolverPanel";
 import MeshPanel from "../panels/MeshPanel";
-import MeshBuilderPanel from "../panels/MeshBuilderPanel";
-import type { GeneratedMesh } from "../panels/MeshBuilderPanel";
 import MetricsPanel from "../panels/MetricsPanel";
 import MagnetizationSlice2D from "../preview/MagnetizationSlice2D";
 import MagnetizationView3D from "../preview/MagnetizationView3D";
@@ -48,6 +46,24 @@ const SCALAR_FIELDS: Record<string, keyof NonNullable<ReturnType<typeof useSessi
   E_total: "e_total",
 };
 
+function basename(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.split("/").pop() ?? normalized;
+}
+
+function detectSourceKind(path: string | null | undefined, isFem: boolean): string {
+  if (!path) {
+    return isFem ? "mesh_asset" : "analytic_geometry";
+  }
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".stl")) return "stl_surface";
+  if (lower.endsWith(".step") || lower.endsWith(".stp")) return "cad_surface";
+  if (lower.endsWith(".mesh.json") || lower.endsWith(".msh")) return "tet_mesh";
+  if (lower.endsWith(".vtk") || lower.endsWith(".vtu") || lower.endsWith(".xdmf")) return "mesh_exchange";
+  return isFem ? "mesh_asset" : "geometry_asset";
+}
+
 export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
   const { state, connection, error } = useSessionStream(sessionId);
   const [viewMode, setViewMode] = useState<ViewportMode>("3D");
@@ -55,20 +71,39 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
   const [plane, setPlane] = useState<SlicePlane>("xy");
   const [sliceIndex, setSliceIndex] = useState(0);
   const [selectedQuantity, setSelectedQuantity] = useState("m");
-  const [femMeshPreview, setFemMeshPreview] = useState<FemMeshData | null>(null);
 
   const session = state?.session;
   const run = state?.run;
   const liveState = state?.live_state;
+  const femMesh = state?.fem_mesh ?? null;
 
   /* Detect FEM backend from plan_summary */
   const planSummary = session?.plan_summary as Record<string, unknown> | undefined;
-  const isFemBackend = planSummary?.backend === "fem";
+  const resolvedBackend =
+    (typeof planSummary?.resolved_backend === "string" ? planSummary.resolved_backend : null) ??
+    (typeof session?.requested_backend === "string" ? session.requested_backend : null);
+  const isFemBackend = resolvedBackend === "fem";
+  const metadata = state?.metadata as Record<string, unknown> | null;
+  const executionPlan = (metadata?.execution_plan as Record<string, unknown> | undefined) ?? undefined;
+  const backendPlan = (executionPlan?.backend_plan as Record<string, unknown> | undefined) ?? undefined;
+  const meshSource =
+    typeof backendPlan?.mesh_source === "string" ? (backendPlan.mesh_source as string) : null;
+  const femMeshName =
+    typeof (backendPlan?.mesh as { mesh_name?: unknown } | undefined)?.mesh_name === "string"
+      ? ((backendPlan?.mesh as { mesh_name?: string }).mesh_name ?? null)
+      : null;
+  const femHmax = typeof backendPlan?.hmax === "number" ? (backendPlan.hmax as number) : null;
+  const sourceLabel = femMeshName ?? basename(meshSource) ?? (isFemBackend ? "mesh asset" : "problem geometry");
+  const sourceKind = detectSourceKind(meshSource, isFemBackend);
+  const realizationLabel = isFemBackend ? "tetrahedral mesh" : "structured grid";
+  const meshInteropTags = isFemBackend
+    ? ["Gmsh pipeline", "STL -> tet mesh", "mesh asset import", "FEM live preview"]
+    : ["structured grid", "STL voxelization", "active mask", "OVF/Zarr/HDF5 outputs"];
   const femInfo = isFemBackend
     ? {
-        nNodes: (planSummary?.n_nodes as number) ?? 0,
-        nElements: (planSummary?.n_elements as number) ?? 0,
-        nBoundaryFaces: 0,
+        nNodes: femMesh?.nodes.length ?? ((planSummary?.n_nodes as number) ?? 0),
+        nElements: femMesh?.elements.length ?? ((planSummary?.n_elements as number) ?? 0),
+        nBoundaryFaces: femMesh?.boundary_faces.length ?? 0,
         totalVolume: 0,
         feOrder: (planSummary?.fe_order as number) ?? 1,
       }
@@ -127,6 +162,38 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
     const values = fieldMap[selectedQuantity as keyof typeof fieldMap] ?? null;
     return values ? new Float64Array(values) : null;
   }, [fieldMap, selectedQuantity]);
+
+  const femMeshData = useMemo<FemMeshData | null>(() => {
+    if (!isFemBackend || !femMesh) {
+      return null;
+    }
+
+    const nodes = femMesh.nodes.flatMap((node) => node);
+    const boundaryFaces = femMesh.boundary_faces.flatMap((face) => face);
+    const nNodes = femMesh.nodes.length;
+    const nElements = femMesh.elements.length;
+
+    let magnetization: FemMeshData["magnetization"] | undefined;
+    if (selectedVectors && selectedVectors.length >= nNodes * 3) {
+      const mx = new Array<number>(nNodes);
+      const my = new Array<number>(nNodes);
+      const mz = new Array<number>(nNodes);
+      for (let index = 0; index < nNodes; index += 1) {
+        mx[index] = selectedVectors[index * 3] ?? 0;
+        my[index] = selectedVectors[index * 3 + 1] ?? 0;
+        mz[index] = selectedVectors[index * 3 + 2] ?? 0;
+      }
+      magnetization = { mx, my, mz };
+    }
+
+    return {
+      nodes,
+      boundaryFaces,
+      nNodes,
+      nElements,
+      magnetization,
+    };
+  }, [femMesh, isFemBackend, selectedVectors]);
 
   const scalarRows = state?.scalar_rows ?? [];
   const selectedScalarValue = useMemo(() => {
@@ -325,11 +392,28 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
                       tone="info"
                     />
                   </div>
-                ) : viewMode === "3D" && isFemBackend && femMeshPreview ? (
+                ) : viewMode === "3D" && isFemBackend && femMeshData ? (
                   <FemMeshView3D
-                    meshData={femMeshPreview}
-                    colorField="mz"
+                    key={`${selectedQuantity}-${component}`}
+                    meshData={femMeshData}
+                    colorField={
+                      component === "x"
+                        ? "mx"
+                        : component === "y"
+                          ? "my"
+                          : component === "z"
+                            ? "mz"
+                            : "|m|"
+                    }
                   />
+                ) : viewMode === "2D" && isFemBackend ? (
+                  <div style={{ padding: "1.25rem" }}>
+                    <EmptyState
+                      title="Mesh-native 2D slice is not ready yet"
+                      description="The FEM control room now renders the real simulation mesh in 3D. 2D cross-sections for tetrahedral meshes are the next visualization milestone."
+                      tone="info"
+                    />
+                  </div>
                 ) : viewMode === "3D" ? (
                   <MagnetizationView3D
                     grid={grid}
@@ -370,22 +454,19 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
         </div>
 
         <div>
-          <MeshPanel grid={grid} cellSize={cellSize} femInfo={femInfo} />
+          <MeshPanel
+            grid={grid}
+            cellSize={cellSize}
+            femInfo={femInfo}
+            backend={session?.requested_backend ?? ""}
+            sourceKind={sourceKind}
+            sourceLabel={sourceLabel}
+            sourcePath={meshSource}
+            realizationLabel={realizationLabel}
+            interopTags={meshInteropTags}
+            hmax={femHmax}
+          />
         </div>
-        {isFemBackend && (
-          <div>
-            <MeshBuilderPanel
-              onMeshGenerated={(mesh: GeneratedMesh) => {
-                setFemMeshPreview({
-                  nodes: mesh.nodes,
-                  boundaryFaces: mesh.boundaryFaces,
-                  nNodes: mesh.nNodes,
-                  nElements: mesh.nElements,
-                });
-              }}
-            />
-          </div>
-        )}
         <div>
           <Panel
             title="Scalars"

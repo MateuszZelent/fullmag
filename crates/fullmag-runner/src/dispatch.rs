@@ -108,6 +108,7 @@ pub(crate) fn execute_fdm_with_callback(
                 on_step(StepUpdate {
                     stats: stats.clone(),
                     grid,
+                    fem_mesh: None,
                     magnetization,
                     finished: false,
                 });

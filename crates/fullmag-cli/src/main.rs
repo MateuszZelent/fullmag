@@ -2,7 +2,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use fullmag_engine::run_reference_exchange_demo;
 use fullmag_ir::{
-    BackendTarget, ExecutionMode, ExecutionPlanSummary, ExecutionPrecision, ProblemIR,
+    BackendPlanIR, BackendTarget, ExecutionMode, ExecutionPlanSummary, ExecutionPrecision,
+    ProblemIR,
 };
 use serde::Serialize;
 use std::ffi::OsString;
@@ -35,7 +36,7 @@ struct ScriptCli {
     interactive: bool,
     #[arg(long)]
     until: f64,
-    #[arg(long, value_enum, default_value_t = BackendArg::Fdm)]
+    #[arg(long, value_enum, default_value_t = BackendArg::Auto)]
     backend: BackendArg,
     #[arg(long, value_enum, default_value_t = ModeArg::Strict)]
     mode: ModeArg,
@@ -174,6 +175,7 @@ struct LiveStepView {
     max_h_eff: f64,
     wall_time_ns: u64,
     grid: [u32; 3],
+    fem_mesh: Option<fullmag_runner::FemMeshPayload>,
     magnetization: Option<Vec<f64>>,
     finished: bool,
 }
@@ -363,6 +365,8 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let plan_summary = ir
         .plan_for(Some(args.backend.into()))
         .map_err(join_errors)?;
+    let execution_plan =
+        fullmag_plan::plan(&ir).map_err(|error| anyhow!(error.to_string()))?;
     let session_manifest_path = session_dir.join("session.json");
     let run_manifest_path = session_dir.join("run.json");
     let live_state_path = session_dir.join("live_state.json");
@@ -437,42 +441,51 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     }
 
     let field_every_n = 10;
-    let result = match fullmag_runner::run_problem_with_callback(
-        &ir,
-        args.until,
-        &artifact_dir,
-        field_every_n,
-        |update| {
-            if update.stats.step <= 1 || update.stats.step % field_every_n == 0 || update.finished {
-                let _ = update_running_run_manifest(
-                    &run_manifest_path,
-                    &run_id,
-                    &session_id,
-                    &artifact_dir,
-                    &update,
-                );
-                let _ = update_live_state(&live_state_path, &update);
-                let _ = append_live_scalar_row(&live_scalars_path, &update);
-                if update.stats.step % 100 == 0 || update.finished {
-                    let _ = append_event(
-                        &session_dir.join("events.ndjson"),
-                        &serde_json::json!({
-                            "kind": if update.finished { "run_finished_step" } else { "run_progress" },
-                            "session_id": session_id.clone(),
-                            "run_id": run_id.clone(),
-                            "step": update.stats.step,
-                            "time": update.stats.time,
-                            "e_ex": update.stats.e_ex,
-                            "e_demag": update.stats.e_demag,
-                            "e_ext": update.stats.e_ext,
-                            "e_total": update.stats.e_total,
-                            "finished": update.finished,
-                        }),
+    let use_live_callback =
+        matches!(&execution_plan.backend_plan, BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_));
+    let result = match if use_live_callback {
+        fullmag_runner::run_problem_with_callback(
+            &ir,
+            args.until,
+            &artifact_dir,
+            field_every_n,
+            |update| {
+                if update.stats.step <= 1
+                    || update.stats.step % field_every_n == 0
+                    || update.finished
+                {
+                    let _ = update_running_run_manifest(
+                        &run_manifest_path,
+                        &run_id,
+                        &session_id,
+                        &artifact_dir,
+                        &update,
                     );
+                    let _ = update_live_state(&live_state_path, &update);
+                    let _ = append_live_scalar_row(&live_scalars_path, &update);
+                    if update.stats.step % 100 == 0 || update.finished {
+                        let _ = append_event(
+                            &session_dir.join("events.ndjson"),
+                            &serde_json::json!({
+                                "kind": if update.finished { "run_finished_step" } else { "run_progress" },
+                                "session_id": session_id.clone(),
+                                "run_id": run_id.clone(),
+                                "step": update.stats.step,
+                                "time": update.stats.time,
+                                "e_ex": update.stats.e_ex,
+                                "e_demag": update.stats.e_demag,
+                                "e_ext": update.stats.e_ext,
+                                "e_total": update.stats.e_total,
+                                "finished": update.finished,
+                            }),
+                        );
+                    }
                 }
-            }
-        },
-    ) {
+            },
+        )
+    } else {
+        fullmag_runner::run_problem(&ir, args.until, &artifact_dir)
+    } {
         Ok(result) => result,
         Err(error) => {
             let failed_at_unix_ms = unix_time_millis()?;
@@ -521,6 +534,21 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             return Err(anyhow!(error.to_string()));
         }
     };
+
+    if !use_live_callback {
+        persist_completed_headless_run(
+            &execution_plan.backend_plan,
+            &run_manifest_path,
+            &live_state_path,
+            &live_scalars_path,
+            &session_dir.join("events.ndjson"),
+            &run_id,
+            &session_id,
+            &artifact_dir,
+            &result,
+        )?;
+    }
+
     let finished_at_unix_ms = unix_time_millis()?;
 
     let summary = ScriptRunSummary {
@@ -981,6 +1009,7 @@ fn update_live_state(path: &Path, update: &fullmag_runner::StepUpdate) -> Result
                 max_h_eff: update.stats.max_h_eff,
                 wall_time_ns: update.stats.wall_time_ns,
                 grid: update.grid,
+                fem_mesh: update.fem_mesh.clone(),
                 magnetization: update.magnetization.clone(),
                 finished: update.finished,
             },
@@ -1014,6 +1043,89 @@ fn update_running_run_manifest(
             artifact_dir: artifact_dir.display().to_string(),
         },
     )
+}
+
+fn persist_completed_headless_run(
+    backend_plan: &BackendPlanIR,
+    run_manifest_path: &Path,
+    live_state_path: &Path,
+    live_scalars_path: &Path,
+    events_path: &Path,
+    run_id: &str,
+    session_id: &str,
+    artifact_dir: &Path,
+    result: &fullmag_runner::RunResult,
+) -> Result<()> {
+    let grid = match backend_plan {
+        BackendPlanIR::Fdm(fdm) => [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
+        BackendPlanIR::Fem(_) => [0, 0, 0],
+    };
+
+    for stats in &result.steps {
+        let update = fullmag_runner::StepUpdate {
+            stats: stats.clone(),
+            grid,
+            fem_mesh: match backend_plan {
+                BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload {
+                    nodes: fem.mesh.nodes.clone(),
+                    elements: fem.mesh.elements.clone(),
+                    boundary_faces: fem.mesh.boundary_faces.clone(),
+                }),
+                BackendPlanIR::Fdm(_) => None,
+            },
+            magnetization: None,
+            finished: false,
+        };
+        append_live_scalar_row(live_scalars_path, &update)?;
+    }
+
+    if let Some(last) = result.steps.last() {
+        let final_update = fullmag_runner::StepUpdate {
+            stats: last.clone(),
+            grid,
+            fem_mesh: match backend_plan {
+                BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload {
+                    nodes: fem.mesh.nodes.clone(),
+                    elements: fem.mesh.elements.clone(),
+                    boundary_faces: fem.mesh.boundary_faces.clone(),
+                }),
+                BackendPlanIR::Fdm(_) => None,
+            },
+            magnetization: Some(
+                result
+                    .final_magnetization
+                    .iter()
+                    .flat_map(|value| value.iter().copied())
+                    .collect(),
+            ),
+            finished: true,
+        };
+        update_running_run_manifest(
+            run_manifest_path,
+            run_id,
+            session_id,
+            artifact_dir,
+            &final_update,
+        )?;
+        update_live_state(live_state_path, &final_update)?;
+        append_event(
+            events_path,
+            &serde_json::json!({
+                "kind": "run_finished_step",
+                "session_id": session_id,
+                "run_id": run_id,
+                "step": final_update.stats.step,
+                "time": final_update.stats.time,
+                "e_ex": final_update.stats.e_ex,
+                "e_demag": final_update.stats.e_demag,
+                "e_ext": final_update.stats.e_ext,
+                "e_total": final_update.stats.e_total,
+                "finished": true,
+            }),
+        )?;
+    }
+
+    Ok(())
 }
 
 fn append_event(path: &Path, event: &serde_json::Value) -> Result<()> {

@@ -41,6 +41,9 @@ pub struct StepUpdate {
     pub stats: StepStats,
     /// Grid dimensions [nx, ny, nz] for client-side reconstruction.
     pub grid: [u32; 3],
+    /// Optional FEM mesh payload for mesh-native preview in the control room.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_mesh: Option<FemMeshPayload>,
     /// Magnetization snapshot as flat [mx,my,mz, mx,my,mz, ...].
     /// Sent periodically (not every step) to limit bandwidth.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,6 +51,13 @@ pub struct StepUpdate {
     /// true when simulation has completed.
     #[serde(default)]
     pub finished: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FemMeshPayload {
+    pub nodes: Vec<[f64; 3]>,
+    pub elements: Vec<[u32; 4]>,
+    pub boundary_faces: Vec<[u32; 3]>,
 }
 
 #[derive(Debug)]

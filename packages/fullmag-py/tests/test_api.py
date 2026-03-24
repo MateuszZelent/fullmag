@@ -200,6 +200,7 @@ class ProblemApiTests(unittest.TestCase):
 
         def build():
             geom = fm.Box(size=(200e-9, 20e-9, 5e-9), name="track")
+            geom = fm.Box(size=(200e-9, 20e-9, 5e-9), name="track")
             material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
             magnet = fm.Ferromagnet(name="track", geometry=geom, material=material)
             return fm.Problem(
@@ -227,6 +228,7 @@ class ProblemApiTests(unittest.TestCase):
         script = """
         import fullmag as fm
 
+        geom = fm.Box(size=(200e-9, 20e-9, 5e-9), name="track")
         geom = fm.Box(size=(200e-9, 20e-9, 5e-9), name="track")
         material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
         magnet = fm.Ferromagnet(name="track", geometry=geom, material=material)

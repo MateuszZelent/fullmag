@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+parallel = ["dep:rayon"]
+
 [dependencies]
 fullmag-ir = { path = "../fullmag-ir" }
 rustfft = "6.4"
+rayon = { version = "1.10", optional = true }

@@ -16,6 +16,9 @@ from fullmag.model.study import TimeEvolution
 IR_VERSION = "0.2.0"
 API_VERSION = "0.2.0"
 SERIALIZER_VERSION = "0.2.0"
+IR_VERSION = "0.2.0"
+API_VERSION = "0.2.0"
+SERIALIZER_VERSION = "0.2.0"
 
 
 class ExecutionMode(str, Enum):
@@ -78,6 +81,7 @@ class Problem:
     ) -> dict[str, object]:
         materials = self._collect_materials()
         regions = self._collect_regions()
+        geometries = self._collect_geometries()
         geometries = self._collect_geometries()
         source_hash = sha256(script_source.encode("utf-8")).hexdigest() if script_source else None
         geometry_assets = self._build_geometry_assets(
@@ -215,7 +219,16 @@ class Problem:
                     asset = realize_fdm_grid_asset(geometry, self.discretization.fdm)
                     assets["fdm_grid_assets"].append(asset.to_ir(geometry.geometry_name))
 
-        if requested_backend == BackendTarget.FEM and self.discretization.fem is not None:
+        should_build_fem_assets = (
+            requested_backend == BackendTarget.FEM
+            or (
+                requested_backend == BackendTarget.AUTO
+                and self.discretization.fem is not None
+                and self.discretization.fem.mesh is not None
+            )
+        )
+
+        if should_build_fem_assets and self.discretization.fem is not None:
             from fullmag._core import validate_mesh_ir
             from fullmag.model.geometry import ImportedGeometry
             from fullmag.meshing import realize_fem_mesh_asset

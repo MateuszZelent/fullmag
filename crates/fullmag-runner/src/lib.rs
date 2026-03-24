@@ -16,7 +16,9 @@ mod schedules;
 mod types;
 
 // Public re-exports (unchanged API surface).
-pub use types::{ExecutionProvenance, RunError, RunResult, RunStatus, StepStats, StepUpdate};
+pub use types::{
+    ExecutionProvenance, FemMeshPayload, RunError, RunResult, RunStatus, StepStats, StepUpdate,
+};
 
 use fullmag_ir::{BackendPlanIR, FdmPlanIR, OutputIR, ProblemIR};
 
@@ -78,13 +80,13 @@ pub fn run_problem_with_callback(
                 &mut on_step,
             )?
         }
-        BackendPlanIR::Fem(_) => {
-            return Err(RunError {
-                message:
-                    "live callback execution is not implemented for FEM yet; use run_problem / Simulation.run for headless FEM execution"
-                        .to_string(),
-            })
-        }
+        BackendPlanIR::Fem(fem) => fem_reference::execute_reference_fem_with_callback(
+            fem,
+            until_seconds,
+            &plan.output_plan.outputs,
+            field_every_n,
+            &mut on_step,
+        )?,
     };
 
     if let Err(e) = artifacts::write_artifacts(output_dir, problem, &plan, &executed) {
@@ -120,6 +122,14 @@ pub fn run_problem_with_callback(
     on_step(StepUpdate {
         stats: final_stats,
         grid: final_grid,
+        fem_mesh: match &plan.backend_plan {
+            BackendPlanIR::Fem(fem) => Some(FemMeshPayload {
+                nodes: fem.mesh.nodes.clone(),
+                elements: fem.mesh.elements.clone(),
+                boundary_faces: fem.mesh.boundary_faces.clone(),
+            }),
+            BackendPlanIR::Fdm(_) => None,
+        },
         magnetization: Some(final_m),
         finished: true,
     });

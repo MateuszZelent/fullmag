@@ -81,6 +81,10 @@ export default function FemMeshView3D({
   const [wireframe, setWireframe] = useState(initialWireframe);
   const [field, setField] = useState<FemColorField>(colorField);
 
+  useEffect(() => {
+    setField(colorField);
+  }, [colorField]);
+
   /* ── Build geometry from mesh data ───────────────────────────────── */
   const buildGeometry = useCallback((): THREE.BufferGeometry => {
     const { nodes, boundaryFaces, nNodes } = meshData;

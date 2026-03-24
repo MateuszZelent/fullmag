@@ -5,6 +5,8 @@
 
 import fullmag as fm
 
+# semantic-only example: imported geometry plus shared energy-term semantics.
+
 
 def build() -> fm.Problem:
     geometry = fm.Box(size=(200e-9, 20e-9, 5e-9), name="track")
@@ -20,6 +22,7 @@ def build() -> fm.Problem:
         name="track",
         geometry=geometry,
         material=material,
+        m0=fm.init.uniform((1.0, 0.0, 0.0)),
         m0=fm.init.uniform((1.0, 0.0, 0.0)),
     )
 

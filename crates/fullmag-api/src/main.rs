@@ -19,7 +19,7 @@ use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
-use fullmag_runner::StepUpdate;
+use fullmag_runner::{FemMeshPayload, StepUpdate};
 
 #[derive(Debug, Clone)]
 struct AppState {
@@ -112,6 +112,8 @@ struct StepUpdateView {
     wall_time_ns: u64,
     grid: [u32; 3],
     #[serde(skip_serializing_if = "Option::is_none")]
+    fem_mesh: Option<FemMeshPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     magnetization: Option<Vec<f64>>,
     finished: bool,
 }
@@ -124,6 +126,7 @@ struct SessionStateResponse {
     metadata: Option<Value>,
     scalar_rows: Vec<ScalarRow>,
     quantities: Vec<QuantityDescriptor>,
+    fem_mesh: Option<FemMeshPayload>,
     latest_fields: LatestFields,
     artifacts: Vec<ArtifactEntry>,
 }
@@ -462,6 +465,10 @@ fn load_session_state(root: &Path, session_id: &str) -> Result<SessionStateRespo
     let metadata = read_optional_json_value(&artifact_dir.join("metadata.json"))?;
     let scalar_rows = read_scalar_rows(&artifact_dir.join("scalars.csv"))?;
     let live_state = read_optional_json_file::<LiveState>(&session_dir.join("live_state.json"))?;
+    let fem_mesh = live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.fem_mesh.clone())
+        .or_else(|| metadata.as_ref().and_then(extract_fem_mesh_from_metadata));
     let latest_fields = LatestFields {
         m: read_latest_field_json(&artifact_dir, "m")?,
         h_ex: read_latest_field_json(&artifact_dir, "H_ex")?,
@@ -469,8 +476,14 @@ fn load_session_state(root: &Path, session_id: &str) -> Result<SessionStateRespo
         h_ext: read_latest_field_json(&artifact_dir, "H_ext")?,
         h_eff: read_latest_field_json(&artifact_dir, "H_eff")?,
     };
-    let quantities =
-        build_quantities(&latest_fields, live_state.as_ref(), run.as_ref(), &scalar_rows);
+    let field_location = if fem_mesh.is_some() { "node" } else { "cell" };
+    let quantities = build_quantities(
+        &latest_fields,
+        live_state.as_ref(),
+        run.as_ref(),
+        &scalar_rows,
+        field_location,
+    );
 
     Ok(SessionStateResponse {
         session,
@@ -479,6 +492,7 @@ fn load_session_state(root: &Path, session_id: &str) -> Result<SessionStateRespo
         metadata,
         scalar_rows,
         quantities,
+        fem_mesh,
         latest_fields,
         artifacts,
     })
@@ -641,6 +655,7 @@ fn build_quantities(
     live_state: Option<&LiveState>,
     run: Option<&RunManifest>,
     scalar_rows: &[ScalarRow],
+    field_location: &str,
 ) -> Vec<QuantityDescriptor> {
     let scalar_available = |run_value: Option<f64>| {
         !scalar_rows.is_empty() || live_state.is_some() || run_value.is_some()
@@ -652,7 +667,7 @@ fn build_quantities(
             label: "Magnetization".to_string(),
             kind: "vector_field".to_string(),
             unit: "dimensionless".to_string(),
-            location: "cell".to_string(),
+            location: field_location.to_string(),
             available: latest_fields.m.is_some()
                 || live_state
                     .and_then(|state| state.latest_step.magnetization.as_ref())
@@ -663,7 +678,7 @@ fn build_quantities(
             label: "Exchange Field".to_string(),
             kind: "vector_field".to_string(),
             unit: "A/m".to_string(),
-            location: "cell".to_string(),
+            location: field_location.to_string(),
             available: latest_fields.h_ex.is_some(),
         },
         QuantityDescriptor {
@@ -671,7 +686,7 @@ fn build_quantities(
             label: "Demagnetization Field".to_string(),
             kind: "vector_field".to_string(),
             unit: "A/m".to_string(),
-            location: "cell".to_string(),
+            location: field_location.to_string(),
             available: latest_fields.h_demag.is_some(),
         },
         QuantityDescriptor {
@@ -679,7 +694,7 @@ fn build_quantities(
             label: "External Field".to_string(),
             kind: "vector_field".to_string(),
             unit: "A/m".to_string(),
-            location: "cell".to_string(),
+            location: field_location.to_string(),
             available: latest_fields.h_ext.is_some(),
         },
         QuantityDescriptor {
@@ -687,7 +702,7 @@ fn build_quantities(
             label: "Effective Field".to_string(),
             kind: "vector_field".to_string(),
             unit: "A/m".to_string(),
-            location: "cell".to_string(),
+            location: field_location.to_string(),
             available: latest_fields.h_eff.is_some(),
         },
         QuantityDescriptor {
@@ -723,6 +738,15 @@ fn build_quantities(
             available: scalar_available(run.and_then(|manifest| manifest.final_e_total)),
         },
     ]
+}
+
+fn extract_fem_mesh_from_metadata(metadata: &Value) -> Option<FemMeshPayload> {
+    let fem = metadata
+        .get("execution_plan")?
+        .get("backend_plan")?
+        .get("Fem")?;
+    let mesh = fem.get("mesh")?;
+    serde_json::from_value(mesh.clone()).ok()
 }
 
 fn repo_root() -> PathBuf {

@@ -44,8 +44,15 @@ export interface LiveState {
   max_h_eff: number;
   wall_time_ns: number;
   grid: [number, number, number];
+  fem_mesh: FemLiveMesh | null;
   magnetization: number[] | null;
   finished: boolean;
+}
+
+export interface FemLiveMesh {
+  nodes: [number, number, number][];
+  elements: [number, number, number, number][];
+  boundary_faces: [number, number, number][];
 }
 
 export interface ScalarRow {
@@ -90,6 +97,7 @@ export interface SessionState {
   metadata: Record<string, unknown> | null;
   scalar_rows: ScalarRow[];
   quantities: QuantityDescriptor[];
+  fem_mesh: FemLiveMesh | null;
   latest_fields: LatestFields;
   artifacts: ArtifactEntry[];
 }
@@ -144,6 +152,7 @@ function normalizeSessionState(raw: any): SessionState {
         max_h_eff: rawLive.latest_step?.max_h_eff ?? 0,
         wall_time_ns: rawLive.latest_step?.wall_time_ns ?? 0,
         grid: rawLive.latest_step?.grid ?? fallbackGrid ?? [0, 0, 0],
+        fem_mesh: rawLive.latest_step?.fem_mesh ?? null,
         magnetization: rawLive.latest_step?.magnetization ?? null,
         finished: Boolean(rawLive.latest_step?.finished),
       }
@@ -156,6 +165,7 @@ function normalizeSessionState(raw: any): SessionState {
     metadata: raw.metadata ?? null,
     scalar_rows: Array.isArray(raw.scalar_rows) ? raw.scalar_rows : [],
     quantities: Array.isArray(raw.quantities) ? raw.quantities : [],
+    fem_mesh: raw.fem_mesh ?? raw.live_state?.latest_step?.fem_mesh ?? null,
     latest_fields: {
       m: flattenField(rawLatest.m),
       h_ex: flattenField(rawLatest.h_ex),
