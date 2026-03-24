@@ -98,8 +98,10 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             }
         }
     }
-    uint64_t expected_fft_cell_count =
+    uint64_t expected_fft_cell_count_3d =
         static_cast<uint64_t>(ctx->nx * 2) * (ctx->ny * 2) * (ctx->nz * 2);
+    uint64_t expected_fft_cell_count_2d =
+        static_cast<uint64_t>(ctx->nx * 2) * (ctx->ny * 2);
     if (ctx->has_demag_tensor_kernel) {
         if (!plan->demag_kernel_xx_spectrum || !plan->demag_kernel_yy_spectrum
             || !plan->demag_kernel_zz_spectrum || !plan->demag_kernel_xy_spectrum
@@ -108,9 +110,17 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             ctx->last_error = "demag kernel spectra pointers must all be present when demag_kernel_spectrum_len is set";
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);
         }
-        if (plan->demag_kernel_spectrum_len != expected_fft_cell_count * 2) {
+        if (ctx->nz == 1 && plan->demag_kernel_spectrum_len == expected_fft_cell_count_2d * 2) {
+            ctx->thin_film_2d_demag = true;
+        } else if (plan->demag_kernel_spectrum_len == expected_fft_cell_count_3d * 2) {
+            ctx->thin_film_2d_demag = false;
+        } else {
             ctx->last_error = "demag_kernel_spectrum_len mismatch: expected "
-                + std::to_string(expected_fft_cell_count * 2)
+                + std::to_string(expected_fft_cell_count_3d * 2)
+                + " (3D)"
+                + (ctx->nz == 1
+                    ? " or " + std::to_string(expected_fft_cell_count_2d * 2) + " (thin-film 2D)"
+                    : std::string())
                 + ", got " + std::to_string(plan->demag_kernel_spectrum_len);
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);
         }

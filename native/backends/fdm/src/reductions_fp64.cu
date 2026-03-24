@@ -15,7 +15,6 @@
 
 #include <cuda_runtime.h>
 #include <cmath>
-#include <limits>
 
 namespace fullmag {
 namespace fdm {
@@ -60,7 +59,7 @@ __global__ void reduce_max_blocks_kernel(const double *input, double *output, ui
     __shared__ double shared[REDUCTION_BLOCK_SIZE];
     uint64_t global = static_cast<uint64_t>(blockIdx.x) * blockDim.x * 2ULL + threadIdx.x;
 
-    double local_max = -std::numeric_limits<double>::infinity();
+    double local_max = -1.0e300;
     if (global < n) {
         local_max = input[global];
     }

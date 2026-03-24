@@ -133,7 +133,7 @@ static bool alloc_fft_workspace(Context &ctx) {
 
     ctx.fft_nx = ctx.nx * 2;
     ctx.fft_ny = ctx.ny * 2;
-    ctx.fft_nz = ctx.nz * 2;
+    ctx.fft_nz = ctx.thin_film_2d_demag ? 1 : ctx.nz * 2;
     ctx.fft_cell_count =
         static_cast<uint64_t>(ctx.fft_nx) * ctx.fft_ny * ctx.fft_nz;
 
@@ -147,10 +147,23 @@ static bool alloc_fft_workspace(Context &ctx) {
         if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_z)", err); return false; }
 
         cufftResult fft_err =
-            cufftPlan3d(&ctx.fft_plan, static_cast<int>(ctx.fft_nz), static_cast<int>(ctx.fft_ny),
-                        static_cast<int>(ctx.fft_nx), CUFFT_Z2Z);
+            ctx.thin_film_2d_demag
+                ? cufftPlan2d(
+                      &ctx.fft_plan,
+                      static_cast<int>(ctx.fft_ny),
+                      static_cast<int>(ctx.fft_nx),
+                      CUFFT_Z2Z)
+                : cufftPlan3d(
+                      &ctx.fft_plan,
+                      static_cast<int>(ctx.fft_nz),
+                      static_cast<int>(ctx.fft_ny),
+                      static_cast<int>(ctx.fft_nx),
+                      CUFFT_Z2Z);
         if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftPlan3d(Z2Z)", fft_err);
+            set_cufft_error(
+                ctx,
+                ctx.thin_film_2d_demag ? "cufftPlan2d(Z2Z)" : "cufftPlan3d(Z2Z)",
+                fft_err);
             return false;
         }
     } else {
@@ -163,10 +176,23 @@ static bool alloc_fft_workspace(Context &ctx) {
         if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_z)", err); return false; }
 
         cufftResult fft_err =
-            cufftPlan3d(&ctx.fft_plan, static_cast<int>(ctx.fft_nz), static_cast<int>(ctx.fft_ny),
-                        static_cast<int>(ctx.fft_nx), CUFFT_C2C);
+            ctx.thin_film_2d_demag
+                ? cufftPlan2d(
+                      &ctx.fft_plan,
+                      static_cast<int>(ctx.fft_ny),
+                      static_cast<int>(ctx.fft_nx),
+                      CUFFT_C2C)
+                : cufftPlan3d(
+                      &ctx.fft_plan,
+                      static_cast<int>(ctx.fft_nz),
+                      static_cast<int>(ctx.fft_ny),
+                      static_cast<int>(ctx.fft_nx),
+                      CUFFT_C2C);
         if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftPlan3d(C2C)", fft_err);
+            set_cufft_error(
+                ctx,
+                ctx.thin_film_2d_demag ? "cufftPlan2d(C2C)" : "cufftPlan3d(C2C)",
+                fft_err);
             return false;
         }
     }

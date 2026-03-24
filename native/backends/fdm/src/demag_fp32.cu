@@ -1,8 +1,10 @@
 /*
- * demag_fp32.cu — GPU single-precision demag field, effective field, and
- * energy helpers.
+ * demag_fp32.cu — GPU single-precision demag field and effective-field helpers.
  *
- * State/FFT are fp32; host-side reductions are accumulated in fp64.
+ * Current implementation:
+ *   - zero-padded tensor FFT using precomputed Newell spectra
+ *   - optional thin-film fast path for nz=1 via 2D FFT
+ *   - device-side masked-domain semantics
  */
 
 #include "context.hpp"
@@ -23,7 +25,6 @@ extern void set_cufft_error(Context &ctx, const char *operation, cufftResult err
 
 namespace {
 
-constexpr double MU0 = 4.0 * M_PI * 1e-7;
 constexpr int BLOCK_SIZE = 256;
 
 __device__ inline int frequency_index(int i, int n) {

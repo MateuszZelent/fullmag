@@ -265,8 +265,7 @@ pub fn compute_newell_kernels(
     let padded_len = px * py * pz;
 
     // Step 1: Precompute f and g values on the extended grid.
-    // Only compute up to ASYMPTOTIC_DISTANCE (matching Boris's fill_f_vals
-    // which limits nx_dist = minimum(n.x, asymptotic_distance)).
+    // Only compute up to ASYMPTOTIC_DISTANCE (matching Boris's fill_f_vals).
     let nx_dist = nx.min(ASYMPTOTIC_DISTANCE);
     let ny_dist = ny.min(ASYMPTOTIC_DISTANCE);
     let nz_dist = nz.min(ASYMPTOTIC_DISTANCE);
@@ -275,43 +274,82 @@ pub fn compute_newell_kernels(
     let fsz = nz_dist + 2;
     let flen = fsx * fsy * fsz;
 
+    // Parallelized over z-slabs (each slab is independent).
+    let slab_len = fsx * fsy; // one z-slab
+    let mut f_all = vec![0.0_f64; flen * 6]; // interleave: xx, yy, zz, xy, xz, yz
+
+    {
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+            f_all
+                .par_chunks_mut(slab_len * 6)
+                .enumerate()
+                .for_each(|(k, slab)| {
+                    let kk = k as isize - 1;
+                    for j in 0..fsy {
+                        let jj = j as isize - 1;
+                        for i in 0..fsx {
+                            let ii = i as isize - 1;
+                            let x = ii as f64 * dx;
+                            let y = jj as f64 * dy;
+                            let z = kk as f64 * dz;
+                            let base = (j * fsx + i) * 6;
+                            slab[base] = newell_f(x, y, z);
+                            slab[base + 1] = newell_f(y, x, z);
+                            slab[base + 2] = newell_f(z, y, x);
+                            slab[base + 3] = newell_g(x, y, z);
+                            slab[base + 4] = newell_g(x, z, y);
+                            slab[base + 5] = newell_g(y, z, x);
+                        }
+                    }
+                });
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            for k in 0..fsz {
+                let kk = k as isize - 1;
+                for j in 0..fsy {
+                    let jj = j as isize - 1;
+                    for i in 0..fsx {
+                        let ii = i as isize - 1;
+                        let x = ii as f64 * dx;
+                        let y = jj as f64 * dy;
+                        let z = kk as f64 * dz;
+                        let base = (k * slab_len + j * fsx + i) * 6;
+                        f_all[base] = newell_f(x, y, z);
+                        f_all[base + 1] = newell_f(y, x, z);
+                        f_all[base + 2] = newell_f(z, y, x);
+                        f_all[base + 3] = newell_g(x, y, z);
+                        f_all[base + 4] = newell_g(x, z, y);
+                        f_all[base + 5] = newell_g(y, z, x);
+                    }
+                }
+            }
+        }
+    }
+
+    // De-interleave into separate arrays for the stencil function
     let mut f_vals_xx = vec![0.0; flen];
     let mut f_vals_yy = vec![0.0; flen];
     let mut f_vals_zz = vec![0.0; flen];
     let mut g_vals_xy = vec![0.0; flen];
     let mut g_vals_xz = vec![0.0; flen];
     let mut g_vals_yz = vec![0.0; flen];
-
-    let fidx = |a: usize, b: usize, c: usize| c * fsy * fsx + b * fsx + a;
-
-    for k in 0..fsz {
-        let kk = k as isize - 1; // signed k: -1..nz
-        for j in 0..fsy {
-            let jj = j as isize - 1; // signed j: -1..ny
-            for i in 0..fsx {
-                let ii = i as isize - 1; // signed i: -1..nx
-                let x = ii as f64 * dx;
-                let y = jj as f64 * dy;
-                let z = kk as f64 * dz;
-                let idx = fidx(i, j, k);
-
-                // N_xx: f(x, y, z)
-                f_vals_xx[idx] = newell_f(x, y, z);
-                // N_yy: f(y, x, z) — permuted
-                f_vals_yy[idx] = newell_f(y, x, z);
-                // N_zz: f(z, y, x) — permuted
-                f_vals_zz[idx] = newell_f(z, y, x);
-                // N_xy: g(x, y, z)
-                g_vals_xy[idx] = newell_g(x, y, z);
-                // N_xz: g(x, z, y) — swap y,z
-                g_vals_xz[idx] = newell_g(x, z, y);
-                // N_yz: g(y, z, x) — cyclic
-                g_vals_yz[idx] = newell_g(y, z, x);
-            }
-        }
+    for idx in 0..flen {
+        let base = idx * 6;
+        f_vals_xx[idx] = f_all[base];
+        f_vals_yy[idx] = f_all[base + 1];
+        f_vals_zz[idx] = f_all[base + 2];
+        g_vals_xy[idx] = f_all[base + 3];
+        g_vals_xz[idx] = f_all[base + 4];
+        g_vals_yz[idx] = f_all[base + 5];
     }
+    drop(f_all);
 
     // Step 2: Apply 27-point stencil and place into padded grid.
+    // Parallelized over z-slabs. Each (i,j,k) writes to unique octant positions,
+    // and each k-slab group writes to non-overlapping positions, so this is safe.
     let mut n_xx = vec![0.0; padded_len];
     let mut n_yy = vec![0.0; padded_len];
     let mut n_zz = vec![0.0; padded_len];
@@ -319,72 +357,130 @@ pub fn compute_newell_kernels(
     let mut n_xz = vec![0.0; padded_len];
     let mut n_yz = vec![0.0; padded_len];
 
-    for k in 0..nz {
-        for j in 0..ny {
-            for i in 0..nx {
-                let (nxx, nyy, nzz, nxy, nxz, nyz);
-                let dist2 = i * i + j * j + k * k;
-                let use_asymptotic = i >= ASYMPTOTIC_DISTANCE
-                    || j >= ASYMPTOTIC_DISTANCE
-                    || k >= ASYMPTOTIC_DISTANCE
-                    || dist2 >= ASYMPTOTIC_DISTANCE * ASYMPTOTIC_DISTANCE;
+    // Inner function for one (i,j,k) → writes into the 6 output arrays
+    let compute_and_place = |i: usize,
+                             j: usize,
+                             k: usize,
+                             n_xx: &mut [f64],
+                             n_yy: &mut [f64],
+                             n_zz: &mut [f64],
+                             n_xy: &mut [f64],
+                             n_xz: &mut [f64],
+                             n_yz: &mut [f64]| {
+        let (nxx, nyy, nzz, nxy, nxz, nyz);
+        let dist2 = i * i + j * j + k * k;
+        let use_asymptotic = i >= ASYMPTOTIC_DISTANCE
+            || j >= ASYMPTOTIC_DISTANCE
+            || k >= ASYMPTOTIC_DISTANCE
+            || dist2 >= ASYMPTOTIC_DISTANCE * ASYMPTOTIC_DISTANCE;
 
-                if use_asymptotic {
-                    // Far-field: use point-dipole asymptotic formula
-                    let x = i as f64 * dx;
-                    let y = j as f64 * dy;
-                    let z = k as f64 * dz;
-                    let vol = dx * dy * dz;
-                    nxx = asymptotic_nxx(x, y, z, vol);
-                    nyy = asymptotic_nxx(y, x, z, vol);
-                    nzz = asymptotic_nxx(z, y, x, vol);
-                    nxy = asymptotic_nxy(x, y, z, vol);
-                    nxz = asymptotic_nxy(x, z, y, vol);
-                    nyz = asymptotic_nxy(y, z, x, vol);
-                } else {
-                    // Near-field: exact 27-point stencil
-                    nxx = ldia(i, j, k, &f_vals_xx, fsx, fsy, dx, dy, dz);
-                    nyy = ldia(i, j, k, &f_vals_yy, fsx, fsy, dy, dx, dz);
-                    nzz = ldia(i, j, k, &f_vals_zz, fsx, fsy, dz, dy, dx);
-                    nxy = ldia(i, j, k, &g_vals_xy, fsx, fsy, dx, dy, dz);
-                    nxz = ldia(i, j, k, &g_vals_xz, fsx, fsy, dx, dz, dy);
-                    nyz = ldia(i, j, k, &g_vals_yz, fsx, fsy, dy, dz, dx);
+        if use_asymptotic {
+            let x = i as f64 * dx;
+            let y = j as f64 * dy;
+            let z = k as f64 * dz;
+            let vol = dx * dy * dz;
+            nxx = asymptotic_nxx(x, y, z, vol);
+            nyy = asymptotic_nxx(y, x, z, vol);
+            nzz = asymptotic_nxx(z, y, x, vol);
+            nxy = asymptotic_nxy(x, y, z, vol);
+            nxz = asymptotic_nxy(x, z, y, vol);
+            nyz = asymptotic_nxy(y, z, x, vol);
+        } else {
+            nxx = ldia(i, j, k, &f_vals_xx, fsx, fsy, dx, dy, dz);
+            nyy = ldia(i, j, k, &f_vals_yy, fsx, fsy, dy, dx, dz);
+            nzz = ldia(i, j, k, &f_vals_zz, fsx, fsy, dz, dy, dx);
+            nxy = ldia(i, j, k, &g_vals_xy, fsx, fsy, dx, dy, dz);
+            nxz = ldia(i, j, k, &g_vals_xz, fsx, fsy, dx, dz, dy);
+            nyz = ldia(i, j, k, &g_vals_yz, fsx, fsy, dy, dz, dx);
+        }
+
+        let pidx = |a: usize, b: usize, c: usize| c * py * px + b * px + a;
+        let xs: &[(usize, f64)] = if i == 0 {
+            &[(0, 1.0)]
+        } else {
+            &[(i, 1.0), (px - i, -1.0)]
+        };
+        let ys: &[(usize, f64)] = if j == 0 {
+            &[(0, 1.0)]
+        } else {
+            &[(j, 1.0), (py - j, -1.0)]
+        };
+        let zs: &[(usize, f64)] = if k == 0 {
+            &[(0, 1.0)]
+        } else {
+            &[(k, 1.0), (pz - k, -1.0)]
+        };
+
+        for &(ix, sx) in xs {
+            for &(iy, sy) in ys {
+                for &(iz, sz) in zs {
+                    let p = pidx(ix, iy, iz);
+                    n_xx[p] = nxx;
+                    n_yy[p] = nyy;
+                    n_zz[p] = nzz;
+                    n_xy[p] = nxy * sx * sy;
+                    n_xz[p] = nxz * sx * sz;
+                    n_yz[p] = nyz * sy * sz;
                 }
+            }
+        }
+    };
 
-                // Place into all 8 octants with correct parity.
-                let pidx = |a: usize, b: usize, c: usize| c * py * px + b * px + a;
+    // The octant placement for different k values writes to non-overlapping
+    // z-positions (k and pz-k never overlap between different k values),
+    // so we can safely run different k values in parallel.
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
 
-                // Generate reflected indices
-                let xs: &[(usize, f64)] = if i == 0 {
-                    &[(0, 1.0)]
-                } else {
-                    &[(i, 1.0), (px - i, -1.0)]
-                };
-                let ys: &[(usize, f64)] = if j == 0 {
-                    &[(0, 1.0)]
-                } else {
-                    &[(j, 1.0), (py - j, -1.0)]
-                };
-                let zs: &[(usize, f64)] = if k == 0 {
-                    &[(0, 1.0)]
-                } else {
-                    &[(k, 1.0), (pz - k, -1.0)]
-                };
+        // Safety wrapper for parallel disjoint writes.
+        // Each (i,j,k) writes to unique octant positions in the output arrays.
+        struct UnsafeSyncSlice {
+            ptr: *mut f64,
+            len: usize,
+        }
+        unsafe impl Send for UnsafeSyncSlice {}
+        unsafe impl Sync for UnsafeSyncSlice {}
+        impl UnsafeSyncSlice {
+            unsafe fn as_mut_slice(&self) -> &mut [f64] {
+                std::slice::from_raw_parts_mut(self.ptr, self.len)
+            }
+        }
 
-                for &(ix, sx) in xs {
-                    for &(iy, sy) in ys {
-                        for &(iz, sz) in zs {
-                            let p = pidx(ix, iy, iz);
-                            // Diagonal: even in all indices
-                            n_xx[p] = nxx;
-                            n_yy[p] = nyy;
-                            n_zz[p] = nzz;
-                            // Off-diagonal: odd in two active indices
-                            n_xy[p] = nxy * sx * sy;
-                            n_xz[p] = nxz * sx * sz;
-                            n_yz[p] = nyz * sy * sz;
-                        }
+        let s_xx = UnsafeSyncSlice { ptr: n_xx.as_mut_ptr(), len: padded_len };
+        let s_yy = UnsafeSyncSlice { ptr: n_yy.as_mut_ptr(), len: padded_len };
+        let s_zz = UnsafeSyncSlice { ptr: n_zz.as_mut_ptr(), len: padded_len };
+        let s_xy = UnsafeSyncSlice { ptr: n_xy.as_mut_ptr(), len: padded_len };
+        let s_xz = UnsafeSyncSlice { ptr: n_xz.as_mut_ptr(), len: padded_len };
+        let s_yz = UnsafeSyncSlice { ptr: n_yz.as_mut_ptr(), len: padded_len };
+
+        (0..nz).into_par_iter().for_each(|k| {
+            for j in 0..ny {
+                for i in 0..nx {
+                    unsafe {
+                        compute_and_place(
+                            i, j, k,
+                            s_xx.as_mut_slice(),
+                            s_yy.as_mut_slice(),
+                            s_zz.as_mut_slice(),
+                            s_xy.as_mut_slice(),
+                            s_xz.as_mut_slice(),
+                            s_yz.as_mut_slice(),
+                        );
                     }
+                }
+            }
+        });
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    compute_and_place(
+                        i, j, k, &mut n_xx, &mut n_yy, &mut n_zz, &mut n_xy, &mut n_xz,
+                        &mut n_yz,
+                    );
                 }
             }
         }

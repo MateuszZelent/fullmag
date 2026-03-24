@@ -145,6 +145,8 @@ Mimo działającego execution path, kilka rzeczy nadal jest tylko bootstrapem:
 5. **Walidacja demag jest nadal za cienka** względem ambicji physics-first.
 6. **Exchange** nie jest jeszcze domknięty pod heterogeniczne `A_f` na ścianach między komórkami.
 7. **Zeeman** ma nadal przejściowy seam `B` w API vs `H_ext` w solverze/provenance.
+8. **CUDA step diagnostics są już device-side**, ale nadal brakuje kolejnych warstw optymalizacji:
+   benchmarków MuMax-class i dalszych redukcji bez zbędnych synchronizacji.
 
 ### 3.3 Najważniejsze otwarte luki
 
@@ -175,12 +177,19 @@ Potrzebujemy:
 
 #### Luka D — CUDA jest działające, ale nie domknięte jako operator klasy produkcyjnej
 
-CUDA path istnieje, ale nadal wymaga:
+CUDA path istnieje i ma już:
+
+- Newell tensor FFT zgodny semantycznie z CPU reference,
+- masked-domain execution,
+- device-side redukcje energii i norm,
+- `nz=1` thin-film fast path przez 2D FFT,
+
+ale nadal wymaga:
 
 - pełnej kwalifikacji,
 - lepszych testów dokładności,
 - uczytelnienia provenance,
-- ograniczenia host round-trip tam, gdzie to możliwe.
+- dalszego ograniczania synchronizacji i specjalizowanych fast pathów.
 
 ---
 

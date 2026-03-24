@@ -408,6 +408,76 @@ pub fn compute_newell_kernel_spectra(
     }
 }
 
+pub fn compute_newell_kernel_spectra_thin_film_2d(
+    nx: usize,
+    ny: usize,
+    dx: f64,
+    dy: f64,
+    dz: f64,
+) -> DemagKernelSpectra {
+    let nk = newell::compute_newell_kernels(nx, ny, 1, dx, dy, dz);
+    let px = nk.px;
+    let py = nk.py;
+    let pz = 1usize;
+    let plane_len = px * py;
+    let zero = Complex::new(0.0, 0.0);
+    let mut planner = FftPlanner::<f64>::new();
+    let fwd_x = planner.plan_fft_forward(px);
+    let fwd_y = planner.plan_fft_forward(py);
+    let fwd_z = planner.plan_fft_forward(1);
+
+    let fft_kernel_2d = |real_3d: Vec<f64>| -> Vec<Complex<f64>> {
+        let mut plane = Vec::with_capacity(plane_len);
+        for y in 0..py {
+            for x in 0..px {
+                plane.push(Complex::new(real_3d[padded_index(px, py, x, y, 0)], 0.0));
+            }
+        }
+        let mut line_y_tmp = vec![zero; py];
+        let mut line_z_tmp = vec![zero; 1];
+        fft3_core(
+            &mut plane,
+            px,
+            py,
+            pz,
+            &*fwd_x,
+            &*fwd_y,
+            &*fwd_z,
+            &mut line_y_tmp,
+            &mut line_z_tmp,
+        );
+        plane
+    };
+
+    let flatten = |values: &[Complex<f64>]| -> Vec<f64> {
+        let mut flat = Vec::with_capacity(values.len() * 2);
+        for value in values {
+            flat.push(value.re);
+            flat.push(value.im);
+        }
+        flat
+    };
+
+    let kern_xx = fft_kernel_2d(nk.n_xx);
+    let kern_yy = fft_kernel_2d(nk.n_yy);
+    let kern_zz = fft_kernel_2d(nk.n_zz);
+    let kern_xy = fft_kernel_2d(nk.n_xy);
+    let kern_xz = fft_kernel_2d(nk.n_xz);
+    let kern_yz = fft_kernel_2d(nk.n_yz);
+
+    DemagKernelSpectra {
+        px,
+        py,
+        pz,
+        n_xx: flatten(&kern_xx),
+        n_yy: flatten(&kern_yy),
+        n_zz: flatten(&kern_zz),
+        n_xy: flatten(&kern_xy),
+        n_xz: flatten(&kern_xz),
+        n_yz: flatten(&kern_yz),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExchangeLlgState {
     grid: GridShape,

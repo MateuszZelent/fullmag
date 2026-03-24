@@ -51,6 +51,7 @@ struct Context {
     bool has_external_field = false;
     bool has_active_mask = false;
     bool has_demag_tensor_kernel = false;
+    bool thin_film_2d_demag = false;
     double external_field[3] = {0.0, 0.0, 0.0};
     uint64_t active_cell_count = 0;
 

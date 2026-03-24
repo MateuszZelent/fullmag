@@ -1,11 +1,10 @@
 /*
- * demag_fp64.cu — GPU double-precision demag field, effective field, and
- * energy helpers.
+ * demag_fp64.cu — GPU double-precision demag field and effective-field helpers.
  *
- * Correctness-first implementation:
- *   - zero-padded complex-to-complex FFT over 2Nx × 2Ny × 2Nz
- *   - spectral projection H_k = -k (k·M_k) / |k|²
- *   - host-side scalar reductions for energies
+ * Current implementation:
+ *   - zero-padded tensor FFT using precomputed Newell spectra
+ *   - optional thin-film fast path for nz=1 via 2D FFT
+ *   - device-side masked-domain semantics
  */
 
 #include "context.hpp"
@@ -26,7 +25,6 @@ extern void set_cufft_error(Context &ctx, const char *operation, cufftResult err
 
 namespace {
 
-constexpr double MU0 = 4.0 * M_PI * 1e-7;
 constexpr int BLOCK_SIZE = 256;
 
 __device__ inline int frequency_index(int i, int n) {

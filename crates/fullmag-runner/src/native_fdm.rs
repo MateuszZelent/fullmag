@@ -80,14 +80,24 @@ impl NativeFdmBackend {
                 .collect()
         });
         let demag_kernel_spectra = if plan.enable_demag {
-            Some(fullmag_engine::compute_newell_kernel_spectra(
-                plan.grid.cells[0] as usize,
-                plan.grid.cells[1] as usize,
-                plan.grid.cells[2] as usize,
-                plan.cell_size[0],
-                plan.cell_size[1],
-                plan.cell_size[2],
-            ))
+            if plan.grid.cells[2] == 1 {
+                Some(fullmag_engine::compute_newell_kernel_spectra_thin_film_2d(
+                    plan.grid.cells[0] as usize,
+                    plan.grid.cells[1] as usize,
+                    plan.cell_size[0],
+                    plan.cell_size[1],
+                    plan.cell_size[2],
+                ))
+            } else {
+                Some(fullmag_engine::compute_newell_kernel_spectra(
+                    plan.grid.cells[0] as usize,
+                    plan.grid.cells[1] as usize,
+                    plan.grid.cells[2] as usize,
+                    plan.cell_size[0],
+                    plan.cell_size[1],
+                    plan.cell_size[2],
+                ))
+            }
         } else {
             None
         };
@@ -360,6 +370,48 @@ mod tests {
         }
     }
 
+    fn make_thin_film_demag_plan() -> FdmPlanIR {
+        let nx = 8usize;
+        let ny = 6usize;
+        let nz = 1usize;
+        let mut initial_magnetization = Vec::with_capacity(nx * ny * nz);
+        for y in 0..ny {
+            for x in 0..nx {
+                let theta = 0.11 * x as f64;
+                let phi = 0.07 * y as f64;
+                let mx = theta.cos() * phi.cos();
+                let my = theta.sin() * phi.cos();
+                let mz = 0.2 * phi.sin();
+                let norm = (mx * mx + my * my + mz * mz).sqrt();
+                initial_magnetization.push([mx / norm, my / norm, mz / norm]);
+            }
+        }
+
+        FdmPlanIR {
+            grid: GridDimensions {
+                cells: [nx as u32, ny as u32, nz as u32],
+            },
+            cell_size: [4e-9, 4e-9, 10e-9],
+            region_mask: vec![0; nx * ny * nz],
+            active_mask: None,
+            initial_magnetization,
+            material: FdmMaterialIR {
+                name: "Py".to_string(),
+                saturation_magnetisation: 800e3,
+                exchange_stiffness: 13e-12,
+                damping: 0.1,
+            },
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            integrator: IntegratorChoice::Heun,
+            fixed_timestep: Some(2.0e-13),
+            enable_exchange: true,
+            enable_demag: true,
+            external_field: Some([2.0e3, -1.0e3, 5.0e2]),
+        }
+    }
+
     fn assert_scalar_close(label: &str, actual: f64, expected: f64, rel_tol: f64, abs_tol: f64) {
         let diff = (actual - expected).abs();
         let scale = expected.abs().max(actual.abs()).max(1.0);
@@ -620,6 +672,78 @@ mod tests {
                 .zip(active_mask.iter())
                 .any(|(value, is_active)| *is_active && *value != [0.0, 0.0, 0.0]),
             "expected at least one active cell to carry non-zero H_demag"
+        );
+    }
+
+    #[test]
+    fn native_fdm_thin_film_demag_matches_cpu_reference_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM thin-film demag parity test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let plan = make_thin_film_demag_plan();
+        let cell_count = plan.initial_magnetization.len();
+        let (
+            expected_m,
+            expected_h_ex,
+            expected_h_demag,
+            expected_h_ext,
+            expected_h_eff,
+            expected_report,
+        ) = cpu_reference_single_step(&plan);
+
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm step");
+        let actual_m = backend.copy_m(cell_count).expect("copy m");
+        let actual_h_ex = backend.copy_h_ex(cell_count).expect("copy H_ex");
+        let actual_h_demag = backend.copy_h_demag(cell_count).expect("copy H_demag");
+        let actual_h_ext = backend.copy_h_ext(cell_count).expect("copy H_ext");
+        let actual_h_eff = backend.copy_h_eff(cell_count).expect("copy H_eff");
+
+        assert_vector_field_close("thin.m", &actual_m, &expected_m, 5e-6, 1e-8);
+        assert_vector_field_close("thin.H_ex", &actual_h_ex, &expected_h_ex, 5e-5, 5e-2);
+        assert_vector_field_close(
+            "thin.H_demag",
+            &actual_h_demag,
+            &expected_h_demag,
+            5e-4,
+            1e-1,
+        );
+        assert_vector_field_close("thin.H_ext", &actual_h_ext, &expected_h_ext, 1e-12, 1e-12);
+        assert_vector_field_close("thin.H_eff", &actual_h_eff, &expected_h_eff, 5e-4, 1e-1);
+
+        assert_scalar_close(
+            "thin.exchange_energy",
+            stats.e_ex,
+            expected_report.exchange_energy_joules,
+            5e-5,
+            1e-21,
+        );
+        assert_scalar_close(
+            "thin.demag_energy",
+            stats.e_demag,
+            expected_report.demag_energy_joules,
+            5e-4,
+            1e-21,
+        );
+        assert_scalar_close(
+            "thin.external_energy",
+            stats.e_ext,
+            expected_report.external_energy_joules,
+            5e-6,
+            1e-21,
+        );
+        assert_scalar_close(
+            "thin.total_energy",
+            stats.e_total,
+            expected_report.total_energy_joules,
+            5e-4,
+            1e-21,
         );
     }
 }
