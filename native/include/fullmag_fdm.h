@@ -174,6 +174,23 @@ int fullmag_fdm_backend_copy_field_f64(
     uint64_t               out_len);
 
 /**
+ * Replace the backend magnetization state from host-side f64 AoS storage.
+ * This does not advance time; call `fullmag_fdm_backend_refresh_observables`
+ * afterwards to recompute H_ex / H_demag / H_eff for the uploaded state.
+ */
+int fullmag_fdm_backend_upload_magnetization_f64(
+    fullmag_fdm_backend   *handle,
+    const double          *m_xyz,
+    uint64_t               len);
+
+/**
+ * Recompute observables for the current magnetization state without taking a
+ * time step.
+ */
+int fullmag_fdm_backend_refresh_observables(
+    fullmag_fdm_backend   *handle);
+
+/**
  * Query GPU device metadata.
  */
 int fullmag_fdm_backend_get_device_info(

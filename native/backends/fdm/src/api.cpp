@@ -275,6 +275,49 @@ int fullmag_fdm_backend_copy_field_f64(
 #endif
 }
 
+int fullmag_fdm_backend_upload_magnetization_f64(
+    fullmag_fdm_backend   *handle,
+    const double          *m_xyz,
+    uint64_t               len)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !m_xyz) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+
+    if (len != ctx->cell_count * 3) {
+        ctx->last_error = "magnetization length mismatch";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+
+    if (!context_upload_magnetization(*ctx, m_xyz, len)) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle; (void)m_xyz; (void)len;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_refresh_observables(
+    fullmag_fdm_backend *handle)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+
+    if (!context_refresh_observables(*ctx)) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 /* ── Device info ── */
 
 int fullmag_fdm_backend_get_device_info(

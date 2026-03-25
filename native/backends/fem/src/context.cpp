@@ -134,7 +134,8 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     if (!context_initialize_mfem(ctx, error)) {
         return false;
     }
-    if (ctx.enable_exchange && !context_refresh_exchange_field_mfem(ctx, error)) {
+    if ((ctx.enable_exchange || ctx.enable_demag) &&
+        !context_refresh_exchange_field_mfem(ctx, error)) {
         return false;
     }
     context_populate_device_info(ctx);
@@ -192,7 +193,7 @@ void context_populate_device_info(Context &ctx) {
     std::strncpy(
         ctx.device_info_cache.name,
         ctx.mfem_exchange_ready
-            ? "mfem_exchange_ready"
+            ? (ctx.enable_demag ? "mfem_transfer_grid_demag_ready" : "mfem_exchange_ready")
             : (ctx.mfem_ready ? "mfem_stack_mesh_ready" : "mfem_stack_uninitialized"),
         sizeof(ctx.device_info_cache.name) - 1);
     ctx.device_info_cache.is_gpu_enabled = 1;

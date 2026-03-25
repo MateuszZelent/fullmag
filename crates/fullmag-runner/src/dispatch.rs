@@ -507,11 +507,15 @@ fn execute_native_fem(
                 fullmag_ir::ExecutionPrecision::Double => "double".to_string(),
             },
             demag_operator_kind: if plan.enable_demag {
-                Some("mfem_hypre_open_boundary".to_string())
+                Some("fem_transfer_grid_fdm_demag".to_string())
             } else {
                 None
             },
-            fft_backend: None,
+            fft_backend: if plan.enable_demag {
+                Some("cuFFT".to_string())
+            } else {
+                None
+            },
             device_name: Some(device_info.name),
             compute_capability: Some(device_info.compute_capability),
             cuda_driver_version: Some(device_info.driver_version),

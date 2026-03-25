@@ -33,6 +33,7 @@ if(FULLMAG_USE_MFEM_STACK)
     )
 
     target_compile_definitions(fullmag_fem PRIVATE FULLMAG_HAS_MFEM_STACK=1)
+    target_link_libraries(fullmag_fem PRIVATE fullmag_fdm)
     if(TARGET MFEM::mfem)
         target_link_libraries(fullmag_fem PRIVATE MFEM::mfem)
     else()

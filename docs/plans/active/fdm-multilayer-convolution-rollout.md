@@ -1,69 +1,138 @@
-# Plan Wdrożenia: FDM Multi-Layer Convolution Demag
+# FDM Multi-Layer Convolution Demag: Szczegółowy Plan Architektoniczny
 
-## Informacje ogólne
-Cel: Implementacja jawnego, objaśnialnego trybu FDM demag dla stacków warstw opartych na exact tensor kernels.
-Na podstawie raportu: `docs/physics/fullmag_multilayer_convolution_report.md`
+## Cel
+Zastąpienie obecnego jedno-magnesowego spektralnego FDM demag przez jawny, objaśnialny, wielowarstwowy demag konwolucyjny oparty na dokładnym tensorze Newella. Pozwala to na symulację stosów warstw (np. SAF, spin-valves) z ewaluacją pól demagnetyzujących warstwa-po-warstwie na wspólnej siatce konwolucyjnej.
 
-## Faza 0 — Przygotowanie kontraktu i dokumentacji
-Początkowe ustalenie słownictwa pojęciowego i dokumentacji fizycznej.
-- [ ] Stabilizacja nomenklatury: `single_grid`, `multilayer_convolution`, `two_d_stack`, `three_d`, `native grid`, `convolution grid`.
-- [ ] Utworzenie `docs/physics/0530-fdm-multilayer-convolution-demag.md` z opisem: exact self demag tensor, shifted kernels, transfer contract, 1-layer reduction.
-- [ ] Aktualizacja specyfikacji w `docs/specs/`:
-  - `problem-ir-v0.md` (placement/translation, per-magnet FDM hints, multilayer FDM plan).
-  - `capability-matrix-v0.md` (multilayer demag tylko w FDM, v1 eligibility matrix).
-  - `geometry-policy-v0.md` (Translate jako część wspólnej semantyki geometrii).
+---
 
-## Faza 1 — Planner and IR groundwork (Python + Rust IR)
-Umożliwienie generowania poprawnego, zwalidowanego planu bez logiki wykonawczej.
-- [ ] **Python API**:
-  - Dodać `fm.Translate(geometry, by=(dx, dy, dz), name="...")`.
-  - Rozszerzyć typy FDM: `FDMGrid`, `FDMDemag`, dodanie per-magnet discretization hints.
-  - Generowanie `Translate` oraz FDM hints w modelu i eksporcie do IR.
-- [ ] **fullmag-ir**: 
-  - Rozszerzyć `GeometryEntryIR` o enuma `Translate { base, by, name }`.
-  - Zastąpić płaskie FDM hints nowymi wariantami (`FdmGridHintsIR`, `FdmDemagHintsIR`).
-- [ ] **fullmag-plan**:
-  - Wprowadzić nowy enum `FdmPlanIR::UniformGrid | MultilayerConvolution`.
-  - Dodać analizę eligibility dla `multilayer_convolution` (sprawdzanie geometrii, extents, dobieranie trybu np. `two_d_stack`).
-  - Generować strukturę `FdmMultilayerSummaryIR`.
-- [ ] Dodać polecenie `fullmag plan script.py --backend fdm --explain` po stronie CLI, aby móc testować planning bez uruchamiania.
+## Szczegółowe zmiany per plik
 
-## Faza 2 — Exact single-layer tensor demag on CPU
-Gruntowna zmiana obecnego, prostego spectral projection FDM demag w jednym magnetzie na dokładny Newell tensor.
-- [ ] Przenieść matematykę do nowego dedykowanego modułu/crate'a (np. `crates/fullmag-fdm-demag` lub `fullmag-demag-kernels`) by współdzielić ją między CPU a CUDA.
-- [ ] Zaimplementować generator "exact self Newell tensor" oraz "FFT-domain packing" (jednolity 6-elementowy wektor zespolony).
-- [ ] W `fullmag-engine` zmodyfikować referencyjny path FDM demag do przeliczania demag metodą newellowską (forward FFT -> tensor multiply -> inverse FFT).
-- [ ] *Testy:* Porównać energię i pola z metodą przestrzenną (`direct evaluate`) dla małych siatek 1 warstwy.
+### 1. Python API & Definicje IR
 
-## Faza 3 — Multilayer CPU Reference
-Rozszerzenie pathu w Rust CPU na wiele warstw.
-- [ ] Dodać `transfer operator` (`push_m` i `pull_h`) obsługujący przeskalowywanie między `native grid` a `convolution grid`.
-- [ ] Dodać generowanie `shifted kernels` oraz ewentualnie `irregular kernels` do `fullmag-fdm-demag`.
-- [ ] Zaimplementować `DemagOperatorRuntime::MultilayerConvolution` na CPU:
-  - Iteracja przez wszystkie destination layers i source layers ($O(L^2)$).
-  - Pełny proces: wyciągnij `m_native`, `push_m`, FFT, przemnóż pary kerneli, inverse FFT, `pull_h`, akumuluj do `h_demag`.
-- [ ] *Testy:* Porównać 1-warstwowy multilayer z single-layer exact demag, i 2-warstwowy symetryczny przypadek.
+#### [MODIFY] packages/fullmag-py/src/fullmag/model/geometry.py
+- Dodać klasę `Translate`, dziedziczącą po `Geometry`: `Translate(base: Geometry, by: tuple[float, float, float], name: str = "")`.
+- Zaimplementować metody `_bounding_box` oraz `_contains` tak, aby przesuwały współrzędne w locie.
+- Dodać `Translate` do `__all__` oraz mixinów operatorskich (`.translate()`).
 
-## Faza 4 — CUDA ABI v2 + Generic GPU path
-Optymalizacja i odblokowanie backendu sprzętowego.
-- [ ] Zaprojektować i wdrożyć nowe ABI C (`fullmag_fdm_multilayer_plan_desc_v2`), zastępujące dotychczasową, płaską, jednowarstwową deskrypcję.
-- [ ] Po stronie hosta (Rust) wygenerować wszystkie kernele w przestrzeni FFT i wgrać via ffi do native backend.
-- [ ] Napisać w `native/backends/fdm` obsługę struktur `native_grid`, `conv_grid`, generic pairwise multiply kernel, wywoływanie cuFFT batch per layer.
-- [ ] *Testy:* Gwarancja tych samych precyzyjnych wyników między Host (CPU reference) a GPU CUDA z exact tensor.
+#### [MODIFY] packages/fullmag-py/src/fullmag/model/discretization.py
+- Przebudować `FDM` aby obsługiwał osobne parametry siatki per magnes oraz opcje demagu:
+  ```python
+  @dataclass(frozen=True, slots=True)
+  class FDMGrid:
+      cell: tuple[float, float, float]
 
-## Faza 5 — Session API / GUI / Artifacts (Obserwowalność)
-Dostosowanie web based Control Roomu, by prezentował wielowarstwową strukturę problemu.
-- [ ] Wprowadzić nowy `Layer registry` do output schema API (JSON).
-- [ ] Dostosować Live Streaming by wysyłał małe podsumowania stanu (bez `m` każdej warstwy per krok).
-- [ ] Zbudować field fetch (On-Demand) w stylu `GET /v1/runs/{id}/fields/{quantity}?layer={layer_id}&step=latest`.
-- [ ] Aktualizacja UI Control Room:
-  - Plan / Diagnostics panel (Eligibility, pair kernels, estimated mem).
-  - Layer Selector w okienku Vector/Scalar field view.
-- [ ] Artifacts Output: Zapisywać `.npz` dla każdej warstwy osobno np. `fields/m/layer-free/step...` obsługiwany zbiorczym `manifest.json`.
+  @dataclass(frozen=True, slots=True)
+  class FDMDemag:
+      strategy: Literal["auto", "single_grid", "multilayer_convolution"] = "auto"
+      mode: Literal["auto", "two_d_stack", "three_d"] = "auto"
+      common_cells: tuple[int, int, int] | None = None
+      common_cells_xy: tuple[int, int] | None = None
+      allow_single_grid_fallback: bool = False
+      explain: bool = True
 
-## Faza 6 — Optymalizacje (V1.1 / V2)
-Późniejsze iteracje, nie blokujące core'u v1:
-- [ ] exact-match kernel reuse cache.
-- [ ] redukcja użycia pamięci za pomocą z shift symmetry: `inverse_shifted`.
-- [ ] R2C/Hermitian packing (optymalizacja złożoności tensorowej storage).
-- [ ] Obsługa skomplikowanych brył w `three_d` oraz trybek arbitrarnej geometrii rotowanych i transfer maskings.
+  @dataclass(frozen=True, slots=True)
+  class FDM:
+      default_cell: tuple[float, float, float] | None = None
+      per_magnet: dict[str, FDMGrid] | None = None
+      demag: FDMDemag | None = None
+  ```
+- Zaktualizować `to_ir()`, by poprawnie eksportowało te obiekty.
+
+#### [MODIFY] crates/fullmag-ir/src/lib.rs
+- W `GeometryEntryIR` dodać wariant: `Translate { name: String, base: Box<GeometryEntryIR>, by: [f64; 3] }`.
+- Wprowadzić `FdmHintsIR` ze strukturą dopasowaną do Pythona (zamiast dotychczasowego płaskiego `cell`).
+- Dodać pomocnicze `FdmDemagHintsIR` i `FdmGridHintsIR`.
+- Przebudować gruntownie `FdmPlanIR`:
+  ```rust
+  #[serde(tag = "kind", rename_all = "snake_case")]
+  pub enum FdmPlanIR {
+      UniformGrid(FdmUniformPlanIR),
+      MultilayerConvolution(FdmMultilayerPlanIR),
+  }
+  ```
+- W `FdmMultilayerPlanIR` dodać: `mode`, `common_cells`, `layers: Vec<FdmLayerPlanIR>`, `planner_summary: FdmMultilayerSummaryIR`.
+- Zdefiniować `FdmLayerPlanIR`, przechowujące `native_grid`, `native_origin`, `convolution_grid` oraz `transfer_kind`.
+
+---
+
+### 2. Planner & Walidacja Wykonawcza
+
+#### [MODIFY] crates/fullmag-plan/src/lib.rs
+- Utworzyć nową fazę planowania implementując funkcję `analyze_fdm_demag_strategy(problem_ir) -> DemagPlanningDecision`.
+- **Reguły decyzyjne**:
+  - Auto-select wybiera `single_grid` dla jednego magnesu lub gdy wszystkie mają precyzyjnie ten sam rozmiar komórki.
+  - Generuje błąd (Brak cichego fallbacku), jeśli nałożenie `multilayer_convolution` z opcją auto failuje przez niezgodne wymiary `xy` (zgłasza konieczność zdefiniowania `common_cells_xy`).
+  - Zgłasza jasne błędy przy pokrywających się warstwach w `z`, lub gdy użyta jest rotacja, co w V1 nie jest wspierane.
+- Zaktualizować główną funkcję `plan()`, kierującą wykonanie na budowanie odpowiedniego wariantu `FdmPlanIR` (UniformGrid lub MultilayerConvolution).
+
+#### [MODIFY] crates/fullmag-cli/src/main.rs
+- Dodać flagę `--explain` argumentach CLI.
+- Jeśli `--explain` jest użyte, aplikacja wypisze czytelny diagnostyczny `FdmMultilayerSummaryIR` na stdout i zakończy bez wywoływania runnera.
+
+---
+
+### 3. Matematyka Single-Layer & Multi-layer na CPU
+
+#### [NEW] crates/fullmag-fdm-demag (Nowy Crate)
+- Cała implementacja kalkulacji tensora Newella, obecnie robi to engine dla pojedynczego box-a, zostaje wydzielona by CPU/GPU miało spójne source of truth.
+- `TensorKernelFft`: Struct przechowujący w pamięci 6 wymiarów w dziedzinie sprzężonej (xx, yy, zz, xy, xz, yz).
+- Utworzyć funkcje generujące: `compute_exact_self_kernel`, `compute_shifted_regular_kernel`.
+- Zaimplementować generyczne $O(1)$ mnożenie tensor-wektor: `accumulate_tensor_convolution(dst_fft, src_fft, pair_kernel)`.
+- Dodać transfer operators: `push_m` (native -> convolution przez uśrednianie w celach) oraz `pull_h` (convolution -> native via interpolacja trójliniowa).
+- Dodać logikę użycia mapowania (np. hash key) po `KernelReuseKey` w celu oszczędzenia powtórnych wyliczeń tych samych dystansów międzywarstwowych.
+
+#### [MODIFY] crates/fullmag-engine/src/lib.rs
+- Zmienić nazwę i logikę `ExchangeLlgProblem` by odzwierciedlały nową semantykę. Nowa architektura:
+  ```rust
+  pub struct FdmLlgProblem {
+      pub layers: Vec<FdmLayerRuntime>,
+      pub demag: DemagOperatorRuntime,
+      pub external_field: Option<[f64; 3]>,
+      pub llg: LlgConfig,
+  }
+  pub enum DemagOperatorRuntime {
+      None,
+      UniformGrid(UniformGridDemagRuntime),
+      MultilayerConvolution(MultilayerDemagRuntime),
+  }
+  ```
+- **Krok Stepper'a**: Ewaluuje najpierw wymianę (exchange) na siatkach natywnych, potem wywołuje demag w oparciu o tablicę `MultilayerDemagRuntime`, co sprowadza się do złożoności $O(L^2)$ transferów i mnożeń w pętli. Na koniec dodaje pole zewnętrzne i przeprowadza krok LLG per warstwa.
+
+---
+
+### 4. GPU Path: Wykonanie natywne w CUDA
+
+#### [MODIFY] crates/fullmag-fdm-sys/src/lib.rs
+- Zmodyfikować bindingi C, tworząc wersję 2 API.
+- Zadeklarować enum type the plan: `fullmag_fdm_plan_kind` (`FULLMAG_FDM_PLAN_UNIFORM_GRID`, `FULLMAG_FDM_PLAN_MULTILAYER_CONV`).
+- Opisać `fullmag_fdm_layer_desc_v2` (posiadające i grid natywny, i wirtualny convolution_grid).
+- Opisać `fullmag_fdm_multilayer_plan_desc_v2` przechowujące referencję na tablice `kernels` pre-kalkulowanych z Rust na hoscie.
+
+#### [MODIFY] native/backends/fdm/src/... (C/CUDA)
+- Przepisać deskryptory setupu pod v2 logic.
+- Dodać kopiowanie z Host to Device prekompilowanych struktur tensorów multi-level `kernels`.
+- Wdrożyć w CUDA generyczny kernel mnożący `multiply_demag_tensor_kernel(...)`.
+- Zaimplementować fast memory `push_m` (scatter/gather z redukcjonalnymi operacjami 3D) i interpolacje sprzętową z CUDA (Texture memory l-erping dla `pull_h`).
+
+#### [MODIFY] crates/fullmag-runner/src/native_fdm.rs
+- Wypełnić wywołania API nowymi tablicami wskaźników z pamięci Rust do memory C używając structów v2.
+- Pobierać tablicowe dane kroków per sub-layer zamiast pojedynczej tablicy grid.
+
+---
+
+### 5. GUI, Session API & Manifesty Artefaktów
+
+#### [MODIFY] crates/fullmag-runner/src/artifacts.rs
+- Skonfigurować artefakty zapisów, tak by obsługiwały podkatalogi per-layer.
+- Generować `manifest.json` po utworzeniu outputu śledzący kształt wektorowy, unikalne Id warstw oraz przesunięcia oryginalne `origin`.
+- Folder będzie wyglądał: `artifacts/fields/m/manifest.json` i dla każdej z warstw np. `layer-free/step-0000.npz`.
+
+#### [MODIFY] apps/fullmag-api
+- Dodać `Layer Registry` eksponowany poprzez endpoint JSON na wstępie połączenia websocket problemu.
+- Stworzyć `GET /v1/runs/{run_id}/fields/{quantity}?layer={layer_id}&step=latest` dla serwowania porcjowanego, co optymalizuje proces wczytywania 3D na frontendzie.
+
+#### [MODIFY] apps/web/lib/useSessionStream.ts & components/runs/RunControlRoom.tsx
+- Zatrzymać uciążliwy nawyk pełnego śledzenia wielkich gridów wektorowych przez websocket; teraz jedynie strumieniować skalary, energie, torqui.
+- Websocket odbiera ping o odświeżeniu najnowszego kroku co wyzwala asynchroniczny fetch na warstwę z REST.
+- Dodać w interfejsie selekcję z Layer Dropdown.
+- Dodać zakładkę **Plan / Diagnostics** na głównej stronie symulacji renderując uciążliwe metadane planowania.

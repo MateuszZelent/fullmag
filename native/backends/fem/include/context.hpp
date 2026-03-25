@@ -1,5 +1,6 @@
 #pragma once
 
+#include "fullmag_fdm.h"
 #include "fullmag_fem.h"
 
 #include <array>
@@ -8,6 +9,35 @@
 #include <vector>
 
 namespace fullmag::fem {
+
+struct TransferGridDesc {
+    uint32_t nx = 0;
+    uint32_t ny = 0;
+    uint32_t nz = 0;
+    double dx = 0.0;
+    double dy = 0.0;
+    double dz = 0.0;
+    std::array<double, 3> bbox_min{0.0, 0.0, 0.0};
+
+    [[nodiscard]] uint64_t cell_count() const {
+        return static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz);
+    }
+
+    [[nodiscard]] size_t index(uint32_t ix, uint32_t iy, uint32_t iz) const {
+        return static_cast<size_t>(iz) * static_cast<size_t>(nx) * static_cast<size_t>(ny) +
+               static_cast<size_t>(iy) * static_cast<size_t>(nx) +
+               static_cast<size_t>(ix);
+    }
+};
+
+struct TransferGridState {
+    bool ready = false;
+    TransferGridDesc desc{};
+    std::vector<uint8_t> active_mask;
+    std::vector<double> magnetization_xyz;
+    std::vector<double> demag_xyz;
+    fullmag_fdm_backend *backend = nullptr;
+};
 
 struct Context {
     uint32_t n_nodes = 0;
@@ -44,6 +74,7 @@ struct Context {
     std::vector<double> h_demag_xyz;
     std::vector<double> h_ext_xyz;
     std::vector<double> h_eff_xyz;
+    TransferGridState transfer_grid{};
 
 #if FULLMAG_HAS_MFEM_STACK
     std::vector<double> mfem_mx;
