@@ -34,12 +34,25 @@ pub enum IntegratorChoice {
     Heun,
 }
 
+/// Algorithm selection for relaxation (energy-minimization) studies.
+///
+/// See `docs/physics/0500-fdm-relaxation-algorithms.md` for full specification.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RelaxationAlgorithmIR {
+    /// Overdamped Landau–Lifshitz–Gilbert time-stepping with high damping.
+    /// Reuses the standard LLG integration pipeline.  Public-executable on FDM and FEM.
     LlgOverdamped,
+    /// Projected steepest descent with Barzilai–Borwein step selection on the
+    /// sphere product manifold.  Uses alternating BB1/BB2 step sizes with Armijo
+    /// backtracking line search.  Public-executable on FDM.
     ProjectedGradientBb,
+    /// Nonlinear conjugate gradient (Polak–Ribière+) with tangent-space vector
+    /// transport, periodic restarts, and Armijo backtracking.  Public-executable
+    /// on FDM.
     NonlinearCg,
+    /// FEM-only linearly implicit tangent-plane relaxation.  Semantic-only;
+    /// execution deferred until FEM tangent-space infrastructure is ready.
     TangentPlaneImplicit,
 }
 
@@ -563,6 +576,7 @@ pub struct CommonPlanMeta {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BackendPlanIR {
     Fdm(FdmPlanIR),
+    FdmMultilayer(FdmMultilayerPlanIR),
     Fem(FemPlanIR),
 }
 

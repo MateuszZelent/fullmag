@@ -11,6 +11,8 @@ mod artifacts;
 mod cpu_reference;
 mod dispatch;
 mod fem_reference;
+mod multilayer_cuda;
+mod multilayer_reference;
 mod native_fdm;
 mod native_fem;
 mod relaxation;
@@ -22,7 +24,7 @@ pub use types::{
     ExecutionProvenance, FemMeshPayload, RunError, RunResult, RunStatus, StepStats, StepUpdate,
 };
 
-use fullmag_ir::{BackendPlanIR, FdmPlanIR, OutputIR, ProblemIR};
+use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, OutputIR, ProblemIR};
 use serde_json::Value;
 
 use std::path::Path;
@@ -42,6 +44,15 @@ pub fn run_problem(
         BackendPlanIR::Fdm(fdm) => {
             let engine = dispatch::resolve_fdm_engine(problem)?;
             dispatch::execute_fdm(engine, fdm, until_seconds, &plan.output_plan.outputs)
+        }
+        BackendPlanIR::FdmMultilayer(fdm) => {
+            let engine = dispatch::resolve_fdm_engine(problem)?;
+            dispatch::execute_fdm_multilayer(
+                engine,
+                fdm,
+                until_seconds,
+                &plan.output_plan.outputs,
+            )
         }
         BackendPlanIR::Fem(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
@@ -86,6 +97,16 @@ pub fn run_problem_with_callback(
                 &mut on_step,
             )
         }
+        BackendPlanIR::FdmMultilayer(fdm) => {
+            let engine = dispatch::resolve_fdm_engine(problem)?;
+            dispatch::execute_fdm_multilayer_with_callback(
+                engine,
+                fdm,
+                until_seconds,
+                &plan.output_plan.outputs,
+                &mut on_step,
+            )
+        }
         BackendPlanIR::Fem(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
             dispatch::execute_fem_with_callback(
@@ -127,6 +148,9 @@ pub fn run_problem_with_callback(
         .collect();
     let final_grid = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
+        BackendPlanIR::FdmMultilayer(fdm) => {
+            [fdm.common_cells[0], fdm.common_cells[1], fdm.common_cells[2]]
+        }
         BackendPlanIR::Fem(_) => [0, 0, 0],
     };
     on_step(StepUpdate {
@@ -138,9 +162,12 @@ pub fn run_problem_with_callback(
                 elements: fem.mesh.elements.clone(),
                 boundary_faces: fem.mesh.boundary_faces.clone(),
             }),
-            BackendPlanIR::Fdm(_) => None,
+            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
         },
-        magnetization: Some(final_m),
+        magnetization: match &plan.backend_plan {
+            BackendPlanIR::Fdm(_) => Some(final_m),
+            BackendPlanIR::FdmMultilayer(_) | BackendPlanIR::Fem(_) => None,
+        },
         finished: true,
     });
 
@@ -188,6 +215,14 @@ pub fn run_reference_fdm(
     outputs: &[OutputIR],
 ) -> Result<RunResult, RunError> {
     Ok(cpu_reference::execute_reference_fdm(plan, until_seconds, outputs)?.result)
+}
+
+pub fn run_reference_multilayer_fdm(
+    plan: &FdmMultilayerPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+) -> Result<RunResult, RunError> {
+    Ok(multilayer_reference::execute_reference_fdm_multilayer(plan, until_seconds, outputs)?.result)
 }
 
 #[cfg(test)]

@@ -568,7 +568,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
         let use_live_callback = matches!(
             &execution_plan.backend_plan,
-            BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_)
+            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) | BackendPlanIR::Fem(_)
         );
         let is_final_stage = stage_index + 1 == stage_count;
         let is_session_final_stage = is_final_stage && !interactive_requested;
@@ -745,6 +745,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         if !use_live_callback {
             let grid = match &execution_plan.backend_plan {
                 BackendPlanIR::Fdm(fdm) => [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
+                BackendPlanIR::FdmMultilayer(fdm) => [fdm.common_cells[0], fdm.common_cells[1], fdm.common_cells[2]],
                 BackendPlanIR::Fem(_) => [0, 0, 0],
             };
             let fem_mesh = match &execution_plan.backend_plan {
@@ -753,7 +754,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     elements: fem.mesh.elements.clone(),
                     boundary_faces: fem.mesh.boundary_faces.clone(),
                 }),
-                BackendPlanIR::Fdm(_) => None,
+                BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
             };
             for (index, stats) in stage_result.steps.iter().enumerate() {
                 let is_final_step = index + 1 == stage_result.steps.len();
@@ -764,7 +765,10 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         .expect("single step should offset"),
                     grid,
                     fem_mesh: fem_mesh.clone(),
-                    magnetization: if is_final_step && is_session_final_stage {
+                    magnetization: if is_final_step
+                        && is_session_final_stage
+                        && matches!(&execution_plan.backend_plan, BackendPlanIR::Fdm(_))
+                    {
                         Some(flatten_magnetization(&stage_result.final_magnetization))
                     } else {
                         None
@@ -928,7 +932,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
             let use_live_callback = matches!(
                 &execution_plan.backend_plan,
-                BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_)
+                BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) | BackendPlanIR::Fem(_)
             );
             let current_stage_artifact_dir = stage_artifact_dir(
                 &session_dir,
@@ -1058,6 +1062,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             if !use_live_callback {
                 let grid = match &execution_plan.backend_plan {
                     BackendPlanIR::Fdm(fdm) => [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
+                    BackendPlanIR::FdmMultilayer(fdm) => [fdm.common_cells[0], fdm.common_cells[1], fdm.common_cells[2]],
                     BackendPlanIR::Fem(_) => [0, 0, 0],
                 };
                 let fem_mesh = match &execution_plan.backend_plan {
@@ -1066,7 +1071,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         elements: fem.mesh.elements.clone(),
                         boundary_faces: fem.mesh.boundary_faces.clone(),
                     }),
-                    BackendPlanIR::Fdm(_) => None,
+                    BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
                 };
                 for stats in &stage_result.steps {
                     let update = fullmag_runner::StepUpdate {
@@ -1926,6 +1931,13 @@ fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runner::StepUpda
             magnetization: Some(flatten_magnetization(&fdm.initial_magnetization)),
             finished: false,
         },
+        BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
+            stats,
+            grid: [fdm.common_cells[0], fdm.common_cells[1], fdm.common_cells[2]],
+            fem_mesh: None,
+            magnetization: None,
+            finished: false,
+        },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
@@ -1960,6 +1972,13 @@ fn final_stage_step_update(
             grid: [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
             fem_mesh: None,
             magnetization: Some(flatten_magnetization(final_magnetization)),
+            finished,
+        },
+        BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
+            stats,
+            grid: [fdm.common_cells[0], fdm.common_cells[1], fdm.common_cells[2]],
+            fem_mesh: None,
+            magnetization: None,
             finished,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {

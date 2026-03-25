@@ -8,17 +8,285 @@
 
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, ExchangeBoundaryCondition,
-    ExecutionMode, ExecutionPlanIR, ExecutionPrecision, FdmGridAssetIR, FdmMaterialIR, FdmPlanIR,
-    FemPlanIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR, IntegratorChoice, MeshIR,
-    OutputIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, RelaxationAlgorithmIR,
+    ExecutionMode, ExecutionPlanIR, ExecutionPrecision, FdmGridAssetIR, FdmHintsIR,
+    FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR,
+    FemPlanIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR, IntegratorChoice,
+    MeshIR, OutputIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, RelaxationAlgorithmIR,
     RelaxationControlIR, IR_VERSION,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::Path;
 
 const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
+const PLACEMENT_TOLERANCE: f64 = 1e-12;
+const GRID_TOLERANCE: f64 = 1e-6;
+
+#[derive(Debug, Clone)]
+enum GeometryShape {
+    Box {
+        size: [f64; 3],
+    },
+    Cylinder {
+        radius: f64,
+        height: f64,
+    },
+    Imported {
+        source: String,
+        format: String,
+    },
+    Difference {
+        base: std::boxed::Box<GeometryShape>,
+        tool: std::boxed::Box<GeometryShape>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct PlacedGeometry {
+    name: String,
+    shape: GeometryShape,
+    translation: [f64; 3],
+}
+
+#[derive(Debug, Clone)]
+struct LoweredBody {
+    magnet_name: String,
+    bounding_size: [f64; 3],
+    native_grid: [u32; 3],
+    native_cell_size: [f64; 3],
+    native_origin: [f64; 3],
+    native_active_mask: Option<Vec<bool>>,
+    initial_magnetization: Vec<[f64; 3]>,
+    material: FdmMaterialIR,
+}
+
+fn ir_to_shape(entry: &GeometryEntryIR) -> GeometryShape {
+    match entry {
+        GeometryEntryIR::Box { size, .. } => GeometryShape::Box { size: *size },
+        GeometryEntryIR::Cylinder { radius, height, .. } => GeometryShape::Cylinder {
+            radius: *radius,
+            height: *height,
+        },
+        GeometryEntryIR::ImportedGeometry { source, format, .. } => GeometryShape::Imported {
+            source: source.clone(),
+            format: format.clone(),
+        },
+        GeometryEntryIR::Difference { base, tool, .. } => GeometryShape::Difference {
+            base: std::boxed::Box::new(ir_to_shape(base)),
+            tool: std::boxed::Box::new(ir_to_shape(tool)),
+        },
+        GeometryEntryIR::Union { a, .. } => ir_to_shape(a),
+        GeometryEntryIR::Intersection { a, .. } => ir_to_shape(a),
+        GeometryEntryIR::Translate { base, .. } => ir_to_shape(base),
+        GeometryEntryIR::Ellipsoid { radii, .. } => GeometryShape::Box {
+            size: [radii[0] * 2.0, radii[1] * 2.0, radii[2] * 2.0],
+        },
+        GeometryEntryIR::Sphere { radius, .. } => GeometryShape::Box {
+            size: [*radius * 2.0, *radius * 2.0, *radius * 2.0],
+        },
+        GeometryEntryIR::Ellipse { radii, height, .. } => GeometryShape::Cylinder {
+            radius: radii[0].max(radii[1]),
+            height: *height,
+        },
+    }
+}
+
+fn extract_multilayer_geometry(entry: &GeometryEntryIR) -> Result<PlacedGeometry, String> {
+    match entry {
+        GeometryEntryIR::Translate { name, base, by } => {
+            let mut placed = extract_multilayer_geometry(base)?;
+            placed.name = name.clone();
+            for axis in 0..3 {
+                placed.translation[axis] += by[axis];
+            }
+            Ok(placed)
+        }
+        GeometryEntryIR::Box { .. }
+        | GeometryEntryIR::Cylinder { .. }
+        | GeometryEntryIR::ImportedGeometry { .. }
+        | GeometryEntryIR::Difference { .. } => Ok(PlacedGeometry {
+            name: entry.name().to_string(),
+            shape: ir_to_shape(entry),
+            translation: [0.0, 0.0, 0.0],
+        }),
+        GeometryEntryIR::Union { .. } | GeometryEntryIR::Intersection { .. } => Err(format!(
+            "geometry '{}' uses CSG union/intersection which is not yet supported by the public multilayer planner; use Box/Cylinder/Difference with optional Translate",
+            entry.name()
+        )),
+        GeometryEntryIR::Ellipsoid { .. }
+        | GeometryEntryIR::Sphere { .. }
+        | GeometryEntryIR::Ellipse { .. } => Err(format!(
+            "geometry '{}' is not yet supported by the public multilayer planner; use Box/Cylinder/Difference with optional Translate",
+            entry.name()
+        )),
+    }
+}
+
+fn voxelize_shape(
+    shape: &GeometryShape,
+    cell_size: [f64; 3],
+    errors: &mut Vec<String>,
+) -> ([f64; 3], Option<Vec<bool>>, [u32; 3]) {
+    match shape {
+        GeometryShape::Box { size } => {
+            let grid_cells = [
+                (size[0] / cell_size[0]).round().max(1.0) as u32,
+                (size[1] / cell_size[1]).round().max(1.0) as u32,
+                (size[2] / cell_size[2]).round().max(1.0) as u32,
+            ];
+            (*size, None, grid_cells)
+        }
+        GeometryShape::Cylinder { radius, height } => {
+            let diameter = 2.0 * radius;
+            let bbox = [diameter, diameter, *height];
+            let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;
+            let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
+            let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
+            let n = (nx * ny * nz) as usize;
+            let cx = nx as f64 * cell_size[0] * 0.5;
+            let cy = ny as f64 * cell_size[1] * 0.5;
+            let r2 = radius * radius;
+            let mut mask = vec![false; n];
+            for z in 0..nz {
+                for y in 0..ny {
+                    for x in 0..nx {
+                        let px = (x as f64 + 0.5) * cell_size[0] - cx;
+                        let py = (y as f64 + 0.5) * cell_size[1] - cy;
+                        let idx = (x + nx * (y + ny * z)) as usize;
+                        mask[idx] = (px * px + py * py) <= r2;
+                    }
+                }
+            }
+            (bbox, Some(mask), [nx, ny, nz])
+        }
+        GeometryShape::Imported { source, format } => {
+            errors.push(format!(
+                "geometry '{}:{}' requires a precomputed FDM grid asset in the public multilayer planner",
+                format, source
+            ));
+            ([1.0, 1.0, 1.0], None, [1, 1, 1])
+        }
+        GeometryShape::Difference { base, tool } => {
+            let bbox = match base.as_ref() {
+                GeometryShape::Box { size } => *size,
+                GeometryShape::Cylinder { radius, height } => [2.0 * radius, 2.0 * radius, *height],
+                _ => {
+                    errors.push("CSG Difference: base must be a Box or Cylinder".to_string());
+                    [1.0, 1.0, 1.0]
+                }
+            };
+            let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;
+            let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
+            let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
+            let n = (nx * ny * nz) as usize;
+            let mut mask = vec![true; n];
+            if let GeometryShape::Cylinder { radius, .. } = base.as_ref() {
+                let cx = nx as f64 * cell_size[0] * 0.5;
+                let cy = ny as f64 * cell_size[1] * 0.5;
+                let r2 = radius * radius;
+                for z in 0..nz {
+                    for y in 0..ny {
+                        for x in 0..nx {
+                            let px = (x as f64 + 0.5) * cell_size[0] - cx;
+                            let py = (y as f64 + 0.5) * cell_size[1] - cy;
+                            let idx = (x + nx * (y + ny * z)) as usize;
+                            mask[idx] = (px * px + py * py) <= r2;
+                        }
+                    }
+                }
+            }
+
+            match tool.as_ref() {
+                GeometryShape::Cylinder { radius, .. } => {
+                    let cx = nx as f64 * cell_size[0] * 0.5;
+                    let cy = ny as f64 * cell_size[1] * 0.5;
+                    let r2 = radius * radius;
+                    for z in 0..nz {
+                        for y in 0..ny {
+                            for x in 0..nx {
+                                let px = (x as f64 + 0.5) * cell_size[0] - cx;
+                                let py = (y as f64 + 0.5) * cell_size[1] - cy;
+                                let idx = (x + nx * (y + ny * z)) as usize;
+                                if (px * px + py * py) <= r2 {
+                                    mask[idx] = false;
+                                }
+                            }
+                        }
+                    }
+                }
+                GeometryShape::Box { size: tool_size } => {
+                    let hx = tool_size[0] * 0.5;
+                    let hy = tool_size[1] * 0.5;
+                    let cx = nx as f64 * cell_size[0] * 0.5;
+                    let cy = ny as f64 * cell_size[1] * 0.5;
+                    for z in 0..nz {
+                        for y in 0..ny {
+                            for x in 0..nx {
+                                let px = (x as f64 + 0.5) * cell_size[0] - cx;
+                                let py = (y as f64 + 0.5) * cell_size[1] - cy;
+                                let idx = (x + nx * (y + ny * z)) as usize;
+                                if px.abs() <= hx && py.abs() <= hy {
+                                    mask[idx] = false;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    errors.push("CSG Difference: tool must be a Box or Cylinder".to_string());
+                }
+            }
+
+            (bbox, Some(mask), [nx, ny, nz])
+        }
+    }
+}
+
+fn validate_realized_grid(
+    label: &str,
+    requested_size: [f64; 3],
+    realized_cells: [u32; 3],
+    cell_size: [f64; 3],
+    errors: &mut Vec<String>,
+) {
+    let realized_size = [
+        realized_cells[0] as f64 * cell_size[0],
+        realized_cells[1] as f64 * cell_size[1],
+        realized_cells[2] as f64 * cell_size[2],
+    ];
+    for axis in 0..3 {
+        if requested_size[axis] <= 0.0 {
+            continue;
+        }
+        let rel_err = (realized_size[axis] - requested_size[axis]).abs() / requested_size[axis];
+        if rel_err > GRID_TOLERANCE {
+            let axis_name = ["x", "y", "z"][axis];
+            errors.push(format!(
+                "{} size along {} ({:.6e} m) is not an integer multiple of cell size ({:.6e} m); realized grid would be {:.6e} m (relative error {:.2e})",
+                label,
+                axis_name,
+                requested_size[axis],
+                cell_size[axis],
+                realized_size[axis],
+                rel_err
+            ));
+        }
+    }
+}
+
+fn fdm_default_cell(hints: &FdmHintsIR) -> [f64; 3] {
+    hints.default_cell.unwrap_or(hints.cell)
+}
+
+fn cell_for_magnet(hints: &FdmHintsIR, magnet_name: &str) -> [f64; 3] {
+    hints
+        .per_magnet
+        .as_ref()
+        .and_then(|per_magnet| per_magnet.get(magnet_name))
+        .map(|grid| grid.cell)
+        .unwrap_or_else(|| fdm_default_cell(hints))
+}
 
 #[derive(Debug)]
 pub struct PlanError {
@@ -128,6 +396,10 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
 
     if resolved_backend == BackendTarget::Fem {
         return plan_fem(problem, resolved_backend);
+    }
+
+    if problem.magnets.len() > 1 {
+        return plan_fdm_multilayer(problem, resolved_backend);
     }
 
     // 4. Check energy terms — executable subset is Exchange / Demag / Zeeman
@@ -592,24 +864,490 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     })
 }
 
-fn plan_fem(
+fn plan_fdm_multilayer(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
     let mut errors = Vec::new();
 
-    if problem.geometry.entries.len() != 1 {
-        errors.push(format!(
-            "current FEM planning baseline supports exactly one geometry entry, found {}",
-            problem.geometry.entries.len()
-        ));
+    let fdm_hints = match &problem.backend_policy.discretization_hints {
+        Some(DiscretizationHintsIR { fdm: Some(fdm), .. }) => fdm,
+        _ => {
+            return Err(PlanError {
+                reasons: vec![
+                    "FDM discretization hints are required for the public multilayer FDM path"
+                        .to_string(),
+                ],
+            })
+        }
+    };
+    let demag_hints = fdm_hints.demag.as_ref();
+    let requested_strategy = demag_hints
+        .map(|policy| policy.strategy.as_str())
+        .unwrap_or("auto");
+    if requested_strategy == "single_grid" {
+        errors.push(
+            "multi-body FDM currently supports only the multilayer_convolution strategy; 'single_grid' for multiple magnets is not yet executable"
+                .to_string(),
+        );
     }
-    if problem.magnets.len() != 1 {
-        errors.push(format!(
-            "current FEM planning baseline supports exactly one magnet, found {}",
-            problem.magnets.len()
-        ));
+
+    let mut enable_exchange = false;
+    let mut enable_demag = false;
+    let mut external_field = None;
+    for term in &problem.energy_terms {
+        match term {
+            fullmag_ir::EnergyTermIR::Exchange => {
+                if enable_exchange {
+                    errors.push("Exchange is declared more than once".to_string());
+                }
+                enable_exchange = true;
+            }
+            fullmag_ir::EnergyTermIR::Demag => {
+                if enable_demag {
+                    errors.push("Demag is declared more than once".to_string());
+                }
+                enable_demag = true;
+            }
+            fullmag_ir::EnergyTermIR::Zeeman { b } => {
+                if external_field.is_some() {
+                    errors.push("Zeeman is declared more than once".to_string());
+                }
+                external_field = Some([b[0] / MU0, b[1] / MU0, b[2] / MU0]);
+            }
+            other => {
+                errors.push(format!(
+                    "energy term '{:?}' is semantic-only in the current public multilayer FDM path",
+                    other
+                ));
+            }
+        }
     }
+    if !(enable_exchange || enable_demag || external_field.is_some()) {
+        errors.push(
+            "the current executable multilayer FDM path requires at least one of Exchange, Demag, or Zeeman"
+                .to_string(),
+        );
+    }
+    validate_executable_outputs(
+        &problem.study.sampling().outputs,
+        enable_exchange,
+        enable_demag,
+        external_field.is_some(),
+        &mut errors,
+    );
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+        errors.push(
+            "execution_precision='single' is reserved for the Phase 2 CUDA path; the current public multilayer FDM runner supports only 'double'"
+                .to_string(),
+        );
+    }
+
+    let geometry_by_name: BTreeMap<&str, &GeometryEntryIR> = problem
+        .geometry
+        .entries
+        .iter()
+        .map(|entry| (entry.name(), entry))
+        .collect();
+    let region_to_geometry: BTreeMap<&str, &str> = problem
+        .regions
+        .iter()
+        .map(|region| (region.name.as_str(), region.geometry.as_str()))
+        .collect();
+
+    let mut lowered_bodies = Vec::with_capacity(problem.magnets.len());
+    for magnet in &problem.magnets {
+        let Some(geometry_name) = region_to_geometry.get(magnet.region.as_str()).copied() else {
+            errors.push(format!(
+                "magnet '{}' references region '{}' with no geometry binding",
+                magnet.name, magnet.region
+            ));
+            continue;
+        };
+        let Some(geometry_entry) = geometry_by_name.get(geometry_name).copied() else {
+            errors.push(format!(
+                "magnet '{}' references geometry '{}' which is missing from geometry.entries",
+                magnet.name, geometry_name
+            ));
+            continue;
+        };
+
+        let placed = match extract_multilayer_geometry(geometry_entry) {
+            Ok(placed) => placed,
+            Err(message) => {
+                errors.push(message);
+                continue;
+            }
+        };
+
+        let cell_size = cell_for_magnet(fdm_hints, magnet.name.as_str());
+        let provided_grid_asset = problem.geometry_assets.as_ref().and_then(|assets| {
+            assets
+                .fdm_grid_assets
+                .iter()
+                .find(|asset| asset.geometry_name == geometry_name)
+        });
+
+        let (bounding_size, active_mask, grid_cells, native_origin) =
+            if let Some(asset) = provided_grid_asset {
+                validate_grid_asset_cell_size(asset, cell_size, &mut errors);
+                let bbox = [
+                    asset.cells[0] as f64 * asset.cell_size[0],
+                    asset.cells[1] as f64 * asset.cell_size[1],
+                    asset.cells[2] as f64 * asset.cell_size[2],
+                ];
+                let mut origin = asset.origin;
+                for axis in 0..3 {
+                    origin[axis] += placed.translation[axis];
+                }
+                (bbox, Some(asset.active_mask.clone()), asset.cells, origin)
+            } else {
+                let (bbox, mask, cells) = voxelize_shape(&placed.shape, cell_size, &mut errors);
+                validate_realized_grid(
+                    &format!("geometry '{}'", geometry_name),
+                    bbox,
+                    cells,
+                    cell_size,
+                    &mut errors,
+                );
+                let origin = [
+                    placed.translation[0] - bbox[0] * 0.5,
+                    placed.translation[1] - bbox[1] * 0.5,
+                    placed.translation[2] - bbox[2] * 0.5,
+                ];
+                (bbox, mask, cells, origin)
+            };
+
+        let Some(material) = problem
+            .materials
+            .iter()
+            .find(|candidate| candidate.name == magnet.material)
+        else {
+            errors.push(format!(
+                "magnet '{}' references missing material '{}'",
+                magnet.name, magnet.material
+            ));
+            continue;
+        };
+
+        let n_cells = (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize;
+        let initial_magnetization = match &magnet.initial_magnetization {
+            Some(InitialMagnetizationIR::Uniform { value }) => {
+                if let Some(ref mask) = active_mask {
+                    mask.iter()
+                        .map(|&active| if active { *value } else { [0.0, 0.0, 0.0] })
+                        .collect()
+                } else {
+                    vec![*value; n_cells]
+                }
+            }
+            Some(InitialMagnetizationIR::RandomSeeded { seed }) => {
+                let mut vectors = generate_random_unit_vectors(*seed, n_cells);
+                if let Some(ref mask) = active_mask {
+                    for (index, active) in mask.iter().enumerate() {
+                        if !active {
+                            vectors[index] = [0.0, 0.0, 0.0];
+                        }
+                    }
+                }
+                vectors
+            }
+            Some(InitialMagnetizationIR::SampledField { values }) => {
+                if values.len() != n_cells {
+                    errors.push(format!(
+                        "magnet '{}' sampled_field has {} vectors, but its realized native grid requires {} cells",
+                        magnet.name,
+                        values.len(),
+                        n_cells
+                    ));
+                }
+                values.clone()
+            }
+            None => {
+                if let Some(ref mask) = active_mask {
+                    mask.iter()
+                        .map(|&active| if active { [1.0, 0.0, 0.0] } else { [0.0, 0.0, 0.0] })
+                        .collect()
+                } else {
+                    vec![[1.0, 0.0, 0.0]; n_cells]
+                }
+            }
+        };
+
+        lowered_bodies.push(LoweredBody {
+            magnet_name: magnet.name.clone(),
+            bounding_size,
+            native_grid: grid_cells,
+            native_cell_size: cell_size,
+            native_origin,
+            native_active_mask: active_mask,
+            initial_magnetization,
+            material: FdmMaterialIR {
+                name: material.name.clone(),
+                saturation_magnetisation: material.saturation_magnetisation,
+                exchange_stiffness: material.exchange_stiffness,
+                damping: material.damping,
+            },
+        });
+    }
+
+    if lowered_bodies.len() != problem.magnets.len() {
+        if errors.is_empty() {
+            errors.push(
+                "failed to realize all magnets into multilayer bodies; see previous planner errors"
+                    .to_string(),
+            );
+        }
+        return Err(PlanError { reasons: errors });
+    }
+
+    let reference_xy = [
+        lowered_bodies[0].bounding_size[0],
+        lowered_bodies[0].bounding_size[1],
+    ];
+    let reference_center_xy = [
+        lowered_bodies[0].native_origin[0] + lowered_bodies[0].bounding_size[0] * 0.5,
+        lowered_bodies[0].native_origin[1] + lowered_bodies[0].bounding_size[1] * 0.5,
+    ];
+    for body in lowered_bodies.iter().skip(1) {
+        let center_xy = [
+            body.native_origin[0] + body.bounding_size[0] * 0.5,
+            body.native_origin[1] + body.bounding_size[1] * 0.5,
+        ];
+        for axis in 0..2 {
+            if (body.bounding_size[axis] - reference_xy[axis]).abs()
+                > PLACEMENT_TOLERANCE * reference_xy[axis].max(1.0)
+            {
+                errors.push(format!(
+                    "multilayer_convolution currently requires identical XY extents; magnet '{}' realizes to [{:.6e}, {:.6e}] m while the reference layer uses [{:.6e}, {:.6e}] m",
+                    body.magnet_name,
+                    body.bounding_size[0],
+                    body.bounding_size[1],
+                    reference_xy[0],
+                    reference_xy[1]
+                ));
+                break;
+            }
+            if (center_xy[axis] - reference_center_xy[axis]).abs()
+                > PLACEMENT_TOLERANCE * reference_xy[axis].max(1.0)
+            {
+                errors.push(format!(
+                    "multilayer_convolution currently requires all bodies to share the same XY center; magnet '{}' is offset in {}",
+                    body.magnet_name,
+                    ["x", "y"][axis]
+                ));
+                break;
+            }
+        }
+    }
+
+    let mut z_intervals = lowered_bodies
+        .iter()
+        .map(|body| {
+            (
+                body.magnet_name.as_str(),
+                body.native_origin[2],
+                body.native_origin[2] + body.bounding_size[2],
+            )
+        })
+        .collect::<Vec<_>>();
+    z_intervals.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    for pair in z_intervals.windows(2) {
+        let previous = pair[0];
+        let current = pair[1];
+        if current.1 < previous.2 - PLACEMENT_TOLERANCE {
+            errors.push(format!(
+                "multilayer_convolution does not allow overlapping bodies in z; '{}' overlaps '{}'",
+                current.0, previous.0
+            ));
+        }
+    }
+
+    let mut selected_mode = demag_hints
+        .map(|policy| policy.mode.clone())
+        .unwrap_or_else(|| "auto".to_string());
+    if selected_mode == "auto" {
+        selected_mode = if lowered_bodies.iter().all(|body| body.native_grid[2] == 1) {
+            "two_d_stack".to_string()
+        } else {
+            "three_d".to_string()
+        };
+    }
+
+    let max_native_z_cells = lowered_bodies
+        .iter()
+        .map(|body| body.native_grid[2])
+        .max()
+        .unwrap_or(1);
+    let max_native_z_size = lowered_bodies
+        .iter()
+        .map(|body| body.bounding_size[2])
+        .fold(0.0_f64, f64::max);
+    let base_cell = fdm_default_cell(fdm_hints);
+    let common_cells = if let Some(policy) = demag_hints {
+        if let Some(cells) = policy.common_cells {
+            cells
+        } else if let Some(cells_xy) = policy.common_cells_xy {
+            [cells_xy[0], cells_xy[1], max_native_z_cells.max(1)]
+        } else {
+            [
+                (reference_xy[0] / base_cell[0]).round().max(1.0) as u32,
+                (reference_xy[1] / base_cell[1]).round().max(1.0) as u32,
+                (max_native_z_size / base_cell[2]).round().max(1.0) as u32,
+            ]
+        }
+    } else {
+        [
+            (reference_xy[0] / base_cell[0]).round().max(1.0) as u32,
+            (reference_xy[1] / base_cell[1]).round().max(1.0) as u32,
+            (max_native_z_size / base_cell[2]).round().max(1.0) as u32,
+        ]
+    };
+    let convolution_cell_size = [
+        reference_xy[0] / common_cells[0] as f64,
+        reference_xy[1] / common_cells[1] as f64,
+        max_native_z_size / common_cells[2] as f64,
+    ];
+
+    let mut unique_shifts = BTreeSet::new();
+    for dst in &lowered_bodies {
+        for src in &lowered_bodies {
+            unique_shifts.insert(
+                ((dst.native_origin[2] - src.native_origin[2]) / convolution_cell_size[2]).round()
+                    as i64,
+            );
+        }
+    }
+
+    let estimated_unique_kernels = unique_shifts.len() as u32;
+    let estimated_pair_kernels = (lowered_bodies.len() * lowered_bodies.len()) as u32;
+    let padded_len = (common_cells[0] * 2) as u64
+        * (common_cells[1] * 2) as u64
+        * (common_cells[2] * 2) as u64;
+    let estimated_kernel_bytes = padded_len * 6 * 16 * estimated_unique_kernels as u64;
+
+    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation) =
+        planned_study_controls(problem, &mut errors);
+    if integrator != IntegratorChoice::Heun {
+        errors.push(
+            "the public multilayer FDM runner currently supports only the 'heun' integrator"
+                .to_string(),
+        );
+    }
+    if relaxation.as_ref().is_some_and(|control| {
+        control.algorithm != RelaxationAlgorithmIR::LlgOverdamped
+    }) {
+        errors.push(
+            "the public multilayer FDM runner currently supports only 'llg_overdamped' relaxation"
+                .to_string(),
+        );
+    }
+
+    if !errors.is_empty() {
+        return Err(PlanError { reasons: errors });
+    }
+
+    let layers = lowered_bodies
+        .into_iter()
+        .map(|body| FdmLayerPlanIR {
+            magnet_name: body.magnet_name,
+            native_grid: body.native_grid,
+            native_cell_size: body.native_cell_size,
+            native_origin: body.native_origin,
+            native_active_mask: body.native_active_mask,
+            initial_magnetization: body.initial_magnetization,
+            material: body.material,
+            convolution_grid: common_cells,
+            convolution_cell_size,
+            convolution_origin: body.native_origin,
+            transfer_kind: if body.native_grid == common_cells
+                && body.native_cell_size == convolution_cell_size
+            {
+                "identity".to_string()
+            } else {
+                "push_pull".to_string()
+            },
+        })
+        .collect::<Vec<_>>();
+
+    let plan = FdmMultilayerPlanIR {
+        mode: selected_mode.clone(),
+        common_cells,
+        layers,
+        enable_exchange,
+        enable_demag,
+        external_field,
+        gyromagnetic_ratio,
+        precision: problem.backend_policy.execution_precision,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        integrator,
+        fixed_timestep,
+        relaxation,
+        planner_summary: FdmMultilayerSummaryIR {
+            requested_strategy: requested_strategy.to_string(),
+            selected_strategy: "multilayer_convolution".to_string(),
+            eligibility: "eligible".to_string(),
+            estimated_pair_kernels,
+            estimated_unique_kernels,
+            estimated_kernel_bytes,
+            warnings: Vec::new(),
+        },
+    };
+
+    let study_note = if let Some(control) = plan.relaxation.as_ref() {
+        format!(
+            "study: relaxation algorithm={} torque_tolerance={:.6e} energy_tolerance={} max_steps={}",
+            control.algorithm.as_str(),
+            control.torque_tolerance,
+            control
+                .energy_tolerance
+                .map(|value| format!("{value:.6e}"))
+                .unwrap_or_else(|| "none".to_string()),
+            control.max_steps
+        )
+    } else {
+        "study: time_evolution".to_string()
+    };
+
+    Ok(ExecutionPlanIR {
+        common: CommonPlanMeta {
+            ir_version: IR_VERSION.to_string(),
+            requested_backend: problem.backend_policy.requested_backend,
+            resolved_backend,
+            execution_mode: problem.validation_profile.execution_mode,
+        },
+        backend_plan: BackendPlanIR::FdmMultilayer(plan),
+        output_plan: OutputPlanIR {
+            outputs: problem.study.sampling().outputs.clone(),
+        },
+        provenance: ProvenancePlanIR {
+            notes: vec![
+                "Phase 2 public multilayer FDM planner".to_string(),
+                format!(
+                    "multibody demag strategy: requested={}, selected=multilayer_convolution",
+                    requested_strategy
+                ),
+                format!(
+                    "multilayer common grid: {}x{}x{}",
+                    common_cells[0], common_cells[1], common_cells[2]
+                ),
+                format!(
+                    "active terms: exchange={}, demag={}, zeeman={}",
+                    enable_exchange,
+                    enable_demag,
+                    external_field.is_some()
+                ),
+                study_note,
+            ],
+        },
+    })
+}
+
+fn plan_fem(
+    problem: &ProblemIR,
+    resolved_backend: BackendTarget,
+) -> Result<ExecutionPlanIR, PlanError> {
+    let mut errors = Vec::new();
 
     let fem_hints = match &problem.backend_policy.discretization_hints {
         Some(DiscretizationHintsIR { fem: Some(fem), .. }) => fem,
@@ -625,39 +1363,127 @@ fn plan_fem(
         }
     };
 
-    let geometry = &problem.geometry.entries[0];
-    let magnet = &problem.magnets[0];
-    let material = problem
-        .materials
+    let geometry_by_name: BTreeMap<&str, &GeometryEntryIR> = problem
+        .geometry
+        .entries
         .iter()
-        .find(|candidate| candidate.name == magnet.material)
-        .cloned()
-        .expect("validation should have caught missing FEM material");
+        .map(|entry| (entry.name(), entry))
+        .collect();
+    let region_to_geometry: BTreeMap<&str, &str> = problem
+        .regions
+        .iter()
+        .map(|region| (region.name.as_str(), region.geometry.as_str()))
+        .collect();
 
-    let mesh_asset = problem
-        .geometry_assets
-        .as_ref()
-        .and_then(|assets| {
-            assets
-                .fem_mesh_assets
-                .iter()
-                .find(|asset| asset.geometry_name == geometry.name())
-        })
-        .cloned();
+    let mut merged_initial_magnetization = Vec::new();
+    let mut mesh_parts = Vec::with_capacity(problem.magnets.len());
+    let mut mesh_sources = Vec::with_capacity(problem.magnets.len());
+    let mut selected_material: Option<fullmag_ir::MaterialIR> = None;
 
-    let mesh_asset = match mesh_asset {
-        Some(asset) => asset,
-        None => {
+    for magnet in &problem.magnets {
+        let Some(geometry_name) = region_to_geometry.get(magnet.region.as_str()).copied() else {
             errors.push(format!(
-                "geometry '{}' requires a precomputed FEM mesh asset; no MeshIR was provided",
-                geometry.name()
+                "magnet '{}' references region '{}' with no geometry binding",
+                magnet.name, magnet.region
             ));
-            if !errors.is_empty() {
-                return Err(PlanError { reasons: errors });
+            continue;
+        };
+        let Some(_geometry_entry) = geometry_by_name.get(geometry_name).copied() else {
+            errors.push(format!(
+                "magnet '{}' references geometry '{}' which is missing from geometry.entries",
+                magnet.name, geometry_name
+            ));
+            continue;
+        };
+        let Some(material) = problem
+            .materials
+            .iter()
+            .find(|candidate| candidate.name == magnet.material)
+            .cloned()
+        else {
+            errors.push(format!(
+                "magnet '{}' references missing material '{}'",
+                magnet.name, magnet.material
+            ));
+            continue;
+        };
+        if let Some(reference_material) = selected_material.as_ref() {
+            if !compatible_fem_material(reference_material, &material) {
+                errors.push(format!(
+                    "current multi-body FEM baseline requires identical material law across magnets; '{}' is incompatible with '{}'",
+                    magnet.name,
+                    problem.magnets[0].name
+                ));
             }
-            unreachable!();
+        } else {
+            selected_material = Some(material.clone());
         }
-    };
+
+        let mesh_asset = problem
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| {
+                assets
+                    .fem_mesh_assets
+                    .iter()
+                    .find(|asset| asset.geometry_name == geometry_name)
+            })
+            .cloned();
+
+        let mesh_asset = match mesh_asset {
+            Some(asset) => asset,
+            None => {
+                errors.push(format!(
+                    "geometry '{}' requires a precomputed FEM mesh asset; no MeshIR was provided",
+                    geometry_name
+                ));
+                continue;
+            }
+        };
+
+        let mesh = match (&mesh_asset.mesh, &mesh_asset.mesh_source) {
+            (Some(mesh), _) => mesh.clone(),
+            (None, Some(source)) => match load_mesh_from_source(source) {
+                Ok(mesh) => mesh,
+                Err(message) => {
+                    errors.push(message);
+                    continue;
+                }
+            },
+            (None, None) => {
+                errors.push(format!(
+                    "geometry '{}' requires a FEM mesh asset with inline mesh or mesh_source",
+                    geometry_name
+                ));
+                continue;
+            }
+        };
+
+        let n_nodes = mesh.nodes.len();
+        let initial_magnetization = match &magnet.initial_magnetization {
+            Some(InitialMagnetizationIR::Uniform { value }) => vec![*value; n_nodes],
+            Some(InitialMagnetizationIR::RandomSeeded { seed }) => {
+                generate_random_unit_vectors(*seed, n_nodes)
+            }
+            Some(InitialMagnetizationIR::SampledField { values }) => {
+                if values.len() != n_nodes {
+                    errors.push(format!(
+                        "magnet '{}' sampled_field has {} vectors, but FEM mesh '{}' has {} nodes",
+                        magnet.name,
+                        values.len(),
+                        mesh.mesh_name,
+                        n_nodes
+                    ));
+                }
+                values.clone()
+            }
+            None => vec![[1.0, 0.0, 0.0]; n_nodes],
+        };
+
+        merged_initial_magnetization.extend(initial_magnetization);
+        mesh_parts.push((magnet.name.clone(), mesh));
+        mesh_sources.push(mesh_asset.mesh_source);
+    }
 
     let mut enable_exchange = false;
     let mut enable_demag = false;
@@ -711,41 +1537,6 @@ fn plan_fem(
         );
     }
 
-    let mesh = match (&mesh_asset.mesh, &mesh_asset.mesh_source) {
-        (Some(mesh), _) => mesh.clone(),
-        (None, Some(source)) => load_mesh_from_source(source).map_err(|message| PlanError {
-            reasons: vec![message],
-        })?,
-        (None, None) => {
-            return Err(PlanError {
-                reasons: vec![format!(
-                    "geometry '{}' requires a FEM mesh asset with inline mesh or mesh_source",
-                    geometry.name()
-                )],
-            })
-        }
-    };
-
-    let n_nodes = mesh.nodes.len();
-    let initial_magnetization = match &magnet.initial_magnetization {
-        Some(InitialMagnetizationIR::Uniform { value }) => vec![*value; n_nodes],
-        Some(InitialMagnetizationIR::RandomSeeded { seed }) => {
-            generate_random_unit_vectors(*seed, n_nodes)
-        }
-        Some(InitialMagnetizationIR::SampledField { values }) => {
-            if values.len() != n_nodes {
-                errors.push(format!(
-                    "sampled_field initial magnetization has {} vectors, but FEM mesh '{}' has {} nodes",
-                    values.len(),
-                    mesh.mesh_name,
-                    n_nodes
-                ));
-            }
-            values.clone()
-        }
-        None => vec![[1.0, 0.0, 0.0]; n_nodes],
-    };
-
     let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation) =
         planned_study_controls(problem, &mut errors);
 
@@ -753,11 +1544,21 @@ fn plan_fem(
         return Err(PlanError { reasons: errors });
     }
 
+    let material = selected_material.expect("validation should have caught missing FEM material");
+    let mesh = merge_fem_meshes(&mesh_parts).map_err(|message| PlanError {
+        reasons: vec![message],
+    })?;
+    let initial_magnetization = merged_initial_magnetization;
+    let n_nodes = mesh.nodes.len();
     let n_elements = mesh.elements.len();
     let mesh_name = mesh.mesh_name.clone();
     let fem_plan = FemPlanIR {
         mesh_name: mesh_name.clone(),
-        mesh_source: mesh_asset.mesh_source,
+        mesh_source: if mesh_parts.len() == 1 {
+            mesh_sources.first().cloned().flatten()
+        } else {
+            None
+        },
         mesh,
         fe_order: fem_hints.order,
         hmax: fem_hints.hmax,
@@ -801,7 +1602,14 @@ fn plan_fem(
         },
         provenance: ProvenancePlanIR {
             notes: vec![
-                "Bootstrap FEM planner with precomputed MeshIR asset".to_string(),
+                if mesh_parts.len() == 1 {
+                    "Bootstrap FEM planner with precomputed MeshIR asset".to_string()
+                } else {
+                    format!(
+                        "Bootstrap multi-body FEM planner merged {} disjoint mesh assets into one FEM plan",
+                        mesh_parts.len()
+                    )
+                },
                 format!("mesh asset: {mesh_name} ({n_nodes} nodes, {n_elements} elements)"),
                 format!(
                     "active terms: exchange={}, demag={}, zeeman={}",
@@ -982,6 +1790,103 @@ fn load_mesh_from_source(source: &str) -> Result<MeshIR, String> {
             if other.is_empty() { "<none>" } else { other }
         )),
     }
+}
+
+fn compatible_fem_material(a: &fullmag_ir::MaterialIR, b: &fullmag_ir::MaterialIR) -> bool {
+    a.saturation_magnetisation == b.saturation_magnetisation
+        && a.exchange_stiffness == b.exchange_stiffness
+        && a.damping == b.damping
+        && a.uniaxial_anisotropy == b.uniaxial_anisotropy
+        && a.anisotropy_axis == b.anisotropy_axis
+}
+
+fn merged_fem_element_markers(mesh: &MeshIR) -> Result<Vec<u32>, String> {
+    let has_marker_one = mesh.element_markers.iter().any(|&marker| marker == 1);
+    if has_marker_one {
+        return Ok(mesh.element_markers.clone());
+    }
+
+    let distinct = mesh
+        .element_markers
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if distinct.len() <= 1 {
+        return Ok(vec![1; mesh.element_markers.len()]);
+    }
+
+    Err(format!(
+        "mesh '{}' does not mark magnetic elements with marker=1 and uses multiple element markers {:?}; current multi-body FEM merge baseline cannot infer magnetic ownership safely",
+        mesh.mesh_name,
+        distinct
+    ))
+}
+
+fn merge_fem_meshes(meshes: &[(String, MeshIR)]) -> Result<MeshIR, String> {
+    if meshes.is_empty() {
+        return Err("cannot merge zero FEM meshes".to_string());
+    }
+    if meshes.len() == 1 {
+        return Ok(meshes[0].1.clone());
+    }
+
+    let merged_name = meshes
+        .iter()
+        .map(|(magnet_name, _)| magnet_name.as_str())
+        .collect::<Vec<_>>()
+        .join("__");
+
+    let mut nodes = Vec::new();
+    let mut elements = Vec::new();
+    let mut element_markers = Vec::new();
+    let mut boundary_faces = Vec::new();
+    let mut boundary_markers = Vec::new();
+
+    let mut node_offset = 0u32;
+    for (_, mesh) in meshes {
+        let remapped_markers = merged_fem_element_markers(mesh)?;
+        nodes.extend(mesh.nodes.iter().copied());
+        elements.extend(
+            mesh.elements
+                .iter()
+                .map(|element| {
+                    [
+                        element[0] + node_offset,
+                        element[1] + node_offset,
+                        element[2] + node_offset,
+                        element[3] + node_offset,
+                    ]
+                }),
+        );
+        element_markers.extend(remapped_markers);
+        boundary_faces.extend(
+            mesh.boundary_faces.iter().map(|face| {
+                [
+                    face[0] + node_offset,
+                    face[1] + node_offset,
+                    face[2] + node_offset,
+                ]
+            }),
+        );
+        boundary_markers.extend(mesh.boundary_markers.iter().copied());
+        node_offset += mesh.nodes.len() as u32;
+    }
+
+    let merged = MeshIR {
+        mesh_name: format!("multibody_{merged_name}"),
+        nodes,
+        elements,
+        element_markers,
+        boundary_faces,
+        boundary_markers,
+    };
+    merged.validate().map_err(|errors| {
+        format!(
+            "merged multi-body FEM mesh is invalid: {}",
+            errors.join("; ")
+        )
+    })?;
+    Ok(merged)
 }
 
 #[cfg(test)]
@@ -1176,6 +2081,194 @@ mod tests {
     }
 
     #[test]
+    fn fem_backend_multibody_merges_disjoint_mesh_assets() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy.requested_backend = BackendTarget::Fem;
+        ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+            fdm: Some(fullmag_ir::FdmHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+                default_cell: None,
+                per_magnet: None,
+                demag: None,
+            }),
+            fem: Some(fullmag_ir::FemHintsIR {
+                order: 1,
+                hmax: 2e-9,
+                mesh: None,
+            }),
+            hybrid: None,
+        });
+        ir.geometry.entries = vec![
+            GeometryEntryIR::Box {
+                name: "free_geom".to_string(),
+                size: [2.0, 1.0, 1.0],
+            },
+            GeometryEntryIR::Box {
+                name: "ref_geom".to_string(),
+                size: [2.0, 1.0, 1.0],
+            },
+        ];
+        ir.regions = vec![
+            fullmag_ir::RegionIR {
+                name: "free".to_string(),
+                geometry: "free_geom".to_string(),
+            },
+            fullmag_ir::RegionIR {
+                name: "ref".to_string(),
+                geometry: "ref_geom".to_string(),
+            },
+        ];
+        ir.magnets = vec![
+            fullmag_ir::MagnetIR {
+                name: "free".to_string(),
+                region: "free".to_string(),
+                material: "Py".to_string(),
+                initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                    value: [1.0, 0.0, 0.0],
+                }),
+            },
+            fullmag_ir::MagnetIR {
+                name: "ref".to_string(),
+                region: "ref".to_string(),
+                material: "Py".to_string(),
+                initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                    value: [0.0, 1.0, 0.0],
+                }),
+            },
+        ];
+        ir.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::Demag,
+        ];
+        ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: vec![],
+            fem_mesh_assets: vec![
+                fullmag_ir::FemMeshAssetIR {
+                    geometry_name: "free_geom".to_string(),
+                    mesh_source: None,
+                    mesh: Some(fullmag_ir::MeshIR {
+                        mesh_name: "free".to_string(),
+                        nodes: vec![
+                            [0.0, 0.0, 0.0],
+                            [1.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0],
+                            [0.0, 0.0, 1.0],
+                        ],
+                        elements: vec![[0, 1, 2, 3]],
+                        element_markers: vec![1],
+                        boundary_faces: vec![[0, 1, 2]],
+                        boundary_markers: vec![1],
+                    }),
+                },
+                fullmag_ir::FemMeshAssetIR {
+                    geometry_name: "ref_geom".to_string(),
+                    mesh_source: None,
+                    mesh: Some(fullmag_ir::MeshIR {
+                        mesh_name: "ref".to_string(),
+                        nodes: vec![
+                            [0.0, 0.0, 2.0],
+                            [1.0, 0.0, 2.0],
+                            [0.0, 1.0, 2.0],
+                            [0.0, 0.0, 3.0],
+                        ],
+                        elements: vec![[0, 1, 2, 3]],
+                        element_markers: vec![1],
+                        boundary_faces: vec![[0, 1, 2]],
+                        boundary_markers: vec![1],
+                    }),
+                },
+            ],
+        });
+
+        let plan = plan(&ir).expect("multi-body FEM should plan successfully");
+        match plan.backend_plan {
+            BackendPlanIR::Fem(fem) => {
+                assert_eq!(fem.mesh.nodes.len(), 8);
+                assert_eq!(fem.mesh.elements.len(), 2);
+                assert_eq!(fem.initial_magnetization.len(), 8);
+                assert!(fem.enable_exchange);
+                assert!(fem.enable_demag);
+            }
+            _ => panic!("expected FEM plan"),
+        }
+    }
+
+    #[test]
+    fn fem_backend_multibody_rejects_incompatible_material_law() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy.requested_backend = BackendTarget::Fem;
+        ir.materials.push(fullmag_ir::MaterialIR {
+            name: "Co".to_string(),
+            saturation_magnetisation: 1.1e6,
+            exchange_stiffness: 20e-12,
+            damping: 0.02,
+            uniaxial_anisotropy: None,
+            anisotropy_axis: None,
+        });
+        ir.geometry.entries.push(GeometryEntryIR::Box {
+            name: "second".to_string(),
+            size: [1.0, 1.0, 1.0],
+        });
+        ir.regions.push(fullmag_ir::RegionIR {
+            name: "second".to_string(),
+            geometry: "second".to_string(),
+        });
+        ir.magnets.push(fullmag_ir::MagnetIR {
+            name: "second".to_string(),
+            region: "second".to_string(),
+            material: "Co".to_string(),
+            initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                value: [0.0, 1.0, 0.0],
+            }),
+        });
+        ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: vec![],
+            fem_mesh_assets: vec![
+                fullmag_ir::FemMeshAssetIR {
+                    geometry_name: "strip".to_string(),
+                    mesh_source: None,
+                    mesh: Some(fullmag_ir::MeshIR {
+                        mesh_name: "strip".to_string(),
+                        nodes: vec![
+                            [0.0, 0.0, 0.0],
+                            [1.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0],
+                            [0.0, 0.0, 1.0],
+                        ],
+                        elements: vec![[0, 1, 2, 3]],
+                        element_markers: vec![1],
+                        boundary_faces: vec![[0, 1, 2]],
+                        boundary_markers: vec![1],
+                    }),
+                },
+                fullmag_ir::FemMeshAssetIR {
+                    geometry_name: "second".to_string(),
+                    mesh_source: None,
+                    mesh: Some(fullmag_ir::MeshIR {
+                        mesh_name: "second".to_string(),
+                        nodes: vec![
+                            [0.0, 0.0, 2.0],
+                            [1.0, 0.0, 2.0],
+                            [0.0, 1.0, 2.0],
+                            [0.0, 0.0, 3.0],
+                        ],
+                        elements: vec![[0, 1, 2, 3]],
+                        element_markers: vec![1],
+                        boundary_faces: vec![[0, 1, 2]],
+                        boundary_markers: vec![1],
+                    }),
+                },
+            ],
+        });
+
+        let error = plan(&ir).expect_err("incompatible multi-body FEM materials should fail");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("requires identical material law")));
+    }
+
+    #[test]
     fn random_seeded_generates_correct_count() {
         let vectors = generate_random_unit_vectors(42, 100);
         assert_eq!(vectors.len(), 100);
@@ -1311,5 +2404,157 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.contains("execution_precision='single'")));
+    }
+
+    #[test]
+    fn stacked_two_body_problem_lowers_to_multilayer_plan() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.geometry.entries = vec![
+            GeometryEntryIR::Translate {
+                name: "free_geom".to_string(),
+                base: std::boxed::Box::new(GeometryEntryIR::Box {
+                    name: "free_base".to_string(),
+                    size: [40e-9, 20e-9, 2e-9],
+                }),
+                by: [0.0, 0.0, 0.0],
+            },
+            GeometryEntryIR::Translate {
+                name: "ref_geom".to_string(),
+                base: std::boxed::Box::new(GeometryEntryIR::Box {
+                    name: "ref_base".to_string(),
+                    size: [40e-9, 20e-9, 2e-9],
+                }),
+                by: [0.0, 0.0, 4e-9],
+            },
+        ];
+        ir.regions = vec![
+            fullmag_ir::RegionIR {
+                name: "free_region".to_string(),
+                geometry: "free_geom".to_string(),
+            },
+            fullmag_ir::RegionIR {
+                name: "ref_region".to_string(),
+                geometry: "ref_geom".to_string(),
+            },
+        ];
+        ir.magnets = vec![
+            fullmag_ir::MagnetIR {
+                name: "free".to_string(),
+                region: "free_region".to_string(),
+                material: "Py".to_string(),
+                initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                    value: [1.0, 0.0, 0.0],
+                }),
+            },
+            fullmag_ir::MagnetIR {
+                name: "ref".to_string(),
+                region: "ref_region".to_string(),
+                material: "Py".to_string(),
+                initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                    value: [0.0, 1.0, 0.0],
+                }),
+            },
+        ];
+        ir.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::Demag,
+        ];
+        ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+            fdm: Some(fullmag_ir::FdmHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+                default_cell: Some([2e-9, 2e-9, 2e-9]),
+                per_magnet: None,
+                demag: Some(fullmag_ir::FdmDemagHintsIR {
+                    strategy: "multilayer_convolution".to_string(),
+                    mode: "two_d_stack".to_string(),
+                    allow_single_grid_fallback: false,
+                    common_cells: None,
+                    common_cells_xy: None,
+                }),
+            }),
+            fem: None,
+            hybrid: None,
+        });
+
+        let plan = plan(&ir).expect("stacked two-body problem should lower");
+        match plan.backend_plan {
+            BackendPlanIR::FdmMultilayer(multilayer) => {
+                assert_eq!(multilayer.layers.len(), 2);
+                assert_eq!(multilayer.common_cells, [20, 10, 1]);
+                for (actual, expected) in multilayer.layers[0]
+                    .native_origin
+                    .iter()
+                    .zip([-20e-9, -10e-9, -1e-9].iter())
+                {
+                    assert!((actual - expected).abs() < 1e-18);
+                }
+                for (actual, expected) in multilayer.layers[1]
+                    .native_origin
+                    .iter()
+                    .zip([-20e-9, -10e-9, 3e-9].iter())
+                {
+                    assert!((actual - expected).abs() < 1e-18);
+                }
+                assert_eq!(
+                    multilayer.planner_summary.selected_strategy,
+                    "multilayer_convolution"
+                );
+            }
+            other => panic!("expected FDM multilayer plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multilayer_planner_rejects_xy_offset() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.geometry.entries = vec![
+            GeometryEntryIR::Translate {
+                name: "free_geom".to_string(),
+                base: std::boxed::Box::new(GeometryEntryIR::Box {
+                    name: "free_base".to_string(),
+                    size: [40e-9, 20e-9, 2e-9],
+                }),
+                by: [0.0, 0.0, 0.0],
+            },
+            GeometryEntryIR::Translate {
+                name: "ref_geom".to_string(),
+                base: std::boxed::Box::new(GeometryEntryIR::Box {
+                    name: "ref_base".to_string(),
+                    size: [40e-9, 20e-9, 2e-9],
+                }),
+                by: [10e-9, 0.0, 4e-9],
+            },
+        ];
+        ir.regions = vec![
+            fullmag_ir::RegionIR {
+                name: "free_region".to_string(),
+                geometry: "free_geom".to_string(),
+            },
+            fullmag_ir::RegionIR {
+                name: "ref_region".to_string(),
+                geometry: "ref_geom".to_string(),
+            },
+        ];
+        ir.magnets = vec![
+            fullmag_ir::MagnetIR {
+                name: "free".to_string(),
+                region: "free_region".to_string(),
+                material: "Py".to_string(),
+                initial_magnetization: None,
+            },
+            fullmag_ir::MagnetIR {
+                name: "ref".to_string(),
+                region: "ref_region".to_string(),
+                material: "Py".to_string(),
+                initial_magnetization: None,
+            },
+        ];
+        ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Demag];
+
+        let err = plan(&ir).expect_err("XY-offset multilayer problem should be rejected");
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("share the same XY center")));
     }
 }

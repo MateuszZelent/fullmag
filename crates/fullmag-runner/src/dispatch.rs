@@ -10,11 +10,13 @@
 //! - `cpu`: force CPU reference
 //! - `gpu`: force native FEM GPU, fail if unavailable
 
-use fullmag_ir::{FdmPlanIR, FemPlanIR, OutputIR, ProblemIR};
+use fullmag_ir::{FdmMultilayerPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR};
 use serde_json::Value;
 
 use crate::cpu_reference;
 use crate::fem_reference;
+use crate::multilayer_cuda;
+use crate::multilayer_reference;
 use crate::native_fdm;
 #[cfg(feature = "cuda")]
 use crate::native_fdm::NativeFdmBackend;
@@ -178,6 +180,22 @@ pub(crate) fn execute_fdm(
     }
 }
 
+pub(crate) fn execute_fdm_multilayer(
+    engine: FdmEngine,
+    plan: &FdmMultilayerPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+) -> Result<ExecutedRun, RunError> {
+    match engine {
+        FdmEngine::CpuReference => {
+            multilayer_reference::execute_reference_fdm_multilayer(plan, until_seconds, outputs)
+        }
+        FdmEngine::CudaFdm => {
+            multilayer_cuda::execute_cuda_fdm_multilayer(plan, until_seconds, outputs)
+        }
+    }
+}
+
 /// Execute a FEM plan using the selected engine.
 pub(crate) fn execute_fem(
     engine: FemEngine,
@@ -287,6 +305,33 @@ pub(crate) fn execute_fdm_with_callback(
                 });
             }
             Ok(executed)
+        }
+    }
+}
+
+pub(crate) fn execute_fdm_multilayer_with_callback(
+    engine: FdmEngine,
+    plan: &FdmMultilayerPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    on_step: &mut impl FnMut(StepUpdate),
+) -> Result<ExecutedRun, RunError> {
+    match engine {
+        FdmEngine::CpuReference => {
+            multilayer_reference::execute_reference_fdm_multilayer_with_callback(
+                plan,
+                until_seconds,
+                outputs,
+                on_step,
+            )
+        }
+        FdmEngine::CudaFdm => {
+            multilayer_cuda::execute_cuda_fdm_multilayer_with_callback(
+                plan,
+                until_seconds,
+                outputs,
+                on_step,
+            )
         }
     }
 }

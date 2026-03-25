@@ -27,8 +27,9 @@ Current repo status relevant to this note:
 - `FemPlanIR` already carries mesh data, per-node initial magnetization, material payload,
   active term flags, precision, and LLG timing parameters,
 - the runner now executes bootstrap FEM CPU-reference plans,
-- `StudyIR::Relaxation` exists and `algorithm="llg_overdamped"` is executable in the
-  current public path,
+- `StudyIR::Relaxation` exists and three algorithms are FDM-executable:
+  `llg_overdamped`, `projected_gradient_bb`, and `nonlinear_cg`
+  (see `0500-fdm-relaxation-algorithms.md` for full specification),
 - higher-order FEM relaxation methods remain defined but not yet public-executable.
 
 For FEM, relaxation is especially important because:
@@ -242,9 +243,14 @@ fm.Relaxation(
 Backend-neutral user API; FE-specific solver/preconditioner knobs belong in
 execution hints or backend policy, not in the top-level public object.
 
-Current executable subset:
+Current executable subset (FEM backend):
 
 - `algorithm = "llg_overdamped"`
+
+FDM-only (see `0500-fdm-relaxation-algorithms.md`):
+
+- `algorithm = "projected_gradient_bb"`
+- `algorithm = "nonlinear_cg"`
 
 ### 4.2 ProblemIR representation
 
@@ -297,12 +303,14 @@ Capability matrix should separate explicit relaxation support from tangent-plane
 - [x] ProblemIR
 - [x] Planner
 - [ ] Capability matrix
-- [x] FDM backend (`llg_overdamped`)
+- [x] FDM backend (`llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`)
 - [x] FEM backend (`llg_overdamped` on CPU reference)
+- [ ] FEM backend (`projected_gradient_bb`, `nonlinear_cg` — need mass-weighted inner products)
+- [ ] FEM backend (`tangent_plane_implicit`)
 - [ ] Hybrid backend
 - [ ] Outputs / observables
 - [ ] Tests / benchmarks
-- [ ] Documentation
+- [x] Documentation (this note + `0500-fdm-relaxation-algorithms.md`)
 
 ## 7. Known limits and deferred work
 

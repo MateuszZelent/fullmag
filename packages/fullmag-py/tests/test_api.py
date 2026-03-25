@@ -174,6 +174,34 @@ class ProblemApiTests(unittest.TestCase):
             {"kind": "cylinder", "name": "pillar", "radius": 50e-9, "height": 10e-9},
         )
 
+    def test_translated_geometries_derive_distinct_names(self) -> None:
+        free_geom = fm.Box(size=(40e-9, 20e-9, 2e-9), name="free").translate((0.0, 0.0, 0.0))
+        ref_geom = fm.Box(size=(40e-9, 20e-9, 2e-9), name="ref").translate((0.0, 0.0, 4e-9))
+        material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.2)
+        problem = fm.Problem(
+            name="translated_multibody",
+            magnets=[
+                fm.Ferromagnet(name="free", geometry=free_geom, material=material),
+                fm.Ferromagnet(name="ref", geometry=ref_geom, material=material),
+            ],
+            energy=[fm.Exchange(), fm.Demag()],
+            study=fm.TimeEvolution(
+                dynamics=fm.LLG(fixed_timestep=1e-13),
+                outputs=[fm.SaveScalar("E_total", every=1e-13)],
+            ),
+            discretization=fm.DiscretizationHints(
+                fdm=fm.FDM(default_cell=(2e-9, 2e-9, 2e-9)),
+            ),
+        )
+
+        ir = problem.to_ir()
+        names = [entry["name"] for entry in ir["geometry"]["entries"]]
+
+        self.assertEqual(len(names), 2)
+        self.assertEqual(len(set(names)), 2)
+        self.assertIn("base", ir["geometry"]["entries"][0])
+        self.assertIn("by", ir["geometry"]["entries"][0])
+
     def test_from_function_is_deferred_stub(self) -> None:
         with self.assertRaises(NotImplementedError):
             fm.init.from_function(lambda point: point)

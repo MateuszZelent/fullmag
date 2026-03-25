@@ -258,6 +258,33 @@ impl NativeFdmBackend {
         )
     }
 
+    pub fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {
+        let flat: Vec<f64> = magnetization
+            .iter()
+            .flat_map(|vector| vector.iter().copied())
+            .collect();
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_upload_magnetization_f64(
+                self.handle as *mut _,
+                flat.as_ptr(),
+                flat.len() as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("upload_magnetization failed"));
+        }
+        Ok(())
+    }
+
+    pub fn refresh_observables(&mut self) -> Result<(), RunError> {
+        let rc =
+            unsafe { ffi::fullmag_fdm_backend_refresh_observables(self.handle as *mut _) };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("refresh_observables failed"));
+        }
+        Ok(())
+    }
+
     /// Query device info.
     pub fn device_info(&self) -> Result<DeviceInfo, RunError> {
         let mut info = ffi::fullmag_fdm_device_info {

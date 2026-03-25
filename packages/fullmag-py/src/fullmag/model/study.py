@@ -35,6 +35,50 @@ class TimeEvolution:
 
 @dataclass(frozen=True, slots=True)
 class Relaxation:
+    """Energy minimization study that drives the system toward a (meta)stable
+    equilibrium satisfying m × H_eff ≈ 0 under the constraint |m| = 1.
+
+    Three algorithms are implemented (see ``docs/physics/0500-fdm-relaxation-algorithms.md``):
+
+    * ``"llg_overdamped"`` — overdamped Landau–Lifshitz–Gilbert time-stepping.
+      Reuses the LLG pipeline with high damping (α ≥ 0.5).  Simplest path;
+      convergence speed depends on damping and time step.
+
+    * ``"projected_gradient_bb"`` — projected steepest descent with
+      Barzilai–Borwein step selection on the sphere product manifold.  Uses
+      alternating BB1/BB2 step sizes with Armijo backtracking line search.
+      Typically faster than overdamped LLG for smooth energy landscapes.
+
+    * ``"nonlinear_cg"`` — nonlinear conjugate gradient (Polak–Ribière+) with
+      tangent-space vector transport, periodic restarts every 50 iterations,
+      and Armijo backtracking.  Generally the fastest for large-scale problems.
+
+    * ``"tangent_plane_implicit"`` — FEM-only linearly implicit tangent-plane
+      relaxation.  Not yet executable; reserved for future FEM production use.
+
+    Parameters
+    ----------
+    outputs : Sequence[OutputSpec]
+        Output specifications (fields and/or scalars) to record.
+        At least one output is required.
+    algorithm : str, default ``"llg_overdamped"``
+        Relaxation algorithm identifier.  Must be one of the strings listed
+        above.
+    torque_tolerance : float, default ``1e-4``
+        Maximum torque convergence threshold in A/m.
+        The algorithm stops when max_i |m_i × H_eff,i| ≤ torque_tolerance.
+    energy_tolerance : float or None, default ``None``
+        Optional energy-change convergence threshold in Joules.  When set,
+        convergence requires *both* torque and energy criteria to be met.
+    max_steps : int, default ``50_000``
+        Hard cap on the number of iterations.  The algorithm stops
+        unconditionally after this many steps, regardless of convergence.
+    dynamics : LLG, default ``LLG()``
+        LLG parameters (damping, gyromagnetic ratio).  Used by the
+        ``"llg_overdamped"`` algorithm and for material parameter specification
+        in all algorithms.
+    """
+
     outputs: Sequence[OutputSpec]
     algorithm: str = "llg_overdamped"
     torque_tolerance: float = 1e-4
@@ -55,6 +99,7 @@ class Relaxation:
             raise ValueError("max_steps must be positive")
 
     def to_ir(self) -> dict[str, object]:
+        """Serialize to ProblemIR-compatible dictionary."""
         return {
             "kind": "relaxation",
             "algorithm": self.algorithm,
@@ -64,3 +109,4 @@ class Relaxation:
             "max_steps": self.max_steps,
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
         }
+

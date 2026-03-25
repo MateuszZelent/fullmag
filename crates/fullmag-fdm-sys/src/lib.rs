@@ -145,6 +145,16 @@ extern "C" {
         out_len: u64,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_upload_magnetization_f64(
+        handle: *mut fullmag_fdm_backend,
+        m_xyz: *const f64,
+        len: u64,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_refresh_observables(
+        handle: *mut fullmag_fdm_backend,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_get_device_info(
         handle: *mut fullmag_fdm_backend,
         out_info: *mut fullmag_fdm_device_info,

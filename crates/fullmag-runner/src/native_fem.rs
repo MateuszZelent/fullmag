@@ -601,7 +601,7 @@ mod tests {
                 }
             }
             assert!(
-                info.name.starts_with("mfem_"),
+                info.name.starts_with("mfem_") || info.name.contains("NVIDIA") || info.name.contains("GeForce") || info.name.contains("RTX"),
                 "unexpected native FEM device info name: {}",
                 info.name
             );

@@ -1,5 +1,50 @@
 # FDM Multi-Layer Convolution Demag: Szczegółowy Plan Architektoniczny
 
+## Status implementacji
+
+### Zaimplementowany pierwszy publiczny slice
+
+Na dzień `2026-03-25` repo ma już działającą ścieżkę publiczną dla **multi-body FDM demag** w
+trybie `multilayer_convolution`, ale tylko dla ograniczonego, uczciwie opisanego zakresu:
+
+- wiele `Ferromagnet` w jednym `Problem`,
+- body-local `Exchange()`,
+- globalne `Demag()` pomiędzy ciałami,
+- planowanie przez `BackendPlanIR::FdmMultilayer(...)`,
+- wykonanie przez CPU reference runner oraz publiczny `cuda-assisted` runner,
+- translacje geometrii przez `Translate`,
+- przykład end-to-end:
+  [examples/fdm_multibody_two_layer_stack.py](/home/kkingstoun/git/fullmag/fullmag/examples/fdm_multibody_two_layer_stack.py)
+
+Potwierdzony smoke publiczny:
+
+```bash
+fullmag examples/fdm_multibody_two_layer_stack.py --headless --json
+```
+
+### Aktualne granice tego slice'u
+
+Obecna implementacja nie jest jeszcze pełnym końcem planu z tego dokumentu. Publicznie
+obsługiwane są tylko:
+
+- stosy rozdzielone w `z`,
+- identyczny środek i extenty `xy` wszystkich warstw,
+- brak nakładania warstw w `z`,
+- `Box`, `Cylinder`, `Difference` oraz opcjonalne `Translate`,
+- `ImportedGeometry` tylko przez precomputed FDM grid asset,
+- `Heun` + `double`,
+- CPU reference oraz runner `cuda-assisted`, w którym local exchange per body idzie przez
+  native CUDA FDM, a globalny cross-body demag pozostaje na istniejącym runtime konwolucyjnym.
+
+Jeszcze **nie** są gotowe:
+
+- pełny native multilayer demag path w ABI/CUDA C backendzie,
+- warstwy z przesunięciem w `x/y`,
+- `Union` / `Intersection` w publicznym plannerze multilayer,
+- inter-body exchange / explicit couplings,
+- layer-aware live preview w web UI,
+- pełny artifact split per layer z osobnymi REST fetchami.
+
 ## Cel
 Zastąpienie obecnego jedno-magnesowego spektralnego FDM demag przez jawny, objaśnialny, wielowarstwowy demag konwolucyjny oparty na dokładnym tensorze Newella. Pozwala to na symulację stosów warstw (np. SAF, spin-valves) z ewaluacją pól demagnetyzujących warstwa-po-warstwie na wspólnej siatce konwolucyjnej.
 

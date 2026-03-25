@@ -11,6 +11,7 @@ fem-gpu = ["dep:fullmag-fem-sys", "fullmag-fem-sys/build-native"]
 
 [dependencies]
 fullmag-engine = { path = "../fullmag-engine", features = ["parallel"] }
+fullmag-fdm-demag = { path = "../fullmag-fdm-demag" }
 fullmag-fdm-sys = { path = "../fullmag-fdm-sys", optional = true }
 fullmag-fem-sys = { path = "../fullmag-fem-sys", optional = true }
 fullmag-ir = { path = "../fullmag-ir" }

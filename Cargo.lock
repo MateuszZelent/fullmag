@@ -434,6 +434,7 @@ name = "fullmag-runner"
 version = "0.1.0"
 dependencies = [
  "fullmag-engine",
+ "fullmag-fdm-demag",
  "fullmag-fdm-sys",
  "fullmag-fem-sys",
  "fullmag-ir",

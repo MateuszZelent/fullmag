@@ -30,6 +30,15 @@ class _GeometryOps:
         return Translate(geometry=self, offset=offset)  # type: ignore[arg-type]
 
 
+def _format_translation_component(value: float) -> str:
+    return f"{value:.6g}"
+
+
+def _derived_translate_name(base_name: str, offset: tuple[float, float, float]) -> str:
+    components = "_".join(_format_translation_component(component) for component in offset)
+    return f"{base_name}__translate_{components}"
+
+
 # ---------------------------------------------------------------------------
 # Imported geometry (NPZ mask, STL, STEP, etc.)
 # ---------------------------------------------------------------------------
@@ -331,28 +340,34 @@ class Translate(_GeometryOps):
 
     geometry: "Geometry"
     offset: tuple[float, float, float]
-    name: str = "translate"
+    name: str | None = None
 
     def __init__(
         self,
         geometry: "Geometry",
         offset: tuple[float, float, float],
-        name: str = "translate",
+        name: str | None = None,
     ) -> None:
         object.__setattr__(self, "geometry", geometry)
-        object.__setattr__(self, "offset", as_vector3(offset, "offset"))
-        object.__setattr__(self, "name", require_non_empty(name, "name"))
+        normalized_offset = as_vector3(offset, "offset")
+        object.__setattr__(self, "offset", normalized_offset)
+        if name is not None:
+            object.__setattr__(self, "name", require_non_empty(name, "name"))
+        else:
+            object.__setattr__(self, "name", None)
 
     @property
     def geometry_name(self) -> str:
-        return self.name
+        if self.name is not None:
+            return self.name
+        return _derived_translate_name(self.geometry.geometry_name, self.offset)
 
     def to_ir(self) -> dict[str, object]:
         return {
-            "name": self.name,
+            "name": self.geometry_name,
             "kind": "translate",
-            "geometry": self.geometry.to_ir(),
-            "offset": list(self.offset),
+            "base": self.geometry.to_ir(),
+            "by": list(self.offset),
         }
 
 

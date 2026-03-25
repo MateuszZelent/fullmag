@@ -172,6 +172,40 @@ fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Value {
                 },
             })
         }
+        BackendPlanIR::FdmMultilayer(ml) => serde_json::json!({
+            "backend": "fdm_multilayer",
+            "mode": ml.mode,
+            "common_cells": ml.common_cells,
+            "layer_count": ml.layers.len(),
+            "layers": ml.layers.iter().scan(0usize, |offset, layer| {
+                let total_cells = layer.native_grid[0] as usize
+                    * layer.native_grid[1] as usize
+                    * layer.native_grid[2] as usize;
+                let active_cell_count = layer
+                    .native_active_mask
+                    .as_ref()
+                    .map(|mask| mask.iter().filter(|is_active| **is_active).count())
+                    .unwrap_or(total_cells);
+                let current_offset = *offset;
+                *offset += total_cells;
+                Some(serde_json::json!({
+                    "magnet_name": layer.magnet_name,
+                    "native_grid": layer.native_grid,
+                    "native_cell_size": layer.native_cell_size,
+                    "native_origin": layer.native_origin,
+                    "convolution_grid": layer.convolution_grid,
+                    "convolution_cell_size": layer.convolution_cell_size,
+                    "transfer_kind": layer.transfer_kind,
+                    "total_cell_count": total_cells,
+                    "active_mask_present": layer.native_active_mask.is_some(),
+                    "active_cell_count": active_cell_count,
+                    "inactive_cell_count": total_cells.saturating_sub(active_cell_count),
+                    "value_offset": current_offset,
+                    "value_count": total_cells,
+                }))
+            }).collect::<Vec<_>>(),
+            "planner_summary": ml.planner_summary,
+        }),
         BackendPlanIR::Fem(fem) => serde_json::json!({
             "backend": "fem",
             "mesh_name": fem.mesh.mesh_name,

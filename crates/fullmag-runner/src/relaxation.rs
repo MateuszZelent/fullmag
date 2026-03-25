@@ -127,6 +127,7 @@ pub(crate) fn execute_projected_gradient_bb(
     let c_armijo: f64 = 1e-4; // sufficient decrease parameter
     let max_backtrack: u32 = 20;
     let mut use_bb1 = true; // alternate between BB1 and BB2
+    let mut reset_consecutive: u64 = 0; // Boris-style reset counter
 
     let mut steps: u64 = 0;
     let mut converged = false;
@@ -171,20 +172,55 @@ pub(crate) fn execute_projected_gradient_bb(
         let h_eff_new = problem.effective_field_from_vectors_ws(&m_trial, ws);
         let g_new = ExchangeLlgProblem::tangent_gradient_from_field(&m_trial, &h_eff_new);
 
-        // Barzilai–Borwein step selection
-        let s: Vec<Vector3> = (0..n).map(|i| sub(m_trial[i], m[i])).collect();
-        let y: Vec<Vector3> = (0..n).map(|i| sub(g_new[i], g[i])).collect();
+        // Barzilai–Borwein step selection (Boris-style signedness checks)
+        // Divide by 1e6 for numerical stability on large meshes (cancels in ratio)
+        let scale_factor = 1e-6;
+        let s: Vec<Vector3> = (0..n)
+            .map(|i| scale(sub(m_trial[i], m[i]), scale_factor))
+            .collect();
+        let y: Vec<Vector3> = (0..n)
+            .map(|i| scale(sub(g_new[i], g[i]), scale_factor))
+            .collect();
 
         let s_dot_s = global_dot(&s, &s);
         let s_dot_y = global_dot(&s, &y);
         let y_dot_y = global_dot(&y, &y);
 
-        if use_bb1 && s_dot_y.abs() > 1e-30 {
-            lambda = (s_dot_s / s_dot_y).abs().clamp(lambda_min, lambda_max);
-        } else if y_dot_y.abs() > 1e-30 {
-            lambda = (s_dot_y / y_dot_y).abs().clamp(lambda_min, lambda_max);
+        // Boris-style: check that the quotient is positive (meaningful curvature)
+        // BB1: λ = s·s / s·y  (only if s·s * s·y > 0, i.e. s·y > 0 since s·s >= 0)
+        // BB2: λ = s·y / y·y  (only if s·y * y·y > 0, i.e. same sign)
+        let bb_ok;
+        if use_bb1 {
+            if s_dot_y > 1e-30 {
+                lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
+                bb_ok = true;
+            } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
+                // Fallback to BB2
+                lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
+                bb_ok = true;
+            } else {
+                bb_ok = false;
+            }
+        } else {
+            if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
+                lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
+                bb_ok = true;
+            } else if s_dot_y > 1e-30 {
+                // Fallback to BB1
+                lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
+                bb_ok = true;
+            } else {
+                bb_ok = false;
+            }
         }
-        // else keep previous lambda
+
+        if bb_ok {
+            reset_consecutive = 0;
+        } else {
+            // Boris-style reset: progressively increase from lambda_min
+            reset_consecutive += 1;
+            lambda = (reset_consecutive as f64 * lambda_min).min(lambda_max);
+        }
         use_bb1 = !use_bb1;
 
         // Accept step

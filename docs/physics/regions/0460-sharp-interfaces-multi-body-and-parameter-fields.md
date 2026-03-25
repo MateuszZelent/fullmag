@@ -815,6 +815,12 @@ Where practical:
 - use existing per-magnet grid hints and multilayer demag scaffolding,
 - enforce synchronous LLG stepping.
 
+Status on `2026-03-25`:
+
+- done for public FDM on the current eligible multilayer slice,
+- done for bootstrap FEM via merged disjoint mesh assets into one `FemPlanIR`,
+- still missing for explicit inter-body couplings and native CUDA multilayer FDM execution.
+
 ## 12.4 Phase 3 — explicit couplings
 
 - contact exchange,

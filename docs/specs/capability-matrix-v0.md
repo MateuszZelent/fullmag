@@ -34,14 +34,15 @@ Every feature carries one of three statuses:
 | Material constants (`Ku1`, `anisU`) | planned | planned | planned | semantic-only | Anisotropy not in exchange-only scope |
 | Ferromagnet + uniform `m0` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Lowered to per-cell vectors for FDM and per-node vectors for FEM |
 | Ferromagnet + random `m0` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Deterministic xorshift64 RNG in planner |
+| Multiple `Ferromagnet` bodies + global demag | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses multilayer-convolution for eligible z-stacks, with CPU reference and a public `cuda-assisted` runner; FEM merges disjoint mesh assets into one bootstrap plan with body-local exchange and global demag |
 | `Exchange` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | CPU 6-point stencil in FDM and lumped-mass P1 operator in FEM |
 | `Demag` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses Newell tensor FFT; executable FEM currently uses a bootstrap transfer-grid demag seam (CPU reference and native MFEM path) for cross-backend parity |
 | `InterfacialDMI` | planned | planned | planned | semantic-only | Not numerically implemented |
 | `Zeeman` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Public API authors `B`; planner normalizes to `H_ext` in A/m for CPU FDM and CPU FEM |
 | `LLG` (Heun) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Heun stepper in `fullmag-engine` |
 | `Relaxation(llg_overdamped)` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Shared `StudyIR::Relaxation` with torque / energy / max-step stopping; currently reuses the damped LLG field pipeline |
-| `Relaxation(projected_gradient_bb)` | planned | planned | planned | semantic-only | Defined in Python API and `ProblemIR`; planner rejects it as not yet executable |
-| `Relaxation(nonlinear_cg)` | planned | planned | planned | semantic-only | Defined in Python API and `ProblemIR`; execution deferred |
+| `Relaxation(projected_gradient_bb)` | ✅ exec | planned | planned | **public-executable** (FDM) | Direct energy minimization on the sphere product manifold with alternating BB1/BB2 step sizes and Armijo backtracking; see `docs/physics/0500-fdm-relaxation-algorithms.md` |
+| `Relaxation(nonlinear_cg)` | ✅ exec | planned | planned | **public-executable** (FDM) | Polak–Ribière+ CG with tangent-space vector transport, periodic restarts, and Armijo backtracking; see `docs/physics/0500-fdm-relaxation-algorithms.md` |
 | `Relaxation(tangent_plane_implicit)` | planned | planned | planned | semantic-only | Canonical production-target FEM relaxation family; execution deferred |
 | Execution precision `double` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Current CPU reference precision for both narrow executable backends |
 | Execution precision `single` | planned | planned | planned | semantic-only | Defined in Python API and `ProblemIR`; reserved for Phase 2 CUDA FDM |
