@@ -86,10 +86,38 @@ pub enum GeometryEntryIR {
         radius: f64,
         height: f64,
     },
+    Ellipsoid {
+        name: String,
+        radii: [f64; 3],
+    },
+    Sphere {
+        name: String,
+        radius: f64,
+    },
+    Ellipse {
+        name: String,
+        radii: [f64; 2],
+        height: f64,
+    },
     Difference {
         name: String,
         base: std::boxed::Box<GeometryEntryIR>,
         tool: std::boxed::Box<GeometryEntryIR>,
+    },
+    Union {
+        name: String,
+        a: std::boxed::Box<GeometryEntryIR>,
+        b: std::boxed::Box<GeometryEntryIR>,
+    },
+    Intersection {
+        name: String,
+        a: std::boxed::Box<GeometryEntryIR>,
+        b: std::boxed::Box<GeometryEntryIR>,
+    },
+    Translate {
+        name: String,
+        base: std::boxed::Box<GeometryEntryIR>,
+        by: [f64; 3],
     },
 }
 
@@ -99,7 +127,13 @@ impl GeometryEntryIR {
             Self::ImportedGeometry { name, .. }
             | Self::Box { name, .. }
             | Self::Cylinder { name, .. }
-            | Self::Difference { name, .. } => name,
+            | Self::Ellipsoid { name, .. }
+            | Self::Sphere { name, .. }
+            | Self::Ellipse { name, .. }
+            | Self::Difference { name, .. }
+            | Self::Union { name, .. }
+            | Self::Intersection { name, .. }
+            | Self::Translate { name, .. } => name,
         }
     }
 }
@@ -243,7 +277,84 @@ pub struct DiscretizationHintsIR {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FdmHintsIR {
+    /// Legacy single-cell hint (backward compatible).
     pub cell: [f64; 3],
+    /// New: explicit default cell (may differ from `cell` in future).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_cell: Option<[f64; 3]>,
+    /// Per-magnet native grid overrides, keyed by magnet name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_magnet: Option<std::collections::BTreeMap<String, FdmGridHintsIR>>,
+    /// Demagnetization solver policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag: Option<FdmDemagHintsIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmGridHintsIR {
+    pub cell: [f64; 3],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmDemagHintsIR {
+    pub strategy: String,
+    pub mode: String,
+    #[serde(default)]
+    pub allow_single_grid_fallback: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common_cells: Option<[u32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common_cells_xy: Option<[u32; 2]>,
+}
+
+// ---------------------------------------------------------------------------
+// Multilayer convolution plan IR types
+// ---------------------------------------------------------------------------
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmMultilayerPlanIR {
+    pub mode: String,
+    pub common_cells: [u32; 3],
+    pub layers: Vec<FdmLayerPlanIR>,
+    pub enable_exchange: bool,
+    pub enable_demag: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_field: Option<[f64; 3]>,
+    pub gyromagnetic_ratio: f64,
+    pub precision: ExecutionPrecision,
+    pub exchange_bc: ExchangeBoundaryCondition,
+    pub integrator: IntegratorChoice,
+    pub fixed_timestep: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relaxation: Option<RelaxationControlIR>,
+    pub planner_summary: FdmMultilayerSummaryIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmLayerPlanIR {
+    pub magnet_name: String,
+    pub native_grid: [u32; 3],
+    pub native_cell_size: [f64; 3],
+    pub native_origin: [f64; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_active_mask: Option<Vec<bool>>,
+    pub initial_magnetization: Vec<[f64; 3]>,
+    pub material: FdmMaterialIR,
+    pub convolution_grid: [u32; 3],
+    pub convolution_cell_size: [f64; 3],
+    pub convolution_origin: [f64; 3],
+    pub transfer_kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmMultilayerSummaryIR {
+    pub requested_strategy: String,
+    pub selected_strategy: String,
+    pub eligibility: String,
+    pub estimated_pair_kernels: u32,
+    pub estimated_unique_kernels: u32,
+    pub estimated_kernel_bytes: u64,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -606,6 +717,9 @@ impl ProblemIR {
                 discretization_hints: Some(DiscretizationHintsIR {
                     fdm: Some(FdmHintsIR {
                         cell: [2e-9, 2e-9, 2e-9],
+                        default_cell: None,
+                        per_magnet: None,
+                        demag: None,
                     }),
                     fem: Some(FemHintsIR {
                         order: 1,
@@ -826,9 +940,18 @@ impl ProblemIR {
                     if name.trim().is_empty() {
                         errors.push("difference geometry name must not be empty".to_string());
                     }
-                    // Validate nested geometries exist (base and tool are Box-wrapped,
-                    // so they're guaranteed non-null by construction)
-                    let _ = (base, tool); // suppress unused warnings; recursive validation is future work
+                    let _ = (base, tool);
+                }
+                // CSG compounds and transforms: validate name only
+                GeometryEntryIR::Ellipsoid { name, .. }
+                | GeometryEntryIR::Sphere { name, .. }
+                | GeometryEntryIR::Ellipse { name, .. }
+                | GeometryEntryIR::Union { name, .. }
+                | GeometryEntryIR::Intersection { name, .. }
+                | GeometryEntryIR::Translate { name, .. } => {
+                    if name.trim().is_empty() {
+                        errors.push("geometry name must not be empty".to_string());
+                    }
                 }
             }
         }

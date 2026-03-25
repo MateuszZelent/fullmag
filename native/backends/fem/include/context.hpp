@@ -36,6 +36,12 @@ struct TransferGridState {
     std::vector<uint8_t> active_mask;
     std::vector<double> magnetization_xyz;
     std::vector<double> demag_xyz;
+    std::vector<double> kernel_xx_spectrum;
+    std::vector<double> kernel_yy_spectrum;
+    std::vector<double> kernel_zz_spectrum;
+    std::vector<double> kernel_xy_spectrum;
+    std::vector<double> kernel_xz_spectrum;
+    std::vector<double> kernel_yz_spectrum;
     fullmag_fdm_backend *backend = nullptr;
 };
 

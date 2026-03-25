@@ -123,6 +123,36 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     ctx.m_xyz.assign(
         plan.initial_magnetization_xyz,
         plan.initial_magnetization_xyz + static_cast<size_t>(plan.initial_magnetization_len));
+    copy_optional_span(
+        plan.demag_kernel_xx_spectrum,
+        static_cast<size_t>(plan.demag_kernel_spectrum_len),
+        ctx.transfer_grid.kernel_xx_spectrum,
+        0.0);
+    copy_optional_span(
+        plan.demag_kernel_yy_spectrum,
+        static_cast<size_t>(plan.demag_kernel_spectrum_len),
+        ctx.transfer_grid.kernel_yy_spectrum,
+        0.0);
+    copy_optional_span(
+        plan.demag_kernel_zz_spectrum,
+        static_cast<size_t>(plan.demag_kernel_spectrum_len),
+        ctx.transfer_grid.kernel_zz_spectrum,
+        0.0);
+    copy_optional_span(
+        plan.demag_kernel_xy_spectrum,
+        static_cast<size_t>(plan.demag_kernel_spectrum_len),
+        ctx.transfer_grid.kernel_xy_spectrum,
+        0.0);
+    copy_optional_span(
+        plan.demag_kernel_xz_spectrum,
+        static_cast<size_t>(plan.demag_kernel_spectrum_len),
+        ctx.transfer_grid.kernel_xz_spectrum,
+        0.0);
+    copy_optional_span(
+        plan.demag_kernel_yz_spectrum,
+        static_cast<size_t>(plan.demag_kernel_spectrum_len),
+        ctx.transfer_grid.kernel_yz_spectrum,
+        0.0);
     fill_zero_vector_field(ctx.h_ex_xyz, ctx.n_nodes);
     fill_zero_vector_field(ctx.h_demag_xyz, ctx.n_nodes);
     if (ctx.has_external_field) {

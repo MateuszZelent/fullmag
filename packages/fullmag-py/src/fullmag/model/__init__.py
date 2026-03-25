@@ -1,4 +1,4 @@
-from .discretization import DiscretizationHints, FDM, FEM, Hybrid
+from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, Hybrid
 from .dynamics import LLG
 from .energy import Demag, Exchange, InterfacialDMI, Zeeman
 from .geometry import (
@@ -40,6 +40,8 @@ __all__ = [
     "ExecutionMode",
     "ExecutionPrecision",
     "FDM",
+    "FDMDemag",
+    "FDMGrid",
     "FEM",
     "Ferromagnet",
     "Hybrid",

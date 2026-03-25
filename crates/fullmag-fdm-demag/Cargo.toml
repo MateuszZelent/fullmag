@@ -1,5 +1,5 @@
 [package]
-name = "fullmag-engine"
+name = "fullmag-fdm-demag"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -9,7 +9,5 @@ default = []
 parallel = ["dep:rayon"]
 
 [dependencies]
-fullmag-ir = { path = "../fullmag-ir" }
-fullmag-fdm-demag = { path = "../fullmag-fdm-demag" }
 rustfft = "6.4"
 rayon = { version = "1.10", optional = true }

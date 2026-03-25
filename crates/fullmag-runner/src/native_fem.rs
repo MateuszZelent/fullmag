@@ -15,6 +15,34 @@ use crate::types::{RunError, StepStats};
 #[cfg(feature = "fem-gpu")]
 use std::ffi::CStr;
 
+#[cfg(feature = "fem-gpu")]
+type BBox = ([f64; 3], [f64; 3]);
+
+#[cfg(feature = "fem-gpu")]
+fn mesh_bbox(nodes: &[[f64; 3]]) -> Option<BBox> {
+    if nodes.is_empty() {
+        return None;
+    }
+    let mut min_corner = [f64::INFINITY; 3];
+    let mut max_corner = [f64::NEG_INFINITY; 3];
+    for point in nodes {
+        for axis in 0..3 {
+            min_corner[axis] = min_corner[axis].min(point[axis]);
+            max_corner[axis] = max_corner[axis].max(point[axis]);
+        }
+    }
+    Some((min_corner, max_corner))
+}
+
+#[cfg(feature = "fem-gpu")]
+fn transfer_axis_cells(extent: f64, requested_cell: f64) -> usize {
+    if extent <= 1e-18 {
+        1
+    } else {
+        ((extent / requested_cell).ceil() as usize).max(1)
+    }
+}
+
 pub(crate) fn is_gpu_available() -> bool {
     #[cfg(feature = "fem-gpu")]
     {
@@ -75,6 +103,34 @@ impl NativeFemBackend {
             damping: plan.material.damping,
             gyromagnetic_ratio: plan.gyromagnetic_ratio,
         };
+        let demag_kernel_spectra = if plan.enable_demag {
+            let (bbox_min, bbox_max) = mesh_bbox(&plan.mesh.nodes).ok_or_else(|| RunError {
+                message: "FEM GPU demag requires a non-empty mesh bounding box".to_string(),
+            })?;
+            let requested = plan.hmax.max(1e-12);
+            let extent = [
+                (bbox_max[0] - bbox_min[0]).abs(),
+                (bbox_max[1] - bbox_min[1]).abs(),
+                (bbox_max[2] - bbox_min[2]).abs(),
+            ];
+            let nx = transfer_axis_cells(extent[0], requested);
+            let ny = transfer_axis_cells(extent[1], requested);
+            let nz = transfer_axis_cells(extent[2], requested);
+            let dx = (extent[0] / nx as f64).max(1e-12);
+            let dy = (extent[1] / ny as f64).max(1e-12);
+            let dz = (extent[2] / nz as f64).max(1e-12);
+            if nz == 1 {
+                Some(fullmag_engine::compute_newell_kernel_spectra_thin_film_2d(
+                    nx, ny, dx, dy, dz,
+                ))
+            } else {
+                Some(fullmag_engine::compute_newell_kernel_spectra(
+                    nx, ny, nz, dx, dy, dz,
+                ))
+            }
+        } else {
+            None
+        };
 
         let precision = match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => {
@@ -103,6 +159,27 @@ impl NativeFemBackend {
                 max_iterations: 500,
             },
             air_box_factor: 0.0,
+            demag_kernel_xx_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_xx.as_ptr()),
+            demag_kernel_yy_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_yy.as_ptr()),
+            demag_kernel_zz_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_zz.as_ptr()),
+            demag_kernel_xy_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_xy.as_ptr()),
+            demag_kernel_xz_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_xz.as_ptr()),
+            demag_kernel_yz_spectrum: demag_kernel_spectra
+                .as_ref()
+                .map_or(std::ptr::null(), |kernels| kernels.n_yz.as_ptr()),
+            demag_kernel_spectrum_len: demag_kernel_spectra
+                .as_ref()
+                .map_or(0, |kernels| kernels.n_xx.len() as u64),
             initial_magnetization_xyz: m_flat.as_ptr(),
             initial_magnetization_len: m_flat.len() as u64,
             dt_seconds: plan.fixed_timestep.unwrap_or(1e-13),

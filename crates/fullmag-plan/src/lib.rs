@@ -207,6 +207,23 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
                 base: std::boxed::Box::new(ir_to_shape(base)),
                 tool: std::boxed::Box::new(ir_to_shape(tool)),
             },
+            // CSG/transform variants: extract the underlying shape from
+            // the base/a operand for planning purposes. Full CSG
+            // planning is future work; for now the planner treats them
+            // as their first operand.
+            GeometryEntryIR::Union { a, .. } => ir_to_shape(a),
+            GeometryEntryIR::Intersection { a, .. } => ir_to_shape(a),
+            GeometryEntryIR::Translate { base, .. } => ir_to_shape(base),
+            GeometryEntryIR::Ellipsoid { radii, .. } => GeometryShape::Box {
+                size: [radii[0] * 2.0, radii[1] * 2.0, radii[2] * 2.0],
+            },
+            GeometryEntryIR::Sphere { radius, .. } => GeometryShape::Box {
+                size: [*radius * 2.0, *radius * 2.0, *radius * 2.0],
+            },
+            GeometryEntryIR::Ellipse { radii, height, .. } => GeometryShape::Cylinder {
+                radius: radii[0].max(radii[1]),
+                height: *height,
+            },
         }
     }
     let shape = ir_to_shape(geometry);
@@ -1051,6 +1068,9 @@ mod tests {
         ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
             fdm: Some(fullmag_ir::FdmHintsIR {
                 cell: [2e-9, 2e-9, 5e-9],
+                default_cell: None,
+                per_magnet: None,
+                demag: None,
             }),
             fem: Some(fullmag_ir::FemHintsIR {
                 order: 1,
@@ -1119,6 +1139,9 @@ mod tests {
         ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
             fdm: Some(fullmag_ir::FdmHintsIR {
                 cell: [2e-9, 2e-9, 5e-9],
+                default_cell: None,
+                per_magnet: None,
+                demag: None,
             }),
             fem: Some(fullmag_ir::FemHintsIR {
                 order: 1,

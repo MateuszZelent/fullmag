@@ -39,6 +39,11 @@ fn main() {
 
     let cmake = std::env::var("FULLMAG_CMAKE").unwrap_or_else(|_| "cmake".to_string());
     let use_mfem_stack = env_flag("FULLMAG_USE_MFEM_STACK");
+    let external_fdm_lib_dir = std::env::var("DEP_FULLMAG_FDM_LIB_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| std::env::var("FULLMAG_FDM_LIB_DIR").ok())
+        .filter(|value| !value.trim().is_empty());
 
     let mut configure = std::process::Command::new(&cmake);
     configure
@@ -55,6 +60,9 @@ fn main() {
             "-DFULLMAG_USE_MFEM_STACK={}",
             if use_mfem_stack { "ON" } else { "OFF" }
         ));
+    if let Some(ref lib_dir) = external_fdm_lib_dir {
+        configure.arg(format!("-DFULLMAG_EXTERNAL_FDM_LIB_DIR={}", lib_dir));
+    }
 
     let configure_status = configure
         .status()
@@ -87,10 +95,14 @@ fn main() {
         "cargo:rustc-link-search=native={}",
         build_dir.join("backends/fem").display()
     );
-    println!(
-        "cargo:rustc-link-search=native={}",
-        build_dir.join("backends/fdm").display()
-    );
+    if let Some(ref lib_dir) = external_fdm_lib_dir {
+        println!("cargo:rustc-link-search=native={}", lib_dir);
+    } else {
+        println!(
+            "cargo:rustc-link-search=native={}",
+            build_dir.join("backends/fdm").display()
+        );
+    }
     println!("cargo:rustc-link-lib=dylib=fullmag_fem");
     if use_mfem_stack {
         println!("cargo:rustc-link-lib=dylib=fullmag_fdm");
@@ -100,8 +112,12 @@ fn main() {
         "cargo:rustc-link-arg=-Wl,-rpath,{}",
         build_dir.join("backends/fem").display()
     );
-    println!(
-        "cargo:rustc-link-arg=-Wl,-rpath,{}",
-        build_dir.join("backends/fdm").display()
-    );
+    if let Some(ref lib_dir) = external_fdm_lib_dir {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir);
+    } else {
+        println!(
+            "cargo:rustc-link-arg=-Wl,-rpath,{}",
+            build_dir.join("backends/fdm").display()
+        );
+    }
 }

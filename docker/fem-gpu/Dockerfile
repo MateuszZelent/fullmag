@@ -2,8 +2,6 @@ FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS deps
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_VERSION=3.30.5
-ENV HYPRE_REF=v2.32.0
-ENV LIBCEED_REF=v0.12.0
 ENV MFEM_REF=v4.7
 ENV INSTALL_PREFIX=/opt/fullmag-deps
 ENV CUDA_HOME=/usr/local/cuda
@@ -38,35 +36,18 @@ RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
 
 WORKDIR /tmp/build
 
-RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hypre.git
-RUN cd hypre/src && \
-    CC=${CC} CXX=${CXX} FC=${FC} CUDA_HOME=${CUDA_HOME} CUDA_PATH=${CUDA_PATH} NVCC=${NVCC} \
-    ./configure \
-      --prefix=${INSTALL_PREFIX} \
-      --with-cuda \
-      --enable-unified-memory \
-      --without-MPI && \
-    make -j1 && \
-    make install
-
-RUN git clone --depth 1 --branch ${LIBCEED_REF} https://github.com/CEED/libCEED.git
-RUN cd /tmp/build/libCEED && \
-    make configure CUDA_DIR=${CUDA_HOME} && \
-    make -j"$(nproc)" CUDA_DIR=${CUDA_HOME} && \
-    make install prefix=${INSTALL_PREFIX} CUDA_DIR=${CUDA_HOME}
-
 RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git
 RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
+      -DBUILD_SHARED_LIBS=ON \
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
       -DMFEM_USE_MPI=NO \
       -DMFEM_USE_METIS=NO \
       -DMFEM_USE_CUDA=YES \
-      -DMFEM_USE_CEED=YES \
-      -DMFEM_USE_HYPRE=YES \
-      -DHYPRE_DIR=${INSTALL_PREFIX} \
-      -DCEED_DIR=${INSTALL_PREFIX}/lib/cmake/ceed && \
+      -DMFEM_USE_CEED=NO \
+      -DMFEM_USE_HYPRE=NO && \
     cmake --build /tmp/build/mfem/build -j"$(nproc)" && \
     cmake --install /tmp/build/mfem/build
 
@@ -90,6 +71,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     gnupg \
+    libgl1 \
+    libglu1-mesa \
+    libsm6 \
+    libx11-6 \
+    libxcursor1 \
+    libxext6 \
+    libxft2 \
+    libxi6 \
+    libxinerama1 \
+    libxrender1 \
     pkg-config \
     python3 \
     python3-dev \

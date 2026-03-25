@@ -81,6 +81,13 @@ typedef struct {
     double external_field_am[3];
     fullmag_fem_solver_config demag_solver;
     double air_box_factor;
+    const double *demag_kernel_xx_spectrum;
+    const double *demag_kernel_yy_spectrum;
+    const double *demag_kernel_zz_spectrum;
+    const double *demag_kernel_xy_spectrum;
+    const double *demag_kernel_xz_spectrum;
+    const double *demag_kernel_yz_spectrum;
+    uint64_t demag_kernel_spectrum_len;
     const double *initial_magnetization_xyz;
     uint64_t initial_magnetization_len;
     double dt_seconds;

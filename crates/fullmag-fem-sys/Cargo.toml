@@ -11,3 +11,4 @@ default = []
 build-native = []
 
 [build-dependencies]
+fullmag-fdm-sys = { path = "../fullmag-fdm-sys", features = ["build-native"] }

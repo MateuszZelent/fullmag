@@ -376,9 +376,17 @@ bool apply_exchange_component(
     const std::vector<double> &lumped_mass,
     double prefactor,
     mfem::GridFunction &m_component,
+    const std::vector<double> &m_values,
     std::vector<double> &h_component,
     std::string &error)
 {
+    if (m_component.Size() != static_cast<int>(m_values.size())) {
+        error = "MFEM GridFunction size does not match host magnetization component size";
+        return false;
+    }
+    for (int i = 0; i < m_component.Size(); ++i) {
+        m_component(i) = m_values[static_cast<size_t>(i)];
+    }
     mfem::Vector tmp(m_component.Size());
     stiffness.Mult(m_component, tmp);
     h_component.resize(static_cast<size_t>(tmp.Size()));
@@ -484,23 +492,20 @@ double external_energy_from_field(
 
 double exchange_energy_from_components(
     const mfem::SparseMatrix &stiffness,
-    const std::vector<double> &mx,
-    const std::vector<double> &my,
-    const std::vector<double> &mz,
+    mfem::GridFunction &mx,
+    mfem::GridFunction &my,
+    mfem::GridFunction &mz,
     double exchange_stiffness)
 {
-    mfem::Vector vx(const_cast<double *>(mx.data()), static_cast<int>(mx.size()));
-    mfem::Vector vy(const_cast<double *>(my.data()), static_cast<int>(my.size()));
-    mfem::Vector vz(const_cast<double *>(mz.data()), static_cast<int>(mz.size()));
-    mfem::Vector tmp(static_cast<int>(mx.size()));
+    mfem::Vector tmp(mx.Size());
 
     double energy = 0.0;
-    stiffness.Mult(vx, tmp);
-    energy += exchange_stiffness * (vx * tmp);
-    stiffness.Mult(vy, tmp);
-    energy += exchange_stiffness * (vy * tmp);
-    stiffness.Mult(vz, tmp);
-    energy += exchange_stiffness * (vz * tmp);
+    stiffness.Mult(mx, tmp);
+    energy += exchange_stiffness * (mx * tmp);
+    stiffness.Mult(my, tmp);
+    energy += exchange_stiffness * (my * tmp);
+    stiffness.Mult(mz, tmp);
+    energy += exchange_stiffness * (mz * tmp);
     return energy;
 }
 
@@ -545,11 +550,29 @@ bool compute_exchange_for_magnetization(
                              (kMu0 * ctx.material.saturation_magnetisation);
 
     if (!apply_exchange_component(
-            stiffness, ctx.mfem_lumped_mass, prefactor, *gf_mx, ctx.mfem_h_ex_x, error) ||
+            stiffness,
+            ctx.mfem_lumped_mass,
+            prefactor,
+            *gf_mx,
+            ctx.mfem_mx,
+            ctx.mfem_h_ex_x,
+            error) ||
         !apply_exchange_component(
-            stiffness, ctx.mfem_lumped_mass, prefactor, *gf_my, ctx.mfem_h_ex_y, error) ||
+            stiffness,
+            ctx.mfem_lumped_mass,
+            prefactor,
+            *gf_my,
+            ctx.mfem_my,
+            ctx.mfem_h_ex_y,
+            error) ||
         !apply_exchange_component(
-            stiffness, ctx.mfem_lumped_mass, prefactor, *gf_mz, ctx.mfem_h_ex_z, error)) {
+            stiffness,
+            ctx.mfem_lumped_mass,
+            prefactor,
+            *gf_mz,
+            ctx.mfem_mz,
+            ctx.mfem_h_ex_z,
+            error)) {
         return false;
     }
 
@@ -568,9 +591,9 @@ bool compute_exchange_for_magnetization(
     if (exchange_energy != nullptr) {
         *exchange_energy = exchange_energy_from_components(
             stiffness,
-            ctx.mfem_mx,
-            ctx.mfem_my,
-            ctx.mfem_mz,
+            *gf_mx,
+            *gf_my,
+            *gf_mz,
             ctx.material.exchange_stiffness);
     }
 
@@ -637,13 +660,13 @@ bool ensure_transfer_grid_backend(
         1,
         0,
         {0.0, 0.0, 0.0},
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr,
-        0,
+        ctx.transfer_grid.kernel_xx_spectrum.empty() ? nullptr : ctx.transfer_grid.kernel_xx_spectrum.data(),
+        ctx.transfer_grid.kernel_yy_spectrum.empty() ? nullptr : ctx.transfer_grid.kernel_yy_spectrum.data(),
+        ctx.transfer_grid.kernel_zz_spectrum.empty() ? nullptr : ctx.transfer_grid.kernel_zz_spectrum.data(),
+        ctx.transfer_grid.kernel_xy_spectrum.empty() ? nullptr : ctx.transfer_grid.kernel_xy_spectrum.data(),
+        ctx.transfer_grid.kernel_xz_spectrum.empty() ? nullptr : ctx.transfer_grid.kernel_xz_spectrum.data(),
+        ctx.transfer_grid.kernel_yz_spectrum.empty() ? nullptr : ctx.transfer_grid.kernel_yz_spectrum.data(),
+        static_cast<uint64_t>(ctx.transfer_grid.kernel_xx_spectrum.size()),
         ctx.transfer_grid.active_mask.data(),
         static_cast<uint64_t>(ctx.transfer_grid.active_mask.size()),
         ctx.transfer_grid.magnetization_xyz.data(),
@@ -880,9 +903,14 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
         }
 
         unpack_aos_to_components(ctx.m_xyz, ctx.mfem_mx, ctx.mfem_my, ctx.mfem_mz);
-        auto *gf_mx = new mfem::GridFunction(fes, ctx.mfem_mx.data());
-        auto *gf_my = new mfem::GridFunction(fes, ctx.mfem_my.data());
-        auto *gf_mz = new mfem::GridFunction(fes, ctx.mfem_mz.data());
+        auto *gf_mx = new mfem::GridFunction(fes);
+        auto *gf_my = new mfem::GridFunction(fes);
+        auto *gf_mz = new mfem::GridFunction(fes);
+        for (int i = 0; i < fes->GetNDofs(); ++i) {
+            (*gf_mx)(i) = ctx.mfem_mx[static_cast<size_t>(i)];
+            (*gf_my)(i) = ctx.mfem_my[static_cast<size_t>(i)];
+            (*gf_mz)(i) = ctx.mfem_mz[static_cast<size_t>(i)];
+        }
 
         auto *exchange_form = new mfem::BilinearForm(fes);
         exchange_form->AddDomainIntegrator(new mfem::DiffusionIntegrator());
@@ -923,6 +951,12 @@ void context_destroy_mfem(Context &ctx) {
     ctx.transfer_grid.active_mask.clear();
     ctx.transfer_grid.magnetization_xyz.clear();
     ctx.transfer_grid.demag_xyz.clear();
+    ctx.transfer_grid.kernel_xx_spectrum.clear();
+    ctx.transfer_grid.kernel_yy_spectrum.clear();
+    ctx.transfer_grid.kernel_zz_spectrum.clear();
+    ctx.transfer_grid.kernel_xy_spectrum.clear();
+    ctx.transfer_grid.kernel_xz_spectrum.clear();
+    ctx.transfer_grid.kernel_yz_spectrum.clear();
     delete static_cast<mfem::Device *>(ctx.mfem_device);
     delete static_cast<mfem::BilinearForm *>(ctx.mfem_mass_form);
     delete static_cast<mfem::BilinearForm *>(ctx.mfem_exchange_form);

@@ -59,7 +59,7 @@ def build() -> fm.Problem:
         ),
         discretization=fm.DiscretizationHints(
             fdm=fm.FDM(cell=CELL),
-            fem=fm.FEM(order=1, hmax=50e-9),
+            fem=fm.FEM(order=1, hmax=20e-9),
         ),
         runtime=fm.backend.engine("fdm"),
     )

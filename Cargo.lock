@@ -377,7 +377,16 @@ dependencies = [
 name = "fullmag-engine"
 version = "0.1.0"
 dependencies = [
+ "fullmag-fdm-demag",
  "fullmag-ir",
+ "rayon",
+ "rustfft",
+]
+
+[[package]]
+name = "fullmag-fdm-demag"
+version = "0.1.0"
+dependencies = [
  "rayon",
  "rustfft",
 ]
@@ -389,6 +398,9 @@ version = "0.1.0"
 [[package]]
 name = "fullmag-fem-sys"
 version = "0.1.0"
+dependencies = [
+ "fullmag-fdm-sys",
+]
 
 [[package]]
 name = "fullmag-ir"
