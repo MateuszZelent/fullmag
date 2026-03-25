@@ -359,6 +359,13 @@ pub(crate) struct DeviceInfo {
 
 #[cfg(feature = "fem-gpu")]
 fn last_global_error_or(fallback: &str) -> String {
+    let err = unsafe { ffi::fullmag_fem_backend_last_error(std::ptr::null_mut()) };
+    if !err.is_null() {
+        let msg = unsafe { CStr::from_ptr(err) }.to_string_lossy().to_string();
+        if !msg.is_empty() {
+            return msg;
+        }
+    }
     fallback.to_string()
 }
 
@@ -390,7 +397,7 @@ mod tests {
                 boundary_markers: vec![1],
             },
             fe_order: 1,
-            hmax: 1.0,
+            hmax: 0.4,
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
             material: MaterialIR {
                 name: "Py".to_string(),

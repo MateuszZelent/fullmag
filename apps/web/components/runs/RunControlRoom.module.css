@@ -246,6 +246,52 @@
   border-radius: 2px;
 }
 
+.interactiveBlock {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.45rem;
+  align-items: end;
+  margin-bottom: 0.55rem;
+}
+
+.interactiveLabel {
+  display: grid;
+  gap: 0.22rem;
+  font-size: 0.67rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3, #6b7f9f);
+}
+
+.interactiveInput {
+  appearance: none;
+  background: hsla(220, 20%, 14%, 0.9);
+  border: 1px solid hsla(220, 20%, 24%, 0.5);
+  border-radius: 4px;
+  color: var(--text-1);
+  font-size: 0.78rem;
+  font-family: var(--font-mono, monospace);
+  padding: 0.38rem 0.5rem;
+}
+
+.interactiveInput:focus {
+  outline: none;
+  border-color: hsl(210, 60%, 40%);
+}
+
+.interactiveActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.2rem;
+}
+
+.interactiveMessage {
+  margin-top: 0.45rem;
+  font-size: 0.72rem;
+  color: var(--text-2, #a7bad3);
+}
+
 /* ── Bottom Console ──────────────────────────────── */
 .console {
   grid-area: console;

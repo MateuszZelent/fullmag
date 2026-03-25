@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -854,6 +855,11 @@ bool compute_effective_fields_for_magnetization(
 
 bool context_initialize_mfem(Context &ctx, std::string &error) {
     try {
+        // mfem::Device is a process-global singleton; creating it more than once
+        // triggers an abort ("mfem::Device is already configured!").  We use
+        // std::call_once so that multi-stage simulations AND parallel test
+        // threads share the same device safely.
+        static std::once_flag s_mfem_device_once;
 #if FULLMAG_HAS_CUDA_RUNTIME
         const int selected_device = selected_cuda_device_from_env().value_or(0);
         int device_count = 0;
@@ -872,12 +878,14 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
                     cudaGetErrorString(cuda_err);
             return false;
         }
-        auto *device = new mfem::Device("cuda");
-        ctx.mfem_device = device;
+        std::call_once(s_mfem_device_once, [&ctx]() {
+            ctx.mfem_device = new mfem::Device("cuda");
+        });
         ctx.mfem_selected_device_index = selected_device;
 #else
-        auto *device = new mfem::Device("cpu");
-        ctx.mfem_device = device;
+        std::call_once(s_mfem_device_once, [&ctx]() {
+            ctx.mfem_device = new mfem::Device("cpu");
+        });
         ctx.mfem_selected_device_index = -1;
 #endif
 
@@ -987,7 +995,9 @@ void context_destroy_mfem(Context &ctx) {
     ctx.transfer_grid.kernel_xy_spectrum.clear();
     ctx.transfer_grid.kernel_xz_spectrum.clear();
     ctx.transfer_grid.kernel_yz_spectrum.clear();
-    delete static_cast<mfem::Device *>(ctx.mfem_device);
+    // NOTE: mfem::Device is a process-global singleton — do NOT delete it here,
+    // because a subsequent NativeFemBackend may need the already-configured device.
+    // delete static_cast<mfem::Device *>(ctx.mfem_device);
     delete static_cast<mfem::BilinearForm *>(ctx.mfem_mass_form);
     delete static_cast<mfem::BilinearForm *>(ctx.mfem_exchange_form);
     delete static_cast<mfem::GridFunction *>(ctx.mfem_gf_mz);

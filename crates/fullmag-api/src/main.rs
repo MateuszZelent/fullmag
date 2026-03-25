@@ -49,6 +49,7 @@ struct SessionManifest {
     session_id: String,
     run_id: String,
     status: String,
+    interactive_session_requested: bool,
     script_path: String,
     problem_name: String,
     requested_backend: String,
@@ -179,6 +180,23 @@ struct SessionAssetImportResponse {
     summary: ImportedAssetSummary,
 }
 
+#[derive(Debug, Deserialize)]
+struct SessionCommandRequest {
+    kind: String,
+    until_seconds: Option<f64>,
+    max_steps: Option<u64>,
+    torque_tolerance: Option<f64>,
+    energy_tolerance: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionCommandResponse {
+    command_id: String,
+    session_id: String,
+    kind: String,
+    queued_path: String,
+}
+
 #[derive(Debug, Serialize)]
 struct ImportedAssetSummary {
     file_name: String,
@@ -243,6 +261,7 @@ async fn main() {
         .route("/v1/sessions/:session_id", get(get_session))
         .route("/v1/sessions/:session_id/state", get(get_session_state))
         .route("/v1/sessions/:session_id/events", get(get_session_events))
+        .route("/v1/sessions/:session_id/commands", post(enqueue_session_command))
         .route(
             "/v1/sessions/:session_id/assets/import",
             post(import_session_asset),
@@ -518,6 +537,65 @@ async fn import_session_asset(
     std::fs::write(manifest_path, manifest_text)?;
 
     Ok(Json(response))
+}
+
+async fn enqueue_session_command(
+    State(state): State<Arc<AppState>>,
+    AxumPath(session_id): AxumPath<String>,
+    Json(req): Json<SessionCommandRequest>,
+) -> Result<Json<SessionCommandResponse>, ApiError> {
+    let session_dir = state.sessions_root.join(&session_id);
+    if !session_dir.exists() {
+        return Err(ApiError::not_found(format!(
+            "missing session directory {}",
+            session_dir.display()
+        )));
+    }
+
+    let kind = req.kind.trim().to_lowercase();
+    if !matches!(kind.as_str(), "run" | "relax" | "close") {
+        return Err(ApiError::bad_request(format!(
+            "unsupported command kind '{}'",
+            req.kind
+        )));
+    }
+    if kind == "run" && req.until_seconds.unwrap_or(0.0) <= 0.0 {
+        return Err(ApiError::bad_request(
+            "run command requires positive until_seconds",
+        ));
+    }
+    if kind == "relax" && req.max_steps.unwrap_or(0) == 0 {
+        return Err(ApiError::bad_request(
+            "relax command requires positive max_steps",
+        ));
+    }
+
+    let pending_dir = session_dir.join("commands").join("pending");
+    std::fs::create_dir_all(&pending_dir)?;
+    let command_id = format!("cmd-{}", uuid_v4_hex());
+    let queued_path = pending_dir.join(format!("{}-{}.json", command_id, kind));
+    let payload = serde_json::json!({
+        "command_id": command_id,
+        "kind": kind,
+        "created_at_unix_ms": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+        "until_seconds": req.until_seconds,
+        "max_steps": req.max_steps,
+        "torque_tolerance": req.torque_tolerance,
+        "energy_tolerance": req.energy_tolerance,
+    });
+    let text = serde_json::to_string_pretty(&payload)
+        .map_err(|error| ApiError::internal(format!("failed to serialize command: {}", error)))?;
+    std::fs::write(&queued_path, text)?;
+
+    Ok(Json(SessionCommandResponse {
+        command_id: payload["command_id"].as_str().unwrap_or_default().to_string(),
+        session_id,
+        kind: payload["kind"].as_str().unwrap_or_default().to_string(),
+        queued_path: make_repo_relative(&state.repo_root, &queued_path),
+    }))
 }
 
 async fn list_runs(State(state): State<Arc<AppState>>) -> Result<Json<Vec<RunManifest>>, ApiError> {

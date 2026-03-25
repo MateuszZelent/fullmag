@@ -8,7 +8,7 @@ use fullmag_ir::{
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
     override_usage = "fullmag <COMMAND>\n       fullmag [-i|--interactive] <script.py> [--backend <auto|fdm|fem|hybrid>] [--mode <strict|extended|hybrid>] [--precision <single|double>] [--headless]"
 )]
 #[command(
-    after_help = "Script mode examples:\n  fullmag examples/exchange_relax.py\n  fullmag -i examples/exchange_relax.py\n\nThe launcher gets the run horizon from the script itself.\nFor time evolution scripts define DEFAULT_UNTIL in the script.\nFor relaxation studies Fullmag derives the execution horizon from the study settings.\nDefault behavior starts the bootstrap control room unless --headless is passed.\nUse -i / --interactive to keep the CLI open after the run completes."
+    after_help = "Script mode examples:\n  fullmag examples/exchange_relax.py\n  fullmag -i examples/exchange_relax.py\n\nThe launcher gets the run horizon from the script itself.\nFor time evolution scripts define DEFAULT_UNTIL in the script.\nFor relaxation studies Fullmag derives the execution horizon from the study settings.\nDefault behavior starts the bootstrap control room unless --headless is passed.\nUse -i / --interactive to keep the session alive after the scripted stages finish so that more run/relax commands can be queued from the control room or API."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -131,6 +131,7 @@ struct SessionManifest {
     session_id: String,
     run_id: String,
     status: String,
+    interactive_session_requested: bool,
     script_path: String,
     problem_name: String,
     requested_backend: String,
@@ -156,14 +157,14 @@ struct RunManifest {
     artifact_dir: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct LiveStateManifest {
     status: String,
     updated_at_unix_ms: u128,
     latest_step: LiveStepView,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct LiveStepView {
     step: u64,
     time: f64,
@@ -499,6 +500,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             session_id: session_id.clone(),
             run_id: run_id.clone(),
             status: "running".to_string(),
+            interactive_session_requested: interactive_requested,
             script_path: script_path.display().to_string(),
             problem_name: final_problem_name.clone(),
             requested_backend: backend_target_name(final_requested_backend).to_string(),
@@ -710,6 +712,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         session_id: session_id.clone(),
                         run_id: run_id.clone(),
                         status: "failed".to_string(),
+                        interactive_session_requested: interactive_requested,
                         script_path: script_path.display().to_string(),
                         problem_name: final_problem_name.clone(),
                         requested_backend: backend_target_name(final_requested_backend).to_string(),
@@ -782,6 +785,31 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
         }
 
+        if let Some(final_update) = final_stage_step_update(
+            &execution_plan.backend_plan,
+            &stage_result.steps,
+            &stage_result.final_magnetization,
+            step_offset,
+            time_offset,
+            is_session_final_stage,
+        ) {
+            update_running_run_manifest(
+                &run_manifest_path,
+                &run_id,
+                &session_id,
+                &artifact_dir,
+                &final_update,
+            )?;
+            update_live_state(&live_state_path, &final_update)?;
+
+            let final_step_already_recorded = final_update.stats.step <= 1
+                || final_update.stats.step % field_every_n == 0
+                || final_update.finished;
+            if !final_step_already_recorded {
+                append_live_scalar_row(&live_scalars_path, &final_update)?;
+            }
+        }
+
         let offset_steps = offset_step_stats(&stage_result.steps, step_offset, time_offset);
         if let Some(last) = offset_steps.last() {
             step_offset = last.step;
@@ -812,27 +840,29 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let awaiting_at_unix_ms = unix_time_millis()?;
         update_session_manifest_status(
             &session_manifest_path,
-            session_id: &session_id,
-            run_id: &run_id,
-            status: "awaiting_command",
-            script_path: &script_path,
-            problem_name: &final_problem_name,
-            requested_backend: backend_target_name(final_requested_backend),
-            execution_mode: execution_mode_name(final_execution_mode),
-            precision: execution_precision_name(final_precision),
-            artifact_dir: &artifact_dir,
+            &session_id,
+            &run_id,
+            "awaiting_command",
+            interactive_requested,
+            &script_path,
+            &final_problem_name,
+            backend_target_name(final_requested_backend),
+            execution_mode_name(final_execution_mode),
+            execution_precision_name(final_precision),
+            &artifact_dir,
             started_at_unix_ms,
-            finished_at_unix_ms: awaiting_at_unix_ms,
-            plan_summary: &current_plan_summary,
+            awaiting_at_unix_ms,
+            &current_plan_summary,
         )?;
         update_run_manifest_status(
             &run_manifest_path,
-            run_id: &run_id,
-            session_id: &session_id,
-            status: "awaiting_command",
-            artifact_dir: &artifact_dir,
-            steps: &aggregated_steps,
+            &run_id,
+            &session_id,
+            "awaiting_command",
+            &artifact_dir,
+            &aggregated_steps,
         )?;
+        update_live_state_status(&live_state_path, "awaiting_command", Some(false))?;
         append_event(
             &events_path,
             &serde_json::json!({
@@ -864,7 +894,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }),
             )?;
 
-            let Some(mut stage) = match build_interactive_command_stage(&interactive_template_ir, &command) {
+            let Some(mut stage) = (match build_interactive_command_stage(&interactive_template_ir, &command) {
                 Ok(stage) => stage,
                 Err(error) => {
                     let _ = move_command_file(&command_path, &failed_commands_dir(&session_dir));
@@ -881,7 +911,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     )?;
                     continue;
                 }
-            } else {
+            }) else {
                 let _ = move_command_file(&command_path, &processed_commands_dir(&session_dir));
                 break;
             };
@@ -916,26 +946,27 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let running_at_unix_ms = unix_time_millis()?;
             update_session_manifest_status(
                 &session_manifest_path,
-                session_id: &session_id,
-                run_id: &run_id,
-                status: "running",
-                script_path: &script_path,
-                problem_name: &final_problem_name,
-                requested_backend: backend_target_name(final_requested_backend),
-                execution_mode: execution_mode_name(final_execution_mode),
-                precision: execution_precision_name(final_precision),
-                artifact_dir: &artifact_dir,
+                &session_id,
+                &run_id,
+                "running",
+                interactive_requested,
+                &script_path,
+                &final_problem_name,
+                backend_target_name(final_requested_backend),
+                execution_mode_name(final_execution_mode),
+                execution_precision_name(final_precision),
+                &artifact_dir,
                 started_at_unix_ms,
-                finished_at_unix_ms: running_at_unix_ms,
-                plan_summary: &current_plan_summary,
+                running_at_unix_ms,
+                &current_plan_summary,
             )?;
             update_run_manifest_status(
                 &run_manifest_path,
-                run_id: &run_id,
-                session_id: &session_id,
-                status: "running",
-                artifact_dir: &artifact_dir,
-                steps: &aggregated_steps,
+                &run_id,
+                &session_id,
+                "running",
+                &artifact_dir,
+                &aggregated_steps,
             )?;
             let stage_initial_update = offset_step_update(
                 &initial_step_update(&execution_plan.backend_plan),
@@ -994,19 +1025,21 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let _ = move_command_file(&command_path, &failed_commands_dir(&session_dir));
                     let _ = update_session_manifest_status(
                         &session_manifest_path,
-                        session_id: &session_id,
-                        run_id: &run_id,
-                        status: "awaiting_command",
-                        script_path: &script_path,
-                        problem_name: &final_problem_name,
-                        requested_backend: backend_target_name(final_requested_backend),
-                        execution_mode: execution_mode_name(final_execution_mode),
-                        precision: execution_precision_name(final_precision),
-                        artifact_dir: &artifact_dir,
+                        &session_id,
+                        &run_id,
+                        "awaiting_command",
+                        interactive_requested,
+                        &script_path,
+                        &final_problem_name,
+                        backend_target_name(final_requested_backend),
+                        execution_mode_name(final_execution_mode),
+                        execution_precision_name(final_precision),
+                        &artifact_dir,
                         started_at_unix_ms,
-                        finished_at_unix_ms: unix_time_millis().unwrap_or(awaiting_at_unix_ms),
-                        plan_summary: &current_plan_summary,
+                        unix_time_millis().unwrap_or(awaiting_at_unix_ms),
+                        &current_plan_summary,
                     );
+                    let _ = update_live_state_status(&live_state_path, "awaiting_command", Some(false));
                     append_event(
                         &events_path,
                         &serde_json::json!({
@@ -1060,6 +1093,30 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
             }
 
+            if let Some(final_update) = final_stage_step_update(
+                &execution_plan.backend_plan,
+                &stage_result.steps,
+                &stage_result.final_magnetization,
+                step_offset,
+                time_offset,
+                false,
+            ) {
+                update_running_run_manifest(
+                    &run_manifest_path,
+                    &run_id,
+                    &session_id,
+                    &artifact_dir,
+                    &final_update,
+                )?;
+                update_live_state(&live_state_path, &final_update)?;
+
+                let final_step_already_recorded = final_update.stats.step <= 1
+                    || final_update.stats.step % field_every_n == 0;
+                if !final_step_already_recorded {
+                    append_live_scalar_row(&live_scalars_path, &final_update)?;
+                }
+            }
+
             let offset_steps = offset_step_stats(&stage_result.steps, step_offset, time_offset);
             if let Some(last) = offset_steps.last() {
                 step_offset = last.step;
@@ -1074,27 +1131,29 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let ready_at_unix_ms = unix_time_millis()?;
             update_session_manifest_status(
                 &session_manifest_path,
-                session_id: &session_id,
-                run_id: &run_id,
-                status: "awaiting_command",
-                script_path: &script_path,
-                problem_name: &final_problem_name,
-                requested_backend: backend_target_name(final_requested_backend),
-                execution_mode: execution_mode_name(final_execution_mode),
-                precision: execution_precision_name(final_precision),
-                artifact_dir: &artifact_dir,
+                &session_id,
+                &run_id,
+                "awaiting_command",
+                interactive_requested,
+                &script_path,
+                &final_problem_name,
+                backend_target_name(final_requested_backend),
+                execution_mode_name(final_execution_mode),
+                execution_precision_name(final_precision),
+                &artifact_dir,
                 started_at_unix_ms,
-                finished_at_unix_ms: ready_at_unix_ms,
-                plan_summary: &current_plan_summary,
+                ready_at_unix_ms,
+                &current_plan_summary,
             )?;
             update_run_manifest_status(
                 &run_manifest_path,
-                run_id: &run_id,
-                session_id: &session_id,
-                status: "awaiting_command",
-                artifact_dir: &artifact_dir,
-                steps: &aggregated_steps,
+                &run_id,
+                &session_id,
+                "awaiting_command",
+                &artifact_dir,
+                &aggregated_steps,
             )?;
+            update_live_state_status(&live_state_path, "awaiting_command", Some(false))?;
             append_event(
                 &events_path,
                 &serde_json::json!({
@@ -1143,6 +1202,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             session_id: session_id.clone(),
             run_id: run_id.clone(),
             status: summary.status.clone(),
+            interactive_session_requested: interactive_requested,
             script_path: summary.script_path.clone(),
             problem_name: summary.problem_name.clone(),
             requested_backend: summary.backend.clone(),
@@ -1188,10 +1248,6 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&summary)?);
     } else {
         print_script_summary(&summary);
-    }
-
-    if interactive_requested {
-        pause_after_run(&summary.session_id, args.headless)?;
     }
 
     Ok(())
@@ -1438,11 +1494,10 @@ fn move_command_file(source: &Path, target_dir: &Path) -> Result<PathBuf> {
         .file_name()
         .ok_or_else(|| anyhow!("command path '{}' has no file name", source.display()))?;
     let target = target_dir.join(file_name);
-    fs::rename(source, &target).or_else(|_| {
+    if let Err(_error) = fs::rename(source, &target) {
         fs::copy(source, &target)?;
         fs::remove_file(source)?;
-        Ok(())
-    })?;
+    }
     Ok(target)
 }
 
@@ -1506,10 +1561,10 @@ fn build_interactive_command_stage(
 
 fn update_session_manifest_status(
     path: &Path,
-    *,
     session_id: &str,
     run_id: &str,
     status: &str,
+    interactive_session_requested: bool,
     script_path: &Path,
     problem_name: &str,
     requested_backend: &str,
@@ -1526,6 +1581,7 @@ fn update_session_manifest_status(
             session_id: session_id.to_string(),
             run_id: run_id.to_string(),
             status: status.to_string(),
+            interactive_session_requested,
             script_path: script_path.display().to_string(),
             problem_name: problem_name.to_string(),
             requested_backend: requested_backend.to_string(),
@@ -1541,7 +1597,6 @@ fn update_session_manifest_status(
 
 fn update_run_manifest_status(
     path: &Path,
-    *,
     run_id: &str,
     session_id: &str,
     status: &str,
@@ -1565,14 +1620,20 @@ fn update_run_manifest_status(
     )
 }
 
-fn mark_live_state_finished(path: &Path) -> Result<()> {
+fn update_live_state_status(path: &Path, status: &str, finished: Option<bool>) -> Result<()> {
     let Some(mut live_state) = read_optional_json_file::<LiveStateManifest>(path)? else {
         return Ok(());
     };
-    live_state.status = "completed".to_string();
+    live_state.status = status.to_string();
     live_state.updated_at_unix_ms = unix_time_millis()?;
-    live_state.latest_step.finished = true;
+    if let Some(finished) = finished {
+        live_state.latest_step.finished = finished;
+    }
     write_json_file(path, &live_state)
+}
+
+fn mark_live_state_finished(path: &Path) -> Result<()> {
+    update_live_state_status(path, "completed", Some(true))
 }
 
 fn run_python_helper(args: &[String]) -> Result<std::process::Output> {
@@ -1774,27 +1835,6 @@ fn which_opener() -> Result<String> {
     bail!("no browser opener found")
 }
 
-fn pause_after_run(session_id: &str, headless: bool) -> Result<()> {
-    if !io::stdin().is_terminal() {
-        return Ok(());
-    }
-
-    println!();
-    println!("interactive mode enabled");
-    if headless {
-        println!("- headless run finished; press Enter to exit the CLI");
-    } else {
-        println!("- control room session: {}", session_id);
-        println!("- press Enter to exit the CLI and leave background services running");
-    }
-
-    let mut buffer = String::new();
-    io::stdin()
-        .read_line(&mut buffer)
-        .context("failed while waiting for interactive exit")?;
-    Ok(())
-}
-
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1809,6 +1849,20 @@ fn unix_time_millis() -> Result<u128> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| anyhow!("system clock error: {}", error))?
         .as_millis())
+}
+
+fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse json from {}", path.display()))
+}
+
+fn read_optional_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_json_file(path).map(Some)
 }
 
 fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -1884,6 +1938,42 @@ fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runner::StepUpda
             finished: false,
         },
     }
+}
+
+fn final_stage_step_update(
+    backend_plan: &BackendPlanIR,
+    steps: &[fullmag_runner::StepStats],
+    final_magnetization: &[[f64; 3]],
+    step_offset: u64,
+    time_offset: f64,
+    finished: bool,
+) -> Option<fullmag_runner::StepUpdate> {
+    let stats = steps.last()?.clone();
+    let stats = offset_step_stats(std::slice::from_ref(&stats), step_offset, time_offset)
+        .into_iter()
+        .next()
+        .expect("single step should offset");
+
+    Some(match backend_plan {
+        BackendPlanIR::Fdm(fdm) => fullmag_runner::StepUpdate {
+            stats,
+            grid: [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
+            fem_mesh: None,
+            magnetization: Some(flatten_magnetization(final_magnetization)),
+            finished,
+        },
+        BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
+            stats,
+            grid: [0, 0, 0],
+            fem_mesh: Some(fullmag_runner::FemMeshPayload {
+                nodes: fem.mesh.nodes.clone(),
+                elements: fem.mesh.elements.clone(),
+                boundary_faces: fem.mesh.boundary_faces.clone(),
+            }),
+            magnetization: Some(flatten_magnetization(final_magnetization)),
+            finished,
+        },
+    })
 }
 
 fn flatten_magnetization(values: &[[f64; 3]]) -> Vec<f64> {

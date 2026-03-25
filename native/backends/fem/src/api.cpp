@@ -72,6 +72,7 @@ fullmag_fem_backend *fullmag_fem_backend_create(const fullmag_fem_plan_desc *pla
 
     std::string error;
     if (!fullmag::fem::context_from_plan(handle->context, *plan, error)) {
+        fullmag_fem_set_global_error(error);
         fullmag_fem_set_handle_error(handle, error);
         delete handle;
         return nullptr;

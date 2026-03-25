@@ -12,6 +12,7 @@ import type { FemMeshData } from "../preview/FemMeshView3D";
 import ScalarPlot from "../plots/ScalarPlot";
 import Sparkline from "../ui/Sparkline";
 import EmptyState from "../ui/EmptyState";
+import Button from "../ui/Button";
 import s from "./RunControlRoom.module.css";
 
 /* ── Types ─────────────────────────────────────────────────── */
@@ -91,6 +92,10 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
   const [sliceIndex, setSliceIndex] = useState(0);
   const [selectedQuantity, setSelectedQuantity] = useState("m");
   const [consoleCollapsed, setConsoleCollapsed] = useState(false);
+  const [runUntilInput, setRunUntilInput] = useState("1e-12");
+  const [relaxMaxStepsInput, setRelaxMaxStepsInput] = useState("5000");
+  const [commandBusy, setCommandBusy] = useState(false);
+  const [commandMessage, setCommandMessage] = useState<string | null>(null);
 
   const session = state?.session;
   const run = state?.run;
@@ -130,6 +135,33 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
     return null;
   }, [activeCells, artifactLayout, totalCells]);
   const activeMaskPresent = artifactLayout?.active_mask_present === true;
+  const interactiveEnabled = session?.interactive_session_requested === true;
+  const awaitingCommand = session?.status === "awaiting_command";
+  const interactiveControlsEnabled = interactiveEnabled && (awaitingCommand || session?.status === "running");
+
+  const enqueueCommand = useCallback(async (payload: Record<string, unknown>) => {
+    setCommandBusy(true);
+    setCommandMessage(null);
+    try {
+      const response = await fetch(`http://127.0.0.1:8080/v1/sessions/${sessionId}/commands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detail = data?.message ?? data?.error ?? `HTTP ${response.status}`;
+        throw new Error(detail);
+      }
+      setCommandMessage(`Queued ${String(payload.kind)}`);
+    } catch (commandError) {
+      setCommandMessage(
+        commandError instanceof Error ? commandError.message : "Failed to queue command",
+      );
+    } finally {
+      setCommandBusy(false);
+    }
+  }, [sessionId]);
 
   /* Keyboard shortcuts: 1=3D, 2=2D, 3=Mesh */
   useEffect(() => {
@@ -509,6 +541,76 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
             <Sparkline data={dtSpark} width={140} height={20} color="hsl(210, 60%, 55%)" label="Δt" />
           )}
         </Section>
+
+        {interactiveControlsEnabled && (
+          <Section title="Interactive" badge={awaitingCommand ? "awaiting" : "running"}>
+            <div className={s.interactiveBlock}>
+              <label className={s.interactiveLabel}>
+                Run until [s]
+                <input
+                  className={s.interactiveInput}
+                  value={runUntilInput}
+                  onChange={(e) => setRunUntilInput(e.target.value)}
+                  disabled={commandBusy || !awaitingCommand}
+                />
+              </label>
+              <Button
+                size="sm"
+                tone="accent"
+                variant="solid"
+                disabled={commandBusy || !awaitingCommand}
+                onClick={() =>
+                  enqueueCommand({
+                    kind: "run",
+                    until_seconds: Number(runUntilInput),
+                  })
+                }
+              >
+                Run
+              </Button>
+            </div>
+            <div className={s.interactiveBlock}>
+              <label className={s.interactiveLabel}>
+                Relax steps
+                <input
+                  className={s.interactiveInput}
+                  value={relaxMaxStepsInput}
+                  onChange={(e) => setRelaxMaxStepsInput(e.target.value)}
+                  disabled={commandBusy || !awaitingCommand}
+                />
+              </label>
+              <Button
+                size="sm"
+                tone="success"
+                variant="solid"
+                disabled={commandBusy || !awaitingCommand}
+                onClick={() =>
+                  enqueueCommand({
+                    kind: "relax",
+                    max_steps: Number(relaxMaxStepsInput),
+                    torque_tolerance: 1e-6,
+                  })
+                }
+              >
+                Relax
+              </Button>
+            </div>
+            <div className={s.interactiveActions}>
+              <Button
+                size="sm"
+                tone="warn"
+                variant="outline"
+                disabled={commandBusy}
+                onClick={() => enqueueCommand({ kind: "close" })}
+              >
+                Close Session
+              </Button>
+            </div>
+            {commandMessage && (
+              <div className={s.interactiveMessage}>{commandMessage}</div>
+            )}
+          </Section>
+        )}
 
         {/* Material */}
         {material && (

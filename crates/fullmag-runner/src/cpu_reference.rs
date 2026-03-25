@@ -811,4 +811,144 @@ mod tests {
             "relaxation should stop early, got final_time={final_time}"
         );
     }
+
+    #[test]
+    fn bb_relaxation_stops_on_uniform_state() {
+        let plan = FdmPlanIR {
+            relaxation: Some(RelaxationControlIR {
+                algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+                torque_tolerance: 1e-6,
+                energy_tolerance: None,
+                max_steps: 1000,
+            }),
+            ..make_test_plan()
+        };
+
+        let executed =
+            execute_reference_fdm(&plan, 1e-9, &[]).expect("BB relaxation should succeed");
+        assert_eq!(executed.result.status, RunStatus::Completed);
+        assert!(!executed.result.steps.is_empty());
+    }
+
+    #[test]
+    fn ncg_relaxation_stops_on_uniform_state() {
+        let plan = FdmPlanIR {
+            relaxation: Some(RelaxationControlIR {
+                algorithm: RelaxationAlgorithmIR::NonlinearCg,
+                torque_tolerance: 1e-6,
+                energy_tolerance: None,
+                max_steps: 1000,
+            }),
+            ..make_test_plan()
+        };
+
+        let executed =
+            execute_reference_fdm(&plan, 1e-9, &[]).expect("NCG relaxation should succeed");
+        assert_eq!(executed.result.status, RunStatus::Completed);
+        assert!(!executed.result.steps.is_empty());
+    }
+
+    #[test]
+    fn bb_relaxation_decreases_energy_on_random_initial() {
+        let random_m0 = fullmag_plan::generate_random_unit_vectors(42, 16);
+        let plan = FdmPlanIR {
+            initial_magnetization: random_m0,
+            relaxation: Some(RelaxationControlIR {
+                algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+                torque_tolerance: 1e-6,
+                energy_tolerance: None,
+                max_steps: 5000,
+            }),
+            ..make_test_plan()
+        };
+
+        let executed =
+            execute_reference_fdm(&plan, 1e-9, &[]).expect("BB relaxation should succeed");
+        assert!(executed.result.steps.len() >= 2, "should have initial + final stats");
+        let first_energy = executed.result.steps.first().unwrap().e_ex;
+        let last_energy = executed.result.steps.last().unwrap().e_ex;
+        assert!(
+            last_energy <= first_energy + 1e-25,
+            "BB should decrease exchange energy: {} -> {}",
+            first_energy,
+            last_energy
+        );
+    }
+
+    #[test]
+    fn ncg_relaxation_decreases_energy_on_random_initial() {
+        let random_m0 = fullmag_plan::generate_random_unit_vectors(42, 16);
+        let plan = FdmPlanIR {
+            initial_magnetization: random_m0,
+            relaxation: Some(RelaxationControlIR {
+                algorithm: RelaxationAlgorithmIR::NonlinearCg,
+                torque_tolerance: 1e-6,
+                energy_tolerance: None,
+                max_steps: 5000,
+            }),
+            ..make_test_plan()
+        };
+
+        let executed =
+            execute_reference_fdm(&plan, 1e-9, &[]).expect("NCG relaxation should succeed");
+        assert!(executed.result.steps.len() >= 2, "should have initial + final stats");
+        let first_energy = executed.result.steps.first().unwrap().e_ex;
+        let last_energy = executed.result.steps.last().unwrap().e_ex;
+        assert!(
+            last_energy <= first_energy + 1e-25,
+            "NCG should decrease exchange energy: {} -> {}",
+            first_energy,
+            last_energy
+        );
+    }
+
+    #[test]
+    fn all_algorithms_converge_to_similar_equilibrium() {
+        let random_m0 = fullmag_plan::generate_random_unit_vectors(42, 16);
+        let base = FdmPlanIR {
+            initial_magnetization: random_m0,
+            fixed_timestep: Some(5e-14), // larger dt for faster LLG convergence
+            ..make_test_plan()
+        };
+
+        let mut energies = Vec::new();
+        for algorithm in [
+            RelaxationAlgorithmIR::LlgOverdamped,
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+            RelaxationAlgorithmIR::NonlinearCg,
+        ] {
+            let plan = FdmPlanIR {
+                relaxation: Some(RelaxationControlIR {
+                    algorithm,
+                    torque_tolerance: 1e-4,
+                    energy_tolerance: None,
+                    max_steps: 2000,
+                }),
+                ..base.clone()
+            };
+            let executed = execute_reference_fdm(&plan, 1e-9, &[])
+                .expect(&format!("{:?} relaxation should succeed", algorithm));
+            let final_energy = executed.result.steps.last().unwrap().e_total;
+            energies.push((algorithm, final_energy));
+        }
+
+        // All algorithms should converge to similar energy (within 20% relative or 1e-25 absolute)
+        let (_, ref_energy) = energies[0];
+        for (algorithm, energy) in &energies[1..] {
+            let delta = (energy - ref_energy).abs();
+            let relative = if ref_energy.abs() > 1e-25 {
+                delta / ref_energy.abs()
+            } else {
+                delta
+            };
+            assert!(
+                relative < 0.2 || delta < 1e-25,
+                "{:?} final energy {} differs from LLG reference {} by {:.1}%",
+                algorithm,
+                energy,
+                ref_energy,
+                relative * 100.0
+            );
+        }
+    }
 }

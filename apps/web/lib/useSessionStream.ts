@@ -6,6 +6,7 @@ export interface SessionManifest {
   session_id: string;
   run_id: string;
   status: string;
+  interactive_session_requested: boolean;
   script_path: string;
   problem_name: string;
   requested_backend: string;

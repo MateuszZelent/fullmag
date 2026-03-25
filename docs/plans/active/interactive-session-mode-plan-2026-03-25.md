@@ -31,16 +31,24 @@ Implemented today:
   - `fm.relax()`
   - `fm.run(5e-10)`
 - the Rust launcher executes those stages in one session and carries magnetization forward between stages.
-- `-i` exists, but it is only a **hold-open after run completion**.
-- `fm.interactive(True)` now exists as the script-owned counterpart of `-i`, but today it maps only to the same hold-open behavior.
+- `-i` and `fm.interactive(True)` now keep the session alive after scripted stages and move it to `awaiting_command`.
+- the CLI exposes a real session command loop backed by file-queued commands under `session_dir/commands/`.
+- the API exposes `POST /v1/sessions/{id}/commands` for:
+  - `run`
+  - `relax`
+  - `close`
+- the control room has bootstrap interactive controls for:
+  - `Run`
+  - `Relax`
+  - `Close Session`
+- live state now keeps the final step, time, and magnetization of the last completed segment before entering `awaiting_command`.
 
 Not implemented yet:
 
-- interactive command injection into a live session,
-- `break` / `continue` / `pause` controls,
-- solver-side command queue,
-- web UI buttons for command submission,
-- mutable runtime edits such as changing field, outputs, or material parameters after session start.
+- `break` / `continue` / `pause` controls during an active solver segment,
+- mutable runtime edits such as changing field, outputs, or material parameters after session start,
+- command-history UI / console semantics beyond simple enqueue buttons,
+- canonical command-sequence IR shared by flat API, Python object API, and future notebook/console flows.
 
 ## Problem statement
 
@@ -117,6 +125,10 @@ Still needed:
 
 ### Slice B: interactive session contract
 
+Status:
+
+- bootstrap done for `awaiting_command` + queued `run/relax/close`
+
 Need new session-level control primitives:
 
 - `pending`
@@ -137,11 +149,17 @@ Need command payloads with strict validation and explicit compatibility checks a
 
 ### Slice C: runner interruption and continuation
 
-Need runner support for:
+Status:
+
+- continuation between scripted stages works
+- continuation between queued interactive commands works
+- session state, time, and cumulative step counter stay in one session/run
+
+Still needed:
 
 - cooperative stop/break points,
-- continuation from the current magnetization/state vector,
-- segment-wise artifact writes without resetting the session.
+- segment cancellation without killing the whole process,
+- resumable in-flight solver segments for FDM first, then FEM.
 
 For FDM and FEM this means:
 
@@ -151,10 +169,12 @@ For FDM and FEM this means:
 
 ### Slice D: UI controls
 
+Status:
+
+- bootstrap `Run / Relax / Close Session` controls are wired to the session command API
+
 Need control-room components for:
 
-- `Run`
-- `Relax`
 - `Break`
 - `Pause`
 - `Resume`
@@ -170,6 +190,11 @@ Need the UI to show:
 
 ### Slice E: Python authoring surface
 
+Status:
+
+- `fm.relax()` + `fm.run(...)` can now coexist as staged commands
+- `fm.interactive(True)` correctly means “keep this session open for more commands”
+
 Need public Python commands that can seed or append to the same execution model:
 
 - `fm.relax()`
@@ -181,20 +206,19 @@ Need script-owned interactive declaration:
 
 - `fm.interactive(True)`
 
-Today this only maps to hold-open. In the target model it should mean:
+Next step for this surface:
 
-- keep session open after initial script command sequence,
-- enter `awaiting_command`,
-- accept further commands from UI/console.
+- expose field/material mutation commands in the same staged model,
+- add a Python-side interactive console contract that maps to the same session queue instead of bypassing the launcher.
 
 ## Recommended rollout
 
-1. keep the new multi-stage launcher and stabilize it,
-2. add session command API and event schema,
-3. implement `pause/break/resume` for FDM first,
-4. add UI buttons and command console,
-5. move `-i` / `fm.interactive(True)` from hold-open to real interactive session mode,
-6. only then extend the same semantics to FEM.
+1. keep the new multi-stage launcher and interactive queue stable,
+2. add `pause/break/resume` for FDM first,
+3. add command console/history UI,
+4. add mutable field/material/session commands,
+5. move from file-backed queue to a more canonical command-sequence/session-state contract if needed,
+6. only then extend the same semantics deeply to FEM.
 
 ## Risks
 
@@ -204,4 +228,4 @@ Today this only maps to hold-open. In the target model it should mean:
 
 ## Immediate next step
 
-Implement the **session command API + awaiting-command state** for FDM first, reusing the new multi-stage session spine rather than inventing a parallel control path.
+Implement **cooperative `pause/break/resume`** for FDM first, reusing the current `awaiting_command` session spine instead of inventing a parallel control path.
