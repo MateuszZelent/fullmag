@@ -3,8 +3,9 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SESSION_ID="${1:-}"
-API_URL="${FULLMAG_API_URL:-http://127.0.0.1:8080}"
-WEB_HOST="${FULLMAG_WEB_HOST:-127.0.0.1}"
+API_URL="${FULLMAG_API_URL:-http://localhost:8080}"
+WEB_BIND_HOST="${FULLMAG_WEB_BIND_HOST:-0.0.0.0}"
+WEB_PUBLIC_HOST="${FULLMAG_WEB_HOST:-localhost}"
 CONTROL_ROOM_URL_FILE=".fullmag/control-room-url.txt"
 
 cd "$REPO_ROOT"
@@ -74,7 +75,7 @@ PY
 
 discover_existing_web_url() {
   for port in 3000 3001 3002 3003 3004 3005 3010; do
-    local candidate="http://${WEB_HOST}:${port}"
+    local candidate="http://${WEB_PUBLIC_HOST}:${port}"
     if curl -fsS "${candidate}" >/dev/null 2>&1; then
       printf '%s\n' "${candidate}"
       return 0
@@ -95,14 +96,14 @@ elif [[ -f "${CONTROL_ROOM_URL_FILE}" ]]; then
       STORED_PORT="${WEB_URL_BASE##*:}"
       if port_is_bindable "${STORED_PORT}"; then
         WEB_PORT="${STORED_PORT}"
-        WEB_URL_BASE="http://${WEB_HOST}:${WEB_PORT}"
+        WEB_URL_BASE="http://${WEB_PUBLIC_HOST}:${WEB_PORT}"
       else
         WEB_PORT="$(pick_web_port)"
-        WEB_URL_BASE="http://${WEB_HOST}:${WEB_PORT}"
+        WEB_URL_BASE="http://${WEB_PUBLIC_HOST}:${WEB_PORT}"
       fi
     else
       WEB_PORT="$(pick_web_port)"
-      WEB_URL_BASE="http://${WEB_HOST}:${WEB_PORT}"
+      WEB_URL_BASE="http://${WEB_PUBLIC_HOST}:${WEB_PORT}"
     fi
   fi
 elif EXISTING_WEB_URL="$(discover_existing_web_url)"; then
@@ -110,7 +111,7 @@ elif EXISTING_WEB_URL="$(discover_existing_web_url)"; then
   WEB_PORT="${WEB_URL_BASE##*:}"
 else
   WEB_PORT="$(pick_web_port)"
-  WEB_URL_BASE="http://${WEB_HOST}:${WEB_PORT}"
+  WEB_URL_BASE="http://${WEB_PUBLIC_HOST}:${WEB_PORT}"
 fi
 
 if curl -fsS "${API_URL}/healthz" >/dev/null 2>&1; then
@@ -173,4 +174,4 @@ fi
 
 printf '%s\n' "${WEB_URL_BASE}" > "${CONTROL_ROOM_URL_FILE}"
 
-"${PNPM_CMD[@]}" --dir apps/web exec next dev --hostname "${WEB_HOST}" --port "${WEB_PORT}"
+"${PNPM_CMD[@]}" --dir apps/web exec next dev --hostname "${WEB_BIND_HOST}" --port "${WEB_PORT}"

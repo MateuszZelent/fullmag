@@ -1,11 +1,13 @@
 /* ============================================================
    Fullmag Design System
    ============================================================
-   Tokens → Resets → Layout → Components → Utilities
+   Tailwind v4 → Tokens → Resets → Layout → Components
    Theme: data-theme="dark" (default) | data-theme="light"
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 /* ----- 1. Design Tokens ----- */
 
@@ -69,6 +71,46 @@
 
   /* Breakpoints (reference only, used in media queries) */
   /* --bp-sm: 640px; --bp-md: 768px; --bp-lg: 1024px; --bp-xl: 1280px; */
+
+  /* ─── IDE / Control-room tokens ─── */
+  --ide-bg:              #060d18;
+  --ide-surface:         hsla(220, 22%, 7%, 0.95);
+  --ide-surface-raised:  hsla(220, 20%, 10%, 0.8);
+  --ide-surface-input:   hsla(220, 20%, 14%, 0.8);
+  --ide-surface-hover:   hsla(220, 20%, 14%, 0.6);
+  --ide-border:          hsla(220, 20%, 20%, 0.5);
+  --ide-border-subtle:   hsla(220, 20%, 18%, 0.4);
+  --ide-border-strong:   hsla(220, 20%, 25%, 0.5);
+
+  --ide-text-1:          #edf3fb;
+  --ide-text-2:          #a7bad3;
+  --ide-text-3:          #6b7f9f;
+
+  --ide-accent:          hsl(210, 70%, 55%);
+  --ide-accent-text:     hsl(210, 80%, 72%);
+  --ide-accent-bg:       hsl(210, 60%, 25%);
+  --ide-accent-hover:    hsl(210, 70%, 62%);
+
+  /* Status */
+  --status-running:      #35b779;
+  --status-running-glow: rgba(53, 183, 121, 0.5);
+  --status-completed:    hsl(210, 70%, 60%);
+  --status-failed:       #cf6256;
+  --status-idle:         #64748b;
+  --status-warn:         #fde725;
+
+  /* Energy term accents */
+  --energy-exchange:     #4cc9f0;
+  --energy-demag:        #f77f00;
+  --energy-external:     #35b779;
+  --energy-total:        hsl(210, 70%, 65%);
+
+  /* IDE font-size scale (raised minimums for readability) */
+  --ide-text-xs:    0.72rem;  /* 11.5px — minimum for labels */
+  --ide-text-sm:    0.78rem;  /* 12.5px */
+  --ide-text-base:  0.84rem;  /* 13.4px — minimum for values */
+  --ide-text-md:    0.90rem;  /* 14.4px */
+  --ide-text-lg:    1rem;     /* 16px */
 
   /* ─── Amumax-ported tokens ─── */
   --surface-1: #0f1728;

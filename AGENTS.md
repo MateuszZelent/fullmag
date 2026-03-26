@@ -83,7 +83,7 @@ If the note does not exist or is incomplete, the task is not ready for implement
 - `crates/fullmag-cli` — CLI for IR validation, planning, and execution.
 - `crates/fullmag-api` — control-plane HTTP API.
 - `crates/fullmag-py-core` — private PyO3 bridge for Python/Rust integration.
-- `apps/web` — Next.js control room for scripts, jobs, and artifacts.
+- `apps/web` — Next.js control room for scripts, jobs, and artifacts. Uses **Tailwind CSS v4** for styling and **shadcn/ui** for UI primitives (tabs, resize panels, badges, etc.).
 - `native/` — native backends and C ABI.
 - `docs/specs` — canonical architecture and IR specs.
 - `docs/plans` — active and archived implementation plans.

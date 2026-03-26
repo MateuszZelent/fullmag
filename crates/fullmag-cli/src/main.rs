@@ -11,6 +11,8 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Parser)]
@@ -126,7 +128,7 @@ struct ScriptRunSummary {
     session_dir: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct SessionManifest {
     session_id: String,
     run_id: String,
@@ -143,7 +145,7 @@ struct SessionManifest {
     plan_summary: serde_json::Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct RunManifest {
     run_id: String,
     session_id: String,
@@ -157,14 +159,14 @@ struct RunManifest {
     artifact_dir: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LiveStateManifest {
     status: String,
     updated_at_unix_ms: u128,
     latest_step: LiveStepView,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LiveStepView {
     step: u64,
     time: f64,
@@ -216,6 +218,149 @@ struct SessionCommand {
     energy_tolerance: Option<f64>,
 }
 
+enum InteractiveCommandSource {
+    CurrentLive,
+    SessionFile(PathBuf),
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CurrentLiveScalarRow {
+    step: u64,
+    time: f64,
+    solver_dt: f64,
+    e_ex: f64,
+    e_demag: f64,
+    e_ext: f64,
+    e_total: f64,
+    max_dm_dt: f64,
+    max_h_eff: f64,
+    max_h_demag: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct CurrentLivePublishPayload {
+    session: Option<SessionManifest>,
+    session_status: Option<String>,
+    metadata: Option<serde_json::Value>,
+    run: Option<RunManifest>,
+    live_state: Option<LiveStateManifest>,
+    latest_scalar_row: Option<CurrentLiveScalarRow>,
+}
+
+#[derive(Debug, Serialize)]
+struct CurrentLivePublishRequest<'a> {
+    session_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<&'a SessionManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_status: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run: Option<&'a RunManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    live_state: Option<&'a LiveStateManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_scalar_row: Option<&'a CurrentLiveScalarRow>,
+}
+
+#[derive(Clone)]
+struct CurrentLivePublisher {
+    pending: Arc<AtomicBool>,
+    payload: Arc<Mutex<CurrentLivePublishPayload>>,
+    wake_tx: mpsc::SyncSender<()>,
+}
+
+const CURRENT_LIVE_MIN_PUBLISH_INTERVAL: Duration = Duration::from_millis(50);
+
+impl CurrentLivePublisher {
+    fn spawn(session_id: &str) -> Self {
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+        let pending = Arc::new(AtomicBool::new(false));
+        let payload = Arc::new(Mutex::new(CurrentLivePublishPayload::default()));
+        let worker_pending = Arc::clone(&pending);
+        let worker_payload = Arc::clone(&payload);
+        let worker_session_id = session_id.to_string();
+        let thread_name = format!("fullmag-live-publisher-{session_id}");
+        std::thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                current_live_publisher_loop(
+                    worker_session_id,
+                    worker_pending,
+                    worker_payload,
+                    wake_rx,
+                )
+            })
+            .expect("current live publisher thread should spawn");
+
+        Self {
+            pending,
+            payload,
+            wake_tx,
+        }
+    }
+
+    fn request_publish(&self) {
+        self.pending.store(true, Ordering::Release);
+        match self.wake_tx.try_send(()) {
+            Ok(()) | Err(mpsc::TrySendError::Full(())) => {}
+            Err(mpsc::TrySendError::Disconnected(())) => {}
+        }
+    }
+
+    fn publish(&self, payload: CurrentLivePublishPayload) {
+        if let Ok(mut slot) = self.payload.lock() {
+            if payload.session.is_some() {
+                slot.session = payload.session;
+            }
+            if payload.session_status.is_some() {
+                slot.session_status = payload.session_status;
+            }
+            if payload.metadata.is_some() {
+                slot.metadata = payload.metadata;
+            }
+            if payload.run.is_some() {
+                slot.run = payload.run;
+            }
+            if payload.live_state.is_some() {
+                slot.live_state = payload.live_state;
+            }
+            if payload.latest_scalar_row.is_some() {
+                slot.latest_scalar_row = payload.latest_scalar_row;
+            }
+        }
+        self.request_publish();
+    }
+}
+
+fn current_live_publisher_loop(
+    session_id: String,
+    pending: Arc<AtomicBool>,
+    payload: Arc<Mutex<CurrentLivePublishPayload>>,
+    wake_rx: mpsc::Receiver<()>,
+) {
+    let mut last_publish_at: Option<Instant> = None;
+    while wake_rx.recv().is_ok() {
+        while pending.swap(false, Ordering::AcqRel) {
+            if let Some(last_publish_at) = last_publish_at {
+                let elapsed = last_publish_at.elapsed();
+                if elapsed < CURRENT_LIVE_MIN_PUBLISH_INTERVAL {
+                    std::thread::sleep(CURRENT_LIVE_MIN_PUBLISH_INTERVAL - elapsed);
+                }
+            }
+            let snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
+            let _ = publish_current_live_state(&session_id, &snapshot);
+            last_publish_at = Some(Instant::now());
+        }
+    }
+
+    if pending.swap(false, Ordering::AcqRel) {
+        let snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
+        let _ = publish_current_live_state(&session_id, &snapshot);
+    }
+}
+
 fn bootstrap_live_state(status: &str) -> LiveStateManifest {
     LiveStateManifest {
         status: status.to_string(),
@@ -237,6 +382,21 @@ fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             magnetization: None,
             finished: false,
         },
+    }
+}
+
+fn scalar_row_from_update(update: &fullmag_runner::StepUpdate) -> CurrentLiveScalarRow {
+    CurrentLiveScalarRow {
+        step: update.stats.step,
+        time: update.stats.time,
+        solver_dt: update.stats.dt,
+        e_ex: update.stats.e_ex,
+        e_demag: update.stats.e_demag,
+        e_ext: update.stats.e_ext,
+        e_total: update.stats.e_total,
+        max_dm_dt: update.stats.max_dm_dt,
+        max_h_eff: update.stats.max_h_eff,
+        max_h_demag: update.stats.max_h_demag,
     }
 }
 
@@ -424,6 +584,158 @@ fn plan_summary_json(plan_summary: &ExecutionPlanSummary) -> serde_json::Value {
     serde_json::to_value(plan_summary).unwrap_or_else(|_| serde_json::json!({}))
 }
 
+fn current_artifact_layout(plan: &ExecutionPlanIR) -> serde_json::Value {
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            let total_cells = fdm.grid.cells[0] as usize
+                * fdm.grid.cells[1] as usize
+                * fdm.grid.cells[2] as usize;
+            let active_cell_count = fdm
+                .active_mask
+                .as_ref()
+                .map(|mask| mask.iter().filter(|is_active| **is_active).count())
+                .unwrap_or(total_cells);
+            serde_json::json!({
+                "backend": "fdm",
+                "grid_cells": fdm.grid.cells,
+                "cell_size": fdm.cell_size,
+                "total_cell_count": total_cells,
+                "active_mask_present": fdm.active_mask.is_some(),
+                "active_cell_count": active_cell_count,
+                "inactive_cell_count": total_cells.saturating_sub(active_cell_count),
+                "active_fraction": if total_cells > 0 {
+                    active_cell_count as f64 / total_cells as f64
+                } else {
+                    0.0
+                },
+            })
+        }
+        BackendPlanIR::FdmMultilayer(multilayer) => serde_json::json!({
+            "backend": "fdm_multilayer",
+            "mode": multilayer.mode,
+            "common_cells": multilayer.common_cells,
+            "layer_count": multilayer.layers.len(),
+            "layers": multilayer.layers.iter().scan(0usize, |offset, layer| {
+                let total_cells = layer.native_grid[0] as usize
+                    * layer.native_grid[1] as usize
+                    * layer.native_grid[2] as usize;
+                let active_cell_count = layer
+                    .native_active_mask
+                    .as_ref()
+                    .map(|mask| mask.iter().filter(|is_active| **is_active).count())
+                    .unwrap_or(total_cells);
+                let current_offset = *offset;
+                *offset += total_cells;
+                Some(serde_json::json!({
+                    "magnet_name": layer.magnet_name,
+                    "native_grid": layer.native_grid,
+                    "native_cell_size": layer.native_cell_size,
+                    "native_origin": layer.native_origin,
+                    "convolution_grid": layer.convolution_grid,
+                    "convolution_cell_size": layer.convolution_cell_size,
+                    "transfer_kind": layer.transfer_kind,
+                    "total_cell_count": total_cells,
+                    "active_mask_present": layer.native_active_mask.is_some(),
+                    "active_cell_count": active_cell_count,
+                    "inactive_cell_count": total_cells.saturating_sub(active_cell_count),
+                    "value_offset": current_offset,
+                    "value_count": total_cells,
+                }))
+            }).collect::<Vec<_>>(),
+            "planner_summary": multilayer.planner_summary,
+        }),
+        BackendPlanIR::Fem(fem) => serde_json::json!({
+            "backend": "fem",
+            "mesh_name": fem.mesh.mesh_name,
+            "mesh_source": fem.mesh_source,
+            "fe_order": fem.fe_order,
+            "hmax": fem.hmax,
+            "n_nodes": fem.mesh.nodes.len(),
+            "n_elements": fem.mesh.elements.len(),
+        }),
+    }
+}
+
+fn current_live_metadata(
+    problem: &ProblemIR,
+    plan: &ExecutionPlanIR,
+    status: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "problem_name": &problem.problem_meta.name,
+        "ir_version": &problem.ir_version,
+        "source_hash": &problem.problem_meta.source_hash,
+        "problem_meta": &problem.problem_meta,
+        "execution_plan": plan,
+        "artifact_layout": current_artifact_layout(plan),
+        "engine_version": env!("CARGO_PKG_VERSION"),
+        "status": status,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_session_manifest(
+    session_id: &str,
+    run_id: &str,
+    status: &str,
+    interactive_session_requested: bool,
+    script_path: &Path,
+    problem_name: &str,
+    requested_backend: &str,
+    execution_mode: &str,
+    precision: &str,
+    artifact_dir: &Path,
+    started_at_unix_ms: u128,
+    finished_at_unix_ms: u128,
+    plan_summary: serde_json::Value,
+) -> SessionManifest {
+    SessionManifest {
+        session_id: session_id.to_string(),
+        run_id: run_id.to_string(),
+        status: status.to_string(),
+        interactive_session_requested,
+        script_path: script_path.display().to_string(),
+        problem_name: problem_name.to_string(),
+        requested_backend: requested_backend.to_string(),
+        execution_mode: execution_mode.to_string(),
+        precision: precision.to_string(),
+        artifact_dir: artifact_dir.display().to_string(),
+        started_at_unix_ms,
+        finished_at_unix_ms,
+        plan_summary,
+    }
+}
+
+fn build_run_manifest(
+    run_id: &str,
+    session_id: &str,
+    status: &str,
+    artifact_dir: &Path,
+) -> RunManifest {
+    run_manifest_from_steps(run_id, session_id, status, artifact_dir, &[])
+}
+
+fn run_manifest_from_steps(
+    run_id: &str,
+    session_id: &str,
+    status: &str,
+    artifact_dir: &Path,
+    steps: &[fullmag_runner::StepStats],
+) -> RunManifest {
+    RunManifest {
+        run_id: run_id.to_string(),
+        session_id: session_id.to_string(),
+        status: status.to_string(),
+        total_steps: steps.last().map(|step| step.step as usize).unwrap_or(0),
+        final_time: steps.last().map(|step| step.time),
+        final_e_ex: steps.last().map(|step| step.e_ex),
+        final_e_demag: steps.last().map(|step| step.e_demag),
+        final_e_ext: steps.last().map(|step| step.e_ext),
+        final_e_total: steps.last().map(|step| step.e_total),
+        artifact_dir: artifact_dir.display().to_string(),
+    }
+}
+
 fn main() -> Result<()> {
     let raw_args = std::env::args_os().collect::<Vec<_>>();
     if is_script_mode(&raw_args) {
@@ -593,6 +905,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let live_state_path = session_dir.join("live_state.json");
     let live_scalars_path = session_dir.join("live_scalars.csv");
     let events_path = session_dir.join("events.ndjson");
+    let current_live_publisher = CurrentLivePublisher::spawn(&session_id);
 
     append_event(
         &events_path,
@@ -624,45 +937,31 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             "phase": "syntax_checked",
         }),
     )?;
-    write_json_file(
-        &session_manifest_path,
-        &SessionManifest {
-            session_id: session_id.clone(),
-            run_id: run_id.clone(),
-            status: "bootstrapping".to_string(),
-            interactive_session_requested: args.interactive,
-            script_path: script_path.display().to_string(),
-            problem_name: script_path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .unwrap_or("fullmag_script")
-                .to_string(),
-            requested_backend: requested_backend_name.clone(),
-            execution_mode: requested_mode_name.clone(),
-            precision: requested_precision_name.clone(),
-            artifact_dir: artifact_dir.display().to_string(),
-            started_at_unix_ms,
-            finished_at_unix_ms: started_at_unix_ms,
-            plan_summary: serde_json::json!({ "status": "bootstrapping" }),
-        },
-    )?;
-    write_json_file(
-        &run_manifest_path,
-        &RunManifest {
-            run_id: run_id.clone(),
-            session_id: session_id.clone(),
-            status: "bootstrapping".to_string(),
-            total_steps: 0,
-            final_time: None,
-            final_e_ex: None,
-            final_e_demag: None,
-            final_e_ext: None,
-            final_e_total: None,
-            artifact_dir: artifact_dir.display().to_string(),
-        },
-    )?;
+    let bootstrapping_session_manifest = build_session_manifest(
+        &session_id,
+        &run_id,
+        "bootstrapping",
+        args.interactive,
+        &script_path,
+        script_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("fullmag_script"),
+        &requested_backend_name,
+        &requested_mode_name,
+        &requested_precision_name,
+        &artifact_dir,
+        started_at_unix_ms,
+        started_at_unix_ms,
+        serde_json::json!({ "status": "bootstrapping" }),
+    );
+    let bootstrapping_run_manifest =
+        build_run_manifest(&run_id, &session_id, "bootstrapping", &artifact_dir);
+    write_json_file(&session_manifest_path, &bootstrapping_session_manifest)?;
+    write_json_file(&run_manifest_path, &bootstrapping_run_manifest)?;
     initialise_live_scalars(&live_scalars_path)?;
-    write_json_file(&live_state_path, &bootstrap_live_state("bootstrapping"))?;
+    let bootstrap_live_state_manifest = bootstrap_live_state("bootstrapping");
+    write_json_file(&live_state_path, &bootstrap_live_state_manifest)?;
 
     announce_session_start(
         &session_id,
@@ -699,7 +998,17 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         )?;
     }
 
+    current_live_publisher.publish(CurrentLivePublishPayload {
+        session: Some(bootstrapping_session_manifest),
+        session_status: Some("bootstrapping".to_string()),
+        metadata: None,
+        run: Some(bootstrapping_run_manifest),
+        live_state: Some(bootstrap_live_state_manifest),
+        latest_scalar_row: None,
+    });
+
     update_live_state_status(&live_state_path, "materializing_script", Some(false))?;
+    publish_current_live_state_best_effort(&session_id);
     append_event(
         &events_path,
         &serde_json::json!({
@@ -749,6 +1058,36 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &artifact_dir,
                 &[],
             )?;
+            current_live_publisher.publish(CurrentLivePublishPayload {
+                session: Some(build_session_manifest(
+                    &session_id,
+                    &run_id,
+                    "failed",
+                    args.interactive,
+                    &script_path,
+                    script_path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or("fullmag_script"),
+                    &requested_backend_name,
+                    &requested_mode_name,
+                    &requested_precision_name,
+                    &artifact_dir,
+                    started_at_unix_ms,
+                    unix_time_millis()?,
+                    serde_json::json!({ "status": "bootstrap_failed" }),
+                )),
+                session_status: Some("failed".to_string()),
+                metadata: None,
+                run: Some(build_run_manifest(
+                    &run_id,
+                    &session_id,
+                    "failed",
+                    &artifact_dir,
+                )),
+                live_state: Some(read_json_file(&live_state_path)?),
+                latest_scalar_row: None,
+            });
             return Err(error);
         }
     };
@@ -852,6 +1191,37 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         started_at_unix_ms,
         &plan_summary_json(&current_plan_summary),
     )?;
+    current_live_publisher.publish(CurrentLivePublishPayload {
+        session: Some(build_session_manifest(
+            &session_id,
+            &run_id,
+            "running",
+            interactive_requested,
+            &script_path,
+            &final_problem_name,
+            backend_target_name(final_requested_backend),
+            execution_mode_name(final_execution_mode),
+            execution_precision_name(final_precision),
+            &artifact_dir,
+            started_at_unix_ms,
+            started_at_unix_ms,
+            plan_summary_json(&current_plan_summary),
+        )),
+        session_status: Some("running".to_string()),
+        metadata: Some(current_live_metadata(
+            &stages[0].ir,
+            &initial_execution_plan,
+            "running",
+        )),
+        run: Some(build_run_manifest(
+            &run_id,
+            &session_id,
+            "running",
+            &artifact_dir,
+        )),
+        live_state: Some(live_state_manifest_from_update(&initial_update)),
+        latest_scalar_row: None,
+    });
     eprintln!(
         "fullmag script materialized\n- problem: {}\n- stages: {}",
         final_problem_name,
@@ -923,6 +1293,33 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             false,
         );
         update_live_state(&live_state_path, &stage_initial_update)?;
+        current_live_publisher.publish(CurrentLivePublishPayload {
+            session: Some(build_session_manifest(
+                &session_id,
+                &run_id,
+                "running",
+                interactive_requested,
+                &script_path,
+                &stage.ir.problem_meta.name,
+                backend_target_name(stage.ir.backend_policy.requested_backend),
+                execution_mode_name(stage.ir.validation_profile.execution_mode),
+                execution_precision_name(stage.ir.backend_policy.execution_precision),
+                &artifact_dir,
+                started_at_unix_ms,
+                started_at_unix_ms,
+                plan_summary_json(&current_plan_summary),
+            )),
+            session_status: Some("running".to_string()),
+            metadata: Some(current_live_metadata(&stage.ir, &execution_plan, "running")),
+            run: Some(running_run_manifest_from_update(
+                &run_id,
+                &session_id,
+                &artifact_dir,
+                &stage_initial_update,
+            )),
+            live_state: Some(live_state_manifest_from_update(&stage_initial_update)),
+            latest_scalar_row: None,
+        });
 
         let stage_result = match if use_live_callback {
             fullmag_runner::run_problem_with_callback(
@@ -973,6 +1370,23 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         );
                         let _ = update_live_state(&live_state_path, &adjusted);
                         let _ = append_live_scalar_row(&live_scalars_path, &adjusted);
+                        current_live_publisher.publish(CurrentLivePublishPayload {
+                            session: None,
+                            session_status: Some(if adjusted.finished {
+                                "completed".to_string()
+                            } else {
+                                "running".to_string()
+                            }),
+                            metadata: None,
+                            run: Some(running_run_manifest_from_update(
+                                &run_id,
+                                &session_id,
+                                &artifact_dir,
+                                &adjusted,
+                            )),
+                            live_state: Some(live_state_manifest_from_update(&adjusted)),
+                            latest_scalar_row: Some(scalar_row_from_update(&adjusted)),
+                        });
                         if adjusted.stats.step % 100 == 0 || adjusted.finished {
                             let _ = append_event(
                                 &events_path,
@@ -1053,6 +1467,34 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         "error": error.to_string(),
                     }),
                 )?;
+                current_live_publisher.publish(CurrentLivePublishPayload {
+                    session: Some(build_session_manifest(
+                        &session_id,
+                        &run_id,
+                        "failed",
+                        interactive_requested,
+                        &script_path,
+                        &final_problem_name,
+                        backend_target_name(final_requested_backend),
+                        execution_mode_name(final_execution_mode),
+                        execution_precision_name(final_precision),
+                        &artifact_dir,
+                        started_at_unix_ms,
+                        failed_at_unix_ms,
+                        plan_summary_json(&current_plan_summary),
+                    )),
+                    session_status: Some("failed".to_string()),
+                    metadata: Some(current_live_metadata(&stage.ir, &execution_plan, "failed")),
+                    run: Some(run_manifest_from_steps(
+                        &run_id,
+                        &session_id,
+                        "failed",
+                        &artifact_dir,
+                        &aggregated_steps,
+                    )),
+                    live_state: Some(read_json_file(&live_state_path)?),
+                    latest_scalar_row: None,
+                });
                 return Err(anyhow!(error.to_string()));
             }
         };
@@ -1109,6 +1551,23 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &update,
                     )?;
                     update_live_state(&live_state_path, &update)?;
+                    current_live_publisher.publish(CurrentLivePublishPayload {
+                        session: None,
+                        session_status: Some(if update.finished {
+                            "completed".to_string()
+                        } else {
+                            "running".to_string()
+                        }),
+                        metadata: None,
+                        run: Some(running_run_manifest_from_update(
+                            &run_id,
+                            &session_id,
+                            &artifact_dir,
+                            &update,
+                        )),
+                        live_state: Some(live_state_manifest_from_update(&update)),
+                        latest_scalar_row: Some(scalar_row_from_update(&update)),
+                    });
                 }
             }
         }
@@ -1129,6 +1588,23 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &final_update,
             )?;
             update_live_state(&live_state_path, &final_update)?;
+            current_live_publisher.publish(CurrentLivePublishPayload {
+                session: None,
+                session_status: Some(if final_update.finished {
+                    "completed".to_string()
+                } else {
+                    "running".to_string()
+                }),
+                metadata: None,
+                run: Some(running_run_manifest_from_update(
+                    &run_id,
+                    &session_id,
+                    &artifact_dir,
+                    &final_update,
+                )),
+                live_state: Some(live_state_manifest_from_update(&final_update)),
+                latest_scalar_row: Some(scalar_row_from_update(&final_update)),
+            });
 
             let final_step_already_recorded = final_update.stats.step <= 1
                 || final_update.stats.step % field_every_n == 0
@@ -1191,6 +1667,34 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             &aggregated_steps,
         )?;
         update_live_state_status(&live_state_path, "awaiting_command", Some(false))?;
+        current_live_publisher.publish(CurrentLivePublishPayload {
+            session: Some(build_session_manifest(
+                &session_id,
+                &run_id,
+                "awaiting_command",
+                interactive_requested,
+                &script_path,
+                &final_problem_name,
+                backend_target_name(final_requested_backend),
+                execution_mode_name(final_execution_mode),
+                execution_precision_name(final_precision),
+                &artifact_dir,
+                started_at_unix_ms,
+                awaiting_at_unix_ms,
+                plan_summary_json(&current_plan_summary),
+            )),
+            session_status: Some("awaiting_command".to_string()),
+            metadata: None,
+            run: Some(run_manifest_from_steps(
+                &run_id,
+                &session_id,
+                "awaiting_command",
+                &artifact_dir,
+                &aggregated_steps,
+            )),
+            live_state: Some(read_json_file(&live_state_path)?),
+            latest_scalar_row: None,
+        });
         append_event(
             &events_path,
             &serde_json::json!({
@@ -1206,7 +1710,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
         let mut interactive_stage_index = stage_count;
         loop {
-            let Some((command_path, command)) = next_pending_command(&session_dir)? else {
+            let Some((command_source, command)) = next_interactive_command(&session_dir)? else {
                 std::thread::sleep(std::time::Duration::from_millis(250));
                 continue;
             };
@@ -1226,8 +1730,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 (match build_interactive_command_stage(&interactive_template_ir, &command) {
                     Ok(stage) => stage,
                     Err(error) => {
-                        let _ =
-                            move_command_file(&command_path, &failed_commands_dir(&session_dir));
+                        let _ = mark_interactive_command_failed(&command_source, &session_dir);
                         append_event(
                             &events_path,
                             &serde_json::json!({
@@ -1243,7 +1746,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
                 })
             else {
-                let _ = move_command_file(&command_path, &processed_commands_dir(&session_dir));
+                let _ = mark_interactive_command_processed(&command_source, &session_dir);
                 break;
             };
 
@@ -1345,6 +1848,19 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             );
                             let _ = update_live_state(&live_state_path, &adjusted);
                             let _ = append_live_scalar_row(&live_scalars_path, &adjusted);
+                            current_live_publisher.publish(CurrentLivePublishPayload {
+                                session: None,
+                                session_status: Some("running".to_string()),
+                                metadata: None,
+                                run: Some(running_run_manifest_from_update(
+                                    &run_id,
+                                    &session_id,
+                                    &artifact_dir,
+                                    &adjusted,
+                                )),
+                                live_state: Some(live_state_manifest_from_update(&adjusted)),
+                                latest_scalar_row: Some(scalar_row_from_update(&adjusted)),
+                            });
                         }
                     },
                 )
@@ -1357,7 +1873,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             } {
                 Ok(result) => result,
                 Err(error) => {
-                    let _ = move_command_file(&command_path, &failed_commands_dir(&session_dir));
+                    let _ = mark_interactive_command_failed(&command_source, &session_dir);
                     let _ = update_session_manifest_status(
                         &session_manifest_path,
                         &session_id,
@@ -1436,6 +1952,19 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &update,
                         )?;
                         update_live_state(&live_state_path, &update)?;
+                        current_live_publisher.publish(CurrentLivePublishPayload {
+                            session: None,
+                            session_status: Some("running".to_string()),
+                            metadata: None,
+                            run: Some(running_run_manifest_from_update(
+                                &run_id,
+                                &session_id,
+                                &artifact_dir,
+                                &update,
+                            )),
+                            live_state: Some(live_state_manifest_from_update(&update)),
+                            latest_scalar_row: Some(scalar_row_from_update(&update)),
+                        });
                     }
                 }
             }
@@ -1456,6 +1985,23 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &final_update,
                 )?;
                 update_live_state(&live_state_path, &final_update)?;
+                current_live_publisher.publish(CurrentLivePublishPayload {
+                    session: None,
+                    session_status: Some(if final_update.finished {
+                        "completed".to_string()
+                    } else {
+                        "running".to_string()
+                    }),
+                    metadata: None,
+                    run: Some(running_run_manifest_from_update(
+                        &run_id,
+                        &session_id,
+                        &artifact_dir,
+                        &final_update,
+                    )),
+                    live_state: Some(live_state_manifest_from_update(&final_update)),
+                    latest_scalar_row: Some(scalar_row_from_update(&final_update)),
+                });
 
                 let final_step_already_recorded =
                     final_update.stats.step <= 1 || final_update.stats.step % field_every_n == 0;
@@ -1472,7 +2018,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             aggregated_steps.extend(offset_steps);
             final_magnetization = stage_result.final_magnetization.clone();
             continuation_magnetization = Some(stage_result.final_magnetization);
-            let _ = move_command_file(&command_path, &processed_commands_dir(&session_dir));
+            let _ = mark_interactive_command_processed(&command_source, &session_dir);
             interactive_stage_index += 1;
 
             let ready_at_unix_ms = unix_time_millis()?;
@@ -1501,6 +2047,34 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &aggregated_steps,
             )?;
             update_live_state_status(&live_state_path, "awaiting_command", Some(false))?;
+            current_live_publisher.publish(CurrentLivePublishPayload {
+                session: Some(build_session_manifest(
+                    &session_id,
+                    &run_id,
+                    "awaiting_command",
+                    interactive_requested,
+                    &script_path,
+                    &final_problem_name,
+                    backend_target_name(final_requested_backend),
+                    execution_mode_name(final_execution_mode),
+                    execution_precision_name(final_precision),
+                    &artifact_dir,
+                    started_at_unix_ms,
+                    ready_at_unix_ms,
+                    plan_summary_json(&current_plan_summary),
+                )),
+                session_status: Some("awaiting_command".to_string()),
+                metadata: None,
+                run: Some(run_manifest_from_steps(
+                    &run_id,
+                    &session_id,
+                    "awaiting_command",
+                    &artifact_dir,
+                    &aggregated_steps,
+                )),
+                live_state: Some(read_json_file(&live_state_path)?),
+                latest_scalar_row: None,
+            });
             append_event(
                 &events_path,
                 &serde_json::json!({
@@ -1576,6 +2150,45 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             artifact_dir: summary.artifact_dir.clone(),
         },
     )?;
+    current_live_publisher.publish(CurrentLivePublishPayload {
+        session: Some(build_session_manifest(
+            &session_id,
+            &run_id,
+            &summary.status,
+            interactive_requested,
+            &script_path,
+            &summary.problem_name,
+            &summary.backend,
+            &summary.mode,
+            &summary.precision,
+            &artifact_dir,
+            started_at_unix_ms,
+            finished_at_unix_ms,
+            plan_summary_json(&current_plan_summary),
+        )),
+        session_status: Some(summary.status.clone()),
+        metadata: None,
+        run: Some(run_manifest_from_steps(
+            &run_id,
+            &session_id,
+            &summary.status,
+            &artifact_dir,
+            &aggregated_steps,
+        )),
+        live_state: Some(read_json_file(&live_state_path)?),
+        latest_scalar_row: aggregated_steps.last().map(|step| CurrentLiveScalarRow {
+            step: step.step,
+            time: step.time,
+            solver_dt: step.dt,
+            e_ex: step.e_ex,
+            e_demag: step.e_demag,
+            e_ext: step.e_ext,
+            e_total: step.e_total,
+            max_dm_dt: step.max_dm_dt,
+            max_h_eff: step.max_h_eff,
+            max_h_demag: step.max_h_demag,
+        }),
+    });
     append_event(
         &session_dir.join("events.ndjson"),
         &serde_json::json!({
@@ -1600,18 +2213,16 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     Ok(())
 }
 
-fn announce_session_start(session_id: &str, script_path: &Path, backend: &str, headless: bool) {
-    eprintln!("fullmag session started");
-    eprintln!("- session_id: {}", session_id);
+fn announce_session_start(_session_id: &str, script_path: &Path, backend: &str, headless: bool) {
+    eprintln!("fullmag live workspace started");
     eprintln!("- script: {}", script_path.display());
     eprintln!("- requested_backend: {}", backend);
     if headless {
         eprintln!(
-            "- live_hint: start the control room manually with `./scripts/dev-control-room.sh {}`",
-            session_id
+            "- live_hint: start the control room manually with `./scripts/dev-control-room.sh`"
         );
     } else {
-        eprintln!("- live_hint: control room bootstrap requested before solver start");
+        eprintln!("- live_hint: GUI bootstrap requested before solver start");
     }
 }
 
@@ -1859,6 +2470,38 @@ fn next_pending_command(session_dir: &Path) -> Result<Option<(PathBuf, SessionCo
     Ok(Some((path, command)))
 }
 
+fn next_current_live_command() -> Result<Option<SessionCommand>> {
+    let response = match current_live_api_client()
+        .get("http://127.0.0.1:8080/v1/live/current/commands/next")
+        .send()
+    {
+        Ok(response) => response,
+        Err(_) => return Ok(None),
+    };
+
+    match response.status() {
+        reqwest::StatusCode::NO_CONTENT => Ok(None),
+        reqwest::StatusCode::NOT_FOUND => Ok(None),
+        status if status.is_success() => response
+            .json::<SessionCommand>()
+            .context("failed to decode current live command")
+            .map(Some),
+        status => bail!("current live command queue returned HTTP {}", status),
+    }
+}
+
+fn next_interactive_command(
+    session_dir: &Path,
+) -> Result<Option<(InteractiveCommandSource, SessionCommand)>> {
+    if let Some(command) = next_current_live_command()? {
+        return Ok(Some((InteractiveCommandSource::CurrentLive, command)));
+    }
+    if let Some((path, command)) = next_pending_command(session_dir)? {
+        return Ok(Some((InteractiveCommandSource::SessionFile(path), command)));
+    }
+    Ok(None)
+}
+
 fn move_command_file(source: &Path, target_dir: &Path) -> Result<PathBuf> {
     fs::create_dir_all(target_dir)?;
     let file_name = source
@@ -1870,6 +2513,26 @@ fn move_command_file(source: &Path, target_dir: &Path) -> Result<PathBuf> {
         fs::remove_file(source)?;
     }
     Ok(target)
+}
+
+fn mark_interactive_command_processed(
+    source: &InteractiveCommandSource,
+    session_dir: &Path,
+) -> Result<()> {
+    if let InteractiveCommandSource::SessionFile(path) = source {
+        let _ = move_command_file(path, &processed_commands_dir(session_dir))?;
+    }
+    Ok(())
+}
+
+fn mark_interactive_command_failed(
+    source: &InteractiveCommandSource,
+    session_dir: &Path,
+) -> Result<()> {
+    if let InteractiveCommandSource::SessionFile(path) = source {
+        let _ = move_command_file(path, &failed_commands_dir(session_dir))?;
+    }
+    Ok(())
 }
 
 fn build_interactive_command_stage(
@@ -2050,19 +2713,17 @@ fn spawn_control_room(session_id: &str, requested_port: Option<u16>) -> Result<(
     let url_file = root.join(".fullmag").join("control-room-url.txt");
     fs::create_dir_all(&log_dir)?;
 
-    // 1. Start fullmag-api if not already running on port 8080
-    if api_is_ready(8080) {
-        eprintln!("  reusing fullmag-api on :8080");
-    } else {
-        eprintln!("  starting fullmag-api on :8080 ...");
-        let api_log = fs::File::create(log_dir.join("fullmag-api.log"))
-            .context("failed to create api log")?;
-        let api_err = api_log.try_clone()?;
+    // 1. Always restart fullmag-api so the local live workspace runs against
+    // the current code and a fresh in-memory state spine.
+    stop_fullmag_api_processes();
+    eprintln!("  starting fullmag-api on :8080 ...");
+    let api_log =
+        fs::File::create(log_dir.join("fullmag-api.log")).context("failed to create api log")?;
+    let api_err = api_log.try_clone()?;
 
-        let self_exe = std::env::current_exe().unwrap_or_default();
-        let mut child = spawn_fullmag_api(&root, &self_exe, api_log, api_err)?;
-        wait_for_api_ready(8080, &mut child, Duration::from_secs(60))?;
-    }
+    let self_exe = std::env::current_exe().unwrap_or_default();
+    let mut child = spawn_fullmag_api(&root, &self_exe, api_log, api_err)?;
+    wait_for_api_ready(8080, &mut child, Duration::from_secs(60))?;
 
     // 2. Resolve frontend port
     let web_port = resolve_web_port(requested_port, &url_file)?;
@@ -2075,7 +2736,14 @@ fn spawn_control_room(session_id: &str, requested_port: Option<u16>) -> Result<(
         let web_err = web_log.try_clone()?;
 
         ProcessCommand::new("npx")
-            .args(["next", "dev", "--port", &web_port.to_string()])
+            .args([
+                "next",
+                "dev",
+                "--hostname",
+                "0.0.0.0",
+                "--port",
+                &web_port.to_string(),
+            ])
             .current_dir(&web_dir)
             .stdin(Stdio::null())
             .stdout(web_log)
@@ -2104,9 +2772,11 @@ fn spawn_control_room(session_id: &str, requested_port: Option<u16>) -> Result<(
         bail!("control room frontend directory missing or failed to start");
     }
 
+    publish_current_live_state_best_effort(session_id);
+
     // 3. Open browser
-    let url = format!("http://localhost:{}/runs/{}", web_port, session_id);
-    eprintln!("  control room: {}", url);
+    let url = format!("http://localhost:{}", web_port);
+    eprintln!("  gui server: {}", url);
 
     if let Ok(opener) = which_opener() {
         let _ = ProcessCommand::new(opener)
@@ -2192,6 +2862,55 @@ fn api_is_ready(port: u16) -> bool {
         return false;
     }
     response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")
+}
+
+fn stop_fullmag_api_processes() {
+    for pattern in ["cargo run -p fullmag-api", "fullmag-api"] {
+        let _ = ProcessCommand::new("pkill")
+            .args(["-f", pattern])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while api_is_ready(8080) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn current_live_api_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .expect("current live API client should build")
+    })
+}
+
+fn publish_current_live_state(session_id: &str, payload: &CurrentLivePublishPayload) -> Result<()> {
+    current_live_api_client()
+        .post("http://127.0.0.1:8080/v1/live/current/publish")
+        .json(&CurrentLivePublishRequest {
+            session_id,
+            session: payload.session.as_ref(),
+            session_status: payload.session_status.as_deref(),
+            metadata: payload.metadata.as_ref(),
+            run: payload.run.as_ref(),
+            live_state: payload.live_state.as_ref(),
+            latest_scalar_row: payload.latest_scalar_row.as_ref(),
+        })
+        .send()
+        .context("failed to publish current live state")?
+        .error_for_status()
+        .context("current live publish endpoint returned error")?;
+    Ok(())
+}
+
+fn publish_current_live_state_best_effort(session_id: &str) {
+    let _ = publish_current_live_state(session_id, &CurrentLivePublishPayload::default());
 }
 
 fn spawn_fullmag_api(
@@ -2309,7 +3028,28 @@ fn read_optional_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<
 
 fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let text = serde_json::to_string_pretty(value)?;
-    fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("fullmag.json");
+    let temp_path = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
+
+    fs::write(&temp_path, text)
+        .with_context(|| format!("failed to write temp file {}", temp_path.display()))?;
+    match fs::rename(&temp_path, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(&temp_path);
+            Err(error).with_context(|| {
+                format!(
+                    "failed to atomically replace {} with {}",
+                    path.display(),
+                    temp_path.display()
+                )
+            })
+        }
+    }
 }
 
 fn initialise_live_scalars(path: &Path) -> Result<()> {
@@ -2447,35 +3187,60 @@ fn flatten_magnetization(values: &[[f64; 3]]) -> Vec<f64> {
         .collect()
 }
 
-fn update_live_state(path: &Path, update: &fullmag_runner::StepUpdate) -> Result<()> {
-    write_json_file(
-        path,
-        &LiveStateManifest {
-            status: if update.finished {
-                "completed".to_string()
-            } else {
-                "running".to_string()
-            },
-            updated_at_unix_ms: unix_time_millis()?,
-            latest_step: LiveStepView {
-                step: update.stats.step,
-                time: update.stats.time,
-                dt: update.stats.dt,
-                e_ex: update.stats.e_ex,
-                e_demag: update.stats.e_demag,
-                e_ext: update.stats.e_ext,
-                e_total: update.stats.e_total,
-                max_dm_dt: update.stats.max_dm_dt,
-                max_h_eff: update.stats.max_h_eff,
-                max_h_demag: update.stats.max_h_demag,
-                wall_time_ns: update.stats.wall_time_ns,
-                grid: update.grid,
-                fem_mesh: update.fem_mesh.clone(),
-                magnetization: update.magnetization.clone(),
-                finished: update.finished,
-            },
+fn live_state_manifest_from_update(update: &fullmag_runner::StepUpdate) -> LiveStateManifest {
+    LiveStateManifest {
+        status: if update.finished {
+            "completed".to_string()
+        } else {
+            "running".to_string()
         },
-    )
+        updated_at_unix_ms: unix_time_millis().unwrap_or(0),
+        latest_step: LiveStepView {
+            step: update.stats.step,
+            time: update.stats.time,
+            dt: update.stats.dt,
+            e_ex: update.stats.e_ex,
+            e_demag: update.stats.e_demag,
+            e_ext: update.stats.e_ext,
+            e_total: update.stats.e_total,
+            max_dm_dt: update.stats.max_dm_dt,
+            max_h_eff: update.stats.max_h_eff,
+            max_h_demag: update.stats.max_h_demag,
+            wall_time_ns: update.stats.wall_time_ns,
+            grid: update.grid,
+            fem_mesh: update.fem_mesh.clone(),
+            magnetization: update.magnetization.clone(),
+            finished: update.finished,
+        },
+    }
+}
+
+fn update_live_state(path: &Path, update: &fullmag_runner::StepUpdate) -> Result<()> {
+    write_json_file(path, &live_state_manifest_from_update(update))
+}
+
+fn running_run_manifest_from_update(
+    run_id: &str,
+    session_id: &str,
+    artifact_dir: &Path,
+    update: &fullmag_runner::StepUpdate,
+) -> RunManifest {
+    RunManifest {
+        run_id: run_id.to_string(),
+        session_id: session_id.to_string(),
+        status: if update.finished {
+            "completed".to_string()
+        } else {
+            "running".to_string()
+        },
+        total_steps: update.stats.step as usize,
+        final_time: Some(update.stats.time),
+        final_e_ex: Some(update.stats.e_ex),
+        final_e_demag: Some(update.stats.e_demag),
+        final_e_ext: Some(update.stats.e_ext),
+        final_e_total: Some(update.stats.e_total),
+        artifact_dir: artifact_dir.display().to_string(),
+    }
 }
 
 fn update_running_run_manifest(
@@ -2487,22 +3252,7 @@ fn update_running_run_manifest(
 ) -> Result<()> {
     write_json_file(
         path,
-        &RunManifest {
-            run_id: run_id.to_string(),
-            session_id: session_id.to_string(),
-            status: if update.finished {
-                "completed".to_string()
-            } else {
-                "running".to_string()
-            },
-            total_steps: update.stats.step as usize,
-            final_time: Some(update.stats.time),
-            final_e_ex: Some(update.stats.e_ex),
-            final_e_demag: Some(update.stats.e_demag),
-            final_e_ext: Some(update.stats.e_ext),
-            final_e_total: Some(update.stats.e_total),
-            artifact_dir: artifact_dir.display().to_string(),
-        },
+        &running_run_manifest_from_update(run_id, session_id, artifact_dir, update),
     )
 }
 

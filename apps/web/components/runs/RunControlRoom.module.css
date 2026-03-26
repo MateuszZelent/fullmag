@@ -208,10 +208,40 @@
   flex-shrink: 0;
 }
 
+.viewportToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  color: var(--text-2);
+}
+
+.viewportToggle input {
+  accent-color: hsl(210, 70%, 58%);
+}
+
 .viewportCanvas {
   flex: 1;
   min-height: 0;
   position: relative;
+}
+
+.previewNotice {
+  padding: 0.28rem 0.6rem;
+  border-bottom: 1px solid hsla(42, 45%, 28%, 0.35);
+  background: hsla(42, 55%, 12%, 0.85);
+  color: hsl(42, 78%, 78%);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.previewStatus {
+  padding: 0.28rem 0.6rem;
+  border-bottom: 1px solid hsla(0, 0%, 100%, 0.06);
+  background: hsla(220, 25%, 10%, 0.9);
+  color: var(--text-2);
+  font-size: 0.68rem;
+  line-height: 1.35;
 }
 
 .viewportOverlay {

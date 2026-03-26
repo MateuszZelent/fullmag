@@ -417,6 +417,12 @@ def _build_problem(
         disc_kwargs["fdm"] = FDM(cell=s._cell)
     if s._hmax is not None:
         disc_kwargs["fem"] = FEM(order=s._fem_order, hmax=s._hmax)
+    elif s._backend == "fem" and "fem" not in disc_kwargs:
+        # Auto-derive FEM hint: use finest FDM cell edge, or a sensible default.
+        if s._cell is not None:
+            disc_kwargs["fem"] = FEM(order=s._fem_order, hmax=min(s._cell))
+        else:
+            disc_kwargs["fem"] = FEM(order=s._fem_order, hmax=5e-9)
 
     # Runtime
     rt = RuntimeSelection()

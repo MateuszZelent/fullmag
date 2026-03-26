@@ -11,13 +11,13 @@ use axum::{
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
@@ -27,8 +27,17 @@ use fullmag_runner::{FemMeshPayload, StepUpdate};
 struct AppState {
     sessions_root: PathBuf,
     repo_root: PathBuf,
+    current_workspace_root: PathBuf,
     /// Per-run broadcast channels for live step updates.
     live_channels: Arc<RwLock<HashMap<String, broadcast::Sender<StepUpdate>>>>,
+    /// Sessionless local-live workspace snapshot used by the root `/` GUI.
+    current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,
+    /// Full current-workspace snapshots broadcast to SSE/WS clients.
+    current_live_events: broadcast::Sender<String>,
+    /// Preview controls for the sessionless root workspace.
+    current_preview_config: Arc<RwLock<CurrentPreviewConfig>>,
+    /// In-memory command queue for the root local-live workspace.
+    current_command_queue: Arc<Mutex<VecDeque<SessionCommand>>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,13 +84,13 @@ struct RunManifest {
     artifact_dir: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct ArtifactEntry {
     path: String,
     kind: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct ScalarRow {
     step: u64,
     time: f64,
@@ -124,7 +133,7 @@ struct StepUpdateView {
     finished: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct SessionStateResponse {
     session: SessionManifest,
     run: Option<RunManifest>,
@@ -135,9 +144,11 @@ struct SessionStateResponse {
     fem_mesh: Option<FemMeshPayload>,
     latest_fields: LatestFields,
     artifacts: Vec<ArtifactEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<PreviewState>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct QuantityDescriptor {
     id: String,
     label: String,
@@ -147,13 +158,117 @@ struct QuantityDescriptor {
     available: bool,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, Clone)]
 struct LatestFields {
     m: Option<Value>,
     h_ex: Option<Value>,
     h_demag: Option<Value>,
     h_ext: Option<Value>,
     h_eff: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentPreviewConfig {
+    quantity: String,
+    component: String,
+    layer: usize,
+    all_layers: bool,
+    x_chosen_size: usize,
+    y_chosen_size: usize,
+    auto_scale_enabled: bool,
+    max_points: usize,
+}
+
+impl Default for CurrentPreviewConfig {
+    fn default() -> Self {
+        Self {
+            quantity: "m".to_string(),
+            component: "3D".to_string(),
+            layer: 0,
+            all_layers: false,
+            x_chosen_size: 0,
+            y_chosen_size: 0,
+            auto_scale_enabled: true,
+            max_points: 16_384,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct PreviewState {
+    spatial_kind: String,
+    quantity: String,
+    unit: String,
+    component: String,
+    layer: usize,
+    all_layers: bool,
+    #[serde(rename = "type")]
+    view_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vector_field_values: Option<Vec<f64>>,
+    scalar_field: Vec<[f64; 3]>,
+    min: f64,
+    max: f64,
+    n_comp: usize,
+    max_points: usize,
+    data_points_count: usize,
+    x_possible_sizes: Vec<usize>,
+    y_possible_sizes: Vec<usize>,
+    x_chosen_size: usize,
+    y_chosen_size: usize,
+    applied_x_chosen_size: usize,
+    applied_y_chosen_size: usize,
+    applied_layer_stride: usize,
+    auto_scale_enabled: bool,
+    auto_downscaled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_downscale_message: Option<String>,
+    preview_grid: [usize; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fem_mesh: Option<FemMeshPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_node_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_face_count: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewQuantityRequest {
+    quantity: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewComponentRequest {
+    component: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewXChosenSizeRequest {
+    #[serde(rename = "xChosenSize")]
+    x_chosen_size: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewYChosenSizeRequest {
+    #[serde(rename = "yChosenSize")]
+    y_chosen_size: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewAutoScaleRequest {
+    #[serde(rename = "autoScaleEnabled")]
+    auto_scale_enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewLayerRequest {
+    layer: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewAllLayersRequest {
+    #[serde(rename = "allLayers")]
+    all_layers: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,12 +304,40 @@ struct SessionCommandRequest {
     energy_tolerance: Option<f64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct CurrentLivePublishRequest {
+    session_id: String,
+    #[serde(default)]
+    session: Option<SessionManifest>,
+    #[serde(default)]
+    session_status: Option<String>,
+    #[serde(default)]
+    metadata: Option<Value>,
+    #[serde(default)]
+    run: Option<RunManifest>,
+    #[serde(default)]
+    live_state: Option<LiveState>,
+    #[serde(default)]
+    latest_scalar_row: Option<ScalarRow>,
+}
+
 #[derive(Debug, Serialize)]
 struct SessionCommandResponse {
     command_id: String,
     session_id: String,
     kind: String,
     queued_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct SessionCommand {
+    command_id: String,
+    kind: String,
+    created_at_unix_ms: u128,
+    until_seconds: Option<f64>,
+    max_steps: Option<u64>,
+    torque_tolerance: Option<f64>,
+    energy_tolerance: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -246,7 +389,15 @@ async fn main() {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(".fullmag/sessions")),
         repo_root: repo_root(),
+        current_workspace_root: repo_root()
+            .join(".fullmag")
+            .join("local-live")
+            .join("current"),
         live_channels: Arc::new(RwLock::new(HashMap::new())),
+        current_live_state: Arc::new(RwLock::new(None)),
+        current_live_events: broadcast::channel(256).0,
+        current_preview_config: Arc::new(RwLock::new(CurrentPreviewConfig::default())),
+        current_command_queue: Arc::new(Mutex::new(VecDeque::new())),
     });
 
     let cors = CorsLayer::new()
@@ -257,6 +408,57 @@ async fn main() {
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/meta/vision", get(vision))
+        .route(
+            "/v1/live/current/bootstrap",
+            get(get_current_live_bootstrap),
+        )
+        .route("/v1/live/current/state", get(get_current_live_state))
+        .route("/v1/live/current/events", get(get_current_live_events))
+        .route("/v1/live/current/publish", post(publish_current_live_state))
+        .route(
+            "/v1/live/current/preview/quantity",
+            post(set_current_preview_quantity),
+        )
+        .route(
+            "/v1/live/current/preview/component",
+            post(set_current_preview_component),
+        )
+        .route(
+            "/v1/live/current/preview/XChosenSize",
+            post(set_current_preview_x_chosen_size),
+        )
+        .route(
+            "/v1/live/current/preview/YChosenSize",
+            post(set_current_preview_y_chosen_size),
+        )
+        .route(
+            "/v1/live/current/preview/autoScaleEnabled",
+            post(set_current_preview_auto_scale),
+        )
+        .route(
+            "/v1/live/current/preview/layer",
+            post(set_current_preview_layer),
+        )
+        .route(
+            "/v1/live/current/preview/allLayers",
+            post(set_current_preview_all_layers),
+        )
+        .route(
+            "/v1/live/current/commands",
+            post(enqueue_current_live_command),
+        )
+        .route(
+            "/v1/live/current/commands/next",
+            get(dequeue_current_live_command),
+        )
+        .route(
+            "/v1/live/current/assets/import",
+            post(import_current_live_asset),
+        )
+        .route(
+            "/v1/live/current/artifacts",
+            get(list_current_live_artifacts),
+        )
         .route("/v1/sessions", get(list_sessions))
         .route("/v1/sessions/:session_id", get(get_session))
         .route("/v1/sessions/:session_id/state", get(get_session_state))
@@ -274,6 +476,7 @@ async fn main() {
         .route("/v1/runs/:run_id/artifacts", get(list_run_artifacts))
         .route("/v1/docs/physics", get(list_physics_docs))
         .route("/v1/run", post(start_run))
+        .route("/ws/live/current", get(ws_current_live))
         .route("/ws/live/:run_id", get(ws_live))
         .layer(cors)
         .with_state(state);
@@ -302,8 +505,204 @@ async fn vision() -> Json<VisionResponse> {
         north_star:
             "Describe one physical problem and execute it through FDM, FEM, or hybrid plans.",
         modes: ["strict", "extended", "hybrid"],
-        runtime_spine: "session",
+        runtime_spine: "current-live + legacy-session",
     })
+}
+
+async fn get_current_live_bootstrap(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<SessionStateResponse>, ApiError> {
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    Ok(Json(snapshot))
+}
+
+async fn get_current_live_state(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<SessionStateResponse>, ApiError> {
+    get_current_live_bootstrap(State(state)).await
+}
+
+async fn get_current_live_events(
+    State(state): State<Arc<AppState>>,
+) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let mut rx = state.current_live_events.subscribe();
+    let initial_snapshot = state.current_live_state.read().await.as_ref().cloned();
+    let stream = stream! {
+        if let Some(snapshot) = initial_snapshot {
+            match serde_json::to_string(&snapshot) {
+                Ok(json) => yield Ok(Event::default().event("session_state").data(json)),
+                Err(error) => {
+                    let json = serde_json::json!({ "error": error.to_string() }).to_string();
+                    yield Ok(Event::default().event("session_error").data(json));
+                    return;
+                }
+            }
+        }
+
+        loop {
+            match rx.recv().await {
+                Ok(json) => yield Ok(Event::default().event("session_state").data(json)),
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+async fn publish_current_live_state(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CurrentLivePublishRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let reset_preview = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .map(|existing| existing.session.session_id != req.session_id)
+        .unwrap_or(false);
+    if reset_preview {
+        *state.current_preview_config.write().await = CurrentPreviewConfig::default();
+        state.current_command_queue.lock().await.clear();
+        let _ = std::fs::remove_dir_all(&state.current_workspace_root);
+    }
+    let preview_config = state.current_preview_config.read().await.clone();
+    let mut current = state.current_live_state.write().await;
+    let mut next = match current.take() {
+        Some(existing) if existing.session.session_id == req.session_id => existing,
+        _ => default_current_live_state(&req),
+    };
+    apply_current_live_publish(&mut next, req)?;
+    next.preview = build_preview_state(&next, &preview_config);
+    let json = serde_json::to_string(&next).map_err(|error| {
+        ApiError::internal(format!("failed to serialize current state: {}", error))
+    })?;
+    *current = Some(next);
+    drop(current);
+
+    let _ = state.current_live_events.send(json);
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+async fn set_current_preview_quantity(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PreviewQuantityRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    mutate_current_preview(&state, move |config| {
+        config.quantity = req.quantity;
+    })
+    .await
+}
+
+async fn set_current_preview_component(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PreviewComponentRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    mutate_current_preview(&state, move |config| {
+        config.component = req.component;
+    })
+    .await
+}
+
+async fn set_current_preview_x_chosen_size(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PreviewXChosenSizeRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    mutate_current_preview(&state, move |config| {
+        config.x_chosen_size = req.x_chosen_size;
+    })
+    .await
+}
+
+async fn set_current_preview_y_chosen_size(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PreviewYChosenSizeRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    mutate_current_preview(&state, move |config| {
+        config.y_chosen_size = req.y_chosen_size;
+    })
+    .await
+}
+
+async fn set_current_preview_auto_scale(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PreviewAutoScaleRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    mutate_current_preview(&state, move |config| {
+        config.auto_scale_enabled = req.auto_scale_enabled;
+    })
+    .await
+}
+
+async fn set_current_preview_layer(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PreviewLayerRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    mutate_current_preview(&state, move |config| {
+        config.layer = req.layer;
+    })
+    .await
+}
+
+async fn set_current_preview_all_layers(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PreviewAllLayersRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    mutate_current_preview(&state, move |config| {
+        config.all_layers = req.all_layers;
+    })
+    .await
+}
+
+async fn enqueue_current_live_command(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SessionCommandRequest>,
+) -> Result<Json<SessionCommandResponse>, ApiError> {
+    let session_id = current_live_session_id(&state).await?;
+    let command = build_session_command(req)?;
+    let response = SessionCommandResponse {
+        command_id: command.command_id.clone(),
+        session_id,
+        kind: command.kind.clone(),
+        queued_path: format!("memory://current/{}", command.command_id),
+    };
+    state.current_command_queue.lock().await.push_back(command);
+    Ok(Json(response))
+}
+
+async fn dequeue_current_live_command(
+    State(state): State<Arc<AppState>>,
+) -> Result<Response, ApiError> {
+    let command = state.current_command_queue.lock().await.pop_front();
+    match command {
+        Some(command) => Ok(Json(command).into_response()),
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+    }
+}
+
+async fn import_current_live_asset(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ImportSessionAssetRequest>,
+) -> Result<Json<SessionAssetImportResponse>, ApiError> {
+    let response = import_asset_for_current_workspace(&state, req).await?;
+    Ok(Json(response))
+}
+
+async fn list_current_live_artifacts(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<ArtifactEntry>>, ApiError> {
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let artifact_dir = current_artifact_dir(snapshot);
+    drop(current);
+    Ok(Json(read_artifacts_from_dir(artifact_dir.as_deref())?))
 }
 
 /// POST /v1/run — start a simulation run and broadcast live updates.
@@ -373,6 +772,13 @@ async fn ws_live(
     Ok(ws.on_upgrade(move |socket| handle_ws(socket, tx)))
 }
 
+async fn ws_current_live(
+    State(state): State<Arc<AppState>>,
+    ws: WebSocketUpgrade,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(ws.on_upgrade(move |socket| handle_current_live_ws(socket, state)))
+}
+
 async fn handle_ws(mut socket: WebSocket, tx: broadcast::Sender<StepUpdate>) {
     let mut rx = tx.subscribe();
 
@@ -399,6 +805,39 @@ async fn handle_ws(mut socket: WebSocket, tx: broadcast::Sender<StepUpdate>) {
                 }
             }
             // Check for client disconnect
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+async fn handle_current_live_ws(mut socket: WebSocket, state: Arc<AppState>) {
+    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
+        if let Ok(json) = serde_json::to_string(&snapshot) {
+            if socket.send(Message::Text(json.into())).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    let mut rx = state.current_live_events.subscribe();
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(json) => {
+                        if socket.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Close(_))) | None => break,
@@ -499,47 +938,7 @@ async fn import_session_asset(
     AxumPath(session_id): AxumPath<String>,
     Json(req): Json<ImportSessionAssetRequest>,
 ) -> Result<Json<SessionAssetImportResponse>, ApiError> {
-    let session_dir = state.sessions_root.join(&session_id);
-    if !session_dir.exists() {
-        return Err(ApiError::not_found(format!(
-            "missing session directory {}",
-            session_dir.display()
-        )));
-    }
-
-    let safe_file_name = sanitize_file_name(&req.file_name);
-    if safe_file_name.is_empty() {
-        return Err(ApiError::bad_request("file_name must not be empty"));
-    }
-
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&req.content_base64)
-        .map_err(|error| ApiError::bad_request(format!("invalid base64 payload: {}", error)))?;
-
-    let imports_dir = session_dir.join("imports");
-    std::fs::create_dir_all(&imports_dir)?;
-
-    let asset_id = format!("asset-{}", uuid_v4_hex());
-    let stored_name = format!("{}-{}", asset_id, safe_file_name);
-    let stored_path = imports_dir.join(&stored_name);
-    std::fs::write(&stored_path, &bytes)?;
-
-    let summary = summarize_uploaded_asset(&safe_file_name, &bytes)?;
-    let response = SessionAssetImportResponse {
-        asset_id: asset_id.clone(),
-        session_id: session_id.clone(),
-        stored_path: make_repo_relative(&state.repo_root, &stored_path),
-        target_realization: req.target_realization.clone(),
-        summary,
-    };
-
-    let manifest_path = imports_dir.join(format!("{}.asset.json", asset_id));
-    let manifest_text = serde_json::to_string_pretty(&response).map_err(|error| {
-        ApiError::internal(format!("failed to serialize asset manifest: {}", error))
-    })?;
-    std::fs::write(manifest_path, manifest_text)?;
-
-    Ok(Json(response))
+    Ok(Json(import_asset_for_session(&state, &session_id, req)?))
 }
 
 async fn enqueue_session_command(
@@ -547,6 +946,14 @@ async fn enqueue_session_command(
     AxumPath(session_id): AxumPath<String>,
     Json(req): Json<SessionCommandRequest>,
 ) -> Result<Json<SessionCommandResponse>, ApiError> {
+    Ok(Json(enqueue_command_for_session(&state, &session_id, req)?))
+}
+
+fn enqueue_command_for_session(
+    state: &AppState,
+    session_id: &str,
+    req: SessionCommandRequest,
+) -> Result<SessionCommandResponse, ApiError> {
     let session_dir = state.sessions_root.join(&session_id);
     if !session_dir.exists() {
         return Err(ApiError::not_found(format!(
@@ -555,6 +962,23 @@ async fn enqueue_session_command(
         )));
     }
 
+    let command = build_session_command(req)?;
+    let pending_dir = session_dir.join("commands").join("pending");
+    std::fs::create_dir_all(&pending_dir)?;
+    let queued_path = pending_dir.join(format!("{}-{}.json", command.command_id, command.kind));
+    let text = serde_json::to_string_pretty(&command)
+        .map_err(|error| ApiError::internal(format!("failed to serialize command: {}", error)))?;
+    std::fs::write(&queued_path, text)?;
+
+    Ok(SessionCommandResponse {
+        command_id: command.command_id,
+        session_id: session_id.to_string(),
+        kind: command.kind,
+        queued_path: make_repo_relative(&state.repo_root, &queued_path),
+    })
+}
+
+fn build_session_command(req: SessionCommandRequest) -> Result<SessionCommand, ApiError> {
     let kind = req.kind.trim().to_lowercase();
     if !matches!(kind.as_str(), "run" | "relax" | "close") {
         return Err(ApiError::bad_request(format!(
@@ -573,35 +997,101 @@ async fn enqueue_session_command(
         ));
     }
 
-    let pending_dir = session_dir.join("commands").join("pending");
-    std::fs::create_dir_all(&pending_dir)?;
-    let command_id = format!("cmd-{}", uuid_v4_hex());
-    let queued_path = pending_dir.join(format!("{}-{}.json", command_id, kind));
-    let payload = serde_json::json!({
-        "command_id": command_id,
-        "kind": kind,
-        "created_at_unix_ms": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis(),
-        "until_seconds": req.until_seconds,
-        "max_steps": req.max_steps,
-        "torque_tolerance": req.torque_tolerance,
-        "energy_tolerance": req.energy_tolerance,
-    });
-    let text = serde_json::to_string_pretty(&payload)
-        .map_err(|error| ApiError::internal(format!("failed to serialize command: {}", error)))?;
-    std::fs::write(&queued_path, text)?;
+    Ok(SessionCommand {
+        command_id: format!("cmd-{}", uuid_v4_hex()),
+        kind,
+        created_at_unix_ms: unix_time_millis_now(),
+        until_seconds: req.until_seconds,
+        max_steps: req.max_steps,
+        torque_tolerance: req.torque_tolerance,
+        energy_tolerance: req.energy_tolerance,
+    })
+}
 
-    Ok(Json(SessionCommandResponse {
-        command_id: payload["command_id"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        session_id,
-        kind: payload["kind"].as_str().unwrap_or_default().to_string(),
-        queued_path: make_repo_relative(&state.repo_root, &queued_path),
-    }))
+fn import_asset_for_session(
+    state: &AppState,
+    session_id: &str,
+    req: ImportSessionAssetRequest,
+) -> Result<SessionAssetImportResponse, ApiError> {
+    let session_dir = state.sessions_root.join(session_id);
+    if !session_dir.exists() {
+        return Err(ApiError::not_found(format!(
+            "missing session directory {}",
+            session_dir.display()
+        )));
+    }
+    import_asset_into_dir(state, session_id, session_dir.join("imports"), req)
+}
+
+async fn import_asset_for_current_workspace(
+    state: &Arc<AppState>,
+    req: ImportSessionAssetRequest,
+) -> Result<SessionAssetImportResponse, ApiError> {
+    let (session_id, imports_dir) = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        let session_id = snapshot.session.session_id.clone();
+        let artifact_dir = current_artifact_dir(snapshot)
+            .unwrap_or_else(|| state.current_workspace_root.join("artifacts"));
+        (session_id, artifact_dir.join("imports"))
+    };
+
+    let response = import_asset_into_dir(state, &session_id, imports_dir.clone(), req)?;
+    let artifacts = read_artifacts_from_dir(imports_dir.parent())?;
+    let json = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current
+            .as_mut()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        snapshot.artifacts = artifacts;
+        serde_json::to_string(snapshot).map_err(|error| {
+            ApiError::internal(format!("failed to serialize current state: {}", error))
+        })?
+    };
+    let _ = state.current_live_events.send(json);
+    Ok(response)
+}
+
+fn import_asset_into_dir(
+    state: &AppState,
+    session_id: &str,
+    imports_dir: PathBuf,
+    req: ImportSessionAssetRequest,
+) -> Result<SessionAssetImportResponse, ApiError> {
+    let safe_file_name = sanitize_file_name(&req.file_name);
+    if safe_file_name.is_empty() {
+        return Err(ApiError::bad_request("file_name must not be empty"));
+    }
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&req.content_base64)
+        .map_err(|error| ApiError::bad_request(format!("invalid base64 payload: {}", error)))?;
+
+    std::fs::create_dir_all(&imports_dir)?;
+
+    let asset_id = format!("asset-{}", uuid_v4_hex());
+    let stored_name = format!("{}-{}", asset_id, safe_file_name);
+    let stored_path = imports_dir.join(&stored_name);
+    std::fs::write(&stored_path, &bytes)?;
+
+    let summary = summarize_uploaded_asset(&safe_file_name, &bytes)?;
+    let response = SessionAssetImportResponse {
+        asset_id: asset_id.clone(),
+        session_id: session_id.to_string(),
+        stored_path: make_repo_relative(&state.repo_root, &stored_path),
+        target_realization: req.target_realization,
+        summary,
+    };
+
+    let manifest_path = imports_dir.join(format!("{}.asset.json", asset_id));
+    let manifest_text = serde_json::to_string_pretty(&response).map_err(|error| {
+        ApiError::internal(format!("failed to serialize asset manifest: {}", error))
+    })?;
+    std::fs::write(manifest_path, manifest_text)?;
+
+    Ok(response)
 }
 
 async fn list_runs(State(state): State<Arc<AppState>>) -> Result<Json<Vec<RunManifest>>, ApiError> {
@@ -660,6 +1150,650 @@ async fn list_physics_docs(
     }
     docs.sort();
     Ok(Json(docs))
+}
+
+async fn mutate_current_preview<F>(
+    state: &Arc<AppState>,
+    mutate: F,
+) -> Result<Json<serde_json::Value>, ApiError>
+where
+    F: FnOnce(&mut CurrentPreviewConfig),
+{
+    let preview_config = {
+        let mut config = state.current_preview_config.write().await;
+        mutate(&mut config);
+        config.clone()
+    };
+
+    let json = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current
+            .as_mut()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        snapshot.preview = build_preview_state(snapshot, &preview_config);
+        serde_json::to_string(snapshot).map_err(|error| {
+            ApiError::internal(format!("failed to serialize current state: {}", error))
+        })?
+    };
+
+    let _ = state.current_live_events.send(json);
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+fn build_preview_state(
+    current: &SessionStateResponse,
+    config: &CurrentPreviewConfig,
+) -> Option<PreviewState> {
+    let quantity = resolve_preview_quantity(current, &config.quantity)?;
+    let component = normalize_preview_component(&config.component);
+    let unit = quantity_unit(&quantity).to_string();
+
+    if let Some(mesh) = current.fem_mesh.as_ref() {
+        let vectors = current_vector_field(current, &quantity)?.0;
+        if vectors.len() != mesh.nodes.len() {
+            return None;
+        }
+        let (min, max) = component_min_max(&vectors, component);
+        return Some(PreviewState {
+            spatial_kind: "mesh".to_string(),
+            quantity,
+            unit,
+            component: component.to_string(),
+            layer: 0,
+            all_layers: true,
+            view_type: if component == "3D" { "3D" } else { "2D" }.to_string(),
+            vector_field_values: Some(flatten_vectors(&vectors)),
+            scalar_field: Vec::new(),
+            min,
+            max,
+            n_comp: 3,
+            max_points: config.max_points,
+            data_points_count: vectors.len(),
+            x_possible_sizes: Vec::new(),
+            y_possible_sizes: Vec::new(),
+            x_chosen_size: 0,
+            y_chosen_size: 0,
+            applied_x_chosen_size: 0,
+            applied_y_chosen_size: 0,
+            applied_layer_stride: 1,
+            auto_scale_enabled: config.auto_scale_enabled,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            preview_grid: [vectors.len(), 1, 1],
+            fem_mesh: Some(mesh.clone()),
+            original_node_count: Some(mesh.nodes.len()),
+            original_face_count: Some(mesh.boundary_faces.len()),
+        });
+    }
+
+    let (vectors, grid) = current_vector_field(current, &quantity)?;
+    if vectors.is_empty() {
+        return None;
+    }
+    let [full_x, full_y, full_z] = grid;
+    if full_x == 0 || full_y == 0 || full_z == 0 || vectors.len() != full_x * full_y * full_z {
+        return None;
+    }
+
+    let x_possible_sizes = candidate_preview_sizes(full_x);
+    let y_possible_sizes = candidate_preview_sizes(full_y);
+    let requested_x = choose_preview_size(config.x_chosen_size, &x_possible_sizes, full_x);
+    let requested_y = choose_preview_size(config.y_chosen_size, &y_possible_sizes, full_y);
+
+    if component == "3D" {
+        let mut applied_x = requested_x;
+        let mut applied_y = requested_y;
+        let mut stride = 1usize;
+        let mut preview_z = full_z;
+        let mut auto_downscaled = false;
+        while config.auto_scale_enabled
+            && applied_x * applied_y * preview_z > config.max_points
+            && (applied_x > 1 || applied_y > 1 || preview_z > 1)
+        {
+            auto_downscaled = true;
+            if applied_x >= applied_y && applied_x > 1 {
+                applied_x = next_smaller_size(applied_x, &x_possible_sizes);
+            } else if applied_y > 1 {
+                applied_y = next_smaller_size(applied_y, &y_possible_sizes);
+            } else {
+                stride += 1;
+                preview_z = full_z.div_ceil(stride);
+            }
+        }
+
+        let vectors = resample_grid_vectors_3d(
+            &vectors,
+            [full_x, full_y, full_z],
+            [applied_x, applied_y, preview_z],
+            stride,
+        );
+        let (min, max) = component_min_max(&vectors, component);
+        let auto_downscale_message = auto_downscaled.then(|| {
+            format!(
+                "Preview auto-scaled from {}x{}x{} to {}x{}x{} to stay within {} points",
+                full_x, full_y, full_z, applied_x, applied_y, preview_z, config.max_points
+            )
+        });
+        return Some(PreviewState {
+            spatial_kind: "grid".to_string(),
+            quantity,
+            unit,
+            component: component.to_string(),
+            layer: config.layer.min(full_z.saturating_sub(1)),
+            all_layers: config.all_layers,
+            view_type: "3D".to_string(),
+            vector_field_values: Some(flatten_vectors(&vectors)),
+            scalar_field: Vec::new(),
+            min,
+            max,
+            n_comp: 3,
+            max_points: config.max_points,
+            data_points_count: vectors.len(),
+            x_possible_sizes: x_possible_sizes.clone(),
+            y_possible_sizes: y_possible_sizes.clone(),
+            x_chosen_size: requested_x,
+            y_chosen_size: requested_y,
+            applied_x_chosen_size: applied_x,
+            applied_y_chosen_size: applied_y,
+            applied_layer_stride: stride,
+            auto_scale_enabled: config.auto_scale_enabled,
+            auto_downscaled,
+            auto_downscale_message,
+            preview_grid: [applied_x, applied_y, preview_z],
+            fem_mesh: None,
+            original_node_count: None,
+            original_face_count: None,
+        });
+    }
+
+    let layer = config.layer.min(full_z.saturating_sub(1));
+    let mut applied_x = requested_x;
+    let mut applied_y = requested_y;
+    let effective_layers = if config.all_layers { full_z } else { 1 };
+    let mut auto_downscaled = false;
+    while config.auto_scale_enabled
+        && applied_x * applied_y * effective_layers > config.max_points
+        && (applied_x > 1 || applied_y > 1)
+    {
+        auto_downscaled = true;
+        if applied_x >= applied_y && applied_x > 1 {
+            applied_x = next_smaller_size(applied_x, &x_possible_sizes);
+        } else if applied_y > 1 {
+            applied_y = next_smaller_size(applied_y, &y_possible_sizes);
+        }
+    }
+    let scalar_field = resample_grid_scalar_2d(
+        &vectors,
+        [full_x, full_y, full_z],
+        [applied_x, applied_y],
+        component,
+        layer,
+        config.all_layers,
+    );
+    let (min, max) = scalar_min_max(&scalar_field);
+    let auto_downscale_message = auto_downscaled.then(|| {
+        format!(
+            "Preview auto-scaled from {}x{} to {}x{} to stay within {} points",
+            full_x, full_y, applied_x, applied_y, config.max_points
+        )
+    });
+    Some(PreviewState {
+        spatial_kind: "grid".to_string(),
+        quantity,
+        unit,
+        component: component.to_string(),
+        layer,
+        all_layers: config.all_layers,
+        view_type: "2D".to_string(),
+        vector_field_values: None,
+        scalar_field,
+        min,
+        max,
+        n_comp: 1,
+        max_points: config.max_points,
+        data_points_count: applied_x * applied_y,
+        x_possible_sizes,
+        y_possible_sizes,
+        x_chosen_size: requested_x,
+        y_chosen_size: requested_y,
+        applied_x_chosen_size: applied_x,
+        applied_y_chosen_size: applied_y,
+        applied_layer_stride: 1,
+        auto_scale_enabled: config.auto_scale_enabled,
+        auto_downscaled,
+        auto_downscale_message,
+        preview_grid: [applied_x, applied_y, 1],
+        fem_mesh: None,
+        original_node_count: None,
+        original_face_count: None,
+    })
+}
+
+fn resolve_preview_quantity(current: &SessionStateResponse, requested: &str) -> Option<String> {
+    if current.quantities.iter().any(|quantity| {
+        quantity.kind == "vector_field" && quantity.available && quantity.id == requested
+    }) {
+        return Some(requested.to_string());
+    }
+    current
+        .quantities
+        .iter()
+        .find(|quantity| quantity.kind == "vector_field" && quantity.available)
+        .map(|quantity| quantity.id.clone())
+}
+
+fn normalize_preview_component(component: &str) -> &str {
+    match component {
+        "x" | "y" | "z" => component,
+        _ => "3D",
+    }
+}
+
+fn quantity_unit(quantity: &str) -> &'static str {
+    match quantity {
+        "m" => "dimensionless",
+        "H_ex" | "H_demag" | "H_ext" | "H_eff" => "A/m",
+        _ => "",
+    }
+}
+
+fn current_vector_field(
+    current: &SessionStateResponse,
+    quantity: &str,
+) -> Option<(Vec<[f64; 3]>, [usize; 3])> {
+    if quantity == "m" {
+        let live = current.live_state.as_ref()?;
+        let values = live.latest_step.magnetization.as_ref()?;
+        let vectors = values
+            .chunks_exact(3)
+            .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+            .collect::<Vec<_>>();
+        let grid = [
+            live.latest_step.grid[0] as usize,
+            live.latest_step.grid[1] as usize,
+            live.latest_step.grid[2] as usize,
+        ];
+        return Some((vectors, grid));
+    }
+    let raw = match quantity {
+        "H_ex" => current.latest_fields.h_ex.as_ref()?,
+        "H_demag" => current.latest_fields.h_demag.as_ref()?,
+        "H_ext" => current.latest_fields.h_ext.as_ref()?,
+        "H_eff" => current.latest_fields.h_eff.as_ref()?,
+        _ => return None,
+    };
+    parse_field_value(raw)
+}
+
+fn parse_field_value(raw: &Value) -> Option<(Vec<[f64; 3]>, [usize; 3])> {
+    let grid = raw
+        .get("layout")?
+        .get("grid_cells")?
+        .as_array()
+        .and_then(|grid| {
+            if grid.len() == 3 {
+                Some([
+                    grid[0].as_u64()? as usize,
+                    grid[1].as_u64()? as usize,
+                    grid[2].as_u64()? as usize,
+                ])
+            } else {
+                None
+            }
+        })?;
+    let values = raw.get("values")?.as_array()?;
+    let vectors = values
+        .iter()
+        .filter_map(|value| {
+            let vector = value.as_array()?;
+            if vector.len() < 3 {
+                return None;
+            }
+            Some([
+                vector[0].as_f64()?,
+                vector[1].as_f64()?,
+                vector[2].as_f64()?,
+            ])
+        })
+        .collect::<Vec<_>>();
+    Some((vectors, grid))
+}
+
+fn flatten_vectors(values: &[[f64; 3]]) -> Vec<f64> {
+    values
+        .iter()
+        .flat_map(|vector| [vector[0], vector[1], vector[2]])
+        .collect()
+}
+
+fn component_min_max(values: &[[f64; 3]], component: &str) -> (f64, f64) {
+    if values.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for [x, y, z] in values.iter().copied() {
+        let value = match component {
+            "x" => x,
+            "y" => y,
+            "z" => z,
+            _ => (x * x + y * y + z * z).sqrt(),
+        };
+        min = min.min(value);
+        max = max.max(value);
+    }
+    (min, max)
+}
+
+fn scalar_min_max(values: &[[f64; 3]]) -> (f64, f64) {
+    if values.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for point in values {
+        min = min.min(point[2]);
+        max = max.max(point[2]);
+    }
+    (min, max)
+}
+
+fn candidate_preview_sizes(full: usize) -> Vec<usize> {
+    let mut sizes = vec![full.max(1)];
+    let mut current = full.max(1);
+    while current > 1 {
+        current = current.div_ceil(2);
+        if sizes.last().copied() != Some(current) {
+            sizes.push(current);
+        }
+    }
+    sizes
+}
+
+fn choose_preview_size(requested: usize, possible: &[usize], full: usize) -> usize {
+    if requested == 0 {
+        return full.max(1);
+    }
+    possible
+        .iter()
+        .copied()
+        .find(|size| *size <= requested)
+        .unwrap_or(1)
+}
+
+fn next_smaller_size(current: usize, possible: &[usize]) -> usize {
+    let index = possible
+        .iter()
+        .position(|size| *size == current)
+        .unwrap_or(0);
+    possible.get(index + 1).copied().unwrap_or(1)
+}
+
+fn resample_grid_vectors_3d(
+    values: &[[f64; 3]],
+    full: [usize; 3],
+    preview: [usize; 3],
+    z_stride: usize,
+) -> Vec<[f64; 3]> {
+    let [full_x, full_y, full_z] = full;
+    let [preview_x, preview_y, preview_z] = preview;
+    let mut out = Vec::with_capacity(preview_x * preview_y * preview_z);
+    for pz in 0..preview_z {
+        let z_start = (pz * z_stride).min(full_z.saturating_sub(1));
+        let z_end = ((pz + 1) * z_stride).min(full_z);
+        for py in 0..preview_y {
+            let y_start = py * full_y / preview_y;
+            let y_end = ((py + 1) * full_y / preview_y).max(y_start + 1).min(full_y);
+            for px in 0..preview_x {
+                let x_start = px * full_x / preview_x;
+                let x_end = ((px + 1) * full_x / preview_x).max(x_start + 1).min(full_x);
+                let mut accum = [0.0, 0.0, 0.0];
+                let mut count = 0.0;
+                for z in z_start..z_end {
+                    for y in y_start..y_end {
+                        for x in x_start..x_end {
+                            let vector = values[(z * full_y + y) * full_x + x];
+                            accum[0] += vector[0];
+                            accum[1] += vector[1];
+                            accum[2] += vector[2];
+                            count += 1.0;
+                        }
+                    }
+                }
+                out.push([accum[0] / count, accum[1] / count, accum[2] / count]);
+            }
+        }
+    }
+    out
+}
+
+fn resample_grid_scalar_2d(
+    values: &[[f64; 3]],
+    full: [usize; 3],
+    preview: [usize; 2],
+    component: &str,
+    layer: usize,
+    all_layers: bool,
+) -> Vec<[f64; 3]> {
+    let [full_x, full_y, full_z] = full;
+    let [preview_x, preview_y] = preview;
+    let z_start = if all_layers {
+        0
+    } else {
+        layer.min(full_z.saturating_sub(1))
+    };
+    let z_end = if all_layers { full_z } else { z_start + 1 };
+    let component_index = match component {
+        "x" => 0,
+        "y" => 1,
+        "z" => 2,
+        _ => 2,
+    };
+    let mut out = Vec::with_capacity(preview_x * preview_y);
+    for py in 0..preview_y {
+        let y_start = py * full_y / preview_y;
+        let y_end = ((py + 1) * full_y / preview_y).max(y_start + 1).min(full_y);
+        for px in 0..preview_x {
+            let x_start = px * full_x / preview_x;
+            let x_end = ((px + 1) * full_x / preview_x).max(x_start + 1).min(full_x);
+            let mut accum = 0.0;
+            let mut count = 0.0;
+            for z in z_start..z_end {
+                for y in y_start..y_end {
+                    for x in x_start..x_end {
+                        accum += values[(z * full_y + y) * full_x + x][component_index];
+                        count += 1.0;
+                    }
+                }
+            }
+            out.push([px as f64, py as f64, accum / count]);
+        }
+    }
+    out
+}
+
+async fn current_live_session_id(state: &AppState) -> Result<String, ApiError> {
+    let current = state.current_live_state.read().await;
+    current
+        .as_ref()
+        .map(|snapshot| snapshot.session.session_id.clone())
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))
+}
+
+fn default_current_live_state(req: &CurrentLivePublishRequest) -> SessionStateResponse {
+    let now = unix_time_millis_now();
+    let run_id = req
+        .session
+        .as_ref()
+        .map(|session| session.run_id.clone())
+        .or_else(|| req.run.as_ref().map(|run| run.run_id.clone()))
+        .unwrap_or_else(|| format!("run-{}", req.session_id));
+    let status = req
+        .session
+        .as_ref()
+        .map(|session| session.status.clone())
+        .or_else(|| req.session_status.clone())
+        .or_else(|| req.live_state.as_ref().map(|state| state.status.clone()))
+        .or_else(|| req.run.as_ref().map(|run| run.status.clone()))
+        .unwrap_or_else(|| "bootstrapping".to_string());
+    let artifact_dir = req
+        .session
+        .as_ref()
+        .map(|session| session.artifact_dir.clone())
+        .or_else(|| req.run.as_ref().map(|run| run.artifact_dir.clone()))
+        .unwrap_or_default();
+
+    SessionStateResponse {
+        session: req.session.clone().unwrap_or(SessionManifest {
+            session_id: req.session_id.clone(),
+            run_id,
+            status,
+            interactive_session_requested: false,
+            script_path: String::new(),
+            problem_name: "Local Live Workspace".to_string(),
+            requested_backend: "auto".to_string(),
+            execution_mode: "strict".to_string(),
+            precision: "double".to_string(),
+            artifact_dir,
+            started_at_unix_ms: now,
+            finished_at_unix_ms: now,
+            plan_summary: serde_json::json!({}),
+        }),
+        run: None,
+        live_state: None,
+        metadata: None,
+        scalar_rows: Vec::new(),
+        quantities: Vec::new(),
+        fem_mesh: None,
+        latest_fields: LatestFields::default(),
+        artifacts: Vec::new(),
+        preview: None,
+    }
+}
+
+fn apply_current_live_publish(
+    current: &mut SessionStateResponse,
+    req: CurrentLivePublishRequest,
+) -> Result<(), ApiError> {
+    if let Some(session) = req.session {
+        current.session = session;
+    }
+    current.session.session_id = req.session_id.clone();
+
+    if let Some(status) = req.session_status {
+        current.session.status = status;
+    }
+    if let Some(metadata) = req.metadata {
+        current.metadata = Some(metadata);
+    }
+    if let Some(run) = req.run {
+        current.session.run_id = run.run_id.clone();
+        current.session.artifact_dir = run.artifact_dir.clone();
+        current.run = Some(run);
+    }
+    if let Some(live_state) = req.live_state {
+        if current.run.is_none() && current.session.status == "bootstrapping" {
+            current.session.status = live_state.status.clone();
+        }
+        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.clone() {
+            current.fem_mesh = Some(fem_mesh);
+        }
+        current.live_state = Some(live_state);
+    }
+    if let Some(row) = req.latest_scalar_row {
+        upsert_scalar_row(&mut current.scalar_rows, row);
+    }
+
+    if let Some(run) = current.run.as_ref() {
+        current.session.run_id = run.run_id.clone();
+        if current.session.artifact_dir.is_empty() {
+            current.session.artifact_dir = run.artifact_dir.clone();
+        }
+    }
+
+    if current.fem_mesh.is_none() {
+        current.fem_mesh = current
+            .live_state
+            .as_ref()
+            .and_then(|state| state.latest_step.fem_mesh.clone())
+            .or_else(|| {
+                current
+                    .metadata
+                    .as_ref()
+                    .and_then(extract_fem_mesh_from_metadata)
+            });
+    }
+
+    if matches!(
+        current.session.status.as_str(),
+        "completed" | "failed" | "cancelled"
+    ) {
+        current.session.finished_at_unix_ms = unix_time_millis_now();
+    }
+
+    let field_location = if current.fem_mesh.is_some() {
+        "node"
+    } else {
+        "cell"
+    };
+    current.quantities = build_quantities(
+        &current.latest_fields,
+        current.live_state.as_ref(),
+        current.run.as_ref(),
+        &current.scalar_rows,
+        field_location,
+    );
+
+    let artifact_dir = current_artifact_dir(current);
+    if current.artifacts.is_empty()
+        || current
+            .live_state
+            .as_ref()
+            .map(|state| state.latest_step.finished)
+            .unwrap_or(false)
+    {
+        current.artifacts = read_artifacts_from_dir(artifact_dir.as_deref())?;
+    }
+
+    Ok(())
+}
+
+fn current_artifact_dir(current: &SessionStateResponse) -> Option<PathBuf> {
+    let from_run = current
+        .run
+        .as_ref()
+        .map(|run| run.artifact_dir.as_str())
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    let from_session = (!current.session.artifact_dir.is_empty())
+        .then(|| PathBuf::from(&current.session.artifact_dir));
+    from_run.or(from_session)
+}
+
+fn read_artifacts_from_dir(artifact_dir: Option<&Path>) -> Result<Vec<ArtifactEntry>, ApiError> {
+    let Some(artifact_dir) = artifact_dir else {
+        return Ok(Vec::new());
+    };
+    if !artifact_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut artifacts = Vec::new();
+    collect_artifacts(artifact_dir, artifact_dir, &mut artifacts)?;
+    Ok(artifacts)
+}
+
+fn upsert_scalar_row(rows: &mut Vec<ScalarRow>, row: ScalarRow) {
+    match rows.last_mut() {
+        Some(last) if last.step == row.step => *last = row,
+        _ => rows.push(row),
+    }
+}
+
+fn unix_time_millis_now() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 fn read_all_sessions(root: &Path) -> Result<Vec<SessionManifest>, ApiError> {
@@ -724,6 +1858,7 @@ fn load_session_state(root: &Path, session_id: &str) -> Result<SessionStateRespo
         fem_mesh,
         latest_fields,
         artifacts,
+        preview: None,
     })
 }
 

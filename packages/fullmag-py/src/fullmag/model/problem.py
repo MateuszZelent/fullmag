@@ -453,7 +453,8 @@ class Problem:
                 mesh_source = discretization.fem.mesh
                 if mesh_source is None and isinstance(geometry, ImportedGeometry):
                     mesh_source = geometry.source
-                if mesh_source is not None:
+                if mesh_source is not None and mesh_source.lower().endswith(".json"):
+                    # Rust planner can load .json MeshIR directly
                     assets["fem_mesh_assets"].append(
                         {
                             "geometry_name": geometry.geometry_name,
@@ -461,6 +462,8 @@ class Problem:
                         }
                     )
                 else:
+                    # All other formats (STL, STEP, etc.) or no source:
+                    # tetrahedralize via gmsh → inline MeshIR
                     mesh = realize_fem_mesh_asset(geometry, discretization.fem)
                     mesh_ir = mesh.to_ir(geometry.geometry_name)
                     is_valid = validate_mesh_ir(mesh_ir)
@@ -471,7 +474,7 @@ class Problem:
                     assets["fem_mesh_assets"].append(
                         {
                             "geometry_name": geometry.geometry_name,
-                            "mesh_source": mesh_source,
+                            "mesh_source": None,
                             "mesh": mesh_ir,
                         }
                     )

@@ -1,10 +1,10 @@
-// @ts-nocheck
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import ViewCube from "./ViewCube";
+import HslSphere from "./HslSphere";
 import { TrackballControls } from "three/examples/jsm/controls/TrackballControls.js";
 import t from "./Toolbar3D.module.css";
 
@@ -49,11 +49,14 @@ const _defaultUp = new THREE.Vector3(0, 1, 0);
 const _tempVec = new THREE.Vector3();
 const _color = new THREE.Color();
 
-// ─── Coloring (1:1 from amumax) ────────────────────────────────────
+// ─── Coloring (matching amumax 3D frontend) ────────────────────────
+// s = sqrt(x²+y²+z²)  → for unit vectors always ≈1 (full saturation)
+// l clamped to [0.18, 0.84]: keeps arrows visible on dark background
+//   (amumax Go uses [0,1] for flat 2D renders, but 3D scene needs clamping)
 function magnetizationHSL(vx: number, vy: number, vz: number, color: THREE.Color) {
   const hue = Math.atan2(vy, vx) / (Math.PI * 2);
-  const saturation = Math.min(1, Math.sqrt(vx * vx + vy * vy));
-  const lightness = THREE.MathUtils.clamp((vz + 1) / 2, 0.18, 0.84);
+  const saturation = Math.min(1, Math.sqrt(vx * vx + vy * vy + vz * vz));
+  const lightness = THREE.MathUtils.clamp(vz * 0.5 + 0.5, 0.18, 0.84);
   color.setHSL((hue + 1) % 1, saturation, lightness);
 }
 
@@ -329,11 +332,11 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
       cancelAnimationFrame(frameId);
       controls.dispose();
       renderer.dispose();
-      scene.traverse((child) => {
+      scene.traverse((child: THREE.Object3D) => {
         if (child instanceof THREE.Mesh || child instanceof THREE.InstancedMesh) {
           child.geometry.dispose();
           if (Array.isArray(child.material)) {
-            child.material.forEach((m) => m.dispose());
+            child.material.forEach((m: THREE.Material) => m.dispose());
           } else if (child.material) {
             child.material.dispose();
           }
@@ -441,8 +444,10 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
               _dummy.quaternion.identity();
             } else {
               visible++;
-              const glyphScale = 0.22 + 1.1 * Math.sqrt(normalizedStrength);
-              _dummy.scale.set(glyphScale, glyphScale, glyphScale);
+              // Uniform glyph scale — magnitude is encoded in color,
+              // and auto-downscale averaging produces fractional magnitudes
+              // at geometry boundaries that make arrows misleadingly small.
+              _dummy.scale.set(1, 1, 1);
               // Direction: sim-Y → world-Z, sim-Z → world-Y (amumax setWorldDirectionFromSimulation)
               _tempVec.set(mx, mz, my);
               if (_tempVec.lengthSq() > 1e-30) {
@@ -607,6 +612,9 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
 
       {/* ─── ViewCube + Axis Gizmo ──── */}
       <ViewCube sceneRef={sceneRef} grid={grid} />
+
+      {/* ─── HSL Colour Sphere ──── */}
+      <HslSphere sceneRef={sceneRef} />
     </div>
   );
 }

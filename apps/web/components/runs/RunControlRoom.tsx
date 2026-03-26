@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { resolveApiBase } from "../../lib/apiBase";
-import { useSessionStream } from "../../lib/useSessionStream";
+import { useLiveStream } from "../../lib/useSessionStream";
 import EngineConsole from "../panels/EngineConsole";
 import MeshQualityHistogram from "../panels/MeshQualityHistogram";
 import MagnetizationSlice2D from "../preview/MagnetizationSlice2D";
 import MagnetizationView3D from "../preview/MagnetizationView3D";
 import FemMeshView3D from "../preview/FemMeshView3D";
 import FemMeshSlice2D from "../preview/FemMeshSlice2D";
+import PreviewScalarField2D from "../preview/PreviewScalarField2D";
 import type { FemMeshData } from "../preview/FemMeshView3D";
 import ScalarPlot from "../plots/ScalarPlot";
 import Sparkline from "../ui/Sparkline";
@@ -19,11 +20,13 @@ import s from "./RunControlRoom.module.css";
 /* ── Types ─────────────────────────────────────────────────── */
 
 interface RunControlRoomProps {
-  sessionId: string;
+  sessionId?: string;
+  mode?: "session" | "current";
 }
 
 type ViewportMode = "3D" | "2D" | "Mesh";
 type VectorComponent = "x" | "y" | "z" | "magnitude";
+type PreviewComponent = "3D" | "x" | "y" | "z";
 type SlicePlane = "xy" | "xz" | "yz";
 
 const FEM_SLICE_COUNT = 25;
@@ -85,8 +88,16 @@ function Section({
 
 /* ── Component ─────────────────────────────────────────────── */
 
-export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
-  const { state, connection, error } = useSessionStream(sessionId);
+export default function RunControlRoom({ sessionId, mode }: RunControlRoomProps) {
+  const presentationMode = mode ?? (sessionId ? "session" : "current");
+  const streamTarget = useMemo(
+    () =>
+      presentationMode === "current"
+        ? ({ kind: "current" } as const)
+        : ({ kind: "session", sessionId: sessionId ?? "" } as const),
+    [presentationMode, sessionId],
+  );
+  const { state, connection, error } = useLiveStream(streamTarget);
   const [viewMode, setViewMode] = useState<ViewportMode>("3D");
   const [component, setComponent] = useState<VectorComponent>("magnitude");
   const [plane, setPlane] = useState<SlicePlane>("xy");
@@ -97,12 +108,46 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
   const [relaxMaxStepsInput, setRelaxMaxStepsInput] = useState("5000");
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandMessage, setCommandMessage] = useState<string | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewMessage, setPreviewMessage] = useState<string | null>(null);
 
   const session = state?.session;
   const run = state?.run;
   const liveState = state?.live_state;
+  const preview = state?.preview ?? null;
   const femMesh = state?.fem_mesh ?? null;
   const scalarRows = state?.scalar_rows ?? [];
+
+  /* When live_state is stale (step===0) but the run manifest has real data,
+     fall back to run values so solver/energy panels show actual progress. */
+  const liveIsStale = (liveState?.step ?? 0) === 0 && (run?.total_steps ?? 0) > 0;
+  const effectiveStep = liveIsStale ? (run?.total_steps ?? 0) : (liveState?.step ?? run?.total_steps ?? 0);
+  const effectiveTime = liveIsStale ? (run?.final_time ?? 0) : (liveState?.time ?? run?.final_time ?? 0);
+  const effectiveDt = liveIsStale ? 0 : (liveState?.dt ?? 0);
+  const effectiveEEx = liveIsStale ? (run?.final_e_ex ?? 0) : (liveState?.e_ex ?? run?.final_e_ex ?? 0);
+  const effectiveEDemag = liveIsStale ? (run?.final_e_demag ?? 0) : (liveState?.e_demag ?? run?.final_e_demag ?? 0);
+  const effectiveEExt = liveIsStale ? (run?.final_e_ext ?? 0) : (liveState?.e_ext ?? run?.final_e_ext ?? 0);
+  const effectiveETotal = liveIsStale ? (run?.final_e_total ?? 0) : (liveState?.e_total ?? run?.final_e_total ?? 0);
+  const effectiveDmDt = liveIsStale ? 0 : (liveState?.max_dm_dt ?? 0);
+  const effectiveHEff = liveIsStale ? 0 : (liveState?.max_h_eff ?? 0);
+  const effectiveHDemag = liveIsStale ? 0 : (liveState?.max_h_demag ?? 0);
+
+  /* Construct a patched liveState for EngineConsole so its Live tab also
+     shows run-manifest data when the SSE live state is stale. */
+  const effectiveLiveState = liveState && liveIsStale ? {
+    ...liveState,
+    step: effectiveStep,
+    time: effectiveTime,
+    dt: effectiveDt,
+    e_ex: effectiveEEx,
+    e_demag: effectiveEDemag,
+    e_ext: effectiveEExt,
+    e_total: effectiveETotal,
+    max_dm_dt: effectiveDmDt,
+    max_h_eff: effectiveHEff,
+    max_h_demag: effectiveHDemag,
+  } : liveState;
+  const isMeshPreview = preview?.spatial_kind === "mesh";
 
 
 
@@ -119,13 +164,19 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
 
   /* Grid / mesh info — memoized to a stable reference so that a new array from every SSE
      tick does not re-trigger Three.js scene init inside MagnetizationView3D. */
-  const _rawGrid = liveState?.grid ?? state?.latest_fields.grid;
-  const grid = useMemo<[number, number, number]>(
-    () => [_rawGrid?.[0] ?? 0, _rawGrid?.[1] ?? 0, _rawGrid?.[2] ?? 0],
+  const _rawSolverGrid = liveState?.grid ?? state?.latest_fields.grid;
+  const solverGrid = useMemo<[number, number, number]>(
+    () => [_rawSolverGrid?.[0] ?? 0, _rawSolverGrid?.[1] ?? 0, _rawSolverGrid?.[2] ?? 0],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [_rawGrid?.[0], _rawGrid?.[1], _rawGrid?.[2]],
+    [_rawSolverGrid?.[0], _rawSolverGrid?.[1], _rawSolverGrid?.[2]],
   );
-  const totalCells = !isFemBackend ? grid[0] * grid[1] * grid[2] : null;
+  const _rawPreviewGrid = preview?.preview_grid ?? liveState?.preview_grid ?? state?.latest_fields.grid ?? solverGrid;
+  const previewGrid = useMemo<[number, number, number]>(
+    () => [_rawPreviewGrid?.[0] ?? 0, _rawPreviewGrid?.[1] ?? 0, _rawPreviewGrid?.[2] ?? 0],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [_rawPreviewGrid?.[0], _rawPreviewGrid?.[1], _rawPreviewGrid?.[2]],
+  );
+  const totalCells = !isFemBackend ? solverGrid[0] * solverGrid[1] * solverGrid[2] : null;
   const activeCells = useMemo(() => {
     if (typeof artifactLayout?.active_cell_count === "number") return artifactLayout.active_cell_count;
     return totalCells;
@@ -139,12 +190,28 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
   const interactiveEnabled = session?.interactive_session_requested === true;
   const awaitingCommand = session?.status === "awaiting_command";
   const interactiveControlsEnabled = interactiveEnabled && (awaitingCommand || session?.status === "running");
+  const commandEndpoint =
+    presentationMode === "current"
+      ? `${resolveApiBase()}/v1/live/current/commands`
+      : `${resolveApiBase()}/v1/sessions/${sessionId}/commands`;
+  const previewEndpointBase =
+    presentationMode === "current"
+      ? `${resolveApiBase()}/v1/live/current/preview`
+      : `${resolveApiBase()}/v1/sessions/${sessionId}/preview`;
+  const previewDrivenMode: ViewportMode | null =
+    preview && !isFemBackend ? (preview.type === "3D" ? "3D" : "2D") : null;
+  const effectiveViewMode = previewDrivenMode ?? viewMode;
+  const previewVectorComponent: VectorComponent =
+    preview?.component && preview.component !== "3D"
+      ? (preview.component as VectorComponent)
+      : "magnitude";
+  const effectiveVectorComponent = isMeshPreview ? previewVectorComponent : component;
 
   const enqueueCommand = useCallback(async (payload: Record<string, unknown>) => {
     setCommandBusy(true);
     setCommandMessage(null);
     try {
-      const response = await fetch(`${resolveApiBase()}/v1/sessions/${sessionId}/commands`, {
+      const response = await fetch(commandEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -162,7 +229,30 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
     } finally {
       setCommandBusy(false);
     }
-  }, [sessionId]);
+  }, [commandEndpoint]);
+
+  const updatePreview = useCallback(async (path: string, payload: Record<string, unknown> = {}) => {
+    setPreviewBusy(true);
+    setPreviewMessage(null);
+    try {
+      const response = await fetch(`${previewEndpointBase}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detail = data?.message ?? data?.error ?? `HTTP ${response.status}`;
+        throw new Error(detail);
+      }
+    } catch (previewError) {
+      setPreviewMessage(
+        previewError instanceof Error ? previewError.message : "Failed to update preview",
+      );
+    } finally {
+      setPreviewBusy(false);
+    }
+  }, [presentationMode, previewEndpointBase]);
 
   /* Keyboard shortcuts: 1=3D, 2=2D, 3=Mesh */
   useEffect(() => {
@@ -191,48 +281,82 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
     [state?.quantities],
   );
 
+  const previewQuantityOptions = useMemo(
+    () =>
+      (state?.quantities ?? [])
+        .filter((q) => q.available && q.kind === "vector_field")
+        .map((q) => ({ value: q.id, label: `${q.label} (${q.unit})` })),
+    [state?.quantities],
+  );
+
   useEffect(() => {
-    if (!quantityOptions.length) return;
-    if (!quantityOptions.some((opt) => opt.value === selectedQuantity)) {
-      setSelectedQuantity(quantityOptions[0].value);
+    const options = preview ? previewQuantityOptions : quantityOptions;
+    if (!options.length) return;
+    if (!options.some((opt) => opt.value === selectedQuantity)) {
+      setSelectedQuantity(options[0].value);
     }
-  }, [quantityOptions, selectedQuantity]);
+  }, [preview, previewQuantityOptions, quantityOptions, selectedQuantity]);
+
+  useEffect(() => {
+    if (preview?.quantity) {
+      setSelectedQuantity(preview.quantity);
+    }
+  }, [preview?.quantity]);
 
   const quantityDescriptor = useMemo(
-    () => state?.quantities.find((q) => q.id === selectedQuantity) ?? null,
-    [selectedQuantity, state?.quantities],
+    () => state?.quantities.find((q) => q.id === (preview?.quantity ?? selectedQuantity)) ?? null,
+    [preview?.quantity, selectedQuantity, state?.quantities],
   );
 
   /* Field data */
   const fieldMap = useMemo(
     () => ({
-      m: liveState?.magnetization ?? state?.latest_fields.m ?? null,
+      m: preview?.quantity === "m" && preview.vector_field_values
+        ? preview.vector_field_values
+        : liveState?.magnetization ?? state?.latest_fields.m ?? null,
       H_ex: state?.latest_fields.h_ex ?? null,
       H_demag: state?.latest_fields.h_demag ?? null,
       H_ext: state?.latest_fields.h_ext ?? null,
       H_eff: state?.latest_fields.h_eff ?? null,
     }),
-    [liveState?.magnetization, state?.latest_fields.h_demag, state?.latest_fields.h_eff, state?.latest_fields.h_ex, state?.latest_fields.h_ext, state?.latest_fields.m],
+    [
+      liveState?.magnetization,
+      preview?.quantity,
+      preview?.type,
+      preview?.vector_field_values,
+      state?.latest_fields.h_demag,
+      state?.latest_fields.h_eff,
+      state?.latest_fields.h_ex,
+      state?.latest_fields.h_ext,
+      state?.latest_fields.m,
+    ],
   );
 
   const selectedVectors = useMemo(() => {
-    const values = fieldMap[selectedQuantity as keyof typeof fieldMap] ?? null;
+    if (preview?.vector_field_values) {
+      return new Float64Array(preview.vector_field_values);
+    }
+    const values = fieldMap[(preview?.quantity ?? selectedQuantity) as keyof typeof fieldMap] ?? null;
     return values ? new Float64Array(values) : null;
-  }, [fieldMap, selectedQuantity]);
+  }, [fieldMap, preview?.quantity, preview?.vector_field_values, selectedQuantity]);
 
   /* FEM mesh data */
+  const effectiveFemMesh = useMemo(
+    () => (isMeshPreview && preview?.fem_mesh ? preview.fem_mesh : femMesh),
+    [femMesh, isMeshPreview, preview?.fem_mesh],
+  );
   const [flatNodes, flatFaces] = useMemo(() => {
-    if (!femMesh) return [null, null];
+    if (!effectiveFemMesh) return [null, null];
     return [
-      femMesh.nodes.flatMap((node) => node),
-      femMesh.boundary_faces.flatMap((face) => face),
+      effectiveFemMesh.nodes.flatMap((node) => node),
+      effectiveFemMesh.boundary_faces.flatMap((face) => face),
     ];
-  }, [femMesh]);
+  }, [effectiveFemMesh]);
 
   const femMeshData = useMemo<FemMeshData | null>(() => {
-    if (!isFemBackend || !femMesh || !flatNodes || !flatFaces) return null;
-    const nNodes = femMesh.nodes.length;
-    const nElements = femMesh.elements.length;
+    if (!isFemBackend || !effectiveFemMesh || !flatNodes || !flatFaces) return null;
+    const nNodes = effectiveFemMesh.nodes.length;
+    const nElements = femMesh?.elements.length ?? effectiveFemMesh.elements.length;
     let fieldData: FemMeshData["fieldData"] | undefined;
     if (selectedVectors && selectedVectors.length >= nNodes * 3) {
       const x = new Array<number>(nNodes);
@@ -246,20 +370,21 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
       fieldData = { x, y, z };
     }
     return { nodes: flatNodes, boundaryFaces: flatFaces, nNodes, nElements, fieldData };
-  }, [isFemBackend, femMesh, flatNodes, flatFaces, selectedVectors]);
+  }, [isFemBackend, effectiveFemMesh, femMesh?.elements.length, flatNodes, flatFaces, selectedVectors]);
 
   const femTopologyKey = useMemo(() => {
-    if (!femMesh) return null;
-    return `${femMesh.nodes.length}:${femMesh.elements.length}:${femMesh.boundary_faces.length}`;
-  }, [femMesh]);
+    if (!effectiveFemMesh) return null;
+    return `${effectiveFemMesh.nodes.length}:${femMesh?.elements.length ?? effectiveFemMesh.elements.length}:${effectiveFemMesh.boundary_faces.length}`;
+  }, [effectiveFemMesh, femMesh?.elements.length]);
 
   /* Slice count */
   const maxSliceCount = useMemo(() => {
+    if (preview?.spatial_kind === "grid") return 1;
     if (isFemBackend && femMeshData) return FEM_SLICE_COUNT;
-    if (plane === "xy") return Math.max(1, grid[2]);
-    if (plane === "xz") return Math.max(1, grid[1]);
-    return Math.max(1, grid[0]);
-  }, [femMeshData, grid, isFemBackend, plane]);
+    if (plane === "xy") return Math.max(1, previewGrid[2]);
+    if (plane === "xz") return Math.max(1, previewGrid[1]);
+    return Math.max(1, previewGrid[0]);
+  }, [femMeshData, isFemBackend, plane, preview?.spatial_kind, previewGrid]);
 
   useEffect(() => {
     if (sliceIndex >= maxSliceCount) setSliceIndex(Math.max(0, maxSliceCount - 1));
@@ -268,7 +393,7 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
   /* Derived stats for sidebar */
   const fieldStats = useMemo(() => {
     if (!selectedVectors) return null;
-    const n = isFemBackend ? (femMesh?.nodes.length ?? 0) : grid[0] * grid[1] * grid[2];
+    const n = isFemBackend ? (effectiveFemMesh?.nodes.length ?? 0) : Math.floor(selectedVectors.length / 3);
     if (n <= 0 || selectedVectors.length < n * 3) return null;
     let sumX = 0, sumY = 0, sumZ = 0;
     let minX = Infinity, minY = Infinity, minZ = Infinity;
@@ -285,7 +410,7 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
       meanX: sumX * inv, meanY: sumY * inv, meanZ: sumZ * inv,
       minX, minY, minZ, maxX, maxY, maxZ,
     };
-  }, [selectedVectors, isFemBackend, femMesh, grid]);
+  }, [selectedVectors, isFemBackend, effectiveFemMesh]);
 
   /* Material from metadata */
   const material = useMemo(() => {
@@ -318,7 +443,11 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
   if (!state) {
     return (
       <div className={s.loadingShell}>
-        {error ? `Connection error: ${error}` : `Connecting to session ${sessionId}…`}
+        {error
+          ? `Connection error: ${error}`
+          : presentationMode === "current"
+            ? "Connecting to local live workspace…"
+            : `Connecting to session ${sessionId}…`}
       </div>
     );
   }
@@ -327,18 +456,24 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
     <div className={s.shell}>
       {/* ═══════ HEADER ═══════════════════════════════ */}
       <div className={s.header}>
-        <a
-          href="/runs"
-          className={s.headerBackBtn}
-          title="Back to runs list"
-          aria-label="Back to runs list"
-        >
-          ←
-        </a>
+        {presentationMode === "session" && (
+          <a
+            href="/runs"
+            className={s.headerBackBtn}
+            title="Back to runs list"
+            aria-label="Back to runs list"
+          >
+            ←
+          </a>
+        )}
         <span className={s.headerDot} data-status={session?.status ?? "idle"} />
-        <span className={s.headerTitle}>{session?.problem_name ?? sessionId}</span>
+        <span className={s.headerTitle}>
+          {session?.problem_name ?? (presentationMode === "current" ? "Local Live Workspace" : sessionId)}
+        </span>
         <span className={s.headerMeta}>{session?.requested_backend?.toUpperCase() ?? ""}</span>
-        <span className={s.headerMeta}>{session?.execution_mode ?? ""}</span>
+        <span className={s.headerMeta}>
+          {presentationMode === "current" ? "local-live" : session?.execution_mode ?? ""}
+        </span>
 
         <span className={s.headerSpacer} />
 
@@ -349,24 +484,26 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
         )}
         {!isFemBackend && totalCells && totalCells > 0 && (
           <span className={s.headerPill}>
-            {grid[0]}×{grid[1]}×{grid[2]} = {totalCells.toLocaleString()} cells
+            {solverGrid[0]}×{solverGrid[1]}×{solverGrid[2]} = {totalCells.toLocaleString()} cells
           </span>
         )}
 
-        <div className={s.headerToggle}>
-          {(["3D", "2D", "Mesh"] as ViewportMode[]).map((mode, i) => (
-            <button
-              key={mode}
-              className={s.headerToggleBtn}
-              data-active={viewMode === mode}
-              disabled={mode === "Mesh" && !isFemBackend}
-              onClick={() => setViewMode(mode)}
-              title={`${mode} view (${i + 1})`}
-            >
-              <span className={s.kbdHint}>{i + 1}</span>{mode}
-            </button>
-          ))}
-        </div>
+        {!previewDrivenMode && (
+          <div className={s.headerToggle}>
+            {(["3D", "2D", "Mesh"] as ViewportMode[]).map((mode, i) => (
+              <button
+                key={mode}
+                className={s.headerToggleBtn}
+                data-active={viewMode === mode}
+                disabled={mode === "Mesh" && !isFemBackend}
+                onClick={() => setViewMode(mode)}
+                title={`${mode} view (${i + 1})`}
+              >
+                <span className={s.kbdHint}>{i + 1}</span>{mode}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ═══════ VIEWPORT ═════════════════════════════ */}
@@ -376,28 +513,150 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
           <span className={s.viewportBarLabel}>Qty</span>
           <select
             className={s.viewportBarSelect}
-            value={selectedQuantity}
-            onChange={(e) => setSelectedQuantity(e.target.value)}
+            value={preview?.quantity ?? selectedQuantity}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (preview) {
+                void updatePreview("/quantity", { quantity: next });
+              } else {
+                setSelectedQuantity(next);
+              }
+            }}
+            disabled={previewBusy}
           >
-            {(quantityOptions.length ? quantityOptions : [{ value: "m", label: "Magnetization" }]).map((opt) => (
+            {((preview ? previewQuantityOptions : quantityOptions).length
+              ? (preview ? previewQuantityOptions : quantityOptions)
+              : [{ value: "m", label: "Magnetization" }]).map((opt) => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
 
           <span className={s.viewportBarSep} />
           <span className={s.viewportBarLabel}>Comp</span>
-          <select
-            className={s.viewportBarSelect}
-            value={component}
-            onChange={(e) => setComponent(e.target.value as VectorComponent)}
-          >
-            <option value="magnitude">|v|</option>
-            <option value="x">x</option>
-            <option value="y">y</option>
-            <option value="z">z</option>
-          </select>
+          {preview ? (
+            <select
+              className={s.viewportBarSelect}
+              value={preview.component}
+              onChange={(e) => void updatePreview("/component", { component: e.target.value as PreviewComponent })}
+              disabled={previewBusy}
+            >
+              <option value="3D">3D</option>
+              <option value="x">x</option>
+              <option value="y">y</option>
+              <option value="z">z</option>
+            </select>
+          ) : (
+            <select
+              className={s.viewportBarSelect}
+              value={component}
+              onChange={(e) => setComponent(e.target.value as VectorComponent)}
+            >
+              <option value="magnitude">|v|</option>
+              <option value="x">x</option>
+              <option value="y">y</option>
+              <option value="z">z</option>
+            </select>
+          )}
 
-          {viewMode === "2D" && (
+          {preview ? (
+            <>
+              {preview.x_possible_sizes.length > 0 && preview.y_possible_sizes.length > 0 && (
+                <>
+                  <span className={s.viewportBarSep} />
+                  <span className={s.viewportBarLabel}>X</span>
+                  <select
+                    className={s.viewportBarSelect}
+                    value={preview.x_chosen_size}
+                    onChange={(e) =>
+                      void updatePreview("/XChosenSize", { xChosenSize: Number(e.target.value) })
+                    }
+                    disabled={previewBusy}
+                  >
+                    {preview.x_possible_sizes.map((size) => (
+                      <option key={size} value={size}>{size}</option>
+                    ))}
+                  </select>
+                  <span className={s.viewportBarLabel}>Y</span>
+                  <select
+                    className={s.viewportBarSelect}
+                    value={preview.y_chosen_size}
+                    onChange={(e) =>
+                      void updatePreview("/YChosenSize", { yChosenSize: Number(e.target.value) })
+                    }
+                    disabled={previewBusy}
+                  >
+                    {preview.y_possible_sizes.map((size) => (
+                      <option key={size} value={size}>{size}</option>
+                    ))}
+                  </select>
+                </>
+              )}
+              <label className={s.viewportToggle}>
+                <input
+                  type="checkbox"
+                  checked={preview.auto_scale_enabled}
+                  onChange={(e) =>
+                    void updatePreview("/autoScaleEnabled", {
+                      autoScaleEnabled: e.target.checked,
+                    })
+                  }
+                  disabled={previewBusy}
+                />
+                <span>Auto-scale</span>
+              </label>
+              {preview.spatial_kind === "grid" && solverGrid[2] > 1 && (
+                <>
+                  <span className={s.viewportBarLabel}>Layer</span>
+                  <select
+                    className={s.viewportBarSelect}
+                    value={preview.layer}
+                    onChange={(e) => void updatePreview("/layer", { layer: Number(e.target.value) })}
+                    disabled={previewBusy || preview.all_layers}
+                  >
+                    {Array.from({ length: solverGrid[2] }, (_, i) => (
+                      <option key={i} value={i}>{i}</option>
+                    ))}
+                  </select>
+                  <label className={s.viewportToggle}>
+                    <input
+                      type="checkbox"
+                      checked={preview.all_layers}
+                      onChange={(e) =>
+                        void updatePreview("/allLayers", { allLayers: e.target.checked })
+                      }
+                      disabled={previewBusy}
+                    />
+                    <span>All layers</span>
+                  </label>
+                </>
+              )}
+              {preview.spatial_kind === "mesh" && effectiveViewMode === "2D" && (
+                <>
+                  <span className={s.viewportBarSep} />
+                  <span className={s.viewportBarLabel}>Plane</span>
+                  <select
+                    className={s.viewportBarSelect}
+                    value={plane}
+                    onChange={(e) => setPlane(e.target.value as SlicePlane)}
+                  >
+                    <option value="xy">XY</option>
+                    <option value="xz">XZ</option>
+                    <option value="yz">YZ</option>
+                  </select>
+                  <span className={s.viewportBarLabel}>Slice</span>
+                  <select
+                    className={s.viewportBarSelect}
+                    value={sliceIndex}
+                    onChange={(e) => setSliceIndex(Number(e.target.value))}
+                  >
+                    {Array.from({ length: maxSliceCount }, (_, i) => (
+                      <option key={i} value={i}>{i + 1}</option>
+                    ))}
+                  </select>
+                </>
+              )}
+            </>
+          ) : effectiveViewMode === "2D" && (
             <>
               <span className={s.viewportBarSep} />
               <span className={s.viewportBarLabel}>Plane</span>
@@ -423,16 +682,27 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
             </>
           )}
         </div>
+        {(preview?.auto_downscaled || liveState?.preview_auto_downscaled) && (
+          <div
+            className={s.previewNotice}
+            title={preview?.auto_downscale_message ?? liveState?.preview_auto_downscale_message ?? undefined}
+          >
+            {preview?.auto_downscale_message ??
+              liveState?.preview_auto_downscale_message ??
+              `Preview auto-scaled to ${previewGrid[0]}×${previewGrid[1]}×${previewGrid[2]}`}
+          </div>
+        )}
+        {previewMessage && <div className={s.previewStatus}>{previewMessage}</div>}
 
         {/* Canvas area */}
         <div className={s.viewportCanvas}>
           {/* Status overlay */}
           <div className={s.viewportOverlay}>
-            <span>Step {(liveState?.step ?? run?.total_steps ?? 0).toLocaleString()}</span>
-            <span>{fmtSI(liveState?.time ?? run?.final_time ?? 0, "s")}</span>
-            {liveState?.max_dm_dt != null && (
-              <span style={{ color: liveState.max_dm_dt < 1e-5 ? "#35b779" : undefined }}>
-                dm/dt {fmtExp(liveState.max_dm_dt)}
+            <span>Step {effectiveStep.toLocaleString()}</span>
+            <span>{fmtSI(effectiveTime, "s")}</span>
+            {effectiveDmDt > 0 && (
+              <span style={{ color: effectiveDmDt < 1e-5 ? "#35b779" : undefined }}>
+                dm/dt {fmtExp(effectiveDmDt)}
               </span>
             )}
           </div>
@@ -449,50 +719,60 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
                 compact
               />
             </div>
-          ) : !selectedVectors ? (
-            <div style={{ padding: "1rem" }}>
-              <EmptyState title="No preview data yet" tone="info" compact />
-            </div>
-          ) : viewMode === "Mesh" && isFemBackend && femMeshData ? (
+          ) : preview && preview.spatial_kind === "grid" && preview.type === "2D" && preview.scalar_field.length > 0 ? (
+            <PreviewScalarField2D
+              data={preview.scalar_field}
+              grid={preview.preview_grid}
+              quantityLabel={quantityDescriptor?.label ?? preview.quantity}
+              quantityUnit={preview.unit}
+              component={preview.component}
+              min={preview.min}
+              max={preview.max}
+            />
+          ) : effectiveViewMode === "Mesh" && isFemBackend && femMeshData ? (
             <FemMeshView3D
               topologyKey={femTopologyKey ?? undefined}
               meshData={femMeshData}
               colorField="quality"
             />
-          ) : viewMode === "3D" && isFemBackend && femMeshData ? (
+          ) : effectiveViewMode === "3D" && isFemBackend && femMeshData ? (
             <FemMeshView3D
               topologyKey={femTopologyKey ?? undefined}
               meshData={femMeshData}
               fieldLabel={quantityDescriptor?.label ?? selectedQuantity}
               colorField={
-                component === "x" ? "x"
-                  : component === "y" ? "y"
-                  : component === "z" ? "z"
+                effectiveVectorComponent === "x" ? "x"
+                  : effectiveVectorComponent === "y" ? "y"
+                  : effectiveVectorComponent === "z" ? "z"
                   : "magnitude"
               }
             />
-          ) : viewMode === "2D" && isFemBackend && femMeshData ? (
+          ) : effectiveViewMode === "2D" && isFemBackend && femMeshData ? (
             <FemMeshSlice2D
               meshData={femMeshData}
               quantityLabel={quantityDescriptor?.label ?? selectedQuantity}
               quantityId={selectedQuantity}
-              component={component}
+              component={effectiveVectorComponent}
               plane={plane}
               sliceIndex={sliceIndex}
               sliceCount={maxSliceCount}
             />
-          ) : viewMode === "3D" ? (
+          ) : !selectedVectors ? (
+            <div style={{ padding: "1rem" }}>
+              <EmptyState title="No preview data yet" tone="info" compact />
+            </div>
+          ) : effectiveViewMode === "3D" ? (
             <MagnetizationView3D
-              grid={grid}
+              grid={previewGrid}
               vectors={selectedVectors}
-              fieldLabel={quantityDescriptor?.label ?? selectedQuantity}
+              fieldLabel={quantityDescriptor?.label ?? preview?.quantity ?? selectedQuantity}
             />
           ) : (
             <MagnetizationSlice2D
-              grid={grid}
+              grid={previewGrid}
               vectors={selectedVectors}
-              quantityLabel={quantityDescriptor?.label ?? selectedQuantity}
-              quantityId={selectedQuantity}
+              quantityLabel={quantityDescriptor?.label ?? preview?.quantity ?? selectedQuantity}
+              quantityId={preview?.quantity ?? selectedQuantity}
               component={component}
               plane={plane}
               sliceIndex={sliceIndex}
@@ -508,31 +788,31 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
           <div className={s.fieldGrid2}>
             <div className={s.fieldCell}>
               <span className={s.fieldLabel}>Step</span>
-              <span className={s.fieldValue}>{(liveState?.step ?? run?.total_steps ?? 0).toLocaleString()}</span>
+              <span className={s.fieldValue}>{effectiveStep.toLocaleString()}</span>
             </div>
             <div className={s.fieldCell}>
               <span className={s.fieldLabel}>Time</span>
-              <span className={s.fieldValue}>{fmtSI(liveState?.time ?? run?.final_time ?? 0, "s")}</span>
+              <span className={s.fieldValue}>{fmtSI(effectiveTime, "s")}</span>
             </div>
             <div className={s.fieldCell}>
               <span className={s.fieldLabel}>Δt</span>
-              <span className={s.fieldValue}>{fmtSI(liveState?.dt ?? 0, "s")}</span>
+              <span className={s.fieldValue}>{fmtSI(effectiveDt, "s")}</span>
             </div>
             <div className={s.fieldCell}>
               <span className={s.fieldLabel}>max dm/dt</span>
               <span className={s.fieldValue} style={{
-                color: (liveState?.max_dm_dt ?? 1) < 1e-5 ? "#35b779" : undefined
+                color: effectiveDmDt > 0 && effectiveDmDt < 1e-5 ? "#35b779" : undefined
               }}>
-                {fmtExp(liveState?.max_dm_dt ?? 0)}
+                {fmtExp(effectiveDmDt)}
               </span>
             </div>
             <div className={s.fieldCell}>
               <span className={s.fieldLabel}>max |H_eff|</span>
-              <span className={s.fieldValue}>{fmtExp(liveState?.max_h_eff ?? 0)}</span>
+              <span className={s.fieldValue}>{fmtExp(effectiveHEff)}</span>
             </div>
             <div className={s.fieldCell}>
               <span className={s.fieldLabel}>max |H_demag|</span>
-              <span className={s.fieldValue}>{fmtExp(liveState?.max_h_demag ?? 0)}</span>
+              <span className={s.fieldValue}>{fmtExp(effectiveHDemag)}</span>
             </div>
           </div>
           {dmDtSpark.length > 1 && (
@@ -604,11 +884,82 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
                 disabled={commandBusy}
                 onClick={() => enqueueCommand({ kind: "close" })}
               >
-                Close Session
+                {presentationMode === "current" ? "Close Workspace" : "Close Session"}
               </Button>
             </div>
             {commandMessage && (
               <div className={s.interactiveMessage}>{commandMessage}</div>
+            )}
+          </Section>
+        )}
+
+        {preview && (
+          <Section
+            title="Preview"
+            badge={
+              preview.spatial_kind === "mesh"
+                ? `${preview.data_points_count.toLocaleString()} nodes`
+                : `${preview.applied_x_chosen_size}×${preview.applied_y_chosen_size}`
+            }
+          >
+            {preview.spatial_kind === "mesh" ? (
+              <div className={s.fieldGrid2}>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Quantity</span>
+                  <span className={s.fieldValue}>{preview.quantity}</span>
+                </div>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Mode</span>
+                  <span className={s.fieldValue}>{preview.type}</span>
+                </div>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Preview nodes</span>
+                  <span className={s.fieldValue}>{preview.data_points_count.toLocaleString()}</span>
+                </div>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Preview faces</span>
+                  <span className={s.fieldValue}>{preview.fem_mesh?.boundary_faces.length.toLocaleString() ?? "0"}</span>
+                </div>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Original nodes</span>
+                  <span className={s.fieldValue}>{preview.original_node_count?.toLocaleString() ?? "—"}</span>
+                </div>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Original faces</span>
+                  <span className={s.fieldValue}>{preview.original_face_count?.toLocaleString() ?? "—"}</span>
+                </div>
+              </div>
+            ) : (
+              <div className={s.fieldGrid2}>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Quantity</span>
+                  <span className={s.fieldValue}>{preview.quantity}</span>
+                </div>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Mode</span>
+                  <span className={s.fieldValue}>{preview.type}</span>
+                </div>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Requested XY</span>
+                  <span className={s.fieldValue}>
+                    {preview.x_chosen_size}×{preview.y_chosen_size}
+                  </span>
+                </div>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Applied XY</span>
+                  <span className={s.fieldValue}>
+                    {preview.applied_x_chosen_size}×{preview.applied_y_chosen_size}
+                  </span>
+                </div>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Points</span>
+                  <span className={s.fieldValue}>{preview.data_points_count.toLocaleString()}</span>
+                </div>
+                <div className={s.fieldCell}>
+                  <span className={s.fieldLabel}>Layer stride</span>
+                  <span className={s.fieldValue}>{preview.applied_layer_stride}</span>
+                </div>
+              </div>
             )}
           </Section>
         )}
@@ -639,24 +990,24 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
         )}
 
         {/* Energy */}
-        <Section title="Energy" badge={fmtSI(liveState?.e_total ?? run?.final_e_total ?? 0, "J")}>
+        <Section title="Energy" badge={fmtSI(effectiveETotal, "J")}>
           <div className={s.fieldGrid2}>
             <div className={s.fieldCell}>
               <span className={s.fieldLabel}>E_exchange</span>
-              <span className={s.fieldValue}>{fmtSI(liveState?.e_ex ?? run?.final_e_ex ?? 0, "J")}</span>
+              <span className={s.fieldValue}>{fmtSI(effectiveEEx, "J")}</span>
             </div>
             <div className={s.fieldCell}>
               <span className={s.fieldLabel}>E_demag</span>
-              <span className={s.fieldValue}>{fmtSI(liveState?.e_demag ?? run?.final_e_demag ?? 0, "J")}</span>
+              <span className={s.fieldValue}>{fmtSI(effectiveEDemag, "J")}</span>
             </div>
             <div className={s.fieldCell}>
               <span className={s.fieldLabel}>E_ext</span>
-              <span className={s.fieldValue}>{fmtSI(liveState?.e_ext ?? run?.final_e_ext ?? 0, "J")}</span>
+              <span className={s.fieldValue}>{fmtSI(effectiveEExt, "J")}</span>
             </div>
             <div className={s.fieldCell}>
               <span className={s.fieldLabel}>E_total</span>
               <span className={s.fieldValue} style={{ color: "hsl(210, 70%, 65%)" }}>
-                {fmtSI(liveState?.e_total ?? run?.final_e_total ?? 0, "J")}
+                {fmtSI(effectiveETotal, "J")}
               </span>
             </div>
           </div>
@@ -697,7 +1048,7 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
         )}
 
         {/* Mesh Quality (FEM only) */}
-        {isFemBackend && femMeshData && viewMode === "Mesh" && (
+        {isFemBackend && femMeshData && effectiveViewMode === "Mesh" && (
           <Section title="Mesh Quality">
             <MeshQualityHistogram femMesh={femMeshData} />
           </Section>
@@ -742,7 +1093,7 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
               <>
                 <div className={s.fieldCell}>
                   <span className={s.fieldLabel}>Grid</span>
-                  <span className={s.fieldValue}>{grid[0]}×{grid[1]}×{grid[2]}</span>
+                  <span className={s.fieldValue}>{solverGrid[0]}×{solverGrid[1]}×{solverGrid[2]}</span>
                 </div>
                 <div className={s.fieldCell}>
                   <span className={s.fieldLabel}>Cells</span>
@@ -763,7 +1114,7 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
           </div>
         </Section>
 
-        {/* Session footer */}
+        {/* Workspace footer */}
         <div className={s.sidebarFooter}>
           {session?.script_path && (
             <div className={s.footerRow}>
@@ -782,8 +1133,12 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
             </div>
           )}
           <div className={s.footerRow}>
-            <span className={s.fieldLabel}>Session</span>
-            <span className={s.footerValue}>{session?.session_id?.slice(0, 12) ?? "—"}</span>
+            <span className={s.fieldLabel}>
+              {presentationMode === "current" ? "Workspace" : "Session"}
+            </span>
+            <span className={s.footerValue}>
+              {presentationMode === "current" ? "local" : session?.session_id?.slice(0, 12) ?? "—"}
+            </span>
           </div>
         </div>
       </div>
@@ -801,11 +1156,12 @@ export default function RunControlRoom({ sessionId }: RunControlRoomProps) {
           <EngineConsole
           session={session ?? null}
           run={run ?? null}
-          liveState={liveState ?? null}
+          liveState={effectiveLiveState ?? null}
           scalarRows={scalarRows}
           artifacts={state?.artifacts ?? []}
           connection={connection}
           error={error}
+          presentationMode={presentationMode}
           />
         )}
       </div>

@@ -168,6 +168,30 @@ export default function FemMeshView3D({
     const colors = new Float32Array(nNodes * 3);
     const _c = new THREE.Color();
     const fld = meshData.fieldData;
+    let scaleX = 1;
+    let scaleY = 1;
+    let scaleZ = 1;
+    let scaleMagnitude = 1;
+
+    if (fld) {
+      let maxAbsX = 0;
+      let maxAbsY = 0;
+      let maxAbsZ = 0;
+      let maxMag = 0;
+      for (let i = 0; i < nNodes; i++) {
+        const fx = fld.x[i] ?? 0;
+        const fy = fld.y[i] ?? 0;
+        const fz = fld.z[i] ?? 0;
+        maxAbsX = Math.max(maxAbsX, Math.abs(fx));
+        maxAbsY = Math.max(maxAbsY, Math.abs(fy));
+        maxAbsZ = Math.max(maxAbsZ, Math.abs(fz));
+        maxMag = Math.max(maxMag, Math.sqrt(fx * fx + fy * fy + fz * fz));
+      }
+      scaleX = maxAbsX > 1e-12 ? maxAbsX : 1;
+      scaleY = maxAbsY > 1e-12 ? maxAbsY : 1;
+      scaleZ = maxAbsZ > 1e-12 ? maxAbsZ : 1;
+      scaleMagnitude = maxMag > 1e-12 ? maxMag : 1;
+    }
 
     if (field === "quality") {
       // Compute AR per face, then average per vertex
@@ -201,10 +225,10 @@ export default function FemMeshView3D({
           const fy = fld.y[i] ?? 0;
           const fz = fld.z[i] ?? 0;
           switch (field) {
-            case "x": divergingColor(fx, _c); break;
-            case "y": divergingColor(fy, _c); break;
-            case "z": divergingColor(fz, _c); break;
-            case "magnitude": magnitudeColor(Math.sqrt(fx*fx + fy*fy + fz*fz), _c); break;
+            case "x": divergingColor(fx / scaleX, _c); break;
+            case "y": divergingColor(fy / scaleY, _c); break;
+            case "z": divergingColor(fz / scaleZ, _c); break;
+            case "magnitude": magnitudeColor(Math.sqrt(fx*fx + fy*fy + fz*fz) / scaleMagnitude, _c); break;
           }
         }
         colors[i * 3] = _c.r;

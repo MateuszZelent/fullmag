@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 /**
@@ -9,7 +8,9 @@
  */
 
 import { useEffect, useRef, useMemo } from "react";
+import type { ECharts, EChartsOption } from "echarts";
 import * as echarts from "echarts";
+import type { ScalarRow } from "../../lib/useSessionStream";
 
 // ─── Theme constants (from amumax echarts-theme.ts) ────────────────
 const THEME = {
@@ -29,16 +30,7 @@ const THEME = {
   brushBorder: "#3b82f6",
 };
 
-const SERIES_COLORS = ["#60a5fa", "#34d399", "#f472b6", "#fbbf24", "#a78bfa", "#fb923c"];
-
-interface ScalarRow {
-  step: number;
-  time: number;
-  e_ex: number;
-  e_demag: number;
-  e_ext: number;
-  e_total: number;
-}
+const SERIES_COLORS = ["#60a5fa", "#34d399", "#f472b6", "#fbbf24", "#a78bfa", "#fb923c", "#38bdf8", "#e879f9"];
 
 interface Props {
   rows: ScalarRow[];
@@ -50,10 +42,14 @@ const DEFAULT_Y_COLUMNS = ["e_ex", "e_demag", "e_ext", "e_total"];
 const COLUMN_LABELS: Record<string, string> = {
   step: "Step",
   time: "Time (s)",
+  solver_dt: "Δt (s)",
   e_ex: "E_exchange (J)",
   e_demag: "E_demag (J)",
   e_ext: "E_external (J)",
   e_total: "E_total (J)",
+  max_dm_dt: "max dm/dt (rad/s)",
+  max_h_eff: "max |H_eff| (A/m)",
+  max_h_demag: "max |H_demag| (A/m)",
 };
 
 export default function ScalarPlot({
@@ -65,6 +61,9 @@ export default function ScalarPlot({
   const chartRef = useRef<echarts.ECharts | null>(null);
 
   // ─── Build series data ────────────────────────────────────────────
+  const accessor = (row: ScalarRow, key: string): number =>
+    (row as unknown as Record<string, number>)[key] ?? 0;
+
   const seriesData = useMemo(() => {
     if (!rows.length) return [];
     return yColumns.map((col, i) => ({
@@ -77,7 +76,7 @@ export default function ScalarPlot({
       animation: false,
       lineStyle: { width: 1.5 },
       itemStyle: { color: SERIES_COLORS[i % SERIES_COLORS.length] },
-      data: rows.map((row) => [(row as any)[xColumn], (row as any)[col]]),
+      data: rows.map((row) => [accessor(row, xColumn), accessor(row, col)]),
     }));
   }, [rows, xColumn, yColumns]);
 

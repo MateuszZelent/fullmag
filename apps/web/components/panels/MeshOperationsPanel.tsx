@@ -39,7 +39,7 @@ interface ImportedAssetSummary {
 }
 
 interface MeshOperationsPanelProps {
-  sessionId: string;
+  sessionId?: string | null;
   backend: BackendKind;
   sourceLabel?: string | null;
   sourceKind?: string | null;
@@ -319,6 +319,9 @@ export default function MeshOperationsPanel({
   const [importTarget, setImportTarget] = useState<LocalRealization>(backend);
   const [importedAsset, setImportedAsset] = useState<ImportedAssetSummary | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const importEndpoint = sessionId
+    ? `${resolveApiBase()}/v1/sessions/${sessionId}/assets/import`
+    : `${resolveApiBase()}/v1/live/current/assets/import`;
 
   const primaryCount = backend === "fem" ? femMesh?.elements.length ?? null : totalCells;
   const primaryCountLabel = backend === "fem" ? "FEM elements" : "FDM cells";
@@ -364,7 +367,7 @@ export default function MeshOperationsPanel({
       const buffer = await file.arrayBuffer();
       let summary: ImportedAssetSummary;
       try {
-        const response = await fetch(`${resolveApiBase()}/v1/sessions/${sessionId}/assets/import`, {
+        const response = await fetch(importEndpoint, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -426,7 +429,7 @@ export default function MeshOperationsPanel({
       setImportedAsset(summary);
       setFeedback(
         summary.origin === "backend"
-          ? `Imported ${file.name} into session asset store`
+          ? `Imported ${file.name} into workspace asset store`
           : `Imported ${file.name} in browser preview mode`,
       );
     } catch (error) {
@@ -669,7 +672,7 @@ export default function MeshOperationsPanel({
                   <ReadonlyField label="Format" value={importedAsset.kind} mono />
                   <ReadonlyField label="Size" value={formatBytes(importedAsset.fileBytes)} mono />
                   <ReadonlyField label="Target" value={importTarget === "fem" ? "FEM tet mesh" : "FDM voxelization"} />
-                  <ReadonlyField label="Origin" value={importedAsset.origin === "backend" ? "session asset" : "browser fallback"} />
+                  <ReadonlyField label="Origin" value={importedAsset.origin === "backend" ? "workspace asset" : "browser fallback"} />
                 </div>
 
                 {importedAsset.assetId || importedAsset.storedPath ? (
@@ -796,7 +799,7 @@ export default function MeshOperationsPanel({
                   lineHeight: 1.5,
                 }}
               >
-                Import local `STL`, `MSH`, or `mesh.json` to create a persisted session asset and preview how it maps to `FDM voxelization` or `FEM tet mesh`. The backend stores the uploaded file under the current session; browser-only fallback is used only if the API upload fails.
+                Import local `STL`, `MSH`, or `mesh.json` to create a persisted workspace asset and preview how it maps to `FDM voxelization` or `FEM tet mesh`. The backend stores the uploaded file under the current live workspace; browser-only fallback is used only if the API upload fails.
               </div>
             )}
           </div>

@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useRef, useEffect, useState, useMemo, useCallback } from "react";
@@ -17,6 +16,7 @@ interface EngineConsoleProps {
   artifacts: ArtifactEntry[];
   connection: "connecting" | "connected" | "disconnected";
   error: string | null;
+  presentationMode?: "session" | "current";
 }
 
 /* ── Formatting ────────────────────────────────────────────── */
@@ -77,6 +77,7 @@ function buildLogEntries(
   scalarRows: ScalarRow[],
   connection: string,
   error: string | null,
+  presentationMode: "session" | "current",
 ): LogEntry[] {
   const entries: LogEntry[] = [];
   const now = Date.now();
@@ -85,7 +86,10 @@ function buildLogEntries(
     entries.push({
       time: session.started_at_unix_ms,
       icon: "▶",
-      message: `Session ${session.session_id.slice(0, 8)} started — ${session.problem_name}`,
+      message:
+        presentationMode === "current"
+          ? `Workspace started — ${session.problem_name}`
+          : `Session ${session.session_id.slice(0, 8)} started — ${session.problem_name}`,
       severity: "system",
     });
 
@@ -142,12 +146,15 @@ function buildLogEntries(
     });
   }
 
-  // Convergence check
-  if (liveState && liveState.max_dm_dt < 1e-5 && liveState.step > 10) {
+  // Convergence check — threshold matches the default torque_tolerance
+  // in ProblemIR::Relaxation. Shows only when solver is clearly approaching
+  // equilibrium (step > 10 avoids false positive on initial conditions).
+  const CONVERGENCE_THRESHOLD = 1e-5;
+  if (liveState && liveState.max_dm_dt < CONVERGENCE_THRESHOLD && liveState.step > 10) {
     entries.push({
       time: liveState.updated_at_unix_ms || now,
       icon: "✓",
-      message: `Convergence criterion: max_dm/dt = ${fmtExp(liveState.max_dm_dt)} < 1e-5 — approaching equilibrium`,
+      message: `Convergence criterion: max_dm/dt = ${fmtExp(liveState.max_dm_dt)} < ${CONVERGENCE_THRESHOLD.toExponential(0)} — approaching equilibrium`,
       severity: "success",
     });
   }
@@ -175,7 +182,10 @@ function buildLogEntries(
     entries.push({
       time: now,
       icon: "⚠",
-      message: "SSE connection lost — attempting reconnect…",
+      message:
+        presentationMode === "current"
+          ? "Live connection lost — attempting reconnect…"
+          : "SSE connection lost — attempting reconnect…",
       severity: "warn",
     });
   }
@@ -200,14 +210,15 @@ export default function EngineConsole({
   artifacts,
   connection,
   error,
+  presentationMode = "session",
 }: EngineConsoleProps) {
   const [activeTab, setActiveTab] = useState<ConsoleTab>("live");
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
   const logEntries = useMemo(
-    () => buildLogEntries(session, run, liveState, scalarRows, connection, error),
-    [session, run, liveState, scalarRows, connection, error],
+    () => buildLogEntries(session, run, liveState, scalarRows, connection, error, presentationMode),
+    [session, run, liveState, scalarRows, connection, error, presentationMode],
   );
 
   useEffect(() => {
