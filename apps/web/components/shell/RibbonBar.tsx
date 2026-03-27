@@ -57,7 +57,7 @@ function buildGroups(props: RibbonBarProps): RibbonGroup[] {
       actions: [
         { id: "geometry", icon: <Shapes size={20} />, label: "Geometry", tooltip: "Define geometry" },
         { id: "material", icon: <FlaskConical size={20} />, label: "Material", tooltip: "Material properties" },
-        { id: "mesh", icon: <Hexagon size={20} />, label: "Mesh", tooltip: "Mesh controls", active: props.viewMode === "Mesh" },
+        { id: "mesh", icon: <Hexagon size={20} />, label: "Mesh", tooltip: "Mesh controls", active: props.viewMode === "Mesh", disabled: !props.isFemBackend, action: () => props.onViewChange?.("Mesh") },
       ],
     },
     {

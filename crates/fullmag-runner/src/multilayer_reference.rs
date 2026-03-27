@@ -163,6 +163,7 @@ fn execute_reference_fdm_multilayer_impl(
                 grid: [grid[0], grid[1], grid[2]],
                 fem_mesh: None,
                 magnetization: None,
+                preview_field: None,
                 finished: false,
             });
         }

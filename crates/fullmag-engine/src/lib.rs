@@ -1,4 +1,7 @@
 pub mod fem;
+pub mod fem_error_estimator;
+pub mod fem_face_topology;
+pub mod fem_size_field;
 pub mod multilayer;
 pub mod newell;
 pub mod studies;
@@ -125,6 +128,9 @@ pub enum TimeIntegrator {
     RK4,
     RK23,
     RK45,
+    /// Adams–Bashforth–Moulton 3rd-order predictor-corrector.
+    /// After 3-step Heun warmup, uses only 1 RHS evaluation per step.
+    ABM3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -527,6 +533,64 @@ pub struct ExchangeLlgState {
     grid: GridShape,
     magnetization: Vec<Vector3>,
     pub time_seconds: f64,
+    /// FSAL (First Same As Last) buffer for Dormand–Prince 5(4).
+    /// Stores the RHS evaluation at the accepted solution from the previous step,
+    /// which becomes k₁ for the next step — saving one full field assembly.
+    /// Automatically invalidated on rejected steps or non-RK45 integrators.
+    k_fsal: Option<Vec<Vector3>>,
+    /// ABM(3) history: stores the last 3 RHS evaluations for multi-step prediction.
+    abm_history: AbmHistory,
+}
+
+/// History buffer for Adams–Bashforth–Moulton 3rd-order predictor-corrector.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AbmHistory {
+    /// RHS at step n (most recent)
+    f_n: Option<Vec<Vector3>>,
+    /// RHS at step n-1
+    f_n_minus_1: Option<Vec<Vector3>>,
+    /// RHS at step n-2
+    f_n_minus_2: Option<Vec<Vector3>>,
+    /// Number of startup steps completed (0..3)
+    startup_steps: u32,
+    /// Last dt used (ABM requires constant dt; restart if changed)
+    last_dt: f64,
+}
+
+impl AbmHistory {
+    fn new() -> Self {
+        Self {
+            f_n: None,
+            f_n_minus_1: None,
+            f_n_minus_2: None,
+            startup_steps: 0,
+            last_dt: 0.0,
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        self.startup_steps >= 3
+            && self.f_n.is_some()
+            && self.f_n_minus_1.is_some()
+            && self.f_n_minus_2.is_some()
+    }
+
+    /// Push a new RHS evaluation, rotating the history buffer.
+    fn push(&mut self, f: Vec<Vector3>, dt: f64) {
+        // Check if dt has changed significantly — if so, restart.
+        if self.last_dt > 0.0 && (dt - self.last_dt).abs() / self.last_dt > 0.1 {
+            self.restart();
+        }
+        self.f_n_minus_2 = self.f_n_minus_1.take();
+        self.f_n_minus_1 = self.f_n.take();
+        self.f_n = Some(f);
+        self.startup_steps = (self.startup_steps + 1).min(3);
+        self.last_dt = dt;
+    }
+
+    fn restart(&mut self) {
+        *self = Self::new();
+    }
 }
 
 impl ExchangeLlgState {
@@ -548,6 +612,8 @@ impl ExchangeLlgState {
             grid,
             magnetization,
             time_seconds: 0.0,
+            k_fsal: None,
+            abm_history: AbmHistory::new(),
         })
     }
 
@@ -557,6 +623,21 @@ impl ExchangeLlgState {
 
     pub fn magnetization(&self) -> &[Vector3] {
         &self.magnetization
+    }
+
+    /// Invalidate the FSAL buffer (e.g. after external state modification).
+    pub fn invalidate_fsal(&mut self) {
+        self.k_fsal = None;
+    }
+
+    /// Check whether a valid FSAL RHS is available.
+    pub fn has_fsal(&self) -> bool {
+        self.k_fsal.is_some()
+    }
+
+    /// Reset ABM multi-step history (e.g. after external state modification).
+    pub fn reset_abm_history(&mut self) {
+        self.abm_history.restart();
     }
 
     /// Replace the magnetization vector, normalizing each cell.
@@ -769,6 +850,7 @@ impl ExchangeLlgProblem {
             TimeIntegrator::RK4 => self.rk4_step(state, dt, ws),
             TimeIntegrator::RK23 => self.rk23_step(state, dt, ws),
             TimeIntegrator::RK45 => self.rk45_step(state, dt, ws),
+            TimeIntegrator::ABM3 => self.abm3_step(state, dt, ws),
         }
     }
 
@@ -1046,8 +1128,12 @@ impl ExchangeLlgProblem {
         const E7: f64 = -1.0 / 40.0;
 
         loop {
-            // Stage 1
-            let k1 = self.llg_rhs_from_vectors_ws(&m0, ws);
+            // Stage 1 — FSAL: reuse k7 from previous accepted step if available
+            let k1 = if let Some(fsal) = state.k_fsal.take() {
+                fsal
+            } else {
+                self.llg_rhs_from_vectors_ws(&m0, ws)
+            };
 
             // Stage 2
             let delta: Vec<Vector3> = (0..n).map(|i| scale(k1[i], A21 * dt)).collect();
@@ -1137,13 +1223,150 @@ impl ExchangeLlgProblem {
             if error <= cfg.max_error || dt <= cfg.dt_min {
                 state.magnetization = y5;
                 state.time_seconds += dt;
+                // FSAL: save k7 for next step's k1
+                state.k_fsal = Some(k7);
                 return Ok(self.make_step_report(state, dt, false, ws));
             }
 
-            // Reject: reduce dt with 5th-order scaling
+            // Reject: reduce dt with 5th-order scaling.
+            // FSAL is implicitly invalidated — k_fsal was already consumed by
+            // take() above, and we don't save a new one on rejection.
             let dt_new = cfg.headroom * dt * (cfg.max_error / error).powf(0.2);
             dt = dt_new.max(cfg.dt_min).min(cfg.dt_max);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // ABM3 (Adams–Bashforth–Moulton 3rd order, multi-step)
+    //
+    // After 3 startup steps (Heun), uses only 1 RHS evaluation per step:
+    //   Predictor (AB3): m* = m + dt·(23/12·f_n - 16/12·f_{n-1} + 5/12·f_{n-2})
+    //   Corrector (AM3): m  = m + dt·(5/12·f* + 8/12·f_n - 1/12·f_{n-1})
+    // -----------------------------------------------------------------------
+    fn abm3_step(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+    ) -> Result<StepReport> {
+        let n = state.magnetization.len();
+
+        // During startup, fall back to Heun to build history
+        if !state.abm_history.is_ready() {
+            // Heun step
+            let m0 = state.magnetization.clone();
+            let k1 = self.llg_rhs_from_vectors_ws(&m0, ws);
+
+            let predicted = {
+                let compute = |i: usize| normalized(add(m0[i], scale(k1[i], dt)));
+                #[cfg(feature = "parallel")]
+                {
+                    (0..n)
+                        .into_par_iter()
+                        .map(compute)
+                        .collect::<Result<Vec<_>>>()?
+                }
+                #[cfg(not(feature = "parallel"))]
+                {
+                    (0..n).map(compute).collect::<Result<Vec<_>>>()?
+                }
+            };
+
+            let k2 = self.llg_rhs_from_vectors_ws(&predicted, ws);
+            let corrected = {
+                let compute =
+                    |i: usize| normalized(add(m0[i], scale(add(k1[i], k2[i]), 0.5 * dt)));
+                #[cfg(feature = "parallel")]
+                {
+                    (0..n)
+                        .into_par_iter()
+                        .map(compute)
+                        .collect::<Result<Vec<_>>>()?
+                }
+                #[cfg(not(feature = "parallel"))]
+                {
+                    (0..n).map(compute).collect::<Result<Vec<_>>>()?
+                }
+            };
+
+            state.magnetization = corrected;
+            state.time_seconds += dt;
+
+            // Store the RHS at the accepted point for ABM history
+            let f_accepted = self.llg_rhs_from_vectors_ws(state.magnetization(), ws);
+            state.abm_history.push(f_accepted, dt);
+
+            return Ok(self.make_step_report(state, dt, false, ws));
+        }
+
+        // --- Full ABM3 step ---
+
+        let m0 = state.magnetization.clone();
+
+        // Extract history references (safe: is_ready() was true)
+        let f_n = state.abm_history.f_n.as_ref().unwrap();
+        let f_n1 = state.abm_history.f_n_minus_1.as_ref().unwrap();
+        let f_n2 = state.abm_history.f_n_minus_2.as_ref().unwrap();
+
+        // Adams–Bashforth predictor (3rd order, explicit):
+        // m* = m + dt·(23/12·f_n - 16/12·f_{n-1} + 5/12·f_{n-2})
+        let m_predicted = {
+            let compute = |i: usize| {
+                let pred = add(
+                    add(scale(f_n[i], 23.0 / 12.0), scale(f_n1[i], -16.0 / 12.0)),
+                    scale(f_n2[i], 5.0 / 12.0),
+                );
+                normalized(add(m0[i], scale(pred, dt)))
+            };
+            #[cfg(feature = "parallel")]
+            {
+                (0..n)
+                    .into_par_iter()
+                    .map(compute)
+                    .collect::<Result<Vec<_>>>()?
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                (0..n).map(compute).collect::<Result<Vec<_>>>()?
+            }
+        };
+
+        // Evaluate RHS at predicted point — this is the ONLY new RHS eval
+        let f_star = self.llg_rhs_from_vectors_ws(&m_predicted, ws);
+
+        // Adams–Moulton corrector (3rd order, implicit one-step):
+        // m = m + dt·(5/12·f* + 8/12·f_n - 1/12·f_{n-1})
+        let m_corrected = {
+            let compute = |i: usize| {
+                let corr = add(
+                    add(scale(f_star[i], 5.0 / 12.0), scale(f_n[i], 8.0 / 12.0)),
+                    scale(f_n1[i], -1.0 / 12.0),
+                );
+                normalized(add(m0[i], scale(corr, dt)))
+            };
+            #[cfg(feature = "parallel")]
+            {
+                (0..n)
+                    .into_par_iter()
+                    .map(compute)
+                    .collect::<Result<Vec<_>>>()?
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                (0..n).map(compute).collect::<Result<Vec<_>>>()?
+            }
+        };
+
+        // Accept corrected solution
+        state.magnetization = m_corrected;
+        state.time_seconds += dt;
+
+        // Push corrector RHS into history for next step
+        // We use f_star as the history entry (evaluated at the predicted point,
+        // which is close to the corrected point for small errors)
+        state.abm_history.push(f_star, dt);
+
+        Ok(self.make_step_report(state, dt, false, ws))
     }
 
     // -----------------------------------------------------------------------
@@ -1855,7 +2078,7 @@ pub fn dot(left: Vector3, right: Vector3) -> f64 {
     left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
 }
 
-fn cross(left: Vector3, right: Vector3) -> Vector3 {
+pub fn cross(left: Vector3, right: Vector3) -> Vector3 {
     [
         left[1] * right[2] - left[2] * right[1],
         left[2] * right[0] - left[0] * right[2],

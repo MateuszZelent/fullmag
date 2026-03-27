@@ -22,6 +22,11 @@ export interface FemMeshData {
   };
 }
 
+export interface MeshSelectionSnapshot {
+  selectedFaceIndices: number[];
+  primaryFaceIndex: number | null;
+}
+
 export type FemColorField = "orientation" | "x" | "y" | "z" | "magnitude" | "quality" | "sicn" | "none";
 export type RenderMode = "surface" | "surface+edges" | "wireframe" | "points";
 export type ClipAxis = "x" | "y" | "z";
@@ -47,6 +52,7 @@ interface Props {
   onClipAxisChange?: (value: ClipAxis) => void;
   onClipPosChange?: (value: number) => void;
   onShowArrowsChange?: (value: boolean) => void;
+  onSelectionChange?: (selection: MeshSelectionSnapshot) => void;
 }
 
 /* ── Constants ─────────────────────────────────────────────────────── */
@@ -174,6 +180,7 @@ export default function FemMeshView3D({
   onClipAxisChange,
   onClipPosChange,
   onShowArrowsChange,
+  onSelectionChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -203,10 +210,11 @@ export default function FemMeshView3D({
   const [internalShowArrows, setInternalShowArrows] = useState(false);
   const [hoveredFace, setHoveredFace] = useState<{ idx: number; x: number; y: number } | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; faceIdx: number } | null>(null);
-  const [selectedFaces, setSelectedFaces] = useState<Set<number>>(new Set());
+  const [selectedFaces, setSelectedFaces] = useState<number[]>([]);
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
   const highlightRef = useRef<THREE.Mesh | null>(null);
+  const topologySignature = topologyKey ?? `${meshData.nNodes}:${meshData.nElements}:${meshData.boundaryFaces.length}`;
 
   const renderMode = controlledRenderMode ?? internalRenderMode;
   const opacity = controlledOpacity ?? internalOpacity;
@@ -246,6 +254,19 @@ export default function FemMeshView3D({
   }, [onShowArrowsChange]);
 
   useEffect(() => { setField(colorField); }, [colorField]);
+
+  useEffect(() => {
+    setSelectedFaces([]);
+    setHoveredFace(null);
+    setCtxMenu(null);
+  }, [topologySignature]);
+
+  useEffect(() => {
+    onSelectionChange?.({
+      selectedFaceIndices: selectedFaces,
+      primaryFaceIndex: selectedFaces.length > 0 ? selectedFaces[selectedFaces.length - 1] : null,
+    });
+  }, [onSelectionChange, selectedFaces]);
 
   /* ── Aspect ratios (computed once per topology) ─────────────── */
   const faceARs = useRef<Float32Array | null>(null);
@@ -461,10 +482,10 @@ export default function FemMeshView3D({
     meshRef.current = mesh;
 
     /* Wireframe / edges */
-    const edges = new THREE.EdgesGeometry(geom, 15);
+    const edges = new THREE.WireframeGeometry(geom);
     const wire = new THREE.LineSegments(
       edges,
-      new THREE.LineBasicMaterial({ color: 0x334455, opacity: 0.3, transparent: true })
+      new THREE.LineBasicMaterial({ color: 0x9bb7d4, opacity: 0.5, transparent: true })
     );
     wire.visible = false;
     scene.add(wire);
@@ -519,7 +540,7 @@ export default function FemMeshView3D({
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [topologyKey ?? `${meshData.nNodes}:${meshData.nElements}:${meshData.boundaryFaces.length}`]);
+  }, [topologySignature]);
 
   /* ── Render mode ────────────────────────────────────────────────── */
   useEffect(() => {
@@ -594,7 +615,7 @@ export default function FemMeshView3D({
       highlightRef.current = null;
     }
 
-    if (selectedFaces.size === 0) return;
+    if (selectedFaces.length === 0) return;
 
     const { nodes, boundaryFaces } = meshData;
     const indices: number[] = [];
@@ -643,7 +664,7 @@ export default function FemMeshView3D({
 
     const wire = wireRef.current;
     if (wire) {
-      const edges = new THREE.EdgesGeometry(geom, 15);
+      const edges = new THREE.WireframeGeometry(geom);
       wire.geometry.dispose();
       wire.geometry = edges;
     }
@@ -867,21 +888,15 @@ export default function FemMeshView3D({
     if (hits.length > 0 && hits[0].faceIndex != null) {
       const fIdx = hits[0].faceIndex;
       setSelectedFaces((prev) => {
-        const next = new Set(prev);
         if (e.shiftKey || e.ctrlKey) {
-          // Toggle with modifier key
-          if (next.has(fIdx)) next.delete(fIdx);
-          else next.add(fIdx);
-        } else {
-          // Single select (replace)
-          if (next.size === 1 && next.has(fIdx)) {
-            next.clear(); // deselect
-          } else {
-            next.clear();
-            next.add(fIdx);
-          }
+          return prev.includes(fIdx)
+            ? prev.filter((idx) => idx !== fIdx)
+            : [...prev, fIdx];
         }
-        return next;
+        if (prev.length === 1 && prev[0] === fIdx) {
+          return [];
+        }
+        return [fIdx];
       });
     }
   }, []);
@@ -1074,10 +1089,10 @@ export default function FemMeshView3D({
             <span style={{ color: "hsl(35 90% 65%)" }}>clip {clipAxis.toUpperCase()} @ {clipPos}%</span>
           </>
         )}
-        {selectedFaces.size > 0 && (
+        {selectedFaces.length > 0 && (
           <>
             <span className={s.infoSep} />
-            <span style={{ color: "hsl(210 80% 70%)" }}>{selectedFaces.size} selected</span>
+            <span style={{ color: "hsl(210 80% 70%)" }}>{selectedFaces.length} selected</span>
           </>
         )}
       </div>
@@ -1107,7 +1122,13 @@ export default function FemMeshView3D({
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
-          <button className={s.ctxItem}>
+          <button
+            className={s.ctxItem}
+            onClick={() => {
+              setSelectedFaces([ctxMenu.faceIdx]);
+              setCtxMenu(null);
+            }}
+          >
             <span className={s.ctxIcon}>🔍</span>
             Inspect face #{ctxMenu.faceIdx}
           </button>
@@ -1157,18 +1178,18 @@ export default function FemMeshView3D({
             <span className={s.ctxIcon}>📷</span>
             Screenshot
           </button>
-          {selectedFaces.size > 0 && (
+          {selectedFaces.length > 0 && (
             <>
               <div className={s.ctxSep} />
               <button
                 className={s.ctxItem}
                 onClick={() => {
-                  setSelectedFaces(new Set());
+                  setSelectedFaces([]);
                   setCtxMenu(null);
                 }}
               >
                 <span className={s.ctxIcon}>✕</span>
-                Clear selection ({selectedFaces.size})
+                Clear selection ({selectedFaces.length})
               </button>
             </>
           )}

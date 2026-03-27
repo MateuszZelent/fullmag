@@ -10,7 +10,9 @@
 use fullmag_fem_sys as ffi;
 
 #[cfg(feature = "fem-gpu")]
-use crate::types::{RunError, StepStats};
+use crate::preview::{build_mesh_preview_field, normalize_quantity_id};
+#[cfg(feature = "fem-gpu")]
+use crate::types::{LivePreviewField, LivePreviewRequest, RunError, StepStats};
 
 #[cfg(feature = "fem-gpu")]
 use std::ffi::CStr;
@@ -295,6 +297,21 @@ impl NativeFemBackend {
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EFF,
             node_count,
         )
+    }
+
+    pub fn copy_live_preview_field(
+        &self,
+        request: &LivePreviewRequest,
+        node_count: usize,
+    ) -> Result<LivePreviewField, RunError> {
+        let values = match normalize_quantity_id(&request.quantity) {
+            "H_ex" => self.copy_h_ex(node_count)?,
+            "H_demag" => self.copy_h_demag(node_count)?,
+            "H_ext" => self.copy_h_ext(node_count)?,
+            "H_eff" => self.copy_h_eff(node_count)?,
+            _ => self.copy_m(node_count)?,
+        };
+        Ok(build_mesh_preview_field(request, &values))
     }
 
     pub fn device_info(&self) -> Result<DeviceInfo, RunError> {

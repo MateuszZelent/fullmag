@@ -12,7 +12,9 @@
 use fullmag_fdm_sys as ffi;
 
 #[cfg(feature = "cuda")]
-use crate::types::RunError;
+use crate::preview::{build_grid_preview_field, normalize_quantity_id};
+#[cfg(feature = "cuda")]
+use crate::types::{LivePreviewField, LivePreviewRequest, RunError};
 #[cfg(feature = "cuda")]
 use crate::types::StepStats;
 
@@ -267,6 +269,23 @@ impl NativeFdmBackend {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
             cell_count,
         )
+    }
+
+    pub fn copy_live_preview_field(
+        &self,
+        request: &LivePreviewRequest,
+        original_grid: [u32; 3],
+    ) -> Result<LivePreviewField, RunError> {
+        let cell_count =
+            (original_grid[0] as usize) * (original_grid[1] as usize) * (original_grid[2] as usize);
+        let values = match normalize_quantity_id(&request.quantity) {
+            "H_ex" => self.copy_h_ex(cell_count)?,
+            "H_demag" => self.copy_h_demag(cell_count)?,
+            "H_ext" => self.copy_h_ext(cell_count)?,
+            "H_eff" => self.copy_h_eff(cell_count)?,
+            _ => self.copy_m(cell_count)?,
+        };
+        Ok(build_grid_preview_field(request, &values, original_grid))
     }
 
     pub fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {

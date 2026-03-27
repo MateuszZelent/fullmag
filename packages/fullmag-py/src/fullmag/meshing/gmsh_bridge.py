@@ -106,6 +106,31 @@ class MeshOptions:
     per_element_quality: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class SizeFieldData:
+    """Nodal target element sizes for adaptive remeshing.
+
+    Attributes:
+        node_coords: (N, 3) array of node coordinates from the previous mesh.
+        h_values: (N,) array of target element sizes at each node.
+    """
+
+    node_coords: NDArray[np.float64]
+    h_values: NDArray[np.float64]
+
+    def __post_init__(self) -> None:
+        coords = np.asarray(self.node_coords, dtype=np.float64)
+        h = np.asarray(self.h_values, dtype=np.float64)
+        object.__setattr__(self, "node_coords", coords)
+        object.__setattr__(self, "h_values", h)
+        if coords.ndim != 2 or coords.shape[1] != 3:
+            raise ValueError("node_coords must have shape (N, 3)")
+        if h.ndim != 1 or h.shape[0] != coords.shape[0]:
+            raise ValueError("h_values must have shape (N,)")
+        if np.any(h <= 0):
+            raise ValueError("h_values must be strictly positive")
+
+
 def _import_gmsh() -> Any:
     try:
         import gmsh  # type: ignore
@@ -964,3 +989,250 @@ def _extract_gmsh_connectivity(
     if not rows:
         return np.zeros((0, nodes_per_element), dtype=np.int32)
     return np.asarray(rows, dtype=np.int32)
+
+
+# ---------------------------------------------------------------------------
+# Adaptive remeshing with PostView background size field
+# ---------------------------------------------------------------------------
+def _apply_postview_background_mesh(
+    gmsh: Any,
+    sf: SizeFieldData,
+    coord_scale: float = 1.0,
+) -> None:
+    """Inject a PostView-based background mesh size field into Gmsh.
+
+    Creates a Gmsh view with scattered-point (SP) data from the nodal
+    size field computed by the Rust error estimator, then registers a
+    PostView field as the background mesh.
+
+    Disables all other automatic size sources so the PostView controls
+    element sizes exclusively.
+
+    Args:
+        gmsh: Initialised Gmsh module.
+        sf: Nodal size field (coordinates + h values).
+        coord_scale: Multiplier applied to node coordinates and h values
+                     to match the internal Gmsh model scale (e.g. 1e6
+                     for µm-scaled OCC models).
+    """
+    # Disable competing size sources
+    gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+    gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+    gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+
+    # Build list data: each SP entry = [x, y, z, h]
+    view_tag = gmsh.view.add("afem_size_field")
+    n = sf.node_coords.shape[0]
+    # addListData expects list of lists: each sub-list = [x, y, z, val]
+    data: list[list[float]] = []
+    for i in range(n):
+        x, y, z = sf.node_coords[i] * coord_scale
+        h = float(sf.h_values[i]) * coord_scale
+        data.append([x, y, z, h])
+    gmsh.view.addListData(view_tag, "SP", n, data)
+
+    # Create PostView field and set as background mesh
+    fid = gmsh.model.mesh.field.add("PostView")
+    gmsh.model.mesh.field.setNumber(fid, "ViewTag", view_tag)
+    gmsh.model.mesh.field.setAsBackgroundMesh(fid)
+
+
+def remesh_with_size_field(
+    geometry: "Geometry",
+    size_field: SizeFieldData,
+    hmax: float,
+    order: int = 1,
+    air_padding: float = 0.0,
+    options: MeshOptions | None = None,
+) -> MeshData:
+    """Re-mesh geometry using an adaptive size field from error estimation.
+
+    This is the primary entry point for the AFEM remesh step.  It
+    reconstructs the OCC geometry, injects a PostView background mesh
+    derived from the Rust-side nodal size field, and generates a new
+    tetrahedral mesh conforming to those target element sizes.
+
+    Args:
+        geometry: Fullmag geometry descriptor (same as for generate_mesh).
+        size_field: Nodal size field produced by the error estimator.
+        hmax: Fallback maximum element size (SI metres). Used as upper
+              bound and for CharacteristicLengthMax.
+        order: Mesh element order (always 1 for current pipeline).
+        air_padding: Reserved for future air-box meshing.
+        options: Optional advanced Gmsh options.
+    """
+    opts = options or MeshOptions()
+
+    # Delegate to type-specific remeshers that share the OCC pipeline
+    if isinstance(geometry, Box):
+        return _remesh_box(geometry, size_field, hmax, order, air_padding, opts)
+    if isinstance(geometry, Cylinder):
+        return _remesh_cylinder(geometry, size_field, hmax, order, air_padding, opts)
+    if isinstance(geometry, (Difference, Union, Intersection, Translate, Ellipsoid, Ellipse)):
+        return _remesh_csg(geometry, size_field, hmax, order, opts)
+    if isinstance(geometry, ImportedGeometry):
+        return _remesh_imported(geometry, size_field, hmax, order, air_padding, opts)
+    raise TypeError(f"unsupported geometry type for adaptive remeshing: {type(geometry)!r}")
+
+
+def _remesh_box(
+    geometry: Box,
+    sf: SizeFieldData,
+    hmax: float,
+    order: int,
+    air_padding: float,
+    opts: MeshOptions,
+) -> MeshData:
+    gmsh = _import_gmsh()
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        gmsh.model.add("fullmag_box_afem")
+        sx, sy, sz = geometry.size
+        gmsh.model.occ.addBox(-sx / 2.0, -sy / 2.0, -sz / 2.0, sx, sy, sz)
+        gmsh.model.occ.synchronize()
+        emit_progress("AFEM: applying adaptive size field")
+        _apply_mesh_options(gmsh, hmax, order, opts)
+        _apply_postview_background_mesh(gmsh, sf)
+        emit_progress("AFEM: generating adaptive 3D mesh")
+        gmsh.model.mesh.generate(3)
+        _apply_post_mesh_options(gmsh, opts)
+        quality = _extract_quality_metrics(gmsh, opts) if opts.compute_quality else None
+        mesh = _extract_mesh_data(gmsh, quality=quality)
+        emit_progress(
+            f"AFEM: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements"
+        )
+        return mesh
+    finally:
+        gmsh.finalize()
+
+
+def _remesh_cylinder(
+    geometry: Cylinder,
+    sf: SizeFieldData,
+    hmax: float,
+    order: int,
+    air_padding: float,
+    opts: MeshOptions,
+) -> MeshData:
+    gmsh = _import_gmsh()
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        gmsh.model.add("fullmag_cylinder_afem")
+        gmsh.model.occ.addCylinder(
+            0.0, 0.0, -geometry.height / 2.0,
+            0.0, 0.0, geometry.height,
+            geometry.radius,
+        )
+        gmsh.model.occ.synchronize()
+        emit_progress("AFEM: applying adaptive size field")
+        _apply_mesh_options(gmsh, hmax, order, opts)
+        _apply_postview_background_mesh(gmsh, sf)
+        emit_progress("AFEM: generating adaptive 3D mesh")
+        gmsh.model.mesh.generate(3)
+        _apply_post_mesh_options(gmsh, opts)
+        quality = _extract_quality_metrics(gmsh, opts) if opts.compute_quality else None
+        mesh = _extract_mesh_data(gmsh, quality=quality)
+        emit_progress(
+            f"AFEM: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements"
+        )
+        return mesh
+    finally:
+        gmsh.finalize()
+
+
+def _remesh_csg(
+    geometry: "Geometry",
+    sf: SizeFieldData,
+    hmax: float,
+    order: int,
+    opts: MeshOptions,
+) -> MeshData:
+    SCALE = 1e6
+    gmsh = _import_gmsh()
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        gmsh.model.add("fullmag_csg_afem")
+        _add_geometry_to_occ(gmsh, geometry, scale=SCALE)
+        gmsh.model.occ.synchronize()
+        emit_progress("AFEM: applying adaptive size field (µm-scaled)")
+        _apply_mesh_options(gmsh, hmax * SCALE, order, opts, hscale=SCALE)
+        _apply_postview_background_mesh(gmsh, sf, coord_scale=SCALE)
+        emit_progress("AFEM: generating adaptive 3D mesh")
+        gmsh.model.mesh.generate(3)
+        _apply_post_mesh_options(gmsh, opts)
+        quality = _extract_quality_metrics(gmsh, opts) if opts.compute_quality else None
+        mesh = _extract_mesh_data(gmsh, quality=quality)
+        emit_progress(
+            f"AFEM: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements"
+        )
+        return MeshData(
+            nodes=mesh.nodes / SCALE,
+            elements=mesh.elements,
+            element_markers=mesh.element_markers,
+            boundary_faces=mesh.boundary_faces,
+            boundary_markers=mesh.boundary_markers,
+            quality=quality,
+        )
+    finally:
+        gmsh.finalize()
+
+
+def _remesh_imported(
+    geometry: "ImportedGeometry",
+    sf: SizeFieldData,
+    hmax: float,
+    order: int,
+    air_padding: float,
+    opts: MeshOptions,
+) -> MeshData:
+    path = Path(geometry.source)
+    suffix = path.suffix.lower()
+    scale_xyz = _normalize_scale_xyz(geometry.scale)
+    source_hmax = _source_hmax_from_scale(hmax, scale_xyz)
+    gmsh = _import_gmsh()
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        gmsh.model.add(path.stem + "_afem")
+        if suffix in {".step", ".stp", ".iges", ".igs"}:
+            emit_progress("AFEM: importing CAD shapes")
+            gmsh.model.occ.importShapes(str(path))
+            gmsh.model.occ.synchronize()
+        elif suffix == ".stl":
+            emit_progress("AFEM: importing STL surface")
+            gmsh.merge(str(path))
+            angle = 40.0 * math.pi / 180.0
+            gmsh.model.mesh.classifySurfaces(
+                angle, boundary=True, forReparametrization=True, curveAngle=math.pi,
+            )
+            gmsh.model.mesh.createGeometry()
+            surfaces = gmsh.model.getEntities(2)
+            if not surfaces:
+                raise ValueError(f"failed to recover closed surfaces from STL: {path}")
+            surface_loop = gmsh.model.geo.addSurfaceLoop([tag for _, tag in surfaces])
+            gmsh.model.geo.addVolume([surface_loop])
+            gmsh.model.geo.synchronize()
+        else:
+            raise ValueError(
+                f"adaptive remeshing from file format {suffix!r} not supported; "
+                "use .step/.stp/.iges/.igs/.stl"
+            )
+        emit_progress("AFEM: applying adaptive size field")
+        _apply_mesh_options(gmsh, source_hmax, order, opts)
+        # Size field coordinates are in SI; scale to source space
+        inv_scale = 1.0 / float(np.max(scale_xyz[scale_xyz > 0]))
+        _apply_postview_background_mesh(gmsh, sf, coord_scale=inv_scale)
+        emit_progress("AFEM: generating adaptive 3D mesh")
+        gmsh.model.mesh.generate(3)
+        _apply_post_mesh_options(gmsh, opts)
+        quality = _extract_quality_metrics(gmsh, opts) if opts.compute_quality else None
+        mesh = _scale_mesh_nodes(_extract_mesh_data(gmsh, quality=quality), scale_xyz)
+        emit_progress(
+            f"AFEM: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements"
+        )
+        return mesh
+    finally:
+        gmsh.finalize()

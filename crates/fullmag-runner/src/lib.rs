@@ -16,14 +16,15 @@ mod multilayer_cuda;
 mod multilayer_reference;
 mod native_fdm;
 mod native_fem;
+mod preview;
 mod relaxation;
 mod schedules;
 mod types;
 
 // Public re-exports (unchanged API surface).
 pub use types::{
-    ExecutionProvenance, FemMeshPayload, RunError, RunResult, RunStatus, RuntimeEngineInfo,
-    StepStats, StepUpdate,
+    ExecutionProvenance, FemMeshPayload, LivePreviewField, LivePreviewRequest, RunError,
+    RunResult, RunStatus, RuntimeEngineInfo, StepStats, StepUpdate,
 };
 
 use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, OutputIR, ProblemIR};
@@ -167,6 +168,108 @@ pub fn run_problem_with_callback(
             BackendPlanIR::Fdm(_) => Some(final_m),
             BackendPlanIR::FdmMultilayer(_) | BackendPlanIR::Fem(_) => None,
         },
+        preview_field: None,
+        finished: true,
+    });
+
+    Ok(executed.result)
+}
+
+/// Run a problem with a live-preview request provider.
+///
+/// The runner samples only the currently requested quantity instead of
+/// streaming every available field.
+pub fn run_problem_with_live_preview(
+    problem: &ProblemIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+    mut on_step: impl FnMut(StepUpdate) + Send,
+) -> Result<RunResult, RunError> {
+    let plan = fullmag_plan::plan(problem)?;
+
+    let cpu_threads = configured_cpu_threads(problem);
+    let executed = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            let grid = fdm.grid.cells;
+            let engine = dispatch::resolve_fdm_engine(problem)?;
+            dispatch::execute_fdm_with_live_preview(
+                engine,
+                fdm,
+                until_seconds,
+                &plan.output_plan.outputs,
+                grid,
+                field_every_n,
+                preview_request,
+                &mut on_step,
+            )
+        }
+        BackendPlanIR::FdmMultilayer(fdm) => {
+            let engine = dispatch::resolve_fdm_engine(problem)?;
+            dispatch::execute_fdm_multilayer_with_callback(
+                engine,
+                fdm,
+                until_seconds,
+                &plan.output_plan.outputs,
+                &mut on_step,
+            )
+        }
+        BackendPlanIR::Fem(fem) => {
+            let engine = dispatch::resolve_fem_engine(problem)?;
+            dispatch::execute_fem_with_live_preview(
+                engine,
+                fem,
+                until_seconds,
+                &plan.output_plan.outputs,
+                field_every_n,
+                preview_request,
+                &mut on_step,
+            )
+        }
+    })?;
+
+    if let Err(e) = artifacts::write_artifacts(output_dir, problem, &plan, &executed) {
+        return Err(RunError {
+            message: format!("Failed to write artifacts: {}", e),
+        });
+    }
+
+    let final_stats = executed.result.steps.last().cloned().unwrap_or(StepStats {
+        step: 0,
+        time: 0.0,
+        dt: 0.0,
+        e_ex: 0.0,
+        e_demag: 0.0,
+        e_ext: 0.0,
+        e_total: 0.0,
+        max_dm_dt: 0.0,
+        max_h_eff: 0.0,
+        max_h_demag: 0.0,
+        wall_time_ns: 0,
+    });
+    let final_grid = match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
+        BackendPlanIR::FdmMultilayer(fdm) => [
+            fdm.common_cells[0],
+            fdm.common_cells[1],
+            fdm.common_cells[2],
+        ],
+        BackendPlanIR::Fem(_) => [0, 0, 0],
+    };
+    on_step(StepUpdate {
+        stats: final_stats,
+        grid: final_grid,
+        fem_mesh: match &plan.backend_plan {
+            BackendPlanIR::Fem(fem) => Some(FemMeshPayload {
+                nodes: fem.mesh.nodes.clone(),
+                elements: fem.mesh.elements.clone(),
+                boundary_faces: fem.mesh.boundary_faces.clone(),
+            }),
+            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
+        },
+        magnetization: None,
+        preview_field: None,
         finished: true,
     });
 

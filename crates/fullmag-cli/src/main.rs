@@ -191,6 +191,7 @@ struct LiveStepView {
     grid: [u32; 3],
     fem_mesh: Option<fullmag_runner::FemMeshPayload>,
     magnetization: Option<Vec<f64>>,
+    preview_field: Option<fullmag_runner::LivePreviewField>,
     finished: bool,
 }
 
@@ -490,6 +491,7 @@ fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             grid: [0, 0, 0],
             fem_mesh: None,
             magnetization: None,
+            preview_field: None,
             finished: false,
         },
     }
@@ -1060,6 +1062,12 @@ fn current_live_metadata(
     plan: &ExecutionPlanIR,
     status: &str,
 ) -> serde_json::Value {
+    let live_preview_supported_quantities = match &plan.backend_plan {
+        BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_) => {
+            vec!["m", "H_ex", "H_demag", "H_ext", "H_eff"]
+        }
+        BackendPlanIR::FdmMultilayer(_) => vec!["m"],
+    };
     let runtime_engine = fullmag_runner::resolve_runtime_engine(problem)
         .ok()
         .map(|engine| {
@@ -1079,9 +1087,18 @@ fn current_live_metadata(
         "runtime_engine": runtime_engine,
         "artifact_layout": current_artifact_layout(plan),
         "meshing_capabilities": current_meshing_capabilities(plan),
+        "live_preview": {
+            "mode": "active_source",
+            "supported_quantities": live_preview_supported_quantities,
+            "downsampling": "runner_side_binned",
+        },
         "engine_version": env!("CARGO_PKG_VERSION"),
         "status": status,
     })
+}
+
+fn supports_dynamic_live_preview(backend_plan: &BackendPlanIR) -> bool {
+    matches!(backend_plan, BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1345,6 +1362,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         },
         current_live_publisher.clone(),
     );
+    let preview_config_handle = CurrentLivePreviewConfigHandle::spawn();
     live_workspace.push_log(
         "system",
         format!(
@@ -1631,63 +1649,126 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         });
 
         let stage_result = match if use_live_callback {
-            fullmag_runner::run_problem_with_callback(
-                &stage.ir,
-                stage.until_seconds,
-                &current_stage_artifact_dir,
-                field_every_n,
-                |update| {
-                    let adjusted = offset_step_update(
-                        &update,
-                        step_offset,
-                        time_offset,
-                        update.finished && is_session_final_stage,
-                    );
-                    let s = &adjusted.stats;
-                    let print_step = s.step <= 10
-                        || (s.step <= 100 && s.step % 10 == 0)
-                        || (s.step <= 1000 && s.step % 100 == 0)
-                        || s.step % 1000 == 0
-                        || adjusted.finished;
-                    if print_step {
-                        let wall_ms = s.wall_time_ns as f64 / 1e6;
-                        eprintln!(
-                            "stage {}/{} ({})  step {:>6}  t={:.4e}  dt={:.3e}  maxTorque={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
-                            stage_index + 1,
-                            stage_count,
-                            stage.entrypoint_kind,
-                            s.step,
-                            s.time,
-                            s.dt,
-                            s.max_dm_dt,
-                            s.e_total,
-                            s.max_h_eff,
-                            wall_ms
+            if supports_dynamic_live_preview(&execution_plan.backend_plan) {
+                let preview_request = || preview_config_handle.snapshot();
+                fullmag_runner::run_problem_with_live_preview(
+                    &stage.ir,
+                    stage.until_seconds,
+                    &current_stage_artifact_dir,
+                    field_every_n,
+                    &preview_request,
+                    |update| {
+                        let adjusted = offset_step_update(
+                            &update,
+                            step_offset,
+                            time_offset,
+                            update.finished && is_session_final_stage,
                         );
-                    }
-
-                    if adjusted.stats.step <= 1
-                        || adjusted.stats.step % field_every_n == 0
-                        || adjusted.finished
-                    {
-                        live_workspace.update(|state| {
-                            state.session.status = if adjusted.finished {
-                                "completed".to_string()
-                            } else {
-                                "running".to_string()
-                            };
-                            state.run = running_run_manifest_from_update(
-                                &run_id,
-                                &session_id,
-                                &artifact_dir,
-                                &adjusted,
+                        let s = &adjusted.stats;
+                        let print_step = s.step <= 10
+                            || (s.step <= 100 && s.step % 10 == 0)
+                            || (s.step <= 1000 && s.step % 100 == 0)
+                            || s.step % 1000 == 0
+                            || adjusted.finished;
+                        if print_step {
+                            let wall_ms = s.wall_time_ns as f64 / 1e6;
+                            eprintln!(
+                                "stage {}/{} ({})  step {:>6}  t={:.4e}  dt={:.3e}  maxTorque={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
+                                stage_index + 1,
+                                stage_count,
+                                stage.entrypoint_kind,
+                                s.step,
+                                s.time,
+                                s.dt,
+                                s.max_dm_dt,
+                                s.e_total,
+                                s.max_h_eff,
+                                wall_ms
                             );
-                            state.live_state = live_state_manifest_from_update(&adjusted);
-                            state.latest_scalar_row = Some(scalar_row_from_update(&adjusted));
-                        });
-                    }
-                },
-            )
+                        }
+
+                        if adjusted.stats.step <= 1
+                            || adjusted.stats.step % field_every_n == 0
+                            || adjusted.preview_field.is_some()
+                            || adjusted.finished
+                        {
+                            live_workspace.update(|state| {
+                                state.session.status = if adjusted.finished {
+                                    "completed".to_string()
+                                } else {
+                                    "running".to_string()
+                                };
+                                state.run = running_run_manifest_from_update(
+                                    &run_id,
+                                    &session_id,
+                                    &artifact_dir,
+                                    &adjusted,
+                                );
+                                state.live_state = live_state_manifest_from_update(&adjusted);
+                                state.latest_scalar_row = Some(scalar_row_from_update(&adjusted));
+                            });
+                        }
+                    },
+                )
+            } else {
+                fullmag_runner::run_problem_with_callback(
+                    &stage.ir,
+                    stage.until_seconds,
+                    &current_stage_artifact_dir,
+                    field_every_n,
+                    |update| {
+                        let adjusted = offset_step_update(
+                            &update,
+                            step_offset,
+                            time_offset,
+                            update.finished && is_session_final_stage,
+                        );
+                        let s = &adjusted.stats;
+                        let print_step = s.step <= 10
+                            || (s.step <= 100 && s.step % 10 == 0)
+                            || (s.step <= 1000 && s.step % 100 == 0)
+                            || s.step % 1000 == 0
+                            || adjusted.finished;
+                        if print_step {
+                            let wall_ms = s.wall_time_ns as f64 / 1e6;
+                            eprintln!(
+                                "stage {}/{} ({})  step {:>6}  t={:.4e}  dt={:.3e}  maxTorque={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
+                                stage_index + 1,
+                                stage_count,
+                                stage.entrypoint_kind,
+                                s.step,
+                                s.time,
+                                s.dt,
+                                s.max_dm_dt,
+                                s.e_total,
+                                s.max_h_eff,
+                                wall_ms
+                            );
+                        }
+
+                        if adjusted.stats.step <= 1
+                            || adjusted.stats.step % field_every_n == 0
+                            || adjusted.finished
+                        {
+                            live_workspace.update(|state| {
+                                state.session.status = if adjusted.finished {
+                                    "completed".to_string()
+                                } else {
+                                    "running".to_string()
+                                };
+                                state.run = running_run_manifest_from_update(
+                                    &run_id,
+                                    &session_id,
+                                    &artifact_dir,
+                                    &adjusted,
+                                );
+                                state.live_state = live_state_manifest_from_update(&adjusted);
+                                state.latest_scalar_row = Some(scalar_row_from_update(&adjusted));
+                            });
+                        }
+                    },
+                )
+            }
         } else {
             fullmag_runner::run_problem(&stage.ir, stage.until_seconds, &current_stage_artifact_dir)
         } {
@@ -1763,6 +1844,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     } else {
                         None
                     },
+                    preview_field: None,
                     finished: is_final_step && is_session_final_stage,
                 };
                 if update.stats.step <= 1
@@ -1948,48 +2030,100 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             });
 
             let stage_result = match if use_live_callback {
-                fullmag_runner::run_problem_with_callback(
-                    &stage.ir,
-                    stage.until_seconds,
-                    &current_stage_artifact_dir,
-                    field_every_n,
-                    |update| {
-                        let adjusted = offset_step_update(&update, step_offset, time_offset, false);
-                        let s = &adjusted.stats;
-                        let print_step = s.step <= 10
-                            || (s.step <= 100 && s.step % 10 == 0)
-                            || (s.step <= 1000 && s.step % 100 == 0)
-                            || s.step % 1000 == 0;
-                        if print_step {
-                            let wall_ms = s.wall_time_ns as f64 / 1e6;
-                            eprintln!(
-                                "interactive {}  step {:>6}  t={:.4e}  dt={:.3e}  maxTorque={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
-                                stage.entrypoint_kind,
-                                s.step,
-                                s.time,
-                                s.dt,
-                                s.max_dm_dt,
-                                s.e_total,
-                                s.max_h_eff,
-                                wall_ms
-                            );
-                        }
-
-                        if adjusted.stats.step <= 1 || adjusted.stats.step % field_every_n == 0 {
-                            live_workspace.update(|state| {
-                                state.session.status = "running".to_string();
-                                state.run = running_run_manifest_from_update(
-                                    &run_id,
-                                    &session_id,
-                                    &artifact_dir,
-                                    &adjusted,
+                if supports_dynamic_live_preview(&execution_plan.backend_plan) {
+                    let preview_request = || preview_config_handle.snapshot();
+                    fullmag_runner::run_problem_with_live_preview(
+                        &stage.ir,
+                        stage.until_seconds,
+                        &current_stage_artifact_dir,
+                        field_every_n,
+                        &preview_request,
+                        |update| {
+                            let adjusted =
+                                offset_step_update(&update, step_offset, time_offset, false);
+                            let s = &adjusted.stats;
+                            let print_step = s.step <= 10
+                                || (s.step <= 100 && s.step % 10 == 0)
+                                || (s.step <= 1000 && s.step % 100 == 0)
+                                || s.step % 1000 == 0;
+                            if print_step {
+                                let wall_ms = s.wall_time_ns as f64 / 1e6;
+                                eprintln!(
+                                    "interactive {}  step {:>6}  t={:.4e}  dt={:.3e}  maxTorque={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
+                                    stage.entrypoint_kind,
+                                    s.step,
+                                    s.time,
+                                    s.dt,
+                                    s.max_dm_dt,
+                                    s.e_total,
+                                    s.max_h_eff,
+                                    wall_ms
                                 );
-                                state.live_state = live_state_manifest_from_update(&adjusted);
-                                state.latest_scalar_row = Some(scalar_row_from_update(&adjusted));
-                            });
-                        }
-                    },
-                )
+                            }
+
+                            if adjusted.stats.step <= 1
+                                || adjusted.stats.step % field_every_n == 0
+                                || adjusted.preview_field.is_some()
+                            {
+                                live_workspace.update(|state| {
+                                    state.session.status = "running".to_string();
+                                    state.run = running_run_manifest_from_update(
+                                        &run_id,
+                                        &session_id,
+                                        &artifact_dir,
+                                        &adjusted,
+                                    );
+                                    state.live_state = live_state_manifest_from_update(&adjusted);
+                                    state.latest_scalar_row =
+                                        Some(scalar_row_from_update(&adjusted));
+                                });
+                            }
+                        },
+                    )
+                } else {
+                    fullmag_runner::run_problem_with_callback(
+                        &stage.ir,
+                        stage.until_seconds,
+                        &current_stage_artifact_dir,
+                        field_every_n,
+                        |update| {
+                            let adjusted = offset_step_update(&update, step_offset, time_offset, false);
+                            let s = &adjusted.stats;
+                            let print_step = s.step <= 10
+                                || (s.step <= 100 && s.step % 10 == 0)
+                                || (s.step <= 1000 && s.step % 100 == 0)
+                                || s.step % 1000 == 0;
+                            if print_step {
+                                let wall_ms = s.wall_time_ns as f64 / 1e6;
+                                eprintln!(
+                                    "interactive {}  step {:>6}  t={:.4e}  dt={:.3e}  maxTorque={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
+                                    stage.entrypoint_kind,
+                                    s.step,
+                                    s.time,
+                                    s.dt,
+                                    s.max_dm_dt,
+                                    s.e_total,
+                                    s.max_h_eff,
+                                    wall_ms
+                                );
+                            }
+
+                            if adjusted.stats.step <= 1 || adjusted.stats.step % field_every_n == 0 {
+                                live_workspace.update(|state| {
+                                    state.session.status = "running".to_string();
+                                    state.run = running_run_manifest_from_update(
+                                        &run_id,
+                                        &session_id,
+                                        &artifact_dir,
+                                        &adjusted,
+                                    );
+                                    state.live_state = live_state_manifest_from_update(&adjusted);
+                                    state.latest_scalar_row = Some(scalar_row_from_update(&adjusted));
+                                });
+                            }
+                        },
+                    )
+                }
             } else {
                 fullmag_runner::run_problem(
                     &stage.ir,
@@ -2071,6 +2205,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         grid,
                         fem_mesh: fem_mesh.clone(),
                         magnetization: None,
+                        preview_field: None,
                         finished: false,
                     };
                     if update.stats.step <= 1 || update.stats.step % field_every_n == 0 {
@@ -2482,6 +2617,46 @@ const LOCALHOST_API_BASE: &str = "http://localhost:8080";
 const LOOPBACK_V4_OCTETS: [u8; 4] = [127, 0, 0, 1];
 const LOCAL_API_PORT: u16 = 8080;
 
+#[derive(Clone)]
+struct CurrentLivePreviewConfigHandle {
+    current: Arc<Mutex<fullmag_runner::LivePreviewRequest>>,
+    stop: Arc<AtomicBool>,
+}
+
+impl CurrentLivePreviewConfigHandle {
+    fn spawn() -> Self {
+        let handle = Self {
+            current: Arc::new(Mutex::new(fullmag_runner::LivePreviewRequest::default())),
+            stop: Arc::new(AtomicBool::new(false)),
+        };
+        let worker = handle.clone();
+        std::thread::spawn(move || {
+            while !worker.stop.load(Ordering::Relaxed) {
+                if let Ok(config) = current_live_preview_config() {
+                    if let Ok(mut current) = worker.current.lock() {
+                        *current = config;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        });
+        handle
+    }
+
+    fn snapshot(&self) -> fullmag_runner::LivePreviewRequest {
+        self.current
+            .lock()
+            .map(|request| request.clone())
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for CurrentLivePreviewConfigHandle {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
 fn next_current_live_command() -> Result<Option<SessionCommand>> {
     let response = match current_live_api_client()
         .get(format!(
@@ -2502,6 +2677,17 @@ fn next_current_live_command() -> Result<Option<SessionCommand>> {
             .map(Some),
         status => bail!("current live command queue returned HTTP {}", status),
     }
+}
+
+fn current_live_preview_config() -> Result<fullmag_runner::LivePreviewRequest> {
+    current_live_api_client()
+        .get(format!("{LOCALHOST_API_BASE}/v1/live/current/preview/config"))
+        .send()
+        .context("failed to fetch current live preview config")?
+        .error_for_status()
+        .context("current live preview config endpoint returned error")?
+        .json::<fullmag_runner::LivePreviewRequest>()
+        .context("failed to decode current live preview config")
 }
 
 fn build_interactive_command_stage(
@@ -3156,6 +3342,7 @@ fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runner::StepUpda
             grid: [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
             fem_mesh: None,
             magnetization: Some(flatten_magnetization(&fdm.initial_magnetization)),
+            preview_field: None,
             finished: false,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
@@ -3167,6 +3354,7 @@ fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runner::StepUpda
             ],
             fem_mesh: None,
             magnetization: None,
+            preview_field: None,
             finished: false,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
@@ -3178,6 +3366,7 @@ fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runner::StepUpda
                 boundary_faces: fem.mesh.boundary_faces.clone(),
             }),
             magnetization: Some(flatten_magnetization(&fem.initial_magnetization)),
+            preview_field: None,
             finished: false,
         },
     }
@@ -3203,6 +3392,7 @@ fn final_stage_step_update(
             grid: [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
             fem_mesh: None,
             magnetization: Some(flatten_magnetization(final_magnetization)),
+            preview_field: None,
             finished,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
@@ -3214,6 +3404,7 @@ fn final_stage_step_update(
             ],
             fem_mesh: None,
             magnetization: None,
+            preview_field: None,
             finished,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
@@ -3225,6 +3416,7 @@ fn final_stage_step_update(
                 boundary_faces: fem.mesh.boundary_faces.clone(),
             }),
             magnetization: Some(flatten_magnetization(final_magnetization)),
+            preview_field: None,
             finished,
         },
     })
@@ -3260,6 +3452,7 @@ fn live_state_manifest_from_update(update: &fullmag_runner::StepUpdate) -> LiveS
             grid: update.grid,
             fem_mesh: update.fem_mesh.clone(),
             magnetization: update.magnetization.clone(),
+            preview_field: update.preview_field.clone(),
             finished: update.finished,
         },
     }

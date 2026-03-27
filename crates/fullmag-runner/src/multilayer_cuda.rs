@@ -222,6 +222,7 @@ fn execute_cuda_fdm_multilayer_impl(
                 grid: [grid[0], grid[1], grid[2]],
                 fem_mesh: None,
                 magnetization: None,
+                preview_field: None,
                 finished: false,
             });
         }
@@ -624,6 +625,7 @@ fn execute_native_stacked_cuda_multilayer(
                     grid: native.global_grid,
                     fem_mesh: None,
                     magnetization: None,
+                    preview_field: None,
                     finished: false,
                 });
             }
@@ -633,6 +635,7 @@ fn execute_native_stacked_cuda_multilayer(
                 grid: native.global_grid,
                 fem_mesh: None,
                 magnetization: None,
+                preview_field: None,
                 finished: false,
             });
         }

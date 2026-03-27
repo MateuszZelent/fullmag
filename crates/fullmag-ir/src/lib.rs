@@ -32,6 +32,10 @@ pub enum ExecutionPrecision {
 #[serde(rename_all = "snake_case")]
 pub enum IntegratorChoice {
     Heun,
+    Rk4,
+    Rk23,
+    Rk45,
+    Abm3,
 }
 
 /// Algorithm selection for relaxation (energy-minimization) studies.

@@ -48,9 +48,61 @@ pub struct StepUpdate {
     /// Sent periodically (not every step) to limit bandwidth.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub magnetization: Option<Vec<f64>>,
+    /// Optional active preview field driven by the current UI preview request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_field: Option<LivePreviewField>,
     /// true when simulation has completed.
     #[serde(default)]
     pub finished: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LivePreviewRequest {
+    #[serde(default)]
+    pub revision: u64,
+    pub quantity: String,
+    pub component: String,
+    pub layer: u32,
+    pub all_layers: bool,
+    pub x_chosen_size: u32,
+    pub y_chosen_size: u32,
+    pub auto_scale_enabled: bool,
+    pub max_points: u32,
+}
+
+impl Default for LivePreviewRequest {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            quantity: "m".to_string(),
+            component: "3D".to_string(),
+            layer: 0,
+            all_layers: false,
+            x_chosen_size: 0,
+            y_chosen_size: 0,
+            auto_scale_enabled: true,
+            max_points: 16_384,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LivePreviewField {
+    pub config_revision: u64,
+    pub quantity: String,
+    pub unit: String,
+    pub spatial_kind: String,
+    pub preview_grid: [u32; 3],
+    pub original_grid: [u32; 3],
+    pub vector_field_values: Vec<f64>,
+    pub x_chosen_size: u32,
+    pub y_chosen_size: u32,
+    pub applied_x_chosen_size: u32,
+    pub applied_y_chosen_size: u32,
+    pub applied_layer_stride: u32,
+    pub auto_downscaled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_downscale_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +188,13 @@ pub(crate) struct FieldSnapshot {
     pub time: f64,
     pub solver_dt: f64,
     pub values: Vec<[f64; 3]>,
+}
+
+pub(crate) struct LiveStepConsumer<'a> {
+    pub grid: [u32; 3],
+    pub field_every_n: u64,
+    pub preview_request: Option<&'a (dyn Fn() -> LivePreviewRequest + Send + Sync)>,
+    pub on_step: &'a mut dyn FnMut(StepUpdate),
 }
 
 #[derive(Debug, Clone)]

@@ -33,7 +33,7 @@ use crate::schedules::{
 };
 #[cfg(all(feature = "fem-gpu", not(feature = "cuda")))]
 use crate::schedules::{collect_field_schedules, collect_scalar_schedules};
-use crate::types::{ExecutedRun, RunError, StepUpdate};
+use crate::types::{ExecutedRun, LivePreviewRequest, LiveStepConsumer, RunError, StepUpdate};
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::types::{ExecutionProvenance, FieldSnapshot, RunResult, RunStatus, StepStats};
 
@@ -323,7 +323,44 @@ pub(crate) fn execute_fem_with_callback(
             plan,
             until_seconds,
             outputs,
-            Some(([0, 0, 0], field_every_n, on_step)),
+            Some(LiveStepConsumer {
+                grid: [0, 0, 0],
+                field_every_n,
+                preview_request: None,
+                on_step,
+            }),
+        ),
+    }
+}
+
+pub(crate) fn execute_fem_with_live_preview(
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    field_every_n: u64,
+    preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+    on_step: &mut impl FnMut(StepUpdate),
+) -> Result<ExecutedRun, RunError> {
+    match engine {
+        FemEngine::CpuReference => fem_reference::execute_reference_fem_with_live_preview(
+            plan,
+            until_seconds,
+            outputs,
+            field_every_n,
+            preview_request,
+            on_step,
+        ),
+        FemEngine::NativeGpu => execute_native_fem_impl(
+            plan,
+            until_seconds,
+            outputs,
+            Some(LiveStepConsumer {
+                grid: [0, 0, 0],
+                field_every_n,
+                preview_request: Some(preview_request),
+                on_step,
+            }),
         ),
     }
 }
@@ -351,7 +388,46 @@ pub(crate) fn execute_fdm_with_callback(
             plan,
             until_seconds,
             outputs,
-            Some((grid, field_every_n, on_step)),
+            Some(LiveStepConsumer {
+                grid,
+                field_every_n,
+                preview_request: None,
+                on_step,
+            }),
+        ),
+    }
+}
+
+pub(crate) fn execute_fdm_with_live_preview(
+    engine: FdmEngine,
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    grid: [u32; 3],
+    field_every_n: u64,
+    preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+    on_step: &mut impl FnMut(StepUpdate),
+) -> Result<ExecutedRun, RunError> {
+    match engine {
+        FdmEngine::CpuReference => cpu_reference::execute_reference_fdm_with_live_preview(
+            plan,
+            until_seconds,
+            outputs,
+            grid,
+            field_every_n,
+            preview_request,
+            on_step,
+        ),
+        FdmEngine::CudaFdm => execute_cuda_fdm_impl(
+            plan,
+            until_seconds,
+            outputs,
+            Some(LiveStepConsumer {
+                grid,
+                field_every_n,
+                preview_request: Some(preview_request),
+                on_step,
+            }),
         ),
     }
 }
@@ -408,7 +484,7 @@ fn execute_cuda_fdm_impl(
     plan: &FdmPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<([u32; 3], u64, &mut dyn FnMut(StepUpdate))>,
+    mut live: Option<LiveStepConsumer<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -439,23 +515,42 @@ fn execute_cuda_fdm_impl(
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
     let mut previous_total_energy: Option<f64> = None;
+    let mut last_preview_revision: Option<u64> = None;
     while current_time < until_seconds {
         let dt_step = dt.min(until_seconds - current_time);
         let stats = backend.step(dt_step)?;
         current_time = stats.time;
         latest_stats = Some(stats.clone());
-        if let Some((grid, field_every_n, on_step)) = live.as_mut() {
-            let emit_every = (*field_every_n).max(1);
-            let magnetization = if stats.step % emit_every == 0 {
+        if let Some(live) = live.as_mut() {
+            let emit_every = live.field_every_n.max(1);
+            let preview_request = live.preview_request.map(|get| get());
+            let preview_due = preview_request
+                .as_ref()
+                .map(|request| {
+                    last_preview_revision != Some(request.revision)
+                        || stats.step <= 1
+                        || stats.step % emit_every == 0
+                })
+                .unwrap_or(false);
+            let magnetization = if live.preview_request.is_none() && stats.step % emit_every == 0 {
                 Some(flatten_vectors(&backend.copy_m(cell_count)?))
             } else {
                 None
             };
-            on_step(StepUpdate {
+            let preview_field = if preview_due {
+                let request = preview_request.as_ref().expect("checked preview_due");
+                let preview = backend.copy_live_preview_field(request, plan.grid.cells)?;
+                last_preview_revision = Some(request.revision);
+                Some(preview)
+            } else {
+                None
+            };
+            (live.on_step)(StepUpdate {
                 stats: stats.clone(),
-                grid: *grid,
+                grid: live.grid,
                 fem_mesh: None,
                 magnetization,
+                preview_field,
                 finished: false,
             });
         }
@@ -542,7 +637,7 @@ fn execute_native_fem_impl(
     plan: &FemPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<([u32; 3], u64, &mut dyn FnMut(StepUpdate))>,
+    mut live: Option<LiveStepConsumer<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -565,27 +660,46 @@ fn execute_native_fem_impl(
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
     let mut previous_total_energy: Option<f64> = None;
+    let mut last_preview_revision: Option<u64> = None;
     while current_time < until_seconds {
         let dt_step = dt.min(until_seconds - current_time);
         let stats = backend.step(dt_step)?;
         current_time = stats.time;
         latest_stats = Some(stats.clone());
-        if let Some((grid, field_every_n, on_step)) = live.as_mut() {
-            let emit_every = (*field_every_n).max(1);
-            let magnetization = if stats.step % emit_every == 0 {
+        if let Some(live) = live.as_mut() {
+            let emit_every = live.field_every_n.max(1);
+            let preview_request = live.preview_request.map(|get| get());
+            let preview_due = preview_request
+                .as_ref()
+                .map(|request| {
+                    last_preview_revision != Some(request.revision)
+                        || stats.step <= 1
+                        || stats.step % emit_every == 0
+                })
+                .unwrap_or(false);
+            let magnetization = if live.preview_request.is_none() && stats.step % emit_every == 0 {
                 Some(flatten_vectors(&backend.copy_m(node_count)?))
             } else {
                 None
             };
-            on_step(StepUpdate {
+            let preview_field = if preview_due {
+                let request = preview_request.as_ref().expect("checked preview_due");
+                let preview = backend.copy_live_preview_field(request, node_count)?;
+                last_preview_revision = Some(request.revision);
+                Some(preview)
+            } else {
+                None
+            };
+            (live.on_step)(StepUpdate {
                 stats: stats.clone(),
-                grid: *grid,
+                grid: live.grid,
                 fem_mesh: Some(crate::types::FemMeshPayload {
                     nodes: plan.mesh.nodes.clone(),
                     elements: plan.mesh.elements.clone(),
                     boundary_faces: plan.mesh.boundary_faces.clone(),
                 }),
                 magnetization,
+                preview_field,
                 finished: false,
             });
         }
@@ -699,7 +813,7 @@ fn execute_native_fem_impl(
     plan: &FemPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    _live: Option<([u32; 3], u64, &mut dyn FnMut(StepUpdate))>,
+    _live: Option<LiveStepConsumer<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     execute_native_fem(plan, until_seconds, outputs)
 }
@@ -722,7 +836,7 @@ fn execute_cuda_fdm_impl(
     plan: &FdmPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    _live: Option<([u32; 3], u64, &mut dyn FnMut(StepUpdate))>,
+    _live: Option<LiveStepConsumer<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     execute_cuda_fdm(plan, until_seconds, outputs)
 }

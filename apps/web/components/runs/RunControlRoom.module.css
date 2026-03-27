@@ -687,6 +687,12 @@
   color: var(--ide-text-3);
 }
 
+.viewportBarMetric {
+  font-family: var(--font-mono);
+  font-size: var(--ide-text-xs);
+  color: var(--ide-text-2);
+}
+
 .viewportBarSep {
   width: 1px;
   height: 16px;

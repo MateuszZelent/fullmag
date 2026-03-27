@@ -21,7 +21,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
-use fullmag_runner::{FemMeshPayload, StepUpdate};
+use fullmag_runner::{FemMeshPayload, LivePreviewField, LivePreviewRequest, StepUpdate};
 
 #[derive(Debug, Clone)]
 struct AppState {
@@ -136,6 +136,8 @@ struct StepUpdateView {
     fem_mesh: Option<FemMeshPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     magnetization: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview_field: Option<LivePreviewField>,
     finished: bool,
 }
 
@@ -151,6 +153,7 @@ struct SessionStateResponse {
     fem_mesh: Option<FemMeshPayload>,
     latest_fields: LatestFields,
     artifacts: Vec<ArtifactEntry>,
+    preview_config: CurrentPreviewConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     preview: Option<PreviewState>,
 }
@@ -174,35 +177,11 @@ struct LatestFields {
     h_eff: Option<Value>,
 }
 
-#[derive(Debug, Clone)]
-struct CurrentPreviewConfig {
-    quantity: String,
-    component: String,
-    layer: usize,
-    all_layers: bool,
-    x_chosen_size: usize,
-    y_chosen_size: usize,
-    auto_scale_enabled: bool,
-    max_points: usize,
-}
-
-impl Default for CurrentPreviewConfig {
-    fn default() -> Self {
-        Self {
-            quantity: "m".to_string(),
-            component: "3D".to_string(),
-            layer: 0,
-            all_layers: false,
-            x_chosen_size: 0,
-            y_chosen_size: 0,
-            auto_scale_enabled: true,
-            max_points: 16_384,
-        }
-    }
-}
+type CurrentPreviewConfig = LivePreviewRequest;
 
 #[derive(Debug, Serialize, Clone)]
 struct PreviewState {
+    config_revision: u64,
     spatial_kind: String,
     quantity: String,
     unit: String,
@@ -426,6 +405,10 @@ async fn main() {
         .route("/v1/live/current/events", get(get_current_live_events))
         .route("/v1/live/current/publish", post(publish_current_live_state))
         .route(
+            "/v1/live/current/preview/config",
+            get(get_current_preview_config),
+        )
+        .route(
             "/v1/live/current/preview/quantity",
             post(set_current_preview_quantity),
         )
@@ -546,6 +529,12 @@ async fn get_current_live_state(
     get_current_live_bootstrap(State(state)).await
 }
 
+async fn get_current_preview_config(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<CurrentPreviewConfig>, ApiError> {
+    Ok(Json(state.current_preview_config.read().await.clone()))
+}
+
 async fn get_current_live_events(
     State(state): State<Arc<AppState>>,
 ) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, ApiError> {
@@ -597,8 +586,10 @@ async fn publish_current_live_state(
         Some(existing) if existing.session.session_id == req.session_id => existing,
         _ => default_current_live_state(&req),
     };
+    let previous_preview = next.preview.clone();
     apply_current_live_publish(&mut next, req)?;
-    next.preview = build_preview_state(&next, &preview_config);
+    next.preview_config = preview_config.clone();
+    next.preview = build_preview_state(&next, &preview_config).or(previous_preview);
     let json = serde_json::to_string(&next).map_err(|error| {
         ApiError::internal(format!("failed to serialize current state: {}", error))
     })?;
@@ -634,7 +625,7 @@ async fn set_current_preview_x_chosen_size(
     Json(req): Json<PreviewXChosenSizeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     mutate_current_preview(&state, move |config| {
-        config.x_chosen_size = req.x_chosen_size;
+        config.x_chosen_size = req.x_chosen_size as u32;
     })
     .await
 }
@@ -644,7 +635,7 @@ async fn set_current_preview_y_chosen_size(
     Json(req): Json<PreviewYChosenSizeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     mutate_current_preview(&state, move |config| {
-        config.y_chosen_size = req.y_chosen_size;
+        config.y_chosen_size = req.y_chosen_size as u32;
     })
     .await
 }
@@ -664,7 +655,7 @@ async fn set_current_preview_layer(
     Json(req): Json<PreviewLayerRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     mutate_current_preview(&state, move |config| {
-        config.layer = req.layer;
+        config.layer = req.layer as u32;
     })
     .await
 }
@@ -1002,6 +993,7 @@ where
     let preview_config = {
         let mut config = state.current_preview_config.write().await;
         mutate(&mut config);
+        config.revision = config.revision.saturating_add(1);
         config.clone()
     };
 
@@ -1010,7 +1002,9 @@ where
         let snapshot = current
             .as_mut()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        snapshot.preview = build_preview_state(snapshot, &preview_config);
+        let previous_preview = snapshot.preview.clone();
+        snapshot.preview_config = preview_config.clone();
+        snapshot.preview = build_preview_state(snapshot, &preview_config).or(previous_preview);
         serde_json::to_string(snapshot).map_err(|error| {
             ApiError::internal(format!("failed to serialize current state: {}", error))
         })?
@@ -1026,6 +1020,15 @@ fn build_preview_state(
 ) -> Option<PreviewState> {
     let quantity = resolve_preview_quantity(current, &config.quantity)?;
     let component = normalize_preview_component(&config.component);
+    if let Some(field) = current
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.preview_field.as_ref())
+        .filter(|field| field.config_revision == config.revision && field.quantity == quantity)
+    {
+        return build_preview_state_from_live_field(current, field, config, component);
+    }
+
     let unit = quantity_unit(&quantity).to_string();
 
     if let Some(mesh) = current.fem_mesh.as_ref() {
@@ -1035,6 +1038,7 @@ fn build_preview_state(
         }
         let (min, max) = component_min_max(&vectors, component);
         return Some(PreviewState {
+            config_revision: config.revision,
             spatial_kind: "mesh".to_string(),
             quantity,
             unit,
@@ -1047,7 +1051,7 @@ fn build_preview_state(
             min,
             max,
             n_comp: 3,
-            max_points: config.max_points,
+            max_points: config.max_points as usize,
             data_points_count: vectors.len(),
             x_possible_sizes: Vec::new(),
             y_possible_sizes: Vec::new(),
@@ -1077,8 +1081,10 @@ fn build_preview_state(
 
     let x_possible_sizes = candidate_preview_sizes(full_x);
     let y_possible_sizes = candidate_preview_sizes(full_y);
-    let requested_x = choose_preview_size(config.x_chosen_size, &x_possible_sizes, full_x);
-    let requested_y = choose_preview_size(config.y_chosen_size, &y_possible_sizes, full_y);
+    let requested_x =
+        choose_preview_size(config.x_chosen_size as usize, &x_possible_sizes, full_x);
+    let requested_y =
+        choose_preview_size(config.y_chosen_size as usize, &y_possible_sizes, full_y);
 
     if component == "3D" {
         let mut applied_x = requested_x;
@@ -1087,7 +1093,7 @@ fn build_preview_state(
         let mut preview_z = full_z;
         let mut auto_downscaled = false;
         while config.auto_scale_enabled
-            && applied_x * applied_y * preview_z > config.max_points
+            && applied_x * applied_y * preview_z > config.max_points as usize
             && (applied_x > 1 || applied_y > 1 || preview_z > 1)
         {
             auto_downscaled = true;
@@ -1111,15 +1117,22 @@ fn build_preview_state(
         let auto_downscale_message = auto_downscaled.then(|| {
             format!(
                 "Preview auto-scaled from {}x{}x{} to {}x{}x{} to stay within {} points",
-                full_x, full_y, full_z, applied_x, applied_y, preview_z, config.max_points
+                full_x,
+                full_y,
+                full_z,
+                applied_x,
+                applied_y,
+                preview_z,
+                config.max_points
             )
         });
         return Some(PreviewState {
+            config_revision: config.revision,
             spatial_kind: "grid".to_string(),
             quantity,
             unit,
             component: component.to_string(),
-            layer: config.layer.min(full_z.saturating_sub(1)),
+            layer: (config.layer as usize).min(full_z.saturating_sub(1)),
             all_layers: config.all_layers,
             view_type: "3D".to_string(),
             vector_field_values: Some(flatten_vectors(&vectors)),
@@ -1127,7 +1140,7 @@ fn build_preview_state(
             min,
             max,
             n_comp: 3,
-            max_points: config.max_points,
+            max_points: config.max_points as usize,
             data_points_count: vectors.len(),
             x_possible_sizes: x_possible_sizes.clone(),
             y_possible_sizes: y_possible_sizes.clone(),
@@ -1146,13 +1159,13 @@ fn build_preview_state(
         });
     }
 
-    let layer = config.layer.min(full_z.saturating_sub(1));
+    let layer = (config.layer as usize).min(full_z.saturating_sub(1));
     let mut applied_x = requested_x;
     let mut applied_y = requested_y;
     let effective_layers = if config.all_layers { full_z } else { 1 };
     let mut auto_downscaled = false;
     while config.auto_scale_enabled
-        && applied_x * applied_y * effective_layers > config.max_points
+        && applied_x * applied_y * effective_layers > config.max_points as usize
         && (applied_x > 1 || applied_y > 1)
     {
         auto_downscaled = true;
@@ -1178,6 +1191,7 @@ fn build_preview_state(
         )
     });
     Some(PreviewState {
+        config_revision: config.revision,
         spatial_kind: "grid".to_string(),
         quantity,
         unit,
@@ -1190,7 +1204,7 @@ fn build_preview_state(
         min,
         max,
         n_comp: 1,
-        max_points: config.max_points,
+        max_points: config.max_points as usize,
         data_points_count: applied_x * applied_y,
         x_possible_sizes,
         y_possible_sizes,
@@ -1203,6 +1217,149 @@ fn build_preview_state(
         auto_downscaled,
         auto_downscale_message,
         preview_grid: [applied_x, applied_y, 1],
+        fem_mesh: None,
+        original_node_count: None,
+        original_face_count: None,
+    })
+}
+
+fn build_preview_state_from_live_field(
+    current: &SessionStateResponse,
+    field: &LivePreviewField,
+    config: &CurrentPreviewConfig,
+    component: &str,
+) -> Option<PreviewState> {
+    let preview_grid = [
+        field.preview_grid[0] as usize,
+        field.preview_grid[1] as usize,
+        field.preview_grid[2] as usize,
+    ];
+    let original_grid = [
+        field.original_grid[0] as usize,
+        field.original_grid[1] as usize,
+        field.original_grid[2] as usize,
+    ];
+    let vectors = field
+        .vector_field_values
+        .chunks_exact(3)
+        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+        .collect::<Vec<_>>();
+
+    if field.spatial_kind == "mesh" {
+        let mesh = current
+            .fem_mesh
+            .as_ref()
+            .or_else(|| current.live_state.as_ref().and_then(|state| state.latest_step.fem_mesh.as_ref()))?
+            .clone();
+        let (min, max) = component_min_max(&vectors, component);
+        return Some(PreviewState {
+            config_revision: field.config_revision,
+            spatial_kind: "mesh".to_string(),
+            quantity: field.quantity.clone(),
+            unit: field.unit.clone(),
+            component: component.to_string(),
+            layer: 0,
+            all_layers: true,
+            view_type: if component == "3D" { "3D" } else { "2D" }.to_string(),
+            vector_field_values: Some(field.vector_field_values.clone()),
+            scalar_field: Vec::new(),
+            min,
+            max,
+            n_comp: 3,
+            max_points: config.max_points as usize,
+            data_points_count: vectors.len(),
+            x_possible_sizes: Vec::new(),
+            y_possible_sizes: Vec::new(),
+            x_chosen_size: field.x_chosen_size as usize,
+            y_chosen_size: field.y_chosen_size as usize,
+            applied_x_chosen_size: field.applied_x_chosen_size as usize,
+            applied_y_chosen_size: field.applied_y_chosen_size as usize,
+            applied_layer_stride: field.applied_layer_stride as usize,
+            auto_scale_enabled: config.auto_scale_enabled,
+            auto_downscaled: field.auto_downscaled,
+            auto_downscale_message: field.auto_downscale_message.clone(),
+            preview_grid,
+            fem_mesh: Some(mesh.clone()),
+            original_node_count: Some(mesh.nodes.len()),
+            original_face_count: Some(mesh.boundary_faces.len()),
+        });
+    }
+
+    let x_possible_sizes = if original_grid[0] > 0 {
+        candidate_preview_sizes(original_grid[0])
+    } else {
+        Vec::new()
+    };
+    let y_possible_sizes = if original_grid[1] > 0 {
+        candidate_preview_sizes(original_grid[1])
+    } else {
+        Vec::new()
+    };
+
+    if component == "3D" {
+        let (min, max) = component_min_max(&vectors, component);
+        return Some(PreviewState {
+            config_revision: field.config_revision,
+            spatial_kind: "grid".to_string(),
+            quantity: field.quantity.clone(),
+            unit: field.unit.clone(),
+            component: component.to_string(),
+            layer: config.layer.min(field.original_grid[2].saturating_sub(1)) as usize,
+            all_layers: config.all_layers,
+            view_type: "3D".to_string(),
+            vector_field_values: Some(field.vector_field_values.clone()),
+            scalar_field: Vec::new(),
+            min,
+            max,
+            n_comp: 3,
+            max_points: config.max_points as usize,
+            data_points_count: vectors.len(),
+            x_possible_sizes,
+            y_possible_sizes,
+            x_chosen_size: field.x_chosen_size as usize,
+            y_chosen_size: field.y_chosen_size as usize,
+            applied_x_chosen_size: field.applied_x_chosen_size as usize,
+            applied_y_chosen_size: field.applied_y_chosen_size as usize,
+            applied_layer_stride: field.applied_layer_stride as usize,
+            auto_scale_enabled: config.auto_scale_enabled,
+            auto_downscaled: field.auto_downscaled,
+            auto_downscale_message: field.auto_downscale_message.clone(),
+            preview_grid,
+            fem_mesh: None,
+            original_node_count: None,
+            original_face_count: None,
+        });
+    }
+
+    let scalar_field = sampled_grid_scalar_2d(&vectors, preview_grid, component);
+    let (min, max) = scalar_min_max(&scalar_field);
+    Some(PreviewState {
+        config_revision: field.config_revision,
+        spatial_kind: "grid".to_string(),
+        quantity: field.quantity.clone(),
+        unit: field.unit.clone(),
+        component: component.to_string(),
+        layer: config.layer.min(field.original_grid[2].saturating_sub(1)) as usize,
+        all_layers: config.all_layers,
+        view_type: "2D".to_string(),
+        vector_field_values: None,
+        scalar_field,
+        min,
+        max,
+        n_comp: 1,
+        max_points: config.max_points as usize,
+        data_points_count: preview_grid[0] * preview_grid[1],
+        x_possible_sizes,
+        y_possible_sizes,
+        x_chosen_size: field.x_chosen_size as usize,
+        y_chosen_size: field.y_chosen_size as usize,
+        applied_x_chosen_size: field.applied_x_chosen_size as usize,
+        applied_y_chosen_size: field.applied_y_chosen_size as usize,
+        applied_layer_stride: field.applied_layer_stride as usize,
+        auto_scale_enabled: config.auto_scale_enabled,
+        auto_downscaled: field.auto_downscaled,
+        auto_downscale_message: field.auto_downscale_message.clone(),
+        preview_grid,
         fem_mesh: None,
         original_node_count: None,
         original_face_count: None,
@@ -1452,6 +1609,31 @@ fn resample_grid_scalar_2d(
     out
 }
 
+fn sampled_grid_scalar_2d(
+    values: &[[f64; 3]],
+    preview_grid: [usize; 3],
+    component: &str,
+) -> Vec<[f64; 3]> {
+    let component_index = match component {
+        "x" => 0,
+        "y" => 1,
+        "z" => 2,
+        _ => 2,
+    };
+    let mut out = Vec::with_capacity(preview_grid[0] * preview_grid[1]);
+    for py in 0..preview_grid[1] {
+        for px in 0..preview_grid[0] {
+            let index = py * preview_grid[0] + px;
+            let value = values
+                .get(index)
+                .map(|vector| vector[component_index])
+                .unwrap_or(0.0);
+            out.push([px as f64, py as f64, value]);
+        }
+    }
+    out
+}
+
 async fn current_live_session_id(state: &AppState) -> Result<String, ApiError> {
     let current = state.current_live_state.read().await;
     current
@@ -1508,6 +1690,7 @@ fn default_current_live_state(req: &CurrentLivePublishRequest) -> SessionStateRe
         fem_mesh: None,
         latest_fields: LatestFields::default(),
         artifacts: Vec::new(),
+        preview_config: CurrentPreviewConfig::default(),
         preview: None,
     }
 }
@@ -1584,6 +1767,7 @@ fn apply_current_live_publish(
         &current.latest_fields,
         current.live_state.as_ref(),
         current.run.as_ref(),
+        current.metadata.as_ref(),
         &current.scalar_rows,
         field_location,
     );
@@ -1945,9 +2129,22 @@ fn build_quantities(
     latest_fields: &LatestFields,
     live_state: Option<&LiveState>,
     run: Option<&RunManifest>,
+    metadata: Option<&Value>,
     scalar_rows: &[ScalarRow],
     field_location: &str,
 ) -> Vec<QuantityDescriptor> {
+    let dynamic_supported = metadata
+        .and_then(|value| value.get("live_preview"))
+        .and_then(|value| value.get("supported_quantities"))
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let dynamic_available = |quantity_id: &str| dynamic_supported.contains(&quantity_id);
     let scalar_available = |run_value: Option<f64>| {
         !scalar_rows.is_empty() || live_state.is_some() || run_value.is_some()
     };
@@ -1959,10 +2156,14 @@ fn build_quantities(
             kind: "vector_field".to_string(),
             unit: "dimensionless".to_string(),
             location: field_location.to_string(),
-            available: latest_fields.m.is_some()
+            available: dynamic_available("m")
+                || latest_fields.m.is_some()
                 || live_state
                     .and_then(|state| state.latest_step.magnetization.as_ref())
-                    .is_some(),
+                    .is_some()
+                || live_state
+                    .and_then(|state| state.latest_step.preview_field.as_ref())
+                    .is_some_and(|field| field.quantity == "m"),
         },
         QuantityDescriptor {
             id: "H_ex".to_string(),
@@ -1970,7 +2171,11 @@ fn build_quantities(
             kind: "vector_field".to_string(),
             unit: "A/m".to_string(),
             location: field_location.to_string(),
-            available: latest_fields.h_ex.is_some(),
+            available: dynamic_available("H_ex")
+                || latest_fields.h_ex.is_some()
+                || live_state
+                    .and_then(|state| state.latest_step.preview_field.as_ref())
+                    .is_some_and(|field| field.quantity == "H_ex"),
         },
         QuantityDescriptor {
             id: "H_demag".to_string(),
@@ -1978,7 +2183,11 @@ fn build_quantities(
             kind: "vector_field".to_string(),
             unit: "A/m".to_string(),
             location: field_location.to_string(),
-            available: latest_fields.h_demag.is_some(),
+            available: dynamic_available("H_demag")
+                || latest_fields.h_demag.is_some()
+                || live_state
+                    .and_then(|state| state.latest_step.preview_field.as_ref())
+                    .is_some_and(|field| field.quantity == "H_demag"),
         },
         QuantityDescriptor {
             id: "H_ext".to_string(),
@@ -1986,7 +2195,11 @@ fn build_quantities(
             kind: "vector_field".to_string(),
             unit: "A/m".to_string(),
             location: field_location.to_string(),
-            available: latest_fields.h_ext.is_some(),
+            available: dynamic_available("H_ext")
+                || latest_fields.h_ext.is_some()
+                || live_state
+                    .and_then(|state| state.latest_step.preview_field.as_ref())
+                    .is_some_and(|field| field.quantity == "H_ext"),
         },
         QuantityDescriptor {
             id: "H_eff".to_string(),
@@ -1994,7 +2207,11 @@ fn build_quantities(
             kind: "vector_field".to_string(),
             unit: "A/m".to_string(),
             location: field_location.to_string(),
-            available: latest_fields.h_eff.is_some(),
+            available: dynamic_available("H_eff")
+                || latest_fields.h_eff.is_some()
+                || live_state
+                    .and_then(|state| state.latest_step.preview_field.as_ref())
+                    .is_some_and(|field| field.quantity == "H_eff"),
         },
         QuantityDescriptor {
             id: "E_ex".to_string(),

@@ -381,6 +381,25 @@ void compute_row_sum_lumped_mass(const mfem::SparseMatrix &matrix, std::vector<d
     }
 }
 
+void multiply_sparse_matrix_host(
+    const mfem::SparseMatrix &matrix,
+    const std::vector<double> &x,
+    std::vector<double> &y)
+{
+    const int n = matrix.Height();
+    y.assign(static_cast<size_t>(n), 0.0);
+    const int *I = matrix.GetI();
+    const int *J = matrix.GetJ();
+    const double *data = matrix.GetData();
+    for (int row = 0; row < n; ++row) {
+        double sum = 0.0;
+        for (int index = I[row]; index < I[row + 1]; ++index) {
+            sum += data[index] * x[static_cast<size_t>(J[index])];
+        }
+        y[static_cast<size_t>(row)] = sum;
+    }
+}
+
 bool apply_exchange_component(
     const mfem::SparseMatrix &stiffness,
     const std::vector<double> &lumped_mass,
@@ -394,19 +413,20 @@ bool apply_exchange_component(
         error = "MFEM GridFunction size does not match host magnetization component size";
         return false;
     }
+    double *m_host = m_component.HostWrite();
     for (int i = 0; i < m_component.Size(); ++i) {
-        m_component(i) = m_values[static_cast<size_t>(i)];
+        m_host[i] = m_values[static_cast<size_t>(i)];
     }
-    mfem::Vector tmp(m_component.Size());
-    stiffness.Mult(m_component, tmp);
-    h_component.resize(static_cast<size_t>(tmp.Size()));
-    for (int i = 0; i < tmp.Size(); ++i) {
+    std::vector<double> tmp_host;
+    multiply_sparse_matrix_host(stiffness, m_values, tmp_host);
+    h_component.resize(m_values.size());
+    for (int i = 0; i < m_component.Size(); ++i) {
         const double mass = lumped_mass[static_cast<size_t>(i)];
         if (mass <= 0.0) {
             error = "encountered non-positive lumped FEM mass while building exchange field";
             return false;
         }
-        h_component[static_cast<size_t>(i)] = -prefactor * tmp[i] / mass;
+        h_component[static_cast<size_t>(i)] = -prefactor * tmp_host[i] / mass;
     }
     return true;
 }
@@ -520,20 +540,25 @@ double external_energy_from_field(
 
 double exchange_energy_from_components(
     const mfem::SparseMatrix &stiffness,
-    mfem::GridFunction &mx,
-    mfem::GridFunction &my,
-    mfem::GridFunction &mz,
+    const std::vector<double> &mx,
+    const std::vector<double> &my,
+    const std::vector<double> &mz,
     double exchange_stiffness)
 {
-    mfem::Vector tmp(mx.Size());
-
+    std::vector<double> tmp;
     double energy = 0.0;
-    stiffness.Mult(mx, tmp);
-    energy += exchange_stiffness * (mx * tmp);
-    stiffness.Mult(my, tmp);
-    energy += exchange_stiffness * (my * tmp);
-    stiffness.Mult(mz, tmp);
-    energy += exchange_stiffness * (mz * tmp);
+    multiply_sparse_matrix_host(stiffness, mx, tmp);
+    for (size_t i = 0; i < mx.size(); ++i) {
+        energy += exchange_stiffness * mx[i] * tmp[i];
+    }
+    multiply_sparse_matrix_host(stiffness, my, tmp);
+    for (size_t i = 0; i < my.size(); ++i) {
+        energy += exchange_stiffness * my[i] * tmp[i];
+    }
+    multiply_sparse_matrix_host(stiffness, mz, tmp);
+    for (size_t i = 0; i < mz.size(); ++i) {
+        energy += exchange_stiffness * mz[i] * tmp[i];
+    }
     return energy;
 }
 
@@ -619,9 +644,9 @@ bool compute_exchange_for_magnetization(
     if (exchange_energy != nullptr) {
         *exchange_energy = exchange_energy_from_components(
             stiffness,
-            *gf_mx,
-            *gf_my,
-            *gf_mz,
+            ctx.mfem_mx,
+            ctx.mfem_my,
+            ctx.mfem_mz,
             ctx.material.exchange_stiffness);
     }
 
@@ -946,10 +971,13 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
         auto *gf_mx = new mfem::GridFunction(fes);
         auto *gf_my = new mfem::GridFunction(fes);
         auto *gf_mz = new mfem::GridFunction(fes);
+        double *mx_host = gf_mx->HostWrite();
+        double *my_host = gf_my->HostWrite();
+        double *mz_host = gf_mz->HostWrite();
         for (int i = 0; i < fes->GetNDofs(); ++i) {
-            (*gf_mx)(i) = ctx.mfem_mx[static_cast<size_t>(i)];
-            (*gf_my)(i) = ctx.mfem_my[static_cast<size_t>(i)];
-            (*gf_mz)(i) = ctx.mfem_mz[static_cast<size_t>(i)];
+            mx_host[i] = ctx.mfem_mx[static_cast<size_t>(i)];
+            my_host[i] = ctx.mfem_my[static_cast<size_t>(i)];
+            mz_host[i] = ctx.mfem_mz[static_cast<size_t>(i)];
         }
 
         auto *exchange_form = new mfem::BilinearForm(fes);

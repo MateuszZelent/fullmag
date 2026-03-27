@@ -97,7 +97,11 @@ install-cli install-cli-dev:
 			FULLMAG_CMAKE="$$cmake_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-api --release --features cuda; \
 			build_mode="cuda"; \
 			if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then \
-				if [ ! -x "$$managed_runtime_bin" ] || [ ".fullmag/target/release/fullmag" -nt "$$managed_runtime_bin" ] || [ "./scripts/export_fem_gpu_runtime.sh" -nt "$$managed_runtime_bin" ]; then \
+				managed_runtime_stale=""; \
+				if [ -x "$$managed_runtime_bin" ]; then \
+					managed_runtime_stale="$$(find native/backends/fem crates/fullmag-fem-sys crates/fullmag-runner crates/fullmag-cli scripts docker-compose.yml Cargo.lock -type f -newer "$$managed_runtime_bin" 2>/dev/null | head -n 1)"; \
+				fi; \
+				if [ ! -x "$$managed_runtime_bin" ] || [ ".fullmag/target/release/fullmag" -nt "$$managed_runtime_bin" ] || [ "./scripts/export_fem_gpu_runtime.sh" -nt "$$managed_runtime_bin" ] || [ -n "$$managed_runtime_stale" ]; then \
 					echo "Exporting managed FEM GPU host runtime bundle..."; \
 					if ./scripts/export_fem_gpu_runtime.sh >"$$managed_log" 2>&1; then \
 						echo "Managed FEM GPU host runtime exported successfully."; \

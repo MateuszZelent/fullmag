@@ -106,6 +106,7 @@ export interface LatestFields {
 }
 
 export interface PreviewState {
+  config_revision: number;
   spatial_kind: "grid" | "mesh";
   quantity: string;
   unit: string;
@@ -136,6 +137,18 @@ export interface PreviewState {
   original_face_count: number | null;
 }
 
+export interface PreviewConfig {
+  revision: number;
+  quantity: string;
+  component: string;
+  layer: number;
+  all_layers: boolean;
+  x_chosen_size: number;
+  y_chosen_size: number;
+  auto_scale_enabled: boolean;
+  max_points: number;
+}
+
 export interface SessionState {
   session: SessionManifest;
   run: RunManifest | null;
@@ -147,6 +160,7 @@ export interface SessionState {
   fem_mesh: FemLiveMesh | null;
   latest_fields: LatestFields;
   artifacts: ArtifactEntry[];
+  preview_config: PreviewConfig | null;
   preview: PreviewState | null;
 }
 
@@ -177,6 +191,7 @@ function normalizeSessionState(raw: any): SessionState {
   const rawLive = raw.live_state;
   const rawLatest = raw.latest_fields ?? {};
   const rawPreview = raw.preview ?? null;
+  const rawPreviewConfig = raw.preview_config ?? null;
   const fallbackGrid =
     fieldGrid(rawLatest.m) ??
     fieldGrid(rawLatest.h_ex) ??
@@ -235,8 +250,22 @@ function normalizeSessionState(raw: any): SessionState {
       grid: fallbackGrid,
     },
     artifacts: Array.isArray(raw.artifacts) ? raw.artifacts : [],
+    preview_config: rawPreviewConfig
+      ? {
+          revision: Number(rawPreviewConfig.revision ?? 0),
+          quantity: String(rawPreviewConfig.quantity ?? "m"),
+          component: String(rawPreviewConfig.component ?? "3D"),
+          layer: Number(rawPreviewConfig.layer ?? 0),
+          all_layers: Boolean(rawPreviewConfig.all_layers),
+          x_chosen_size: Number(rawPreviewConfig.x_chosen_size ?? 0),
+          y_chosen_size: Number(rawPreviewConfig.y_chosen_size ?? 0),
+          auto_scale_enabled: Boolean(rawPreviewConfig.auto_scale_enabled ?? true),
+          max_points: Number(rawPreviewConfig.max_points ?? 0),
+        }
+      : null,
     preview: rawPreview
       ? {
+          config_revision: Number(rawPreview.config_revision ?? 0),
           spatial_kind: rawPreview.spatial_kind === "mesh" ? "mesh" : "grid",
           quantity: rawPreview.quantity ?? "",
           unit: rawPreview.unit ?? "",

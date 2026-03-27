@@ -11,6 +11,7 @@ use fullmag_ir::{
     ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
 };
 
+use crate::preview::{build_grid_preview_field, flatten_vectors, select_observables};
 use crate::relaxation::{
     execute_nonlinear_cg, execute_projected_gradient_bb, relaxation_converged,
 };
@@ -19,8 +20,8 @@ use crate::schedules::{
     OutputSchedule,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
-    StateObservables, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewRequest, LiveStepConsumer,
+    RunError, RunResult, RunStatus, StateObservables, StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -35,7 +36,7 @@ pub(crate) fn execute_reference_fdm(
         plan,
         until_seconds,
         outputs,
-        None::<(&[u32; 3], u64, &mut dyn FnMut(StepUpdate))>,
+        None::<LiveStepConsumer<'_>>,
     )
 }
 
@@ -52,7 +53,34 @@ pub(crate) fn execute_reference_fdm_with_callback(
         plan,
         until_seconds,
         outputs,
-        Some((&grid, field_every_n, on_step)),
+        Some(LiveStepConsumer {
+            grid,
+            field_every_n,
+            preview_request: None,
+            on_step,
+        }),
+    )
+}
+
+pub(crate) fn execute_reference_fdm_with_live_preview(
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    grid: [u32; 3],
+    field_every_n: u64,
+    preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+    on_step: &mut impl FnMut(StepUpdate),
+) -> Result<ExecutedRun, RunError> {
+    execute_reference_fdm_impl(
+        plan,
+        until_seconds,
+        outputs,
+        Some(LiveStepConsumer {
+            grid,
+            field_every_n,
+            preview_request: Some(preview_request),
+            on_step,
+        }),
     )
 }
 
@@ -60,7 +88,7 @@ fn execute_reference_fdm_impl(
     plan: &FdmPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], u64, &mut dyn FnMut(StepUpdate))>,
+    mut live: Option<LiveStepConsumer<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -104,6 +132,10 @@ fn execute_reference_fdm_impl(
 
     let integrator = match plan.integrator {
         IntegratorChoice::Heun => TimeIntegrator::Heun,
+        IntegratorChoice::Rk4 => TimeIntegrator::RK4,
+        IntegratorChoice::Rk23 => TimeIntegrator::RK23,
+        IntegratorChoice::Rk45 => TimeIntegrator::RK45,
+        IntegratorChoice::Abm3 => TimeIntegrator::ABM3,
     };
 
     let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator).map_err(|e| RunError {
@@ -161,6 +193,7 @@ fn execute_reference_fdm_impl(
     // --- Create FFT workspace once for the entire simulation ---
     let mut fft_workspace = problem.create_workspace();
     let mut previous_total_energy = Some(observe_state(&problem, &state)?.total_energy);
+    let mut last_preview_revision: Option<u64> = None;
 
     // --- Dispatch on relaxation algorithm ---
     let is_direct_minimization = plan.relaxation.as_ref().is_some_and(|control| {
@@ -247,22 +280,36 @@ fn execute_reference_fdm_impl(
                 )?;
             }
 
-            if let Some((live_grid, field_every_n, on_step)) = live.as_mut() {
+            if let Some(live) = live.as_mut() {
                 let observables = observe_state(&problem, &state)?;
-                let emit_every = (*field_every_n).max(1);
-                let include_field = step_count % emit_every == 0;
-                let magnetization = if include_field {
-                    Some(
-                        observables
-                            .magnetization
-                            .iter()
-                            .flat_map(|vector| vector.iter().copied())
-                            .collect(),
-                    )
+                let emit_every = live.field_every_n.max(1);
+                let preview_request = live.preview_request.map(|get| get());
+                let preview_due = preview_request
+                    .as_ref()
+                    .map(|request| {
+                        last_preview_revision != Some(request.revision)
+                            || step_count <= 1
+                            || step_count % emit_every == 0
+                    })
+                    .unwrap_or(false);
+                let magnetization = if live.preview_request.is_none() && step_count % emit_every == 0
+                {
+                    Some(flatten_vectors(&observables.magnetization))
                 } else {
                     None
                 };
-                on_step(StepUpdate {
+                let preview_field = if preview_due {
+                    let request = preview_request.as_ref().expect("checked preview_due");
+                    last_preview_revision = Some(request.revision);
+                    Some(build_grid_preview_field(
+                        request,
+                        select_observables(&observables, &request.quantity),
+                        live.grid,
+                    ))
+                } else {
+                    None
+                };
+                (live.on_step)(StepUpdate {
                     stats: make_step_stats(
                         step_count,
                         state.time_seconds,
@@ -270,9 +317,10 @@ fn execute_reference_fdm_impl(
                         wall_elapsed,
                         &observables,
                     ),
-                    grid: [live_grid[0], live_grid[1], live_grid[2]],
+                    grid: live.grid,
                     fem_mesh: None,
                     magnetization,
+                    preview_field,
                     finished: false,
                 });
             }
