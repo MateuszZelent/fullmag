@@ -13,8 +13,7 @@ use fullmag_fdm_sys as ffi;
 
 #[cfg(feature = "cuda")]
 use crate::preview::{
-    build_grid_preview_field, build_grid_preview_field_from_flat_plan, normalize_quantity_id,
-    plan_grid_preview,
+    build_grid_preview_field_from_flat_plan, normalize_quantity_id, plan_grid_preview,
 };
 #[cfg(feature = "cuda")]
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError};

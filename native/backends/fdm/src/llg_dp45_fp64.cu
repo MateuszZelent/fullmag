@@ -173,17 +173,15 @@ static void copy_field_d2d(DeviceVectorField &dst, const DeviceVectorField &src,
     cudaMemcpy(dst.z, src.z, bytes, cudaMemcpyDeviceToDevice);
 }
 
-/* ── Compute fields + LLG RHS ── */
+/* ── Compute fields + LLG RHS ──
+ *
+ * Assumes ctx.m already contains the stage state.
+ * Stores result in the specified output buffer.
+ */
 
-static void compute_rhs_fp64(Context &ctx,
-    const DeviceVectorField &m_state,
-    DeviceVectorField &rhs_out,
+static void compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
     int n, int grid, double gamma_bar, double alpha)
 {
-    // Temporarily swap m for field computation
-    DeviceVectorField saved_m = ctx.m;
-    ctx.m = m_state;
-
     if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
     launch_effective_field_fp64(ctx);
@@ -199,8 +197,6 @@ static void compute_rhs_fp64(Context &ctx,
         static_cast<double*>(rhs_out.y),
         static_cast<double*>(rhs_out.z),
         n, gamma_bar, alpha);
-
-    ctx.m = saved_m;
 }
 
 /* ── Max reduction for error ── */
@@ -269,7 +265,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k1.x), static_cast<const double*>(ctx.k1.y), static_cast<const double*>(ctx.k1.z),
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A21);
-        compute_rhs_fp64(ctx, ctx.m, ctx.k2, n, grid, gamma_bar, alpha);
+        compute_rhs_into(ctx, ctx.k2, n, grid, gamma_bar, alpha);
 
         // Stage 3: y3 = m0 + dt*(A31*k1 + A32*k2) → compute k3
         dp45_rk_stage_2_kernel<<<grid, 256>>>(
@@ -278,20 +274,9 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k2.x), static_cast<const double*>(ctx.k2.y), static_cast<const double*>(ctx.k2.z),
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A31, A32);
-        compute_rhs_fp64(ctx, ctx.m, ctx.k3, n, grid, gamma_bar, alpha);
+        compute_rhs_into(ctx, ctx.k3, n, grid, gamma_bar, alpha);
 
         // Stage 4: y4 = m0 + dt*(A41*k1 + A42*k2 + A43*k3)
-        // Reuse stage_2 trick: write to m, compute k4
-        dp45_rk_stage_2_kernel<<<grid, 256>>>(
-            static_cast<const double*>(ctx.tmp.x), static_cast<const double*>(ctx.tmp.y), static_cast<const double*>(ctx.tmp.z),
-            static_cast<const double*>(ctx.k1.x), static_cast<const double*>(ctx.k1.y), static_cast<const double*>(ctx.k1.z),
-            static_cast<const double*>(ctx.k2.x), static_cast<const double*>(ctx.k2.y), static_cast<const double*>(ctx.k2.z),
-            static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
-            n, dt, A41, A42);
-        // Need to add A43*k3 — use a more general approach for stages 4+
-        // Actually, let's use the dedicated 4-stage and 5-stage kernels
-
-        // Re-do stage 4 properly with the 4-kernel
         dp45_rk_stage_4_kernel<<<grid, 256>>>(
             static_cast<const double*>(ctx.tmp.x), static_cast<const double*>(ctx.tmp.y), static_cast<const double*>(ctx.tmp.z),
             static_cast<const double*>(ctx.k1.x), static_cast<const double*>(ctx.k1.y), static_cast<const double*>(ctx.k1.z),
@@ -300,7 +285,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k3.x), static_cast<const double*>(ctx.k3.y), static_cast<const double*>(ctx.k3.z), // dummy, not used
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A41, A42, A43, 0.0);
-        compute_rhs_fp64(ctx, ctx.m, ctx.k4, n, grid, gamma_bar, alpha);
+        compute_rhs_into(ctx, ctx.k4, n, grid, gamma_bar, alpha);
 
         // Stage 5: y5 = m0 + dt*(A51*k1 + A52*k2 + A53*k3 + A54*k4)
         dp45_rk_stage_4_kernel<<<grid, 256>>>(
@@ -311,7 +296,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k4.x), static_cast<const double*>(ctx.k4.y), static_cast<const double*>(ctx.k4.z),
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A51, A52, A53, A54);
-        compute_rhs_fp64(ctx, ctx.m, ctx.k5, n, grid, gamma_bar, alpha);
+        compute_rhs_into(ctx, ctx.k5, n, grid, gamma_bar, alpha);
 
         // Stage 6: y6 = m0 + dt*(A61*k1 + A62*k2 + A63*k3 + A64*k4 + A65*k5)
         dp45_rk_stage_5_kernel<<<grid, 256>>>(
@@ -323,7 +308,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k5.x), static_cast<const double*>(ctx.k5.y), static_cast<const double*>(ctx.k5.z),
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A61, A62, A63, A64, A65);
-        compute_rhs_fp64(ctx, ctx.m, ctx.k6, n, grid, gamma_bar, alpha);
+        compute_rhs_into(ctx, ctx.k6, n, grid, gamma_bar, alpha);
 
         // 5th-order solution: y5 = m0 + dt*(B1*k1 + B3*k3 + B4*k4 + B5*k5 + B6*k6)
         dp45_rk_stage_5_kernel<<<grid, 256>>>(

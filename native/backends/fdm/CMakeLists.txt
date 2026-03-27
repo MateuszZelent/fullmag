@@ -22,6 +22,8 @@ if(FULLMAG_ENABLE_CUDA)
         src/demag_fp32.cu
         src/llg_fp64.cu
         src/llg_fp32.cu
+        src/llg_dp45_fp64.cu
+        src/llg_abm3_fp64.cu
         src/reductions_fp64.cu
     )
 endif()
