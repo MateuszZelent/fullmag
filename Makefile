@@ -96,7 +96,9 @@ install-cli install-cli-dev:
 			FULLMAG_CMAKE="$$cmake_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-cli --release --features cuda; \
 			FULLMAG_CMAKE="$$cmake_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-api --release --features cuda; \
 			build_mode="cuda"; \
-			if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then \
+			if [ "$${FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT:-0}" = "1" ]; then \
+				echo "Skipping managed FEM GPU host runtime export."; \
+			elif command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then \
 				managed_runtime_stale=""; \
 				if [ -x "$$managed_runtime_bin" ]; then \
 					managed_runtime_stale="$$(find native/backends/fem crates/fullmag-fem-sys crates/fullmag-runner crates/fullmag-cli scripts docker-compose.yml Cargo.lock -type f -newer "$$managed_runtime_bin" 2>/dev/null | head -n 1)"; \

@@ -20,7 +20,13 @@ namespace fullmag { namespace fdm {
 extern void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 } }
 
@@ -258,14 +264,37 @@ int fullmag_fdm_backend_step(
             case FULLMAG_FDM_INTEGRATOR_ABM3:
                 launch_abm3_step_fp64(*ctx, dt_seconds, out_stats);
                 break;
+            case FULLMAG_FDM_INTEGRATOR_RK4:
+                launch_rk4_step_fp64(*ctx, dt_seconds, out_stats);
+                break;
+            case FULLMAG_FDM_INTEGRATOR_RK23:
+                launch_rk23_step_fp64(*ctx, dt_seconds, out_stats);
+                break;
             case FULLMAG_FDM_INTEGRATOR_HEUN:
             default:
                 launch_heun_step_fp64(*ctx, dt_seconds, out_stats);
                 break;
         }
     } else {
-        // fp32: only Heun currently supported
-        launch_heun_step_fp32(*ctx, dt_seconds, out_stats);
+        // fp32: full integrator support
+        switch (ctx->integrator) {
+            case FULLMAG_FDM_INTEGRATOR_DP45:
+                launch_dp45_step_fp32(*ctx, dt_seconds, out_stats);
+                break;
+            case FULLMAG_FDM_INTEGRATOR_ABM3:
+                launch_abm3_step_fp32(*ctx, dt_seconds, out_stats);
+                break;
+            case FULLMAG_FDM_INTEGRATOR_RK4:
+                launch_rk4_step_fp32(*ctx, dt_seconds, out_stats);
+                break;
+            case FULLMAG_FDM_INTEGRATOR_RK23:
+                launch_rk23_step_fp32(*ctx, dt_seconds, out_stats);
+                break;
+            case FULLMAG_FDM_INTEGRATOR_HEUN:
+            default:
+                launch_heun_step_fp32(*ctx, dt_seconds, out_stats);
+                break;
+        }
     }
 
     // Check for CUDA errors

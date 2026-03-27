@@ -95,6 +95,10 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     };
     ctx.material = plan.material;
     ctx.demag_solver = plan.demag_solver;
+#if FULLMAG_HAS_MFEM_STACK
+    ctx.demag_realization = static_cast<int>(plan.demag_realization);
+    ctx.poisson_boundary_marker = plan.poisson_boundary_marker;
+#endif
     ctx.step_count = 0;
     ctx.current_time = 0.0;
 
@@ -202,6 +206,12 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
 #if FULLMAG_HAS_MFEM_STACK
     if (!context_initialize_mfem(ctx, error)) {
         return false;
+    }
+    // Initialize Poisson demag solver if requested
+    if (ctx.enable_demag && ctx.demag_realization == 1 /* POISSON_AIRBOX */) {
+        if (!context_initialize_poisson(ctx, error)) {
+            return false;
+        }
     }
     if ((ctx.enable_exchange || ctx.enable_demag) &&
         !context_refresh_exchange_field_mfem(ctx, error)) {

@@ -423,16 +423,59 @@ bool apply_exchange_component(
     for (int i = 0; i < m_component.Size(); ++i) {
         const double mass = lumped_mass[static_cast<size_t>(i)];
         if (mass <= 0.0) {
-            error = "encountered non-positive lumped FEM mass while building exchange field";
-            return false;
+            // S08: non-magnetic nodes may have zero lumped mass when
+            // assembly is restricted to magnetic elements — set h=0.
+            h_component[static_cast<size_t>(i)] = 0.0;
+        } else {
+            h_component[static_cast<size_t>(i)] = -prefactor * tmp_host[i] / mass;
         }
-        h_component[static_cast<size_t>(i)] = -prefactor * tmp_host[i] / mass;
     }
     return true;
 }
 
 double vector_norm3(double x, double y, double z) {
     return std::sqrt(x * x + y * y + z * z);
+}
+
+// ── S17: PI controller for adaptive time stepping ─────────────────────
+// Given the local error estimate `error_norm` (0-based, 1 = at tolerance),
+// computes the next dt using a PI controller:
+//   dt_new = dt * safety * (1/error)^α * (prev_error/error)^β
+//
+// Returns the accepted/rejected status and the proposed new dt.
+struct AdaptiveResult {
+    bool accepted;
+    double dt_next;
+};
+
+AdaptiveResult adaptive_pi_step(Context &ctx, double error_norm) {
+    if (!ctx.adaptive_dt_enabled || error_norm <= 0.0) {
+        return {true, ctx.dt_seconds};
+    }
+
+    const double clamped_error = std::max(error_norm, 1e-15);
+
+    if (clamped_error <= 1.0) {
+        // Accepted step — compute growth ratio
+        double ratio = ctx.safety_factor *
+                       std::pow(1.0 / clamped_error, ctx.pi_alpha) *
+                       std::pow(ctx.prev_error_norm / clamped_error, ctx.pi_beta);
+        ratio = std::min(ratio, ctx.dt_grow_max);
+        ratio = std::max(ratio, 1.0);  // never shrink on accept
+
+        const double dt_new = std::min(ctx.dt_seconds * ratio, ctx.dt_max);
+        ctx.prev_error_norm = clamped_error;
+        return {true, dt_new};
+    } else {
+        // Rejected step — shrink dt and retry
+        double ratio = ctx.safety_factor *
+                       std::pow(1.0 / clamped_error, ctx.pi_alpha);
+        ratio = std::max(ratio, ctx.dt_shrink_min);
+
+        const double dt_new = std::max(ctx.dt_seconds * ratio, ctx.dt_min);
+        ctx.rejected_steps += 1;
+        return {false, dt_new};
+    }
 }
 
 void normalize_aos_field(std::vector<double> &m_xyz) {
@@ -574,11 +617,6 @@ bool compute_exchange_for_magnetization(
         error = "MFEM exchange requested before MFEM context initialization";
         return false;
     }
-    if (!is_fully_magnetic(ctx)) {
-        error =
-            "native MFEM exchange scaffold currently supports only fully magnetic meshes (single material marker)";
-        return false;
-    }
 
     auto *exchange_form = static_cast<mfem::BilinearForm *>(ctx.mfem_exchange_form);
     auto *mass_form = static_cast<mfem::BilinearForm *>(ctx.mfem_mass_form);
@@ -630,6 +668,21 @@ bool compute_exchange_for_magnetization(
     }
 
     pack_components_to_aos(ctx.mfem_h_ex_x, ctx.mfem_h_ex_y, ctx.mfem_h_ex_z, h_ex_xyz);
+
+    // S08 multi-region: zero exchange field on non-magnetic nodes.
+    // The stiffness/mass forms are already restricted to magnetic elements,
+    // but nodes shared between magnetic and air may carry residual coupling.
+    if (!ctx.magnetic_node_mask.empty()) {
+        for (size_t i = 0; i < ctx.magnetic_node_mask.size(); ++i) {
+            if (ctx.magnetic_node_mask[i] == 0u) {
+                const size_t base = i * 3u;
+                h_ex_xyz[base + 0] = 0.0;
+                h_ex_xyz[base + 1] = 0.0;
+                h_ex_xyz[base + 2] = 0.0;
+            }
+        }
+    }
+
     if (h_eff_xyz != nullptr) {
         h_eff_xyz->resize(h_ex_xyz.size());
         if (ctx.has_external_field) {
@@ -857,10 +910,16 @@ bool compute_effective_fields_for_magnetization(
 
     double demag = 0.0;
     if (ctx.enable_demag) {
-        if (!compute_demag_for_magnetization(
-                ctx, m_xyz, h_demag_xyz, demag, error))
-        {
-            return false;
+        if (ctx.demag_realization == 1 /* POISSON_AIRBOX */ && ctx.poisson_ready) {
+            if (!context_compute_demag_poisson(ctx, m_xyz, h_demag_xyz, demag, error)) {
+                return false;
+            }
+        } else {
+            if (!compute_demag_for_magnetization(
+                    ctx, m_xyz, h_demag_xyz, demag, error))
+            {
+                return false;
+            }
         }
     }
 
@@ -873,6 +932,343 @@ bool compute_effective_fields_for_magnetization(
     }
     if (demag_energy != nullptr) {
         *demag_energy = demag;
+    }
+
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Poisson demag: ∇²u = ∇·M on Ω_m ∪ Ω_air  (S02–S05)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Custom MFEM VectorCoefficient for M_s * m(x), restricted to magnetic elements.
+/// Returns zero on air elements. Used for the Poisson RHS: b(v) = ∫ M·∇v dV.
+class MagnetizationCoefficient : public mfem::VectorCoefficient {
+public:
+    MagnetizationCoefficient(
+        const Context &ctx_ref,
+        const std::vector<double> &m_xyz_ref,
+        mfem::FiniteElementSpace *fes_ref)
+        : mfem::VectorCoefficient(3)
+        , ctx_(ctx_ref)
+        , m_xyz_(m_xyz_ref)
+        , fes_(fes_ref)
+    {
+    }
+
+    void Eval(mfem::Vector &V, mfem::ElementTransformation &T,
+              const mfem::IntegrationPoint &ip) override
+    {
+        V.SetSize(3);
+
+        // Check if this element is magnetic
+        const int elem_no = T.ElementNo;
+        if (elem_no >= 0 &&
+            !ctx_.magnetic_element_mask.empty() &&
+            static_cast<size_t>(elem_no) < ctx_.magnetic_element_mask.size() &&
+            ctx_.magnetic_element_mask[static_cast<size_t>(elem_no)] == 0u) {
+            V = 0.0;
+            return;
+        }
+
+        // Interpolate m at the integration point using FE basis
+        mfem::Array<int> dofs;
+        fes_->GetElementDofs(elem_no, dofs);
+        const int ndof = dofs.Size();
+
+        // Evaluate shape functions at ip
+        const mfem::FiniteElement *fe = fes_->GetFE(elem_no);
+        mfem::Vector shape(ndof);
+        fe->CalcShape(ip, shape);
+
+        // Interpolate m components
+        double mx = 0.0, my = 0.0, mz = 0.0;
+        for (int i = 0; i < ndof; ++i) {
+            const int global_dof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
+            const double sign = dofs[i] >= 0 ? 1.0 : -1.0;
+            const size_t base = static_cast<size_t>(global_dof) * 3u;
+            mx += sign * shape(i) * m_xyz_[base + 0];
+            my += sign * shape(i) * m_xyz_[base + 1];
+            mz += sign * shape(i) * m_xyz_[base + 2];
+        }
+
+        // M = M_s * m (A/m)
+        const double Ms = ctx_.material.saturation_magnetisation;
+        V(0) = Ms * mx;
+        V(1) = Ms * my;
+        V(2) = Ms * mz;
+    }
+
+private:
+    const Context &ctx_;
+    const std::vector<double> &m_xyz_;
+    mfem::FiniteElementSpace *fes_;
+};
+
+/// Assemble the Poisson RHS: b(v) = ∫_Ω_m M·∇v dV
+bool assemble_poisson_rhs(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    mfem::Vector &rhs,
+    std::string &error)
+{
+    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_potential_fes);
+    if (fes == nullptr) {
+        error = "Poisson FE space is null during RHS assembly";
+        return false;
+    }
+
+    MagnetizationCoefficient M_coeff(ctx, m_xyz, fes);
+
+    mfem::LinearForm b(fes);
+    b.AddDomainIntegrator(new mfem::DomainLFGradIntegrator(M_coeff));
+    b.Assemble();
+
+    rhs.SetSize(fes->GetTrueVSize());
+    b.GetTrueDofs(rhs);
+
+    return true;
+}
+
+/// Solve the Poisson equation: -∇²u = -∇·M with Dirichlet u=0 on ∂D.
+bool solve_poisson(
+    Context &ctx,
+    const mfem::Vector &rhs,
+    mfem::Vector &solution,
+    std::string &error)
+{
+    auto *A_bc = static_cast<mfem::SparseMatrix *>(ctx.mfem_poisson_bc_op);
+    if (A_bc == nullptr) {
+        error = "Poisson BC-eliminated operator is null during solve";
+        return false;
+    }
+
+    // Apply boundary conditions to RHS only (matrix is pre-eliminated in init)
+    mfem::Vector rhs_bc(rhs);
+    mfem::Array<int> ess_tdof(ctx.poisson_ess_tdof_list.data(),
+                              static_cast<int>(ctx.poisson_ess_tdof_list.size()));
+    for (int i = 0; i < ess_tdof.Size(); ++i) {
+        rhs_bc(ess_tdof[i]) = 0.0;
+    }
+
+    // Warm-start from previous step
+    mfem::Vector sol_bc(solution);
+
+    // CG solver with diagonal (Jacobi) preconditioner
+    mfem::DSmoother prec;
+    mfem::CGSolver cg;
+    cg.SetRelTol(ctx.demag_solver.relative_tolerance);
+    cg.SetMaxIter(static_cast<int>(ctx.demag_solver.max_iterations));
+    cg.SetPrintLevel(0);
+    cg.SetOperator(*A_bc);
+    cg.SetPreconditioner(prec);
+
+    cg.Mult(rhs_bc, sol_bc);
+
+    ctx.poisson_last_iterations = cg.GetNumIterations();
+    ctx.poisson_last_residual = cg.GetFinalNorm();
+
+    // Restore essential DOF values (u=0 on boundary)
+    for (int i = 0; i < ess_tdof.Size(); ++i) {
+        sol_bc(ess_tdof[i]) = 0.0;
+    }
+
+    solution = sol_bc;
+    return true;
+}
+
+#ifdef MFEM_USE_MPI
+// ── S10: Hypre GPU CG + BoomerAMG for Poisson ─────────────────────────
+// Wraps the pre-eliminated SparseMatrix in a HypreParMatrix and solves
+// with HyprePCG + HypreBoomerAMG.  MPI is initialized in serial mode
+// (single process) solely to satisfy Hypre's interface requirements.
+
+void ensure_mpi_initialized() {
+    int initialized = 0;
+    MPI_Initialized(&initialized);
+    if (!initialized) {
+        int provided = 0;
+        MPI_Init_thread(nullptr, nullptr, MPI_THREAD_FUNNELED, &provided);
+    }
+}
+
+bool solve_poisson_hypre(
+    Context &ctx,
+    const mfem::Vector &rhs,
+    mfem::Vector &solution,
+    std::string &error)
+{
+    auto *A_bc = static_cast<mfem::SparseMatrix *>(ctx.mfem_poisson_bc_op);
+    if (A_bc == nullptr) {
+        error = "Poisson BC-eliminated operator is null during Hypre solve";
+        return false;
+    }
+
+    ensure_mpi_initialized();
+
+    const HYPRE_BigInt glob_size = static_cast<HYPRE_BigInt>(A_bc->NumRows());
+    HYPRE_BigInt row_starts[2] = {0, glob_size};
+
+    // Wrap the existing SparseMatrix in a HypreParMatrix (no data copy — borrows pointers)
+    mfem::HypreParMatrix A_par(MPI_COMM_WORLD, glob_size, row_starts, A_bc);
+
+    // Apply BCs to RHS
+    mfem::Vector rhs_bc(rhs);
+    mfem::Array<int> ess_tdof(ctx.poisson_ess_tdof_list.data(),
+                              static_cast<int>(ctx.poisson_ess_tdof_list.size()));
+    for (int i = 0; i < ess_tdof.Size(); ++i) {
+        rhs_bc(ess_tdof[i]) = 0.0;
+    }
+
+    // Wrap host vectors as HypreParVectors
+    mfem::HypreParVector b_par(MPI_COMM_WORLD, glob_size, rhs_bc.GetData(), row_starts);
+    mfem::HypreParVector x_par(MPI_COMM_WORLD, glob_size, solution.GetData(), row_starts);
+
+    // BoomerAMG preconditioner — GPU-friendly settings
+    mfem::HypreBoomerAMG amg(A_par);
+    amg.SetPrintLevel(0);
+    amg.SetRelaxType(18);   // l1-scaled Jacobi (GPU-friendly)
+    amg.SetCoarsenType(8);  // PMIS (good for GPU/parallel)
+    amg.SetInterpType(6);   // extended+i interpolation
+    amg.SetAggressiveCoarseningLevels(1);
+
+    // HyprePCG solver
+    mfem::HyprePCG pcg(MPI_COMM_WORLD);
+    pcg.SetTol(ctx.demag_solver.relative_tolerance);
+    pcg.SetMaxIter(static_cast<int>(ctx.demag_solver.max_iterations));
+    pcg.SetPrintLevel(0);
+    pcg.SetOperator(A_par);
+    pcg.SetPreconditioner(amg);
+
+    pcg.Mult(b_par, x_par);
+
+    // x_par writes directly into solution.GetData()
+    ctx.poisson_last_iterations = pcg.GetNumIterations();
+    ctx.poisson_last_residual = pcg.GetFinalNorm();
+
+    // Restore essential DOFs
+    for (int i = 0; i < ess_tdof.Size(); ++i) {
+        solution(ess_tdof[i]) = 0.0;
+    }
+
+    return true;
+}
+#endif // MFEM_USE_MPI
+
+/// Recover H_demag = -∇u from the scalar potential solution.
+/// Computes element-wise gradient, distributes to nodes weighted by shape functions.
+bool recover_demag_field(
+    Context &ctx,
+    const mfem::Vector &potential,
+    std::vector<double> &h_demag_xyz,
+    double &demag_energy,
+    const std::vector<double> &m_xyz,
+    std::string &error)
+{
+    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_potential_fes);
+    auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_mesh);
+    if (fes == nullptr || mesh == nullptr) {
+        error = "Poisson FE space or mesh is null during H_demag recovery";
+        return false;
+    }
+
+    h_demag_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
+
+    // Create GridFunction from the potential solution
+    mfem::GridFunction gf_u(fes);
+    gf_u.SetFromTrueDofs(potential);
+
+    // Accumulate -∇u at each node, weighted by shape * quadrature weight
+    std::vector<double> node_weight(static_cast<size_t>(ctx.n_nodes), 0.0);
+
+    for (int elem = 0; elem < mesh->GetNE(); ++elem) {
+        const mfem::FiniteElement *fe = fes->GetFE(elem);
+        mfem::ElementTransformation *T = mesh->GetElementTransformation(elem);
+
+        mfem::Array<int> dofs;
+        fes->GetElementDofs(elem, dofs);
+        const int local_ndof = dofs.Size();
+
+        // Extract element DOF values of the potential
+        mfem::Vector u_elem(local_ndof);
+        for (int i = 0; i < local_ndof; ++i) {
+            const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
+            const double sign = dofs[i] >= 0 ? 1.0 : -1.0;
+            u_elem(i) = sign * gf_u(gdof);
+        }
+
+        const mfem::IntegrationRule &ir =
+            mfem::IntRules.Get(fe->GetGeomType(), 2 * fe->GetOrder());
+
+        for (int q = 0; q < ir.GetNPoints(); ++q) {
+            const mfem::IntegrationPoint &ip = ir.IntPoint(q);
+            T->SetIntPoint(&ip);
+            const double w = ip.weight * T->Weight();
+
+            // Gradient of shape functions in physical coordinates
+            mfem::DenseMatrix dshape(local_ndof, 3);
+            fe->CalcPhysDShape(*T, dshape);
+
+            // grad_u = Σᵢ uᵢ · ∇φᵢ
+            double grad_u[3] = {0.0, 0.0, 0.0};
+            for (int i = 0; i < local_ndof; ++i) {
+                for (int d = 0; d < 3; ++d) {
+                    grad_u[d] += u_elem(i) * dshape(i, d);
+                }
+            }
+
+            // Distribute -∇u to each DOF, weighted by shape function
+            mfem::Vector shape(local_ndof);
+            fe->CalcShape(ip, shape);
+            for (int i = 0; i < local_ndof; ++i) {
+                const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
+                if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.n_nodes) {
+                    continue;
+                }
+                const double phi_w = std::abs(shape(i)) * w;
+                const size_t base = static_cast<size_t>(gdof) * 3u;
+                h_demag_xyz[base + 0] += -grad_u[0] * phi_w;
+                h_demag_xyz[base + 1] += -grad_u[1] * phi_w;
+                h_demag_xyz[base + 2] += -grad_u[2] * phi_w;
+                node_weight[static_cast<size_t>(gdof)] += phi_w;
+            }
+        }
+    }
+
+    // Normalize by accumulated weights
+    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
+        if (node_weight[node] > 0.0) {
+            const size_t base = static_cast<size_t>(node) * 3u;
+            h_demag_xyz[base + 0] /= node_weight[node];
+            h_demag_xyz[base + 1] /= node_weight[node];
+            h_demag_xyz[base + 2] /= node_weight[node];
+        }
+    }
+
+    // Zero out non-magnetic nodes
+    zero_non_magnetic_nodes_aos(h_demag_xyz, ctx.magnetic_node_mask);
+
+    // Demag energy: E_d = -μ₀/2 · M_s · Σᵢ (m·h_d)ᵢ · M_Lᵢ
+    if (ctx.mfem_lumped_mass.empty()) {
+        auto *mass_form = static_cast<mfem::BilinearForm *>(ctx.mfem_mass_form);
+        if (mass_form != nullptr) {
+            compute_row_sum_lumped_mass(mass_form->SpMat(), ctx.mfem_lumped_mass);
+        }
+    }
+
+    demag_energy = 0.0;
+    for (size_t i = 0; i < ctx.mfem_lumped_mass.size(); ++i) {
+        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[i] == 0u) {
+            continue;
+        }
+        const size_t base = i * 3u;
+        const double mdoth =
+            m_xyz[base + 0] * h_demag_xyz[base + 0] +
+            m_xyz[base + 1] * h_demag_xyz[base + 1] +
+            m_xyz[base + 2] * h_demag_xyz[base + 2];
+        demag_energy +=
+            -0.5 * kMu0 * ctx.material.saturation_magnetisation *
+            mdoth * ctx.mfem_lumped_mass[i];
     }
 
     return true;
@@ -909,6 +1305,20 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
             ctx.mfem_device = new mfem::Device("cuda");
         });
         ctx.mfem_selected_device_index = selected_device;
+
+        // S12: Create prioritized CUDA streams
+        {
+            int low_priority = 0, high_priority = 0;
+            cudaDeviceGetStreamPriorityRange(&low_priority, &high_priority);
+            cudaStream_t cs{}, ios{};
+            cudaStreamCreateWithPriority(&cs, cudaStreamNonBlocking, high_priority);
+            cudaStreamCreateWithPriority(&ios, cudaStreamNonBlocking, low_priority);
+            ctx.compute_stream = reinterpret_cast<void *>(cs);
+            ctx.io_stream = reinterpret_cast<void *>(ios);
+            cudaEvent_t ev{};
+            cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
+            ctx.compute_event = reinterpret_cast<void *>(ev);
+        }
 #else
         std::call_once(s_mfem_device_once, [&ctx]() {
             ctx.mfem_device = new mfem::Device("cpu");
@@ -934,9 +1344,14 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
                 static_cast<int>(tet[2]),
                 static_cast<int>(tet[3]),
             };
-            const int attr = ctx.element_markers.empty()
-                ? 1
-                : static_cast<int>(ctx.element_markers[static_cast<size_t>(i)]);
+            // MFEM attributes must be >= 1.  Our markers: 1 = magnetic, 0 = air.
+            // Map: marker 0 -> attr 2 (air), marker 1 -> attr 1 (magnetic).
+            // Any other marker m -> attr m (unchanged, already >= 1).
+            int attr = 1;
+            if (!ctx.element_markers.empty()) {
+                const uint32_t marker = ctx.element_markers[static_cast<size_t>(i)];
+                attr = marker == 0u ? 2 : static_cast<int>(marker);
+            }
             mesh->AddTet(vi, attr);
         }
 
@@ -971,6 +1386,11 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
         auto *gf_mx = new mfem::GridFunction(fes);
         auto *gf_my = new mfem::GridFunction(fes);
         auto *gf_mz = new mfem::GridFunction(fes);
+        // S09: enable device memory so that future GPU operators find data
+        // already on device without extra H2D copies.
+        gf_mx->UseDevice(true);
+        gf_my->UseDevice(true);
+        gf_mz->UseDevice(true);
         double *mx_host = gf_mx->HostWrite();
         double *my_host = gf_my->HostWrite();
         double *mz_host = gf_mz->HostWrite();
@@ -981,12 +1401,24 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
         }
 
         auto *exchange_form = new mfem::BilinearForm(fes);
-        exchange_form->AddDomainIntegrator(new mfem::DiffusionIntegrator());
+        auto *mass_form = new mfem::BilinearForm(fes);
+
+        // S08 multi-region: restrict exchange/mass assembly to magnetic
+        // elements only (MFEM attribute 1).  For single-material meshes the
+        // max attribute is 1, so every element is included.
+        const int max_attr = mesh->attributes.Max();
+        mfem::Array<int> magnetic_attr_marker(max_attr);
+        magnetic_attr_marker = 0;
+        // Attribute 1 = magnetic elements
+        magnetic_attr_marker[0] = 1;
+
+        exchange_form->AddDomainIntegrator(
+            new mfem::DiffusionIntegrator(), magnetic_attr_marker);
         exchange_form->Assemble();
         exchange_form->Finalize();
 
-        auto *mass_form = new mfem::BilinearForm(fes);
-        mass_form->AddDomainIntegrator(new mfem::MassIntegrator());
+        mass_form->AddDomainIntegrator(
+            new mfem::MassIntegrator(), magnetic_attr_marker);
         mass_form->Assemble();
         mass_form->Finalize();
 
@@ -1011,6 +1443,9 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
 }
 
 void context_destroy_mfem(Context &ctx) {
+    // Destroy Poisson demag resources first
+    context_destroy_poisson(ctx);
+
     if (ctx.transfer_grid.backend != nullptr) {
         fullmag_fdm_backend_destroy(ctx.transfer_grid.backend);
         ctx.transfer_grid.backend = nullptr;
@@ -1027,7 +1462,6 @@ void context_destroy_mfem(Context &ctx) {
     ctx.transfer_grid.kernel_yz_spectrum.clear();
     // NOTE: mfem::Device is a process-global singleton — do NOT delete it here,
     // because a subsequent NativeFemBackend may need the already-configured device.
-    // delete static_cast<mfem::Device *>(ctx.mfem_device);
     delete static_cast<mfem::BilinearForm *>(ctx.mfem_mass_form);
     delete static_cast<mfem::BilinearForm *>(ctx.mfem_exchange_form);
     delete static_cast<mfem::GridFunction *>(ctx.mfem_gf_mz);
@@ -1047,6 +1481,177 @@ void context_destroy_mfem(Context &ctx) {
     ctx.mfem_mesh = nullptr;
     ctx.mfem_ready = false;
     ctx.mfem_exchange_ready = false;
+
+    // S12: Destroy CUDA streams and events
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (ctx.compute_stream != nullptr) {
+        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.compute_stream));
+        ctx.compute_stream = nullptr;
+    }
+    if (ctx.io_stream != nullptr) {
+        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.io_stream));
+        ctx.io_stream = nullptr;
+    }
+    if (ctx.compute_event != nullptr) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(ctx.compute_event));
+        ctx.compute_event = nullptr;
+    }
+    // S13: Free pinned snapshot buffers
+    for (auto &buf : ctx.pinned_snapshot) {
+        if (buf != nullptr) {
+            cudaFreeHost(buf);
+            buf = nullptr;
+        }
+    }
+    ctx.pinned_snapshot_bytes = 0;
+#endif
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Poisson demag initialization / destruction / compute (S02–S05)
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool context_initialize_poisson(Context &ctx, std::string &error) {
+    try {
+        auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_mesh);
+        if (mesh == nullptr) {
+            error = "MFEM mesh is null — cannot initialize Poisson demag";
+            return false;
+        }
+
+        // S02: Scalar H1 FE space on the FULL mesh (magnetic + air)
+        auto *potential_fec = new mfem::H1_FECollection(
+            static_cast<int>(ctx.fe_order), mesh->Dimension());
+        auto *potential_fes = new mfem::FiniteElementSpace(mesh, potential_fec);
+
+        // S02: Poisson bilinear form: a(u,v) = ∫ ∇u·∇v dV (Laplacian)
+        auto *poisson_bilinear = new mfem::BilinearForm(potential_fes);
+        poisson_bilinear->AddDomainIntegrator(new mfem::DiffusionIntegrator());
+        poisson_bilinear->Assemble();
+        poisson_bilinear->Finalize();
+
+        // Identify essential DOFs: Dirichlet u=0 on outer boundary
+        // The boundary marker value corresponds to the air-box outer surface
+        ctx.poisson_ess_tdof_list.clear();
+        if (ctx.poisson_boundary_marker > 0) {
+            // Build attribute list from mesh boundary attributes
+            mfem::Array<int> bdr_attr_is_ess(mesh->bdr_attributes.Max());
+            bdr_attr_is_ess = 0;
+            // Mark the outer boundary marker as essential
+            if (ctx.poisson_boundary_marker <= mesh->bdr_attributes.Max()) {
+                bdr_attr_is_ess[ctx.poisson_boundary_marker - 1] = 1;
+            }
+            mfem::Array<int> ess_tdof;
+            potential_fes->GetEssentialTrueDofs(bdr_attr_is_ess, ess_tdof);
+            ctx.poisson_ess_tdof_list.assign(
+                ess_tdof.GetData(),
+                ess_tdof.GetData() + ess_tdof.Size());
+        }
+
+        // If no essential DOFs were found (e.g., no outer boundary marker),
+        // pin the first DOF to remove the constant null space
+        if (ctx.poisson_ess_tdof_list.empty()) {
+            ctx.poisson_ess_tdof_list.push_back(0);
+        }
+
+        // Potential GridFunction (warm-start: zeros initially)
+        auto *gf_potential = new mfem::GridFunction(potential_fes);
+        gf_potential->UseDevice(true);
+        *gf_potential = 0.0;
+
+        ctx.mfem_potential_fec = potential_fec;
+        ctx.mfem_potential_fes = potential_fes;
+        ctx.mfem_poisson_bilinear = poisson_bilinear;
+        ctx.mfem_gf_potential = gf_potential;
+        ctx.poisson_ready = true;
+
+        // S09: Pre-compute the BC-eliminated Poisson operator once.
+        // This avoids the per-step SparseMatrix copy in solve_poisson.
+        {
+            mfem::Array<int> ess_tdof(
+                ctx.poisson_ess_tdof_list.data(),
+                static_cast<int>(ctx.poisson_ess_tdof_list.size()));
+
+            auto *A_bc = new mfem::SparseMatrix(poisson_bilinear->SpMat());
+            for (int i = 0; i < ess_tdof.Size(); ++i) {
+                A_bc->EliminateRowCol(ess_tdof[i]);
+            }
+            ctx.mfem_poisson_bc_op = A_bc;
+        }
+
+        return true;
+    } catch (const std::exception &ex) {
+        error = std::string("Poisson demag initialization failed: ") + ex.what();
+    } catch (...) {
+        error = "Poisson demag initialization failed with an unknown error";
+    }
+    context_destroy_poisson(ctx);
+    return false;
+}
+
+void context_destroy_poisson(Context &ctx) {
+    // S09: BC-eliminated matrix is a separate allocation — delete first.
+    delete static_cast<mfem::SparseMatrix *>(ctx.mfem_poisson_bc_op);
+    ctx.mfem_poisson_bc_op = nullptr;
+    // Poisson bilinear form owns the SparseMatrix — don't double-free
+    delete static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
+    delete static_cast<mfem::BilinearForm *>(ctx.mfem_poisson_bilinear);
+    delete static_cast<mfem::FiniteElementSpace *>(ctx.mfem_potential_fes);
+    delete static_cast<mfem::FiniteElementCollection *>(ctx.mfem_potential_fec);
+    ctx.mfem_gf_potential = nullptr;
+    ctx.mfem_poisson_bilinear = nullptr;
+    ctx.mfem_potential_fes = nullptr;
+    ctx.mfem_potential_fec = nullptr;
+    ctx.mfem_poisson_rhs = nullptr;
+    ctx.mfem_poisson_rhs_vec = nullptr;
+    ctx.poisson_ess_tdof_list.clear();
+    ctx.poisson_ready = false;
+}
+
+bool context_compute_demag_poisson(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &h_demag_xyz,
+    double &demag_energy,
+    std::string &error)
+{
+    if (!ctx.poisson_ready) {
+        error = "Poisson demag requested before initialization";
+        return false;
+    }
+
+    // S03: Assemble RHS b(v) = ∫ M·∇v dV
+    mfem::Vector rhs;
+    if (!assemble_poisson_rhs(ctx, m_xyz, rhs, error)) {
+        return false;
+    }
+
+    // S04: Solve -∇²u = -∇·M with Dirichlet BCs
+    auto *gf_potential = static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
+    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_potential_fes);
+    mfem::Vector solution(fes->GetTrueVSize());
+    gf_potential->GetTrueDofs(solution);  // warm-start
+
+#ifdef MFEM_USE_MPI
+    // S10: Prefer Hypre CG+AMG when available (GPU-accelerated)
+    if (!solve_poisson_hypre(ctx, rhs, solution, error)) {
+        return false;
+    }
+#else
+    if (!solve_poisson(ctx, rhs, solution, error)) {
+        return false;
+    }
+#endif
+
+    // S05: Recover H_demag = -∇u and compute energy
+    if (!recover_demag_field(ctx, solution, h_demag_xyz, demag_energy, m_xyz, error)) {
+        return false;
+    }
+
+    // Store solution for warm-start in next step
+    gf_potential->SetFromTrueDofs(solution);
+
+    return true;
 }
 
 bool context_refresh_exchange_field_mfem(Context &ctx, std::string &error) {

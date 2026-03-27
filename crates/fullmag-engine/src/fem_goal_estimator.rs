@@ -16,8 +16,7 @@
 
 use crate::fem::MeshTopology;
 use crate::fem_error_estimator::ErrorIndicators;
-use crate::fem_face_topology::{tet_diameter, FaceTopology};
-use crate::{dot, EngineError, Result, Vector3};
+use crate::{dot, EngineError, Result};
 
 // ---------------------------------------------------------------------------
 // QoI functionals

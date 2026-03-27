@@ -132,12 +132,15 @@ fullmag/
     assets/...
   runtimes/
     cpu-reference/
+      bin/...
       manifest.json
       lib/...
     fdm-cuda/
+      bin/fullmag-fdm-cuda-bin
       manifest.json
       lib/...
     fem-gpu/
+      bin/fullmag-fem-gpu-bin
       manifest.json
       lib/...
   share/
@@ -191,6 +194,191 @@ Target meaning:
 - `fdm-cuda` should be present in GPU-capable production bundles,
 - `fem-gpu` should be present in full GPU production bundles once numerically production-ready.
 
+## 6.2.1 Runtime family is not the same as execution engine
+
+We need to separate four concepts clearly:
+
+1. public launcher command,
+2. runtime family,
+3. execution engine capability,
+4. worker binary.
+
+### Public launcher
+
+This remains exactly one public entrypoint:
+
+```bash
+fullmag my_problem.py
+```
+
+### Runtime family
+
+This is the installable/bundled runtime pack:
+
+- `cpu-reference`
+- `fdm-cuda`
+- `fem-gpu`
+
+### Execution engine capability
+
+This is the concrete resolved execution tuple:
+
+- backend: `fdm` / `fem`
+- device: `cpu` / `gpu`
+- precision: `single` / `double`
+- execution mode: `strict` / `extended` / `hybrid`
+
+Examples:
+
+- `fdm + cpu + double + strict`
+- `fem + cpu + double + strict`
+- `fdm + gpu + double + strict`
+- `fdm + gpu + single + strict`
+- `fem + gpu + double + strict`
+
+### Worker binary
+
+This is the actual executable used to run the solver implementation for the selected runtime pack.
+
+The important consequence is:
+
+- users choose a problem and optionally a policy,
+- the launcher resolves an engine capability,
+- the launcher then chooses a runtime family and worker binary that can execute it.
+
+Users should not choose worker binaries directly.
+
+## 6.2.2 Practical engine matrix
+
+The intended production matrix should be:
+
+| Requested intent | Resolved runtime family | Worker location | Initial public status |
+| --- | --- | --- | --- |
+| `fdm + cpu + double` | `cpu-reference` | base launcher/runtime | public |
+| `fem + cpu + double` | `cpu-reference` | base launcher/runtime | public |
+| `fdm + gpu + double` | `fdm-cuda` | `runtimes/fdm-cuda/bin/...` | public target |
+| `fdm + gpu + single` | `fdm-cuda` | `runtimes/fdm-cuda/bin/...` | gated until parity |
+| `fem + gpu + double` | `fem-gpu` | `runtimes/fem-gpu/bin/...` | gated until production-ready |
+| `fem + gpu + single` | `fem-gpu` | `runtimes/fem-gpu/bin/...` | deferred |
+
+Key design decision:
+
+- we should not make one end-user package per precision,
+- precision is an engine capability exposed by a runtime pack,
+- not a separate user-facing application.
+
+So:
+
+- `fdm-cuda` is one runtime family,
+- it may advertise only `double` at first,
+- later the same family may advertise `single` and `double`.
+
+Likewise:
+
+- `fem-gpu` is one runtime family,
+- it should not fork into separate “FEM single app” and “FEM double app”.
+
+## 6.2.3 Do we want everything in one binary?
+
+No, not in the sense of one giant ELF containing every control-plane and solver realization.
+
+Yes, in the sense of one public launcher command and one user-visible application.
+
+The practical production model should be:
+
+### Base application binaries
+
+- `bin/fullmag` — public wrapper / launcher
+- `bin/fullmag-bin` — main control-plane binary
+- `bin/fullmag-api` — local API / static-web server
+
+### Runtime worker binaries
+
+- `runtimes/fdm-cuda/bin/fullmag-fdm-cuda-bin`
+- `runtimes/fem-gpu/bin/fullmag-fem-gpu-bin`
+
+The `cpu-reference` family may remain inside the base control-plane binary if that keeps the base
+artifact simpler.
+
+This is the recommended split because:
+
+1. CPU baseline stays simple and always available,
+2. heavy solver stacks stay isolated,
+3. runtime packs remain replaceable and diagnosable,
+4. launcher/runtime selection remains explicit,
+5. we avoid one giant binary with every heavy dependency glued together.
+
+## 6.2.4 Precision handling policy
+
+Precision is part of execution policy and provenance.
+
+It should flow as:
+
+1. script or CLI requests precision,
+2. planner validates semantic executability,
+3. launcher/runtime resolver checks runtime-manifest support,
+4. selected worker receives the requested precision explicitly,
+5. session/run metadata records both requested and resolved precision.
+
+Important production rule:
+
+- `single` must not silently downshift to `double`,
+- `double` must not silently downshift to `single`,
+- unsupported precision must fail explicitly with a product-facing error.
+
+## 6.2.5 Recommended runtime-manifest shape
+
+Each runtime family should advertise supported engine capabilities explicitly, for example:
+
+```json
+{
+  "family": "fdm-cuda",
+  "version": "0.1.0",
+  "worker": "bin/fullmag-fdm-cuda-bin",
+  "engines": [
+    {
+      "backend": "fdm",
+      "device": "gpu",
+      "mode": "strict",
+      "precision": "double",
+      "public": true
+    },
+    {
+      "backend": "fdm",
+      "device": "gpu",
+      "mode": "strict",
+      "precision": "single",
+      "public": false
+    }
+  ]
+}
+```
+
+The `public` gate is important because a capability may exist technically before it is promoted as
+product-executable.
+
+## 6.2.6 Shared-library packaging policy
+
+For workstation production bundles, we should prefer colocated shared libraries over trying to
+force everything into one giant binary.
+
+The practical policy should be:
+
+1. base control-plane binaries live in `bin/`,
+2. base shared libraries live in `lib/`,
+3. each heavy runtime family carries its own `bin/` and `lib/`,
+4. CUDA user-space libraries required by a GPU runtime live inside that runtime pack,
+5. the launcher resolves workers and libraries relative to the install root,
+6. no normal execution path depends on host `LD_LIBRARY_PATH` or `/usr/local/cuda`.
+
+This is the right production compromise because it gives us:
+
+- one public application,
+- diagnosable runtime packs,
+- relocatable installs,
+- predictable `ldd` behavior,
+- no requirement for a host CUDA toolkit.
+
 ## 6.3 Runtime resolution behavior
 
 At runtime the launcher should:
@@ -200,6 +388,27 @@ At runtime the launcher should:
 3. resolve to the best matching runtime,
 4. emit the requested and resolved runtime in session metadata,
 5. fail with a clear product error if a requested path is not installed.
+
+The practical resolver order should be:
+
+1. resolve `backend/device/mode/precision` intent,
+2. map `auto` to a concrete backend through planning,
+3. enumerate installed runtime manifests,
+4. filter runtimes by exact engine-capability match,
+5. reject runtimes that are installed but not public-enabled for that capability,
+6. select the preferred runtime family for that capability,
+7. spawn the matching worker binary.
+
+For example:
+
+- `backend=fdm, device=gpu, precision=double`:
+  - prefer `fdm-cuda`
+- `backend=fem, device=cpu, precision=double`:
+  - resolve into `cpu-reference`
+- `backend=fem, device=gpu, precision=double`:
+  - require `fem-gpu`
+- `backend=fdm, device=gpu, precision=single`:
+  - fail unless `fdm-cuda` manifest advertises that engine as `public: true`
 
 The launcher must never expose:
 
@@ -257,6 +466,58 @@ at runtime.
 The control room should be delivered as prebuilt static assets served by the host-side launcher/API.
 
 The existing `web-build-static` direction is the correct basis for this.
+
+## 7.4 CUDA user-space library bundling
+
+We need to be explicit here because this is one of the easiest places for a fake “portable”
+package to fail in practice.
+
+Production rule:
+
+- GPU runtime packs must ship the CUDA user-space shared libraries they actually need.
+
+That means:
+
+- `fdm-cuda` bundles libraries such as `libcudart.so*`, `libcufft.so*`, and any other non-driver
+  CUDA DSOs linked by the FDM worker,
+- `fem-gpu` bundles the required CUDA user-space DSOs together with MFEM/libCEED/hypre runtime
+  DSOs,
+- the package must not assume a host-side CUDA toolkit install.
+
+Equally important:
+
+- Fullmag must not bundle `libcuda.so.1`,
+- Fullmag must not bundle `libnvidia-ml.so.1`,
+- Fullmag must not bundle kernel driver components.
+
+Those belong to the host NVIDIA driver and remain the only acceptable external prerequisite for GPU
+execution.
+
+## 7.5 ELF `RUNPATH` / relocatability policy
+
+To avoid `ldd` failures after unpacking or moving the install directory, every production artifact
+must be made relocatable at the ELF level.
+
+Required rules:
+
+1. each worker binary in `runtimes/<family>/bin/` must resolve its runtime-pack `lib/` via
+   `$ORIGIN`-relative `RUNPATH` or `RPATH`,
+2. each bundled shared object in `runtimes/<family>/lib/` must also carry a relative search path
+   for sibling bundled DSOs,
+3. base binaries in `bin/` must resolve `lib/` relative to their own location,
+4. packaging must not rely on repo-local paths, builder machine linker cache state, or user-set
+   `LD_LIBRARY_PATH`.
+
+Recommended search layout:
+
+- base binaries: `$ORIGIN/../lib`
+- runtime workers: `$ORIGIN/../lib:$ORIGIN/../../../lib`
+- runtime DSOs: `$ORIGIN:$ORIGIN/../../lib`
+
+Exact values may be refined per runtime family, but the product rule is fixed:
+
+- extracted bundles must still run after moving the install tree,
+- `ldd` must not show unexpected `not found` dependencies on supported machines.
 
 ---
 
@@ -381,7 +642,9 @@ Deliverables:
    - version,
    - ABI contract,
    - GPU requirement,
-   - driver requirement hints.
+   - driver requirement hints,
+   - bundled dependency completeness,
+   - relative `RUNPATH` correctness.
 
 Acceptance:
 
@@ -408,7 +671,8 @@ Deliverables:
 2. AppImage packager,
 3. checksum/signature generation,
 4. release smoke tests on extracted artifact,
-5. release metadata describing included runtimes.
+5. release metadata describing included runtimes,
+6. packaged-ELF linkage verification for base and runtime worker binaries.
 
 Acceptance:
 
@@ -533,6 +797,23 @@ Session/run metadata must record:
 4. launcher version,
 5. artifact build id.
 
+## 13.5 Linkage acceptance
+
+For every release candidate artifact:
+
+1. `ldd bin/fullmag-bin` must show no unexpected `not found` dependencies,
+2. `ldd bin/fullmag-api` must show no unexpected `not found` dependencies,
+3. `ldd runtimes/fdm-cuda/bin/fullmag-fdm-cuda-bin` must resolve all bundled CUDA user-space
+   dependencies from the extracted artifact on a supported GPU host,
+4. `ldd runtimes/fem-gpu/bin/fullmag-fem-gpu-bin` must resolve all bundled MFEM/libCEED/hypre and
+   CUDA user-space dependencies from the extracted artifact on a supported GPU host,
+5. `readelf -d` on packaged workers must show relative `RUNPATH` or `RPATH` entries rooted at
+   `$ORIGIN`,
+6. no production run requires the user to set `LD_LIBRARY_PATH`.
+
+`libcuda.so.1` remains the one expected host-provided dependency for CUDA execution and should be
+validated via GPU-host smoke tests, not solved by bundling the driver into the artifact.
+
 ---
 
 ## 14. Immediate repo actions
@@ -544,7 +825,8 @@ The next concrete repo tasks should be:
 2. define and implement runtime manifests for `cpu-reference`, `fdm-cuda`, and exported `fem-gpu`,
 3. bundle a private Python runtime into the portable artifact,
 4. make static web assets part of the release layout and serve them without Node at runtime,
-5. add smoke tests that run against the packaged artifact, not just the repo-local launcher.
+5. add ELF-linkage checks (`ldd` + `readelf`) for packaged base/runtime binaries,
+6. add smoke tests that run against the packaged artifact, not just the repo-local launcher.
 
 ---
 

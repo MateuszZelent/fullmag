@@ -433,7 +433,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
                 }
                 enable_exchange = true;
             }
-            fullmag_ir::EnergyTermIR::Demag => {
+            fullmag_ir::EnergyTermIR::Demag { .. } => {
                 if enable_demag {
                     errors.push("Demag is declared more than once".to_string());
                 }
@@ -922,7 +922,7 @@ fn plan_fdm_multilayer(
                 }
                 enable_exchange = true;
             }
-            fullmag_ir::EnergyTermIR::Demag => {
+            fullmag_ir::EnergyTermIR::Demag { .. } => {
                 if enable_demag {
                     errors.push("Demag is declared more than once".to_string());
                 }
@@ -1513,6 +1513,7 @@ fn plan_fem(
     let mut enable_exchange = false;
     let mut enable_demag = false;
     let mut external_field = None;
+    let mut demag_realization: Option<String> = None;
     for term in &problem.energy_terms {
         match term {
             fullmag_ir::EnergyTermIR::Exchange => {
@@ -1521,11 +1522,12 @@ fn plan_fem(
                 }
                 enable_exchange = true;
             }
-            fullmag_ir::EnergyTermIR::Demag => {
+            fullmag_ir::EnergyTermIR::Demag { realization } => {
                 if enable_demag {
                     errors.push("Demag is declared more than once".to_string());
                 }
                 enable_demag = true;
+                demag_realization = realization.clone();
             }
             fullmag_ir::EnergyTermIR::Zeeman { b } => {
                 if external_field.is_some() {
@@ -1577,6 +1579,28 @@ fn plan_fem(
     let n_nodes = mesh.nodes.len();
     let n_elements = mesh.elements.len();
     let mesh_name = mesh.mesh_name.clone();
+
+    // S07: Auto-resolve demag realization.
+    // "auto" or None → "poisson_airbox" when the mesh contains air elements (marker 0),
+    // otherwise "transfer_grid" (traditional FFT-on-Cartesian-grid approach).
+    let resolved_demag_realization = if enable_demag {
+        match demag_realization.as_deref() {
+            Some("transfer_grid") => Some("transfer_grid".to_string()),
+            Some("poisson_airbox") => Some("poisson_airbox".to_string()),
+            // auto or unset: detect air-box elements
+            _ => {
+                let has_air_elements = mesh.element_markers.iter().any(|&m| m == 0);
+                if has_air_elements {
+                    Some("poisson_airbox".to_string())
+                } else {
+                    Some("transfer_grid".to_string())
+                }
+            }
+        }
+    } else {
+        None
+    };
+
     let fem_plan = FemPlanIR {
         mesh_name: mesh_name.clone(),
         mesh_source: if mesh_parts.len() == 1 {
@@ -1598,6 +1622,8 @@ fn plan_fem(
         integrator,
         fixed_timestep,
         relaxation,
+        demag_realization: resolved_demag_realization,
+        air_box_config: None,
     };
     let study_note = if let Some(control) = fem_plan.relaxation.as_ref() {
         format!(
@@ -2159,7 +2185,7 @@ mod tests {
         ];
         ir.energy_terms = vec![
             fullmag_ir::EnergyTermIR::Exchange,
-            fullmag_ir::EnergyTermIR::Demag,
+            fullmag_ir::EnergyTermIR::Demag { realization: None },
         ];
         ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
             fdm_grid_assets: vec![],
@@ -2478,7 +2504,7 @@ mod tests {
         ];
         ir.energy_terms = vec![
             fullmag_ir::EnergyTermIR::Exchange,
-            fullmag_ir::EnergyTermIR::Demag,
+            fullmag_ir::EnergyTermIR::Demag { realization: None },
         ];
         ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
             fdm: Some(fullmag_ir::FdmHintsIR {
@@ -2570,7 +2596,7 @@ mod tests {
                 initial_magnetization: None,
             },
         ];
-        ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Demag];
+        ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Demag { realization: None }];
 
         let err = plan(&ir).expect_err("XY-offset multilayer problem should be rejected");
         assert!(err

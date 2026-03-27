@@ -58,6 +58,20 @@ struct Context {
     fullmag_fem_precision precision = FULLMAG_FEM_PRECISION_DOUBLE;
     fullmag_fem_integrator integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
 
+    // ── S17: Adaptive time stepping (PI controller) ──
+    bool adaptive_dt_enabled = false;
+    double dt_min = 1e-16;
+    double dt_max = 1e-10;
+    double adaptive_atol = 1e-6;      // absolute tolerance
+    double adaptive_rtol = 1e-3;      // relative tolerance
+    double pi_alpha = 0.7;            // PI controller exponent for error
+    double pi_beta = 0.4;             // PI controller exponent for prev error ratio
+    double safety_factor = 0.9;       // safety multiplier on predicted dt
+    double dt_grow_max = 2.0;         // max growth ratio per step
+    double dt_shrink_min = 0.2;       // min shrink ratio per step
+    double prev_error_norm = 1.0;     // for PI: error from previous accepted step
+    uint64_t rejected_steps = 0;      // total rejected (retried) steps
+
     bool enable_exchange = true;
     bool enable_demag = false;
     bool has_external_field = false;
@@ -106,6 +120,46 @@ struct Context {
     void *mfem_mass_form = nullptr;
     bool mfem_ready = false;
     bool mfem_exchange_ready = false;
+
+    // ── Poisson demag (S02-S05) ──
+    // Scalar H1 space for potential u on the FULL mesh (magnetic + air).
+    void *mfem_potential_fec = nullptr;   // mfem::H1_FECollection*
+    void *mfem_potential_fes = nullptr;   // mfem::FiniteElementSpace*
+    void *mfem_gf_potential = nullptr;    // mfem::GridFunction* (solution u)
+    void *mfem_poisson_bilinear = nullptr;// mfem::BilinearForm* (stiffness: ∫∇u·∇v)
+    void *mfem_poisson_matrix = nullptr;  // mfem::SparseMatrix* (assembled, owned by form)
+
+    // S09: BC-eliminated Poisson operator (mfem::SparseMatrix*).
+    // Created once by FormLinearSystem during init; reused every solve.
+    // Owned by the BilinearForm — do NOT delete separately.
+    void *mfem_poisson_bc_op = nullptr;
+
+    // RHS and solver workspace
+    void *mfem_poisson_rhs = nullptr;     // mfem::LinearForm* (reusable handle)
+    void *mfem_poisson_rhs_vec = nullptr; // mfem::Vector* (assembled RHS b)
+
+    // Dirichlet boundary: DOFs on outer air-box boundary (marker = boundary_marker)
+    std::vector<int> poisson_ess_tdof_list;
+    bool poisson_ready = false;
+
+    // Solver state for warm-start
+    int poisson_last_iterations = 0;
+    double poisson_last_residual = 0.0;
+
+    // Demag realization: 0 = transfer_grid (legacy), 1 = poisson_airbox
+    int demag_realization = 0;
+    int poisson_boundary_marker = 99;
+#endif
+
+    // ── S12: CUDA stream management ──
+#if FULLMAG_HAS_CUDA_RUNTIME
+    void *compute_stream = nullptr; // cudaStream_t (high priority)
+    void *io_stream = nullptr;      // cudaStream_t (low priority, snapshot I/O)
+    void *compute_event = nullptr;  // cudaEvent_t (signal scalars ready)
+    // Double-buffered pinned host snapshots (S13)
+    void *pinned_snapshot[2] = {nullptr, nullptr};
+    size_t pinned_snapshot_bytes = 0;
+    int active_snapshot_buffer = 0;
 #endif
 
     fullmag_fem_device_info device_info_cache{};
@@ -128,6 +182,14 @@ bool context_step_exchange_heun_mfem(
     Context &ctx,
     double dt_seconds,
     fullmag_fem_step_stats &stats,
+    std::string &error);
+bool context_initialize_poisson(Context &ctx, std::string &error);
+void context_destroy_poisson(Context &ctx);
+bool context_compute_demag_poisson(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &h_demag_xyz,
+    double &demag_energy,
     std::string &error);
 #endif
 

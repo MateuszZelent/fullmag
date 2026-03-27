@@ -49,6 +49,8 @@ typedef enum {
     FULLMAG_FDM_INTEGRATOR_HEUN = 1,
     FULLMAG_FDM_INTEGRATOR_DP45 = 2,
     FULLMAG_FDM_INTEGRATOR_ABM3 = 3,
+    FULLMAG_FDM_INTEGRATOR_RK4  = 4,
+    FULLMAG_FDM_INTEGRATOR_RK23 = 5,
 } fullmag_fdm_integrator;
 
 typedef enum {
@@ -117,7 +119,7 @@ typedef struct {
     const double              *initial_magnetization_xyz;
     uint64_t                   initial_magnetization_len; /* = 3 * cell_count */
 
-    /* Adaptive step configuration (DP45 only) */
+    /* Adaptive step configuration (DP45 and RK23) */
     double                     adaptive_max_error;   /* 0 → use default 1e-5 */
     double                     adaptive_dt_min;      /* 0 → use default 1e-18 */
     double                     adaptive_dt_max;      /* 0 → use default 1e-10 */

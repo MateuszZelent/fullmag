@@ -8,6 +8,7 @@
 //! - `dispatch`      — engine selection (CPU now, CUDA in Phase 2)
 
 mod artifacts;
+pub mod artifact_pipeline;
 mod cpu_reference;
 mod dispatch;
 mod fem_reference;
@@ -497,7 +498,7 @@ mod tests {
         });
         problem.energy_terms = vec![
             fullmag_ir::EnergyTermIR::Exchange,
-            fullmag_ir::EnergyTermIR::Demag,
+            fullmag_ir::EnergyTermIR::Demag { realization: None },
         ];
         problem.problem_meta.runtime_metadata.insert(
             "runtime_selection".to_string(),

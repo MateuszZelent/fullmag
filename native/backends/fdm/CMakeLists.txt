@@ -23,9 +23,18 @@ if(FULLMAG_ENABLE_CUDA)
         src/llg_fp64.cu
         src/llg_fp32.cu
         src/llg_dp45_fp64.cu
+        src/llg_dp45_fp32.cu
+        src/llg_rk4_fp64.cu
+        src/llg_rk4_fp32.cu
+        src/llg_rk23_fp64.cu
+        src/llg_rk23_fp32.cu
         src/llg_abm3_fp64.cu
+        src/llg_abm3_fp32.cu
         src/reductions_fp64.cu
         src/newell_gpu_fp64.cu
+        src/newell_gpu_fp32.cu
+        src/llg_dp45_fp32.cu
+        src/llg_abm3_fp32.cu
     )
 endif()
 

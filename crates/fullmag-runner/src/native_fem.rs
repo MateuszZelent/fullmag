@@ -171,7 +171,17 @@ impl NativeFemBackend {
                 relative_tolerance: 1e-8,
                 max_iterations: 500,
             },
-            air_box_factor: 0.0,
+            air_box_factor: plan.air_box_config.as_ref().map_or(0.0, |c| c.factor),
+            demag_realization: match plan.demag_realization.as_deref() {
+                Some("poisson_airbox") => {
+                    ffi::fullmag_fem_demag_realization::FULLMAG_FEM_DEMAG_POISSON_AIRBOX
+                }
+                _ => ffi::fullmag_fem_demag_realization::FULLMAG_FEM_DEMAG_TRANSFER_GRID,
+            },
+            poisson_boundary_marker: plan
+                .air_box_config
+                .as_ref()
+                .map_or(99, |c| c.boundary_marker as i32),
             demag_kernel_xx_spectrum: demag_kernel_spectra
                 .as_ref()
                 .map_or(std::ptr::null(), |kernels| kernels.n_xx.as_ptr()),

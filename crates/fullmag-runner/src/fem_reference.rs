@@ -536,6 +536,8 @@ mod tests {
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
             relaxation: None,
+            demag_realization: None,
+            air_box_config: None,
         }
     }
 
@@ -600,6 +602,8 @@ mod tests {
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
             relaxation: None,
+            demag_realization: None,
+            air_box_config: None,
         }
     }
 

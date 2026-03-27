@@ -341,13 +341,25 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_vector_field(ctx, ctx.tmp))  return false;
     if (!alloc_vector_field(ctx, ctx.work)) return false;
 
-    // DP45: allocate 5 extra stage buffers + FSAL
-    if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45) {
+    // DP45 / RK23 / RK4: allocate extra stage buffers as needed.
+    // DP45 needs k2..k6 + k_fsal; RK23 needs k2, k3, k_fsal; RK4 needs k2, k3, k4.
+    // We allocate the union of required buffers per integrator.
+    if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45
+        || ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK23
+        || ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
         if (!alloc_vector_field(ctx, ctx.k2)) return false;
         if (!alloc_vector_field(ctx, ctx.k3)) return false;
+    }
+    if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45
+        || ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
         if (!alloc_vector_field(ctx, ctx.k4)) return false;
+    }
+    if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45) {
         if (!alloc_vector_field(ctx, ctx.k5)) return false;
         if (!alloc_vector_field(ctx, ctx.k6)) return false;
+    }
+    if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45
+        || ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK23) {
         if (!alloc_vector_field(ctx, ctx.k_fsal)) return false;
         ctx.fsal_valid = false;
     }

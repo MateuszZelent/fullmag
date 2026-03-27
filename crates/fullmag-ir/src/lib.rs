@@ -215,7 +215,10 @@ pub enum InitialMagnetizationIR {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EnergyTermIR {
     Exchange,
-    Demag,
+    Demag {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        realization: Option<String>,
+    },
     InterfacialDmi {
         #[serde(rename = "D")]
         d: f64,
@@ -669,6 +672,17 @@ pub struct FemPlanIR {
     pub fixed_timestep: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relaxation: Option<RelaxationControlIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_realization: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub air_box_config: Option<AirBoxConfigIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AirBoxConfigIR {
+    pub factor: f64,
+    pub grading: f64,
+    pub boundary_marker: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

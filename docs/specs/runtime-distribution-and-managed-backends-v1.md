@@ -1,7 +1,7 @@
 # Runtime Distribution and Managed Backends v1
 
 - Status: draft stable distribution/runtime contract
-- Last updated: 2026-03-24
+- Last updated: 2026-03-27
 - Parent architecture: `docs/specs/fullmag-application-architecture-v2.md`
 
 ## 1. Purpose
@@ -28,6 +28,7 @@ This spec covers:
 - official user-facing launcher shape,
 - distribution model on Linux,
 - separation between launcher package and managed runtime packs,
+- relocatable workstation runtime packs with colocated shared libraries,
 - containerized backend runtimes,
 - runtime selection and fallback behavior,
 - provenance requirements related to runtime resolution.
@@ -167,6 +168,12 @@ Each runtime pack may be delivered as:
 
 The packaging mechanism may vary, but the launcher contract must stay the same.
 
+For workstation production builds, the preferred form is:
+
+- unpacked runtime packs on disk,
+- with colocated shared libraries under a Fullmag-owned directory,
+- resolved by the launcher with no host CUDA toolkit requirement.
+
 ---
 
 ## 6. Why heavyweight backends are not plain host dependencies
@@ -183,7 +190,9 @@ The same logic applies, to a lesser extent, to advanced CUDA FDM stacks.
 Therefore:
 
 - the host OS may carry the launcher,
-- the heavy solver runtime may live in a managed container/runtime pack.
+- the heavy solver runtime may live in a managed runtime pack,
+- on workstations that pack should usually be a relocatable on-disk runtime,
+- on CI/HPC it may additionally be represented as a container/runtime image.
 
 This is still one application.
 
@@ -211,15 +220,78 @@ These should be treated as managed runtimes:
 This split is canonical because it preserves product simplicity without pretending HPC stacks are
 desktop-trivial dependencies.
 
+For workstation packaging, a managed runtime pack should normally contain:
+
+- its worker binary,
+- its backend-native shared libraries,
+- its CUDA user-space shared libraries when required,
+- its own manifest and diagnostics metadata.
+
+The user must not be required to install `/usr/local/cuda`, MFEM, libCEED, or hypre manually.
+
+## 7.3 CUDA user-space library policy
+
+For Linux workstation production bundles, the CUDA policy is:
+
+1. Bundle CUDA user-space libraries required by the selected runtime family inside the runtime pack.
+2. Bundle backend-specific libraries such as MFEM/libCEED/hypre artifacts inside that same runtime
+   pack when they are runtime dependencies.
+3. Do not require `LD_LIBRARY_PATH` for normal execution.
+4. Do not require a system CUDA toolkit layout such as `/usr/local/cuda`.
+5. Do not bundle NVIDIA driver-owned libraries.
+
+In practice this means:
+
+- `runtimes/fdm-cuda/lib/` should carry libraries such as `libcudart.so*`, `libcufft.so*`, and any
+  other non-driver CUDA DSOs actually linked by the FDM worker,
+- `runtimes/fem-gpu/lib/` should carry the required CUDA user-space DSOs plus MFEM/libCEED/hypre
+  runtime DSOs,
+- `libcuda.so.1`, `libnvidia-ml.so.1`, kernel modules, and other host driver components remain
+  host-provided and must not be bundled by Fullmag.
+
+This keeps the product self-contained while preserving the only acceptable host prerequisite for GPU
+execution: a compatible NVIDIA driver.
+
+## 7.4 ELF linkage policy for relocatable runtimes
+
+Relocatable runtime packs must resolve their dependencies relative to their own install root.
+
+Therefore:
+
+1. Every worker binary must use `$ORIGIN`-relative `RUNPATH` or `RPATH`.
+2. Every bundled shared object that depends on sibling bundled libraries must also carry its own
+   relative `RUNPATH` or `RPATH`.
+3. We must not rely on repo-relative paths or developer-machine linker cache state.
+
+Typical layout:
+
+- worker binary: `runtimes/<family>/bin/...`
+- runtime libraries: `runtimes/<family>/lib/...`
+- shared base libraries: `lib/...`
+
+Typical search rules:
+
+- worker binary resolves `../lib` within its runtime pack first,
+- then may resolve shared base libraries from the application-level `lib/`,
+- bundled DSOs resolve their sibling libraries from their own directory first.
+
+The release pipeline may use linker flags and/or post-processing tools such as `patchelf`, but the
+product rule is the outcome, not the tool:
+
+- extracted artifacts must run after moving the install directory,
+- `ldd` must not report unexpected `not found` entries on supported hosts.
+
 ---
 
 ## 8. Containerized runtimes
 
-Containerized runtimes are first-class in Fullmag.
+Containerized runtimes remain first-class in Fullmag.
 
 They are not a temporary workaround.
 
-They are the preferred operational model for heavyweight backend stacks.
+They are the preferred build/export and HPC form for heavyweight backend stacks.
+
+They are not the default workstation end-user runtime form.
 
 ### 8.1 Current canonical runtime container
 

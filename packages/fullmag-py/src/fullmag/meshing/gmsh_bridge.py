@@ -1236,3 +1236,289 @@ def _remesh_imported(
         return mesh
     finally:
         gmsh.finalize()
+
+
+# ---------------------------------------------------------------------------
+# Air-box mesh generation for Poisson demag (S01)
+# ---------------------------------------------------------------------------
+def add_air_box(
+    geometry: Geometry,
+    hmax: float,
+    factor: float = 3.0,
+    grading: float = 0.3,
+    order: int = 1,
+    boundary_marker: int = 99,
+    options: MeshOptions | None = None,
+) -> MeshData:
+    """Generate a tetrahedral mesh with an air-box surrounding the magnetic region.
+
+    The magnetic volume gets ``element_marker=1``, the air region gets
+    ``element_marker=0``.  Boundary faces on the outer air-box surface get
+    ``boundary_marker`` (default 99) for Dirichlet/Robin BC application.
+
+    The air-box extends ``factor`` times the magnetic bounding box in each
+    direction (centered on the magnet centroid).  ``grading`` controls how
+    much the mesh coarsens between the magnet surface and the outer boundary
+    (0 = uniform, 1 = maximum grading).
+
+    Args:
+        geometry: Magnetic body geometry (Box, Cylinder, Sphere, etc.).
+        hmax: Maximum element size on the magnetic body (SI metres).
+        factor: Air-box size as a multiple of the magnetic bounding-box diagonal.
+        grading: Mesh grading factor (0–1).  Higher = coarser air far from magnet.
+        order: FE order (1 = linear P1, 2 = quadratic P2).
+        boundary_marker: Marker assigned to outer air-box boundary faces.
+        options: Advanced Gmsh meshing options.
+
+    Returns:
+        MeshData with both magnetic (marker=1) and air (marker=0) elements.
+    """
+    if factor < 1.5:
+        raise ValueError(f"air_box factor must be >= 1.5, got {factor}")
+    if not 0.0 <= grading <= 1.0:
+        raise ValueError(f"grading must be in [0, 1], got {grading}")
+
+    opts = options or MeshOptions()
+    gmsh = _import_gmsh()
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        gmsh.model.add("fullmag_airbox")
+
+        # ── Create magnetic volume via Gmsh OCC ──
+        mag_tag = _create_occ_geometry(gmsh, geometry)
+        # Get bounding box of magnetic volume
+        xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.occ.getBoundingBox(3, mag_tag)
+        cx, cy, cz = (xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2
+        dx, dy, dz = xmax - xmin, ymax - ymin, zmax - zmin
+        diag = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+        # ── Create air-box as a larger box ──
+        half = factor * diag / 2.0
+        air_tag = gmsh.model.occ.addBox(
+            cx - half, cy - half, cz - half,
+            2 * half, 2 * half, 2 * half,
+        )
+
+        # ── Boolean cut: air = box - magnet, preserving both ──
+        # Fragment produces non-overlapping volumes sharing interfaces
+        result, result_map = gmsh.model.occ.fragment(
+            [(3, air_tag)], [(3, mag_tag)]
+        )
+        gmsh.model.occ.synchronize()
+
+        # ── Identify which fragment is the magnet and which is air ──
+        # The magnetic volume is the one inside the original magnet bounding box
+        volumes = gmsh.model.getEntities(3)
+        mag_volumes = []
+        air_volumes = []
+        for dim, tag in volumes:
+            bb = gmsh.model.getBoundingBox(dim, tag)
+            vol_cx = (bb[0] + bb[3]) / 2
+            vol_cy = (bb[1] + bb[4]) / 2
+            vol_cz = (bb[2] + bb[5]) / 2
+            vol_dx = bb[3] - bb[0]
+            vol_dy = bb[4] - bb[1]
+            vol_dz = bb[5] - bb[2]
+            # If the volume fits within the original magnet bbox (with tolerance),
+            # it's the magnetic region; otherwise it's air.
+            tol = 0.1 * diag
+            if (vol_dx < dx + tol and vol_dy < dy + tol and vol_dz < dz + tol
+                    and abs(vol_cx - cx) < tol and abs(vol_cy - cy) < tol
+                    and abs(vol_cz - cz) < tol):
+                mag_volumes.append(tag)
+            else:
+                air_volumes.append(tag)
+
+        if not mag_volumes:
+            raise RuntimeError(
+                "air-box generation failed: could not identify magnetic volume after fragment"
+            )
+
+        # ── Physical groups: magnetic=1, air=0 ──
+        gmsh.model.addPhysicalGroup(3, mag_volumes, tag=1)
+        gmsh.model.setPhysicalName(3, 1, "magnetic")
+        gmsh.model.addPhysicalGroup(3, air_volumes, tag=2)
+        gmsh.model.setPhysicalName(3, 2, "air")
+
+        # ── Outer boundary: faces on the air-box exterior ──
+        # Identify boundary faces of air volumes that are on the outer box surface
+        outer_faces = []
+        for air_tag_i in air_volumes:
+            bnd = gmsh.model.getBoundary([(3, air_tag_i)], oriented=False)
+            for _, face_tag in bnd:
+                bb = gmsh.model.getBoundingBox(2, face_tag)
+                face_cx = (bb[0] + bb[3]) / 2
+                face_cy = (bb[1] + bb[4]) / 2
+                face_cz = (bb[2] + bb[5]) / 2
+                # Check if face is on the outer box boundary
+                eps = 0.01 * half
+                on_outer = (
+                    abs(bb[0] - (cx - half)) < eps or abs(bb[3] - (cx + half)) < eps
+                    or abs(bb[1] - (cy - half)) < eps or abs(bb[4] - (cy + half)) < eps
+                    or abs(bb[2] - (cz - half)) < eps or abs(bb[5] - (cz + half)) < eps
+                )
+                if on_outer and face_tag not in outer_faces:
+                    outer_faces.append(face_tag)
+        if outer_faces:
+            gmsh.model.addPhysicalGroup(2, outer_faces, tag=boundary_marker)
+            gmsh.model.setPhysicalName(2, boundary_marker, "outer_boundary")
+
+        # ── Mesh size: fine near magnet surface, coarser in air ──
+        gmsh.option.setNumber("Mesh.MeshSizeMax", hmax * factor * (1.0 + 2.0 * grading))
+        gmsh.option.setNumber("Mesh.MeshSizeMin", hmax * 0.1)
+
+        # Size field: distance from magnetic surface + threshold
+        mag_surfaces = []
+        for mv in mag_volumes:
+            bnd = gmsh.model.getBoundary([(3, mv)], oriented=False)
+            mag_surfaces.extend([abs(t) for _, t in bnd])
+        mag_surfaces = list(set(mag_surfaces))
+
+        f_dist = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(f_dist, "SurfacesList", mag_surfaces)
+
+        f_thresh = gmsh.model.mesh.field.add("Threshold")
+        gmsh.model.mesh.field.setNumber(f_thresh, "InField", f_dist)
+        gmsh.model.mesh.field.setNumber(f_thresh, "SizeMin", hmax)
+        gmsh.model.mesh.field.setNumber(f_thresh, "SizeMax", hmax * factor * (1.0 + 2.0 * grading))
+        gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", 0.0)
+        gmsh.model.mesh.field.setNumber(f_thresh, "DistMax", half * grading + hmax)
+
+        f_min = gmsh.model.mesh.field.add("Min")
+        gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", [f_thresh])
+        gmsh.model.mesh.field.setAsBackgroundMesh(f_min)
+
+        gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+        gmsh.option.setNumber("Mesh.Algorithm3D", opts.algorithm_3d)
+
+        if order > 1:
+            gmsh.option.setNumber("Mesh.ElementOrder", order)
+
+        # ── Generate ──
+        emit_progress("Gmsh: generating air-box 3D mesh")
+        gmsh.model.mesh.generate(3)
+        quality = _extract_quality_metrics(gmsh, opts) if opts.compute_quality else None
+
+        # ── Extract mesh data ──
+        mesh = _extract_airbox_mesh_data(gmsh, mag_volumes, air_volumes, boundary_marker, quality)
+        emit_progress(
+            f"Gmsh: air-box mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements "
+            f"(magnetic: {int((mesh.element_markers == 1).sum())}, "
+            f"air: {int((mesh.element_markers == 0).sum())})"
+        )
+        return mesh
+    finally:
+        gmsh.finalize()
+
+
+def _create_occ_geometry(gmsh: Any, geometry: Geometry) -> int:
+    """Create a Gmsh OCC volume from a fullmag Geometry and return its tag."""
+    if isinstance(geometry, Box):
+        sx, sy, sz = geometry.size
+        return gmsh.model.occ.addBox(-sx / 2, -sy / 2, -sz / 2, sx, sy, sz)
+    if isinstance(geometry, Cylinder):
+        return gmsh.model.occ.addCylinder(
+            0, 0, -geometry.height / 2, 0, 0, geometry.height, geometry.radius
+        )
+    if isinstance(geometry, Ellipsoid):
+        tag = gmsh.model.occ.addSphere(0, 0, 0, 1.0)
+        rx, ry, rz = geometry.semi_axes
+        gmsh.model.occ.dilate([(3, tag)], 0, 0, 0, rx, ry, rz)
+        return tag
+    # Fallback for CSG or imported: create a sphere placeholder
+    # (real implementation would walk the CSG tree)
+    raise TypeError(f"add_air_box does not yet support {type(geometry).__name__} geometry")
+
+
+def _extract_airbox_mesh_data(
+    gmsh: Any,
+    mag_volumes: list[int],
+    air_volumes: list[int],
+    boundary_marker: int,
+    quality: MeshQualityReport | None,
+) -> MeshData:
+    """Extract mesh data with correct element markers from an air-box mesh.
+
+    magnetic volumes → element_marker=1, air volumes → element_marker=0.
+    """
+    # Get all nodes
+    node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
+    n_gmsh_nodes = len(node_tags)
+    # Build tag→index mapping
+    tag_to_idx: dict[int, int] = {}
+    max_tag = int(node_tags.max()) if n_gmsh_nodes > 0 else 0
+    coords_3d = node_coords.reshape(-1, 3)
+    # Renumber into contiguous array
+    reindex = np.full(max_tag + 1, -1, dtype=np.int32)
+    for i, tag in enumerate(node_tags):
+        reindex[int(tag)] = i
+
+    nodes = coords_3d.copy()
+
+    # Collect elements with markers
+    all_elements: list[np.ndarray] = []
+    all_markers: list[np.ndarray] = []
+
+    mag_set = set(mag_volumes)
+    for dim, vol_tag in gmsh.model.getEntities(3):
+        elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(dim, vol_tag)
+        for et, etags, enodes in zip(elem_types, elem_tags, elem_node_tags):
+            props = gmsh.model.mesh.getElementProperties(et)
+            if props[0] != "Tetrahedron":
+                continue
+            n_per = props[3]
+            if n_per < 4:
+                continue
+            node_array = np.array(enodes, dtype=np.int64).reshape(-1, n_per)
+            # Take first 4 nodes (linear P1 corners)
+            tets = node_array[:, :4]
+            n_tets = tets.shape[0]
+            marker = 1 if vol_tag in mag_set else 0
+            reindexed = reindex[tets.ravel()].reshape(-1, 4)
+            all_elements.append(reindexed)
+            all_markers.append(np.full(n_tets, marker, dtype=np.int32))
+
+    if not all_elements:
+        raise RuntimeError("air-box mesh generation produced zero tetrahedra")
+
+    elements = np.concatenate(all_elements, axis=0)
+    element_markers = np.concatenate(all_markers, axis=0)
+
+    # Collect boundary faces
+    all_bnd_faces: list[np.ndarray] = []
+    all_bnd_markers: list[np.ndarray] = []
+    for dim, surf_tag in gmsh.model.getEntities(2):
+        elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(dim, surf_tag)
+        for et, etags, enodes in zip(elem_types, elem_tags, elem_node_tags):
+            props = gmsh.model.mesh.getElementProperties(et)
+            if props[0] != "Triangle":
+                continue
+            n_per = props[3]
+            node_array = np.array(enodes, dtype=np.int64).reshape(-1, n_per)
+            tris = node_array[:, :3]
+            n_tris = tris.shape[0]
+            reindexed = reindex[tris.ravel()].reshape(-1, 3)
+            all_bnd_faces.append(reindexed)
+            # Check if this surface belongs to the outer boundary physical group
+            phys_groups = gmsh.model.getPhysicalGroupsForEntity(2, surf_tag)
+            bm = boundary_marker if boundary_marker in phys_groups else 1
+            all_bnd_markers.append(np.full(n_tris, bm, dtype=np.int32))
+
+    if all_bnd_faces:
+        boundary_faces = np.concatenate(all_bnd_faces, axis=0)
+        boundary_markers_arr = np.concatenate(all_bnd_markers, axis=0)
+    else:
+        boundary_faces = np.zeros((0, 3), dtype=np.int32)
+        boundary_markers_arr = np.zeros(0, dtype=np.int32)
+
+    return MeshData(
+        nodes=nodes,
+        elements=elements,
+        element_markers=element_markers,
+        boundary_faces=boundary_faces,
+        boundary_markers=boundary_markers_arr,
+        quality=quality,
+    )

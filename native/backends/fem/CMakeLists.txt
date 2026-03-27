@@ -22,6 +22,12 @@ if(FULLMAG_USE_MFEM_STACK)
     list(APPEND FEM_SOURCES
         src/mfem_bridge.cpp
     )
+
+    # S11: CUDA fused kernels (LLG RHS, normalize, accumulate)
+    if(FULLMAG_ENABLE_CUDA)
+        enable_language(CUDA)
+        list(APPEND FEM_SOURCES src/kernels.cu)
+    endif()
 endif()
 
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
@@ -57,3 +63,18 @@ set_target_properties(fullmag_fem PROPERTIES
     SOVERSION 0
     PUBLIC_HEADER "${FEM_PUBLIC_HEADERS}"
 )
+
+# S14: PA vs Assembled benchmark (opt-in)
+if(FULLMAG_USE_MFEM_STACK)
+    add_executable(pa_benchmark examples/pa_benchmark.cpp)
+    target_link_libraries(pa_benchmark PRIVATE fullmag_fem)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(pa_benchmark PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(pa_benchmark PRIVATE mfem)
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        target_link_libraries(pa_benchmark PRIVATE CUDA::cudart)
+    endif()
+    set_target_properties(pa_benchmark PROPERTIES EXCLUDE_FROM_ALL TRUE)
+endif()

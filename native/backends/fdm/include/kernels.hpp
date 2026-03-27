@@ -32,6 +32,15 @@ namespace fdm {
 
 // GPU-native Newell tensor computation
 void launch_newell_compute_spectra_fp64(Context &ctx);
+void launch_newell_compute_spectra_fp32(Context &ctx);
+
+// DP45 adaptive integrators
+void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+
+// ABM3 multi-step integrators
+void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 
 } // namespace fdm
 } // namespace fullmag

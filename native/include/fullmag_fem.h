@@ -41,6 +41,11 @@ typedef enum {
     FULLMAG_FEM_PRECONDITIONER_AMG = 2,
 } fullmag_fem_preconditioner;
 
+typedef enum {
+    FULLMAG_FEM_DEMAG_TRANSFER_GRID = 0,
+    FULLMAG_FEM_DEMAG_POISSON_AIRBOX = 1,
+} fullmag_fem_demag_realization;
+
 typedef struct {
     const double *nodes_xyz;
     uint32_t n_nodes;
@@ -81,6 +86,8 @@ typedef struct {
     double external_field_am[3];
     fullmag_fem_solver_config demag_solver;
     double air_box_factor;
+    fullmag_fem_demag_realization demag_realization;
+    int poisson_boundary_marker;
     const double *demag_kernel_xx_spectrum;
     const double *demag_kernel_yy_spectrum;
     const double *demag_kernel_zz_spectrum;

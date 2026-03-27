@@ -26,7 +26,14 @@ build target="fullmag":
 
 package target="fullmag":
     if [ "{{target}}" = "fullmag" ] || [ "{{target}}" = "fullmag-host" ]; then ./scripts/package_fullmag_host.sh; \
-    else echo "unknown package target: {{target}}" >&2; echo "supported targets: fullmag, fullmag-host" >&2; exit 1; fi
+    elif [ "{{target}}" = "fullmag-portable" ]; then \
+      just ensure-python; \
+      if [ ! -x ".fullmag/local/bin/fullmag-bin" ] || [ ! -x ".fullmag/local/bin/fullmag-api" ] || [ ! -e ".fullmag/local/lib/libfullmag_fdm.so.0" ] || [ ! -f ".fullmag/local/web/index.html" ]; then \
+        FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag; \
+      fi; \
+      ./scripts/package_fullmag_portable.sh; \
+    \
+    else echo "unknown package target: {{target}}" >&2; echo "supported targets: fullmag, fullmag-host, fullmag-portable" >&2; exit 1; fi
 
 check:
     cargo +nightly check --workspace

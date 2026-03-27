@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gfortran \
     git \
+    libopenmpi-dev \
     ninja-build \
     pkg-config \
     python3 \
@@ -37,17 +38,30 @@ RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
 WORKDIR /tmp/build
 
 RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git
+
+# S10: Build hypre (serial + CUDA) — required for CG+AMG Poisson solver
+RUN git clone --depth 1 https://github.com/hypre-space/hypre.git /tmp/build/hypre && \
+    cd /tmp/build/hypre/src && \
+    ./configure \
+      --prefix=${INSTALL_PREFIX} \
+      --enable-shared \
+      --with-cuda \
+      --with-gpu-arch="60 70 80 90" && \
+    make -j"$(nproc)" && \
+    make install
+
 RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
       -DBUILD_SHARED_LIBS=ON \
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-      -DMFEM_USE_MPI=NO \
+      -DMFEM_USE_MPI=YES \
       -DMFEM_USE_METIS=NO \
       -DMFEM_USE_CUDA=YES \
       -DMFEM_USE_CEED=NO \
-      -DMFEM_USE_HYPRE=NO && \
+      -DMFEM_USE_HYPRE=YES \
+      -DHYPRE_DIR=${INSTALL_PREFIX} && \
     cmake --build /tmp/build/mfem/build -j"$(nproc)" && \
     cmake --install /tmp/build/mfem/build
 
@@ -73,6 +87,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gnupg \
     libgl1 \
     libglu1-mesa \
+    libopenmpi-dev \
     libsm6 \
     libx11-6 \
     libxcursor1 \

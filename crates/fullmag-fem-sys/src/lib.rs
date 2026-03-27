@@ -51,6 +51,13 @@ pub enum fullmag_fem_preconditioner {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_demag_realization {
+    FULLMAG_FEM_DEMAG_TRANSFER_GRID = 0,
+    FULLMAG_FEM_DEMAG_POISSON_AIRBOX = 1,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_mesh_desc {
     pub nodes_xyz: *const f64,
@@ -96,6 +103,8 @@ pub struct fullmag_fem_plan_desc {
     pub external_field_am: [f64; 3],
     pub demag_solver: fullmag_fem_solver_config,
     pub air_box_factor: f64,
+    pub demag_realization: fullmag_fem_demag_realization,
+    pub poisson_boundary_marker: i32,
     pub demag_kernel_xx_spectrum: *const f64,
     pub demag_kernel_yy_spectrum: *const f64,
     pub demag_kernel_zz_spectrum: *const f64,

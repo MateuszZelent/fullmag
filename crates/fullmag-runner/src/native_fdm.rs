@@ -71,13 +71,21 @@ impl NativeFdmBackend {
         };
 
         let integrator = match plan.integrator {
-            fullmag_ir::IntegratorChoice::Rk45 | fullmag_ir::IntegratorChoice::Rk23 => {
+            fullmag_ir::IntegratorChoice::Heun => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN
+            }
+            fullmag_ir::IntegratorChoice::Rk4 => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK4
+            }
+            fullmag_ir::IntegratorChoice::Rk23 => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK23
+            }
+            fullmag_ir::IntegratorChoice::Rk45 => {
                 ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_DP45
             }
             fullmag_ir::IntegratorChoice::Abm3 => {
                 ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_ABM3
             }
-            _ => ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN,
         };
 
         // Flatten [f64; 3] AoS → contiguous f64 buffer

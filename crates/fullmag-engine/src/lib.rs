@@ -10,6 +10,7 @@ pub mod fem_solution_transfer;
 pub mod multilayer;
 pub mod newell;
 pub mod studies;
+pub mod vector;
 
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
@@ -1290,7 +1291,7 @@ impl ExchangeLlgProblem {
     }
 
     /// In-place RHS evaluation that also returns cached observables.
-    fn llg_rhs_full_into_ws(
+    fn _llg_rhs_full_into_ws(
         &self,
         magnetization: &[Vector3],
         ws: &mut FftWorkspace,
@@ -2795,63 +2796,8 @@ fn combine_fields(
     }
 }
 
-pub fn normalized(vector: Vector3) -> Result<Vector3> {
-    let norm = norm(vector);
-    if norm <= 0.0 {
-        // Inactive cell (masked out by active_mask) — preserve zero vector
-        return Ok([0.0, 0.0, 0.0]);
-    }
-    Ok(scale(vector, 1.0 / norm))
-}
-
-pub fn max_norm(vectors: &[Vector3]) -> f64 {
-    #[cfg(feature = "parallel")]
-    {
-        vectors
-            .par_iter()
-            .map(|vector| norm(*vector))
-            .reduce(|| 0.0, f64::max)
-    }
-    #[cfg(not(feature = "parallel"))]
-    {
-        vectors
-            .iter()
-            .map(|vector| norm(*vector))
-            .fold(0.0, f64::max)
-    }
-}
-
-pub fn add(left: Vector3, right: Vector3) -> Vector3 {
-    [left[0] + right[0], left[1] + right[1], left[2] + right[2]]
-}
-
-pub fn sub(left: Vector3, right: Vector3) -> Vector3 {
-    [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
-}
-
-pub fn scale(vector: Vector3, factor: f64) -> Vector3 {
-    [vector[0] * factor, vector[1] * factor, vector[2] * factor]
-}
-
-pub fn dot(left: Vector3, right: Vector3) -> f64 {
-    left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
-}
-
-pub fn cross(left: Vector3, right: Vector3) -> Vector3 {
-    [
-        left[1] * right[2] - left[2] * right[1],
-        left[2] * right[0] - left[0] * right[2],
-        left[0] * right[1] - left[1] * right[0],
-    ]
-}
-
-pub fn squared_norm(vector: Vector3) -> f64 {
-    dot(vector, vector)
-}
-
-pub fn norm(vector: Vector3) -> f64 {
-    squared_norm(vector).sqrt()
-}
+// Vector math utilities — re-exported from vector module
+pub use vector::{add, cross, dot, max_norm, norm, normalized, scale, squared_norm, sub};
 
 #[cfg(test)]
 mod tests {
