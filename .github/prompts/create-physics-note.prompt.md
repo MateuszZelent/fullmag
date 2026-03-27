@@ -9,11 +9,12 @@ The note must include:
 - governing equations,
 - symbols and SI units,
 - assumptions and approximations,
-- FDM/FEM/hybrid interpretation,
+- FDM/FEM/CPU/GPU/hybrid interpretation where relevant,
 - Python API impact,
+- UI authoring and script-export impact when relevant,
 - `ProblemIR` impact,
-- planner and capability-matrix impact,
-- validation strategy,
+- planner, capability-matrix, and runtime-selection impact,
+- validation strategy, observables, and tolerances,
 - completeness checklist,
 - deferred work.
 

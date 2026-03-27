@@ -294,6 +294,7 @@ export default function RunControlRoom() {
   const session = state?.session;
   const run = state?.run;
   const liveState = state?.live_state;
+  const previewConfig = state?.preview_config ?? null;
   const preview = state?.preview ?? null;
   const femMesh = state?.fem_mesh ?? null;
   const scalarRows = state?.scalar_rows ?? [];
@@ -503,6 +504,22 @@ export default function RunControlRoom() {
   const previewDrivenMode: ViewportMode | null =
     preview && !isFemBackend ? (preview.type === "3D" ? "3D" : "2D") : null;
   const effectiveViewMode = previewDrivenMode ?? viewMode;
+  const previewControlsActive = Boolean(previewConfig ?? preview);
+  const requestedPreviewQuantity =
+    previewConfig?.quantity ?? preview?.quantity ?? selectedQuantity;
+  const requestedPreviewComponent =
+    previewConfig?.component ?? preview?.component ?? "3D";
+  const requestedPreviewLayer = previewConfig?.layer ?? preview?.layer ?? 0;
+  const requestedPreviewAllLayers =
+    previewConfig?.all_layers ?? preview?.all_layers ?? false;
+  const requestedPreviewXChosenSize =
+    previewConfig?.x_chosen_size ?? preview?.x_chosen_size ?? 0;
+  const requestedPreviewYChosenSize =
+    previewConfig?.y_chosen_size ?? preview?.y_chosen_size ?? 0;
+  const requestedPreviewAutoScale =
+    previewConfig?.auto_scale_enabled ?? preview?.auto_scale_enabled ?? true;
+  const previewIsStale =
+    Boolean(preview && previewConfig && preview.config_revision !== previewConfig.revision);
   const previewVectorComponent: VectorComponent =
     preview?.component && preview.component !== "3D"
       ? (preview.component as VectorComponent)
@@ -629,23 +646,25 @@ export default function RunControlRoom() {
   );
 
   useEffect(() => {
-    const options = preview ? previewQuantityOptions : quantityOptions;
+    const options = previewControlsActive ? previewQuantityOptions : quantityOptions;
     if (!options.length) return;
     if (!options.some((opt) => opt.value === selectedQuantity)) {
       const fallback = options.find((opt) => !opt.disabled) ?? options[0];
       setSelectedQuantity(fallback.value);
     }
-  }, [preview, previewQuantityOptions, quantityOptions, selectedQuantity]);
+  }, [previewControlsActive, previewQuantityOptions, quantityOptions, selectedQuantity]);
 
   useEffect(() => {
-    if (preview?.quantity) {
-      setSelectedQuantity(preview.quantity);
+    if (requestedPreviewQuantity) {
+      setSelectedQuantity(requestedPreviewQuantity);
     }
-  }, [preview?.quantity]);
+  }, [requestedPreviewQuantity]);
 
   const quantityDescriptor = useMemo(
-    () => state?.quantities.find((q) => q.id === (preview?.quantity ?? selectedQuantity)) ?? null,
-    [preview?.quantity, selectedQuantity, state?.quantities],
+    () =>
+      state?.quantities.find((q) => q.id === (preview?.quantity ?? requestedPreviewQuantity)) ??
+      null,
+    [preview?.quantity, requestedPreviewQuantity, state?.quantities],
   );
 
   /* Field data */
@@ -1309,10 +1328,10 @@ export default function RunControlRoom() {
                         <span className={s.meshControlLabel}>Quantity</span>
                         <select
                           className={s.meshSelect}
-                          value={preview?.quantity ?? selectedQuantity}
+                          value={requestedPreviewQuantity}
                           onChange={(e) => {
                             const next = e.target.value;
-                            if (preview) void updatePreview("/quantity", { quantity: next });
+                            if (previewControlsActive) void updatePreview("/quantity", { quantity: next });
                             else setSelectedQuantity(next);
                           }}
                           disabled={previewBusy}
@@ -1328,10 +1347,10 @@ export default function RunControlRoom() {
                       </label>
                       <label className={s.meshControl}>
                         <span className={s.meshControlLabel}>Component</span>
-                        {preview ? (
+                        {previewControlsActive ? (
                           <select
                             className={s.meshSelect}
-                            value={preview.component}
+                            value={requestedPreviewComponent}
                             onChange={(e) => void updatePreview("/component", { component: e.target.value as PreviewComponent })}
                             disabled={previewBusy}
                           >
@@ -1558,10 +1577,10 @@ export default function RunControlRoom() {
               <span className={s.viewportBarLabel}>Qty</span>
               <select
                 className={s.viewportBarSelect}
-                value={preview?.quantity ?? selectedQuantity}
+                value={requestedPreviewQuantity}
                 onChange={(e) => {
                   const next = e.target.value;
-                  if (preview) {
+                  if (previewControlsActive) {
                     void updatePreview("/quantity", { quantity: next });
                   } else {
                     setSelectedQuantity(next);
@@ -1569,8 +1588,8 @@ export default function RunControlRoom() {
                 }}
                 disabled={previewBusy}
               >
-                {((preview ? previewQuantityOptions : quantityOptions).length
-                  ? (preview ? previewQuantityOptions : quantityOptions)
+                {((previewControlsActive ? previewQuantityOptions : quantityOptions).length
+                  ? (previewControlsActive ? previewQuantityOptions : quantityOptions)
                   : [{ value: "m", label: "Magnetization", disabled: false }]).map((opt) => (
                   <option key={opt.value} value={opt.value} disabled={opt.disabled}>
                     {opt.label}
@@ -1580,10 +1599,10 @@ export default function RunControlRoom() {
 
               <span className={s.viewportBarSep} />
               <span className={s.viewportBarLabel}>Comp</span>
-              {preview ? (
+              {previewControlsActive ? (
                 <select
                   className={s.viewportBarSelect}
-                  value={preview.component}
+                  value={requestedPreviewComponent}
                   onChange={(e) => void updatePreview("/component", { component: e.target.value as PreviewComponent })}
                   disabled={previewBusy}
                 >
@@ -1613,7 +1632,7 @@ export default function RunControlRoom() {
                       <span className={s.viewportBarLabel}>X</span>
                       <select
                         className={s.viewportBarSelect}
-                        value={preview.x_chosen_size}
+                        value={requestedPreviewXChosenSize}
                         onChange={(e) =>
                           void updatePreview("/XChosenSize", { xChosenSize: Number(e.target.value) })
                         }
@@ -1626,7 +1645,7 @@ export default function RunControlRoom() {
                       <span className={s.viewportBarLabel}>Y</span>
                       <select
                         className={s.viewportBarSelect}
-                        value={preview.y_chosen_size}
+                        value={requestedPreviewYChosenSize}
                         onChange={(e) =>
                           void updatePreview("/YChosenSize", { yChosenSize: Number(e.target.value) })
                         }
@@ -1641,7 +1660,7 @@ export default function RunControlRoom() {
                   <label className={s.viewportToggle}>
                     <input
                       type="checkbox"
-                      checked={preview.auto_scale_enabled}
+                      checked={requestedPreviewAutoScale}
                       onChange={(e) =>
                         void updatePreview("/autoScaleEnabled", {
                           autoScaleEnabled: e.target.checked,
@@ -1656,9 +1675,9 @@ export default function RunControlRoom() {
                       <span className={s.viewportBarLabel}>Layer</span>
                       <select
                         className={s.viewportBarSelect}
-                        value={preview.layer}
+                        value={requestedPreviewLayer}
                         onChange={(e) => void updatePreview("/layer", { layer: Number(e.target.value) })}
-                        disabled={previewBusy || preview.all_layers}
+                        disabled={previewBusy || requestedPreviewAllLayers}
                       >
                         {Array.from({ length: solverGrid[2] }, (_, i) => (
                           <option key={i} value={i}>{i}</option>
@@ -1667,7 +1686,7 @@ export default function RunControlRoom() {
                       <label className={s.viewportToggle}>
                         <input
                           type="checkbox"
-                          checked={preview.all_layers}
+                          checked={requestedPreviewAllLayers}
                           onChange={(e) =>
                             void updatePreview("/allLayers", { allLayers: e.target.checked })
                           }
@@ -1741,7 +1760,11 @@ export default function RunControlRoom() {
               `Preview auto-scaled to ${previewGrid[0]}×${previewGrid[1]}×${previewGrid[2]}`}
           </div>
         )}
-        {previewMessage && <div className={s.previewStatus}>{previewMessage}</div>}
+        {(previewMessage || previewIsStale) && (
+          <div className={s.previewStatus}>
+            {previewMessage ?? "Preview update pending"}
+          </div>
+        )}
 
         {/* Canvas area */}
         <div className={s.viewportCanvas}>
@@ -1892,10 +1915,10 @@ export default function RunControlRoom() {
               <span className={s.viewportBarLabel}>Qty</span>
               <select
                 className={s.viewportBarSelect}
-                value={preview?.quantity ?? selectedQuantity}
+                value={requestedPreviewQuantity}
                 onChange={(e) => {
                   const next = e.target.value;
-                  if (preview) {
+                  if (previewControlsActive) {
                     void updatePreview("/quantity", { quantity: next });
                   } else {
                     setSelectedQuantity(next);
@@ -1903,8 +1926,8 @@ export default function RunControlRoom() {
                 }}
                 disabled={previewBusy}
               >
-                {((preview ? previewQuantityOptions : quantityOptions).length
-                  ? (preview ? previewQuantityOptions : quantityOptions)
+                {((previewControlsActive ? previewQuantityOptions : quantityOptions).length
+                  ? (previewControlsActive ? previewQuantityOptions : quantityOptions)
                   : [{ value: "m", label: "Magnetization", disabled: false }]).map((opt) => (
                   <option key={opt.value} value={opt.value} disabled={opt.disabled}>
                     {opt.label}
@@ -1914,10 +1937,10 @@ export default function RunControlRoom() {
 
               <span className={s.viewportBarSep} />
               <span className={s.viewportBarLabel}>Comp</span>
-              {preview ? (
+              {previewControlsActive ? (
                 <select
                   className={s.viewportBarSelect}
-                  value={preview.component}
+                  value={requestedPreviewComponent}
                   onChange={(e) => void updatePreview("/component", { component: e.target.value as PreviewComponent })}
                   disabled={previewBusy}
                 >
@@ -1947,7 +1970,7 @@ export default function RunControlRoom() {
                       <span className={s.viewportBarLabel}>X</span>
                       <select
                         className={s.viewportBarSelect}
-                        value={preview.x_chosen_size}
+                        value={requestedPreviewXChosenSize}
                         onChange={(e) =>
                           void updatePreview("/XChosenSize", { xChosenSize: Number(e.target.value) })
                         }
@@ -1960,7 +1983,7 @@ export default function RunControlRoom() {
                       <span className={s.viewportBarLabel}>Y</span>
                       <select
                         className={s.viewportBarSelect}
-                        value={preview.y_chosen_size}
+                        value={requestedPreviewYChosenSize}
                         onChange={(e) =>
                           void updatePreview("/YChosenSize", { yChosenSize: Number(e.target.value) })
                         }
@@ -1975,7 +1998,7 @@ export default function RunControlRoom() {
                   <label className={s.viewportToggle}>
                     <input
                       type="checkbox"
-                      checked={preview.auto_scale_enabled}
+                      checked={requestedPreviewAutoScale}
                       onChange={(e) =>
                         void updatePreview("/autoScaleEnabled", {
                           autoScaleEnabled: e.target.checked,
@@ -1990,9 +2013,9 @@ export default function RunControlRoom() {
                       <span className={s.viewportBarLabel}>Layer</span>
                       <select
                         className={s.viewportBarSelect}
-                        value={preview.layer}
+                        value={requestedPreviewLayer}
                         onChange={(e) => void updatePreview("/layer", { layer: Number(e.target.value) })}
-                        disabled={previewBusy || preview.all_layers}
+                        disabled={previewBusy || requestedPreviewAllLayers}
                       >
                         {Array.from({ length: solverGrid[2] }, (_, i) => (
                           <option key={i} value={i}>{i}</option>
@@ -2001,7 +2024,7 @@ export default function RunControlRoom() {
                       <label className={s.viewportToggle}>
                         <input
                           type="checkbox"
-                          checked={preview.all_layers}
+                          checked={requestedPreviewAllLayers}
                           onChange={(e) =>
                             void updatePreview("/allLayers", { allLayers: e.target.checked })
                           }
@@ -2075,7 +2098,11 @@ export default function RunControlRoom() {
               `Preview auto-scaled to ${previewGrid[0]}×${previewGrid[1]}×${previewGrid[2]}`}
           </div>
         )}
-        {previewMessage && <div className={s.previewStatus}>{previewMessage}</div>}
+        {(previewMessage || previewIsStale) && (
+          <div className={s.previewStatus}>
+            {previewMessage ?? "Preview update pending"}
+          </div>
+        )}
 
         {/* Canvas area */}
         <div className={s.viewportCanvas}>

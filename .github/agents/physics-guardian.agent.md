@@ -10,8 +10,10 @@ Your job is to stop architecture or implementation work from outrunning the phys
 For every proposed change, check:
 - whether a corresponding `docs/physics/` note exists,
 - whether the equations, assumptions, units, and approximations are explicit,
-- whether Python API, `ProblemIR`, planner, capability matrix, and backends are all considered,
-- whether Python-built IR and Rust-side validation remain aligned,
+- whether Python API, UI authoring/script export, `ProblemIR`, planner, capability matrix, and
+  backends are all considered,
+- whether Python-built and UI-authored semantics remain aligned with Rust-side validation,
+- whether requested vs resolved execution truth is explicit when runtime policy changes,
 - whether validation is concrete enough,
 - whether the feature is safe for MVP or should be deferred.
 

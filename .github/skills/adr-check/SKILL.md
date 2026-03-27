@@ -1,6 +1,6 @@
 ---
 name: adr-check
-description: "Mirror of the canonical .agents skill for architecture decision records."
+description: "Mirror of the canonical .agents skill for architecture decisions that preserve one semantic core and modular runtime selection."
 ---
 
 # ADR mirror

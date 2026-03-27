@@ -1,6 +1,6 @@
 ---
 name: capability-matrix-check
-description: "Mirror of the canonical .agents skill for capability-matrix and backend legality changes."
+description: "Mirror of the canonical .agents skill for capability-matrix, backend/device legality, and requested-vs-resolved execution changes."
 ---
 
 # Capability matrix mirror

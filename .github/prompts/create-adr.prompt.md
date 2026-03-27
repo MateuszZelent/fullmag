@@ -10,6 +10,11 @@ Include:
 - context,
 - decision,
 - consequences,
+- affected invariants,
 - what is explicitly deferred from MVP.
 
-Cross-check the ADR with `AGENTS.md`, existing ADRs, `docs/specs/problem-ir-v0.md`, and relevant notes in `docs/physics/`.
+Cross-check the ADR with `AGENTS.md`, existing ADRs,
+`docs/specs/fullmag-application-architecture-v2.md`,
+`docs/specs/session-run-api-v1.md`,
+`docs/specs/runtime-distribution-and-managed-backends-v1.md`,
+and relevant notes in `docs/physics/`.

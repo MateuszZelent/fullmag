@@ -9,7 +9,7 @@ description: "Use when adding or modifying a public class in the fullmag embedde
 
 Keep the chain coherent:
 
-`docs/physics -> fullmag Python API -> ProblemIR -> planner/capability matrix`
+`docs/physics -> fullmag Python API and UI export shapes -> ProblemIR -> planner/capability/session`
 
 ## Preconditions
 
@@ -21,12 +21,13 @@ Keep the chain coherent:
 1. Add or update the public class in `packages/fullmag-py/src/fullmag/`
 2. Validate parameters and preserve type hints
 3. Provide `to_ir()` or equivalent canonical serialization
-4. Export the class from the public `fullmag` namespace
-5. Add or update tests
-6. Add or update an example when the public surface changes
+4. Keep the class shape stable for canonical script export and UI round-trip use when relevant
+5. Export the class from the public `fullmag` namespace
+6. Add or update tests, including serialization or round-trip coverage when the public surface changes
+7. Add or update an example when the public surface changes
 
 ## Naming rules
 
 - Classes: PascalCase
 - Parameters: snake_case
-- Public names should map cleanly onto IR terms and physics notes
+- Public names should map cleanly onto IR terms, physics notes, and UI vocabulary

@@ -47,6 +47,8 @@ typedef enum {
 
 typedef enum {
     FULLMAG_FDM_INTEGRATOR_HEUN = 1,
+    FULLMAG_FDM_INTEGRATOR_DP45 = 2,
+    FULLMAG_FDM_INTEGRATOR_ABM3 = 3,
 } fullmag_fdm_integrator;
 
 typedef enum {
@@ -114,6 +116,12 @@ typedef struct {
     /* Initial m in AoS layout: [m0x, m0y, m0z, m1x, m1y, m1z, ...] */
     const double              *initial_magnetization_xyz;
     uint64_t                   initial_magnetization_len; /* = 3 * cell_count */
+
+    /* Adaptive step configuration (DP45 only) */
+    double                     adaptive_max_error;   /* 0 → use default 1e-5 */
+    double                     adaptive_dt_min;      /* 0 → use default 1e-18 */
+    double                     adaptive_dt_max;      /* 0 → use default 1e-10 */
+    double                     adaptive_headroom;    /* 0 → use default 0.8 */
 } fullmag_fdm_plan_desc;
 
 /* ── Per-step diagnostics ── */
@@ -163,7 +171,8 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     const fullmag_fdm_plan_desc *plan);
 
 /**
- * Execute one Heun time step of length dt_seconds.
+ * Execute one time step of length dt_seconds using the configured integrator.
+ * For DP45: dt_seconds is the initial step size; adaptive stepping may adjust it.
  * On success, writes diagnostics to *out_stats and returns FULLMAG_FDM_OK.
  */
 int fullmag_fdm_backend_step(
@@ -179,6 +188,23 @@ int fullmag_fdm_backend_step(
 int fullmag_fdm_backend_copy_field_f64(
     fullmag_fdm_backend   *handle,
     fullmag_fdm_observable observable,
+    double                *out_xyz,
+    uint64_t               out_len);
+
+/**
+ * Copy a downsampled preview of a field observable from device to host as f64.
+ * The preview grid is defined by preview_nx * preview_ny * preview_nz bins.
+ * For each preview bin the backend returns the arithmetic average of the source
+ * cells that fall into that bin, matching the runner/UI preview semantics.
+ */
+int fullmag_fdm_backend_copy_field_preview_f64(
+    fullmag_fdm_backend   *handle,
+    fullmag_fdm_observable observable,
+    uint32_t               preview_nx,
+    uint32_t               preview_ny,
+    uint32_t               preview_nz,
+    uint32_t               z_origin,
+    uint32_t               z_stride,
     double                *out_xyz,
     uint64_t               out_len);
 

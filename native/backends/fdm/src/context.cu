@@ -146,6 +146,72 @@ static void free_reduction_scratch(Context &ctx) {
     ctx.reduction_scratch_len = 0;
 }
 
+template <typename Scalar>
+__global__ void downsample_field_preview_to_f64_kernel(
+    const Scalar *field_x,
+    const Scalar *field_y,
+    const Scalar *field_z,
+    uint32_t full_x,
+    uint32_t full_y,
+    uint32_t full_z,
+    uint32_t preview_x,
+    uint32_t preview_y,
+    uint32_t preview_z,
+    uint32_t z_origin,
+    uint32_t z_stride,
+    double *out_xyz)
+{
+    uint64_t preview_count =
+        static_cast<uint64_t>(preview_x) * preview_y * preview_z;
+    uint64_t preview_index =
+        static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (preview_index >= preview_count) {
+        return;
+    }
+
+    uint32_t px = static_cast<uint32_t>(preview_index % preview_x);
+    uint32_t py = static_cast<uint32_t>((preview_index / preview_x) % preview_y);
+    uint32_t pz = static_cast<uint32_t>(preview_index / (static_cast<uint64_t>(preview_x) * preview_y));
+
+    uint32_t x_start = static_cast<uint32_t>((static_cast<uint64_t>(px) * full_x) / preview_x);
+    uint32_t x_end = static_cast<uint32_t>((static_cast<uint64_t>(px + 1) * full_x) / preview_x);
+    if (x_end <= x_start) x_end = x_start + 1;
+    if (x_end > full_x) x_end = full_x;
+
+    uint32_t y_start = static_cast<uint32_t>((static_cast<uint64_t>(py) * full_y) / preview_y);
+    uint32_t y_end = static_cast<uint32_t>((static_cast<uint64_t>(py + 1) * full_y) / preview_y);
+    if (y_end <= y_start) y_end = y_start + 1;
+    if (y_end > full_y) y_end = full_y;
+
+    uint32_t z_start = z_origin + pz * z_stride;
+    if (z_start >= full_z) z_start = full_z - 1;
+    uint32_t z_end = z_origin + (pz + 1) * z_stride;
+    if (z_end <= z_start) z_end = z_start + 1;
+    if (z_end > full_z) z_end = full_z;
+
+    double accum_x = 0.0;
+    double accum_y = 0.0;
+    double accum_z = 0.0;
+    double count = 0.0;
+
+    for (uint32_t z = z_start; z < z_end; ++z) {
+        for (uint32_t y = y_start; y < y_end; ++y) {
+            for (uint32_t x = x_start; x < x_end; ++x) {
+                uint64_t index =
+                    (static_cast<uint64_t>(z) * full_y + y) * full_x + x;
+                accum_x += static_cast<double>(field_x[index]);
+                accum_y += static_cast<double>(field_y[index]);
+                accum_z += static_cast<double>(field_z[index]);
+                count += 1.0;
+            }
+        }
+    }
+
+    out_xyz[preview_index * 3 + 0] = accum_x / count;
+    out_xyz[preview_index * 3 + 1] = accum_y / count;
+    out_xyz[preview_index * 3 + 2] = accum_z / count;
+}
+
 static bool alloc_fft_workspace(Context &ctx) {
     if (!ctx.enable_demag) {
         return true;
@@ -245,6 +311,27 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_vector_field(ctx, ctx.k1))   return false;
     if (!alloc_vector_field(ctx, ctx.tmp))  return false;
     if (!alloc_vector_field(ctx, ctx.work)) return false;
+
+    // DP45: allocate 5 extra stage buffers + FSAL
+    if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45) {
+        if (!alloc_vector_field(ctx, ctx.k2)) return false;
+        if (!alloc_vector_field(ctx, ctx.k3)) return false;
+        if (!alloc_vector_field(ctx, ctx.k4)) return false;
+        if (!alloc_vector_field(ctx, ctx.k5)) return false;
+        if (!alloc_vector_field(ctx, ctx.k6)) return false;
+        if (!alloc_vector_field(ctx, ctx.k_fsal)) return false;
+        ctx.fsal_valid = false;
+    }
+
+    // ABM3: allocate 3 history buffers
+    if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_ABM3) {
+        if (!alloc_vector_field(ctx, ctx.abm_f_n))  return false;
+        if (!alloc_vector_field(ctx, ctx.abm_f_n1)) return false;
+        if (!alloc_vector_field(ctx, ctx.abm_f_n2)) return false;
+        ctx.abm_startup = 0;
+        ctx.abm_last_dt = 0.0;
+    }
+
     if (!alloc_fft_workspace(ctx)) return false;
     if (!alloc_demag_kernel(ctx)) return false;
 
@@ -276,6 +363,17 @@ void context_free_device(Context &ctx) {
     free_vector_field(ctx.k1);
     free_vector_field(ctx.tmp);
     free_vector_field(ctx.work);
+    // DP45 stage buffers
+    free_vector_field(ctx.k2);
+    free_vector_field(ctx.k3);
+    free_vector_field(ctx.k4);
+    free_vector_field(ctx.k5);
+    free_vector_field(ctx.k6);
+    free_vector_field(ctx.k_fsal);
+    // ABM3 history buffers
+    free_vector_field(ctx.abm_f_n);
+    free_vector_field(ctx.abm_f_n1);
+    free_vector_field(ctx.abm_f_n2);
     free_fft_workspace(ctx);
     free_demag_kernel(ctx);
     free_active_mask(ctx);
@@ -478,6 +576,165 @@ bool context_download_field_f64(
             out_xyz[3 * i + 1] = static_cast<double>(hy[i]);
             out_xyz[3 * i + 2] = static_cast<double>(hz[i]);
         }
+    }
+
+    return true;
+}
+
+bool context_download_field_preview_f64(
+    const Context &ctx,
+    fullmag_fdm_observable observable,
+    uint32_t preview_nx,
+    uint32_t preview_ny,
+    uint32_t preview_nz,
+    uint32_t z_origin,
+    uint32_t z_stride,
+    double *out_xyz,
+    uint64_t out_len)
+{
+    if (!out_xyz || preview_nx == 0 || preview_ny == 0 || preview_nz == 0 || z_stride == 0) {
+        return false;
+    }
+
+    uint64_t preview_count =
+        static_cast<uint64_t>(preview_nx) * preview_ny * preview_nz;
+    if (out_len != preview_count * 3) {
+        return false;
+    }
+    if (z_origin >= ctx.nz) {
+        return false;
+    }
+
+    if (preview_nx == ctx.nx && preview_ny == ctx.ny && preview_nz == ctx.nz
+        && z_origin == 0 && z_stride == 1)
+    {
+        return context_download_field_f64(ctx, observable, out_xyz, out_len);
+    }
+
+    const DeviceVectorField *field = nullptr;
+    switch (observable) {
+        case FULLMAG_FDM_OBSERVABLE_M:
+            field = &ctx.m;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_EX:
+            field = &ctx.h_ex;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
+            field = &ctx.h_demag;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_EFF:
+            field = &ctx.work;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_EXT: {
+            for (uint32_t pz = 0; pz < preview_nz; ++pz) {
+                uint32_t z_start = z_origin + pz * z_stride;
+                if (z_start >= ctx.nz) z_start = ctx.nz - 1;
+                uint32_t z_end = z_origin + (pz + 1) * z_stride;
+                if (z_end <= z_start) z_end = z_start + 1;
+                if (z_end > ctx.nz) z_end = ctx.nz;
+                for (uint32_t py = 0; py < preview_ny; ++py) {
+                    uint32_t y_start = static_cast<uint32_t>(
+                        (static_cast<uint64_t>(py) * ctx.ny) / preview_ny);
+                    uint32_t y_end = static_cast<uint32_t>(
+                        (static_cast<uint64_t>(py + 1) * ctx.ny) / preview_ny);
+                    if (y_end <= y_start) y_end = y_start + 1;
+                    if (y_end > ctx.ny) y_end = ctx.ny;
+                    for (uint32_t px = 0; px < preview_nx; ++px) {
+                        uint32_t x_start = static_cast<uint32_t>(
+                            (static_cast<uint64_t>(px) * ctx.nx) / preview_nx);
+                        uint32_t x_end = static_cast<uint32_t>(
+                            (static_cast<uint64_t>(px + 1) * ctx.nx) / preview_nx);
+                        if (x_end <= x_start) x_end = x_start + 1;
+                        if (x_end > ctx.nx) x_end = ctx.nx;
+
+                        double active_count = 0.0;
+                        double count = 0.0;
+                        for (uint32_t z = z_start; z < z_end; ++z) {
+                            for (uint32_t y = y_start; y < y_end; ++y) {
+                                for (uint32_t x = x_start; x < x_end; ++x) {
+                                    uint64_t index =
+                                        (static_cast<uint64_t>(z) * ctx.ny + y) * ctx.nx + x;
+                                    bool is_active =
+                                        !ctx.has_active_mask || ctx.active_mask_host[index] != 0;
+                                    active_count += is_active ? 1.0 : 0.0;
+                                    count += 1.0;
+                                }
+                            }
+                        }
+
+                        uint64_t preview_index =
+                            (static_cast<uint64_t>(pz) * preview_ny + py) * preview_nx + px;
+                        double scale =
+                            (ctx.has_external_field && count > 0.0) ? (active_count / count) : 0.0;
+                        out_xyz[preview_index * 3 + 0] = ctx.external_field[0] * scale;
+                        out_xyz[preview_index * 3 + 1] = ctx.external_field[1] * scale;
+                        out_xyz[preview_index * 3 + 2] = ctx.external_field[2] * scale;
+                    }
+                }
+            }
+            return true;
+        }
+        default:
+            return false;
+    }
+
+    double *device_out = nullptr;
+    cudaError_t err =
+        cudaMalloc(reinterpret_cast<void **>(&device_out), preview_count * 3 * sizeof(double));
+    if (err != cudaSuccess) {
+        const_cast<Context &>(ctx).last_error = "cudaMalloc(preview_out) failed";
+        set_cuda_error(const_cast<Context &>(ctx), "cudaMalloc(preview_out)", err);
+        return false;
+    }
+
+    constexpr uint32_t threads_per_block = 256;
+    uint32_t blocks = static_cast<uint32_t>(
+        (preview_count + threads_per_block - 1) / threads_per_block);
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        downsample_field_preview_to_f64_kernel<<<blocks, threads_per_block>>>(
+            reinterpret_cast<const double *>(field->x),
+            reinterpret_cast<const double *>(field->y),
+            reinterpret_cast<const double *>(field->z),
+            ctx.nx,
+            ctx.ny,
+            ctx.nz,
+            preview_nx,
+            preview_ny,
+            preview_nz,
+            z_origin,
+            z_stride,
+            device_out);
+    } else {
+        downsample_field_preview_to_f64_kernel<<<blocks, threads_per_block>>>(
+            reinterpret_cast<const float *>(field->x),
+            reinterpret_cast<const float *>(field->y),
+            reinterpret_cast<const float *>(field->z),
+            ctx.nx,
+            ctx.ny,
+            ctx.nz,
+            preview_nx,
+            preview_ny,
+            preview_nz,
+            z_origin,
+            z_stride,
+            device_out);
+    }
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        set_cuda_error(const_cast<Context &>(ctx), "downsample_field_preview_to_f64_kernel", err);
+        cudaFree(device_out);
+        return false;
+    }
+    err = cudaMemcpy(
+        out_xyz,
+        device_out,
+        preview_count * 3 * sizeof(double),
+        cudaMemcpyDeviceToHost);
+    cudaFree(device_out);
+    if (err != cudaSuccess) {
+        set_cuda_error(const_cast<Context &>(ctx), "cudaMemcpy(preview_out)", err);
+        return false;
     }
 
     return true;

@@ -19,6 +19,8 @@ using namespace fullmag::fdm;
 namespace fullmag { namespace fdm {
 extern void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 } }
 
@@ -115,6 +117,12 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     ctx->external_field[1] = plan->external_field_am[1];
     ctx->external_field[2] = plan->external_field_am[2];
     ctx->active_cell_count = ctx->cell_count;
+
+    // Adaptive step config (DP45)
+    ctx->adaptive_max_error = plan->adaptive_max_error > 0 ? plan->adaptive_max_error : 1e-5;
+    ctx->adaptive_dt_min    = plan->adaptive_dt_min > 0    ? plan->adaptive_dt_min    : 1e-18;
+    ctx->adaptive_dt_max    = plan->adaptive_dt_max > 0    ? plan->adaptive_dt_max    : 1e-10;
+    ctx->adaptive_headroom  = plan->adaptive_headroom > 0  ? plan->adaptive_headroom  : 0.8;
 
     // Validate
     if (ctx->cell_count == 0) {
@@ -243,15 +251,27 @@ int fullmag_fdm_backend_step(
     auto *ctx = reinterpret_cast<Context *>(handle);
 
     if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-        launch_heun_step_fp64(*ctx, dt_seconds, out_stats);
+        switch (ctx->integrator) {
+            case FULLMAG_FDM_INTEGRATOR_DP45:
+                launch_dp45_step_fp64(*ctx, dt_seconds, out_stats);
+                break;
+            case FULLMAG_FDM_INTEGRATOR_ABM3:
+                launch_abm3_step_fp64(*ctx, dt_seconds, out_stats);
+                break;
+            case FULLMAG_FDM_INTEGRATOR_HEUN:
+            default:
+                launch_heun_step_fp64(*ctx, dt_seconds, out_stats);
+                break;
+        }
     } else {
+        // fp32: only Heun currently supported
         launch_heun_step_fp32(*ctx, dt_seconds, out_stats);
     }
 
     // Check for CUDA errors
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        set_cuda_error(*ctx, "heun_step", err);
+        set_cuda_error(*ctx, "integrator_step", err);
         return FULLMAG_FDM_ERR_CUDA;
     }
 
@@ -286,6 +306,61 @@ int fullmag_fdm_backend_copy_field_f64(
     return FULLMAG_FDM_OK;
 #else
     (void)handle; (void)observable; (void)out_xyz; (void)out_len;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_copy_field_preview_f64(
+    fullmag_fdm_backend   *handle,
+    fullmag_fdm_observable observable,
+    uint32_t               preview_nx,
+    uint32_t               preview_ny,
+    uint32_t               preview_nz,
+    uint32_t               z_origin,
+    uint32_t               z_stride,
+    double                *out_xyz,
+    uint64_t               out_len)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_xyz || preview_nx == 0 || preview_ny == 0 || preview_nz == 0
+        || z_stride == 0)
+    {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    auto *ctx = reinterpret_cast<Context *>(handle);
+
+    uint64_t expected_len =
+        static_cast<uint64_t>(preview_nx) * preview_ny * preview_nz * 3;
+    if (out_len != expected_len) {
+        ctx->last_error = "preview out_len mismatch";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+
+    if (!context_download_field_preview_f64(
+            *ctx,
+            observable,
+            preview_nx,
+            preview_ny,
+            preview_nz,
+            z_origin,
+            z_stride,
+            out_xyz,
+            out_len))
+    {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)observable;
+    (void)preview_nx;
+    (void)preview_ny;
+    (void)preview_nz;
+    (void)z_origin;
+    (void)z_stride;
+    (void)out_xyz;
+    (void)out_len;
     return FULLMAG_FDM_ERR_CUDA;
 #endif
 }

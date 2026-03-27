@@ -13,18 +13,19 @@ Enforce the project rule: physics first, implementation second.
 
 - adding a new energy term, dynamics model, or numerical method,
 - changing equations, assumptions, or units,
-- changing backend interpretation or validation scope,
+- changing backend interpretation, execution-selection semantics, or validation scope,
 - changing shared problem semantics for physics-facing features.
 
 ## Required outputs
 
 1. A `docs/physics/<topic>.md` note based on `docs/physics/TEMPLATE.md`
 2. Governing equations, symbols, SI units, assumptions, and approximations
-3. Explicit FDM, FEM, and hybrid interpretation
-4. Python API and `ProblemIR` impact
-5. Planner and capability-matrix impact
-6. Validation strategy, observables, and tolerances
-7. Completeness checklist and deferred work
+3. Explicit FDM, FEM, CPU, GPU, and hybrid interpretation where relevant
+4. Python API, UI authoring, and script-export impact
+5. `ProblemIR` impact
+6. Planner, capability-matrix, and runtime-selection impact
+7. Validation strategy, observables, tolerances, and provenance expectations
+8. Completeness checklist and deferred work
 
 ## Blocker policy
 

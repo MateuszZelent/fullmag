@@ -1,6 +1,6 @@
 ---
 name: physics-publication
-description: "Mirror of the canonical .agents skill for publication-style physics notes before implementation."
+description: "Mirror of the canonical .agents skill for publication-style physics notes covering API, UI, IR, runtime-selection, and validation before implementation."
 ---
 
 # Physics publication mirror

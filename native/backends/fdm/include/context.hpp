@@ -68,9 +68,28 @@ struct Context {
     DeviceVectorField m;      // magnetization
     DeviceVectorField h_ex;   // exchange field
     DeviceVectorField h_demag;// demag field
-    DeviceVectorField k1;     // predictor RHS
-    DeviceVectorField tmp;    // predictor state
+    DeviceVectorField k1;     // RHS stage 1 (all integrators)
+    DeviceVectorField tmp;    // predictor state / scratch
     DeviceVectorField work;   // effective field / scratch
+
+    // --- DP45-specific stage buffers ---
+    DeviceVectorField k2, k3, k4, k5, k6;
+    DeviceVectorField k_fsal; // FSAL: k7 from prev accepted step = k1 for next
+    bool              fsal_valid = false;
+
+    // Adaptive step config (DP45)
+    double adaptive_max_error = 1e-5;
+    double adaptive_dt_min    = 1e-18;
+    double adaptive_dt_max    = 1e-10;
+    double adaptive_headroom  = 0.8;
+
+    // --- ABM3-specific history buffers ---
+    DeviceVectorField abm_f_n;       // RHS at step n
+    DeviceVectorField abm_f_n1;      // RHS at step n-1
+    DeviceVectorField abm_f_n2;      // RHS at step n-2
+    uint32_t          abm_startup = 0; // counts 0..3 Heun warmup steps
+    double            abm_last_dt = 0.0;
+
     uint8_t *active_mask = nullptr;
     uint32_t *region_mask = nullptr;
     double *reduction_scratch = nullptr;
@@ -130,6 +149,18 @@ bool context_upload_demag_kernel_spectra(
 bool context_download_field_f64(
     const Context &ctx,
     fullmag_fdm_observable observable,
+    double *out_xyz,
+    uint64_t out_len);
+
+/// Download a downsampled preview of a field observable from device to host.
+bool context_download_field_preview_f64(
+    const Context &ctx,
+    fullmag_fdm_observable observable,
+    uint32_t preview_nx,
+    uint32_t preview_ny,
+    uint32_t preview_nz,
+    uint32_t z_origin,
+    uint32_t z_stride,
     double *out_xyz,
     uint64_t out_len);
 

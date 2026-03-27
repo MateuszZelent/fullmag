@@ -207,6 +207,15 @@ pub(crate) fn build_grid_preview_field_from_plan(
     sampled: &[[f64; 3]],
     quantity: &str,
 ) -> LivePreviewField {
+    build_grid_preview_field_from_flat_plan(request, plan, flatten_vectors(sampled), quantity)
+}
+
+pub(crate) fn build_grid_preview_field_from_flat_plan(
+    request: &LivePreviewRequest,
+    plan: &GridPreviewPlan,
+    vector_field_values: Vec<f64>,
+    quantity: &str,
+) -> LivePreviewField {
     LivePreviewField {
         config_revision: request.revision,
         quantity: quantity.to_string(),
@@ -214,7 +223,7 @@ pub(crate) fn build_grid_preview_field_from_plan(
         spatial_kind: "grid".to_string(),
         preview_grid: plan.preview_grid,
         original_grid: plan.original_grid,
-        vector_field_values: flatten_vectors(sampled),
+        vector_field_values,
         x_chosen_size: plan.x_chosen_size,
         y_chosen_size: plan.y_chosen_size,
         applied_x_chosen_size: plan.applied_x_chosen_size,

@@ -12,7 +12,10 @@
 use fullmag_fdm_sys as ffi;
 
 #[cfg(feature = "cuda")]
-use crate::preview::{build_grid_preview_field, normalize_quantity_id};
+use crate::preview::{
+    build_grid_preview_field, build_grid_preview_field_from_flat_plan, normalize_quantity_id,
+    plan_grid_preview,
+};
 #[cfg(feature = "cuda")]
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError};
 #[cfg(feature = "cuda")]
@@ -276,16 +279,45 @@ impl NativeFdmBackend {
         request: &LivePreviewRequest,
         original_grid: [u32; 3],
     ) -> Result<LivePreviewField, RunError> {
-        let cell_count =
-            (original_grid[0] as usize) * (original_grid[1] as usize) * (original_grid[2] as usize);
-        let values = match normalize_quantity_id(&request.quantity) {
-            "H_ex" => self.copy_h_ex(cell_count)?,
-            "H_demag" => self.copy_h_demag(cell_count)?,
-            "H_ext" => self.copy_h_ext(cell_count)?,
-            "H_eff" => self.copy_h_eff(cell_count)?,
-            _ => self.copy_m(cell_count)?,
+        let plan = plan_grid_preview(request, original_grid);
+        let quantity = normalize_quantity_id(&request.quantity);
+        let preview_count = (plan.preview_grid[0] as usize)
+            * (plan.preview_grid[1] as usize)
+            * (plan.preview_grid[2] as usize);
+        if preview_count == 0 {
+            return Err(RunError {
+                message: "copy_field_preview planned an empty preview grid".to_string(),
+            });
+        }
+
+        let observable = match quantity {
+            "H_ex" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
+            "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
+            "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
+            "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
+            _ => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
         };
-        Ok(build_grid_preview_field(request, &values, original_grid))
+        let len = preview_count * 3;
+        let mut flat = vec![0.0f64; len];
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_copy_field_preview_f64(
+                self.handle as *mut _,
+                observable,
+                plan.preview_grid[0],
+                plan.preview_grid[1],
+                plan.preview_grid[2],
+                plan.z_origin,
+                plan.applied_layer_stride,
+                flat.as_mut_ptr(),
+                len as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("copy_field_preview failed"));
+        }
+        Ok(build_grid_preview_field_from_flat_plan(
+            request, &plan, flat, quantity,
+        ))
     }
 
     pub fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {

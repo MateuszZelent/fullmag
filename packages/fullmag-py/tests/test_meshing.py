@@ -11,7 +11,7 @@ import numpy as np
 import fullmag as fm
 from fullmag import _core as fullmag_core
 from fullmag.meshing.asset_pipeline import realize_fdm_grid_asset, realize_fem_mesh_asset
-from fullmag.meshing.gmsh_bridge import MeshData, _extract_gmsh_connectivity
+from fullmag.meshing.gmsh_bridge import MeshData, SizeFieldData, _extract_gmsh_connectivity
 from fullmag.meshing.quality import validate_mesh
 from fullmag.meshing.surface_assets import export_geometry_to_stl
 from fullmag.meshing.voxelization import VoxelMaskData, voxelize_geometry
@@ -329,6 +329,50 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertIsInstance(loaded, MeshData)
         np.testing.assert_allclose(mesh.nodes, loaded.nodes)
         np.testing.assert_array_equal(mesh.elements, loaded.elements)
+
+
+class SizeFieldDataTests(unittest.TestCase):
+    """Tests for the SizeFieldData dataclass (E5 adaptive remeshing)."""
+
+    def test_valid_construction(self) -> None:
+        coords = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float64)
+        h = np.array([0.1, 0.2, 0.15, 0.3], dtype=np.float64)
+        sf = SizeFieldData(node_coords=coords, h_values=h)
+        self.assertEqual(sf.node_coords.shape, (4, 3))
+        self.assertEqual(sf.h_values.shape, (4,))
+
+    def test_casts_to_float64(self) -> None:
+        coords = np.array([[0, 0, 0]], dtype=np.float32)
+        h = np.array([0.5], dtype=np.float32)
+        sf = SizeFieldData(node_coords=coords, h_values=h)
+        self.assertEqual(sf.node_coords.dtype, np.float64)
+        self.assertEqual(sf.h_values.dtype, np.float64)
+
+    def test_rejects_wrong_coords_shape(self) -> None:
+        with self.assertRaisesRegex(ValueError, "node_coords"):
+            SizeFieldData(
+                node_coords=np.array([[0, 0], [1, 0]]),
+                h_values=np.array([0.1, 0.2]),
+            )
+
+    def test_rejects_mismatched_lengths(self) -> None:
+        with self.assertRaisesRegex(ValueError, "h_values"):
+            SizeFieldData(
+                node_coords=np.array([[0, 0, 0], [1, 0, 0]]),
+                h_values=np.array([0.1]),
+            )
+
+    def test_rejects_nonpositive_h(self) -> None:
+        with self.assertRaisesRegex(ValueError, "positive"):
+            SizeFieldData(
+                node_coords=np.array([[0, 0, 0]]),
+                h_values=np.array([0.0]),
+            )
+        with self.assertRaisesRegex(ValueError, "positive"):
+            SizeFieldData(
+                node_coords=np.array([[0, 0, 0], [1, 0, 0]]),
+                h_values=np.array([0.1, -0.5]),
+            )
 
 
 if __name__ == "__main__":
