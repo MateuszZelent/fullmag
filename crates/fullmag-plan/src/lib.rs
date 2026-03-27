@@ -313,18 +313,37 @@ fn planned_study_controls(
     f64,
     Option<RelaxationControlIR>,
 ) {
-    let integrator = match problem.study.dynamics() {
-        fullmag_ir::DynamicsIR::Llg { integrator, .. } => {
-            if integrator == "heun" {
-                IntegratorChoice::Heun
-            } else {
+    // Parse user-specified integrator string → Option<IntegratorChoice>.
+    // "auto" resolves to None, which triggers per-study-kind default selection.
+    let user_integrator = match problem.study.dynamics() {
+        fullmag_ir::DynamicsIR::Llg { integrator, .. } => match integrator.as_str() {
+            "heun" => Some(IntegratorChoice::Heun),
+            "rk4" => Some(IntegratorChoice::Rk4),
+            "rk23" => Some(IntegratorChoice::Rk23),
+            "rk45" => Some(IntegratorChoice::Rk45),
+            "abm3" => Some(IntegratorChoice::Abm3),
+            "auto" => None,
+            other => {
                 errors.push(format!(
-                    "integrator '{}' is not supported; only 'heun' is available",
-                    integrator
+                    "integrator '{}' is not supported; use heun/rk4/rk23/rk45/abm3/auto",
+                    other
                 ));
-                IntegratorChoice::Heun
+                None
             }
-        }
+        },
+    };
+
+    // Resolve "auto" to the physics-optimal default per study kind.
+    // TimeEvolution → RK45 (mumax3's default: Dormand-Prince, 5th-order adaptive).
+    // Relaxation    → algorithm.default_integrator() (e.g. LlgOverdamped→RK23).
+    let integrator = match user_integrator {
+        Some(choice) => choice,
+        None => match &problem.study {
+            fullmag_ir::StudyIR::TimeEvolution { .. } => IntegratorChoice::Rk45,
+            fullmag_ir::StudyIR::Relaxation { algorithm, .. } => {
+                algorithm.default_integrator()
+            }
+        },
     };
 
     let fixed_timestep = match problem.study.dynamics() {

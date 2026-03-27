@@ -842,6 +842,21 @@ impl FemLlgProblem {
             .demag_transfer_cell_size_hint
             .unwrap_or_else(|| self.default_demag_transfer_cell_size_hint(bbox_min, bbox_max));
         let grid_desc = TransferGridDesc::from_bbox(bbox_min, bbox_max, requested)?;
+
+        // One-time diagnostic: warn about per-step FFT workspace allocation
+        {
+            use std::sync::Once;
+            static WARN: Once = Once::new();
+            WARN.call_once(|| {
+                eprintln!(
+                    "[fullmag::fem] PERF: Transfer-grid demag active — grid {}×{}×{} ({} cells). \
+                     FFT workspace is rebuilt per evaluation. Consider mesh-native demag for production workloads.",
+                    grid_desc.grid.nx, grid_desc.grid.ny, grid_desc.grid.nz,
+                    grid_desc.grid.cell_count()
+                );
+            });
+        }
+
         let rasterized =
             self.rasterize_magnetization_to_transfer_grid(magnetization, &grid_desc)?;
         if !rasterized.active_mask.iter().any(|is_active| *is_active) {

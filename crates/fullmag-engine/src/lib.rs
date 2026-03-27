@@ -26,6 +26,73 @@ pub const DEFAULT_GYROMAGNETIC_RATIO: f64 = 2.211e5;
 
 pub type Vector3 = [f64; 3];
 
+/// Structure-of-Arrays layout for 3D vector fields.
+///
+/// Stores `x`, `y`, `z` components in separate contiguous arrays —
+/// optimal for SIMD, FFT gather/scatter, and GPU upload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VectorFieldSoA {
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
+    pub z: Vec<f64>,
+}
+
+impl VectorFieldSoA {
+    /// Allocate zeroed buffers for `n` vectors.
+    pub fn zeros(n: usize) -> Self {
+        Self {
+            x: vec![0.0; n],
+            y: vec![0.0; n],
+            z: vec![0.0; n],
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.x.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.x.is_empty()
+    }
+
+    /// Convert from AoS `&[Vector3]` without allocation (writes into self).
+    pub fn scatter_from_aos(&mut self, aos: &[Vector3]) {
+        let n = aos.len();
+        debug_assert!(self.x.len() >= n);
+        for i in 0..n {
+            self.x[i] = aos[i][0];
+            self.y[i] = aos[i][1];
+            self.z[i] = aos[i][2];
+        }
+    }
+
+    /// Convert to AoS `Vec<Vector3>`.
+    pub fn gather_to_aos(&self) -> Vec<Vector3> {
+        let n = self.x.len();
+        let mut aos = Vec::with_capacity(n);
+        for i in 0..n {
+            aos.push([self.x[i], self.y[i], self.z[i]]);
+        }
+        aos
+    }
+
+    /// Convert to AoS into existing buffer (no allocation).
+    pub fn gather_into_aos(&self, aos: &mut [Vector3]) {
+        let n = self.x.len().min(aos.len());
+        for i in 0..n {
+            aos[i] = [self.x[i], self.y[i], self.z[i]];
+        }
+    }
+
+    /// Create from AoS `&[Vector3]` (allocating).
+    pub fn from_aos(aos: &[Vector3]) -> Self {
+        let n = aos.len();
+        let mut soa = Self::zeros(n);
+        soa.scatter_from_aos(aos);
+        soa
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineError {
     message: String,
@@ -766,6 +833,95 @@ impl IntegratorBuffers {
             m_stage: zero(),
             m0: zero(),
         }
+    }
+}
+
+/// Persistent solver session bundling all per-simulation resources.
+///
+/// This is the recommended production entry point for time-stepping loops.
+/// It bundles the problem definition, solution state, FFT workspace, and
+/// integrator scratch buffers into a single object, providing a simple
+/// `step()` method that avoids all per-step resource acquisition overhead.
+///
+/// # Example
+/// ```ignore
+/// let session = SolverSession::new(problem, initial_magnetization)?;
+/// for _ in 0..1000 {
+///     let report = session.step(dt)?;
+///     println!("t = {:.3e}  E = {:.6e}", report.time_seconds, report.total_energy_joules);
+/// }
+/// ```
+pub struct SolverSession {
+    problem: ExchangeLlgProblem,
+    state: ExchangeLlgState,
+    fft_ws: FftWorkspace,
+    bufs: IntegratorBuffers,
+    step_count: u64,
+}
+
+impl SolverSession {
+    /// Create a new solver session with the given problem and initial magnetization.
+    pub fn new(problem: ExchangeLlgProblem, magnetization: Vec<Vector3>) -> Result<Self> {
+        let state = ExchangeLlgState::new(problem.grid, magnetization)?;
+        let fft_ws = problem.create_workspace();
+        let bufs = problem.create_integrator_buffers();
+        Ok(Self {
+            problem,
+            state,
+            fft_ws,
+            bufs,
+            step_count: 0,
+        })
+    }
+
+    /// Advance the simulation by one time step.
+    ///
+    /// Uses the buffer-aware path for Heun/RK4, falling back to the
+    /// allocating path for adaptive integrators.
+    pub fn step(&mut self, dt: f64) -> Result<StepReport> {
+        let report = self.problem.step_with_buffers(
+            &mut self.state,
+            dt,
+            &mut self.fft_ws,
+            &mut self.bufs,
+        )?;
+        self.step_count += 1;
+        Ok(report)
+    }
+
+    /// Current magnetization.
+    pub fn magnetization(&self) -> &[Vector3] {
+        self.state.magnetization()
+    }
+
+    /// Current simulation time (seconds).
+    pub fn time(&self) -> f64 {
+        self.state.time_seconds
+    }
+
+    /// Number of steps taken so far.
+    pub fn step_count(&self) -> u64 {
+        self.step_count
+    }
+
+    /// Mutable access to the state (e.g. for external field changes).
+    pub fn state_mut(&mut self) -> &mut ExchangeLlgState {
+        &mut self.state
+    }
+
+    /// Immutable access to the state.
+    pub fn state(&self) -> &ExchangeLlgState {
+        &self.state
+    }
+
+    /// Immutable access to the problem.
+    pub fn problem(&self) -> &ExchangeLlgProblem {
+        &self.problem
+    }
+
+    /// Compute full observables at the current state.
+    pub fn observe(&mut self) -> EffectiveFieldObservables {
+        self.problem.observe_vectors_ws(self.state.magnetization(), &mut self.fft_ws)
     }
 }
 

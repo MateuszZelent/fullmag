@@ -18,7 +18,7 @@ use crate::relaxation::relaxation_converged;
 use crate::schedules::{collect_field_schedules, collect_scalar_schedules, is_due, OutputSchedule};
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
-    StateObservables, StepStats, StepUpdate,
+    StateObservables, StepAction, StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -42,7 +42,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         plan,
         until_seconds,
         outputs,
-        None::<(&[u32; 3], &mut dyn FnMut(StepUpdate))>,
+        None::<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     )
 }
 
@@ -50,7 +50,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_callback(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    on_step: &mut impl FnMut(StepUpdate),
+    on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
     execute_reference_fdm_multilayer_impl(
         plan,
@@ -64,7 +64,7 @@ fn execute_reference_fdm_multilayer_impl(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate))>,
+    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
 ) -> Result<ExecutedRun, RunError> {
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -76,14 +76,15 @@ fn execute_reference_fdm_multilayer_impl(
             message: "public multilayer FDM CPU runner supports only double precision".to_string(),
         });
     }
-    if plan.integrator != IntegratorChoice::Heun {
-        return Err(RunError {
-            message: "public multilayer FDM CPU runner currently supports only the heun integrator"
-                .to_string(),
-        });
-    }
+    let integrator = match plan.integrator {
+        IntegratorChoice::Heun => fullmag_engine::TimeIntegrator::Heun,
+        IntegratorChoice::Rk4 => fullmag_engine::TimeIntegrator::RK4,
+        IntegratorChoice::Rk23 => fullmag_engine::TimeIntegrator::RK23,
+        IntegratorChoice::Rk45 => fullmag_engine::TimeIntegrator::RK45,
+        IntegratorChoice::Abm3 => fullmag_engine::TimeIntegrator::ABM3,
+    };
 
-    let (contexts, mut states) = build_contexts_and_states(plan)?;
+    let (contexts, mut states) = build_contexts_and_states(plan, integrator)?;
     let demag_runtime = if plan.enable_demag {
         Some(build_multilayer_demag_runtime(plan)?)
     } else {
@@ -119,6 +120,7 @@ fn execute_reference_fdm_multilayer_impl(
     )?;
 
     let mut previous_total_energy = Some(initial_observables.total_energy);
+    let mut cancelled = false;
     while current_time(&states) < until_seconds {
         let dt_step = dt.min(until_seconds - current_time(&states));
         let wall_start = Instant::now();
@@ -158,7 +160,7 @@ fn execute_reference_fdm_multilayer_impl(
         )?;
 
         if let Some((grid, on_step)) = live.as_mut() {
-            on_step(StepUpdate {
+            let action = on_step(StepUpdate {
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
                 fem_mesh: None,
@@ -166,6 +168,13 @@ fn execute_reference_fdm_multilayer_impl(
                 preview_field: None,
                 finished: false,
             });
+            if action == StepAction::Stop {
+                cancelled = true;
+            }
+        }
+
+        if cancelled {
+            break;
         }
 
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
@@ -211,7 +220,7 @@ fn execute_reference_fdm_multilayer_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: RunStatus::Completed,
+            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
             steps,
             final_magnetization: flatten_layers(
                 &states
@@ -245,6 +254,7 @@ fn execute_reference_fdm_multilayer_impl(
 
 fn build_contexts_and_states(
     plan: &FdmMultilayerPlanIR,
+    integrator: fullmag_engine::TimeIntegrator,
 ) -> Result<(Vec<LayerContext>, Vec<ExchangeLlgState>), RunError> {
     let mut contexts = Vec::with_capacity(plan.layers.len());
     let mut states = Vec::with_capacity(plan.layers.len());
@@ -276,7 +286,7 @@ fn build_contexts_and_states(
         })?;
         let dynamics = LlgConfig::new(
             plan.gyromagnetic_ratio,
-            fullmag_engine::TimeIntegrator::Heun,
+            integrator,
         )
         .map_err(|error| RunError {
             message: format!("LLG for magnet '{}': {}", layer.magnet_name, error),

@@ -22,7 +22,7 @@ use crate::relaxation::relaxation_converged;
 use crate::schedules::{collect_field_schedules, collect_scalar_schedules, is_due, OutputSchedule};
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
-    StateObservables, StepStats, StepUpdate,
+    StateObservables, StepAction, StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -63,7 +63,7 @@ pub(crate) fn execute_cuda_fdm_multilayer(
         plan,
         until_seconds,
         outputs,
-        None::<(&[u32; 3], &mut dyn FnMut(StepUpdate))>,
+        None::<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     )
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_callback(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    on_step: &mut impl FnMut(StepUpdate),
+    on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
     execute_cuda_fdm_multilayer_impl(
         plan,
@@ -85,7 +85,7 @@ fn execute_cuda_fdm_multilayer_impl(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate))>,
+    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
 ) -> Result<ExecutedRun, RunError> {
     if !is_cuda_available() {
         return Err(RunError {
@@ -175,6 +175,7 @@ fn execute_cuda_fdm_multilayer_impl(
     )?;
 
     let mut previous_total_energy = Some(initial_observables.total_energy);
+    let mut cancelled = false;
     while current_time(&states) < until_seconds {
         let dt_step = dt.min(until_seconds - current_time(&states));
         let wall_start = Instant::now();
@@ -225,7 +226,7 @@ fn execute_cuda_fdm_multilayer_impl(
         )?;
 
         if let Some((grid, on_step)) = live.as_mut() {
-            on_step(StepUpdate {
+            let action = on_step(StepUpdate {
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
                 fem_mesh: None,
@@ -233,6 +234,13 @@ fn execute_cuda_fdm_multilayer_impl(
                 preview_field: None,
                 finished: false,
             });
+            if action == StepAction::Stop {
+                cancelled = true;
+            }
+        }
+
+        if cancelled {
+            break;
         }
 
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
@@ -283,7 +291,7 @@ fn execute_cuda_fdm_multilayer_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: RunStatus::Completed,
+            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
             steps,
             final_magnetization: flatten_layers(
                 &states
@@ -554,7 +562,7 @@ fn execute_native_stacked_cuda_multilayer(
     native: &NativeStackedCudaPlan,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate))>,
+    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
 ) -> Result<ExecutedRun, RunError> {
     let mut backend = NativeFdmBackend::create(&native.combined_plan)?;
     let device_info = backend.device_info().ok();
@@ -587,6 +595,7 @@ fn execute_native_stacked_cuda_multilayer(
 
     let mut previous_total_energy = Some(initial_observables.total_energy);
     let mut latest_stats: Option<StepStats> = None;
+    let mut cancelled = false;
     while latest_stats.as_ref().map_or(0.0, |stats| stats.time) < until_seconds {
         let current_time = latest_stats.as_ref().map_or(0.0, |stats| stats.time);
         let dt_step = dt.min(until_seconds - current_time);
@@ -628,7 +637,7 @@ fn execute_native_stacked_cuda_multilayer(
                 &mut field_snapshots,
             )?;
             if let Some((_, on_step)) = live.as_mut() {
-                on_step(StepUpdate {
+                let action = on_step(StepUpdate {
                     stats: stats.clone(),
                     grid: native.global_grid,
                     fem_mesh: None,
@@ -636,9 +645,12 @@ fn execute_native_stacked_cuda_multilayer(
                     preview_field: None,
                     finished: false,
                 });
+                if action == StepAction::Stop {
+                    cancelled = true;
+                }
             }
         } else if let Some((_, on_step)) = live.as_mut() {
-            on_step(StepUpdate {
+            let action = on_step(StepUpdate {
                 stats: stats.clone(),
                 grid: native.global_grid,
                 fem_mesh: None,
@@ -646,6 +658,13 @@ fn execute_native_stacked_cuda_multilayer(
                 preview_field: None,
                 finished: false,
             });
+            if action == StepAction::Stop {
+                cancelled = true;
+            }
+        }
+
+        if cancelled {
+            break;
         }
 
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
@@ -686,7 +705,7 @@ fn execute_native_stacked_cuda_multilayer(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: RunStatus::Completed,
+            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
             steps,
             final_magnetization: final_observables.magnetization.clone(),
         },

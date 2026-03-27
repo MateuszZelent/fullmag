@@ -1708,6 +1708,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 state.latest_scalar_row = Some(scalar_row_from_update(&adjusted));
                             });
                         }
+                        fullmag_runner::StepAction::Continue
                     },
                 )
             } else {
@@ -1766,6 +1767,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 state.latest_scalar_row = Some(scalar_row_from_update(&adjusted));
                             });
                         }
+                        fullmag_runner::StepAction::Continue
                     },
                 )
             }
@@ -1955,6 +1957,12 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 continue;
             };
 
+            // Pause just returns to awaiting_command without closing
+            if command.kind == "pause" {
+                live_workspace.push_log("system", "Paused — awaiting next command");
+                continue;
+            }
+
             let Some(mut stage) =
                 (match build_interactive_command_stage(&interactive_template_ir, &command) {
                     Ok(stage) => stage,
@@ -2078,6 +2086,17 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         Some(scalar_row_from_update(&adjusted));
                                 });
                             }
+
+                            // Poll for stop commands every 100 steps
+                            if s.step % 100 == 0 {
+                                if let Ok(Some(cmd)) = next_current_live_command() {
+                                    if cmd.kind == "stop" || cmd.kind == "close" {
+                                        eprintln!("interactive: received '{}' command — cancelling stage", cmd.kind);
+                                        return fullmag_runner::StepAction::Stop;
+                                    }
+                                }
+                            }
+                            fullmag_runner::StepAction::Continue
                         },
                     )
                 } else {
@@ -2124,6 +2143,17 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         Some(scalar_row_from_update(&adjusted));
                                 });
                             }
+
+                            // Poll for stop commands every 100 steps
+                            if s.step % 100 == 0 {
+                                if let Ok(Some(cmd)) = next_current_live_command() {
+                                    if cmd.kind == "stop" || cmd.kind == "close" {
+                                        eprintln!("interactive: received '{}' command — cancelling stage", cmd.kind);
+                                        return fullmag_runner::StepAction::Stop;
+                                    }
+                                }
+                            }
+                            fullmag_runner::StepAction::Continue
                         },
                     )
                 }
@@ -2174,6 +2204,59 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     continue;
                 }
             };
+
+            // Handle mid-stage cancellation: preserve partial state, return to awaiting_command
+            if stage_result.status == fullmag_runner::RunStatus::Cancelled {
+                let offset_steps =
+                    offset_step_stats(&stage_result.steps, step_offset, time_offset);
+                if let Some(last) = offset_steps.last() {
+                    step_offset = last.step;
+                    time_offset = last.time;
+                }
+                aggregated_steps.extend(offset_steps);
+                continuation_magnetization = Some(stage_result.final_magnetization);
+                interactive_stage_index += 1;
+
+                let cancelled_at_unix_ms = unix_time_millis()?;
+                live_workspace.update(|state| {
+                    state.session = build_session_manifest(
+                        &session_id,
+                        &run_id,
+                        "awaiting_command",
+                        interactive_requested,
+                        &script_path,
+                        &final_problem_name,
+                        backend_target_name(final_requested_backend),
+                        execution_mode_name(final_execution_mode),
+                        execution_precision_name(final_precision),
+                        &artifact_dir,
+                        started_at_unix_ms,
+                        cancelled_at_unix_ms,
+                        plan_summary_json(&current_plan_summary),
+                    );
+                    state.run = run_manifest_from_steps(
+                        &run_id,
+                        &session_id,
+                        "awaiting_command",
+                        &artifact_dir,
+                        &aggregated_steps,
+                    );
+                    set_live_state_status(
+                        &mut state.live_state,
+                        "awaiting_command",
+                        Some(false),
+                    );
+                });
+                eprintln!("interactive command {} cancelled by user", command.kind);
+                live_workspace.push_log(
+                    "warning",
+                    format!(
+                        "Interactive command {} cancelled — partial results preserved",
+                        command.kind,
+                    ),
+                );
+                continue;
+            }
 
             if !use_live_callback {
                 let grid = match &execution_plan.backend_plan {
@@ -2700,7 +2783,8 @@ fn build_interactive_command_stage(
     command: &SessionCommand,
 ) -> Result<Option<ResolvedScriptStage>> {
     match command.kind.as_str() {
-        "close" => Ok(None),
+        "close" | "stop" => Ok(None),
+        "pause" => Ok(None),
         "run" => {
             let until_seconds = command
                 .until_seconds

@@ -149,7 +149,18 @@ impl NativeFemBackend {
             fe_order: plan.fe_order,
             hmax: plan.hmax,
             precision,
-            integrator: ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_HEUN,
+            integrator: match plan.integrator {
+                fullmag_ir::IntegratorChoice::Heun => {
+                    ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_HEUN
+                }
+                other => {
+                    eprintln!(
+                        "native FEM backend only supports Heun; ignoring {:?}, falling back to Heun",
+                        other
+                    );
+                    ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_HEUN
+                }
+            },
             enable_exchange: if plan.enable_exchange { 1 } else { 0 },
             enable_demag: if plan.enable_demag { 1 } else { 0 },
             has_external_field: if plan.external_field.is_some() { 1 } else { 0 },

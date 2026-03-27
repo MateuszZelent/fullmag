@@ -1180,6 +1180,20 @@ impl RelaxationAlgorithmIR {
             RelaxationAlgorithmIR::TangentPlaneImplicit => "tangent_plane_implicit",
         }
     }
+
+    /// Physics-optimal default integrator for each relaxation algorithm.
+    ///
+    /// - `LlgOverdamped` / `ProjectedGradientBb` / `NonlinearCg` → RK23
+    ///   (mumax3 Relax pattern: cheap 3rd-order adaptive, fast overdamped convergence)
+    /// - `TangentPlaneImplicit` → Heun (FEM implicit; Heun for explicit sub-steps)
+    pub fn default_integrator(self) -> IntegratorChoice {
+        match self {
+            Self::LlgOverdamped
+            | Self::ProjectedGradientBb
+            | Self::NonlinearCg => IntegratorChoice::Rk23,
+            Self::TangentPlaneImplicit => IntegratorChoice::Heun,
+        }
+    }
 }
 
 fn validate_unique_names<'a>(

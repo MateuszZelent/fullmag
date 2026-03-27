@@ -33,7 +33,7 @@ use crate::schedules::{
 };
 #[cfg(all(feature = "fem-gpu", not(feature = "cuda")))]
 use crate::schedules::{collect_field_schedules, collect_scalar_schedules};
-use crate::types::{ExecutedRun, LivePreviewRequest, LiveStepConsumer, RunError, StepUpdate};
+use crate::types::{ExecutedRun, LivePreviewRequest, LiveStepConsumer, RunError, StepAction, StepUpdate};
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::types::{ExecutionProvenance, FieldSnapshot, RunResult, RunStatus, StepStats};
 
@@ -309,7 +309,7 @@ pub(crate) fn execute_fem_with_callback(
     until_seconds: f64,
     outputs: &[OutputIR],
     field_every_n: u64,
-    on_step: &mut impl FnMut(StepUpdate),
+    on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
     match engine {
         FemEngine::CpuReference => fem_reference::execute_reference_fem_with_callback(
@@ -340,7 +340,7 @@ pub(crate) fn execute_fem_with_live_preview(
     outputs: &[OutputIR],
     field_every_n: u64,
     preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
-    on_step: &mut impl FnMut(StepUpdate),
+    on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
     match engine {
         FemEngine::CpuReference => fem_reference::execute_reference_fem_with_live_preview(
@@ -373,7 +373,7 @@ pub(crate) fn execute_fdm_with_callback(
     outputs: &[OutputIR],
     grid: [u32; 3],
     field_every_n: u64,
-    on_step: &mut impl FnMut(StepUpdate),
+    on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
     match engine {
         FdmEngine::CpuReference => cpu_reference::execute_reference_fdm_with_callback(
@@ -406,7 +406,7 @@ pub(crate) fn execute_fdm_with_live_preview(
     grid: [u32; 3],
     field_every_n: u64,
     preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
-    on_step: &mut impl FnMut(StepUpdate),
+    on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
     match engine {
         FdmEngine::CpuReference => cpu_reference::execute_reference_fdm_with_live_preview(
@@ -437,7 +437,7 @@ pub(crate) fn execute_fdm_multilayer_with_callback(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    on_step: &mut impl FnMut(StepUpdate),
+    on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
     match engine {
         FdmEngine::CpuReference => {
@@ -516,6 +516,7 @@ fn execute_cuda_fdm_impl(
     let mut current_time = 0.0;
     let mut previous_total_energy: Option<f64> = None;
     let mut last_preview_revision: Option<u64> = None;
+    let mut cancelled = false;
     while current_time < until_seconds {
         let dt_step = dt.min(until_seconds - current_time);
         let stats = backend.step(dt_step)?;
@@ -546,7 +547,7 @@ fn execute_cuda_fdm_impl(
             } else {
                 None
             };
-            (live.on_step)(StepUpdate {
+            let action = (live.on_step)(StepUpdate {
                 stats: stats.clone(),
                 grid: live.grid,
                 fem_mesh: None,
@@ -554,6 +555,12 @@ fn execute_cuda_fdm_impl(
                 preview_field,
                 finished: false,
             });
+            if action == StepAction::Stop {
+                cancelled = true;
+            }
+        }
+        if cancelled {
+            break;
         }
         record_cuda_due_outputs(
             &backend,
@@ -594,7 +601,7 @@ fn execute_cuda_fdm_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: RunStatus::Completed,
+            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
             steps,
             final_magnetization,
         },
@@ -662,6 +669,7 @@ fn execute_native_fem_impl(
     let mut current_time = 0.0;
     let mut previous_total_energy: Option<f64> = None;
     let mut last_preview_revision: Option<u64> = None;
+    let mut cancelled = false;
     while current_time < until_seconds {
         let dt_step = dt.min(until_seconds - current_time);
         let stats = backend.step(dt_step)?;
@@ -692,7 +700,7 @@ fn execute_native_fem_impl(
             } else {
                 None
             };
-            (live.on_step)(StepUpdate {
+            let action = (live.on_step)(StepUpdate {
                 stats: stats.clone(),
                 grid: live.grid,
                 fem_mesh: Some(crate::types::FemMeshPayload {
@@ -704,6 +712,12 @@ fn execute_native_fem_impl(
                 preview_field,
                 finished: false,
             });
+            if action == StepAction::Stop {
+                cancelled = true;
+            }
+        }
+        if cancelled {
+            break;
         }
         if default_scalar_trace || scalar_schedules.is_empty() {
             steps.push(stats);
@@ -767,7 +781,7 @@ fn execute_native_fem_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: RunStatus::Completed,
+            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
             steps,
             final_magnetization,
         },

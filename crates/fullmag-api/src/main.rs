@@ -766,6 +766,7 @@ async fn start_run(
             10, // send magnetization every 10 steps
             |update| {
                 let _ = tx.send(update);
+                fullmag_runner::StepAction::Continue
             },
         );
         match result {
@@ -881,7 +882,7 @@ async fn handle_current_live_ws(mut socket: WebSocket, state: Arc<AppState>) {
 
 fn build_session_command(req: SessionCommandRequest) -> Result<SessionCommand, ApiError> {
     let kind = req.kind.trim().to_lowercase();
-    if !matches!(kind.as_str(), "run" | "relax" | "close") {
+    if !matches!(kind.as_str(), "run" | "relax" | "close" | "stop" | "pause") {
         return Err(ApiError::bad_request(format!(
             "unsupported command kind '{}'",
             req.kind

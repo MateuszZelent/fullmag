@@ -21,7 +21,7 @@ use crate::schedules::{
 };
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewRequest, LiveStepConsumer,
-    RunError, RunResult, RunStatus, StateObservables, StepStats, StepUpdate,
+    RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -42,7 +42,7 @@ pub(crate) fn execute_reference_fdm_with_callback(
     outputs: &[OutputIR],
     grid: [u32; 3],
     field_every_n: u64,
-    on_step: &mut impl FnMut(StepUpdate),
+    on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
     execute_reference_fdm_impl(
         plan,
@@ -64,7 +64,7 @@ pub(crate) fn execute_reference_fdm_with_live_preview(
     grid: [u32; 3],
     field_every_n: u64,
     preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
-    on_step: &mut impl FnMut(StepUpdate),
+    on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
     execute_reference_fdm_impl(
         plan,
@@ -190,6 +190,7 @@ fn execute_reference_fdm_impl(
     let mut integrator_bufs = problem.create_integrator_buffers();
     let mut previous_total_energy = Some(observe_state(&problem, &state)?.total_energy);
     let mut last_preview_revision: Option<u64> = None;
+    let mut cancelled = false;
 
     // --- Dispatch on relaxation algorithm ---
     let is_direct_minimization = plan.relaxation.as_ref().is_some_and(|control| {
@@ -306,7 +307,7 @@ fn execute_reference_fdm_impl(
                 } else {
                     None
                 };
-                (live.on_step)(StepUpdate {
+                let action = (live.on_step)(StepUpdate {
                     stats: make_step_stats(
                         step_count,
                         state.time_seconds,
@@ -320,6 +321,13 @@ fn execute_reference_fdm_impl(
                     preview_field,
                     finished: false,
                 });
+                if action == StepAction::Stop {
+                    cancelled = true;
+                }
+            }
+
+            if cancelled {
+                break;
             }
 
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
@@ -352,7 +360,7 @@ fn execute_reference_fdm_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: RunStatus::Completed,
+            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
             steps,
             final_magnetization: state.magnetization().to_vec(),
         },

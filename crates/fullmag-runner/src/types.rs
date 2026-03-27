@@ -17,6 +17,16 @@ pub struct RunResult {
 pub enum RunStatus {
     Completed,
     Failed,
+    Cancelled,
+}
+
+/// Returned by the `on_step` callback to signal whether the runner should continue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepAction {
+    /// Continue the simulation.
+    Continue,
+    /// Stop the simulation as soon as possible (user-requested cancellation).
+    Stop,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,7 +211,7 @@ pub(crate) struct LiveStepConsumer<'a> {
     pub grid: [u32; 3],
     pub field_every_n: u64,
     pub preview_request: Option<&'a (dyn Fn() -> LivePreviewRequest + Send + Sync)>,
-    pub on_step: &'a mut dyn FnMut(StepUpdate),
+    pub on_step: &'a mut dyn FnMut(StepUpdate) -> StepAction,
 }
 
 #[derive(Debug, Clone)]

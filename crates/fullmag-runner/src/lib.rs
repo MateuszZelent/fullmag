@@ -24,7 +24,7 @@ mod types;
 // Public re-exports (unchanged API surface).
 pub use types::{
     ExecutionProvenance, FemMeshPayload, LivePreviewField, LivePreviewRequest, RunError, RunResult,
-    RunStatus, RuntimeEngineInfo, StepStats, StepUpdate,
+    RunStatus, RuntimeEngineInfo, StepAction, StepStats, StepUpdate,
 };
 
 use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, OutputIR, ProblemIR};
@@ -69,14 +69,15 @@ pub fn run_problem(
 
 /// Run a problem with a per-step callback for live streaming.
 ///
-/// The callback receives a `StepUpdate` after each simulation step.
+/// The callback receives a `StepUpdate` after each simulation step and returns
+/// `StepAction::Continue` to keep running or `StepAction::Stop` to cancel.
 /// Magnetization data is included every `field_every_n` steps (default: 10).
 pub fn run_problem_with_callback(
     problem: &ProblemIR,
     until_seconds: f64,
     output_dir: &Path,
     field_every_n: u64,
-    mut on_step: impl FnMut(StepUpdate) + Send,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
 
@@ -185,7 +186,7 @@ pub fn run_problem_with_live_preview(
     output_dir: &Path,
     field_every_n: u64,
     preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
-    mut on_step: impl FnMut(StepUpdate) + Send,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
 
@@ -350,13 +351,30 @@ fn with_cpu_parallelism<T>(
 where
     T: Send,
 {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(cpu_threads)
-        .build()
-        .map_err(|error| RunError {
-            message: format!("failed to configure CPU thread pool: {error}"),
-        })?
-        .install(f)
+    use std::sync::Mutex;
+    static CACHED_POOL: Mutex<Option<(usize, rayon::ThreadPool)>> = Mutex::new(None);
+
+    let mut guard = CACHED_POOL.lock().unwrap();
+    let pool = match guard.as_ref() {
+        Some((cached_threads, _)) if *cached_threads == cpu_threads => {
+            // Reuse existing pool with matching thread count
+            let (_, pool) = guard.as_ref().unwrap();
+            return pool.install(f);
+        }
+        _ => {
+            // Build a new pool (first call or thread count changed)
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(cpu_threads)
+                .build()
+                .map_err(|error| RunError {
+                    message: format!("failed to configure CPU thread pool: {error}"),
+                })?;
+            *guard = Some((cpu_threads, pool));
+            let (_, pool) = guard.as_ref().unwrap();
+            pool.install(f)
+        }
+    };
+    pool
 }
 
 /// Execute a reference FDM plan without artifact writing.

@@ -18,7 +18,7 @@ use crate::schedules::{
 };
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewRequest, LiveStepConsumer,
-    RunError, RunResult, RunStatus, StateObservables, StepStats, StepUpdate,
+    RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -36,7 +36,7 @@ pub(crate) fn execute_reference_fem_with_callback(
     until_seconds: f64,
     outputs: &[OutputIR],
     field_every_n: u64,
-    on_step: &mut impl FnMut(StepUpdate),
+    on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
     execute_reference_fem_impl(
         plan,
@@ -57,7 +57,7 @@ pub(crate) fn execute_reference_fem_with_live_preview(
     outputs: &[OutputIR],
     field_every_n: u64,
     preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
-    on_step: &mut impl FnMut(StepUpdate),
+    on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
     execute_reference_fem_impl(
         plan,
@@ -155,6 +155,7 @@ fn execute_reference_fem_impl(
 
     let mut previous_total_energy = Some(observe_state(&problem, &state)?.total_energy);
     let mut last_preview_revision: Option<u64> = None;
+    let mut cancelled = false;
 
     while state.time_seconds < until_seconds {
         let dt_step = dt.min(until_seconds - state.time_seconds);
@@ -220,7 +221,7 @@ fn execute_reference_fem_impl(
             } else {
                 None
             };
-            (live.on_step)(StepUpdate {
+            let action = (live.on_step)(StepUpdate {
                 stats: make_step_stats(
                     step_count,
                     state.time_seconds,
@@ -229,15 +230,26 @@ fn execute_reference_fem_impl(
                     &observables,
                 ),
                 grid: live.grid,
-                fem_mesh: Some(crate::types::FemMeshPayload {
-                    nodes: plan.mesh.nodes.clone(),
-                    elements: plan.mesh.elements.clone(),
-                    boundary_faces: plan.mesh.boundary_faces.clone(),
-                }),
+                fem_mesh: if step_count <= 1 {
+                    Some(crate::types::FemMeshPayload {
+                        nodes: plan.mesh.nodes.clone(),
+                        elements: plan.mesh.elements.clone(),
+                        boundary_faces: plan.mesh.boundary_faces.clone(),
+                    })
+                } else {
+                    None
+                },
                 magnetization,
                 preview_field,
                 finished: false,
             });
+            if action == StepAction::Stop {
+                cancelled = true;
+            }
+        }
+
+        if cancelled {
+            break;
         }
 
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
@@ -269,7 +281,7 @@ fn execute_reference_fem_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: RunStatus::Completed,
+            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
             steps,
             final_magnetization: state.magnetization().to_vec(),
         },
@@ -623,6 +635,7 @@ mod tests {
         let result = execute_reference_fem_with_callback(&plan, 5e-13, &[], 2, &mut |update| {
             seen += 1;
             assert_eq!(update.grid, [0, 0, 0]);
+            StepAction::Continue
         })
         .expect("callback FEM run should succeed");
 

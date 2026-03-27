@@ -829,6 +829,8 @@ def _build_problem(
     llg_kwargs: dict[str, Any] = {}
     if s._dt is not None:
         llg_kwargs["fixed_timestep"] = s._dt
+    if s._integrator is not None:
+        llg_kwargs["integrator"] = s._integrator
     if s._gamma is not None and not math.isclose(s._gamma, DEFAULT_GAMMA):
         llg_kwargs["gamma"] = s._gamma
     dynamics = LLG(**llg_kwargs)
