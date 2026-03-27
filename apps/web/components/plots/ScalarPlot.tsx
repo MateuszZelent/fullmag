@@ -244,8 +244,8 @@ export default function ScalarPlot({
       ref={containerRef}
       style={{
         width: "100%",
-        height: "320px",
-        minHeight: "280px",
+        height: "100%",
+        minHeight: "200px",
         borderRadius: "var(--radius-md)",
         border: "1px solid var(--ide-border-subtle)",
         background: "var(--ide-bg)",

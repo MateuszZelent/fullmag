@@ -1,4 +1,4 @@
-.PHONY: up down shell fmt check cargo-check cargo-test web-install web-build-static py-install py-test repo-check smoke install-cli install-cli-dev show-cli-path control-room control-room-stop fem-gpu-build fem-gpu-shell fem-gpu-check fem-gpu-test fem-gpu-native-test
+.PHONY: up down shell fmt check cargo-check cargo-test web-install web-build-static web-build-static-if-needed py-install py-test repo-check smoke install-cli install-cli-dev install-cli-static show-cli-path control-room control-room-stop fem-gpu-build fem-gpu-shell fem-gpu-check fem-gpu-test fem-gpu-native-test
 
 up:
 	docker compose up -d postgres minio nats dev
@@ -37,8 +37,12 @@ web-build-static:
 	if [ ! -d "apps/web/node_modules" ] && [ ! -d "node_modules" ]; then \
 		$$PNPM_CMD install --dir apps/web; \
 	fi; \
-	rm -rf apps/web/out .fullmag/local/web.new; \
-	$$PNPM_CMD --dir apps/web build; \
+	rm -rf apps/web/.next apps/web/out .fullmag/local/web.new; \
+	if ! $$PNPM_CMD --dir apps/web build; then \
+		echo "Static control room build failed; retrying once from a clean Next cache..."; \
+		rm -rf apps/web/.next apps/web/out; \
+		$$PNPM_CMD --dir apps/web build; \
+	fi; \
 	mkdir -p .fullmag/local; \
 	cp -a apps/web/out .fullmag/local/web.new; \
 	touch .fullmag/local/web.new/.build-stamp; \
@@ -46,6 +50,25 @@ web-build-static:
 	mv .fullmag/local/web.new .fullmag/local/web; \
 	echo "Installed static control room:"; \
 	echo "  $(PWD)/.fullmag/local/web"
+
+web-build-static-if-needed:
+	@set -e; \
+	stamp=".fullmag/local/web/.build-stamp"; \
+	index=".fullmag/local/web/index.html"; \
+	if [ ! -f "$$stamp" ] || [ ! -f "$$index" ]; then \
+		$(MAKE) web-build-static; \
+	else \
+		stale_path="$$(find apps/web \
+			\( -path 'apps/web/node_modules' -o -path 'apps/web/.next' -o -path 'apps/web/out' \) -prune \
+			-o -type f -newer "$$stamp" -print -quit)"; \
+		if [ -n "$$stale_path" ]; then \
+			echo "Static control room is stale; rebuilding..."; \
+			$(MAKE) web-build-static; \
+		else \
+			echo "Reusing static control room:"; \
+			echo "  $(PWD)/.fullmag/local/web"; \
+		fi; \
+	fi
 
 py-install:
 	docker compose run --rm --no-deps dev bash -lc "python3 -m venv .venv && . .venv/bin/activate && pip install -e 'packages/fullmag-py[meshing]'"
@@ -59,10 +82,11 @@ repo-check:
 smoke:
 	docker compose run --rm --no-deps dev bash -lc "python3 -m venv .venv && . .venv/bin/activate && pip install -e 'packages/fullmag-py[meshing]' && /usr/local/cargo/bin/cargo build -p fullmag-cli --bin fullmag && python scripts/run_python_ir_smoke.py --cli target/debug/fullmag"
 
-install-cli: INSTALL_STATIC_WEB=1
+install-cli: INSTALL_STATIC_WEB=0
 install-cli-dev: INSTALL_STATIC_WEB=0
+install-cli-static: INSTALL_STATIC_WEB=1
 
-install-cli install-cli-dev:
+install-cli install-cli-dev install-cli-static:
 	mkdir -p .fullmag/local
 	@set -e; \
 	cmake_bin=""; \
@@ -85,39 +109,44 @@ install-cli install-cli-dev:
 	build_mode="cpu"; \
 	if [ -n "$$nvcc_bin" ] && [ -n "$$cmake_bin" ]; then \
 		echo "Installing Rust launcher with CUDA support..."; \
-		if FULLMAG_USE_MFEM_STACK=ON FULLMAG_CMAKE="$$cmake_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-cli --release --features "cuda fem-gpu" >"$$build_log" 2>&1 \
-			&& FULLMAG_USE_MFEM_STACK=ON FULLMAG_CMAKE="$$cmake_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-api --release --features "cuda fem-gpu" >>"$$build_log" 2>&1; then \
+		if [ "$${FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT:-0}" = "1" ]; then \
+			FULLMAG_CMAKE="$$cmake_bin" CUDACXX="$$nvcc_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-cli --release --features cuda; \
+			FULLMAG_CMAKE="$$cmake_bin" CUDACXX="$$nvcc_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-api --release --features cuda; \
+			build_mode="cuda"; \
+		elif FULLMAG_USE_MFEM_STACK=ON FULLMAG_CMAKE="$$cmake_bin" CUDACXX="$$nvcc_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-cli --release --features "cuda fem-gpu" >"$$build_log" 2>&1 \
+				&& FULLMAG_USE_MFEM_STACK=ON FULLMAG_CMAKE="$$cmake_bin" CUDACXX="$$nvcc_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-api --release --features "cuda fem-gpu" >>"$$build_log" 2>&1; then \
 			echo "Host FEM GPU backend available; installing launcher with CUDA + FEM GPU support..."; \
 			build_mode="cuda-fem-gpu"; \
 		else \
 			echo "Host FEM GPU backend not available; falling back to CUDA-only launcher."; \
 			echo "Probe log: $(PWD)/.fullmag/local/install-cli-build.log"; \
 			CARGO_TARGET_DIR=.fullmag/target cargo +nightly clean -p fullmag-fem-sys >/dev/null 2>&1 || true; \
-			FULLMAG_CMAKE="$$cmake_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-cli --release --features cuda; \
-			FULLMAG_CMAKE="$$cmake_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-api --release --features cuda; \
-			build_mode="cuda"; \
-			if [ "$${FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT:-0}" = "1" ]; then \
-				echo "Skipping managed FEM GPU host runtime export."; \
-			elif command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then \
+				FULLMAG_CMAKE="$$cmake_bin" CUDACXX="$$nvcc_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-cli --release --features cuda; \
+				FULLMAG_CMAKE="$$cmake_bin" CUDACXX="$$nvcc_bin" CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-api --release --features cuda; \
+				build_mode="cuda"; \
+				managed_runtime_ready="0"; \
+				if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then \
 				managed_runtime_stale=""; \
 				if [ -x "$$managed_runtime_bin" ]; then \
 					managed_runtime_stale="$$(find native/backends/fem crates/fullmag-fem-sys crates/fullmag-runner crates/fullmag-cli scripts docker-compose.yml Cargo.lock -type f -newer "$$managed_runtime_bin" 2>/dev/null | head -n 1)"; \
-				fi; \
-				if [ ! -x "$$managed_runtime_bin" ] || [ ".fullmag/target/release/fullmag" -nt "$$managed_runtime_bin" ] || [ "./scripts/export_fem_gpu_runtime.sh" -nt "$$managed_runtime_bin" ] || [ -n "$$managed_runtime_stale" ]; then \
-					echo "Exporting managed FEM GPU host runtime bundle..."; \
-					if ./scripts/export_fem_gpu_runtime.sh >"$$managed_log" 2>&1; then \
-						echo "Managed FEM GPU host runtime exported successfully."; \
-					else \
-						echo "Managed FEM GPU host runtime export failed; staying on local CUDA-only launcher."; \
-						echo "Managed runtime log: $(PWD)/.fullmag/local/install-cli-managed-fem-gpu.log"; \
 					fi; \
-				else \
-					echo "Reusing managed FEM GPU host runtime bundle."; \
+					if [ ! -x "$$managed_runtime_bin" ] || [ ".fullmag/target/release/fullmag" -nt "$$managed_runtime_bin" ] || [ "./scripts/export_fem_gpu_runtime.sh" -nt "$$managed_runtime_bin" ] || [ -n "$$managed_runtime_stale" ]; then \
+						echo "Exporting managed FEM GPU host runtime bundle..."; \
+						if ./scripts/export_fem_gpu_runtime.sh >"$$managed_log" 2>&1; then \
+							echo "Managed FEM GPU host runtime exported successfully."; \
+							managed_runtime_ready="1"; \
+						else \
+							echo "Managed FEM GPU host runtime export failed; staying on local CUDA-only launcher."; \
+							echo "Managed runtime log: $(PWD)/.fullmag/local/install-cli-managed-fem-gpu.log"; \
+						fi; \
+					else \
+						echo "Reusing managed FEM GPU host runtime bundle."; \
+						managed_runtime_ready="1"; \
+					fi; \
 				fi; \
-			fi; \
-			if [ -x "$$managed_runtime_bin" ]; then \
-				build_mode="cuda+managed-fem-gpu-host"; \
-			fi; \
+				if [ "$$managed_runtime_ready" = "1" ] && [ -x "$$managed_runtime_bin" ]; then \
+					build_mode="cuda+managed-fem-gpu-host"; \
+				fi; \
 		fi; \
 	else \
 		echo "Installing Rust launcher without CUDA support..."; \
@@ -141,23 +170,28 @@ install-cli install-cli-dev:
 	@mv -f .fullmag/local/bin/fullmag-bin.new .fullmag/local/bin/fullmag-bin
 	@cp .fullmag/target/release/fullmag-api .fullmag/local/bin/fullmag-api.new
 	@mv -f .fullmag/local/bin/fullmag-api.new .fullmag/local/bin/fullmag-api
-	@printf '%s\n' '#!/usr/bin/env bash' \
-		'SELF_DIR="$$(cd "$$(dirname "$$0")" && pwd)"' \
-		'REPO_ROOT="$$(cd "$$SELF_DIR/../../.." && pwd)"' \
-		'export FULLMAG_REPO_ROOT="$$REPO_ROOT"' \
-		'export PYTHONPATH="$$REPO_ROOT/packages/fullmag-py/src$${PYTHONPATH:+:$$PYTHONPATH}"' \
-		'export FULLMAG_FEM_MESH_CACHE_DIR="$$REPO_ROOT/.fullmag/local/cache/fem_mesh_assets"' \
-		'MANAGED_RUNTIME_ROOT="$${SELF_DIR}/../../runtimes/fem-gpu-host"' \
-		'MANAGED_RUNTIME_BIN="$${MANAGED_RUNTIME_ROOT}/bin/fullmag-fem-gpu-bin"' \
-		'if [ "$${FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME:-0}" != "1" ] && [ -x "$$MANAGED_RUNTIME_BIN" ]; then' \
-		'  export LD_LIBRARY_PATH="$$MANAGED_RUNTIME_ROOT/lib:$$SELF_DIR/../lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}"' \
-		'  exec "$$MANAGED_RUNTIME_BIN" "$$@"' \
-		'fi' \
+		@printf '%s\n' '#!/usr/bin/env bash' \
+			'SELF_DIR="$$(cd "$$(dirname "$$0")" && pwd)"' \
+			'REPO_ROOT="$$(cd "$$SELF_DIR/../../.." && pwd)"' \
+			'export FULLMAG_REPO_ROOT="$$REPO_ROOT"' \
+			'export PYTHONPATH="$$REPO_ROOT/packages/fullmag-py/src$${PYTHONPATH:+:$$PYTHONPATH}"' \
+			'export FULLMAG_FEM_MESH_CACHE_DIR="$$REPO_ROOT/.fullmag/local/cache/fem_mesh_assets"' \
+			'BUILD_MODE_FILE="$${SELF_DIR}/../launcher-build-mode"' \
+			'BUILD_MODE=""' \
+			'if [ -f "$$BUILD_MODE_FILE" ]; then' \
+			'  BUILD_MODE="$$(cat "$$BUILD_MODE_FILE")"' \
+			'fi' \
+			'MANAGED_RUNTIME_ROOT="$${SELF_DIR}/../../runtimes/fem-gpu-host"' \
+			'MANAGED_RUNTIME_BIN="$${MANAGED_RUNTIME_ROOT}/bin/fullmag-fem-gpu-bin"' \
+			'if [ "$${FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME:-0}" != "1" ] && [ -x "$$MANAGED_RUNTIME_BIN" ] && { [ "$$BUILD_MODE" = "managed-fem-gpu-host" ] || [ "$$BUILD_MODE" = "cuda+managed-fem-gpu-host" ]; }; then' \
+			'  export LD_LIBRARY_PATH="$$MANAGED_RUNTIME_ROOT/lib:$$SELF_DIR/../lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}"' \
+			'  exec "$$MANAGED_RUNTIME_BIN" "$$@"' \
+			'fi' \
 		'export LD_LIBRARY_PATH="$$SELF_DIR/../lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}"' \
 		'exec "$$SELF_DIR/fullmag-bin" "$$@"' \
 		> .fullmag/local/bin/fullmag
 	@chmod +x .fullmag/local/bin/fullmag
-	@if [ "$(INSTALL_STATIC_WEB)" = "1" ]; then $(MAKE) web-build-static; fi
+	@if [ "$(INSTALL_STATIC_WEB)" = "1" ]; then $(MAKE) web-build-static-if-needed; fi
 	@echo ""
 	@echo "Installed repo-local launcher:"
 	@echo "  $(PWD)/.fullmag/local/bin/fullmag"

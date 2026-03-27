@@ -448,6 +448,18 @@ def finish_script_capture() -> list[CapturedStage]:
     return captured
 
 
+def capture_workspace_problem() -> Problem | None:
+    """Materialize the current flat-script world without requiring run()/relax()."""
+    if not _capture_enabled or not _state._magnets:
+        return None
+    previous_interactive = _state._interactive
+    _state._interactive = True
+    try:
+        return _build_problem()
+    finally:
+        _state._interactive = previous_interactive
+
+
 # ---------------------------------------------------------------------------
 # Engine / backend
 # ---------------------------------------------------------------------------

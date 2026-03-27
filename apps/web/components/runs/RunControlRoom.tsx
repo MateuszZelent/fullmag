@@ -736,6 +736,25 @@ export default function RunControlRoom() {
     [previewQuantityOptions],
   );
 
+  const handleSimulationAction = useCallback((action: string) => {
+    if (action === "run") void enqueueCommand({ kind: "run" });
+    if (action === "pause") void enqueueCommand({ kind: "pause" });
+    if (action === "stop") void enqueueCommand({ kind: "stop" });
+  }, [enqueueCommand]);
+
+  const handleCapture = useCallback(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>(".viewport canvas, [class*='viewport'] canvas");
+    if (!canvas) return;
+    const link = document.createElement("a");
+    link.download = `fullmag_snapshot_${Date.now()}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }, []);
+
+  const handleExport = useCallback(() => {
+    void enqueueCommand({ kind: "save_vtk" });
+  }, [enqueueCommand]);
+
   /* ── Loading state ─────────────────────────────── */
   if (!state) {
     return (
@@ -816,11 +835,6 @@ export default function RunControlRoom() {
     meshGenerating, handleMeshGenerate, openFemMeshWorkspace, setViewMode, setFemDockTab, setMeshRenderMode,
     dmDtSpark, dtSpark, eTotalSpark,
   };
-  const handleSimulationAction = useCallback((action: string) => {
-    if (action === "run") void enqueueCommand({ kind: "run" });
-    if (action === "pause") void enqueueCommand({ kind: "pause" });
-    if (action === "stop") void enqueueCommand({ kind: "stop" });
-  }, [enqueueCommand]);
 
   return (
     <div className={s.shell}>
@@ -847,6 +861,8 @@ export default function RunControlRoom() {
         onSidebarToggle={() => setSidebarCollapsed((v) => !v)}
         onSimAction={handleSimulationAction}
         onSetup={() => setSolverSetupOpen((v) => !v)}
+        onCapture={handleCapture}
+        onExport={handleExport}
       />
       <PanelGroup
         orientation="horizontal"

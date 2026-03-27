@@ -10,6 +10,35 @@
 
 namespace fullmag::fem {
 
+// ── Butcher tableau for explicit Runge-Kutta methods ──────────────────────
+// Max stages: 7 (DP54 uses 7 for FSAL).
+static constexpr int MAX_RK_STAGES = 7;
+
+struct ExplicitTableau {
+    int stages;                                     // s
+    double c[MAX_RK_STAGES];                        // nodes
+    double a[MAX_RK_STAGES][MAX_RK_STAGES];         // lower-triangular coupling
+    double b_hi[MAX_RK_STAGES];                     // high-order weights
+    double b_lo[MAX_RK_STAGES];                     // low-order weights (embedded error)
+    int order_hi;                                   // order of b_hi
+    int order_est;                                  // order of b_lo (0 = no error est)
+    bool fsal;                                      // first-same-as-last?
+};
+
+// ── Stepper workspace (device-resident allocation, reused per step) ───────
+struct StepperWorkspace {
+    bool allocated = false;
+    size_t dof_len = 0;                             // n_nodes * 3
+    std::vector<double> m_backup;                   // backup of m before stage loop
+    std::vector<double> k[MAX_RK_STAGES];           // stage derivatives k_i
+    std::vector<double> m_stage;                    // temp: m at stage evaluation point
+    std::vector<double> h_ex_tmp;                   // temp exchange field
+    std::vector<double> h_demag_tmp;                // temp demag field
+    std::vector<double> h_eff_tmp;                  // temp effective field
+    std::vector<double> err;                        // error = h*(b_hi - b_lo) . K
+    bool fsal_valid = false;                        // true when k[0] holds valid FSAL RHS
+};
+
 struct TransferGridDesc {
     uint32_t nx = 0;
     uint32_t ny = 0;
@@ -146,6 +175,12 @@ struct Context {
     int poisson_last_iterations = 0;
     double poisson_last_residual = 0.0;
 
+    // Cached Hypre solver/preconditioner (persistent across solves)
+    void *mfem_cached_hypre_par = nullptr;  // mfem::HypreParMatrix* (wraps bc_op)
+    void *mfem_cached_hypre_amg = nullptr;  // mfem::HypreBoomerAMG*
+    void *mfem_cached_hypre_pcg = nullptr;  // mfem::HyprePCG*
+    bool poisson_solver_setup = false;
+
     // Demag realization: 0 = transfer_grid (legacy), 1 = poisson_airbox
     int demag_realization = 0;
     int poisson_boundary_marker = 99;
@@ -164,6 +199,9 @@ struct Context {
 
     fullmag_fem_device_info device_info_cache{};
     bool device_info_valid = false;
+
+    // ── Unified RK stepper workspace ──
+    StepperWorkspace stepper;
 };
 
 bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::string &error);
@@ -183,6 +221,14 @@ bool context_step_exchange_heun_mfem(
     double dt_seconds,
     fullmag_fem_step_stats &stats,
     std::string &error);
+bool context_step_explicit_rk_mfem(
+    Context &ctx,
+    const ExplicitTableau &tab,
+    double dt_seconds,
+    fullmag_fem_step_stats &stats,
+    std::string &error);
+const ExplicitTableau &tableau_for_integrator(fullmag_fem_integrator integrator);
+void stepper_workspace_allocate(StepperWorkspace &ws, size_t dof_len, int stages);
 bool context_initialize_poisson(Context &ctx, std::string &error);
 void context_destroy_poisson(Context &ctx);
 bool context_compute_demag_poisson(

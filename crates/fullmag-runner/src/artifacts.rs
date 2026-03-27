@@ -80,6 +80,7 @@ pub(crate) fn write_artifacts(
         max_h_eff: 0.0,
         max_h_demag: 0.0,
         wall_time_ns: 0,
+        ..StepStats::default()
     });
     write_field_file(
         &output_dir.join("m_final.json"),

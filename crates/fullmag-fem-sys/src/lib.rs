@@ -23,6 +23,22 @@ pub enum fullmag_fem_precision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fem_integrator {
     FULLMAG_FEM_INTEGRATOR_HEUN = 1,
+    FULLMAG_FEM_INTEGRATOR_RK4 = 2,
+    FULLMAG_FEM_INTEGRATOR_RK23_BS = 3,
+    FULLMAG_FEM_INTEGRATOR_RK45_DP54 = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_adaptive_config {
+    pub atol: f64,
+    pub rtol: f64,
+    pub dt_initial: f64,
+    pub dt_min: f64,
+    pub dt_max: f64,
+    pub safety: f64,
+    pub growth_limit: f64,
+    pub shrink_limit: f64,
 }
 
 #[repr(C)]
@@ -115,6 +131,7 @@ pub struct fullmag_fem_plan_desc {
     pub initial_magnetization_xyz: *const f64,
     pub initial_magnetization_len: u64,
     pub dt_seconds: f64,
+    pub adaptive_config: *const fullmag_fem_adaptive_config,
 }
 
 #[repr(C)]
@@ -133,6 +150,11 @@ pub struct fullmag_fem_step_stats {
     pub demag_linear_iterations: u32,
     pub demag_linear_residual: f64,
     pub wall_time_ns: u64,
+    pub error_estimate: f64,
+    pub rejected_attempts: u32,
+    pub dt_suggested: f64,
+    pub rhs_evaluations: u32,
+    pub fsal_reused: i32,
 }
 
 #[repr(C)]

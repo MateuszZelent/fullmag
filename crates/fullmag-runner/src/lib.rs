@@ -139,6 +139,7 @@ pub fn run_problem_with_callback(
         max_h_eff: 0.0,
         max_h_demag: 0.0,
         wall_time_ns: 0,
+        ..StepStats::default()
     });
     let final_m: Vec<f64> = executed
         .result
@@ -249,6 +250,7 @@ pub fn run_problem_with_live_preview(
         max_h_eff: 0.0,
         max_h_demag: 0.0,
         wall_time_ns: 0,
+        ..StepStats::default()
     });
     let final_grid = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],

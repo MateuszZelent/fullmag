@@ -209,6 +209,24 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertAlmostEqual(voxels.origin[1], -1.0)
         self.assertAlmostEqual(voxels.origin[2], -1.0)
 
+    def test_binary_stl_voxelization_falls_back_without_scipy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "cube.stl"
+            self._write_binary_cube_stl(path)
+            geometry = fm.ImportedGeometry(source=str(path), name="cube")
+
+            with patch(
+                "fullmag.meshing.voxelization._import_trimesh_voxelization_stack",
+                side_effect=ImportError("missing scipy"),
+            ):
+                voxels = voxelize_geometry(geometry, (1.0, 1.0, 1.0))
+
+        self.assertEqual(voxels.shape, (2, 2, 2))
+        self.assertEqual(voxels.active_cell_count, 8)
+        self.assertAlmostEqual(voxels.origin[0], -1.0)
+        self.assertAlmostEqual(voxels.origin[1], -1.0)
+        self.assertAlmostEqual(voxels.origin[2], -1.0)
+
     def test_binary_stl_voxelization_respects_anisotropic_import_scale(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "cube.stl"

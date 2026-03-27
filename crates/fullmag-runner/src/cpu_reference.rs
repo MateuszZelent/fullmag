@@ -261,6 +261,7 @@ fn execute_reference_fdm_impl(
                 max_h_eff: report.max_effective_field_amplitude,
                 max_h_demag: report.max_demag_field_amplitude,
                 wall_time_ns: wall_elapsed,
+                ..StepStats::default()
             };
 
             if !default_scalar_trace || !field_schedules.is_empty() {
@@ -563,6 +564,7 @@ fn make_step_stats(
         max_h_eff: observables.max_h_eff,
         max_h_demag: observables.max_h_demag,
         wall_time_ns,
+        ..StepStats::default()
     }
 }
 

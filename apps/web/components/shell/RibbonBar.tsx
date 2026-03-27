@@ -40,6 +40,7 @@ interface RibbonBarProps {
   onSimAction?: (action: string) => void;
   onSetup?: () => void;
   onExport?: () => void;
+  onCapture?: () => void;
 }
 
 function buildGroups(props: RibbonBarProps): RibbonGroup[] {
@@ -75,8 +76,8 @@ function buildGroups(props: RibbonBarProps): RibbonGroup[] {
       id: "results",
       title: "Results",
       actions: [
-        { id: "plot", icon: <BarChart3 size={20} />, label: "Plot", tooltip: "Open scalar plot", disabled: true },
-        { id: "snapshot", icon: <Camera size={20} />, label: "Capture", tooltip: "Take snapshot", disabled: true },
+        { id: "plot", icon: <BarChart3 size={20} />, label: "Plot", tooltip: "Open scalar plot in console", action: () => props.onViewChange?.("charts") },
+        { id: "snapshot", icon: <Camera size={20} />, label: "Capture", tooltip: "Take viewport screenshot", action: props.onCapture },
         { id: "exportvtk", icon: <Download size={20} />, label: "Export", tooltip: "Export VTK", action: props.onExport },
       ],
     },

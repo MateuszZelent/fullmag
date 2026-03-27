@@ -95,6 +95,22 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     };
     ctx.material = plan.material;
     ctx.demag_solver = plan.demag_solver;
+
+    // Adaptive time-stepping from plan
+    if (plan.adaptive_config != nullptr) {
+        ctx.adaptive_dt_enabled = true;
+        ctx.adaptive_atol = plan.adaptive_config->atol;
+        ctx.adaptive_rtol = plan.adaptive_config->rtol;
+        ctx.dt_seconds = plan.adaptive_config->dt_initial > 0.0
+                             ? plan.adaptive_config->dt_initial
+                             : plan.dt_seconds;
+        ctx.dt_min = plan.adaptive_config->dt_min;
+        ctx.dt_max = plan.adaptive_config->dt_max;
+        ctx.safety_factor = plan.adaptive_config->safety;
+        ctx.dt_grow_max = plan.adaptive_config->growth_limit;
+        ctx.dt_shrink_min = plan.adaptive_config->shrink_limit;
+    }
+
 #if FULLMAG_HAS_MFEM_STACK
     ctx.demag_realization = static_cast<int>(plan.demag_realization);
     ctx.poisson_boundary_marker = plan.poisson_boundary_marker;
@@ -127,36 +143,40 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     ctx.m_xyz.assign(
         plan.initial_magnetization_xyz,
         plan.initial_magnetization_xyz + static_cast<size_t>(plan.initial_magnetization_len));
-    copy_optional_span(
-        plan.demag_kernel_xx_spectrum,
-        static_cast<size_t>(plan.demag_kernel_spectrum_len),
-        ctx.transfer_grid.kernel_xx_spectrum,
-        0.0);
-    copy_optional_span(
-        plan.demag_kernel_yy_spectrum,
-        static_cast<size_t>(plan.demag_kernel_spectrum_len),
-        ctx.transfer_grid.kernel_yy_spectrum,
-        0.0);
-    copy_optional_span(
-        plan.demag_kernel_zz_spectrum,
-        static_cast<size_t>(plan.demag_kernel_spectrum_len),
-        ctx.transfer_grid.kernel_zz_spectrum,
-        0.0);
-    copy_optional_span(
-        plan.demag_kernel_xy_spectrum,
-        static_cast<size_t>(plan.demag_kernel_spectrum_len),
-        ctx.transfer_grid.kernel_xy_spectrum,
-        0.0);
-    copy_optional_span(
-        plan.demag_kernel_xz_spectrum,
-        static_cast<size_t>(plan.demag_kernel_spectrum_len),
-        ctx.transfer_grid.kernel_xz_spectrum,
-        0.0);
-    copy_optional_span(
-        plan.demag_kernel_yz_spectrum,
-        static_cast<size_t>(plan.demag_kernel_spectrum_len),
-        ctx.transfer_grid.kernel_yz_spectrum,
-        0.0);
+
+    // Only copy Newell kernel spectra for transfer-grid demag (not poisson_airbox).
+    if (static_cast<int>(plan.demag_realization) != 1 /* POISSON_AIRBOX */) {
+        copy_optional_span(
+            plan.demag_kernel_xx_spectrum,
+            static_cast<size_t>(plan.demag_kernel_spectrum_len),
+            ctx.transfer_grid.kernel_xx_spectrum,
+            0.0);
+        copy_optional_span(
+            plan.demag_kernel_yy_spectrum,
+            static_cast<size_t>(plan.demag_kernel_spectrum_len),
+            ctx.transfer_grid.kernel_yy_spectrum,
+            0.0);
+        copy_optional_span(
+            plan.demag_kernel_zz_spectrum,
+            static_cast<size_t>(plan.demag_kernel_spectrum_len),
+            ctx.transfer_grid.kernel_zz_spectrum,
+            0.0);
+        copy_optional_span(
+            plan.demag_kernel_xy_spectrum,
+            static_cast<size_t>(plan.demag_kernel_spectrum_len),
+            ctx.transfer_grid.kernel_xy_spectrum,
+            0.0);
+        copy_optional_span(
+            plan.demag_kernel_xz_spectrum,
+            static_cast<size_t>(plan.demag_kernel_spectrum_len),
+            ctx.transfer_grid.kernel_xz_spectrum,
+            0.0);
+        copy_optional_span(
+            plan.demag_kernel_yz_spectrum,
+            static_cast<size_t>(plan.demag_kernel_spectrum_len),
+            ctx.transfer_grid.kernel_yz_spectrum,
+            0.0);
+    }
     // Build magnetic element mask (matches CPU: marker 1 = magnetic when
     // both marker-1 and non-marker-1 elements exist; otherwise all magnetic).
     {

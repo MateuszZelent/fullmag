@@ -753,6 +753,7 @@ fn execute_native_fem_impl(
         max_h_eff: 0.0,
         max_h_demag: 0.0,
         wall_time_ns: 0,
+        ..StepStats::default()
     });
 
     for schedule in &mut field_schedules {

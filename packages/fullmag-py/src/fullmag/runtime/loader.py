@@ -77,6 +77,7 @@ def load_problem_from_script(path: str | Path) -> LoadedProblem:
     try:
         spec.loader.exec_module(module)
         script_source = source_path.read_text(encoding="utf-8")
+        workspace_problem = world.capture_workspace_problem()
         captured_stages = world.finish_script_capture()
         if captured_stages:
             loaded_stages = tuple(
@@ -95,6 +96,16 @@ def load_problem_from_script(path: str | Path) -> LoadedProblem:
                 entrypoint_kind="flat_sequence" if len(loaded_stages) > 1 else final_stage.entrypoint_kind,
                 default_until_seconds=final_stage.default_until_seconds,
                 stages=loaded_stages,
+            )
+
+        if workspace_problem is not None:
+            return LoadedProblem(
+                problem=workspace_problem,
+                source_path=source_path,
+                script_source=script_source,
+                entrypoint_kind="flat_workspace",
+                default_until_seconds=None,
+                stages=(),
             )
 
         problem, entrypoint_kind = _extract_problem(module)

@@ -13,6 +13,7 @@ dependencies = ["numpy>=1.24"]
 meshing = [
     "gmsh>=4.12",
     "meshio>=5.3",
+    "scipy>=1.10",
     "trimesh>=4.2",
 ]
 

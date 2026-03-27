@@ -20,7 +20,21 @@ typedef enum {
 
 typedef enum {
     FULLMAG_FEM_INTEGRATOR_HEUN = 1,
+    FULLMAG_FEM_INTEGRATOR_RK4 = 2,
+    FULLMAG_FEM_INTEGRATOR_RK23_BS = 3,
+    FULLMAG_FEM_INTEGRATOR_RK45_DP54 = 4,
 } fullmag_fem_integrator;
+
+typedef struct {
+    double atol;
+    double rtol;
+    double dt_initial;
+    double dt_min;
+    double dt_max;
+    double safety;
+    double growth_limit;
+    double shrink_limit;
+} fullmag_fem_adaptive_config;
 
 typedef enum {
     FULLMAG_FEM_OBSERVABLE_M = 1,
@@ -98,6 +112,7 @@ typedef struct {
     const double *initial_magnetization_xyz;
     uint64_t initial_magnetization_len;
     double dt_seconds;
+    const fullmag_fem_adaptive_config *adaptive_config;
 } fullmag_fem_plan_desc;
 
 typedef struct {
@@ -114,6 +129,11 @@ typedef struct {
     uint32_t demag_linear_iterations;
     double demag_linear_residual;
     uint64_t wall_time_ns;
+    double error_estimate;
+    uint32_t rejected_attempts;
+    double dt_suggested;
+    uint32_t rhs_evaluations;
+    int fsal_reused;
 } fullmag_fem_step_stats;
 
 typedef struct {

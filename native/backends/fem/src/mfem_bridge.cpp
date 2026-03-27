@@ -1025,7 +1025,11 @@ bool assemble_poisson_rhs(
     b.Assemble();
 
     rhs.SetSize(fes->GetTrueVSize());
-    b.GetTrueDofs(rhs);
+    if (const mfem::SparseMatrix *restriction = fes->GetRestrictionMatrix()) {
+        restriction->Mult(b, rhs);
+    } else {
+        rhs = b;
+    }
 
     return true;
 }
@@ -1106,12 +1110,6 @@ bool solve_poisson_hypre(
 
     ensure_mpi_initialized();
 
-    const HYPRE_BigInt glob_size = static_cast<HYPRE_BigInt>(A_bc->NumRows());
-    HYPRE_BigInt row_starts[2] = {0, glob_size};
-
-    // Wrap the existing SparseMatrix in a HypreParMatrix (no data copy — borrows pointers)
-    mfem::HypreParMatrix A_par(MPI_COMM_WORLD, glob_size, row_starts, A_bc);
-
     // Apply BCs to RHS
     mfem::Vector rhs_bc(rhs);
     mfem::Array<int> ess_tdof(ctx.poisson_ess_tdof_list.data(),
@@ -1120,31 +1118,48 @@ bool solve_poisson_hypre(
         rhs_bc(ess_tdof[i]) = 0.0;
     }
 
+    const HYPRE_BigInt glob_size = static_cast<HYPRE_BigInt>(A_bc->NumRows());
+    HYPRE_BigInt row_starts[2] = {0, glob_size};
+
+    // First call: build and cache the HypreParMatrix + AMG + PCG
+    if (!ctx.poisson_solver_setup) {
+        // Wrap the SparseMatrix in a HypreParMatrix (borrows pointers; lives as long as ctx)
+        auto *A_par = new mfem::HypreParMatrix(MPI_COMM_WORLD, glob_size, row_starts, A_bc);
+        ctx.mfem_cached_hypre_par = A_par;
+
+        // BoomerAMG preconditioner — GPU-friendly settings
+        auto *amg = new mfem::HypreBoomerAMG(*A_par);
+        amg->SetPrintLevel(0);
+        amg->SetRelaxType(18);   // l1-scaled Jacobi (GPU-friendly)
+        amg->SetCoarsenType(8);  // PMIS (good for GPU/parallel)
+        amg->SetInterpType(6);   // extended+i interpolation
+        amg->SetAggressiveCoarseningLevels(1);
+        ctx.mfem_cached_hypre_amg = amg;
+
+        // HyprePCG solver
+        auto *pcg = new mfem::HyprePCG(MPI_COMM_WORLD);
+        pcg->SetTol(ctx.demag_solver.relative_tolerance);
+        pcg->SetMaxIter(static_cast<int>(ctx.demag_solver.max_iterations));
+        pcg->SetPrintLevel(0);
+        pcg->SetOperator(*A_par);
+        pcg->SetPreconditioner(*amg);
+        ctx.mfem_cached_hypre_pcg = pcg;
+
+        ctx.poisson_solver_setup = true;
+    }
+
+    auto *A_par = static_cast<mfem::HypreParMatrix *>(ctx.mfem_cached_hypre_par);
+    auto *pcg = static_cast<mfem::HyprePCG *>(ctx.mfem_cached_hypre_pcg);
+
     // Wrap host vectors as HypreParVectors
     mfem::HypreParVector b_par(MPI_COMM_WORLD, glob_size, rhs_bc.GetData(), row_starts);
     mfem::HypreParVector x_par(MPI_COMM_WORLD, glob_size, solution.GetData(), row_starts);
 
-    // BoomerAMG preconditioner — GPU-friendly settings
-    mfem::HypreBoomerAMG amg(A_par);
-    amg.SetPrintLevel(0);
-    amg.SetRelaxType(18);   // l1-scaled Jacobi (GPU-friendly)
-    amg.SetCoarsenType(8);  // PMIS (good for GPU/parallel)
-    amg.SetInterpType(6);   // extended+i interpolation
-    amg.SetAggressiveCoarseningLevels(1);
-
-    // HyprePCG solver
-    mfem::HyprePCG pcg(MPI_COMM_WORLD);
-    pcg.SetTol(ctx.demag_solver.relative_tolerance);
-    pcg.SetMaxIter(static_cast<int>(ctx.demag_solver.max_iterations));
-    pcg.SetPrintLevel(0);
-    pcg.SetOperator(A_par);
-    pcg.SetPreconditioner(amg);
-
-    pcg.Mult(b_par, x_par);
+    pcg->Mult(b_par, x_par);
 
     // x_par writes directly into solution.GetData()
-    ctx.poisson_last_iterations = pcg.GetNumIterations();
-    ctx.poisson_last_residual = pcg.GetFinalNorm();
+    ctx.poisson_last_iterations = pcg->GetNumIterations();
+    ctx.poisson_last_residual = pcg->GetFinalNorm();
 
     // Restore essential DOFs
     for (int i = 0; i < ess_tdof.Size(); ++i) {
@@ -1590,6 +1605,16 @@ bool context_initialize_poisson(Context &ctx, std::string &error) {
 }
 
 void context_destroy_poisson(Context &ctx) {
+    // Cached Hypre solver objects — must be deleted before the matrix they reference.
+    // Order matters: PCG → AMG → ParMatrix (reverse of construction).
+    delete static_cast<mfem::HyprePCG *>(ctx.mfem_cached_hypre_pcg);
+    ctx.mfem_cached_hypre_pcg = nullptr;
+    delete static_cast<mfem::HypreBoomerAMG *>(ctx.mfem_cached_hypre_amg);
+    ctx.mfem_cached_hypre_amg = nullptr;
+    delete static_cast<mfem::HypreParMatrix *>(ctx.mfem_cached_hypre_par);
+    ctx.mfem_cached_hypre_par = nullptr;
+    ctx.poisson_solver_setup = false;
+
     // S09: BC-eliminated matrix is a separate allocation — delete first.
     delete static_cast<mfem::SparseMatrix *>(ctx.mfem_poisson_bc_op);
     ctx.mfem_poisson_bc_op = nullptr;
@@ -1809,6 +1834,309 @@ bool context_step_exchange_heun_mfem(
     stats.demag_linear_iterations = 0;
     stats.demag_linear_residual = 0.0;
     stats.wall_time_ns = 0;
+    stats.error_estimate = 0.0;
+    stats.rejected_attempts = 0;
+    stats.dt_suggested = 0.0;
+    stats.rhs_evaluations = 2;
+    stats.fsal_reused = 0;
+
+    return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Unified explicit Runge-Kutta engine (Butcher tableau-driven)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Static Butcher tableaux ───────────────────────────────────────────────
+
+static const ExplicitTableau TABLEAU_HEUN = {
+    /* stages */ 2,
+    /* c */      {0.0, 1.0},
+    /* a */      {{0},
+                  {1.0}},
+    /* b_hi */   {0.5, 0.5},
+    /* b_lo */   {0},
+    /* order_hi */  2,
+    /* order_est */ 0,
+    /* fsal */      false,
+};
+
+static const ExplicitTableau TABLEAU_RK4 = {
+    /* stages */ 4,
+    /* c */      {0.0, 0.5, 0.5, 1.0},
+    /* a */      {{0},
+                  {0.5},
+                  {0.0, 0.5},
+                  {0.0, 0.0, 1.0}},
+    /* b_hi */   {1.0/6.0, 1.0/3.0, 1.0/3.0, 1.0/6.0},
+    /* b_lo */   {0},
+    /* order_hi */  4,
+    /* order_est */ 0,
+    /* fsal */      false,
+};
+
+static const ExplicitTableau TABLEAU_BS23 = {
+    /* stages */ 4,
+    /* c */      {0.0, 0.5, 0.75, 1.0},
+    /* a */      {{0},
+                  {0.5},
+                  {0.0,   0.75},
+                  {2.0/9.0, 1.0/3.0, 4.0/9.0}},
+    /* b_hi */   {2.0/9.0, 1.0/3.0, 4.0/9.0, 0.0},        // 3rd order
+    /* b_lo */   {7.0/24.0, 0.25, 1.0/3.0, 0.125},         // 2nd order (error est)
+    /* order_hi */  3,
+    /* order_est */ 2,
+    /* fsal */      true,  // k[3] at c=1 reuses as k[0] of next step
+};
+
+static const ExplicitTableau TABLEAU_DP54 = {
+    /* stages */ 7,
+    /* c */      {0.0, 0.2, 0.3, 0.8, 8.0/9.0, 1.0, 1.0},
+    /* a */      {{0},
+                  {0.2},
+                  {3.0/40.0,       9.0/40.0},
+                  {44.0/45.0,      -56.0/15.0,     32.0/9.0},
+                  {19372.0/6561.0, -25360.0/2187.0, 64448.0/6561.0, -212.0/729.0},
+                  {9017.0/3168.0,  -355.0/33.0,     46732.0/5247.0,  49.0/176.0,  -5103.0/18656.0},
+                  {35.0/384.0,      0.0,             500.0/1113.0,    125.0/192.0, -2187.0/6784.0, 11.0/84.0}},
+    /* b_hi */   {35.0/384.0,  0.0,  500.0/1113.0,  125.0/192.0,  -2187.0/6784.0,  11.0/84.0,  0.0},  // 5th order
+    /* b_lo */   {5179.0/57600.0, 0.0, 7571.0/16695.0, 393.0/640.0, -92097.0/339200.0, 187.0/2100.0, 1.0/40.0}, // 4th order
+    /* order_hi */  5,
+    /* order_est */ 4,
+    /* fsal */      true,  // k[6] == k[0] of next step
+};
+
+const ExplicitTableau &tableau_for_integrator(fullmag_fem_integrator integrator) {
+    switch (integrator) {
+        case FULLMAG_FEM_INTEGRATOR_RK4:       return TABLEAU_RK4;
+        case FULLMAG_FEM_INTEGRATOR_RK23_BS:   return TABLEAU_BS23;
+        case FULLMAG_FEM_INTEGRATOR_RK45_DP54: return TABLEAU_DP54;
+        default:                               return TABLEAU_HEUN;
+    }
+}
+
+void stepper_workspace_allocate(StepperWorkspace &ws, size_t dof_len, int stages) {
+    if (ws.allocated && ws.dof_len == dof_len) return;
+    ws.dof_len = dof_len;
+    ws.m_backup.resize(dof_len, 0.0);
+    for (int i = 0; i < stages; ++i) {
+        ws.k[i].resize(dof_len, 0.0);
+    }
+    ws.m_stage.resize(dof_len, 0.0);
+    ws.h_ex_tmp.resize(dof_len, 0.0);
+    ws.h_demag_tmp.resize(dof_len, 0.0);
+    ws.h_eff_tmp.resize(dof_len, 0.0);
+    ws.err.resize(dof_len, 0.0);
+    ws.fsal_valid = false;
+    ws.allocated = true;
+}
+
+// evaluate_rhs: compute H_eff for state m_state, then LLG RHS into out_k
+static bool evaluate_rhs(
+    Context &ctx,
+    const std::vector<double> &m_state,
+    StepperWorkspace &ws,
+    std::vector<double> &out_k,
+    double *out_max_rhs,
+    double *out_exchange_energy,
+    double *out_demag_energy,
+    std::string &error)
+{
+    if (!compute_effective_fields_for_magnetization(
+            ctx, m_state, ws.h_ex_tmp, ws.h_demag_tmp, ws.h_eff_tmp,
+            out_exchange_energy, out_demag_energy, error)) {
+        return false;
+    }
+    double max_rhs = 0.0;
+    llg_rhs_aos(m_state, ws.h_eff_tmp,
+                ctx.material.gyromagnetic_ratio, ctx.material.damping,
+                out_k, max_rhs);
+    zero_non_magnetic_nodes_aos(out_k, ctx.magnetic_node_mask);
+    if (out_max_rhs) *out_max_rhs = max_rhs;
+    return true;
+}
+
+// Compute the weighted error norm for adaptive stepping:
+// norm = max_i |err_i| / (atol + rtol * max(|m_old_i|, |m_new_i|))
+static double compute_error_norm(
+    const std::vector<double> &err,
+    const std::vector<double> &m_old,
+    const std::vector<double> &m_new,
+    double atol, double rtol)
+{
+    double max_scaled = 0.0;
+    const size_t n = err.size() / 3u;
+    for (size_t i = 0; i < n; ++i) {
+        const size_t b = i * 3u;
+        for (int d = 0; d < 3; ++d) {
+            const double scale = atol + rtol * std::max(std::abs(m_old[b+d]), std::abs(m_new[b+d]));
+            max_scaled = std::max(max_scaled, std::abs(err[b+d]) / scale);
+        }
+    }
+    return max_scaled;
+}
+
+bool context_step_explicit_rk_mfem(
+    Context &ctx,
+    const ExplicitTableau &tab,
+    double dt_seconds,
+    fullmag_fem_step_stats &stats,
+    std::string &error)
+{
+    if (!ctx.mfem_ready) {
+        error = "MFEM step requested before MFEM context initialization";
+        return false;
+    }
+    if (!ctx.enable_exchange && !ctx.enable_demag) {
+        error = "native FEM GPU stepper requires at least one effective-field term";
+        return false;
+    }
+    if (dt_seconds <= 0.0) {
+        error = "native FEM GPU stepper requires a positive dt";
+        return false;
+    }
+
+    const size_t dof_len = ctx.m_xyz.size();
+    stepper_workspace_allocate(ctx.stepper, dof_len, tab.stages);
+    auto &ws = ctx.stepper;
+
+    const bool adaptive = (tab.order_est > 0) && ctx.adaptive_dt_enabled;
+    double dt = dt_seconds;
+    uint32_t rejected = 0;
+    uint32_t total_rhs = 0;
+    bool fsal_used = false;
+
+    // Outer accept/reject loop (runs once for non-adaptive)
+    for (;;) {
+        // Save m_backup
+        ws.m_backup = ctx.m_xyz;
+
+        // Stage 0: evaluate or reuse FSAL
+        if (tab.fsal && ws.fsal_valid) {
+            // k[0] already holds the RHS from previous accepted step
+            fsal_used = true;
+        } else {
+            double exchange_energy_s0 = 0.0;
+            double demag_energy_s0 = 0.0;
+            if (!evaluate_rhs(ctx, ctx.m_xyz, ws, ws.k[0],
+                              nullptr, &exchange_energy_s0, &demag_energy_s0, error)) {
+                return false;
+            }
+            total_rhs += 1;
+        }
+
+        // Stages 1..s-1
+        for (int s = 1; s < tab.stages; ++s) {
+            // m_stage = m_backup + dt * sum_j(a[s][j] * k[j])
+            for (size_t i = 0; i < dof_len; ++i) {
+                double accum = 0.0;
+                for (int j = 0; j < s; ++j) {
+                    accum += tab.a[s][j] * ws.k[j][i];
+                }
+                ws.m_stage[i] = ws.m_backup[i] + dt * accum;
+            }
+            normalize_aos_field(ws.m_stage);
+
+            if (!evaluate_rhs(ctx, ws.m_stage, ws, ws.k[s],
+                              nullptr, nullptr, nullptr, error)) {
+                return false;
+            }
+            total_rhs += 1;
+        }
+
+        // High-order solution: m_new = m_backup + dt * sum(b_hi[s] * k[s])
+        for (size_t i = 0; i < dof_len; ++i) {
+            double accum = 0.0;
+            for (int s = 0; s < tab.stages; ++s) {
+                accum += tab.b_hi[s] * ws.k[s][i];
+            }
+            ctx.m_xyz[i] = ws.m_backup[i] + dt * accum;
+        }
+        normalize_aos_field(ctx.m_xyz);
+
+        // For adaptive methods, compute error estimate
+        if (adaptive) {
+            for (size_t i = 0; i < dof_len; ++i) {
+                double err_accum = 0.0;
+                for (int s = 0; s < tab.stages; ++s) {
+                    err_accum += (tab.b_hi[s] - tab.b_lo[s]) * ws.k[s][i];
+                }
+                ws.err[i] = dt * err_accum;
+            }
+            double err_norm = compute_error_norm(ws.err, ws.m_backup, ctx.m_xyz,
+                                                  ctx.adaptive_atol, ctx.adaptive_rtol);
+            auto result = adaptive_pi_step(ctx, err_norm);
+            if (!result.accepted) {
+                // Reject: restore, shrink dt, retry
+                ctx.m_xyz = ws.m_backup;
+                dt = result.dt_next;
+                ctx.dt_seconds = dt;
+                ws.fsal_valid = false;
+                rejected += 1;
+                continue;
+            }
+            stats.error_estimate = err_norm;
+            stats.dt_suggested = result.dt_next;
+            ctx.dt_seconds = result.dt_next;
+        } else {
+            stats.error_estimate = 0.0;
+            stats.dt_suggested = dt;
+        }
+
+        // Accept: FSAL cache for next step
+        if (tab.fsal) {
+            // Last stage k[stages-1] evaluated at c=1 becomes k[0] of next step
+            std::swap(ws.k[0], ws.k[tab.stages - 1]);
+            ws.fsal_valid = true;
+        } else {
+            ws.fsal_valid = false;
+        }
+
+        break; // accepted
+    }
+
+    // Post-step: compute final fields and energy from accepted state
+    double exchange_energy_final = 0.0;
+    double demag_energy_final = 0.0;
+    std::vector<double> h_ex_final, h_demag_final, h_eff_final;
+    if (!compute_effective_fields_for_magnetization(
+            ctx, ctx.m_xyz, h_ex_final, h_demag_final, h_eff_final,
+            &exchange_energy_final, &demag_energy_final, error)) {
+        return false;
+    }
+    ctx.h_ex_xyz = std::move(h_ex_final);
+    ctx.h_demag_xyz = std::move(h_demag_final);
+    ctx.h_eff_xyz = std::move(h_eff_final);
+    ctx.current_time += dt;
+    ctx.step_count += 1;
+    ctx.mfem_exchange_ready = true;
+
+    // Post-step RHS for max_dm_dt metric
+    std::vector<double> rhs_final;
+    double max_rhs_final = 0.0;
+    llg_rhs_aos(ctx.m_xyz, ctx.h_eff_xyz,
+                ctx.material.gyromagnetic_ratio, ctx.material.damping,
+                rhs_final, max_rhs_final);
+    zero_non_magnetic_nodes_aos(rhs_final, ctx.magnetic_node_mask);
+    max_rhs_final = max_norm_aos(rhs_final);
+
+    stats.step = ctx.step_count;
+    stats.time_seconds = ctx.current_time;
+    stats.dt_seconds = dt;
+    stats.exchange_energy_joules = exchange_energy_final;
+    stats.demag_energy_joules = demag_energy_final;
+    stats.external_energy_joules = external_energy_from_field(ctx, ctx.m_xyz);
+    stats.total_energy_joules =
+        stats.exchange_energy_joules + stats.demag_energy_joules + stats.external_energy_joules;
+    stats.max_effective_field_amplitude = max_norm_aos(ctx.h_eff_xyz);
+    stats.max_demag_field_amplitude = max_norm_aos(ctx.h_demag_xyz);
+    stats.max_rhs_amplitude = max_rhs_final;
+    stats.demag_linear_iterations = 0;
+    stats.demag_linear_residual = 0.0;
+    stats.wall_time_ns = 0;
+    stats.rejected_attempts = rejected;
+    stats.rhs_evaluations = total_rhs;
+    stats.fsal_reused = fsal_used ? 1 : 0;
 
     return true;
 }

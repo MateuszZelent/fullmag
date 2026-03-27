@@ -299,4 +299,38 @@
 .energyCard[data-tone="demag"] { border-left: 3px solid var(--energy-demag); }
 .energyCard[data-tone="external"] { border-left: 3px solid var(--energy-external); }
 .energyCard[data-tone="total"] { border-left: 3px solid var(--energy-total); }
-.energyCard[data-tone="neutral"] { border-left: 3px solid var(--ide-text-3); }
+.energyCard[data-tone=\"neutral\"] { border-left: 3px solid var(--ide-text-3); }
+
+/* ── Charts preset bar ──────────────────────────── */
+.chartPresetBar {
+  display: flex;
+  gap: 2px;
+  padding: 0.5rem 0.75rem 0.35rem;
+  flex-shrink: 0;
+}
+
+.chartPresetBtn {
+  appearance: none;
+  border: 1px solid var(--ide-border-subtle);
+  background: var(--ide-surface-input);
+  color: var(--ide-text-3);
+  font-size: var(--ide-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 120ms, background 120ms, border-color 120ms;
+}
+
+.chartPresetBtn:hover {
+  color: var(--ide-text-2);
+  background: var(--ide-surface-hover);
+}
+
+.chartPresetBtn[data-active="true"] {
+  color: var(--ide-accent-text);
+  background: var(--ide-accent-bg);
+  border-color: var(--ide-accent);
+}

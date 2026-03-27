@@ -71,7 +71,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(ir["geometry"]["entries"][0]["size"], [200e-9, 20e-9, 5e-9])
         self.assertEqual(ir["energy_terms"][2]["kind"], "interfacial_dmi")
         self.assertEqual(ir["study"]["kind"], "time_evolution")
-        self.assertEqual(ir["study"]["dynamics"]["integrator"], "heun")
+        self.assertEqual(ir["study"]["dynamics"]["integrator"], "auto")
         self.assertEqual(ir["study"]["sampling"]["outputs"][0]["name"], "m")
         self.assertEqual(
             ir["problem_meta"]["runtime_metadata"]["runtime_selection"]["device"], "auto"
@@ -737,10 +737,44 @@ class ProblemApiTests(unittest.TestCase):
 
     def test_llg_requires_supported_integrator_and_positive_timestep(self) -> None:
         with self.assertRaisesRegex(ValueError, "integrator must be one of"):
-            fm.LLG(integrator="rk4")
+            fm.LLG(integrator="bogus")
 
         with self.assertRaisesRegex(ValueError, "fixed_timestep"):
             fm.LLG(fixed_timestep=0.0)
+
+    def test_helper_exports_ir_for_flat_workspace_script(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        fm.solver(dt=1e-13)
+        fm.save("m", every=1e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_flat_workspace.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = runtime_helper.main(
+                    [
+                        "export-ir",
+                        "--script",
+                        str(path),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        ir = json.loads(stdout.getvalue())
+        self.assertEqual(ir["problem_meta"]["entrypoint_kind"], "flat_workspace")
+        self.assertEqual(ir["study"]["dynamics"]["integrator"], "auto")
 
     def test_cli_runs_script_and_preserves_script_provenance(self) -> None:
         script = """

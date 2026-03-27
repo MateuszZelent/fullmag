@@ -7,11 +7,20 @@ import {
   Play, Settings, Loader2, Pause, Circle, Diamond,
   ArrowRight, CheckCircle2, XCircle, AlertTriangle, Dot,
 } from "lucide-react";
+import ScalarPlot from "../plots/ScalarPlot";
 import s from "./EngineConsole.module.css";
 
 /* ── Types ─────────────────────────────────────────────────── */
 
-type ConsoleTab = "live" | "log" | "energy" | "perf";
+type ConsoleTab = "live" | "log" | "energy" | "charts" | "perf";
+type ChartPreset = "energy" | "convergence" | "timestep" | "all";
+
+const CHART_PRESETS: Record<ChartPreset, { label: string; yColumns: string[] }> = {
+  energy:       { label: "Energy",       yColumns: ["e_ex", "e_demag", "e_ext", "e_total"] },
+  convergence:  { label: "Convergence",  yColumns: ["max_dm_dt", "max_h_eff"] },
+  timestep:     { label: "Δt",           yColumns: ["solver_dt"] },
+  all:          { label: "All",          yColumns: ["e_total", "max_dm_dt", "solver_dt", "max_h_eff"] },
+};
 
 interface EngineConsoleProps {
   session: SessionManifest | null;
@@ -279,6 +288,7 @@ const TABS: { value: ConsoleTab; label: string }[] = [
   { value: "live", label: "Live" },
   { value: "log", label: "Log" },
   { value: "energy", label: "Energy" },
+  { value: "charts", label: "Charts" },
   { value: "perf", label: "Perf" },
 ];
 
@@ -294,6 +304,7 @@ export default function EngineConsole({
   presentationMode = "current",
 }: EngineConsoleProps) {
   const [activeTab, setActiveTab] = useState<ConsoleTab>("live");
+  const [chartPreset, setChartPreset] = useState<ChartPreset>("energy");
   /* Note: we keep state manually for backwards compat; Radix Tabs controlled via value/onValueChange */
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -563,6 +574,36 @@ export default function EngineConsole({
                 </>
               );
             })()}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="charts" className={s.tabPane}>
+          <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <div className={s.chartPresetBar}>
+              {(Object.keys(CHART_PRESETS) as ChartPreset[]).map((key) => (
+                <button
+                  key={key}
+                  className={s.chartPresetBtn}
+                  data-active={chartPreset === key}
+                  onClick={() => setChartPreset(key)}
+                >
+                  {CHART_PRESETS[key].label}
+                </button>
+              ))}
+            </div>
+            {scalarRows.length < 2 ? (
+              <div style={{ padding: "1.5rem", color: "var(--ide-muted)", textAlign: "center", fontSize: "0.82rem" }}>
+                Waiting for at least 2 data points to render chart…
+              </div>
+            ) : (
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <ScalarPlot
+                  rows={scalarRows}
+                  xColumn="time"
+                  yColumns={CHART_PRESETS[chartPreset].yColumns}
+                />
+              </div>
+            )}
           </div>
         </TabsContent>
 

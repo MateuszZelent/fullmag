@@ -86,11 +86,12 @@ fi
 
 echo "== smoke: bundled python imports"
 PYTHONHOME="$BUNDLE_ROOT/python" \
-LD_LIBRARY_PATH="$BUNDLE_ROOT/python/lib:$python_version_dir:$python_version_dir/site-packages/numpy.libs" \
+LD_LIBRARY_PATH="$BUNDLE_ROOT/python/lib:$python_version_dir:$python_version_dir/site-packages/numpy.libs:$python_version_dir/site-packages/scipy.libs:$python_version_dir/site-packages/scipy/.libs" \
 "$BUNDLE_ROOT/python/bin/python" - <<'PY' >/dev/null
 import gmsh
 import meshio
 import numpy
+import scipy
 import trimesh
 PY
 

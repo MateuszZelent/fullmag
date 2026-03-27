@@ -236,7 +236,28 @@ pub enum DynamicsIR {
         gyromagnetic_ratio: f64,
         integrator: String,
         fixed_timestep: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adaptive_timestep: Option<AdaptiveTimeStepIR>,
     },
+}
+
+/// Adaptive time-stepping configuration for embedded-error RK methods.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdaptiveTimeStepIR {
+    pub atol: f64,
+    pub rtol: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dt_initial: Option<f64>,
+    pub dt_min: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dt_max: Option<f64>,
+    pub safety: f64,
+    pub growth_limit: f64,
+    pub shrink_limit: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_spin_rotation: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub norm_tolerance: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -671,6 +692,8 @@ pub struct FemPlanIR {
     pub integrator: IntegratorChoice,
     pub fixed_timestep: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_timestep: Option<AdaptiveTimeStepIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relaxation: Option<RelaxationControlIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<String>,
@@ -754,6 +777,7 @@ impl ProblemIR {
                     gyromagnetic_ratio: 2.211e5,
                     integrator: "heun".to_string(),
                     fixed_timestep: Some(1e-13),
+                    adaptive_timestep: None,
                 },
                 sampling: SamplingIR {
                     outputs: vec![
@@ -1231,20 +1255,31 @@ fn validate_unique_names<'a>(
     }
 }
 
+fn is_supported_llg_integrator(integrator: &str) -> bool {
+    matches!(
+        integrator,
+        "heun" | "rk4" | "rk23" | "rk45" | "abm3" | "auto"
+    )
+}
+
 fn validate_study_dynamics(dynamics: &DynamicsIR, errors: &mut Vec<String>) {
     match dynamics {
         DynamicsIR::Llg {
             gyromagnetic_ratio,
             integrator,
             fixed_timestep,
+            ..
         } => {
             if *gyromagnetic_ratio <= 0.0 {
                 errors.push("llg.gyromagnetic_ratio must be positive".to_string());
             }
             if integrator.trim().is_empty() {
                 errors.push("llg.integrator must not be empty".to_string());
-            } else if integrator != "heun" {
-                errors.push("llg.integrator must currently be 'heun'".to_string());
+            } else if !is_supported_llg_integrator(integrator.as_str()) {
+                errors.push(
+                    "llg.integrator must be one of: heun, rk4, rk23, rk45, abm3, auto"
+                        .to_string(),
+                );
             }
             if fixed_timestep.is_some_and(|value| value <= 0.0) {
                 errors.push("llg.fixed_timestep must be positive when provided".to_string());
@@ -1325,8 +1360,9 @@ mod tests {
         ir.study = StudyIR::TimeEvolution {
             dynamics: DynamicsIR::Llg {
                 gyromagnetic_ratio: 2.211e5,
-                integrator: "rk4".to_string(),
+                integrator: "bogus".to_string(),
                 fixed_timestep: None,
+                adaptive_timestep: None,
             },
             sampling: ir.study.sampling().clone(),
         };
@@ -1336,7 +1372,7 @@ mod tests {
             .expect_err("unsupported llg integrator must fail validation");
         assert!(errors
             .iter()
-            .any(|error| error.contains("llg.integrator must currently be 'heun'")));
+            .any(|error| error.contains("llg.integrator must be one of")));
     }
 
     #[test]

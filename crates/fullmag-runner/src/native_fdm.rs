@@ -228,6 +228,7 @@ impl NativeFdmBackend {
             max_h_demag: stats.max_demag_field_amplitude,
             max_dm_dt: stats.max_rhs_amplitude,
             wall_time_ns: stats.wall_time_ns,
+            ..StepStats::default()
         })
     }
 

@@ -1576,6 +1576,13 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut continuation_magnetization: Option<Vec<[f64; 3]>> = None;
 
     for (stage_index, mut stage) in stages.into_iter().enumerate() {
+        if stage.entrypoint_kind == "flat_workspace" {
+            live_workspace.push_log(
+                "system",
+                "Workspace-only script loaded — awaiting control-room command".to_string(),
+            );
+            continue;
+        }
         if let Some(previous_final_magnetization) = continuation_magnetization.as_deref() {
             apply_continuation_initial_state(&mut stage.ir, previous_final_magnetization)?;
         }
@@ -2611,10 +2618,19 @@ fn materialize_script_stages(config: ScriptExecutionConfig) -> Result<Vec<Resolv
     }
 
     if stages.is_empty() {
+        let entrypoint_kind = ir.problem_meta.entrypoint_kind.clone();
         return Ok(vec![ResolvedScriptStage {
-            until_seconds: resolve_script_until_seconds(&ir, default_until_seconds)?,
+            until_seconds: if entrypoint_kind == "flat_workspace" {
+                0.0
+            } else {
+                resolve_script_until_seconds(&ir, default_until_seconds)?
+            },
             ir,
-            entrypoint_kind: "direct_script".to_string(),
+            entrypoint_kind: if entrypoint_kind.is_empty() {
+                "direct_script".to_string()
+            } else {
+                entrypoint_kind
+            },
         }]);
     }
 
@@ -3014,7 +3030,7 @@ fn spawn_control_room(
     if !dev_mode {
         if !static_control_room_is_ready(LOCAL_API_PORT, Duration::from_secs(20)) {
             bail!(
-                "built control room did not become ready on :{}; rebuild the launcher assets with `make install-cli` or run `fullmag --dev ...`",
+                "built control room did not become ready on :{}; rebuild the static control room with `make web-build-static` or `just build-static-control-room`, or run `fullmag --dev ...`",
                 LOCAL_API_PORT
             );
         }
@@ -3423,6 +3439,7 @@ fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runner::StepUpda
         max_h_eff: 0.0,
         max_h_demag: 0.0,
         wall_time_ns: 0,
+        ..fullmag_runner::StepStats::default()
     };
 
     match backend_plan {
@@ -3669,7 +3686,10 @@ mod tests {
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
+            adaptive_timestep: None,
             relaxation: None,
+            demag_realization: None,
+            air_box_config: None,
         });
 
         let update = initial_step_update(&plan);

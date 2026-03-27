@@ -13,24 +13,29 @@ help:
 ensure-python:
     mkdir -p .fullmag/local
     if [ ! -x "{{repo_python}}" ]; then python3 -m venv .fullmag/local/python; fi
-    "{{repo_python}}" -m pip install 'numpy>=1.24' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2'
+    "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2'
 
 build target="fullmag":
     if [ "{{target}}" = "fullmag" ]; then make install-cli; \
+    elif [ "{{target}}" = "fullmag-static" ]; then make install-cli-static; \
     elif [ "{{target}}" = "fullmag-dev" ]; then make install-cli-dev; \
     elif [ "{{target}}" = "fullmag-host" ]; then make install-cli; \
     elif [ "{{target}}" = "dev-image" ]; then docker compose build dev; \
     elif [ "{{target}}" = "fem-gpu-runtime" ]; then docker compose --profile fem-gpu build fem-gpu; \
     elif [ "{{target}}" = "fem-gpu-runtime-host" ]; then ./scripts/export_fem_gpu_runtime.sh; \
-    else echo "unknown build target: {{target}}" >&2; echo "supported targets: fullmag, fullmag-dev, fullmag-host, dev-image, fem-gpu-runtime, fem-gpu-runtime-host" >&2; exit 1; fi
+    else echo "unknown build target: {{target}}" >&2; echo "supported targets: fullmag, fullmag-static, fullmag-dev, fullmag-host, dev-image, fem-gpu-runtime, fem-gpu-runtime-host" >&2; exit 1; fi
+
+build-static-control-room:
+    make web-build-static-if-needed
 
 package target="fullmag":
     if [ "{{target}}" = "fullmag" ] || [ "{{target}}" = "fullmag-host" ]; then ./scripts/package_fullmag_host.sh; \
     elif [ "{{target}}" = "fullmag-portable" ]; then \
       just ensure-python; \
-      if [ ! -x ".fullmag/local/bin/fullmag-bin" ] || [ ! -x ".fullmag/local/bin/fullmag-api" ] || [ ! -e ".fullmag/local/lib/libfullmag_fdm.so.0" ] || [ ! -f ".fullmag/local/web/index.html" ]; then \
+      if [ ! -x ".fullmag/local/bin/fullmag-bin" ] || [ ! -x ".fullmag/local/bin/fullmag-api" ] || [ ! -e ".fullmag/local/lib/libfullmag_fdm.so.0" ]; then \
         FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag; \
       fi; \
+      just build-static-control-room; \
       ./scripts/package_fullmag_portable.sh; \
     \
     else echo "unknown package target: {{target}}" >&2; echo "supported targets: fullmag, fullmag-host, fullmag-portable" >&2; exit 1; fi
@@ -58,6 +63,7 @@ run script:
 run-interactive script:
     just ensure-python
     just build fullmag
+    just build-static-control-room
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag -i {{script}}
 
 run-headless script:
@@ -83,16 +89,18 @@ run-nanoflower:
 run-nanoflower-static:
     just ensure-python
     just build fullmag
+    just build-static-control-room
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag examples/nanoflower_fem.py
 
 run-nanoflower-interactive:
     just ensure-python
-    just build fullmag
-    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag -i examples/nanoflower_fdm.py
+    FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag
+    just build-static-control-room
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag --dev -i examples/nanoflower_fdm.py
 
 run-nanoflower-headless:
     just ensure-python
-    just build fullmag
+    FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag examples/nanoflower_fdm.py --headless --json
 
 fem-gpu-headless script:

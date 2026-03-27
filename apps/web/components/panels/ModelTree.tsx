@@ -116,11 +116,24 @@ export function buildFullmagModelTree(opts: {
   backend?: string;
   geometryKind?: string;
   materialName?: string;
+  materialMsat?: number | null;
+  materialAex?: number | null;
+  materialAlpha?: number | null;
   meshStatus?: NodeStatus;
   meshElements?: number;
+  meshNodes?: number;
+  meshFeOrder?: number | null;
+  meshName?: string | null;
   solverStatus?: NodeStatus;
+  solverIntegrator?: string;
+  solverRelaxAlgorithm?: string;
   demagMethod?: string;
   physicsTerms?: string[];
+  exchangeEnabled?: boolean;
+  demagEnabled?: boolean;
+  zeemanField?: number[] | null;
+  convergenceStatus?: NodeStatus;
+  scalarRowCount?: number;
   onGeometryClick?: () => void;
   onRegionsClick?: () => void;
   onMeshClick?: () => void;
@@ -183,14 +196,14 @@ export function buildFullmagModelTree(opts: {
       label: "Materials",
       icon: "●",
       badge: opts.materialName ?? "—",
-      status: "ready",
+      status: opts.materialMsat != null ? "ready" : "pending",
       onClick: opts.onMaterialClick,
       children: [
         { id: "mat-body", label: opts.materialName ?? "Material 1", icon: "●",
           children: [
-            { id: "mat-ms", label: "Ms (saturation)", icon: "𝑀" },
-            { id: "mat-aex", label: "A (exchange)", icon: "𝐴" },
-            { id: "mat-alpha", label: "α (damping)", icon: "α" },
+            { id: "mat-ms", label: opts.materialMsat != null ? `Ms = ${fmtCompact(opts.materialMsat)} A/m` : "Ms (saturation)", icon: "𝑀", status: opts.materialMsat != null ? "ready" : "pending" },
+            { id: "mat-aex", label: opts.materialAex != null ? `A = ${opts.materialAex.toExponential(1)} J/m` : "A (exchange)", icon: "𝐴", status: opts.materialAex != null ? "ready" : "pending" },
+            { id: "mat-alpha", label: opts.materialAlpha != null ? `α = ${opts.materialAlpha}` : "α (damping)", icon: "α", status: opts.materialAlpha != null ? "ready" : "pending" },
           ],
         },
       ],
@@ -207,11 +220,11 @@ export function buildFullmagModelTree(opts: {
       id: "mesh",
       label: "Mesh",
       icon: "◫",
-      badge: opts.meshElements ? `${opts.meshElements.toLocaleString()} el` : "—",
+      badge: opts.meshElements ? `${opts.meshElements.toLocaleString()} el` : opts.meshNodes ? `${opts.meshNodes.toLocaleString()} nodes` : "—",
       status: opts.meshStatus ?? "pending",
       onClick: opts.onMeshClick,
       children: [
-        { id: "mesh-size", label: "Size", icon: "📏" },
+        { id: "mesh-size", label: opts.meshFeOrder != null ? `Order: P${opts.meshFeOrder}` : "Size", icon: "📏" },
         { id: "mesh-algorithm", label: "Algorithm", icon: "⚙" },
         { id: "mesh-quality", label: "Quality", icon: "📊" },
       ],
@@ -224,16 +237,17 @@ export function buildFullmagModelTree(opts: {
       status: opts.solverStatus ?? "pending",
       onClick: opts.onSolverClick,
       children: [
-        { id: "study-solver", label: "Solver Configuration", icon: "🔧" },
+        { id: "study-solver", label: opts.solverIntegrator ? `Integrator: ${opts.solverIntegrator.toUpperCase()}` : "Solver Configuration", icon: "🔧" },
         { id: "study-time", label: "Time Stepping", icon: "⏱" },
-        { id: "study-convergence", label: "Convergence", icon: "📉" },
+        { id: "study-convergence", label: "Convergence", icon: "📉", status: opts.convergenceStatus },
       ],
     },
     {
       id: "results",
       label: "Results",
       icon: "📈",
-      status: "pending",
+      status: opts.scalarRowCount && opts.scalarRowCount > 0 ? "ready" : "pending",
+      badge: opts.scalarRowCount ? `${opts.scalarRowCount} pts` : undefined,
       onClick: opts.onResultsClick,
       children: [
         { id: "res-fields", label: "Field Data", icon: "🗂" },
@@ -242,4 +256,10 @@ export function buildFullmagModelTree(opts: {
       ],
     },
   ];
+}
+
+function fmtCompact(v: number): string {
+  if (Math.abs(v) >= 1e6) return `${(v / 1e6).toFixed(0)}M`;
+  if (Math.abs(v) >= 1e3) return `${(v / 1e3).toFixed(0)}k`;
+  return v.toFixed(0);
 }

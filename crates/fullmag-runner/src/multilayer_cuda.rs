@@ -1297,6 +1297,7 @@ fn make_step_stats(
         max_h_eff: observables.max_h_eff,
         max_h_demag: observables.max_h_demag,
         wall_time_ns,
+        ..StepStats::default()
     }
 }
 

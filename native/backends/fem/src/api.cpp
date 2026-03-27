@@ -97,8 +97,19 @@ int fullmag_fem_backend_step(
 
 #if FULLMAG_HAS_MFEM_STACK
     handle->last_error.clear();
-    if (!fullmag::fem::context_step_exchange_heun_mfem(
-            handle->context, dt_seconds, *out_stats, handle->last_error)) {
+    bool ok = false;
+    auto &ctx = handle->context;
+    if (ctx.integrator == FULLMAG_FEM_INTEGRATOR_HEUN) {
+        // Legacy Heun path (unchanged behavior)
+        ok = fullmag::fem::context_step_exchange_heun_mfem(
+            ctx, dt_seconds, *out_stats, handle->last_error);
+    } else {
+        // Unified explicit-RK engine
+        const auto &tab = fullmag::fem::tableau_for_integrator(ctx.integrator);
+        ok = fullmag::fem::context_step_explicit_rk_mfem(
+            ctx, tab, dt_seconds, *out_stats, handle->last_error);
+    }
+    if (!ok) {
         fullmag_fem_set_handle_error(handle, handle->last_error);
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }

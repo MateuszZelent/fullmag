@@ -123,7 +123,7 @@ export FULLMAG_REPO_ROOT="${INSTALL_ROOT}"
 export FULLMAG_PYTHON="${INSTALL_ROOT}/python/bin/python"
 export PYTHONHOME="${INSTALL_ROOT}/python"
 export PYTHONNOUSERSITE=1
-export LD_LIBRARY_PATH="${INSTALL_ROOT}/python/lib:${INSTALL_ROOT}/python/lib/python__PY_VERSION__:${INSTALL_ROOT}/python/lib/python__PY_VERSION__/site-packages/numpy.libs${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LD_LIBRARY_PATH="${INSTALL_ROOT}/python/lib:${INSTALL_ROOT}/python/lib/python__PY_VERSION__:${INSTALL_ROOT}/python/lib/python__PY_VERSION__/site-packages/numpy.libs:${INSTALL_ROOT}/python/lib/python__PY_VERSION__/site-packages/scipy.libs:${INSTALL_ROOT}/python/lib/python__PY_VERSION__/site-packages/scipy/.libs${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export PYTHONPATH="${INSTALL_ROOT}/packages/fullmag-py/src${PYTHONPATH:+:${PYTHONPATH}}"
 export FULLMAG_FEM_MESH_CACHE_DIR="${INSTALL_ROOT}/.fullmag/local/cache/fem_mesh_assets"
 exec "${SELF_DIR}/fullmag-bin" "$@"

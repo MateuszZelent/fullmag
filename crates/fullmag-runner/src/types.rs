@@ -42,6 +42,43 @@ pub struct StepStats {
     pub max_h_eff: f64,
     pub max_h_demag: f64,
     pub wall_time_ns: u64,
+    // --- adaptive time-stepping diagnostics (PR1) ---
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_estimate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dt_suggested: Option<f64>,
+    #[serde(default)]
+    pub rejected_attempts: u32,
+    #[serde(default)]
+    pub rhs_evals: u32,
+    #[serde(default)]
+    pub demag_solves: u32,
+    #[serde(default)]
+    pub fsal_reused: bool,
+}
+
+impl Default for StepStats {
+    fn default() -> Self {
+        Self {
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            e_ex: 0.0,
+            e_demag: 0.0,
+            e_ext: 0.0,
+            e_total: 0.0,
+            max_dm_dt: 0.0,
+            max_h_eff: 0.0,
+            max_h_demag: 0.0,
+            wall_time_ns: 0,
+            error_estimate: None,
+            dt_suggested: None,
+            rejected_attempts: 0,
+            rhs_evals: 0,
+            demag_solves: 0,
+            fsal_reused: false,
+        }
+    }
 }
 
 /// Lightweight update emitted by the runner for live WebSocket streaming.

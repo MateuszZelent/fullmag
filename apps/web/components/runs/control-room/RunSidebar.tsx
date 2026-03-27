@@ -241,12 +241,34 @@ export default function RunSidebar(props: RunSidebarProps) {
         geometryKind: mesherSourceKind ?? undefined,
         materialName:
           material?.msat != null ? `Msat=${(material.msat / 1e3).toFixed(0)} kA/m` : undefined,
+        materialMsat: material?.msat,
+        materialAex: material?.aex,
+        materialAlpha: material?.alpha,
         meshStatus: effectiveFemMesh ? "ready" : "pending",
         meshElements: effectiveFemMesh?.elements.length,
+        meshNodes: effectiveFemMesh?.nodes.length,
+        meshFeOrder: meshFeOrder,
+        meshName: meshName,
         solverStatus: hasSolverTelemetry ? "active" : "pending",
+        solverIntegrator: solverSettings.integrator,
+        solverRelaxAlgorithm: solverSettings.relaxAlgorithm,
         demagMethod: "transfer-grid",
+        exchangeEnabled: material?.exchangeEnabled,
+        demagEnabled: material?.demagEnabled,
+        zeemanField: material?.zeemanField,
+        convergenceStatus:
+          hasSolverTelemetry && effectiveDmDt > 0 && effectiveDmDt < 1e-5
+            ? "ready"
+            : hasSolverTelemetry
+              ? "active"
+              : undefined,
+        scalarRowCount: scalarRows.length,
       }),
-    [effectiveFemMesh, hasSolverTelemetry, isFemBackend, material?.msat, mesherSourceKind],
+    [
+      effectiveFemMesh, hasSolverTelemetry, isFemBackend, material, mesherSourceKind,
+      meshFeOrder, meshName, solverSettings.integrator, solverSettings.relaxAlgorithm,
+      effectiveDmDt, scalarRows.length,
+    ],
   );
 
   const fallbackSidebarNodeId = useMemo(() => {
@@ -416,6 +438,18 @@ export default function RunSidebar(props: RunSidebarProps) {
           onChange={setSolverSettings}
           solverRunning={workspaceStatus === "running"}
           awaitingCommand={awaitingCommand}
+          onApply={() =>
+            enqueueCommand({
+              kind: "configure_solver",
+              integrator: solverSettings.integrator,
+              fixed_timestep: parseOptionalNumber(solverSettings.fixedTimestep),
+              relax_algorithm: solverSettings.relaxAlgorithm,
+              torque_tolerance: parseOptionalNumber(solverSettings.torqueTolerance),
+              energy_tolerance: parseOptionalNumber(solverSettings.energyTolerance),
+              max_relax_steps: parseOptionalNumber(solverSettings.maxRelaxSteps),
+              relax_alpha: parseOptionalNumber(solverSettings.relaxAlpha),
+            })
+          }
         />
       </Section>
 
@@ -436,7 +470,12 @@ export default function RunSidebar(props: RunSidebarProps) {
               tone="accent"
               variant="solid"
               disabled={commandBusy || !awaitingCommand}
-              onClick={() => enqueueCommand({ kind: "run", until_seconds: Number(runUntilInput) })}
+              onClick={() => enqueueCommand({
+                kind: "run",
+                until_seconds: Number(runUntilInput),
+                integrator: solverSettings.integrator,
+                fixed_timestep: parseOptionalNumber(solverSettings.fixedTimestep),
+              })}
             >
               Run
             </Button>
@@ -464,6 +503,10 @@ export default function RunSidebar(props: RunSidebarProps) {
                   max_steps: parseOptionalNumber(solverSettings.maxRelaxSteps),
                   torque_tolerance: parseOptionalNumber(solverSettings.torqueTolerance),
                   energy_tolerance: parseOptionalNumber(solverSettings.energyTolerance),
+                  relax_algorithm: solverSettings.relaxAlgorithm,
+                  relax_alpha: parseOptionalNumber(solverSettings.relaxAlpha),
+                  integrator: solverSettings.integrator,
+                  fixed_timestep: parseOptionalNumber(solverSettings.fixedTimestep),
                 })
               }
             >

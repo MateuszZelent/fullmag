@@ -105,7 +105,9 @@ impl NativeFemBackend {
             damping: plan.material.damping,
             gyromagnetic_ratio: plan.gyromagnetic_ratio,
         };
-        let demag_kernel_spectra = if plan.enable_demag {
+        let demag_kernel_spectra = if plan.enable_demag
+            && plan.demag_realization.as_deref() != Some("poisson_airbox")
+        {
             let (bbox_min, bbox_max) = mesh_bbox(&plan.mesh.nodes).ok_or_else(|| RunError {
                 message: "FEM GPU demag requires a non-empty mesh bounding box".to_string(),
             })?;
@@ -153,9 +155,18 @@ impl NativeFemBackend {
                 fullmag_ir::IntegratorChoice::Heun => {
                     ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_HEUN
                 }
+                fullmag_ir::IntegratorChoice::Rk4 => {
+                    ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK4
+                }
+                fullmag_ir::IntegratorChoice::Rk23 => {
+                    ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK23_BS
+                }
+                fullmag_ir::IntegratorChoice::Rk45 => {
+                    ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK45_DP54
+                }
                 other => {
                     eprintln!(
-                        "native FEM backend only supports Heun; ignoring {:?}, falling back to Heun",
+                        "native FEM backend: unsupported integrator {:?}, falling back to Heun",
                         other
                     );
                     ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_HEUN
@@ -206,7 +217,25 @@ impl NativeFemBackend {
             initial_magnetization_xyz: m_flat.as_ptr(),
             initial_magnetization_len: m_flat.len() as u64,
             dt_seconds: plan.fixed_timestep.unwrap_or(1e-13),
+            adaptive_config: std::ptr::null(),
         };
+
+        // Build adaptive config if present
+        let adaptive_cfg = plan.adaptive_timestep.as_ref().map(|a| {
+            ffi::fullmag_fem_adaptive_config {
+                atol: a.atol,
+                rtol: a.rtol,
+                dt_initial: a.dt_initial.unwrap_or(plan.fixed_timestep.unwrap_or(1e-13)),
+                dt_min: a.dt_min,
+                dt_max: a.dt_max.unwrap_or(1e-10),
+                safety: a.safety,
+                growth_limit: a.growth_limit,
+                shrink_limit: a.shrink_limit,
+            }
+        });
+        if let Some(ref cfg) = adaptive_cfg {
+            plan_desc.adaptive_config = cfg as *const ffi::fullmag_fem_adaptive_config;
+        }
 
         let handle = unsafe { ffi::fullmag_fem_backend_create(&plan_desc) };
         if handle.is_null() {
@@ -242,6 +271,11 @@ impl NativeFemBackend {
             demag_linear_iterations: 0,
             demag_linear_residual: 0.0,
             wall_time_ns: 0,
+            error_estimate: 0.0,
+            rejected_attempts: 0,
+            dt_suggested: 0.0,
+            rhs_evaluations: 0,
+            fsal_reused: 0,
         };
 
         let rc = unsafe { ffi::fullmag_fem_backend_step(self.handle, dt, &mut stats) };
@@ -261,6 +295,30 @@ impl NativeFemBackend {
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
             wall_time_ns: stats.wall_time_ns,
+            error_estimate: if stats.error_estimate > 0.0 {
+                Some(stats.error_estimate)
+            } else {
+                None
+            },
+            rejected_attempts: stats.rejected_attempts,
+            dt_suggested: if stats.dt_suggested > 0.0 {
+                Some(stats.dt_suggested)
+            } else {
+                None
+            },
+            rhs_evaluations: stats.rhs_evaluations,
+            fsal_reused: stats.fsal_reused != 0,
+            demag_iterations: if stats.demag_linear_iterations > 0 {
+                Some(stats.demag_linear_iterations)
+            } else {
+                None
+            },
+            demag_residual: if stats.demag_linear_residual > 0.0 {
+                Some(stats.demag_linear_residual)
+            } else {
+                None
+            },
+            ..StepStats::default()
         })
     }
 
@@ -453,7 +511,10 @@ mod tests {
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
+            adaptive_timestep: None,
             relaxation: None,
+            demag_realization: None,
+            air_box_config: None,
         }
     }
 
@@ -507,7 +568,10 @@ mod tests {
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(2.5e-13),
+            adaptive_timestep: None,
             relaxation: None,
+            demag_realization: None,
+            air_box_config: None,
         }
     }
 

@@ -194,7 +194,7 @@ export default function FemMeshView3D({
   const meshRef = useRef<THREE.Mesh | null>(null);
   const wireRef = useRef<THREE.LineSegments | null>(null);
   const pointsRef = useRef<THREE.Points | null>(null);
-  const arrowGroupRef = useRef<THREE.Group | null>(null);
+  const arrowGroupRef = useRef<THREE.Group | THREE.InstancedMesh | null>(null);
   const animIdRef = useRef<number>(0);
   const maxDimRef = useRef<number>(1);
   const centerRef = useRef<THREE.Vector3>(new THREE.Vector3());
@@ -208,6 +208,7 @@ export default function FemMeshView3D({
   const [internalClipPos, setInternalClipPos] = useState(50); // percentage 0-100
   const [showClipDrop, setShowClipDrop] = useState(false);
   const [internalShowArrows, setInternalShowArrows] = useState(false);
+  const [arrowDensity, setArrowDensity] = useState(1200);
   const [hoveredFace, setHoveredFace] = useState<{ idx: number; x: number; y: number } | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; faceIdx: number } | null>(null);
   const [selectedFaces, setSelectedFaces] = useState<number[]>([]);
@@ -675,7 +676,7 @@ export default function FemMeshView3D({
     }
   }, [field, buildGeometry]);
 
-  /* ── Arrow plot (COMSOL-style cone glyphs) ──────────────────────── */
+  /* ── Arrow plot (COMSOL-style cone glyphs via InstancedMesh) ──── */
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
@@ -683,45 +684,144 @@ export default function FemMeshView3D({
     // Remove old arrows
     if (arrowGroupRef.current) {
       scene.remove(arrowGroupRef.current);
-      arrowGroupRef.current.traverse((obj) => {
-        if ((obj as THREE.Mesh).geometry) (obj as THREE.Mesh).geometry.dispose();
-        if ((obj as THREE.Mesh).material) {
-          const mat = (obj as THREE.Mesh).material;
-          if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
-          else mat.dispose();
-        }
-      });
+      if (arrowGroupRef.current instanceof THREE.InstancedMesh) {
+        arrowGroupRef.current.geometry.dispose();
+        (arrowGroupRef.current.material as THREE.Material).dispose();
+      } else {
+        arrowGroupRef.current.traverse((obj) => {
+          if ((obj as THREE.Mesh).geometry) (obj as THREE.Mesh).geometry.dispose();
+          if ((obj as THREE.Mesh).material) {
+            const mat = (obj as THREE.Mesh).material;
+            if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+            else (mat as THREE.Material).dispose();
+          }
+        });
+      }
       arrowGroupRef.current = null;
     }
 
     const fld = meshData.fieldData;
     if (!showArrows || !fld) return;
 
-    const { nodes, boundaryFaces, nNodes } = meshData;
+    const { nodes, boundaryFaces } = meshData;
     const maxDim = maxDimRef.current;
     const center = centerRef.current;
-    const arrowLen = maxDim * 0.04;
-    const arrowRadius = arrowLen * 0.15;
 
-    // Sample every Nth boundary node to keep cone count reasonable
+    // ── Step 1: Collect unique boundary nodes ────────────────────
     const uniqueNodeSet = new Set<number>();
     for (let i = 0; i < boundaryFaces.length; i++) uniqueNodeSet.add(boundaryFaces[i]);
     const allBoundaryNodes = Array.from(uniqueNodeSet);
-    const maxArrows = 600;
-    const step = Math.max(1, Math.floor(allBoundaryNodes.length / maxArrows));
-    const sampledNodes = allBoundaryNodes.filter((_, i) => i % step === 0);
 
-    const group = new THREE.Group();
-    const coneGeom = new THREE.ConeGeometry(arrowRadius, arrowLen, 6);
-    coneGeom.rotateX(Math.PI / 2); // align tip with +Z
-    coneGeom.translate(0, 0, arrowLen / 2);
+    // ── Step 2: Spatial grid subsampling ─────────────────────────
+    // Bin boundary nodes into a regular 3D grid to ensure uniform
+    // spatial coverage (eliminates clustering from Set iteration order).
+    const maxArrows = arrowDensity;
+    let sampledNodes: number[];
 
-    const _dir = new THREE.Vector3();
-    const _quat = new THREE.Quaternion();
-    const _zAxis = new THREE.Vector3(0, 0, 1);
-    const _color = new THREE.Color();
+    if (allBoundaryNodes.length <= maxArrows) {
+      sampledNodes = allBoundaryNodes;
+    } else {
+      // Compute bounding box of boundary nodes
+      let bMinX = Infinity, bMinY = Infinity, bMinZ = Infinity;
+      let bMaxX = -Infinity, bMaxY = -Infinity, bMaxZ = -Infinity;
+      for (const ni of allBoundaryNodes) {
+        const x = nodes[ni * 3], y = nodes[ni * 3 + 1], z = nodes[ni * 3 + 2];
+        bMinX = Math.min(bMinX, x); bMaxX = Math.max(bMaxX, x);
+        bMinY = Math.min(bMinY, y); bMaxY = Math.max(bMaxY, y);
+        bMinZ = Math.min(bMinZ, z); bMaxZ = Math.max(bMaxZ, z);
+      }
+      // Determine grid resolution to get ~maxArrows cells
+      const volume = Math.max(1e-30,
+        (bMaxX - bMinX) * (bMaxY - bMinY) * (bMaxZ - bMinZ));
+      const cellSize = Math.pow(volume / maxArrows, 1 / 3);
+      const invCell = 1 / Math.max(cellSize, 1e-30);
+      const nBinsX = Math.max(1, Math.ceil((bMaxX - bMinX) * invCell));
+      const nBinsY = Math.max(1, Math.ceil((bMaxY - bMinY) * invCell));
+      const nBinsZ = Math.max(1, Math.ceil((bMaxZ - bMinZ) * invCell));
 
+      // One node per grid cell (first-come keeps)
+      const occupied = new Map<number, number>();
+      for (const ni of allBoundaryNodes) {
+        const ix = Math.min(nBinsX - 1, Math.floor((nodes[ni * 3] - bMinX) * invCell));
+        const iy = Math.min(nBinsY - 1, Math.floor((nodes[ni * 3 + 1] - bMinY) * invCell));
+        const iz = Math.min(nBinsZ - 1, Math.floor((nodes[ni * 3 + 2] - bMinZ) * invCell));
+        const key = ix + iy * nBinsX + iz * nBinsX * nBinsY;
+        if (!occupied.has(key)) occupied.set(key, ni);
+      }
+      sampledNodes = Array.from(occupied.values());
+    }
+
+    // ── Step 3: Pre-compute field normalization ──────────────────
+    let maxAbsX = 0, maxAbsY = 0, maxAbsZ = 0, maxMag = 0;
     for (const ni of sampledNodes) {
+      const vx = fld.x[ni] ?? 0, vy = fld.y[ni] ?? 0, vz = fld.z[ni] ?? 0;
+      maxAbsX = Math.max(maxAbsX, Math.abs(vx));
+      maxAbsY = Math.max(maxAbsY, Math.abs(vy));
+      maxAbsZ = Math.max(maxAbsZ, Math.abs(vz));
+      maxMag = Math.max(maxMag, Math.sqrt(vx * vx + vy * vy + vz * vz));
+    }
+    const scaleX = Math.max(maxAbsX, 1e-12);
+    const scaleY = Math.max(maxAbsY, 1e-12);
+    const scaleZ = Math.max(maxAbsZ, 1e-12);
+    const scaleMag = Math.max(maxMag, 1e-12);
+
+    // ── Step 4: Arrow geometry (shaft+cone merged) ──────────────
+    const arrowLen = maxDim * 0.035;
+    const shaftRadius = arrowLen * 0.08;
+    const headRadius = arrowLen * 0.20;
+    const headLen = arrowLen * 0.35;
+    const shaftLen = arrowLen - headLen;
+    const shaft = new THREE.CylinderGeometry(shaftRadius, shaftRadius, shaftLen, 6);
+    shaft.rotateX(Math.PI / 2); // align with +Z
+    shaft.translate(0, 0, shaftLen / 2);
+    const head = new THREE.ConeGeometry(headRadius, headLen, 6);
+    head.rotateX(Math.PI / 2); // align tip with +Z
+    head.translate(0, 0, shaftLen + headLen / 2);
+
+    // Merge into single arrow geometry
+    const merged = new THREE.BufferGeometry();
+    const shaftPos = shaft.getAttribute("position") as THREE.BufferAttribute;
+    const headPos = head.getAttribute("position") as THREE.BufferAttribute;
+    const totalVerts = shaftPos.count + headPos.count;
+    const positions = new Float32Array(totalVerts * 3);
+    const normals = new Float32Array(totalVerts * 3);
+    positions.set(new Float32Array(shaftPos.array), 0);
+    positions.set(new Float32Array(headPos.array), shaftPos.count * 3);
+    const shaftNorm = shaft.getAttribute("normal") as THREE.BufferAttribute;
+    const headNorm = head.getAttribute("normal") as THREE.BufferAttribute;
+    normals.set(new Float32Array(shaftNorm.array), 0);
+    normals.set(new Float32Array(headNorm.array), shaftPos.count * 3);
+    merged.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    merged.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+    // Merge index buffers with offset
+    const shaftIdx = shaft.getIndex()!;
+    const headIdx = head.getIndex()!;
+    const totalIdx = shaftIdx.count + headIdx.count;
+    const indexArr = new Uint32Array(totalIdx);
+    for (let i = 0; i < shaftIdx.count; i++) indexArr[i] = shaftIdx.array[i];
+    for (let i = 0; i < headIdx.count; i++) indexArr[shaftIdx.count + i] = headIdx.array[i] + shaftPos.count;
+    merged.setIndex(new THREE.BufferAttribute(indexArr, 1));
+    shaft.dispose();
+    head.dispose();
+
+    // ── Step 5: InstancedMesh ───────────────────────────────────
+    const material = new THREE.MeshPhongMaterial({ shininess: 60 });
+    const count = sampledNodes.length;
+    const instancedMesh = new THREE.InstancedMesh(merged, material, count);
+    instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    instancedMesh.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(count * 3), 3,
+    );
+    instancedMesh.frustumCulled = false;
+
+    const _dummy = new THREE.Object3D();
+    const _dir = new THREE.Vector3();
+    const _defaultUp = new THREE.Vector3(0, 0, 1);
+    const _color = new THREE.Color();
+    const colors = instancedMesh.instanceColor.array as Float32Array;
+
+    for (let i = 0; i < count; i++) {
+      const ni = sampledNodes[i];
       const px = nodes[ni * 3] - center.x;
       const py = nodes[ni * 3 + 1] - center.y;
       const pz = nodes[ni * 3 + 2] - center.z;
@@ -729,42 +829,54 @@ export default function FemMeshView3D({
       const vy = fld.y[ni] ?? 0;
       const vz = fld.z[ni] ?? 0;
       const len = Math.sqrt(vx * vx + vy * vy + vz * vz);
-      if (len < 1e-6) continue;
 
-      _dir.set(vx, vy, vz).normalize();
-      _quat.setFromUnitVectors(_zAxis, _dir);
+      _dummy.position.set(px, py, pz);
 
+      if (len < 1e-12) {
+        _dummy.scale.set(0, 0, 0);
+        _dummy.quaternion.identity();
+      } else {
+        _dummy.scale.set(1, 1, 1);
+        _dir.set(vx, vy, vz).normalize();
+        _dummy.quaternion.setFromUnitVectors(_defaultUp, _dir);
+      }
+
+      // ── Color by selected field mode ────────────────────────
       switch (field) {
         case "orientation":
           magnetizationHSL(vx, vy, vz, _color);
           break;
         case "x":
-          divergingColor(vx / Math.max(maxDim, 1e-12), _color);
+          divergingColor(vx / scaleX, _color);
           break;
         case "y":
-          divergingColor(vy / Math.max(maxDim, 1e-12), _color);
+          divergingColor(vy / scaleY, _color);
           break;
         case "z":
-          divergingColor(vz / Math.max(maxDim, 1e-12), _color);
+          divergingColor(vz / scaleZ, _color);
           break;
         case "magnitude":
-          magnitudeColor(len / Math.max(len, 1e-12), _color);
+          magnitudeColor(len / scaleMag, _color);
           break;
         default:
-          divergingColor(vz / Math.max(len, 1e-12), _color);
+          magnetizationHSL(vx, vy, vz, _color);
           break;
       }
 
-      const mat = new THREE.MeshPhongMaterial({ color: _color.clone(), shininess: 60 });
-      const cone = new THREE.Mesh(coneGeom.clone(), mat);
-      cone.position.set(px, py, pz);
-      cone.quaternion.copy(_quat);
-      group.add(cone);
+      colors[i * 3] = _color.r;
+      colors[i * 3 + 1] = _color.g;
+      colors[i * 3 + 2] = _color.b;
+
+      _dummy.updateMatrix();
+      instancedMesh.setMatrixAt(i, _dummy.matrix);
     }
 
-    scene.add(group);
-    arrowGroupRef.current = group;
-  }, [showArrows, meshData.fieldData, meshData]);
+    instancedMesh.instanceMatrix.needsUpdate = true;
+    instancedMesh.instanceColor.needsUpdate = true;
+
+    scene.add(instancedMesh);
+    arrowGroupRef.current = instancedMesh;
+  }, [showArrows, meshData.fieldData, meshData, field, arrowDensity]);
 
   /* ── Camera presets ──────────────────────────────────────────────── */
   const setCameraPreset = useCallback((view: "reset" | "front" | "top" | "right") => {
@@ -1050,6 +1162,22 @@ export default function FemMeshView3D({
           >
             ↗ Arrows
           </button>
+          {showArrows && (
+            <>
+              <input
+                type="range"
+                className={s.dropSlider}
+                min={200}
+                max={3000}
+                step={100}
+                value={arrowDensity}
+                onChange={(e) => setArrowDensity(Number(e.target.value))}
+                style={{ width: 60 }}
+                title="Arrow density"
+              />
+              <span className={s.dropValue}>{arrowDensity}</span>
+            </>
+          )}
         </div>
 
         <div className={s.toolSep} />

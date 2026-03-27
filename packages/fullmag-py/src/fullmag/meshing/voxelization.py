@@ -44,6 +44,18 @@ def _import_trimesh() -> Any:
     return trimesh
 
 
+def _import_trimesh_voxelization_stack() -> Any:
+    trimesh = _import_trimesh()
+    try:
+        import scipy.sparse  # type: ignore  # noqa: F401
+    except ImportError as exc:  # pragma: no cover - depends on optional extra
+        raise ImportError(
+            "scipy is required for STL voxelization through trimesh. "
+            "Install with: python -m pip install 'scipy>=1.10'"
+        ) from exc
+    return trimesh
+
+
 def _load_stl_triangles(path: Path) -> NDArray[np.float64]:
     data = path.read_bytes()
     if len(data) >= 84:
@@ -506,7 +518,7 @@ def _voxelize_imported_geometry(
         )
 
     try:
-        trimesh = _import_trimesh()
+        trimesh = _import_trimesh_voxelization_stack()
     except ImportError:
         try:
             from .gmsh_bridge import generate_mesh_from_file

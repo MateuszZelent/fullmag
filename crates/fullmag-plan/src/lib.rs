@@ -3,8 +3,8 @@
 //! Phase 1 scope: `Box/Cylinder/(ImportedGeometry + precomputed grid asset) +
 //! (Exchange | Demag | Zeeman combinations) + fdm/strict`
 //! is the legal executable path.
-//! Additionally, `backend='fem'` can now produce a planner-ready `FemPlanIR`
-//! when a precomputed `MeshIR` asset is attached, but runner execution remains deferred.
+//! Additionally, `backend='fem'` produces an executable `FemPlanIR`
+//! when a precomputed `MeshIR` asset is attached; runner execution is fully supported.
 
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, ExchangeBoundaryCondition,
@@ -312,6 +312,7 @@ fn planned_study_controls(
     Option<f64>,
     f64,
     Option<RelaxationControlIR>,
+    Option<fullmag_ir::AdaptiveTimeStepIR>,
 ) {
     // Parse user-specified integrator string → Option<IntegratorChoice>.
     // "auto" resolves to None, which triggers per-study-kind default selection.
@@ -369,7 +370,28 @@ fn planned_study_controls(
         control
     });
 
-    (integrator, fixed_timestep, gyromagnetic_ratio, relaxation)
+    let adaptive_timestep = match problem.study.dynamics() {
+        fullmag_ir::DynamicsIR::Llg {
+            adaptive_timestep, ..
+        } => adaptive_timestep.clone(),
+    };
+
+    // Validate adaptive/fixed exclusivity and integrator compatibility.
+    if adaptive_timestep.is_some() && fixed_timestep.is_some() {
+        errors.push(
+            "adaptive_timestep and fixed_timestep are mutually exclusive".to_string(),
+        );
+    }
+    if adaptive_timestep.is_some()
+        && !matches!(integrator, IntegratorChoice::Rk23 | IntegratorChoice::Rk45)
+    {
+        errors.push(format!(
+            "adaptive_timestep requires an embedded-error integrator (rk23, rk45), got {:?}",
+            integrator,
+        ));
+    }
+
+    (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, adaptive_timestep)
 }
 
 /// Plans a `ProblemIR` into an `ExecutionPlanIR`.
@@ -377,7 +399,7 @@ fn planned_study_controls(
 /// Current planner coverage:
 /// - executable FDM: `Box | Cylinder | ImportedGeometry + precomputed active_mask`
 ///   with the narrow interaction subset and `Heun`,
-/// - planner-ready FEM: explicit `backend='fem'` with precomputed `MeshIR`.
+/// - executable FEM: explicit `backend='fem'` with precomputed `MeshIR`.
 ///
 /// Returns a detailed error for anything outside this subset.
 pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
@@ -777,7 +799,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         }
     };
 
-    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation) =
+    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, _adaptive_timestep) =
         planned_study_controls(problem, &mut errors);
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
@@ -1250,7 +1272,7 @@ fn plan_fdm_multilayer(
         (common_cells[0] * 2) as u64 * (common_cells[1] * 2) as u64 * (common_cells[2] * 2) as u64;
     let estimated_kernel_bytes = padded_len * 6 * 16 * estimated_unique_kernels as u64;
 
-    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation) =
+    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, _adaptive_timestep) =
         planned_study_controls(problem, &mut errors);
     if integrator != IntegratorChoice::Heun {
         errors.push(
@@ -1564,7 +1586,7 @@ fn plan_fem(
         );
     }
 
-    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation) =
+    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, adaptive_timestep) =
         planned_study_controls(problem, &mut errors);
 
     if !errors.is_empty() {
@@ -1621,6 +1643,7 @@ fn plan_fem(
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         integrator,
         fixed_timestep,
+        adaptive_timestep,
         relaxation,
         demag_realization: resolved_demag_realization,
         air_box_config: None,
