@@ -11,6 +11,7 @@
 #include "fullmag_fdm.h"
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -120,6 +121,18 @@ struct Context {
     std::string last_error;
 };
 
+struct AsyncFieldSnapshot {
+    fullmag_fdm_precision precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    uint64_t cell_count = 0;
+    DeviceVectorField staging;
+    void *host_soa = nullptr;
+    size_t host_soa_len_bytes = 0;
+    void *stream = nullptr;      // cudaStream_t
+    void *ready_event = nullptr; // cudaEvent_t
+    void *done_event = nullptr;  // cudaEvent_t
+    bool needs_wait = false;
+};
+
 #ifdef FULLMAG_HAS_CUDA
 
 /// Allocate all device buffers.
@@ -194,6 +207,22 @@ bool context_query_device_info(Context &ctx);
 
 /// Populate H_ex / H_demag / H_eff for the current state without advancing time.
 bool context_refresh_observables(Context &ctx);
+
+/// Begin an asynchronous field snapshot with private staging + pinned host storage.
+AsyncFieldSnapshot *context_begin_async_field_snapshot(
+    Context &ctx,
+    fullmag_fdm_observable observable);
+
+/// Wait for an asynchronous field snapshot to complete and expose the pinned payload.
+bool context_wait_async_field_snapshot(
+    AsyncFieldSnapshot &snapshot,
+    const void **out_data,
+    uint64_t &out_len_bytes,
+    fullmag_fdm_snapshot_desc &out_desc,
+    std::string &error);
+
+/// Destroy an asynchronous field snapshot and free all owned resources.
+void context_destroy_async_field_snapshot(AsyncFieldSnapshot *snapshot);
 
 #endif // FULLMAG_HAS_CUDA
 

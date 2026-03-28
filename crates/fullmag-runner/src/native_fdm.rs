@@ -24,6 +24,8 @@ use crate::types::{LivePreviewField, LivePreviewRequest, RunError};
 
 #[cfg(feature = "cuda")]
 use std::ffi::CStr;
+#[cfg(feature = "cuda")]
+use std::io::Write;
 
 /// Check whether the native CUDA FDM backend is compiled and available.
 pub(crate) fn is_cuda_available() -> bool {
@@ -43,6 +45,44 @@ pub(crate) struct NativeFdmBackend {
     handle: *mut ffi::fullmag_fdm_backend,
     precision: fullmag_ir::ExecutionPrecision,
 }
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeFieldSnapshotScalarType {
+    F32,
+    F64,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NativeFieldSnapshotInfo {
+    pub cell_count: usize,
+    pub component_count: usize,
+    pub scalar_bytes: usize,
+    pub scalar_type: NativeFieldSnapshotScalarType,
+    pub len_bytes: usize,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug)]
+struct NativeFieldSnapshotReady {
+    ptr: *const u8,
+    info: NativeFieldSnapshotInfo,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug)]
+pub(crate) struct NativeFdmFieldSnapshot {
+    handle: *mut ffi::fullmag_fdm_field_snapshot,
+    pub name: String,
+    pub step: u64,
+    pub time: f64,
+    pub solver_dt: f64,
+    ready: Option<NativeFieldSnapshotReady>,
+}
+
+#[cfg(feature = "cuda")]
+unsafe impl Send for NativeFdmFieldSnapshot {}
 
 #[cfg(feature = "cuda")]
 impl NativeFdmBackend {
@@ -372,6 +412,31 @@ impl NativeFdmBackend {
         )
     }
 
+    pub fn begin_field_snapshot(
+        &self,
+        name: &str,
+        step: u64,
+        time: f64,
+        solver_dt: f64,
+    ) -> Result<NativeFdmFieldSnapshot, RunError> {
+        let observable = snapshot_observable(name).ok_or_else(|| RunError {
+            message: format!("unsupported CUDA field snapshot '{}'", name),
+        })?;
+        let handle =
+            unsafe { ffi::fullmag_fdm_backend_begin_field_snapshot(self.handle, observable) };
+        if handle.is_null() {
+            return Err(self.last_error_or("begin_field_snapshot failed"));
+        }
+        Ok(NativeFdmFieldSnapshot {
+            handle,
+            name: name.to_string(),
+            step,
+            time,
+            solver_dt,
+            ready: None,
+        })
+    }
+
     pub fn copy_live_preview_field(
         &self,
         request: &LivePreviewRequest,
@@ -530,6 +595,84 @@ impl Drop for NativeFdmBackend {
     }
 }
 
+#[cfg(feature = "cuda")]
+impl NativeFdmFieldSnapshot {
+    fn ensure_ready(&mut self) -> Result<&NativeFieldSnapshotReady, RunError> {
+        if self.ready.is_none() {
+            let mut data = std::ptr::null();
+            let mut len_bytes = 0u64;
+            let mut desc = ffi::fullmag_fdm_snapshot_desc {
+                cell_count: 0,
+                component_count: 0,
+                scalar_bytes: 0,
+                scalar_type: ffi::fullmag_fdm_snapshot_scalar_type::FULLMAG_FDM_SNAPSHOT_SCALAR_F64,
+            };
+            let rc = unsafe {
+                ffi::fullmag_fdm_field_snapshot_wait(
+                    self.handle,
+                    &mut data,
+                    &mut len_bytes,
+                    &mut desc,
+                )
+            };
+            if rc != ffi::FULLMAG_FDM_OK {
+                return Err(RunError {
+                    message: format!("waiting for CUDA field snapshot '{}' failed", self.name),
+                });
+            }
+            let scalar_type = match desc.scalar_type {
+                ffi::fullmag_fdm_snapshot_scalar_type::FULLMAG_FDM_SNAPSHOT_SCALAR_F32 => {
+                    NativeFieldSnapshotScalarType::F32
+                }
+                ffi::fullmag_fdm_snapshot_scalar_type::FULLMAG_FDM_SNAPSHOT_SCALAR_F64 => {
+                    NativeFieldSnapshotScalarType::F64
+                }
+            };
+            self.ready = Some(NativeFieldSnapshotReady {
+                ptr: data.cast::<u8>(),
+                info: NativeFieldSnapshotInfo {
+                    cell_count: desc.cell_count as usize,
+                    component_count: desc.component_count as usize,
+                    scalar_bytes: desc.scalar_bytes as usize,
+                    scalar_type,
+                    len_bytes: len_bytes as usize,
+                },
+            });
+        }
+        Ok(self.ready.as_ref().expect("snapshot ready cached"))
+    }
+
+    pub(crate) fn info(&mut self) -> Result<NativeFieldSnapshotInfo, RunError> {
+        Ok(self.ensure_ready()?.info)
+    }
+
+    pub(crate) fn write_payload(
+        &mut self,
+        writer: &mut impl Write,
+    ) -> Result<NativeFieldSnapshotInfo, RunError> {
+        let snapshot_name = self.name.clone();
+        let ready = self.ensure_ready()?;
+        let bytes = unsafe { std::slice::from_raw_parts(ready.ptr, ready.info.len_bytes) };
+        writer.write_all(bytes).map_err(|error| RunError {
+            message: format!(
+                "failed to write CUDA field snapshot payload for '{}': {}",
+                snapshot_name, error
+            ),
+        })?;
+        Ok(ready.info)
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for NativeFdmFieldSnapshot {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { ffi::fullmag_fdm_field_snapshot_destroy(self.handle) };
+            self.handle = std::ptr::null_mut();
+        }
+    }
+}
+
 /// Parsed device info.
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone)]
@@ -568,6 +711,18 @@ fn flatten_vectors_f32(vectors: &[[f32; 3]]) -> Vec<f32> {
         .iter()
         .flat_map(|vector| vector.iter().copied())
         .collect()
+}
+
+#[cfg(feature = "cuda")]
+fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
+    Some(match name {
+        "m" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
+        "H_ex" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
+        "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
+        "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
+        "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
+        _ => return None,
+    })
 }
 
 #[cfg(all(test, feature = "cuda"))]

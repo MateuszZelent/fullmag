@@ -683,6 +683,33 @@ def _mesh_cad_file(
         gmsh.finalize()
 
 
+def _build_stl_volume_model(gmsh: object, path: Path) -> None:
+    """Classify an STL surface into a watertight volume model via the GEO kernel.
+
+    Shared by both initial meshing (``_mesh_stl_surface``) and adaptive
+    remeshing (``_remesh_imported``).  After return, the Gmsh model contains
+    a volume entity ready for ``generate(3)``.
+    """
+    emit_progress("Gmsh: importing STL surface")
+    gmsh.merge(str(path))
+    angle = 40.0 * math.pi / 180.0
+    emit_progress("Gmsh: classifying STL surfaces")
+    gmsh.model.mesh.classifySurfaces(
+        angle,
+        boundary=True,
+        forReparametrization=True,
+        curveAngle=math.pi,
+    )
+    emit_progress("Gmsh: creating geometry from classified surfaces")
+    gmsh.model.mesh.createGeometry()
+    surfaces = gmsh.model.getEntities(2)
+    if not surfaces:
+        raise ValueError(f"failed to recover closed surfaces from STL: {path}")
+    surface_loop = gmsh.model.geo.addSurfaceLoop([tag for _, tag in surfaces])
+    gmsh.model.geo.addVolume([surface_loop])
+    gmsh.model.geo.synchronize()
+
+
 def _mesh_stl_surface(
     path: Path,
     hmax: float,
@@ -697,24 +724,7 @@ def _mesh_stl_surface(
     gmsh.option.setNumber("General.Terminal", 0)
     try:
         gmsh.model.add(path.stem)
-        emit_progress("Gmsh: importing STL surface")
-        gmsh.merge(str(path))
-        angle = 40.0 * math.pi / 180.0
-        emit_progress("Gmsh: classifying STL surfaces")
-        gmsh.model.mesh.classifySurfaces(
-            angle,
-            boundary=True,
-            forReparametrization=True,
-            curveAngle=math.pi,
-        )
-        emit_progress("Gmsh: creating geometry from classified surfaces")
-        gmsh.model.mesh.createGeometry()
-        surfaces = gmsh.model.getEntities(2)
-        if not surfaces:
-            raise ValueError(f"failed to recover closed surfaces from STL: {path}")
-        surface_loop = gmsh.model.geo.addSurfaceLoop([tag for _, tag in surfaces])
-        gmsh.model.geo.addVolume([surface_loop])
-        gmsh.model.geo.synchronize()
+        _build_stl_volume_model(gmsh, path)
         if air_padding > 0.0:
             pass
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
@@ -1203,18 +1213,7 @@ def _remesh_imported(
             gmsh.model.occ.synchronize()
         elif suffix == ".stl":
             emit_progress("AFEM: importing STL surface")
-            gmsh.merge(str(path))
-            angle = 40.0 * math.pi / 180.0
-            gmsh.model.mesh.classifySurfaces(
-                angle, boundary=True, forReparametrization=True, curveAngle=math.pi,
-            )
-            gmsh.model.mesh.createGeometry()
-            surfaces = gmsh.model.getEntities(2)
-            if not surfaces:
-                raise ValueError(f"failed to recover closed surfaces from STL: {path}")
-            surface_loop = gmsh.model.geo.addSurfaceLoop([tag for _, tag in surfaces])
-            gmsh.model.geo.addVolume([surface_loop])
-            gmsh.model.geo.synchronize()
+            _build_stl_volume_model(gmsh, path)
         else:
             raise ValueError(
                 f"adaptive remeshing from file format {suffix!r} not supported; "

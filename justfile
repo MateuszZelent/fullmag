@@ -97,6 +97,11 @@ run-nanoflower-interactive:
     FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag-dev
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag --dev -i examples/nanoflower_fdm.py
 
+run-pylayer-interactive:
+    just ensure-python
+    FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag-dev
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag --dev -i examples/py_layer_hole_relax_150nm.py
+
 run-nanoflower-headless:
     just ensure-python
     FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag

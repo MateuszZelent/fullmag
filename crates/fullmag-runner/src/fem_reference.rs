@@ -527,13 +527,7 @@ fn record_final_outputs(
 
     let observables = observe_state(problem, state)?;
     if need_scalar {
-        let stats = make_step_stats(
-            step,
-            state.time_seconds,
-            solver_dt,
-            0,
-            &observables,
-        );
+        let stats = make_step_stats(step, state.time_seconds, solver_dt, 0, &observables);
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
     }

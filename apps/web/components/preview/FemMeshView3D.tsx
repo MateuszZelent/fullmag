@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { FemGeometry } from "./r3f/FemGeometry";
 import { FemArrows } from "./r3f/FemArrows";
 import { FemHighlightView } from "./r3f/FemHighlightView";
+import SceneAxes3D from "./r3f/SceneAxes3D";
 import { computeFaceAspectRatios } from "./r3f/colorUtils";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
@@ -141,6 +142,7 @@ export default function FemMeshView3D({
   
   const [geomCenter, setGeomCenter] = useState<THREE.Vector3>(new THREE.Vector3());
   const [maxDim, setMaxDim] = useState<number>(1);
+  const [geomSize, setGeomSize] = useState<[number, number, number]>([1, 1, 1]);
   const [cameraPresetEvent, setCameraPresetEvent] = useState<string | null>(null);
 
   const controlsRef = useRef<any>(null);
@@ -198,8 +200,8 @@ export default function FemMeshView3D({
     return () => window.removeEventListener("click", dismiss);
   }, [ctxMenu]);
 
-  const handleGeometryCenter = useCallback((c: THREE.Vector3, m: number) => {
-    setGeomCenter(c); setMaxDim(m);
+  const handleGeometryCenter = useCallback((c: THREE.Vector3, m: number, s: THREE.Vector3) => {
+    setGeomCenter(c); setMaxDim(m); setGeomSize([s.x, s.y, s.z]);
     if (!viewCubeSceneRef.current?.camera) return;
     const cam = viewCubeSceneRef.current.camera;
     if (cam.position.lengthSq() < 1e-6) {
@@ -274,6 +276,7 @@ export default function FemMeshView3D({
         />
         <FemArrows meshData={meshData} field={field} arrowDensity={arrowDensity} center={geomCenter} maxDim={maxDim} visible={showArrows} />
         <FemHighlightView meshData={meshData} selectedFaces={selectedFaces} center={geomCenter} />
+        <SceneAxes3D worldExtent={geomSize} center={[0, 0, 0]} sceneScale={[1, 1, 1]} />
         
         <SyncedControls controlsRefObject={controlsRef} viewCubeBridgeRef={viewCubeSceneRef} setCameraPresetEvent={cameraPresetEvent} />
       </Canvas>

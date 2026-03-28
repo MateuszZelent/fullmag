@@ -99,13 +99,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_callback(
     outputs: &[OutputIR],
     on_step: &mut impl FnMut(StepUpdate) -> StepAction,
 ) -> Result<ExecutedRun, RunError> {
-    execute_cuda_fdm_multilayer_with_callback_streaming(
-        plan,
-        until_seconds,
-        outputs,
-        None,
-        on_step,
-    )
+    execute_cuda_fdm_multilayer_with_callback_streaming(plan, until_seconds, outputs, None, on_step)
 }
 
 pub(crate) fn execute_cuda_fdm_multilayer_with_callback_streaming(
@@ -160,14 +154,14 @@ fn execute_cuda_fdm_multilayer_impl(
 
     if let Some(native_stacked) = build_native_stacked_cuda_plan(plan)? {
         return execute_native_stacked_cuda_multilayer(
-                plan,
-                &native_stacked,
-                until_seconds,
-                outputs,
-                live,
-                artifact_writer,
-            );
-        }
+            plan,
+            &native_stacked,
+            until_seconds,
+            outputs,
+            live,
+            artifact_writer,
+        );
+    }
 
     let gpu_contexts = build_gpu_contexts(plan)?;
     match plan.precision {

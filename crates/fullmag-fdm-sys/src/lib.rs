@@ -43,6 +43,13 @@ pub enum fullmag_fdm_observable {
     FULLMAG_FDM_OBSERVABLE_H_EFF = 5,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fdm_snapshot_scalar_type {
+    FULLMAG_FDM_SNAPSHOT_SCALAR_F32 = 1,
+    FULLMAG_FDM_SNAPSHOT_SCALAR_F64 = 2,
+}
+
 // ── Descriptors ──
 
 #[repr(C)]
@@ -128,10 +135,24 @@ pub struct fullmag_fdm_device_info {
     pub runtime_version: i32,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_snapshot_desc {
+    pub cell_count: u64,
+    pub component_count: u32,
+    pub scalar_bytes: u32,
+    pub scalar_type: fullmag_fdm_snapshot_scalar_type,
+}
+
 // ── Opaque handle ──
 
 #[repr(C)]
 pub struct fullmag_fdm_backend {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct fullmag_fdm_field_snapshot {
     _private: [u8; 0],
 }
 
@@ -188,6 +209,20 @@ extern "C" {
         out_xyz: *mut f32,
         out_len: u64,
     ) -> i32;
+
+    pub fn fullmag_fdm_backend_begin_field_snapshot(
+        handle: *mut fullmag_fdm_backend,
+        observable: fullmag_fdm_observable,
+    ) -> *mut fullmag_fdm_field_snapshot;
+
+    pub fn fullmag_fdm_field_snapshot_wait(
+        snapshot: *mut fullmag_fdm_field_snapshot,
+        out_data: *mut *const std::ffi::c_void,
+        out_len_bytes: *mut u64,
+        out_desc: *mut fullmag_fdm_snapshot_desc,
+    ) -> i32;
+
+    pub fn fullmag_fdm_field_snapshot_destroy(snapshot: *mut fullmag_fdm_field_snapshot);
 
     pub fn fullmag_fdm_backend_upload_magnetization_f64(
         handle: *mut fullmag_fdm_backend,

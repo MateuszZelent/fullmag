@@ -476,6 +476,69 @@ int fullmag_fdm_backend_copy_field_preview_f32(
 #endif
 }
 
+fullmag_fdm_field_snapshot *fullmag_fdm_backend_begin_field_snapshot(
+    fullmag_fdm_backend   *handle,
+    fullmag_fdm_observable observable)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle) return nullptr;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return reinterpret_cast<fullmag_fdm_field_snapshot *>(
+        context_begin_async_field_snapshot(*ctx, observable));
+#else
+    (void)handle;
+    (void)observable;
+    return nullptr;
+#endif
+}
+
+int fullmag_fdm_field_snapshot_wait(
+    fullmag_fdm_field_snapshot *snapshot,
+    const void               **out_data,
+    uint64_t                  *out_len_bytes,
+    fullmag_fdm_snapshot_desc *out_desc)
+{
+#if FULLMAG_HAS_CUDA
+    if (!snapshot || !out_data || !out_len_bytes || !out_desc) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    std::string error;
+    const void *data = nullptr;
+    uint64_t len_bytes = 0;
+    fullmag_fdm_snapshot_desc desc{};
+    if (!context_wait_async_field_snapshot(
+            *reinterpret_cast<AsyncFieldSnapshot *>(snapshot),
+            &data,
+            len_bytes,
+            desc,
+            error))
+    {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    *out_data = data;
+    *out_len_bytes = len_bytes;
+    *out_desc = desc;
+    return FULLMAG_FDM_OK;
+#else
+    (void)snapshot;
+    (void)out_data;
+    (void)out_len_bytes;
+    (void)out_desc;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+void fullmag_fdm_field_snapshot_destroy(
+    fullmag_fdm_field_snapshot *snapshot)
+{
+#if FULLMAG_HAS_CUDA
+    context_destroy_async_field_snapshot(
+        reinterpret_cast<AsyncFieldSnapshot *>(snapshot));
+#else
+    (void)snapshot;
+#endif
+}
+
 int fullmag_fdm_backend_upload_magnetization_f64(
     fullmag_fdm_backend   *handle,
     const double          *m_xyz,

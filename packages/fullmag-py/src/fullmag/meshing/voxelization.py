@@ -556,7 +556,7 @@ def _voxelize_imported_geometry(
         scale_transform[1, 1] = scale_xyz[1]
         scale_transform[2, 2] = scale_xyz[2]
         mesh.apply_transform(scale_transform)
-    voxel_grid = mesh.voxelized(dx)
+    voxel_grid = mesh.voxelized(dx).fill()
     matrix = np.asarray(voxel_grid.matrix, dtype=np.bool_)
     # trimesh exposes dense voxel grids in (x, y, z) order, while the rest of
     # Fullmag uses canonical (z, y, x) masks so flattening stays x-fastest.

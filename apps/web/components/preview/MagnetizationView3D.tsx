@@ -1,21 +1,25 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
+import { Canvas, useThree } from "@react-three/fiber";
+import { TrackballControls } from "@react-three/drei";
 import { cn } from "@/lib/utils";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import ViewCube from "./ViewCube";
 import HslSphere from "./HslSphere";
-import { applyMagnetizationHsl } from "./magnetizationColor";
-import { TrackballControls } from "three/examples/jsm/controls/TrackballControls.js";
+import FdmInstances from "./r3f/FdmInstances";
+import FdmLighting from "./r3f/FdmLighting";
+import SceneAxes3D from "./r3f/SceneAxes3D";
 
-// ─── Types (mirroring amumax preview3D.ts) ──────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────
 interface Props {
   grid: [number, number, number];
   vectors: Float64Array | null;
   fieldLabel?: string;
   geometryMode?: boolean;
   activeMask?: boolean[] | null;
+  /** Physical extent [x, y, z] in metres — enables in-scene axis labels */
+  worldExtent?: [number, number, number] | null;
 }
 
 export type QualityLevel = "low" | "high" | "ultra";
@@ -24,104 +28,7 @@ export type VoxelColorMode = "orientation" | "x" | "y" | "z";
 export type VoxelSampling = 1 | 2 | 4;
 export type TopoComponent = "x" | "y" | "z";
 
-interface QualityConfig {
-  segments: number;
-  useLighting: boolean;
-  useHemisphere: boolean;
-  antialias: boolean;
-  pixelRatio: number;
-}
-
-const QUALITY_CONFIGS: Record<QualityLevel, QualityConfig> = {
-  low: { segments: 6, useLighting: false, useHemisphere: false, antialias: false, pixelRatio: 1 },
-  high: { segments: 12, useLighting: true, useHemisphere: true, antialias: true, pixelRatio: 1 },
-  ultra: {
-    segments: 16, useLighting: true, useHemisphere: true, antialias: true,
-    pixelRatio: typeof window !== "undefined" ? Math.min(window.devicePixelRatio, 2) : 1,
-  },
-};
-
-// ─── Constants (from amumax) ────────────────────────────────────────
-const COMP_NEGATIVE = new THREE.Color("#2f6caa");
-const COMP_NEUTRAL = new THREE.Color("#f4f1ed");
-const COMP_POSITIVE = new THREE.Color("#cf6256");
-const BG_COLOR = 0x0c121f;
-
-const _dummy = new THREE.Object3D();
-const _defaultUp = new THREE.Vector3(0, 1, 0);
-const _tempVec = new THREE.Vector3();
-const _color = new THREE.Color();
-
-function applyComponentColor(value: number, color: THREE.Color) {
-  const normalized = THREE.MathUtils.clamp(value, -1, 1);
-  if (normalized < 0) {
-    color.copy(COMP_NEUTRAL).lerp(COMP_NEGATIVE, Math.abs(normalized));
-  } else {
-    color.copy(COMP_NEUTRAL).lerp(COMP_POSITIVE, normalized);
-  }
-}
-
-function componentValue(mx: number, my: number, mz: number, mode: "x" | "y" | "z"): number {
-  switch (mode) {
-    case "x": return mx;
-    case "y": return my;
-    case "z": return mz;
-  }
-}
-
-function applyVoxelColor(mx: number, my: number, mz: number, mode: VoxelColorMode, color: THREE.Color) {
-  if (mode === "orientation") {
-    applyMagnetizationHsl(mx, my, mz, color);
-  } else {
-    applyComponentColor(componentValue(mx, my, mz, mode), color);
-  }
-}
-
-// ─── Topography (1:1 from amumax voxelTopography.ts) ────────────────
-const TOPO_EPSILON = 1e-6;
-
-function resolveVoxelTopography(baseZ: number, baseDepth: number, signedDisplacement: number) {
-  if (!Number.isFinite(signedDisplacement) || Math.abs(signedDisplacement) < TOPO_EPSILON) {
-    return { centerZ: baseZ, depthScale: baseDepth };
-  }
-  return {
-    centerZ: baseZ + signedDisplacement / 2,
-    depthScale: baseDepth + Math.abs(signedDisplacement),
-  };
-}
-
-// ─── Geometry (1:1 from amumax) ─────────────────────────────────────
-function createArrowGeometry(segments: number): THREE.BufferGeometry {
-  const shaft = new THREE.CylinderGeometry(0.05, 0.05, 0.55, segments);
-  shaft.translate(0, -0.06, 0);
-  const head = new THREE.ConeGeometry(0.2, 0.4, segments);
-  head.translate(0, 0.4, 0);
-  const merged = mergeGeometries([shaft, head]);
-  if (!merged) throw new Error("failed to merge arrow geometry");
-  merged.computeVertexNormals();
-  return merged;
-}
-
-function createVoxelGeometry(): THREE.BufferGeometry {
-  return new THREE.BoxGeometry(1, 1, 1);
-}
-
-// ─── Material (1:1 from amumax) ─────────────────────────────────────
-function createMaterial(mode: RenderMode, cfg: QualityConfig, opacity: number): THREE.Material {
-  if (mode === "voxel") {
-    return cfg.useLighting
-      ? new THREE.MeshPhongMaterial({
-          transparent: true, opacity, depthWrite: false,
-          shininess: 24, specular: new THREE.Color(0x24334c),
-        })
-      : new THREE.MeshBasicMaterial({ transparent: true, opacity, depthWrite: false });
-  }
-  return cfg.useLighting
-    ? new THREE.MeshPhongMaterial({ shininess: 60, specular: new THREE.Color(0x444444) })
-    : new THREE.MeshBasicMaterial();
-}
-
-// ─── localStorage persistence (1:1 from amumax) ────────────────────
+// ─── localStorage persistence ───────────────────────────────────────
 const STORAGE_KEYS = {
   brightness: "preview3d_brightness",
   quality: "preview3d_quality",
@@ -153,6 +60,20 @@ function persist(key: string, value: string | number) {
   if (typeof window !== "undefined") localStorage.setItem(key, String(value));
 }
 
+interface Settings {
+  quality: QualityLevel;
+  renderMode: RenderMode;
+  voxelColorMode: VoxelColorMode;
+  sampling: VoxelSampling;
+  brightness: number;
+  voxelOpacity: number;
+  voxelGap: number;
+  voxelThreshold: number;
+  topoEnabled: boolean;
+  topoComponent: TopoComponent;
+  topoMultiplier: number;
+}
+
 function loadSettings(): Settings {
   return {
     quality: loadEnum(STORAGE_KEYS.quality, ["low", "high", "ultra"], "high"),
@@ -169,44 +90,78 @@ function loadSettings(): Settings {
   };
 }
 
-interface Settings {
-  quality: QualityLevel;
-  renderMode: RenderMode;
-  voxelColorMode: VoxelColorMode;
-  sampling: VoxelSampling;
-  brightness: number;
-  voxelOpacity: number;
-  voxelGap: number;
-  voxelThreshold: number;
-  topoEnabled: boolean;
-  topoComponent: TopoComponent;
-  topoMultiplier: number;
+// ─── R3F camera ↔ ViewCube bridge ───────────────────────────────────
+
+function SyncedControls({
+  controlsRefObject,
+  viewCubeBridgeRef,
+  grid,
+}: {
+  controlsRefObject: React.MutableRefObject<any>;
+  viewCubeBridgeRef: React.MutableRefObject<any>;
+  grid: [number, number, number];
+}) {
+  const { camera } = useThree();
+  const [nx, ny, nz] = grid;
+  const cx = nx / 2, cy = nz / 2, cz = ny / 2;
+
+  useEffect(() => {
+    viewCubeBridgeRef.current = { camera, controls: controlsRefObject.current };
+  }, [camera, controlsRefObject, viewCubeBridgeRef]);
+
+  return (
+    <TrackballControls
+      ref={controlsRefObject}
+      rotateSpeed={1}
+      zoomSpeed={1.2}
+      panSpeed={0.8}
+      target={[cx, cy, cz]}
+      dynamicDampingFactor={1}
+    />
+  );
+}
+
+// ─── R3F scene background ───────────────────────────────────────────
+
+const BG_COLOR = 0x0c121f;
+
+function SceneConfig({ toneMapping }: { toneMapping: boolean }) {
+  const { gl } = useThree();
+  useEffect(() => {
+    if (toneMapping) {
+      gl.toneMapping = THREE.ACESFilmicToneMapping;
+      gl.toneMappingExposure = 1.05;
+    }
+  }, [gl, toneMapping]);
+  return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════
 // COMPONENT
 // ═══════════════════════════════════════════════════════════════════
-export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vector Field", geometryMode = false, activeMask = null }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
+export default function MagnetizationView3D({
+  grid,
+  vectors,
+  fieldLabel = "Vector Field",
+  geometryMode = false,
+  activeMask = null,
+  worldExtent = null,
+}: Props) {
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [expanded, setExpanded] = useState(false);
   const [visibleCount, setVisibleCount] = useState(0);
 
-  const sceneRef = useRef<{
-    mesh: THREE.InstancedMesh;
-    scene: THREE.Scene;
-    camera: THREE.PerspectiveCamera;
-    renderer: THREE.WebGLRenderer;
-    controls: TrackballControls;
-    frameId: number;
-    currentMode: RenderMode;
-  } | null>(null);
+  const controlsRef = useRef<any>(null);
+  const viewCubeSceneRef = useRef<any>(null);
+
+  const [nx, ny, nz] = grid;
+  const cx = nx / 2, cy = nz / 2, cz = ny / 2;
+  const orbitDist = Math.max(nx, ny, nz) * 1.5;
 
   // Persist settings changes
   const update = (patch: Partial<Settings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
-      // persist each changed key
       if (patch.quality !== undefined) persist(STORAGE_KEYS.quality, next.quality);
       if (patch.renderMode !== undefined) persist(STORAGE_KEYS.renderMode, next.renderMode);
       if (patch.voxelColorMode !== undefined) persist(STORAGE_KEYS.voxelColorMode, next.voxelColorMode);
@@ -222,334 +177,33 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
     });
   };
 
-  // ─── Scene setup (1:1 from amumax init()) ─────────────────────────
-  const initScene = useCallback(() => {
-    if (!containerRef.current) return;
-    const container = containerRef.current;
-    const width = container.clientWidth;
-    const height = container.clientHeight || 500;
-    const cfg = QUALITY_CONFIGS[settings.quality];
-    const mode = settings.renderMode;
-
-    // Renderer (amumax createRenderer)
-    const renderer = new THREE.WebGLRenderer({ antialias: cfg.antialias, alpha: false });
-    renderer.setPixelRatio(cfg.pixelRatio);
-    renderer.setClearColor(BG_COLOR, 1);
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
-    renderer.setSize(width, height);
-    container.appendChild(renderer.domElement);
-
-    // Scene (amumax createScene)
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(BG_COLOR);
-
-    if (cfg.useLighting) {
-      const b = settings.brightness;
-      const dir = new THREE.DirectionalLight(0xffffff, 1.8 * b);
-      dir.position.set(1, 2, 3);
-      dir.userData.baseIntensity = 1.8;
-      scene.add(dir);
-      const fill = new THREE.DirectionalLight(0xccccff, 0.8 * b);
-      fill.position.set(-2, 0, 1);
-      fill.userData.baseIntensity = 0.8;
-      scene.add(fill);
-      const back = new THREE.DirectionalLight(0xffffff, 0.5 * b);
-      back.position.set(0, -1, -2);
-      back.userData.baseIntensity = 0.5;
-      scene.add(back);
-      const ambient = new THREE.AmbientLight(0x8888aa, 1.0 * b);
-      ambient.userData.baseIntensity = 1.0;
-      scene.add(ambient);
-      if (cfg.useHemisphere) {
-        const hemi = new THREE.HemisphereLight(0x8898bf, 0x293245, 0.6 * b);
-        hemi.userData.baseIntensity = 0.6;
-        scene.add(hemi);
-      }
-    }
-
-    // Camera (amumax createCamera + getWorldExtents)
-    const [nx, ny, nz] = grid;
-    const centerX = nx / 2;
-    const centerY = nz / 2;
-    const centerZ = ny / 2;
-    const orbitDistance = Math.max(nx, ny, nz) * 1.5;
-    const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000);
-    camera.position.set(centerX, centerY, centerZ + orbitDistance);
-
-    // Controls (amumax createControls)
-    const controls = new TrackballControls(camera, renderer.domElement);
-    controls.dynamicDampingFactor = 1;
-    controls.panSpeed = 0.8;
-    controls.rotateSpeed = 1;
-    controls.target.set(centerX, centerY, centerZ);
-    controls.update();
-
-    // Mesh (amumax createMesh)
-    const count = nx * ny * nz;
-    const geometry = mode === "voxel" ? createVoxelGeometry() : createArrowGeometry(cfg.segments);
-    const material = createMaterial(mode, cfg, settings.voxelOpacity);
-    const mesh = new THREE.InstancedMesh(geometry, material, count);
-    mesh.frustumCulled = false;
-    mesh.renderOrder = mode === "voxel" ? 2 : 1;
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    mesh.instanceColor = new THREE.InstancedBufferAttribute(
-      new Float32Array(Math.max(count, 1) * 3), 3,
-    );
-    scene.add(mesh);
-
-    // Animation (amumax animate)
-    const animate = () => {
-      const id = requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-      if (sceneRef.current) sceneRef.current.frameId = id;
-    };
-    const frameId = requestAnimationFrame(animate);
-
-    // Resize observer
-    const observer = new ResizeObserver(() => {
-      const w = container.clientWidth;
-      const h = container.clientHeight || 500;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-    });
-    observer.observe(container);
-
-    sceneRef.current = { mesh, scene, camera, renderer, controls, frameId, currentMode: mode };
-
-    return () => {
-      observer.disconnect();
-      cancelAnimationFrame(frameId);
-      controls.dispose();
-      renderer.dispose();
-      scene.traverse((child: THREE.Object3D) => {
-        if (child instanceof THREE.Mesh || child instanceof THREE.InstancedMesh) {
-          child.geometry.dispose();
-          if (Array.isArray(child.material)) {
-            child.material.forEach((m: THREE.Material) => m.dispose());
-          } else if (child.material) {
-            child.material.dispose();
-          }
-        }
-      });
-      if (renderer.domElement.parentNode) {
-        renderer.domElement.parentNode.removeChild(renderer.domElement);
-      }
-      sceneRef.current = null;
-    };
-  // Destructure to primitive deps — prevents full scene rebuild when parent passes a new
-  // array reference with the same values (e.g. on every SSE tick from useSessionStream).
-  }, [grid[0], grid[1], grid[2], settings.quality, settings.renderMode, settings.brightness, settings.voxelOpacity]);
-
-  useEffect(() => {
-    const cleanup = initScene();
-    return cleanup;
-  }, [initScene]);
-
-  // ─── Update mesh (1:1 from amumax updateGlyphMesh + updateVoxelMesh) ──
-  useEffect(() => {
-    if (!sceneRef.current) return;
-    const { mesh, currentMode } = sceneRef.current;
-    const [nx, ny, nz] = grid;
-    const expectedVectorCount = nx * ny * nz * 3;
-    const clearMesh = () => {
-      mesh.count = 0;
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) {
-        mesh.instanceColor.needsUpdate = true;
-      }
-      setVisibleCount(0);
-    };
-    if (!vectors || expectedVectorCount === 0 || vectors.length < expectedVectorCount) {
-      if (!geometryMode) {
-        clearMesh();
-        return;
-      }
-      // Geometry mode: render cells even without field vectors
-      mesh.count = nx * ny * nz;
-      const instanceColor = mesh.instanceColor;
-      if (!instanceColor) return;
-      const colors = instanceColor.array as Float32Array;
-      const gapScale = Math.max(0.12, 1 - settings.voxelGap);
-      let visible = 0;
-      let idx = 0;
-      for (let iz = 0; iz < nz; iz++) {
-        for (let iy = 0; iy < ny; iy++) {
-          for (let ix = 0; ix < nx; ix++) {
-            const isActive = !activeMask || activeMask[idx];
-            _dummy.position.set(ix, iz, iy);
-            _dummy.quaternion.identity();
-            if (!isActive) {
-              _dummy.scale.set(0, 0, 0);
-            } else {
-              visible++;
-              const depthS = nz > 1 ? gapScale : Math.max(0.22, gapScale * 0.42);
-              _dummy.scale.set(gapScale, depthS, gapScale);
-            }
-            // Steel-gray color for geometry mode
-            _color.setHSL(210 / 360, 0.08, 0.55);
-            colors[idx * 3 + 0] = _color.r;
-            colors[idx * 3 + 1] = _color.g;
-            colors[idx * 3 + 2] = _color.b;
-            _dummy.updateMatrix();
-            mesh.setMatrixAt(idx, _dummy.matrix);
-            idx++;
-          }
-        }
-      }
-      setVisibleCount(visible);
-      mesh.instanceMatrix.needsUpdate = true;
-      instanceColor.needsUpdate = true;
-      // Force voxel opacity
-      if (!Array.isArray(mesh.material)) {
-        (mesh.material as THREE.MeshPhongMaterial | THREE.MeshBasicMaterial).opacity = 0.85;
-        mesh.material.needsUpdate = true;
-      }
-      return;
-    }
-    mesh.count = nx * ny * nz;
-    const { sampling, voxelColorMode, voxelGap, voxelThreshold, topoEnabled, topoComponent, topoMultiplier } = settings;
-    const isVoxel = currentMode === "voxel";
-
-    const step = sampling;
-    const baseScale = isVoxel ? Math.max(0.12, step * (1 - voxelGap)) : 1;
-    const depthScale = nz > 1 ? baseScale : Math.max(0.22, baseScale * 0.42);
-    const instanceColor = mesh.instanceColor;
-    if (!instanceColor) return;
-    const colors = instanceColor.array as Float32Array;
-
-    let maxMagnitude = 0;
-    for (let idx = 0; idx < vectors.length; idx += 3) {
-      const mx = vectors[idx];
-      const my = vectors[idx + 1];
-      const mz = vectors[idx + 2];
-      const mag = Math.sqrt(mx * mx + my * my + mz * mz);
-      maxMagnitude = Math.max(maxMagnitude, mag);
-    }
-    const normalizationMagnitude = Math.max(maxMagnitude, 1e-30);
-
-    let visible = 0;
-    let idx = 0;
-
-    for (let iz = 0; iz < nz; iz++) {
-      for (let iy = 0; iy < ny; iy++) {
-        for (let ix = 0; ix < nx; ix++) {
-          const base = idx * 3;
-          const mx = vectors[base];
-          const my = vectors[base + 1];
-          const mz = vectors[base + 2];
-
-          // Sampling check (amumax isSampledPosition)
-          const sampled =
-            step === 1 ||
-            (ix % step === 0 && iy % step === 0 && (nz <= 1 || iz % step === 0));
-
-          const mag = Math.sqrt(mx * mx + my * my + mz * mz);
-          const normalizedStrength = Math.min(1, mag / normalizationMagnitude);
-          const strengthScale = 0.18 + 0.82 * Math.sqrt(normalizedStrength);
-
-          if (isVoxel) {
-            // ─── Voxel mode (amumax updateVoxelMesh) ────────
-            const cellActive = !activeMask || activeMask[idx];
-            const metric = voxelColorMode === "orientation"
-              ? mag
-              : Math.abs(componentValue(mx, my, mz, voxelColorMode as "x" | "y" | "z"));
-            const isVisible = cellActive && sampled && metric >= voxelThreshold;
-
-            // Position: sim-Y → world-Z, sim-Z → world-Y (amumax convention)
-            let worldY = iz;
-            let vH = depthScale * strengthScale;
-            const voxelScale = baseScale * strengthScale;
-
-            if (topoEnabled && isVisible) {
-              const compVal = componentValue(mx, my, mz, topoComponent);
-              const displacement = compVal * topoMultiplier;
-              const topo = resolveVoxelTopography(iz, vH, displacement);
-              worldY = topo.centerZ;
-              vH = topo.depthScale;
-            }
-
-            _dummy.position.set(ix, worldY, iy);
-            _dummy.quaternion.identity();
-
-            if (!isVisible) {
-              _dummy.scale.set(0, 0, 0);
-            } else {
-              visible++;
-              _dummy.scale.set(voxelScale, vH, voxelScale);
-            }
-
-            applyVoxelColor(mx, my, mz, voxelColorMode, _color);
-          } else {
-            // ─── Glyph mode (amumax updateGlyphMesh) ────────
-            const cellActive = !activeMask || activeMask[idx];
-            const isVisible = cellActive && (mx !== 0 || my !== 0 || mz !== 0) && sampled;
-
-            // Position: sim-Y → world-Z, sim-Z → world-Y
-            _dummy.position.set(ix, iz, iy);
-
-            if (!isVisible) {
-              _dummy.scale.set(0, 0, 0);
-              _dummy.quaternion.identity();
-            } else {
-              visible++;
-              // Uniform glyph scale — magnitude is encoded in color,
-              // and auto-downscale averaging produces fractional magnitudes
-              // at geometry boundaries that make arrows misleadingly small.
-              _dummy.scale.set(1, 1, 1);
-              // Direction: sim-Y → world-Z, sim-Z → world-Y (amumax setWorldDirectionFromSimulation)
-              _tempVec.set(mx, mz, my);
-              if (_tempVec.lengthSq() > 1e-30) {
-                _tempVec.normalize();
-              } else {
-                _tempVec.set(0, 1, 0);
-              }
-              _dummy.quaternion.setFromUnitVectors(_defaultUp, _tempVec);
-            }
-
-            applyMagnetizationHsl(mx, my, mz, _color);
-          }
-
-          colors[idx * 3 + 0] = _color.r;
-          colors[idx * 3 + 1] = _color.g;
-          colors[idx * 3 + 2] = _color.b;
-
-          _dummy.updateMatrix();
-          mesh.setMatrixAt(idx, _dummy.matrix);
-          idx++;
-        }
-      }
-    }
-
-    setVisibleCount(visible);
-    mesh.instanceMatrix.needsUpdate = true;
-    instanceColor.needsUpdate = true;
-
-    // Update voxel material opacity
-    if (isVoxel && !Array.isArray(mesh.material)) {
-      (mesh.material as THREE.MeshPhongMaterial | THREE.MeshBasicMaterial).opacity = settings.voxelOpacity;
-      mesh.material.needsUpdate = true;
-    }
-  }, [vectors, grid, settings, geometryMode, activeMask]);
-
-  // ─── Reset camera (amumax resetCamera) ────────────────────────────
-  const resetCamera = () => {
-    if (!sceneRef.current) return;
-    const [nx, ny, nz] = grid;
-    const cx = nx / 2, cy = nz / 2, cz = ny / 2;
-    const dist = Math.max(nx, ny, nz) * 1.5;
-    const { camera, controls } = sceneRef.current;
-    camera.position.set(cx, cy, cz + dist);
+  // Reset camera
+  const resetCamera = useCallback(() => {
+    const bridge = viewCubeSceneRef.current;
+    if (!bridge?.camera || !bridge?.controls) return;
+    const { camera, controls } = bridge;
+    camera.position.set(cx, cy, cz + orbitDist);
     camera.up.set(0, 1, 0);
     camera.lookAt(cx, cy, cz);
     controls.target.set(cx, cy, cz);
     controls.update();
-  };
+  }, [cx, cy, cz, orbitDist]);
+
+  // SceneAxes3D props — FDM coordinate mapping: scene-X=sim-X, scene-Y=sim-Z, scene-Z=sim-Y
+  const axesWorldExtent = worldExtent
+    ? [worldExtent[0], worldExtent[2], worldExtent[1]] as [number, number, number]
+    : null;
+  const axesSceneScale: [number, number, number] = axesWorldExtent
+    ? [
+        axesWorldExtent[0] > 0 ? nx / axesWorldExtent[0] : 1,
+        axesWorldExtent[1] > 0 ? nz / axesWorldExtent[1] : 1,
+        axesWorldExtent[2] > 0 ? ny / axesWorldExtent[2] : 1,
+      ]
+    : [1, 1, 1];
 
   return (
     <div className="relative flex flex-col h-full">
+      {/* ── Settings toolbar overlay ──────────────────────── */}
       <div className="absolute left-3 top-3 z-10 flex flex-col">
         <button
           className="w-8 h-8 flex items-center justify-center rounded-md bg-card/40 border border-border/50 text-muted-foreground text-base cursor-pointer backdrop-blur-md transition-all hover:bg-muted/50 hover:text-foreground"
@@ -691,13 +345,56 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
         ) : null}
       </div>
 
-      <div
-        ref={containerRef}
-        className="w-full flex-1 min-h-0 bg-[#0c121f]"
-      />
+      {/* ── R3F Canvas ────────────────────────────────────── */}
+      <Canvas
+        className="w-full flex-1 min-h-0"
+        camera={{
+          fov: 50,
+          near: 0.1,
+          far: 1000,
+          position: [cx, cy, cz + orbitDist],
+        }}
+        gl={{
+          antialias: settings.quality !== "low",
+        }}
+        dpr={settings.quality === "ultra"
+          ? Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, 2)
+          : 1
+        }
+        style={{ background: `#${BG_COLOR.toString(16).padStart(6, "0")}` }}
+      >
+        <color attach="background" args={[BG_COLOR]} />
+        <SceneConfig toneMapping={settings.quality !== "low"} />
 
-      <ViewCube sceneRef={sceneRef} grid={grid} />
-      {!geometryMode ? <HslSphere sceneRef={sceneRef} /> : null}
+        <FdmLighting brightness={settings.brightness} quality={settings.quality} />
+
+        <FdmInstances
+          grid={grid}
+          vectors={vectors}
+          geometryMode={geometryMode}
+          activeMask={activeMask}
+          settings={settings}
+          onVisibleCount={setVisibleCount}
+        />
+
+        {axesWorldExtent && axesWorldExtent[0] > 0 && axesWorldExtent[1] > 0 && axesWorldExtent[2] > 0 && (
+          <SceneAxes3D
+            worldExtent={axesWorldExtent}
+            center={[cx, cy, cz]}
+            sceneScale={axesSceneScale}
+            axisLabels={["x", "z", "y"]}
+          />
+        )}
+
+        <SyncedControls
+          controlsRefObject={controlsRef}
+          viewCubeBridgeRef={viewCubeSceneRef}
+          grid={grid}
+        />
+      </Canvas>
+
+      <ViewCube sceneRef={viewCubeSceneRef} grid={grid} />
+      {!geometryMode ? <HslSphere sceneRef={viewCubeSceneRef} /> : null}
     </div>
   );
 }

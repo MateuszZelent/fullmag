@@ -22,12 +22,12 @@ layer.m     = fm.uniform(1, 0, 0)
 fm.solver(dt=1e-13)
 
 # ── Outputs ─────────────────────────────────────────────────
-fm.save("m",       every=50e-12)
-fm.save("H_demag", every=50e-12)
-fm.save("H_eff",   every=50e-12)
-fm.save("E_ex",    every=10e-12)
-fm.save("E_demag", every=10e-12)
-fm.save("E_total", every=10e-12)
+# fm.save("m",       every=50e-12)
+# fm.save("H_demag", every=50e-12)
+# fm.save("H_eff",   every=50e-12)
+# fm.save("E_ex",    every=10e-12)
+# fm.save("E_demag", every=10e-12)
+# fm.save("E_total", every=10e-12)
 
 # ── Run ─────────────────────────────────────────────────────
 fm.relax()

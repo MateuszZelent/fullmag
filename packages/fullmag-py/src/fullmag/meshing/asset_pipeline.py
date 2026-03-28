@@ -19,6 +19,7 @@ def realize_fem_mesh_asset(geometry: Geometry, hints: FEM) -> MeshData:
                 "kind": "fem_surface_preview",
                 "geometry_name": geometry.geometry_name,
                 "fem_mesh": preview,
+                "is_preview": True,
                 "message": (
                     f"Surface preview ready for '{geometry.geometry_name}': "
                     f"{len(preview['nodes'])} vertices, {len(preview['boundary_faces'])} faces"
@@ -28,11 +29,21 @@ def realize_fem_mesh_asset(geometry: Geometry, hints: FEM) -> MeshData:
 
     if hints.mesh is not None:
         emit_progress(f"Resolving FEM mesh from source '{hints.mesh}'")
-        return generate_mesh_from_file(hints.mesh, hmax=hints.hmax, order=hints.order)
-    emit_progress(
-        f"Generating FEM mesh from geometry '{geometry.geometry_name}' with hmax={hints.hmax:.4e}"
-    )
-    return generate_mesh(geometry, hmax=hints.hmax, order=hints.order)
+        mesh = generate_mesh_from_file(hints.mesh, hmax=hints.hmax, order=hints.order)
+    else:
+        emit_progress(
+            f"Generating FEM mesh from geometry '{geometry.geometry_name}' with hmax={hints.hmax:.4e}"
+        )
+        mesh = generate_mesh(geometry, hmax=hints.hmax, order=hints.order)
+
+    if mesh.n_elements == 0:
+        raise ValueError(
+            f"FEM mesh for '{geometry.geometry_name}' contains 0 tetrahedral elements. "
+            "The geometry surface may not be watertight or manifold. "
+            "Try repairing the STL in a mesh tool like MeshLab or reducing hmax."
+        )
+
+    return mesh
 
 
 def realize_fdm_grid_asset(geometry: Geometry, hints: FDM) -> VoxelMaskData:

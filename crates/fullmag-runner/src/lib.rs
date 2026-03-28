@@ -100,9 +100,13 @@ pub fn run_problem(
     };
     let pipeline_summary = pipeline_summary?;
 
-    if let Err(e) =
-        artifacts::write_artifacts(output_dir, problem, &plan, &executed, Some(&pipeline_summary))
-    {
+    if let Err(e) = artifacts::write_artifacts(
+        output_dir,
+        problem,
+        &plan,
+        &executed,
+        Some(&pipeline_summary),
+    ) {
         return Err(RunError {
             message: format!("Failed to write artifacts: {}", e),
         });
@@ -188,9 +192,13 @@ pub fn run_problem_with_callback(
     };
     let pipeline_summary = pipeline_summary?;
 
-    if let Err(e) =
-        artifacts::write_artifacts(output_dir, problem, &plan, &executed, Some(&pipeline_summary))
-    {
+    if let Err(e) = artifacts::write_artifacts(
+        output_dir,
+        problem,
+        &plan,
+        &executed,
+        Some(&pipeline_summary),
+    ) {
         return Err(RunError {
             message: format!("Failed to write artifacts: {}", e),
         });
@@ -328,9 +336,13 @@ pub fn run_problem_with_live_preview(
     };
     let pipeline_summary = pipeline_summary?;
 
-    if let Err(e) =
-        artifacts::write_artifacts(output_dir, problem, &plan, &executed, Some(&pipeline_summary))
-    {
+    if let Err(e) = artifacts::write_artifacts(
+        output_dir,
+        problem,
+        &plan,
+        &executed,
+        Some(&pipeline_summary),
+    ) {
         return Err(RunError {
             message: format!("Failed to write artifacts: {}", e),
         });

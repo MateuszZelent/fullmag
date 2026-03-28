@@ -364,13 +364,9 @@ pub(crate) fn execute_fem_streaming(
                 fem_reference::execute_reference_fem(plan, until_seconds, outputs)
             }
         }
-        FemEngine::NativeGpu => execute_native_fem_impl(
-            plan,
-            until_seconds,
-            outputs,
-            None,
-            artifact_writer,
-        ),
+        FemEngine::NativeGpu => {
+            execute_native_fem_impl(plan, until_seconds, outputs, None, artifact_writer)
+        }
     }
 }
 
@@ -793,12 +789,7 @@ fn execute_cuda_fdm_impl(
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;
     let default_scalar_trace = scalar_schedules.is_empty();
-    capture_initial_cuda_fields(
-        &backend,
-        cell_count,
-        &mut field_schedules,
-        &mut artifacts,
-    )?;
+    capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
 
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
@@ -1207,25 +1198,30 @@ fn capture_initial_cuda_fields(
         .collect::<Vec<_>>();
 
     for name in due_field_names {
-        let values = match name.as_str() {
-            "m" => backend.copy_m(cell_count)?,
-            "H_ex" => backend.copy_h_ex(cell_count)?,
-            "H_demag" => backend.copy_h_demag(cell_count)?,
-            "H_ext" => backend.copy_h_ext(cell_count)?,
-            "H_eff" => backend.copy_h_eff(cell_count)?,
-            other => {
-                return Err(RunError {
-                    message: format!("unsupported CUDA field snapshot '{}'", other),
-                })
-            }
-        };
-        artifacts.record_field_snapshot(FieldSnapshot {
-            name: name.clone(),
-            step: 0,
-            time: 0.0,
-            solver_dt: 0.0,
-            values,
-        })?;
+        if artifacts.is_streaming() {
+            let snapshot = backend.begin_field_snapshot(&name, 0, 0.0, 0.0)?;
+            artifacts.record_native_field_snapshot(snapshot)?;
+        } else {
+            let values = match name.as_str() {
+                "m" => backend.copy_m(cell_count)?,
+                "H_ex" => backend.copy_h_ex(cell_count)?,
+                "H_demag" => backend.copy_h_demag(cell_count)?,
+                "H_ext" => backend.copy_h_ext(cell_count)?,
+                "H_eff" => backend.copy_h_eff(cell_count)?,
+                other => {
+                    return Err(RunError {
+                        message: format!("unsupported CUDA field snapshot '{}'", other),
+                    })
+                }
+            };
+            artifacts.record_field_snapshot(FieldSnapshot {
+                name: name.clone(),
+                step: 0,
+                time: 0.0,
+                solver_dt: 0.0,
+                values,
+            })?;
+        }
     }
     advance_due_schedules(field_schedules, 0.0);
     Ok(())
@@ -1256,25 +1252,30 @@ fn record_cuda_due_outputs(
         .map(|schedule| schedule.name.clone())
         .collect::<Vec<_>>();
     for name in due_field_names {
-        let values = match name.as_str() {
-            "m" => backend.copy_m(cell_count)?,
-            "H_ex" => backend.copy_h_ex(cell_count)?,
-            "H_demag" => backend.copy_h_demag(cell_count)?,
-            "H_ext" => backend.copy_h_ext(cell_count)?,
-            "H_eff" => backend.copy_h_eff(cell_count)?,
-            other => {
-                return Err(RunError {
-                    message: format!("unsupported CUDA field snapshot '{}'", other),
-                })
-            }
-        };
-        artifacts.record_field_snapshot(FieldSnapshot {
-            name: name.clone(),
-            step: stats.step,
-            time: stats.time,
-            solver_dt: stats.dt,
-            values,
-        })?;
+        if artifacts.is_streaming() {
+            let snapshot = backend.begin_field_snapshot(&name, stats.step, stats.time, stats.dt)?;
+            artifacts.record_native_field_snapshot(snapshot)?;
+        } else {
+            let values = match name.as_str() {
+                "m" => backend.copy_m(cell_count)?,
+                "H_ex" => backend.copy_h_ex(cell_count)?,
+                "H_demag" => backend.copy_h_demag(cell_count)?,
+                "H_ext" => backend.copy_h_ext(cell_count)?,
+                "H_eff" => backend.copy_h_eff(cell_count)?,
+                other => {
+                    return Err(RunError {
+                        message: format!("unsupported CUDA field snapshot '{}'", other),
+                    })
+                }
+            };
+            artifacts.record_field_snapshot(FieldSnapshot {
+                name: name.clone(),
+                step: stats.step,
+                time: stats.time,
+                solver_dt: stats.dt,
+                values,
+            })?;
+        }
     }
     advance_due_schedules(field_schedules, stats.time);
     Ok(())
@@ -1323,25 +1324,35 @@ fn record_cuda_final_outputs(
     let missing_field_names = requested_field_names;
 
     for name in missing_field_names {
-        let values = match name.as_str() {
-            "m" => backend.copy_m(cell_count)?,
-            "H_ex" => backend.copy_h_ex(cell_count)?,
-            "H_demag" => backend.copy_h_demag(cell_count)?,
-            "H_ext" => backend.copy_h_ext(cell_count)?,
-            "H_eff" => backend.copy_h_eff(cell_count)?,
-            other => {
-                return Err(RunError {
-                    message: format!("unsupported CUDA field snapshot '{}'", other),
-                })
-            }
-        };
-        artifacts.record_field_snapshot(FieldSnapshot {
-            name,
-            step: latest_stats.step,
-            time: latest_stats.time,
-            solver_dt: latest_stats.dt,
-            values,
-        })?;
+        if artifacts.is_streaming() {
+            let snapshot = backend.begin_field_snapshot(
+                &name,
+                latest_stats.step,
+                latest_stats.time,
+                latest_stats.dt,
+            )?;
+            artifacts.record_native_field_snapshot(snapshot)?;
+        } else {
+            let values = match name.as_str() {
+                "m" => backend.copy_m(cell_count)?,
+                "H_ex" => backend.copy_h_ex(cell_count)?,
+                "H_demag" => backend.copy_h_demag(cell_count)?,
+                "H_ext" => backend.copy_h_ext(cell_count)?,
+                "H_eff" => backend.copy_h_eff(cell_count)?,
+                other => {
+                    return Err(RunError {
+                        message: format!("unsupported CUDA field snapshot '{}'", other),
+                    })
+                }
+            };
+            artifacts.record_field_snapshot(FieldSnapshot {
+                name,
+                step: latest_stats.step,
+                time: latest_stats.time,
+                solver_dt: latest_stats.dt,
+                values,
+            })?;
+        }
     }
 
     Ok(())

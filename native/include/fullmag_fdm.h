@@ -62,6 +62,11 @@ typedef enum {
     FULLMAG_FDM_OBSERVABLE_H_EFF    = 5,
 } fullmag_fdm_observable;
 
+typedef enum {
+    FULLMAG_FDM_SNAPSHOT_SCALAR_F32 = 1,
+    FULLMAG_FDM_SNAPSHOT_SCALAR_F64 = 2,
+} fullmag_fdm_snapshot_scalar_type;
+
 /* ── Plan descriptor ── */
 
 typedef struct {
@@ -155,9 +160,17 @@ typedef struct {
     int  runtime_version;
 } fullmag_fdm_device_info;
 
+typedef struct {
+    uint64_t cell_count;
+    uint32_t component_count; /* always 3 for vector fields */
+    uint32_t scalar_bytes;    /* 4 for f32, 8 for f64 */
+    fullmag_fdm_snapshot_scalar_type scalar_type;
+} fullmag_fdm_snapshot_desc;
+
 /* ── Opaque handle ── */
 
 typedef struct fullmag_fdm_backend fullmag_fdm_backend;
+typedef struct fullmag_fdm_field_snapshot fullmag_fdm_field_snapshot;
 
 /* ── Functions ── */
 
@@ -236,6 +249,48 @@ int fullmag_fdm_backend_copy_field_preview_f32(
     uint32_t               z_stride,
     float                 *out_xyz,
     uint64_t               out_len);
+
+/**
+ * Begin an asynchronous binary field snapshot.
+ *
+ * The snapshot owns its own device staging buffers and pinned host buffer.
+ * The payload layout exposed by `fullmag_fdm_field_snapshot_wait` is
+ * component-major SoA:
+ *   [x0..xN-1, y0..yN-1, z0..zN-1]
+ *
+ * This call schedules:
+ *   1. device-to-device snapshot staging on the backend compute/default stream,
+ *   2. device-to-host transfer to pinned memory on a dedicated snapshot stream.
+ *
+ * The returned snapshot handle can be waited on and consumed from another
+ * host thread without needing any further backend interaction.
+ */
+fullmag_fdm_field_snapshot *fullmag_fdm_backend_begin_field_snapshot(
+    fullmag_fdm_backend   *handle,
+    fullmag_fdm_observable observable);
+
+/**
+ * Wait for an asynchronous snapshot to complete and expose the pinned payload.
+ *
+ * On success:
+ *   - `*out_data` points to the SoA payload owned by `snapshot`,
+ *   - `*out_len_bytes` is the total payload byte length,
+ *   - `*out_desc` describes dtype and logical vector shape.
+ *
+ * The returned pointer stays valid until `fullmag_fdm_field_snapshot_destroy`.
+ */
+int fullmag_fdm_field_snapshot_wait(
+    fullmag_fdm_field_snapshot *snapshot,
+    const void               **out_data,
+    uint64_t                  *out_len_bytes,
+    fullmag_fdm_snapshot_desc *out_desc);
+
+/**
+ * Destroy an asynchronous field snapshot handle.
+ * Safe to call with NULL.
+ */
+void fullmag_fdm_field_snapshot_destroy(
+    fullmag_fdm_field_snapshot *snapshot);
 
 /**
  * Replace the backend magnetization state from host-side f64 AoS storage.

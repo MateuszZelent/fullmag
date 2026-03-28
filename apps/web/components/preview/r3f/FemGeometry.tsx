@@ -11,7 +11,7 @@ interface FemGeometryProps {
   renderMode: RenderMode;
   opacity: number;
   qualityPerFace?: number[] | null;
-  onGeometryCenter?: (center: THREE.Vector3, maxDim: number) => void;
+  onGeometryCenter?: (center: THREE.Vector3, maxDim: number, size: THREE.Vector3) => void;
   onFaceClick?: (e: any) => void;
   onFaceHover?: (e: any) => void;
   onFaceUnhover?: (e: any) => void;
@@ -154,7 +154,7 @@ export function FemGeometry({
     
     // Call onGeometryCenter outside of render via defer
     if (onGeometryCenter) {
-      setTimeout(() => onGeometryCenter(c, ms), 0);
+      setTimeout(() => onGeometryCenter(c, ms, size), 0);
     }
     invalidate();
     return { geometry: geom, edgesGeometry: edgesGeom, center: c, maxDim: ms };

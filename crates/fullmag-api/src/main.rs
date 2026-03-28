@@ -1978,6 +1978,18 @@ fn collect_artifacts(
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
+            if path.extension().and_then(|ext| ext.to_str()) == Some("zarr") {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string();
+                out.push(ArtifactEntry {
+                    path: relative,
+                    kind: "zarr".to_string(),
+                });
+                continue;
+            }
             collect_artifacts(root, &path, out)?;
             continue;
         }

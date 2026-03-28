@@ -10,6 +10,7 @@
 #include <cuda_runtime.h>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <vector>
 
 namespace fullmag {
@@ -172,6 +173,28 @@ static void free_preview_download_scratch(Context &ctx) {
         ctx.preview_download_scratch = nullptr;
     }
     ctx.preview_download_scratch_len_bytes = 0;
+}
+
+static void destroy_async_snapshot_resources(AsyncFieldSnapshot &snapshot) {
+    if (snapshot.done_event) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
+        snapshot.done_event = nullptr;
+    }
+    if (snapshot.ready_event) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.ready_event));
+        snapshot.ready_event = nullptr;
+    }
+    if (snapshot.stream) {
+        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(snapshot.stream));
+        snapshot.stream = nullptr;
+    }
+    if (snapshot.host_soa) {
+        cudaFreeHost(snapshot.host_soa);
+        snapshot.host_soa = nullptr;
+    }
+    snapshot.host_soa_len_bytes = 0;
+    free_vector_field(snapshot.staging);
+    snapshot.needs_wait = false;
 }
 
 template <typename InputScalar, typename OutputScalar>
@@ -862,6 +885,195 @@ bool context_download_field_preview_f32(
         z_stride,
         out_xyz,
         out_len);
+}
+
+AsyncFieldSnapshot *context_begin_async_field_snapshot(
+    Context &ctx,
+    fullmag_fdm_observable observable)
+{
+    auto *snapshot = new (std::nothrow) AsyncFieldSnapshot();
+    if (snapshot == nullptr) {
+        ctx.last_error = "failed to allocate async field snapshot";
+        return nullptr;
+    }
+    snapshot->precision = ctx.precision;
+    snapshot->cell_count = ctx.cell_count;
+    snapshot->host_soa_len_bytes = ctx.cell_count * 3u * scalar_size(ctx.precision);
+
+    auto fail = [&](const char *label, cudaError_t err) -> AsyncFieldSnapshot * {
+        ctx.last_error = std::string(label) + ": " + cudaGetErrorString(err);
+        destroy_async_snapshot_resources(*snapshot);
+        delete snapshot;
+        return nullptr;
+    };
+
+    auto fail_message = [&](const std::string &message) -> AsyncFieldSnapshot * {
+        ctx.last_error = message;
+        destroy_async_snapshot_resources(*snapshot);
+        delete snapshot;
+        return nullptr;
+    };
+
+    const size_t component_bytes = ctx.cell_count * scalar_size(ctx.precision);
+    cudaError_t err = cudaMalloc(&snapshot->staging.x, component_bytes);
+    if (err != cudaSuccess) return fail("cudaMalloc(snapshot.x)", err);
+    err = cudaMalloc(&snapshot->staging.y, component_bytes);
+    if (err != cudaSuccess) return fail("cudaMalloc(snapshot.y)", err);
+    err = cudaMalloc(&snapshot->staging.z, component_bytes);
+    if (err != cudaSuccess) return fail("cudaMalloc(snapshot.z)", err);
+
+    err = cudaHostAlloc(&snapshot->host_soa, snapshot->host_soa_len_bytes, cudaHostAllocDefault);
+    if (err != cudaSuccess) return fail("cudaHostAlloc(snapshot.host_soa)", err);
+
+    cudaStream_t io_stream{};
+    err = cudaStreamCreateWithFlags(&io_stream, cudaStreamNonBlocking);
+    if (err != cudaSuccess) return fail("cudaStreamCreate(snapshot.io_stream)", err);
+    snapshot->stream = reinterpret_cast<void *>(io_stream);
+
+    cudaEvent_t ready_event{};
+    err = cudaEventCreateWithFlags(&ready_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) return fail("cudaEventCreate(snapshot.ready_event)", err);
+    snapshot->ready_event = reinterpret_cast<void *>(ready_event);
+
+    cudaEvent_t done_event{};
+    err = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) return fail("cudaEventCreate(snapshot.done_event)", err);
+    snapshot->done_event = reinterpret_cast<void *>(done_event);
+
+    const DeviceVectorField *field = nullptr;
+    switch (observable) {
+        case FULLMAG_FDM_OBSERVABLE_M:
+            field = &ctx.m;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_EX:
+            field = &ctx.h_ex;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
+            field = &ctx.h_demag;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_EFF:
+            field = &ctx.work;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_EXT:
+            if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+                auto *host = reinterpret_cast<double *>(snapshot->host_soa);
+                for (uint64_t i = 0; i < ctx.cell_count; ++i) {
+                    const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
+                    host[i] = (ctx.has_external_field && is_active) ? ctx.external_field[0] : 0.0;
+                    host[ctx.cell_count + i] =
+                        (ctx.has_external_field && is_active) ? ctx.external_field[1] : 0.0;
+                    host[(ctx.cell_count * 2u) + i] =
+                        (ctx.has_external_field && is_active) ? ctx.external_field[2] : 0.0;
+                }
+            } else {
+                auto *host = reinterpret_cast<float *>(snapshot->host_soa);
+                for (uint64_t i = 0; i < ctx.cell_count; ++i) {
+                    const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
+                    host[i] = (ctx.has_external_field && is_active)
+                        ? static_cast<float>(ctx.external_field[0])
+                        : 0.0f;
+                    host[ctx.cell_count + i] = (ctx.has_external_field && is_active)
+                        ? static_cast<float>(ctx.external_field[1])
+                        : 0.0f;
+                    host[(ctx.cell_count * 2u) + i] = (ctx.has_external_field && is_active)
+                        ? static_cast<float>(ctx.external_field[2])
+                        : 0.0f;
+                }
+            }
+            snapshot->needs_wait = false;
+            return snapshot;
+        default:
+            return fail_message("unsupported async snapshot observable");
+    }
+
+    err = cudaMemcpyAsync(
+        snapshot->staging.x, field->x, component_bytes, cudaMemcpyDeviceToDevice, nullptr);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.x)", err);
+    err = cudaMemcpyAsync(
+        snapshot->staging.y, field->y, component_bytes, cudaMemcpyDeviceToDevice, nullptr);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.y)", err);
+    err = cudaMemcpyAsync(
+        snapshot->staging.z, field->z, component_bytes, cudaMemcpyDeviceToDevice, nullptr);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.z)", err);
+
+    err = cudaEventRecord(ready_event, nullptr);
+    if (err != cudaSuccess) return fail("cudaEventRecord(snapshot.ready_event)", err);
+
+    err = cudaStreamWaitEvent(io_stream, ready_event, 0);
+    if (err != cudaSuccess) return fail("cudaStreamWaitEvent(snapshot.ready_event)", err);
+
+    auto *host_bytes = static_cast<unsigned char *>(snapshot->host_soa);
+    err = cudaMemcpyAsync(
+        host_bytes,
+        snapshot->staging.x,
+        component_bytes,
+        cudaMemcpyDeviceToHost,
+        io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.host_x)", err);
+    err = cudaMemcpyAsync(
+        host_bytes + component_bytes,
+        snapshot->staging.y,
+        component_bytes,
+        cudaMemcpyDeviceToHost,
+        io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.host_y)", err);
+    err = cudaMemcpyAsync(
+        host_bytes + (component_bytes * 2u),
+        snapshot->staging.z,
+        component_bytes,
+        cudaMemcpyDeviceToHost,
+        io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.host_z)", err);
+
+    err = cudaEventRecord(done_event, io_stream);
+    if (err != cudaSuccess) return fail("cudaEventRecord(snapshot.done_event)", err);
+
+    snapshot->needs_wait = true;
+    return snapshot;
+}
+
+bool context_wait_async_field_snapshot(
+    AsyncFieldSnapshot &snapshot,
+    const void **out_data,
+    uint64_t &out_len_bytes,
+    fullmag_fdm_snapshot_desc &out_desc,
+    std::string &error)
+{
+    if (out_data == nullptr) {
+        error = "async snapshot output pointer is null";
+        return false;
+    }
+
+    if (snapshot.needs_wait) {
+        cudaError_t err =
+            cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
+        if (err != cudaSuccess) {
+            error = std::string("cudaEventSynchronize(snapshot.done_event): ")
+                + cudaGetErrorString(err);
+            return false;
+        }
+        snapshot.needs_wait = false;
+    }
+
+    *out_data = snapshot.host_soa;
+    out_len_bytes = static_cast<uint64_t>(snapshot.host_soa_len_bytes);
+    out_desc.cell_count = snapshot.cell_count;
+    out_desc.component_count = 3;
+    out_desc.scalar_bytes =
+        snapshot.precision == FULLMAG_FDM_PRECISION_SINGLE ? 4u : 8u;
+    out_desc.scalar_type =
+        snapshot.precision == FULLMAG_FDM_PRECISION_SINGLE
+            ? FULLMAG_FDM_SNAPSHOT_SCALAR_F32
+            : FULLMAG_FDM_SNAPSHOT_SCALAR_F64;
+    return true;
+}
+
+void context_destroy_async_field_snapshot(AsyncFieldSnapshot *snapshot) {
+    if (snapshot == nullptr) {
+        return;
+    }
+    destroy_async_snapshot_resources(*snapshot);
+    delete snapshot;
 }
 
 bool context_query_device_info(Context &ctx) {

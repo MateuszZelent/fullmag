@@ -353,6 +353,7 @@ export function ViewportCanvasArea() {
           fieldLabel="Geometry"
           geometryMode
           activeMask={ctx.activeMask}
+          worldExtent={ctx.worldExtent}
         />
       ) : ctx.effectiveViewMode === "3D" && ctx.isFemBackend && ctx.femMeshData ? (
         <FemMeshView3D
@@ -392,6 +393,7 @@ export function ViewportCanvasArea() {
           vectors={ctx.selectedVectors}
           fieldLabel={ctx.quantityDescriptor?.label ?? ctx.preview?.quantity ?? ctx.selectedQuantity}
           activeMask={ctx.activeMask}
+          worldExtent={ctx.worldExtent}
         />
       ) : ctx.effectiveViewMode === "2D" ? (
         <MagnetizationSlice2D

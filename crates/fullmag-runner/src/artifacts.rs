@@ -136,10 +136,7 @@ pub(crate) fn write_scalars_csv_header(writer: &mut impl Write) -> std::io::Resu
     )
 }
 
-pub(crate) fn write_scalar_row(
-    writer: &mut impl Write,
-    step: &StepStats,
-) -> std::io::Result<()> {
+pub(crate) fn write_scalar_row(writer: &mut impl Write, step: &StepStats) -> std::io::Result<()> {
     writeln!(
         writer,
         "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
