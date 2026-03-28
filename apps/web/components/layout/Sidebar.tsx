@@ -67,29 +67,8 @@ export function Sidebar({ items, collapsed, mobileOpen, onCloseMobile }: Sidebar
         </nav>
 
         <div className="sidebar-footer">
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 'var(--sp-3)',
-              fontSize: 'var(--text-xs)',
-              color: 'var(--text-muted)',
-            }}
-          >
-            <span
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 'var(--radius-full)',
-                background: 'var(--bg-raised)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 'var(--text-xs)',
-                fontWeight: 600,
-                flexShrink: 0,
-              }}
-            >
+          <div className="sidebar-footer-brand">
+            <span className="sidebar-footer-badge">
               FM
             </span>
             {!collapsed && <span>Fullmag v0.1</span>}

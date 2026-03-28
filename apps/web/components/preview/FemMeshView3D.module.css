@@ -58,6 +58,10 @@
   border: 1px solid var(--ide-border-strong);
 }
 
+.toolGroupRelative {
+  position: relative;
+}
+
 .toolSep {
   width: 1px;
   height: 20px;
@@ -86,6 +90,15 @@
 .toolBtn:hover {
   background: var(--ide-surface-hover);
   color: var(--ide-text-1);
+}
+
+.toolBtnCompact {
+  padding: 0.2rem 0.45rem;
+}
+
+.toolBtnSubtle {
+  font-size: 0.64rem;
+  opacity: 0.7;
 }
 
 .toolBtn[data-active="true"] {
@@ -150,6 +163,11 @@
   cursor: pointer;
 }
 
+.dropSliderCompact {
+  width: 60px;
+  flex: 0 0 auto;
+}
+
 .dropValue {
   font-size: var(--ide-text-xs);
   font-family: var(--font-mono);
@@ -178,6 +196,14 @@
   border-radius: 50%;
   background: var(--ide-border-subtle);
   flex-shrink: 0;
+}
+
+.infoAccentWarn {
+  color: hsl(35 90% 65%);
+}
+
+.infoAccentInfo {
+  color: hsl(210 80% 70%);
 }
 
 /* ── ViewCube ──────────────────────────────────────────────────── */
@@ -257,4 +283,3 @@
   white-space: nowrap;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
-

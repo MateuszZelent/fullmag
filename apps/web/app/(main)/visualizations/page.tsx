@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { resolveApiBase } from "@/lib/apiBase";
-
-/* ── Types ───────────────────────────────────────── */
 
 interface SessionSummary {
   session_id: string;
@@ -29,7 +29,11 @@ interface EnergySnapshot {
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
 
-/* ── Helpers ─────────────────────────────────────── */
+const pageStackClass = "flex flex-col gap-[var(--sp-4)]";
+const autoFill200GridClass = "grid gap-[var(--sp-3)] [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]";
+const autoFill180GridClass = "grid gap-[var(--sp-3)] [grid-template-columns:repeat(auto-fill,minmax(180px,1fr))]";
+const autoFill280GridClass = "grid gap-[var(--sp-3)] [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]";
+const refreshButtonClass = "inline-flex items-center rounded-md border border-[var(--ide-border-subtle)] bg-[var(--surface-2)] px-3 py-1.5 text-[length:var(--text-sm)] font-medium text-[var(--text-soft)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-1)]";
 
 function fmtSI(v: number, unit: string): string {
   if (!Number.isFinite(v) || v === 0) return `0 ${unit}`;
@@ -54,7 +58,13 @@ function fmtTimestamp(unix_ms: number): string {
   return new Date(unix_ms).toLocaleString();
 }
 
-/* ── Page ────────────────────────────────────────── */
+const toneClassByMetric: Record<string, string> = {
+  exchange: "text-[var(--energy-exchange)]",
+  demag: "text-[var(--energy-demag)]",
+  external: "text-[var(--energy-external)]",
+  total: "text-[var(--energy-total)]",
+  success: "text-[var(--status-running)]",
+};
 
 export default function VisualizationsPage() {
   const [session, setSession] = useState<SessionSummary | null>(null);
@@ -118,38 +128,25 @@ export default function VisualizationsPage() {
         <p className="page-subtitle">Compare solver results and analyze convergence</p>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
-        {/* ── Current Session Summary ── */}
-        <div className="card">
-          <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div className={pageStackClass}>
+        <section className="card">
+          <div className="card-header">
             <h2 className="card-title">Current Session</h2>
-            <button
-              onClick={load}
-              style={{
-                appearance: "none",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: "6px",
-                background: "var(--surface-2)",
-                color: "var(--text-secondary)",
-                padding: "0.35rem 0.75rem",
-                fontSize: "var(--text-sm)",
-                cursor: "pointer",
-              }}
-            >
-              ⟳ Refresh
+            <button type="button" onClick={load} className={refreshButtonClass}>
+              Refresh
             </button>
           </div>
           <div className="card-body">
             {loadState === "loading" && (
-              <p style={{ color: "var(--text-muted)" }}>Loading session data…</p>
+              <p className="text-[length:var(--text-sm)] text-[var(--text-muted)]">Loading session data…</p>
             )}
             {loadState === "error" && (
-              <p style={{ color: "var(--status-error, #f87171)" }}>
-                {error ?? "Failed to connect."}  No active session available.
+              <p className="text-[length:var(--text-sm)] text-[var(--am-danger)]">
+                {error ?? "Failed to connect."} No active session available.
               </p>
             )}
             {session && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "var(--sp-3)" }}>
+              <div className={autoFill200GridClass}>
                 <MetricCard label="Problem" value={session.problem_name} />
                 <MetricCard label="Backend" value={session.requested_backend.toUpperCase()} />
                 <MetricCard label="Status" value={session.status} tone={session.status === "running" ? "success" : undefined} />
@@ -176,35 +173,37 @@ export default function VisualizationsPage() {
               </div>
             )}
           </div>
-        </div>
+        </section>
 
-        {/* ── Energy Comparison ── */}
         {energy && (
-          <div className="card">
+          <section className="card">
             <div className="card-header">
               <h2 className="card-title">Energy Summary</h2>
             </div>
             <div className="card-body">
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "var(--sp-3)" }}>
+              <div className={autoFill180GridClass}>
                 <MetricCard label="E_exchange" value={fmtSI(energy.e_ex, "J")} tone="exchange" />
                 <MetricCard label="E_demag" value={fmtSI(energy.e_demag, "J")} tone="demag" />
                 <MetricCard label="E_external" value={fmtSI(energy.e_ext, "J")} tone="external" />
                 <MetricCard label="E_total" value={fmtSI(energy.e_total, "J")} tone="total" />
                 <MetricCard label="Step" value={energy.step.toLocaleString()} />
                 <MetricCard label="Sim Time" value={fmtSI(energy.time, "s")} />
-                <MetricCard label="max dm/dt" value={energy.max_dm_dt.toExponential(3)} tone={energy.max_dm_dt < 1e-5 ? "success" : undefined} />
+                <MetricCard
+                  label="max dm/dt"
+                  value={energy.max_dm_dt.toExponential(3)}
+                  tone={energy.max_dm_dt < 1e-5 ? "success" : undefined}
+                />
               </div>
             </div>
-          </div>
+          </section>
         )}
 
-        {/* ── Comparison Tools ── */}
-        <div className="card">
+        <section className="card">
           <div className="card-header">
             <h2 className="card-title">Comparison Tools</h2>
           </div>
           <div className="card-body">
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "var(--sp-3)" }}>
+            <div className={autoFill280GridClass}>
               <ToolCard
                 title="FDM vs FEM"
                 description="Compare finite-difference and finite-element solutions on the same geometry. Requires completed runs from both backends."
@@ -223,25 +222,15 @@ export default function VisualizationsPage() {
                 available={loadState === "loaded"}
                 reason={loadState === "loaded" ? "Use Charts tab in Dashboard" : "No session available"}
                 linkHref="/"
-                linkLabel="→ Open Dashboard"
+                linkLabel="Open Dashboard"
               />
             </div>
           </div>
-        </div>
+        </section>
       </div>
     </>
   );
 }
-
-/* ── Metric card ─────────────────────────────────────── */
-
-const TONE_COLORS: Record<string, string> = {
-  exchange: "hsl(160, 65%, 55%)",
-  demag: "hsl(280, 60%, 65%)",
-  external: "hsl(30, 85%, 60%)",
-  total: "hsl(210, 70%, 65%)",
-  success: "hsl(145, 70%, 55%)",
-};
 
 function MetricCard({
   label,
@@ -253,34 +242,21 @@ function MetricCard({
   tone?: string;
 }) {
   return (
-    <div
-      style={{
-        padding: "var(--sp-3)",
-        borderRadius: "8px",
-        background: "var(--surface-2, #0f1728)",
-        border: "1px solid var(--border-subtle)",
-        borderLeft: tone && TONE_COLORS[tone] ? `3px solid ${TONE_COLORS[tone]}` : undefined,
-      }}
-    >
-      <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>
+    <div className="rounded-lg border border-[var(--ide-border-subtle)] bg-[var(--surface-2)] p-[var(--sp-3)]">
+      <div className="text-[length:var(--text-xs)] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">
         {label}
       </div>
       <div
-        style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: "var(--text-base)",
-          color: tone && TONE_COLORS[tone] ? TONE_COLORS[tone] : "var(--text-primary)",
-          fontWeight: 600,
-          marginTop: "2px",
-        }}
+        className={cn(
+          "mt-[var(--sp-2)] font-mono text-[length:var(--text-base)] font-semibold text-[var(--text-1)]",
+          tone ? toneClassByMetric[tone] : undefined,
+        )}
       >
         {value}
       </div>
     </div>
   );
 }
-
-/* ── Tool card ─────────────────────────────────────── */
 
 function ToolCard({
   title,
@@ -293,43 +269,34 @@ function ToolCard({
   title: string;
   description: string;
   available: boolean;
-  reason?: string;
+  reason: string;
   linkHref?: string;
   linkLabel?: string;
 }) {
   return (
-    <div
-      style={{
-        padding: "var(--sp-4)",
-        borderRadius: "8px",
-        background: "var(--surface-2, #0f1728)",
-        border: "1px solid var(--border-subtle)",
-        opacity: available ? 1 : 0.6,
-      }}
-    >
-      <div style={{ fontSize: "var(--text-base)", fontWeight: 700, color: "var(--text-primary)", marginBottom: "var(--sp-2)" }}>
-        {title}
+    <div className="rounded-lg border border-[var(--ide-border-subtle)] bg-[var(--surface-2)] p-[var(--sp-4)]">
+      <div className="mb-[var(--sp-2)] flex items-start justify-between gap-[var(--sp-3)]">
+        <div className="text-[length:var(--text-base)] font-semibold text-[var(--text-1)]">
+          {title}
+        </div>
+        <Badge variant={available ? "success" : "outline"}>
+          {available ? "Available" : "Planned"}
+        </Badge>
       </div>
-      <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: "var(--sp-3)" }}>
+      <div className="mb-[var(--sp-3)] text-[length:var(--text-sm)] text-[var(--text-soft)]">
         {description}
       </div>
-      <div style={{ fontSize: "var(--text-xs)", color: available ? "var(--status-success, #34d399)" : "var(--text-muted)" }}>
-        {available ? "✓ Available" : `○ ${reason ?? "Not available"}`}
+      <div className={cn("text-[length:var(--text-xs)]", available ? "text-[var(--status-running)]" : "text-[var(--text-muted)]")}>
+        {reason}
       </div>
-      {available && linkHref && (
+      {linkHref && linkLabel ? (
         <a
           href={linkHref}
-          style={{
-            display: "inline-block",
-            marginTop: "var(--sp-2)",
-            fontSize: "var(--text-sm)",
-            color: "var(--ide-accent, #3b82f6)",
-            textDecoration: "none",
-          }}
+          className="mt-[var(--sp-3)] inline-flex items-center text-[length:var(--text-sm)] font-semibold text-[var(--ide-accent-text)] transition-colors hover:text-[var(--ide-accent-hover)]"
         >
           {linkLabel}
         </a>
-      )}
+      ) : null}
     </div>
   );
 }

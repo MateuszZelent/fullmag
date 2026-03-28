@@ -1,9 +1,14 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use fullmag_engine::run_reference_exchange_demo;
+use fullmag_engine::fem::{FemLlgProblem, MeshTopology};
+use fullmag_engine::{
+    run_reference_exchange_demo, AdaptiveStepConfig, CellSize, EffectiveFieldTerms,
+    ExchangeLlgProblem, GridShape, LlgConfig, MaterialParameters, TimeIntegrator,
+};
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, ExecutionMode, ExecutionPlanIR, ExecutionPlanSummary,
-    ExecutionPrecision, GeometryAssetsIR, ProblemIR,
+    ExecutionPrecision, FdmMultilayerPlanIR, FdmPlanIR, FemPlanIR, GeometryAssetsIR,
+    IntegratorChoice, ProblemIR, RelaxationAlgorithmIR,
 };
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -1237,6 +1242,9 @@ fn main() -> Result<()> {
             output_dir,
         } => {
             let ir = read_ir(&path)?;
+            let execution_plan =
+                fullmag_plan::plan(&ir).map_err(|error| anyhow!(error.to_string()))?;
+            emit_initial_state_warnings(None, &execution_plan.backend_plan)?;
             let result = fullmag_runner::run_problem(&ir, until, &output_dir)
                 .map_err(|e| anyhow!("{}", e))?;
             println!(
@@ -1609,6 +1617,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             .map_err(join_errors)?;
         let execution_plan =
             fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
+        emit_initial_state_warnings(Some(&live_workspace), &execution_plan.backend_plan)?;
         let use_live_callback = matches!(
             &execution_plan.backend_plan,
             BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) | BackendPlanIR::Fem(_)
@@ -2008,6 +2017,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 .map_err(join_errors)?;
             let execution_plan =
                 fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
+            emit_initial_state_warnings(Some(&live_workspace), &execution_plan.backend_plan)?;
             let use_live_callback = matches!(
                 &execution_plan.backend_plan,
                 BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) | BackendPlanIR::Fem(_)
@@ -2881,6 +2891,278 @@ fn build_interactive_command_stage(
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct InitialStateDiagnostic {
+    max_effective_field_amplitude: Option<f64>,
+    max_rhs_amplitude: Option<f64>,
+    warnings: Vec<String>,
+}
+
+fn integrator_for_plan(integrator: IntegratorChoice) -> TimeIntegrator {
+    match integrator {
+        IntegratorChoice::Heun => TimeIntegrator::Heun,
+        IntegratorChoice::Rk4 => TimeIntegrator::RK4,
+        IntegratorChoice::Rk23 => TimeIntegrator::RK23,
+        IntegratorChoice::Rk45 => TimeIntegrator::RK45,
+        IntegratorChoice::Abm3 => TimeIntegrator::ABM3,
+    }
+}
+
+fn relaxation_uses_pure_damping(relaxation: Option<&fullmag_ir::RelaxationControlIR>) -> bool {
+    relaxation.is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::LlgOverdamped)
+}
+
+fn has_nonzero_external_field(field: Option<[f64; 3]>) -> bool {
+    field.is_some_and(|value| value.iter().any(|component| component.abs() > 0.0))
+}
+
+fn magnetization_is_uniform(values: &[[f64; 3]]) -> bool {
+    let Some(first) = values.first() else {
+        return true;
+    };
+    values.iter().all(|value| {
+        (value[0] - first[0]).abs() <= 1e-12
+            && (value[1] - first[1]).abs() <= 1e-12
+            && (value[2] - first[2]).abs() <= 1e-12
+    })
+}
+
+fn near_zero(value: f64) -> bool {
+    value.abs() <= 1e-18
+}
+
+fn add_initial_state_warnings(
+    warnings: &mut Vec<String>,
+    max_effective_field_amplitude: Option<f64>,
+    max_rhs_amplitude: Option<f64>,
+    exchange_enabled: bool,
+    demag_enabled: bool,
+    external_field: Option<[f64; 3]>,
+    damping: f64,
+    relaxation: Option<&fullmag_ir::RelaxationControlIR>,
+    uniform_initial_state: bool,
+) {
+    let has_external_field = has_nonzero_external_field(external_field);
+
+    if relaxation.is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::LlgOverdamped)
+        && damping <= 0.0
+    {
+        warnings.push(
+            "Relaxation requested with alpha=0. Overdamped LLG has no dissipative drive in this case, so the state will not converge.".to_string(),
+        );
+    }
+
+    if exchange_enabled && !demag_enabled && !has_external_field && uniform_initial_state {
+        warnings.push(
+            "Demag and external field are both disabled while the initial magnetization is uniform. In this exchange-only configuration H_eff is zero, so the solver should remain static until the state is perturbed.".to_string(),
+        );
+    }
+
+    if let Some(max_rhs) = max_rhs_amplitude {
+        if near_zero(max_rhs) {
+            match max_effective_field_amplitude {
+                Some(max_h_eff) if near_zero(max_h_eff) => warnings.push(format!(
+                    "Initial torque is numerically zero (max_dm_dt≈{max_rhs:.3e}, |H_eff|≈{max_h_eff:.3e}). The state is already torque-free; if motion was expected, perturb the initial magnetization or enable an active field term."
+                )),
+                Some(max_h_eff) => warnings.push(format!(
+                    "Initial torque is numerically zero (max_dm_dt≈{max_rhs:.3e}) even though |H_eff|≈{max_h_eff:.3e} is non-zero. Magnetization is likely parallel to the effective field, so the run can look frozen until conditions change."
+                )),
+                None => warnings.push(format!(
+                    "Initial torque is numerically zero (max_dm_dt≈{max_rhs:.3e}). The solver will appear static unless the initial state or active fields change."
+                )),
+            }
+        }
+    }
+}
+
+fn diagnose_initial_fdm_plan(plan: &FdmPlanIR) -> Result<InitialStateDiagnostic> {
+    let grid = GridShape::new(
+        plan.grid.cells[0] as usize,
+        plan.grid.cells[1] as usize,
+        plan.grid.cells[2] as usize,
+    )
+    .map_err(|error| anyhow!("diagnostic grid error: {}", error))?;
+    let cell_size = CellSize::new(plan.cell_size[0], plan.cell_size[1], plan.cell_size[2])
+        .map_err(|error| anyhow!("diagnostic cell size error: {}", error))?;
+    let material = MaterialParameters::new(
+        plan.material.saturation_magnetisation,
+        plan.material.exchange_stiffness,
+        plan.material.damping,
+    )
+    .map_err(|error| anyhow!("diagnostic material error: {}", error))?;
+    let mut dynamics = LlgConfig::new(
+        plan.gyromagnetic_ratio,
+        integrator_for_plan(plan.integrator),
+    )
+    .map_err(|error| anyhow!("diagnostic LLG config error: {}", error))?
+    .with_precession_enabled(!relaxation_uses_pure_damping(plan.relaxation.as_ref()));
+    if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
+        dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
+            max_error: adaptive.atol,
+            dt_min: adaptive.dt_min,
+            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            headroom: adaptive.safety,
+        });
+    }
+    let problem = ExchangeLlgProblem::with_terms_and_mask(
+        grid,
+        cell_size,
+        material,
+        dynamics,
+        EffectiveFieldTerms {
+            exchange: plan.enable_exchange,
+            demag: plan.enable_demag,
+            external_field: plan.external_field,
+        },
+        plan.active_mask.clone(),
+    )
+    .map_err(|error| anyhow!("diagnostic problem construction error: {}", error))?;
+    let state = problem
+        .new_state(plan.initial_magnetization.clone())
+        .map_err(|error| anyhow!("diagnostic state error: {}", error))?;
+    let observables = problem
+        .observe(&state)
+        .map_err(|error| anyhow!("diagnostic observe error: {}", error))?;
+
+    let mut diagnostic = InitialStateDiagnostic {
+        max_effective_field_amplitude: Some(observables.max_effective_field_amplitude),
+        max_rhs_amplitude: Some(observables.max_rhs_amplitude),
+        warnings: Vec::new(),
+    };
+    add_initial_state_warnings(
+        &mut diagnostic.warnings,
+        diagnostic.max_effective_field_amplitude,
+        diagnostic.max_rhs_amplitude,
+        plan.enable_exchange,
+        plan.enable_demag,
+        plan.external_field,
+        plan.material.damping,
+        plan.relaxation.as_ref(),
+        magnetization_is_uniform(&plan.initial_magnetization),
+    );
+    Ok(diagnostic)
+}
+
+fn diagnose_initial_fem_plan(plan: &FemPlanIR) -> Result<InitialStateDiagnostic> {
+    let topology = MeshTopology::from_ir(&plan.mesh)
+        .map_err(|error| anyhow!("diagnostic FEM topology error: {}", error))?;
+    let material = MaterialParameters::new(
+        plan.material.saturation_magnetisation,
+        plan.material.exchange_stiffness,
+        plan.material.damping,
+    )
+    .map_err(|error| anyhow!("diagnostic FEM material error: {}", error))?;
+    let mut dynamics = LlgConfig::new(
+        plan.gyromagnetic_ratio,
+        integrator_for_plan(plan.integrator),
+    )
+    .map_err(|error| anyhow!("diagnostic FEM LLG config error: {}", error))?
+    .with_precession_enabled(!relaxation_uses_pure_damping(plan.relaxation.as_ref()));
+    if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
+        dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
+            max_error: adaptive.atol,
+            dt_min: adaptive.dt_min,
+            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            headroom: adaptive.safety,
+        });
+    }
+    let problem = FemLlgProblem::with_terms_and_demag_transfer_grid(
+        topology,
+        material,
+        dynamics,
+        EffectiveFieldTerms {
+            exchange: plan.enable_exchange,
+            demag: plan.enable_demag,
+            external_field: plan.external_field,
+        },
+        Some([plan.hmax, plan.hmax, plan.hmax]),
+    );
+    let state = problem
+        .new_state(plan.initial_magnetization.clone())
+        .map_err(|error| anyhow!("diagnostic FEM state error: {}", error))?;
+    let observables = problem
+        .observe(&state)
+        .map_err(|error| anyhow!("diagnostic FEM observe error: {}", error))?;
+
+    let mut diagnostic = InitialStateDiagnostic {
+        max_effective_field_amplitude: Some(observables.max_effective_field_amplitude),
+        max_rhs_amplitude: Some(observables.max_rhs_amplitude),
+        warnings: Vec::new(),
+    };
+    add_initial_state_warnings(
+        &mut diagnostic.warnings,
+        diagnostic.max_effective_field_amplitude,
+        diagnostic.max_rhs_amplitude,
+        plan.enable_exchange,
+        plan.enable_demag,
+        plan.external_field,
+        plan.material.damping,
+        plan.relaxation.as_ref(),
+        magnetization_is_uniform(&plan.initial_magnetization),
+    );
+    Ok(diagnostic)
+}
+
+fn diagnose_initial_multilayer_plan(plan: &FdmMultilayerPlanIR) -> InitialStateDiagnostic {
+    let mut diagnostic = InitialStateDiagnostic::default();
+    let uniform_initial_state = plan.layers.iter().all(|layer| {
+        magnetization_is_uniform(&layer.initial_magnetization)
+            && layer
+                .initial_magnetization
+                .first()
+                .zip(
+                    plan.layers
+                        .first()
+                        .and_then(|first| first.initial_magnetization.first()),
+                )
+                .map(|(current, reference)| {
+                    (current[0] - reference[0]).abs() <= 1e-12
+                        && (current[1] - reference[1]).abs() <= 1e-12
+                        && (current[2] - reference[2]).abs() <= 1e-12
+                })
+                .unwrap_or(true)
+    });
+    let damping = plan
+        .layers
+        .iter()
+        .map(|layer| layer.material.damping)
+        .fold(f64::INFINITY, f64::min);
+    add_initial_state_warnings(
+        &mut diagnostic.warnings,
+        None,
+        None,
+        plan.enable_exchange,
+        plan.enable_demag,
+        plan.external_field,
+        if damping.is_finite() { damping } else { 0.0 },
+        plan.relaxation.as_ref(),
+        uniform_initial_state,
+    );
+    diagnostic
+}
+
+fn diagnose_initial_backend_plan(backend_plan: &BackendPlanIR) -> Result<InitialStateDiagnostic> {
+    match backend_plan {
+        BackendPlanIR::Fdm(plan) => diagnose_initial_fdm_plan(plan),
+        BackendPlanIR::FdmMultilayer(plan) => Ok(diagnose_initial_multilayer_plan(plan)),
+        BackendPlanIR::Fem(plan) => diagnose_initial_fem_plan(plan),
+    }
+}
+
+fn emit_initial_state_warnings(
+    live_workspace: Option<&LocalLiveWorkspace>,
+    backend_plan: &BackendPlanIR,
+) -> Result<()> {
+    let diagnostic = diagnose_initial_backend_plan(backend_plan)?;
+    for warning in diagnostic.warnings {
+        eprintln!("fullmag diagnostic warning: {}", warning);
+        if let Some(workspace) = live_workspace {
+            workspace.push_log("warning", warning);
+        }
+    }
+    Ok(())
+}
+
 const PYTHON_PROGRESS_PREFIX: &str = "[fullmag-progress] ";
 const PYTHON_PROGRESS_JSON_PREFIX: &str = "json:";
 
@@ -3697,7 +3979,7 @@ mod tests {
     use super::*;
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FemPlanIR, GridDimensions,
-        IntegratorChoice, MaterialIR, MeshIR,
+        IntegratorChoice, MaterialIR, MeshIR, RelaxationAlgorithmIR, RelaxationControlIR,
     };
 
     #[test]
@@ -3809,5 +4091,92 @@ mod tests {
             }
             other => panic!("expected fem surface preview event, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn diagnose_initial_fdm_plan_warns_for_uniform_exchange_only_state() {
+        let plan = fullmag_ir::FdmPlanIR {
+            grid: GridDimensions { cells: [4, 1, 1] },
+            cell_size: [2e-9, 2e-9, 2e-9],
+            region_mask: vec![0; 4],
+            active_mask: None,
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            material: FdmMaterialIR {
+                name: "Py".to_string(),
+                saturation_magnetisation: 800e3,
+                exchange_stiffness: 13e-12,
+                damping: 0.5,
+            },
+            enable_exchange: true,
+            enable_demag: false,
+            external_field: None,
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            integrator: IntegratorChoice::Heun,
+            fixed_timestep: Some(1e-13),
+            adaptive_timestep: None,
+            relaxation: None,
+        };
+
+        let diagnostic = diagnose_initial_fdm_plan(&plan).expect("diagnostic should succeed");
+        assert!(
+            diagnostic
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("exchange-only configuration")),
+            "expected exchange-only warning, got {:?}",
+            diagnostic.warnings
+        );
+        assert!(
+            diagnostic
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Initial torque is numerically zero")),
+            "expected zero-torque warning, got {:?}",
+            diagnostic.warnings
+        );
+    }
+
+    #[test]
+    fn diagnose_initial_fdm_plan_warns_for_overdamped_relax_with_zero_alpha() {
+        let plan = fullmag_ir::FdmPlanIR {
+            grid: GridDimensions { cells: [1, 1, 1] },
+            cell_size: [2e-9, 2e-9, 2e-9],
+            region_mask: vec![0; 1],
+            active_mask: None,
+            initial_magnetization: vec![[1.0, 0.0, 0.0]],
+            material: FdmMaterialIR {
+                name: "Py".to_string(),
+                saturation_magnetisation: 800e3,
+                exchange_stiffness: 13e-12,
+                damping: 0.0,
+            },
+            enable_exchange: false,
+            enable_demag: false,
+            external_field: Some([0.0, 0.0, 1.0e5]),
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            integrator: IntegratorChoice::Heun,
+            fixed_timestep: Some(1e-13),
+            adaptive_timestep: None,
+            relaxation: Some(RelaxationControlIR {
+                algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+                torque_tolerance: 1e-6,
+                energy_tolerance: None,
+                max_steps: 100,
+            }),
+        };
+
+        let diagnostic = diagnose_initial_fdm_plan(&plan).expect("diagnostic should succeed");
+        assert!(
+            diagnostic
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("alpha=0")),
+            "expected alpha=0 warning, got {:?}",
+            diagnostic.warnings
+        );
     }
 }

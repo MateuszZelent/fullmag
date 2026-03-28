@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { resolveApiBase } from "@/lib/apiBase";
-
-/* ── Types ───────────────────────────────────────── */
 
 interface ServerConfig {
   backend: string;
@@ -17,8 +17,10 @@ interface ServerConfig {
 }
 
 type ConnectionState = "idle" | "loading" | "connected" | "error";
+type SettingTone = "success" | "error" | "info";
 
-/* ── Data fetching ───────────────────────────────── */
+const pageStackClass = "flex flex-col gap-[var(--sp-4)]";
+const refreshButtonClass = "inline-flex items-center rounded-md border border-[var(--ide-border-subtle)] bg-[var(--surface-2)] px-3 py-1.5 text-[length:var(--text-sm)] font-medium text-[var(--text-soft)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-1)]";
 
 function useServerConfig() {
   const [config, setConfig] = useState<ServerConfig | null>(null);
@@ -61,7 +63,12 @@ function useServerConfig() {
   return { config, connection, error, refresh };
 }
 
-/* ── Page ────────────────────────────────────────── */
+function badgeVariantForTone(tone?: SettingTone) {
+  if (tone === "success") return "success";
+  if (tone === "error") return "danger";
+  if (tone === "info") return "info";
+  return "outline";
+}
 
 export default function SettingsPage() {
   const { config, connection, error, refresh } = useServerConfig();
@@ -86,25 +93,12 @@ export default function SettingsPage() {
         <p className="page-subtitle">Platform configuration and live workspace state</p>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
-        {/* ── Connection Status ── */}
-        <div className="card">
-          <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div className={pageStackClass}>
+        <section className="card">
+          <div className="card-header">
             <h2 className="card-title">Server Connection</h2>
-            <button
-              onClick={refresh}
-              style={{
-                appearance: "none",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: "6px",
-                background: "var(--surface-2)",
-                color: "var(--text-secondary)",
-                padding: "0.35rem 0.75rem",
-                fontSize: "var(--text-sm)",
-                cursor: "pointer",
-              }}
-            >
-              ⟳ Refresh
+            <button type="button" onClick={refresh} className={refreshButtonClass}>
+              Refresh
             </button>
           </div>
           <div className="card-body">
@@ -112,41 +106,28 @@ export default function SettingsPage() {
               label="Status"
               value={
                 connection === "connected"
-                  ? "✓ Connected"
+                  ? "Connected"
                   : connection === "loading"
-                    ? "⟳ Loading…"
+                    ? "Loading…"
                     : connection === "error"
-                      ? "✗ Disconnected"
-                      : "○ Idle"
+                      ? "Disconnected"
+                      : "Idle"
               }
               tone={connection === "connected" ? "success" : connection === "error" ? "error" : undefined}
             />
             <SettingRow label="API Endpoint" value={resolveApiBase()} />
             {error && <SettingRow label="Error" value={error} tone="error" />}
           </div>
-        </div>
+        </section>
 
-        {/* ── Execution Config ── */}
-        <div className="card">
+        <section className="card">
           <div className="card-header">
             <h2 className="card-title">Execution Configuration</h2>
           </div>
           <div className="card-body">
-            <SettingRow
-              label="Backend"
-              value={config?.backend?.toUpperCase() ?? "—"}
-              muted={!config}
-            />
-            <SettingRow
-              label="Execution Mode"
-              value={config?.execution_mode ?? "—"}
-              muted={!config}
-            />
-            <SettingRow
-              label="Precision"
-              value={config?.precision ?? "—"}
-              muted={!config}
-            />
+            <SettingRow label="Backend" value={config?.backend?.toUpperCase() ?? "—"} muted={!config} />
+            <SettingRow label="Execution Mode" value={config?.execution_mode ?? "—"} muted={!config} />
+            <SettingRow label="Precision" value={config?.precision ?? "—"} muted={!config} />
             <SettingRow
               label="Workspace Status"
               value={config?.status ?? "—"}
@@ -160,19 +141,14 @@ export default function SettingsPage() {
               muted={!config}
             />
           </div>
-        </div>
+        </section>
 
-        {/* ── Active Problem ── */}
-        <div className="card">
+        <section className="card">
           <div className="card-header">
             <h2 className="card-title">Active Problem</h2>
           </div>
           <div className="card-body">
-            <SettingRow
-              label="Problem Name"
-              value={config?.problem_name ?? "—"}
-              muted={!config}
-            />
+            <SettingRow label="Problem Name" value={config?.problem_name ?? "—"} muted={!config} />
             {config?.script_path && (
               <SettingRow label="Script" value={config.script_path.split("/").pop() ?? "—"} />
             )}
@@ -181,10 +157,9 @@ export default function SettingsPage() {
             )}
             {meshInfo && <SettingRow label="Mesh" value={meshInfo} />}
           </div>
-        </div>
+        </section>
 
-        {/* ── GPU Configuration ── */}
-        <div className="card">
+        <section className="card">
           <div className="card-header">
             <h2 className="card-title">GPU Configuration</h2>
           </div>
@@ -192,29 +167,26 @@ export default function SettingsPage() {
             <SettingRow label="CUDA Device" value="Not yet detected" muted />
             <SettingRow label="CUDA Toolkit" value="—" muted />
             <SettingRow label="GPU Backend Status" value="Phase 2" muted />
-            <p style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", marginTop: "var(--sp-2)" }}>
+            <p className="mt-[var(--sp-2)] text-[length:var(--text-sm)] text-[var(--text-muted)]">
               GPU acceleration will be available when the CUDA backend is implemented.
             </p>
           </div>
-        </div>
+        </section>
 
-        {/* ── Appearance ── */}
-        <div className="card">
+        <section className="card">
           <div className="card-header">
             <h2 className="card-title">Appearance</h2>
           </div>
           <div className="card-body">
-            <p style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
+            <p className="text-[length:var(--text-sm)] text-[var(--text-muted)]">
               Use the sun/moon icon in the top bar to toggle between dark and light themes.
             </p>
           </div>
-        </div>
+        </section>
       </div>
     </>
   );
 }
-
-/* ── SettingRow ───────────────────────────────────── */
 
 function SettingRow({
   label,
@@ -225,40 +197,25 @@ function SettingRow({
   label: string;
   value: string;
   muted?: boolean;
-  tone?: "success" | "error" | "info";
+  tone?: SettingTone;
 }) {
-  const toneColor =
-    tone === "success"
-      ? "var(--status-success, #34d399)"
-      : tone === "error"
-        ? "var(--status-error, #f87171)"
-        : tone === "info"
-          ? "var(--status-info, #60a5fa)"
-          : undefined;
-
   return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: "var(--sp-3) 0",
-        borderBottom: "1px solid var(--border-subtle)",
-      }}
-    >
-      <span style={{ fontSize: "var(--text-base)", color: "var(--text-secondary)" }}>
+    <div className="flex items-center justify-between gap-[var(--sp-4)] border-b border-[var(--ide-border-subtle)] py-[var(--sp-3)] last:border-b-0">
+      <span className="text-[length:var(--text-base)] text-[var(--text-soft)]">
         {label}
       </span>
-      <span
-        style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: "var(--text-sm)",
-          color: toneColor ?? (muted ? "var(--text-muted)" : "var(--text-primary)"),
-          fontWeight: tone ? 600 : undefined,
-        }}
-      >
-        {value}
-      </span>
+      <div className="flex items-center gap-2">
+        <span
+          className={cn(
+            "font-mono text-[length:var(--text-sm)]",
+            muted ? "text-[var(--text-muted)]" : "text-[var(--text-1)]",
+            tone ? "font-semibold" : undefined,
+          )}
+        >
+          {value}
+        </span>
+        {tone ? <Badge variant={badgeVariantForTone(tone)}>{tone}</Badge> : null}
+      </div>
     </div>
   );
 }

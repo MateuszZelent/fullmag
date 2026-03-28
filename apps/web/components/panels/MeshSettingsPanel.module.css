@@ -208,6 +208,18 @@
   vertical-align: middle;
 }
 
+.legendDotDanger {
+  background: #cf6256;
+}
+
+.legendDotWarn {
+  background: #fde725;
+}
+
+.legendDotGood {
+  background: #35b779;
+}
+
 /* ── Generate button ── */
 .generateBtn {
   width: 100%;
@@ -247,4 +259,3 @@
 @keyframes meshSpin {
   to { transform: rotate(360deg); }
 }
-

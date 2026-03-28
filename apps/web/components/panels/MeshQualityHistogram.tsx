@@ -188,7 +188,7 @@ export default function MeshQualityHistogram({ femMesh }: MeshQualityHistogramPr
         panelId="mesh-quality"
         eyebrow="FEM"
       >
-        <div style={{ padding: "1rem", color: "var(--text-3)", fontSize: "0.85rem" }}>
+        <div className="p-4 text-[0.85rem] text-[var(--text-3)]">
           Mesh quality histogram will appear once FEM topology is loaded.
         </div>
       </Panel>
@@ -213,68 +213,46 @@ export default function MeshQualityHistogram({ femMesh }: MeshQualityHistogramPr
         />
       }
     >
-      <div style={{ display: "grid", gap: "0.75rem" }}>
+      <div className="grid gap-3">
         {/* Stats row */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
-            gap: "0.5rem",
-            fontSize: "0.78rem",
-            fontFamily: "var(--font-mono)",
-          }}
-        >
+        <div className="grid grid-cols-6 gap-2 font-mono text-[0.78rem]">
           <div>
-            <div style={{ color: "var(--text-3)", fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Min AR</div>
-            <div style={{ color: "var(--text-1)" }}>{stats.min.toFixed(2)}</div>
+            <div className="text-[0.68rem] font-bold uppercase tracking-[0.08em] text-[var(--text-3)]">Min AR</div>
+            <div className="text-[var(--text-1)]">{stats.min.toFixed(2)}</div>
           </div>
           <div>
-            <div style={{ color: "var(--text-3)", fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Mean AR</div>
-            <div style={{ color: "var(--text-1)" }}>{stats.mean.toFixed(2)}</div>
+            <div className="text-[0.68rem] font-bold uppercase tracking-[0.08em] text-[var(--text-3)]">Mean AR</div>
+            <div className="text-[var(--text-1)]">{stats.mean.toFixed(2)}</div>
           </div>
           <div>
-            <div style={{ color: "var(--text-3)", fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Max AR</div>
-            <div style={{ color: "var(--text-1)" }}>{stats.max.toFixed(2)}</div>
+            <div className="text-[0.68rem] font-bold uppercase tracking-[0.08em] text-[var(--text-3)]">Max AR</div>
+            <div className="text-[var(--text-1)]">{stats.max.toFixed(2)}</div>
           </div>
           <div>
-            <div style={{ color: "#35b779", fontSize: "0.68rem", fontWeight: 700 }}>Good</div>
-            <div style={{ color: "var(--text-1)" }}>{goodPct}%</div>
+            <div className="text-[0.68rem] font-bold text-[#35b779]">Good</div>
+            <div className="text-[var(--text-1)]">{goodPct}%</div>
           </div>
           <div>
-            <div style={{ color: "#fde725", fontSize: "0.68rem", fontWeight: 700 }}>Fair</div>
-            <div style={{ color: "var(--text-1)" }}>{fairPct}%</div>
+            <div className="text-[0.68rem] font-bold text-[#fde725]">Fair</div>
+            <div className="text-[var(--text-1)]">{fairPct}%</div>
           </div>
           <div>
-            <div style={{ color: "#cf6256", fontSize: "0.68rem", fontWeight: 700 }}>Poor</div>
-            <div style={{ color: "var(--text-1)" }}>{poorPct}%</div>
+            <div className="text-[0.68rem] font-bold text-[#cf6256]">Poor</div>
+            <div className="text-[var(--text-1)]">{poorPct}%</div>
           </div>
         </div>
 
         {/* Histogram canvas */}
         <canvas
           ref={canvasRef}
-          style={{
-            width: "100%",
-            height: 160,
-            borderRadius: "var(--radius-md)",
-            background: "rgba(6, 10, 18, 0.6)",
-            border: "1px solid var(--border-subtle)",
-          }}
+          className="h-40 w-full rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[rgba(6,10,18,0.6)]"
         />
 
         {/* Legend */}
-        <div
-          style={{
-            display: "flex",
-            gap: "1rem",
-            fontSize: "0.72rem",
-            color: "var(--text-3)",
-            justifyContent: "center",
-          }}
-        >
-          <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "#35b779", marginRight: 4, verticalAlign: "middle" }} /> AR &lt; 3 (Good)</span>
-          <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "#fde725", marginRight: 4, verticalAlign: "middle" }} /> 3 ≤ AR &lt; 6 (Fair)</span>
-          <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "#cf6256", marginRight: 4, verticalAlign: "middle" }} /> AR ≥ 6 (Poor)</span>
+        <div className="flex justify-center gap-4 text-[0.72rem] text-[var(--text-3)]">
+          <span><span className="mr-1 inline-block size-[10px] rounded-[2px] align-middle bg-[#35b779]" /> AR &lt; 3 (Good)</span>
+          <span><span className="mr-1 inline-block size-[10px] rounded-[2px] align-middle bg-[#fde725]" /> 3 ≤ AR &lt; 6 (Fair)</span>
+          <span><span className="mr-1 inline-block size-[10px] rounded-[2px] align-middle bg-[#cf6256]" /> AR ≥ 6 (Poor)</span>
         </div>
       </div>
     </Panel>

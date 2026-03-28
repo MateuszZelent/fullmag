@@ -393,11 +393,7 @@ export default function MagnetizationSlice2D({
   return (
     <div
       ref={containerRef}
-      style={{
-        width: "100%",
-        height: "100%",
-        background: "#0c121f",
-      }}
+      className="h-full w-full bg-[#0c121f]"
     />
   );
 }

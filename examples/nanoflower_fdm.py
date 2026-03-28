@@ -9,8 +9,8 @@ import fullmag as fm
 # ── Engine ──────────────────────────────────────────────────
 fm.name("nanoflower_fdm")
 fm.engine("fdm")
-fm.device("cuda:0")
-fm.cell(2.5e-9, 2.5e-9, 2.5e-9)
+fm.device("cuda:0", precision="single")
+fm.cell(5e-9, 5e-9, 5e-9)
 
 # ── Geometry & Material ─────────────────────────────────────
 flower = fm.geometry(

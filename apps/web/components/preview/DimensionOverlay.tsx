@@ -85,16 +85,19 @@ export default function DimensionOverlay({
       {/* ── Bottom axis (X) ── */}
       <div className={s.axisBottom}>
         <div className={s.axisLine}>
-          {xTicks.map((v) => (
-            <span
-              key={v}
-              className={s.tick}
-              style={{ left: `${axes.x.extent > 0 ? (v / axes.x.extent) * 100 : 0}%` }}
-            >
-              <span className={s.tickMark} />
-              <span className={s.tickLabel}>{fmtTickLabel(v)}</span>
-            </span>
-          ))}
+          <svg className={s.axisSvg} viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true">
+            {xTicks.map((v) => {
+              const x = axes.x.extent > 0 ? (v / axes.x.extent) * 100 : 0;
+              return (
+                <g key={v}>
+                  <line x1={x} x2={x} y1="0" y2="6" className={s.tickMark} />
+                  <text x={x} y="16" textAnchor="middle" className={`${s.tickLabel} ${s.tickLabelBottom}`}>
+                    {fmtTickLabel(v)}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
         </div>
         <span className={s.axisLabel}>{axes.unit}</span>
       </div>
@@ -102,16 +105,19 @@ export default function DimensionOverlay({
       {/* ── Left axis (Y) ── */}
       <div className={s.axisLeft}>
         <div className={s.axisLine}>
-          {yTicks.map((v) => (
-            <span
-              key={v}
-              className={s.tick}
-              style={{ bottom: `${axes.y.extent > 0 ? (v / axes.y.extent) * 100 : 0}%` }}
-            >
-              <span className={s.tickMark} />
-              <span className={s.tickLabel}>{fmtTickLabel(v)}</span>
-            </span>
-          ))}
+          <svg className={s.axisSvg} viewBox="0 0 24 100" preserveAspectRatio="none" aria-hidden="true">
+            {yTicks.map((v) => {
+              const y = axes.y.extent > 0 ? 100 - (v / axes.y.extent) * 100 : 100;
+              return (
+                <g key={v}>
+                  <line x1="0" x2="6" y1={y} y2={y} className={s.tickMark} />
+                  <text x="18" y={y + 2} textAnchor="end" className={`${s.tickLabel} ${s.tickLabelLeft}`}>
+                    {fmtTickLabel(v)}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
         </div>
         <span className={s.axisLabel}>{axes.unit}</span>
       </div>

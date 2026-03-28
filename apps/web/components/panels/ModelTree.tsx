@@ -53,7 +53,7 @@ function TreeNode({
     <div className={s.node}>
       <div
         className={s.nodeRow}
-        style={{ "--depth": depth } as React.CSSProperties}
+        data-depth={depth}
         data-active={activeId === node.id ? "true" : undefined}
         onClick={handleClick}
         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextMenu?.(e, node.id, node.label); }}
@@ -113,6 +113,10 @@ export default function ModelTree({
     if (!ctxMenu) return;
     const close = () => setCtxMenu(null);
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    if (menuRef.current) {
+      menuRef.current.style.left = `${ctxMenu.x}px`;
+      menuRef.current.style.top = `${ctxMenu.y}px`;
+    }
     window.addEventListener("click", close);
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", onKey); };
@@ -145,7 +149,6 @@ export default function ModelTree({
         <div
           ref={menuRef}
           className={s.contextMenu}
-          style={{ top: ctxMenu.y, left: ctxMenu.x }}
         >
           <div className={s.ctxHeader}>{ctxMenu.label}</div>
           <button className={s.ctxItem} onClick={() => handleAction("select")}>Select</button>

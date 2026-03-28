@@ -30,12 +30,7 @@ export default function MetricTile({
       </header>
       <strong>{value}</strong>
       {normalized != null && (
-        <div className={s.bar} aria-hidden="true">
-          <span
-            className={s.barFill}
-            style={{ width: `${normalized}%` }}
-          />
-        </div>
+        <progress className={s.bar} value={normalized} max={100} aria-hidden="true" />
       )}
     </article>
   );

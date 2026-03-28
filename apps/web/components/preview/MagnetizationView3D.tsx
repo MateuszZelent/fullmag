@@ -547,9 +547,7 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
   };
 
   return (
-    <div
-      style={{ position: "relative", display: "flex", flexDirection: "column", height: "100%" }}
-    >
+    <div className={t.viewportRoot}>
       <div className={t.toolbar}>
         <button
           className={t.toggleBtn}
@@ -693,12 +691,7 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
 
       <div
         ref={containerRef}
-        style={{
-          width: "100%",
-          flex: 1,
-          minHeight: 0,
-          background: `#${BG_COLOR.toString(16).padStart(6, "0")}`,
-        }}
+        className={t.viewportCanvas}
       />
 
       <ViewCube sceneRef={sceneRef} grid={grid} />

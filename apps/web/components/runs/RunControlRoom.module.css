@@ -257,6 +257,18 @@
   flex: 1;
 }
 
+.viewportRow {
+  flex-direction: row;
+}
+
+.viewportMainColumn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
 .meshDock {
   height: 100%;
   min-height: 0;
@@ -575,8 +587,41 @@
 }
 
 .meshQualityFill {
+  width: 100%;
   height: 100%;
+  appearance: none;
+  border: none;
   border-radius: inherit;
+}
+
+.meshQualityFill::-webkit-progress-bar {
+  background: transparent;
+  border-radius: inherit;
+}
+
+.meshQualityFill::-webkit-progress-value {
+  border-radius: inherit;
+  background: var(--ide-accent);
+}
+
+.meshQualityFill::-moz-progress-bar {
+  border-radius: inherit;
+  background: var(--ide-accent);
+}
+
+.meshQualityFill[data-tone="success"]::-webkit-progress-value,
+.meshQualityFill[data-tone="success"]::-moz-progress-bar {
+  background: var(--status-running);
+}
+
+.meshQualityFill[data-tone="warn"]::-webkit-progress-value,
+.meshQualityFill[data-tone="warn"]::-moz-progress-bar {
+  background: var(--status-warn);
+}
+
+.meshQualityFill[data-tone="danger"]::-webkit-progress-value,
+.meshQualityFill[data-tone="danger"]::-moz-progress-bar {
+  background: var(--status-failed);
 }
 
 .meshQualityValue {
@@ -763,14 +808,21 @@
   pointer-events: none;
 }
 
+.viewportOverlayMetricConverged {
+  color: var(--status-running);
+}
+
+.viewportEmptyState {
+  padding: 1rem;
+}
+
 /* ── Right Sidebar ───────────────────────────────── */
 .sidebar {
   display: flex;
   flex-direction: column;
   background: var(--ide-surface);
   border-left: 1px solid var(--ide-border);
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   min-height: 0;
   min-width: 220px;
   height: 100%;
@@ -785,6 +837,78 @@
 .sidebar::-webkit-scrollbar-thumb {
   background: hsla(220, 20%, 30%, 0.4);
   border-radius: 2px;
+}
+
+.sidebarStack {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.sidebarPanelSection {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--ide-surface);
+}
+
+.sidebarPanelBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.sidebarPanelBody::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebarPanelBody::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebarPanelBody::-webkit-scrollbar-thumb {
+  background: hsla(220, 20%, 30%, 0.4);
+  border-radius: 2px;
+}
+
+.sidebarPanelContentStack {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.sidebarSectionResizeHandle {
+  height: 10px;
+  background: transparent;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 150ms;
+  flex-shrink: 0;
+  position: relative;
+  touch-action: none;
+}
+
+.sidebarSectionResizeHandle::after {
+  content: "";
+  width: 56px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--ide-border);
+  transition: background 150ms, width 150ms;
+}
+
+.sidebarSectionResizeHandle:hover,
+.sidebarSectionResizeHandle:active {
+  background: var(--ide-accent-bg);
+}
+
+.sidebarSectionResizeHandle:hover::after,
+.sidebarSectionResizeHandle:active::after {
+  width: 72px;
+  background: var(--ide-accent);
 }
 
 .interactiveBlock {
@@ -825,6 +949,26 @@
   display: flex;
   justify-content: flex-end;
   margin-top: 0.2rem;
+}
+
+.interactiveActionsWrapStart {
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  margin-top: 0.75rem;
+}
+
+.interactiveActionsWrapStartCompact {
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  margin-top: 0.7rem;
+}
+
+.interactiveActionsSpread {
+  gap: 0.4rem;
+  justify-content: space-between;
+  margin-top: 0.7rem;
 }
 
 .interactiveMessage {
@@ -916,6 +1060,32 @@
   background: var(--ide-surface-hover);
 }
 
+.sectionHeaderButton {
+  appearance: none;
+  width: 100%;
+  border: none;
+  background: var(--ide-surface-raised);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+  user-select: none;
+  transition: background 80ms;
+}
+
+.sectionHeaderButton:hover {
+  background: var(--ide-surface-hover);
+}
+
+.sectionHeaderButton:focus-visible {
+  outline: 1px solid var(--ide-accent);
+  outline-offset: -1px;
+}
+
 .sectionChevron {
   font-size: 0.65rem;
   color: var(--ide-text-3);
@@ -950,6 +1120,85 @@
   padding: 0.5rem 0.7rem 0.6rem;
   overflow: hidden;
   min-width: 0;
+}
+
+.inspectorBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid var(--ide-border-strong);
+  border-radius: 8px;
+  background: linear-gradient(180deg, hsla(220, 18%, 16%, 0.92), hsla(220, 16%, 13%, 0.92));
+}
+
+.inspectorBlock + .inspectorBlock {
+  margin-top: 0.7rem;
+}
+
+.inspectorBlockTitle {
+  font-size: var(--ide-text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ide-text-2);
+}
+
+.inspectorPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.1rem;
+}
+
+.inspectorNoteList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.inspectorNoteItem {
+  font-size: var(--ide-text-sm);
+  line-height: 1.45;
+  color: var(--ide-text-2);
+}
+
+.inspectorCardGrid {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.inspectorCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  min-width: 0;
+  padding: 0.65rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--ide-border);
+  background: hsla(220, 18%, 20%, 0.55);
+}
+
+.inspectorCardTitle {
+  font-size: var(--ide-text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ide-accent-text);
+}
+
+.inspectorCardSubtitle {
+  font-family: var(--font-mono);
+  font-size: var(--ide-text-sm);
+  color: var(--ide-text-1);
+  font-weight: 600;
+}
+
+.inspectorCardBody {
+  font-size: var(--ide-text-sm);
+  line-height: 1.5;
+  color: var(--ide-text-2);
 }
 
 /* ── Sidebar field grid ──────────────────────────── */
@@ -991,6 +1240,54 @@
   color: var(--ide-text-1);
   font-weight: 500;
   overflow-wrap: anywhere;
+}
+
+.fieldValueSuccess {
+  color: var(--status-running);
+}
+
+.metricSparkline {
+  width: 100%;
+  min-height: 20px;
+  margin-top: 0.25rem;
+}
+
+.pillRow {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  margin-top: 0.55rem;
+}
+
+.fieldGridTopSpace {
+  margin-top: 0.55rem;
+}
+
+.fieldGridTopSpaceSm {
+  margin-top: 0.35rem;
+}
+
+.fieldGridTopSpaceLg {
+  margin-top: 0.7rem;
+}
+
+.fullWidthLabel {
+  grid-column: 1 / -1;
+}
+
+.interactiveLabelEnd {
+  justify-content: end;
+}
+
+.checkboxInlineRow {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 36px;
+}
+
+.hintTopSpace {
+  padding-top: 0.5rem;
 }
 
 .fieldUnit {

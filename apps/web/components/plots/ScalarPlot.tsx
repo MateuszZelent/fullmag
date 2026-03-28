@@ -106,7 +106,7 @@ function buildChartConfig(xColumn: string, yColumns: string[], theme: ReturnType
         let html = `<strong>${xLabel}: ${Number(xVal).toExponential(3)}</strong>`;
         for (const p of params) {
           const yVal = Number(p.value[1]);
-          html += `<br/><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color};margin-right:4px;"></span>${p.seriesName}: ${
+          html += `<br/>● ${p.seriesName}: ${
             magnetizationOnly ? yVal.toFixed(4) : yVal.toExponential(4)
           }`;
         }
@@ -322,14 +322,7 @@ const ScalarPlot = memo(function ScalarPlot({
   return (
     <div
       ref={containerRef}
-      style={{
-        width: "100%",
-        height: "100%",
-        minHeight: 0,
-        borderRadius: "var(--radius-md)",
-        border: "1px solid var(--ide-border-subtle)",
-        background: "var(--ide-bg)",
-      }}
+      className="h-full min-h-0 w-full rounded-[var(--radius-md)] border border-[var(--ide-border-subtle)] bg-[var(--ide-bg)]"
     />
   );
 });

@@ -175,29 +175,14 @@ export default function MagnetizationView2D({ grid, magnetization }: Props) {
   return (
     <div>
       {/* Controls */}
-      <div
-        style={{
-          display: "flex",
-          gap: "var(--sp-3)",
-          padding: "var(--sp-3) var(--sp-4)",
-          alignItems: "center",
-          borderBottom: "1px solid var(--border)",
-        }}
-      >
-        <label style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
+      <div className="flex items-center gap-[var(--sp-3)] border-b border-[var(--border)] px-[var(--sp-4)] py-[var(--sp-3)]">
+        <label className="text-[var(--text-sm)] text-[var(--text-muted)]">
           Component
         </label>
         <select
           value={component}
           onChange={(e) => setComponent(e.target.value as Component)}
-          style={{
-            background: "var(--bg-raised)",
-            color: "var(--text-primary)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-md)",
-            padding: "var(--sp-1) var(--sp-3)",
-            fontSize: "var(--text-sm)",
-          }}
+          className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-raised)] px-[var(--sp-3)] py-[var(--sp-1)] text-[var(--text-sm)] text-[var(--text-primary)]"
         >
           <option value="mx">mₓ</option>
           <option value="my">mᵧ</option>
@@ -207,9 +192,7 @@ export default function MagnetizationView2D({ grid, magnetization }: Props) {
 
         {nz > 1 && (
           <>
-            <label
-              style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", marginLeft: "var(--sp-4)" }}
-            >
+            <label className="ml-[var(--sp-4)] text-[var(--text-sm)] text-[var(--text-muted)]">
               z-slice
             </label>
             <input
@@ -218,15 +201,9 @@ export default function MagnetizationView2D({ grid, magnetization }: Props) {
               max={nz - 1}
               value={zSlice}
               onChange={(e) => setZSlice(parseInt(e.target.value))}
-              style={{ width: "80px" }}
+              className="w-20"
             />
-            <span
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: "var(--text-sm)",
-                color: "var(--text-muted)",
-              }}
-            >
+            <span className="font-mono text-[var(--text-sm)] text-[var(--text-muted)]">
               {zSlice}/{nz - 1}
             </span>
           </>
@@ -236,11 +213,7 @@ export default function MagnetizationView2D({ grid, magnetization }: Props) {
       {/* Chart */}
       <div
         ref={containerRef}
-        style={{
-          width: "100%",
-          height: "400px",
-          background: "#0d1117",
-        }}
+        className="h-[400px] w-full bg-[#0d1117]"
       />
     </div>
   );

@@ -418,9 +418,10 @@ impl FemLlgProblem {
             if error <= cfg.max_error || dt <= cfg.dt_min {
                 state.magnetization = y3;
                 state.time_seconds += dt;
-                let dt_next = (cfg.headroom * dt * (cfg.max_error / error.max(1e-30)).powf(1.0 / 3.0))
-                    .max(cfg.dt_min)
-                    .min(cfg.dt_max);
+                let dt_next =
+                    (cfg.headroom * dt * (cfg.max_error / error.max(1e-30)).powf(1.0 / 3.0))
+                        .max(cfg.dt_min)
+                        .min(cfg.dt_max);
                 let observables = self.observe_vectors(state.magnetization())?;
                 return Ok(StepReport {
                     time_seconds: state.time_seconds,

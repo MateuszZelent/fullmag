@@ -33,9 +33,6 @@ type FaceZone = {
   label?: string;
 };
 
-const S = 30;
-const _q = new THREE.Quaternion();
-const _euler = new THREE.Euler();
 const _m = new THREE.Matrix4();
 
 function add(a: number[], b: number[], c?: number[]): [number, number, number] {
@@ -59,12 +56,12 @@ function buildZones(
 }
 
 const faces: { cssTransform: string; zones: FaceZone[][] }[] = [
-  { cssTransform: `translateZ(${S}px)`, zones: buildZones([0, 1, 0], [0, 0, 1], [1, 0, 0], "+Y") },
-  { cssTransform: `rotateY(180deg) translateZ(${S}px)`, zones: buildZones([0, -1, 0], [0, 0, 1], [-1, 0, 0], "-Y") },
-  { cssTransform: `rotateY(90deg) translateZ(${S}px)`, zones: buildZones([1, 0, 0], [0, 0, 1], [0, -1, 0], "+X") },
-  { cssTransform: `rotateY(-90deg) translateZ(${S}px)`, zones: buildZones([-1, 0, 0], [0, 0, 1], [0, 1, 0], "-X") },
-  { cssTransform: `rotateX(90deg) translateZ(${S}px)`, zones: buildZones([0, 0, 1], [0, 1, 0], [1, 0, 0], "+Z") },
-  { cssTransform: `rotateX(-90deg) translateZ(${S}px)`, zones: buildZones([0, 0, -1], [0, -1, 0], [1, 0, 0], "-Z") },
+  { cssTransform: "vcFaceTop", zones: buildZones([0, 1, 0], [0, 0, 1], [1, 0, 0], "+Y") },
+  { cssTransform: "vcFaceBottom", zones: buildZones([0, -1, 0], [0, 0, 1], [-1, 0, 0], "-Y") },
+  { cssTransform: "vcFaceRight", zones: buildZones([1, 0, 0], [0, 0, 1], [0, -1, 0], "+X") },
+  { cssTransform: "vcFaceLeft", zones: buildZones([-1, 0, 0], [0, 0, 1], [0, 1, 0], "-X") },
+  { cssTransform: "vcFaceFront", zones: buildZones([0, 0, 1], [0, 1, 0], [1, 0, 0], "+Z") },
+  { cssTransform: "vcFaceBack", zones: buildZones([0, 0, -1], [0, -1, 0], [1, 0, 0], "-Z") },
 ];
 
 export default function ViewCube({ sceneRef, grid, onRotate }: ViewCubeProps) {
@@ -208,7 +205,7 @@ export default function ViewCube({ sceneRef, grid, onRotate }: ViewCubeProps) {
           onPointerLeave={onPointerUp}
         >
           {faces.map((face, fi) => (
-            <div key={fi} className={s.vcFace} style={{ transform: face.cssTransform }}>
+            <div key={fi} className={`${s.vcFace} ${s[face.cssTransform]}`}>
               {face.zones.flat().map((zone, zi) => (
                 <button
                   key={zi}
@@ -231,17 +228,17 @@ export default function ViewCube({ sceneRef, grid, onRotate }: ViewCubeProps) {
       <div className={s.ag}>
         <div ref={axisSceneRef} className={s.agScene}>
           {/* X axis (red) */}
-          <div className={`${s.agShaft} ${s.agShaftX}`} style={{ transform: "rotateZ(-90deg) translateY(-18px)" }} />
-          <div className={`${s.agTip} ${s.agTipX}`} style={{ transform: "translateX(26px) rotate(-90deg)" }} />
-          <div className={`${s.agLbl} ${s.agLblX}`} style={{ transform: "translateX(36px)" }}>X</div>
+          <div className={`${s.agShaft} ${s.agShaftX} ${s.agShaftXTransform}`} />
+          <div className={`${s.agTip} ${s.agTipX} ${s.agTipXTransform}`} />
+          <div className={`${s.agLbl} ${s.agLblX} ${s.agLblXTransform}`}>X</div>
           {/* Z axis (blue) */}
-          <div className={`${s.agShaft} ${s.agShaftZ}`} style={{ transform: "translateY(-18px)" }} />
-          <div className={`${s.agTip} ${s.agTipZ}`} style={{ transform: "translateY(-26px)" }} />
-          <div className={`${s.agLbl} ${s.agLblZ}`} style={{ transform: "translateY(-36px)" }}>Z</div>
+          <div className={`${s.agShaft} ${s.agShaftZ} ${s.agShaftZTransform}`} />
+          <div className={`${s.agTip} ${s.agTipZ} ${s.agTipZTransform}`} />
+          <div className={`${s.agLbl} ${s.agLblZ} ${s.agLblZTransform}`}>Z</div>
           {/* Y axis (green) */}
-          <div className={`${s.agShaft} ${s.agShaftY}`} style={{ transform: "rotateX(90deg) translateY(-18px)" }} />
-          <div className={`${s.agTip} ${s.agTipY}`} style={{ transform: "translateZ(26px) rotateX(90deg)" }} />
-          <div className={`${s.agLbl} ${s.agLblY}`} style={{ transform: "translateZ(36px)" }}>Y</div>
+          <div className={`${s.agShaft} ${s.agShaftY} ${s.agShaftYTransform}`} />
+          <div className={`${s.agTip} ${s.agTipY} ${s.agTipYTransform}`} />
+          <div className={`${s.agLbl} ${s.agLblY} ${s.agLblYTransform}`}>Y</div>
         </div>
       </div>
     </>

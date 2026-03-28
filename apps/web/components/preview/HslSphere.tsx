@@ -18,6 +18,7 @@ import { useEffect, useRef, useCallback } from "react";
 import * as THREE from "three";
 import type { TrackballControls } from "three/examples/jsm/controls/TrackballControls.js";
 import { magnetizationHslColor } from "./magnetizationColor";
+import { cn } from "@/lib/utils";
 
 /* ── Types ─────────────────────────────────────────────────── */
 
@@ -178,22 +179,12 @@ export default function HslSphere({ sceneRef }: HslSphereProps) {
   }, [syncRotation]);
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        bottom: 16,
-        left: 16,
-        width: SIZE,
-        height: SIZE,
-        zIndex: 10,
-        pointerEvents: "none",
-      }}
-    >
+    <div className="pointer-events-none absolute bottom-4 left-4 z-10 h-[110px] w-[110px]">
       <canvas
         ref={canvasRef}
         width={SIZE}
         height={SIZE}
-        style={{ width: SIZE, height: SIZE, borderRadius: "50%" }}
+        className={cn("block h-full w-full rounded-full")}
       />
     </div>
   );

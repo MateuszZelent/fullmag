@@ -1,5 +1,6 @@
 "use client";
 
+import { cn } from "@/lib/utils";
 import type { FemLiveMesh, PreviewState } from "../../../lib/useSessionStream";
 import MagnetizationSlice2D from "../../preview/MagnetizationSlice2D";
 import MagnetizationView3D from "../../preview/MagnetizationView3D";
@@ -398,7 +399,7 @@ export function ViewportCanvasArea(props: ViewportCanvasAreaProps) {
         <span>Step {effectiveStep.toLocaleString()}</span>
         <span>{fmtSI(effectiveTime, "s")}</span>
         {effectiveDmDt > 0 && (
-          <span style={{ color: effectiveDmDt < 1e-5 ? "var(--status-running)" : undefined }}>
+          <span className={cn(effectiveDmDt < 1e-5 ? s.viewportOverlayMetricConverged : undefined)}>
             dm/dt {fmtExp(effectiveDmDt)}
           </span>
         )}
@@ -411,7 +412,7 @@ export function ViewportCanvasArea(props: ViewportCanvasAreaProps) {
         />
       )}
       {!isVectorQuantity ? (
-        <div style={{ padding: "1rem" }}>
+        <div className={s.viewportEmptyState}>
           <EmptyState
             title={quantityDescriptor?.label ?? "Scalar quantity"}
             description={
@@ -510,7 +511,7 @@ export function ViewportCanvasArea(props: ViewportCanvasAreaProps) {
           sliceIndex={sliceIndex}
         />
       ) : (
-        <div style={{ padding: "1rem" }}>
+        <div className={s.viewportEmptyState}>
           <EmptyState
             title={emptyStateMessage.title}
             description={emptyStateMessage.description}

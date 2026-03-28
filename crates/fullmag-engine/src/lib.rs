@@ -279,7 +279,7 @@ impl Default for EffectiveFieldTerms {
     fn default() -> Self {
         Self {
             exchange: true,
-            demag: false,
+            demag: true,
             external_field: None,
         }
     }
@@ -1391,9 +1391,10 @@ impl ExchangeLlgProblem {
             if error <= cfg.max_error || dt <= cfg.dt_min {
                 state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
                 state.time_seconds += dt;
-                let dt_next = (cfg.headroom * dt * (cfg.max_error / error.max(1e-30)).powf(1.0 / 3.0))
-                    .max(cfg.dt_min)
-                    .min(cfg.dt_max);
+                let dt_next =
+                    (cfg.headroom * dt * (cfg.max_error / error.max(1e-30)).powf(1.0 / 3.0))
+                        .max(cfg.dt_min)
+                        .min(cfg.dt_max);
                 let (_, eval) = self.llg_rhs_full_ws(&state.magnetization, ws);
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = Some(dt_next);
@@ -2720,11 +2721,16 @@ pub fn run_reference_exchange_demo(steps: usize, dt: f64) -> Result<ReferenceDem
         return Err(EngineError::new("dt must be positive"));
     }
     let grid = GridShape::new(3, 1, 1)?;
-    let problem = ExchangeLlgProblem::new(
+    let problem = ExchangeLlgProblem::with_terms(
         grid,
         CellSize::new(2e-9, 2e-9, 2e-9)?,
         MaterialParameters::new(800e3, 13e-12, 0.2)?,
         LlgConfig::default(),
+        EffectiveFieldTerms {
+            exchange: true,
+            demag: false,
+            external_field: None,
+        },
     );
     let mut state = problem.new_state(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])?;
     let initial_exchange_energy_joules = problem.exchange_energy(&state)?;
@@ -2871,11 +2877,16 @@ mod tests {
 
     fn simple_problem(alpha: f64, gamma: f64) -> ExchangeLlgProblem {
         let grid = GridShape::new(3, 1, 1).expect("valid grid");
-        ExchangeLlgProblem::new(
+        ExchangeLlgProblem::with_terms(
             grid,
             CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
             MaterialParameters::new(1.0, 0.5 * MU0, alpha).expect("valid material"),
             LlgConfig::new(gamma, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: true,
+                demag: false,
+                external_field: None,
+            },
         )
     }
 
@@ -2892,6 +2903,14 @@ mod tests {
                 external_field: Some(field),
             },
         )
+    }
+
+    #[test]
+    fn effective_field_terms_default_enables_demag() {
+        let terms = EffectiveFieldTerms::default();
+        assert!(terms.exchange);
+        assert!(terms.demag);
+        assert!(terms.external_field.is_none());
     }
 
     fn demag_problem(nx: usize, ny: usize, nz: usize) -> ExchangeLlgProblem {

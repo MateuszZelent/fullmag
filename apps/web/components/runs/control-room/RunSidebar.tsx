@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
+import {
+  Panel,
+  Group as PanelGroup,
+  Separator as PanelResizeHandle,
+  usePanelRef,
+  type PanelSize,
+} from "react-resizable-panels";
 import ModelTree, { buildFullmagModelTree } from "../../panels/ModelTree";
 import SettingsPanel from "../../panels/SettingsPanel";
 import { useControlRoom } from "./ControlRoomContext";
@@ -13,6 +20,10 @@ import s from "../RunControlRoom.module.css";
  */
 export default function RunSidebar() {
   const ctx = useControlRoom();
+  const navigatorPanelRef = usePanelRef();
+  const inspectorPanelRef = usePanelRef();
+  const [navigatorOpen, setNavigatorOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
 
   /* ── Build model tree nodes ── */
   const modelTreeNodes = useMemo(
@@ -109,17 +120,103 @@ export default function RunSidebar() {
     }
   }, [ctx]);
 
-  return (
-    <div className={s.sidebar} style={{ display: "flex", flexDirection: "column" }}>
-      {/* ── Model Tree (compact, fixed height) ── */}
-      <div style={{ flex: "0 0 auto", maxHeight: "40%", overflow: "auto", borderBottom: "1px solid var(--ide-border)" }}>
-        <ModelTree nodes={modelTreeNodes} activeId={activeNodeId} onNodeClick={handleTreeClick} />
-      </div>
+  const handleNavigatorToggle = useCallback(() => {
+    const panel = navigatorPanelRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) {
+      panel.expand();
+      setNavigatorOpen(true);
+      return;
+    }
+    panel.collapse();
+    setNavigatorOpen(false);
+  }, [navigatorPanelRef]);
 
-      {/* ── Settings Panel (scrollable, fills remaining space) ── */}
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-        <SettingsPanel nodeId={activeNodeId} nodeLabel={activeNode?.label ?? null} />
-      </div>
+  const handleInspectorToggle = useCallback(() => {
+    const panel = inspectorPanelRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) {
+      panel.expand();
+      setInspectorOpen(true);
+      return;
+    }
+    panel.collapse();
+    setInspectorOpen(false);
+  }, [inspectorPanelRef]);
+
+  const handleNavigatorResize = useCallback((panelSize: PanelSize) => {
+    setNavigatorOpen(panelSize.inPixels > 68);
+  }, []);
+
+  const handleInspectorResize = useCallback((panelSize: PanelSize) => {
+    setInspectorOpen(panelSize.inPixels > 68);
+  }, []);
+
+  return (
+    <div className={s.sidebar}>
+      <PanelGroup
+        orientation="vertical"
+        className={s.sidebarStack}
+        resizeTargetMinimumSize={{ coarse: 32, fine: 10 }}
+      >
+        <Panel
+          id="sidebar-model-outline"
+          defaultSize="34%"
+          minSize="92px"
+          collapsible
+          collapsedSize="44px"
+          panelRef={navigatorPanelRef}
+          onResize={handleNavigatorResize}
+        >
+          <section className={s.sidebarPanelSection}>
+            <button
+              type="button"
+              className={s.sectionHeaderButton}
+              onClick={handleNavigatorToggle}
+              aria-expanded={navigatorOpen}
+            >
+              <span className={s.sectionChevron} data-open={navigatorOpen}>▸</span>
+              <span className={s.sectionTitle}>Model</span>
+              <span className={s.sectionBadge}>{ctx.isFemBackend ? "FEM" : "FDM"}</span>
+            </button>
+            {navigatorOpen && (
+              <div className={s.sidebarPanelBody}>
+                <ModelTree nodes={modelTreeNodes} activeId={activeNodeId} onNodeClick={handleTreeClick} />
+              </div>
+            )}
+          </section>
+        </Panel>
+
+        <PanelResizeHandle className={s.sidebarSectionResizeHandle} />
+
+        <Panel
+          id="sidebar-inspector"
+          defaultSize="66%"
+          minSize="140px"
+          collapsible
+          collapsedSize="44px"
+          panelRef={inspectorPanelRef}
+          onResize={handleInspectorResize}
+        >
+          <section className={s.sidebarPanelSection}>
+            <button
+              type="button"
+              className={s.sectionHeaderButton}
+              onClick={handleInspectorToggle}
+              aria-expanded={inspectorOpen}
+            >
+              <span className={s.sectionChevron} data-open={inspectorOpen}>▸</span>
+              <span className={s.sectionTitle}>Inspector</span>
+              <span className={s.sectionBadge}>{activeNode?.label ?? "Workspace"}</span>
+            </button>
+            {inspectorOpen && (
+              <div className={s.sidebarPanelBody}>
+                <SettingsPanel nodeId={activeNodeId} nodeLabel={activeNode?.label ?? null} />
+              </div>
+            )}
+          </section>
+        </Panel>
+      </PanelGroup>
     </div>
   );
 }

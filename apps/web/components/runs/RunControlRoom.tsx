@@ -22,6 +22,7 @@ import {
   fmtStepValue,
 } from "./control-room/shared";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
+import { cn } from "@/lib/utils";
 import s from "./RunControlRoom.module.css";
 
 /* ── Inner shell (consumes context) ── */
@@ -282,8 +283,8 @@ function ControlRoomShell() {
                   <FemWorkspacePanel {...femWorkspaceProps} />
                 </PanelGroup>
               ) : (
-                <div className={s.viewport} style={{ flexDirection: "row" }}>
-                  <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+                <div className={cn(s.viewport, s.viewportRow)}>
+                  <div className={s.viewportMainColumn}>
                     <ViewportBar {...viewportBarProps} />
                     {previewNotices}
                     <ViewportCanvasArea {...viewportCanvasProps} />

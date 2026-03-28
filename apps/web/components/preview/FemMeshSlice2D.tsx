@@ -425,24 +425,10 @@ export default function FemMeshSlice2D({
   }, [component, plane, quantityId, quantityLabel, slice, sliceCount]);
 
   return (
-    <div
-      style={{
-        position: "relative",
-        width: "100%",
-        height: "100%",
-        minHeight: "360px",
-        borderRadius: "8px",
-        overflow: "hidden",
-        background: BG,
-      }}
-    >
+    <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-[8px] bg-[#0c121f]">
       <canvas
         ref={canvasRef}
-        style={{
-          display: "block",
-          width: "100%",
-          height: "100%",
-        }}
+        className="block h-full w-full"
       />
     </div>
   );

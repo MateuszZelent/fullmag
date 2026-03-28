@@ -480,17 +480,17 @@ export default function MeshSettingsPanel({
               {/* SICN Histogram */}
               <canvas ref={sicnCanvasRef} className={s.histogramCanvas} />
               <div className={s.legend}>
-                <span><span className={s.legendDot} style={{ background: "#cf6256" }} />SICN &lt; 0 (inverted)</span>
-                <span><span className={s.legendDot} style={{ background: "#fde725" }} />0–0.5 (fair)</span>
-                <span><span className={s.legendDot} style={{ background: "#35b779" }} />&gt; 0.5 (good)</span>
+                <span><span className={`${s.legendDot} ${s.legendDotDanger}`} />SICN &lt; 0 (inverted)</span>
+                <span><span className={`${s.legendDot} ${s.legendDotWarn}`} />0–0.5 (fair)</span>
+                <span><span className={`${s.legendDot} ${s.legendDotGood}`} />&gt; 0.5 (good)</span>
               </div>
 
               {/* Gamma Histogram */}
               <canvas ref={gammaCanvasRef} className={s.histogramCanvas} />
               <div className={s.legend}>
-                <span><span className={s.legendDot} style={{ background: "#cf6256" }} />γ &lt; 0.3 (poor)</span>
-                <span><span className={s.legendDot} style={{ background: "#fde725" }} />0.3–0.6 (fair)</span>
-                <span><span className={s.legendDot} style={{ background: "#35b779" }} />&gt; 0.6 (good)</span>
+                <span><span className={`${s.legendDot} ${s.legendDotDanger}`} />γ &lt; 0.3 (poor)</span>
+                <span><span className={`${s.legendDot} ${s.legendDotWarn}`} />0.3–0.6 (fair)</span>
+                <span><span className={`${s.legendDot} ${s.legendDotGood}`} />&gt; 0.6 (good)</span>
               </div>
             </>
           )}

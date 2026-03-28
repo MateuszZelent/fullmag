@@ -205,6 +205,8 @@ export default function FemMeshView3D({
   const [arrowDensity, setArrowDensity] = useState(1200);
   const [hoveredFace, setHoveredFace] = useState<{ idx: number; x: number; y: number } | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; faceIdx: number } | null>(null);
+  const faceTooltipRef = useRef<HTMLDivElement | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement | null>(null);
   const [selectedFaces, setSelectedFaces] = useState<number[]>([]);
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
@@ -1032,6 +1034,18 @@ export default function FemMeshView3D({
     return { faceIdx: idx, ar, sicn };
   }, [hoveredFace, meshData, qualityPerFace]);
 
+  useEffect(() => {
+    if (!hoveredFace || !faceTooltipRef.current) return;
+    faceTooltipRef.current.style.left = `${hoveredFace.x + 14}px`;
+    faceTooltipRef.current.style.top = `${hoveredFace.y - 8}px`;
+  }, [hoveredFace]);
+
+  useEffect(() => {
+    if (!ctxMenu || !ctxMenuRef.current) return;
+    ctxMenuRef.current.style.left = `${ctxMenu.x}px`;
+    ctxMenuRef.current.style.top = `${ctxMenu.y}px`;
+  }, [ctxMenu]);
+
   return (
       <div
         className={s.container}
@@ -1074,7 +1088,7 @@ export default function FemMeshView3D({
         </div>
 
         {/* Clip */}
-        <div className={s.toolGroup} style={{ position: "relative" }}>
+        <div className={`${s.toolGroup} ${s.toolGroupRelative}`}>
           <button
             className={s.toolBtn}
             data-active={clipEnabled}
@@ -1100,10 +1114,9 @@ export default function FemMeshView3D({
                 {(["x", "y", "z"] as ClipAxis[]).map((a) => (
                   <button
                     key={a}
-                    className={s.toolBtn}
+                    className={`${s.toolBtn} ${s.toolBtnCompact}`}
                     data-active={clipAxis === a}
                     onClick={() => updateClipAxis(a)}
-                    style={{ padding: "0.2rem 0.45rem" }}
                   >
                     {a.toUpperCase()}
                   </button>
@@ -1122,9 +1135,8 @@ export default function FemMeshView3D({
                 <span className={s.dropValue}>{clipPos}%</span>
               </div>
               <button
-                className={s.toolBtn}
+                className={`${s.toolBtn} ${s.toolBtnSubtle}`}
                 onClick={() => setShowClipDrop(false)}
-                style={{ fontSize: "0.64rem", opacity: 0.7 }}
               >
                 Close
               </button>
@@ -1137,12 +1149,11 @@ export default function FemMeshView3D({
           <span className={s.toolLabel}>Opacity</span>
           <input
             type="range"
-            className={s.dropSlider}
+            className={`${s.dropSlider} ${s.dropSliderCompact}`}
             min={10}
             max={100}
             value={opacity}
             onChange={(e) => updateOpacity(Number(e.target.value))}
-            style={{ width: 60 }}
           />
           <span className={s.dropValue}>{opacity}%</span>
         </div>
@@ -1160,13 +1171,12 @@ export default function FemMeshView3D({
             <>
               <input
                 type="range"
-                className={s.dropSlider}
+                className={`${s.dropSlider} ${s.dropSliderCompact}`}
                 min={200}
                 max={3000}
                 step={100}
                 value={arrowDensity}
                 onChange={(e) => setArrowDensity(Number(e.target.value))}
-                style={{ width: 60 }}
                 title="Arrow density"
               />
               <span className={s.dropValue}>{arrowDensity}</span>
@@ -1208,13 +1218,13 @@ export default function FemMeshView3D({
         {clipEnabled && (
           <>
             <span className={s.infoSep} />
-            <span style={{ color: "hsl(35 90% 65%)" }}>clip {clipAxis.toUpperCase()} @ {clipPos}%</span>
+            <span className={s.infoAccentWarn}>clip {clipAxis.toUpperCase()} @ {clipPos}%</span>
           </>
         )}
         {selectedFaces.length > 0 && (
           <>
             <span className={s.infoSep} />
-            <span style={{ color: "hsl(210 80% 70%)" }}>{selectedFaces.length} selected</span>
+            <span className={s.infoAccentInfo}>{selectedFaces.length} selected</span>
           </>
         )}
       </div>
@@ -1228,8 +1238,8 @@ export default function FemMeshView3D({
       {/* ─── Face hover tooltip ────────────────────── */}
       {hoveredFaceInfo && hoveredFace && (
         <div
+          ref={faceTooltipRef}
           className={s.faceTooltip}
-          style={{ left: hoveredFace.x + 14, top: hoveredFace.y - 8 }}
         >
           face #{hoveredFaceInfo.faceIdx}
           {" · AR "}{hoveredFaceInfo.ar.toFixed(2)}
@@ -1240,8 +1250,8 @@ export default function FemMeshView3D({
       {/* ─── Right-click context menu ──────────────── */}
       {ctxMenu && (
         <div
+          ref={ctxMenuRef}
           className={s.contextMenu}
-          style={{ left: ctxMenu.x, top: ctxMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
           <button

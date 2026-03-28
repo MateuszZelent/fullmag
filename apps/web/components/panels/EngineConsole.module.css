@@ -69,6 +69,10 @@
   color: var(--ide-text-3);
 }
 
+.statusLabelAuto {
+  margin-left: auto;
+}
+
 /* ── Tabs ─────────────────────────────────────────── */
 .tabBar {
   display: flex;
@@ -151,6 +155,27 @@
   font-weight: 600;
 }
 
+.metricValueSuccess {
+  color: var(--status-running);
+}
+
+.metricValueAccent {
+  color: var(--ide-accent-text);
+}
+
+.metricValueWarn {
+  color: var(--status-warn);
+}
+
+.metricValueDanger {
+  color: var(--status-failed);
+}
+
+.metricValueCompact {
+  font-size: 0.72rem;
+  margin-top: 0.2rem;
+}
+
 .metricUnit {
   font-size: var(--ide-text-xs);
   color: var(--ide-text-3);
@@ -178,6 +203,45 @@
   border-radius: 3px;
   background: var(--ide-surface-input);
   overflow: hidden;
+}
+
+.inlineProgress {
+  width: 100%;
+  height: 6px;
+  appearance: none;
+  border: none;
+  border-radius: 3px;
+  background: var(--ide-surface-input);
+  overflow: hidden;
+  --progress-color: var(--ide-accent);
+}
+
+.inlineProgress::-webkit-progress-bar {
+  background: var(--ide-surface-input);
+  border-radius: 3px;
+}
+
+.inlineProgress::-webkit-progress-value {
+  background: var(--progress-color);
+  border-radius: 3px;
+  transition: width 300ms ease;
+}
+
+.inlineProgress::-moz-progress-bar {
+  background: var(--progress-color);
+  border-radius: 3px;
+}
+
+.inlineProgress[data-tone="success"] {
+  --progress-color: var(--status-running);
+}
+
+.inlineProgress[data-tone="warn"] {
+  --progress-color: var(--status-warn);
+}
+
+.inlineProgress[data-tone="danger"] {
+  --progress-color: var(--status-failed);
 }
 
 .convergenceFill {
@@ -263,6 +327,67 @@
 /* ── Tab content ─────────────────────────────────── */
 .tabContent {
   min-height: 120px;
+}
+
+.consoleNotice {
+  padding: 0 0.75rem 0.65rem;
+  color: var(--ide-text-3);
+}
+
+.consoleNoticeCentered {
+  padding: 1rem;
+  color: var(--ide-text-3);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.consoleNoticeCenteredLg {
+  padding: 1.5rem;
+  color: var(--ide-text-3);
+  text-align: center;
+  font-size: 0.82rem;
+}
+
+.consoleSection {
+  padding: 0.4rem 0.75rem 0.65rem;
+}
+
+.consoleSectionStack {
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.consoleColumnFill {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.consoleFill {
+  flex: 1;
+  min-height: 0;
+}
+
+.phaseLabelDone {
+  color: var(--status-running);
+}
+
+.phaseLabelActive {
+  color: var(--ide-accent-text);
+}
+
+.convergenceRowTopGap {
+  margin-top: 0.5rem;
+}
+
+.telemetryGridTopGap {
+  margin-top: 0.35rem;
+}
+
+.metricCellFull {
+  grid-column: 1 / -1;
 }
 
 /* ── Scrollbar ───────────────────────────────────── */

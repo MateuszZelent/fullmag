@@ -33,27 +33,42 @@
 
 .bar {
   height: 0.5rem;
+  width: 100%;
+  appearance: none;
+  border: none;
   border-radius: var(--radius-pill);
   background: hsla(0, 0%, 100%, 0.06);
   overflow: hidden;
 }
 
-.barFill {
-  display: block;
-  height: 100%;
+.bar::-webkit-progress-bar {
+  background: hsla(0, 0%, 100%, 0.06);
   border-radius: inherit;
+}
+
+.bar::-webkit-progress-value {
   background: linear-gradient(90deg, var(--am-info), var(--am-accent));
+  border-radius: inherit;
   transition: width 300ms;
 }
 
-.uiMetric[data-tone='warn'] .barFill {
+.bar::-moz-progress-bar {
+  background: linear-gradient(90deg, var(--am-info), var(--am-accent));
+  border-radius: inherit;
+  transition: width 300ms;
+}
+
+.uiMetric[data-tone='warn'] .bar::-webkit-progress-value,
+.uiMetric[data-tone='warn'] .bar::-moz-progress-bar {
   background: linear-gradient(90deg, var(--am-warn), hsl(30, 88%, 60%));
 }
 
-.uiMetric[data-tone='danger'] .barFill {
+.uiMetric[data-tone='danger'] .bar::-webkit-progress-value,
+.uiMetric[data-tone='danger'] .bar::-moz-progress-bar {
   background: linear-gradient(90deg, var(--am-danger), hsl(347, 100%, 68%));
 }
 
-.uiMetric[data-tone='accent'] .barFill {
+.uiMetric[data-tone='accent'] .bar::-webkit-progress-value,
+.uiMetric[data-tone='accent'] .bar::-moz-progress-bar {
   background: linear-gradient(90deg, var(--am-accent), var(--accent-strong));
 }

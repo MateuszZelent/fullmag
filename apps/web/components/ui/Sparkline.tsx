@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { cn } from "@/lib/utils";
 
 interface SparklineProps {
   /** Array of numeric values to plot */
@@ -15,6 +16,10 @@ interface SparklineProps {
   fill?: boolean;
   /** Label shown on the right end */
   label?: string;
+  /** Stretch to the width of the parent container while keeping the internal viewBox width */
+  responsive?: boolean;
+  /** Optional class for layout styling */
+  className?: string;
 }
 
 export default function Sparkline({
@@ -24,6 +29,8 @@ export default function Sparkline({
   color = "hsl(210, 60%, 55%)",
   fill = true,
   label,
+  responsive = false,
+  className,
 }: SparklineProps) {
   const path = useMemo(() => {
     if (data.length < 2) return "";
@@ -66,7 +73,13 @@ export default function Sparkline({
 
   if (data.length < 2) {
     return (
-      <svg width={width} height={height} style={{ display: "block" }}>
+      <svg
+        width={responsive ? "100%" : width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        className={cn("block", className)}
+      >
         <text
           x={width / 2}
           y={height / 2 + 3}
@@ -82,7 +95,13 @@ export default function Sparkline({
   }
 
   return (
-    <svg width={width} height={height} style={{ display: "block" }}>
+    <svg
+      width={responsive ? "100%" : width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      className={cn("block", className)}
+    >
       {fill && (
         <path d={fillPath} fill={color} opacity={0.12} />
       )}

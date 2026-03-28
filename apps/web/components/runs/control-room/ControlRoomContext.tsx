@@ -548,6 +548,32 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const runtimeEngineLabel = typeof runtimeEngine?.engine_label === "string" ? runtimeEngine.engine_label : null;
   const solverPlan = useMemo(() => extractSolverPlan(metadata, session), [metadata, session]);
 
+  /* Hydrate solver-settings panel from the actual backend plan on first load. */
+  const [solverSettingsHydrated, setSolverSettingsHydrated] = useState(false);
+  useEffect(() => {
+    if (solverSettingsHydrated || !solverPlan) return;
+    setSolverSettings((prev) => ({
+      ...prev,
+      integrator: solverPlan.integrator ?? prev.integrator,
+      fixedTimestep:
+        solverPlan.fixedTimestep != null ? String(solverPlan.fixedTimestep) : prev.fixedTimestep,
+      relaxAlgorithm: solverPlan.relaxation?.algorithm ?? prev.relaxAlgorithm,
+      torqueTolerance:
+        solverPlan.relaxation?.torqueTolerance != null
+          ? String(solverPlan.relaxation.torqueTolerance)
+          : prev.torqueTolerance,
+      energyTolerance:
+        solverPlan.relaxation?.energyTolerance != null
+          ? String(solverPlan.relaxation.energyTolerance)
+          : prev.energyTolerance,
+      maxRelaxSteps:
+        solverPlan.relaxation?.maxSteps != null
+          ? String(solverPlan.relaxation.maxSteps)
+          : prev.maxRelaxSteps,
+    }));
+    setSolverSettingsHydrated(true);
+  }, [solverPlan, solverSettingsHydrated]);
+
   const currentStage = useMemo(() => parseStageExecutionMessage(latestEngineMessage), [latestEngineMessage]);
 
   const activity = useMemo<ActivityInfo>(() => {

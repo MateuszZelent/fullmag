@@ -611,16 +611,16 @@ export default function FemWorkspacePanel(props: FemWorkspacePanelProps) {
                       </div>
                     </div>
                     {([
-                      ["Good", meshQualitySummary.good, "var(--status-running)"],
-                      ["Fair", meshQualitySummary.fair, "var(--status-warn)"],
-                      ["Poor", meshQualitySummary.poor, "var(--status-failed)"],
-                    ] as [string, number, string][]).map(([label, count, color]) => {
+                      ["Good", meshQualitySummary.good, "success"],
+                      ["Fair", meshQualitySummary.fair, "warn"],
+                      ["Poor", meshQualitySummary.poor, "danger"],
+                    ] as [string, number, "success" | "warn" | "danger"][]).map(([label, count, tone]) => {
                       const pct = meshQualitySummary.count > 0 ? (count / meshQualitySummary.count) * 100 : 0;
                       return (
                         <div key={label} className={s.meshQualityRow}>
                           <span className={s.meshQualityLabel}>{label}</span>
                           <div className={s.meshQualityTrack}>
-                            <div className={s.meshQualityFill} style={{ width: `${pct}%`, background: color }} />
+                            <progress className={s.meshQualityFill} value={pct} max={100} data-tone={tone} />
                           </div>
                           <span className={s.meshQualityValue}>{pct.toFixed(1)}%</span>
                         </div>

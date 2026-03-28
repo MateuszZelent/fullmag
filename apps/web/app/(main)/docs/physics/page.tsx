@@ -1,3 +1,7 @@
+import { Badge } from "@/components/ui/badge";
+
+const docCardStackClass = "mt-[var(--sp-6)] flex flex-col gap-[var(--sp-4)]";
+
 export default function PhysicsDocsPage() {
   return (
     <>
@@ -8,23 +12,23 @@ export default function PhysicsDocsPage() {
         </p>
       </div>
 
-      <div className="card">
+      <section className="card">
         <div className="card-header">
           <h2 className="card-title">Exchange-Only LLG Reference</h2>
         </div>
         <div className="card-body">
-          <p style={{ color: 'var(--text-secondary)', lineHeight: 'var(--leading-relaxed)' }}>
-            Physics documentation from{' '}
-            <code style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)', color: 'var(--accent)' }}>
+          <p className="leading-[var(--leading-relaxed)] text-[var(--text-soft)]">
+            Physics documentation from{" "}
+            <code className="font-mono text-[length:var(--text-sm)] text-[var(--ide-accent-text)]">
               docs/physics/
-            </code>{' '}
+            </code>{" "}
             notes will be auto-rendered here. This ensures every physics feature documented
             through the publication-style notes is visible in the web UI.
           </p>
         </div>
-      </div>
+      </section>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)', marginTop: 'var(--sp-6)' }}>
+      <div className={docCardStackClass}>
         <DocCard
           id="0100"
           title="Exchange Energy"
@@ -56,34 +60,27 @@ function DocCard({
 }: {
   id: string;
   title: string;
-  status: 'published' | 'draft';
+  status: "published" | "draft";
   description: string;
 }) {
   return (
-    <div className="card">
+    <section className="card">
       <div className="card-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-          <span
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 'var(--text-xs)',
-              color: 'var(--text-muted)',
-            }}
-          >
+        <div className="flex items-center gap-[var(--sp-3)]">
+          <span className="font-mono text-[length:var(--text-xs)] text-[var(--text-muted)]">
             {id}
           </span>
           <h3 className="card-title">{title}</h3>
         </div>
-        <span className={`badge badge-${status === 'published' ? 'success' : 'warning'}`}>
-          <span className="badge-dot" />
+        <Badge variant={status === "published" ? "success" : "warn"}>
           {status}
-        </span>
+        </Badge>
       </div>
       <div className="card-body">
-        <p style={{ fontSize: 'var(--text-base)', color: 'var(--text-secondary)' }}>
+        <p className="text-[length:var(--text-base)] text-[var(--text-soft)]">
           {description}
         </p>
       </div>
-    </div>
+    </section>
   );
 }

@@ -1,12 +1,13 @@
 "use client";
 
-import { useRef, useEffect, useState, useMemo, useCallback } from "react";
+import { useRef, useEffect, useState, useMemo } from "react";
 import type { LiveState, ScalarRow, SessionManifest, RunManifest, ArtifactEntry, EngineLogEntry } from "../../lib/useSessionStream";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Play, Settings, Loader2, Pause, Circle, Diamond,
   ArrowRight, CheckCircle2, XCircle, AlertTriangle, Dot,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import ScalarPlot from "../plots/ScalarPlot";
 import ScalarTable from "./ScalarTable";
 import s from "./EngineConsole.module.css";
@@ -69,13 +70,6 @@ function fmtExp(v: number): string {
   if (!Number.isFinite(v)) return "—";
   if (v === 0) return "0";
   return v.toExponential(3);
-}
-
-function fmtRate(steps: number, ms: number): string {
-  if (ms <= 0) return "—";
-  const rate = (steps / ms) * 1000;
-  if (rate >= 1) return `${rate.toFixed(1)} steps/s`;
-  return `${(1000 / rate).toFixed(0)} ms/step`;
 }
 
 function fmtStepValue(v: number, enabled: boolean): string {
@@ -360,6 +354,26 @@ export default function EngineConsole({
   const convergencePct = Math.max(0, Math.min(100, ((7 + dmDtLog) / 7) * 100)); // -12→0%, -5→100%
   // Actually: lower dm/dt = more converged, so invert
   const convergenceDisplay = Math.max(0, Math.min(100, 100 - convergencePct));
+  const memoryEstimate = Math.min(100, (artifacts.length / 20) * 100);
+  const convergenceTone =
+    convergenceDisplay > 80 ? "success"
+      : convergenceDisplay > 40 ? "warn"
+      : "danger";
+  const throughputDisplay = Math.min(100, stepsPerSec);
+  const throughputTone =
+    stepsPerSec > 50 ? "success"
+      : stepsPerSec > 10 ? "warn"
+      : undefined;
+  const statusValueClassName =
+    run?.status === "completed"
+      ? s.metricValueSuccess
+      : workspaceStatus === "running"
+        ? s.metricValueAccent
+        : workspaceStatus === "materializing_script"
+          ? s.metricValueWarn
+          : run?.status === "failed"
+            ? s.metricValueDanger
+            : undefined;
 
   return (
     <div className={s.console}>
@@ -377,7 +391,7 @@ export default function EngineConsole({
             : "Offline"}
         </span>
         {session && (
-          <span className={s.statusLabel} style={{ marginLeft: "auto" }}>
+          <span className={cn(s.statusLabel, s.statusLabelAuto)}>
             {session.problem_name} · {session.requested_backend.toUpperCase()}
           </span>
         )}
@@ -401,12 +415,7 @@ export default function EngineConsole({
             <div className={s.telemetryGrid}>
               <div className={s.metricCell}>
                 <span className={s.metricLabel}>Status</span>
-                <span className={s.metricValue} style={{
-                  color: run?.status === "completed" ? "var(--status-running)"
-                    : workspaceStatus === "running" ? "var(--ide-accent-text)"
-                    : workspaceStatus === "materializing_script" ? "var(--status-warn)"
-                    : run?.status === "failed" ? "var(--status-failed)" : undefined
-                }}>
+                <span className={cn(s.metricValue, statusValueClassName)}>
                   {workspaceStatus}
                 </span>
               </div>
@@ -430,11 +439,12 @@ export default function EngineConsole({
               </div>
               <div className={s.metricCell}>
                 <span className={s.metricLabel}>max dm/dt</span>
-                <span className={s.metricValue} style={{
-                  color: hasSolverTelemetry && (liveState?.max_dm_dt ?? 0) < 1e-5
-                    ? "var(--status-running)"
-                    : undefined
-                }}>
+                <span
+                  className={cn(
+                    s.metricValue,
+                    hasSolverTelemetry && (liveState?.max_dm_dt ?? 0) < 1e-5 && s.metricValueSuccess,
+                  )}
+                >
                   {fmtExpOrDash(liveState?.max_dm_dt ?? 0, hasSolverTelemetry)}
                 </span>
               </div>
@@ -454,40 +464,28 @@ export default function EngineConsole({
               </div>
             </div>
             {!hasSolverTelemetry && (
-              <div style={{ padding: "0 0.75rem 0.65rem", color: "var(--ide-muted)" }}>
+              <div className={s.consoleNotice}>
                 {solverNotStartedMessage}
               </div>
             )}
 
             {/* Convergence bars */}
-            <div style={{ padding: "0.4rem 0.75rem 0.65rem" }}>
+            <div className={s.consoleSection}>
               <div className={s.convergenceRow}>
                 <span className={s.convergenceLabel}>Convergence</span>
-                <div className={s.convergenceTrack}>
-                  <div
-                    className={s.convergenceFill}
-                    style={{
-                      width: `${convergenceDisplay}%`,
-                      background: convergenceDisplay > 80 ? "var(--status-running)"
-                        : convergenceDisplay > 40 ? "var(--status-warn)" : "var(--status-failed)",
-                    }}
-                  />
-                </div>
+                <progress
+                  className={s.inlineProgress}
+                  value={convergenceDisplay}
+                  max={100}
+                  data-tone={convergenceTone}
+                />
                 <span className={s.convergenceValue}>
                   {convergenceDisplay.toFixed(0)}%
                 </span>
               </div>
               <div className={s.convergenceRow}>
                 <span className={s.convergenceLabel}>Memory est.</span>
-                <div className={s.convergenceTrack}>
-                  <div
-                    className={s.convergenceFill}
-                    style={{
-                      width: `${Math.min(100, (artifacts.length / 20) * 100)}%`,
-                      background: "var(--ide-accent)",
-                    }}
-                  />
-                </div>
+                <progress className={s.inlineProgress} value={memoryEstimate} max={100} />
                 <span className={s.convergenceValue}>
                   {artifacts.length} files
                 </span>
@@ -507,7 +505,7 @@ export default function EngineConsole({
             }}
           >
             {logEntries.length === 0 ? (
-              <div style={{ padding: "1rem", color: "var(--text-3)", fontSize: "0.82rem", textAlign: "center" }}>
+              <div className={s.consoleNoticeCentered}>
                 Waiting for events…
               </div>
             ) : (
@@ -565,9 +563,7 @@ export default function EngineConsole({
                 <>
                   <div className={s.energyCard} data-tone="neutral">
                     <span className={s.metricLabel}>ΔE_total / step</span>
-                    <span className={s.metricValue} style={{
-                      color: dE < 0 ? "var(--status-running)" : "var(--status-failed)"
-                    }}>
+                    <span className={cn(s.metricValue, dE < 0 ? s.metricValueSuccess : s.metricValueDanger)}>
                       {dStep > 0 ? fmtExp(dE / dStep) : "—"}
                     </span>
                   </div>
@@ -582,7 +578,7 @@ export default function EngineConsole({
         </TabsContent>
 
         <TabsContent value="charts" className={s.tabPane}>
-          <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          <div className={s.consoleColumnFill}>
             <div className={s.chartPresetBar}>
               {(Object.keys(CHART_PRESETS) as ChartPreset[]).map((key) => (
                 <button
@@ -596,11 +592,11 @@ export default function EngineConsole({
               ))}
             </div>
             {scalarRows.length < 2 ? (
-              <div style={{ padding: "1.5rem", color: "var(--ide-muted)", textAlign: "center", fontSize: "0.82rem" }}>
+              <div className={s.consoleNoticeCenteredLg}>
                 Waiting for at least 2 data points to render chart…
               </div>
             ) : (
-              <div style={{ flex: 1, minHeight: 0 }}>
+              <div className={s.consoleFill}>
                 <ScalarPlot
                   rows={scalarRows}
                   xColumn="time"
@@ -616,7 +612,7 @@ export default function EngineConsole({
         </TabsContent>
 
         <TabsContent value="progress" className={s.tabPane}>
-          <div style={{ padding: "0.75rem", display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+          <div className={s.consoleSectionStack}>
             {/* Phase timeline */}
             {[
               { label: "Bootstrap", done: !!session, active: workspaceStatus === "bootstrapping" },
@@ -625,26 +621,38 @@ export default function EngineConsole({
               { label: "Converged", done: hasSolverTelemetry && (liveState?.max_dm_dt ?? 1) < 1e-5, active: false },
             ].map((phase) => (
               <div key={phase.label} className={s.convergenceRow}>
-                <span className={s.convergenceLabel} style={{ color: phase.done ? "var(--status-running)" : phase.active ? "var(--ide-accent-text)" : undefined }}>
+                <span
+                  className={cn(
+                    s.convergenceLabel,
+                    phase.done && s.phaseLabelDone,
+                    !phase.done && phase.active && s.phaseLabelActive,
+                  )}
+                >
                   {phase.done ? "✓" : phase.active ? "●" : "○"} {phase.label}
                 </span>
-                <div className={s.convergenceTrack}>
-                  <div className={s.convergenceFill} style={{ width: phase.done ? "100%" : phase.active ? "50%" : "0%", background: phase.done ? "var(--status-running)" : "var(--ide-accent)" }} />
-                </div>
+                <progress
+                  className={s.inlineProgress}
+                  value={phase.done ? 100 : phase.active ? 50 : 0}
+                  max={100}
+                  data-tone={phase.done ? "success" : undefined}
+                />
               </div>
             ))}
 
             {/* Convergence metric */}
-            <div className={s.convergenceRow} style={{ marginTop: "0.5rem" }}>
+            <div className={cn(s.convergenceRow, s.convergenceRowTopGap)}>
               <span className={s.convergenceLabel}>Convergence</span>
-              <div className={s.convergenceTrack}>
-                <div className={s.convergenceFill} style={{ width: `${convergenceDisplay}%`, background: convergenceDisplay > 80 ? "var(--status-running)" : convergenceDisplay > 40 ? "var(--status-warn)" : "var(--status-failed)" }} />
-              </div>
+              <progress
+                className={s.inlineProgress}
+                value={convergenceDisplay}
+                max={100}
+                data-tone={convergenceTone}
+              />
               <span className={s.convergenceValue}>{convergenceDisplay.toFixed(0)}%</span>
             </div>
 
             {/* Key metrics */}
-            <div className={s.telemetryGrid} style={{ marginTop: "0.35rem" }}>
+            <div className={cn(s.telemetryGrid, s.telemetryGridTopGap)}>
               <div className={s.metricCell}>
                 <span className={s.metricLabel}>Steps</span>
                 <span className={s.metricValue}>{(liveState?.step ?? run?.total_steps ?? 0).toLocaleString()}</span>
@@ -659,7 +667,12 @@ export default function EngineConsole({
               </div>
               <div className={s.metricCell}>
                 <span className={s.metricLabel}>max dm/dt</span>
-                <span className={s.metricValue} style={{ color: hasSolverTelemetry && (liveState?.max_dm_dt ?? 1) < 1e-5 ? "var(--status-running)" : undefined }}>
+                <span
+                  className={cn(
+                    s.metricValue,
+                    hasSolverTelemetry && (liveState?.max_dm_dt ?? 1) < 1e-5 && s.metricValueSuccess,
+                  )}
+                >
                   {fmtExpOrDash(liveState?.max_dm_dt ?? 0, hasSolverTelemetry)}
                 </span>
               </div>
@@ -703,18 +716,15 @@ export default function EngineConsole({
             </div>
 
             {/* Throughput bar */}
-            <div className={s.metricCell} style={{ gridColumn: "1 / -1" }}>
+            <div className={cn(s.metricCell, s.metricCellFull)}>
               <span className={s.metricLabel}>Throughput (steps/sec)</span>
-              <div className={s.perfBar}>
-                <div
-                  className={s.perfBarFill}
-                  style={{
-                    width: `${Math.min(100, (stepsPerSec / 100) * 100)}%`,
-                    background: stepsPerSec > 50 ? "var(--status-running)" : stepsPerSec > 10 ? "var(--status-warn)" : "var(--ide-accent)",
-                  }}
-                />
-              </div>
-              <span className={s.metricValue} style={{ fontSize: "0.72rem", marginTop: "0.2rem" }}>
+              <progress
+                className={s.inlineProgress}
+                value={throughputDisplay}
+                max={100}
+                data-tone={throughputTone}
+              />
+              <span className={cn(s.metricValue, s.metricValueCompact)}>
                 {stepsPerSec > 0 ? `${stepsPerSec.toFixed(2)} steps/sec` : "Waiting for data…"}
               </span>
             </div>

@@ -7,7 +7,9 @@
 //! - `double` precision
 
 use fullmag_engine::fem::{FemLlgProblem, FemLlgState, MeshTopology};
-use fullmag_engine::{AdaptiveStepConfig, EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator};
+use fullmag_engine::{
+    AdaptiveStepConfig, EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator,
+};
 use fullmag_ir::{ExecutionPrecision, FemPlanIR, IntegratorChoice, OutputIR};
 
 use crate::preview::{build_mesh_preview_field, flatten_vectors, select_observables};
@@ -111,10 +113,11 @@ fn execute_reference_fem_impl(
         IntegratorChoice::Abm3 => TimeIntegrator::ABM3,
     };
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
-    let mut dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator).map_err(|e| RunError {
-        message: format!("LLG: {}", e),
-    })?
-    .with_precession_enabled(!pure_damping_relax);
+    let mut dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator)
+        .map_err(|e| RunError {
+            message: format!("LLG: {}", e),
+        })?
+        .with_precession_enabled(!pure_damping_relax);
     if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
         dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
             max_error: adaptive.atol,
@@ -144,11 +147,7 @@ fn execute_reference_fem_impl(
 
     let mut dt = plan
         .fixed_timestep
-        .or_else(|| {
-            plan.adaptive_timestep
-                .as_ref()
-                .and_then(|a| a.dt_initial)
-        })
+        .or_else(|| plan.adaptive_timestep.as_ref().and_then(|a| a.dt_initial))
         .unwrap_or(1e-13);
     let mut steps = Vec::new();
     let mut field_snapshots = Vec::new();

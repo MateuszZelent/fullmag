@@ -26,28 +26,32 @@
   border-bottom: 1px solid hsla(210, 30%, 70%, 0.35);
 }
 
-.axisBottom .tick {
-  position: absolute;
-  bottom: 0;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+.axisSvg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
-.axisBottom .tickMark {
-  width: 1px;
-  height: 6px;
-  background: hsla(210, 30%, 70%, 0.5);
+.tickMark {
+  stroke: hsla(210, 30%, 70%, 0.5);
+  stroke-width: 1;
 }
 
-.axisBottom .tickLabel {
+.tickLabel {
   font-size: 0.55rem;
   font-weight: 600;
   font-family: var(--font-mono, monospace);
   color: hsla(210, 30%, 80%, 0.7);
-  margin-top: 2px;
   white-space: nowrap;
+  fill: hsla(210, 30%, 80%, 0.7);
+}
+
+.tickLabelBottom {
+  dominant-baseline: hanging;
+}
+
+.tickLabelLeft {
+  dominant-baseline: middle;
 }
 
 .axisBottom .axisLabel {
@@ -76,32 +80,6 @@
   width: 20px;
   position: relative;
   border-left: 1px solid hsla(210, 30%, 70%, 0.35);
-}
-
-.axisLeft .tick {
-  position: absolute;
-  left: 0;
-  transform: translateY(50%);
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-}
-
-.axisLeft .tickMark {
-  width: 6px;
-  height: 1px;
-  background: hsla(210, 30%, 70%, 0.5);
-}
-
-.axisLeft .tickLabel {
-  font-size: 0.55rem;
-  font-weight: 600;
-  font-family: var(--font-mono, monospace);
-  color: hsla(210, 30%, 80%, 0.7);
-  margin-left: -20px;
-  white-space: nowrap;
-  text-align: right;
-  min-width: 16px;
 }
 
 .axisLeft .axisLabel {

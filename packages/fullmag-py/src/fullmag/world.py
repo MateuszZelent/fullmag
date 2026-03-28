@@ -368,6 +368,7 @@ class _WorldState:
     _device: str = "auto"
     _gpu_count: int = 0
     _device_index: int | None = None
+    _precision: str | None = None
 
     # Grid
     _cell: tuple[float, float, float] | None = None
@@ -469,14 +470,14 @@ def engine(backend: str) -> None:
     _state._backend = backend.lower()
 
 
-def device(spec: str) -> None:
-    """Set device: ``"cpu"``, ``"cuda:0"``, ``"cuda:1"``, ``"gpu"``.
+def device(spec: str, *, precision: str | None = None) -> None:
+    """Set device and optionally execution precision.
 
     Examples::
 
         fm.device("cpu")
         fm.device("cuda:0")
-        fm.device("cuda:1")
+        fm.device("cuda:0", precision="single")
     """
     spec = spec.lower()
     if spec == "cpu":
@@ -494,6 +495,8 @@ def device(spec: str) -> None:
         _state._gpu_count = 1
     else:
         _state._device = spec
+    if precision is not None:
+        _state._precision = precision.lower()
 
 
 def cell(dx: float, dy: float, dz: float) -> None:
@@ -949,6 +952,8 @@ def _build_problem(
         rt = rt.cpu()
     elif s._device == "gpu":
         rt = rt.gpu(s._gpu_count)
+    if s._precision is not None:
+        rt = rt.precision(s._precision)
 
     runtime_metadata: dict[str, Any] = {"interactive_session_requested": s._interactive}
     mesh_workflow = _collect_mesh_workflow_metadata()

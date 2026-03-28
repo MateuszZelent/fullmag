@@ -51,6 +51,30 @@
   border: 1px solid hsla(220, 50%, 55%, 0.2);
 }
 
+.vcFaceTop {
+  transform: translateZ(30px);
+}
+
+.vcFaceBottom {
+  transform: rotateY(180deg) translateZ(30px);
+}
+
+.vcFaceRight {
+  transform: rotateY(90deg) translateZ(30px);
+}
+
+.vcFaceLeft {
+  transform: rotateY(-90deg) translateZ(30px);
+}
+
+.vcFaceFront {
+  transform: rotateX(90deg) translateZ(30px);
+}
+
+.vcFaceBack {
+  transform: rotateX(-90deg) translateZ(30px);
+}
+
 .vcZone {
   border: none;
   background: transparent;
@@ -152,6 +176,18 @@
 .agShaftY { background: #50c850; }
 .agShaftZ { background: #5090e6; }
 
+.agShaftXTransform {
+  transform: rotateZ(-90deg) translateY(-18px);
+}
+
+.agShaftYTransform {
+  transform: rotateX(90deg) translateY(-18px);
+}
+
+.agShaftZTransform {
+  transform: translateY(-18px);
+}
+
 .agTip {
   width: 0;
   height: 0;
@@ -166,6 +202,18 @@
 .agTipY { border-bottom: 10px solid #50c850; }
 .agTipZ { border-bottom: 10px solid #5090e6; }
 
+.agTipXTransform {
+  transform: translateX(26px) rotate(-90deg);
+}
+
+.agTipYTransform {
+  transform: translateZ(26px) rotateX(90deg);
+}
+
+.agTipZTransform {
+  transform: translateY(-26px);
+}
+
 .agLbl {
   font-size: 13px;
   font-weight: 800;
@@ -176,3 +224,15 @@
 .agLblX { color: #e65050; }
 .agLblY { color: #50c850; }
 .agLblZ { color: #5090e6; }
+
+.agLblXTransform {
+  transform: translateX(36px);
+}
+
+.agLblYTransform {
+  transform: translateZ(36px);
+}
+
+.agLblZTransform {
+  transform: translateY(-36px);
+}

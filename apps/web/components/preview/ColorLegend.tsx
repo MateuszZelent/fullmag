@@ -2,21 +2,15 @@
 
 import { useMemo } from "react";
 import { useControlRoom } from "../runs/control-room/ControlRoomContext";
-import { fmtSI, fmtExp } from "../runs/control-room/shared";
+import { fmtExp } from "../runs/control-room/shared";
 import css from "./ColorLegend.module.css";
 
-/* ── Colormap gradient presets ── */
-const GRADIENTS: Record<string, string> = {
-  viridis: "linear-gradient(to top, #440154, #482777, #3e4989, #31688e, #26828e, #1f9e89, #35b779, #6ece58, #b5de2b, #fde725)",
-  diverging: "linear-gradient(to top, #2166ac, #67a9cf, #d1e5f0, #f7f7f7, #fddbc7, #ef8a62, #b2182b)",
-  magnitude: "linear-gradient(to top, #000428, #004e92, #428bca, #73d0ff, #ffffff)",
-  orientation: "linear-gradient(to top, hsl(0,80%,50%), hsl(60,80%,50%), hsl(120,80%,50%), hsl(180,80%,50%), hsl(240,80%,50%), hsl(300,80%,50%), hsl(360,80%,50%))",
-};
+type LegendGradient = "orientation" | "diverging" | "magnitude";
 
-function selectGradient(colorField: string): string {
-  if (colorField === "orientation") return GRADIENTS.orientation;
-  if (colorField === "x" || colorField === "y" || colorField === "z") return GRADIENTS.diverging;
-  return GRADIENTS.magnitude;
+function selectGradient(colorField: string): LegendGradient {
+  if (colorField === "orientation") return "orientation";
+  if (colorField === "x" || colorField === "y" || colorField === "z") return "diverging";
+  return "magnitude";
 }
 
 function componentLabel(colorField: string, quantity: string): string {
@@ -46,8 +40,8 @@ export default function ColorLegend() {
   const colorField = ctx.femColorField ?? "magnitude";
   const quantity = ctx.requestedPreviewQuantity ?? "m";
 
-  const gradient = useMemo(() => selectGradient(colorField), [colorField]);
-  const label = useMemo(() => componentLabel(colorField, quantity), [colorField, quantity]);
+  const gradient = selectGradient(colorField);
+  const label = componentLabel(colorField, quantity);
 
   /* Numeric range from field stats if available */
   const maxVal = useMemo(() => {
@@ -76,7 +70,7 @@ export default function ColorLegend() {
   return (
     <div className={css.root}>
       <span className={css.label}>{formatValue(maxVal)}</span>
-      <div className={css.track} style={{ "--legend-gradient": gradient } as React.CSSProperties} />
+      <div className={css.track} data-gradient={gradient} />
       <span className={css.label}>{formatValue(minVal)}</span>
       <span className={css.indicator}>{label}</span>
     </div>

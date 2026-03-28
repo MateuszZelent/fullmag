@@ -42,7 +42,28 @@
   min-height: 48px;
   border-radius: 3px;
   border: 1px solid var(--ide-border-strong);
-  background: var(--legend-gradient, linear-gradient(to top, #440154, #31688e, #35b779, #fde725));
+  background: linear-gradient(to top, #000428, #004e92, #428bca, #73d0ff, #ffffff);
+}
+
+.track[data-gradient="diverging"] {
+  background: linear-gradient(to top, #2166ac, #67a9cf, #d1e5f0, #f7f7f7, #fddbc7, #ef8a62, #b2182b);
+}
+
+.track[data-gradient="magnitude"] {
+  background: linear-gradient(to top, #000428, #004e92, #428bca, #73d0ff, #ffffff);
+}
+
+.track[data-gradient="orientation"] {
+  background: linear-gradient(
+    to top,
+    hsl(0, 80%, 50%),
+    hsl(60, 80%, 50%),
+    hsl(120, 80%, 50%),
+    hsl(180, 80%, 50%),
+    hsl(240, 80%, 50%),
+    hsl(300, 80%, 50%),
+    hsl(360, 80%, 50%)
+  );
 }
 
 /* ── Colormap / component indicator ── */
