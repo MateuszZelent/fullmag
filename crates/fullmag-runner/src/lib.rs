@@ -544,6 +544,8 @@ mod tests {
             fixed_timestep: Some(1e-14),
             adaptive_timestep: None,
             relaxation: None,
+            boundary_correction: None,
+            inter_region_exchange: vec![],
             enable_exchange: true,
             enable_demag: false,
             external_field: None,

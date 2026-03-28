@@ -674,9 +674,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const interactiveControlsEnabled = interactiveEnabled && (awaitingCommand || session?.status === "running");
   const liveApi = useMemo(() => currentLiveApiClient(), []);
 
-  /* Preview derived */
+  /* Preview derived — respect user's explicit 2D/Mesh choice */
   const previewDrivenMode: ViewportMode | null =
-    preview && !isFemBackend && viewMode !== "Mesh" ? (preview.type === "3D" ? "3D" : "2D") : null;
+    preview && !isFemBackend && viewMode === "3D" ? (preview.type === "3D" ? "3D" : "2D") : null;
   const effectiveViewMode = previewDrivenMode ?? viewMode;
   const previewControlsActive = Boolean(previewConfig ?? preview);
   const requestedPreviewQuantity = previewConfig?.quantity ?? preview?.quantity ?? selectedQuantity;
@@ -748,6 +748,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
 
   const handleViewModeChange = useCallback((mode: string) => {
     if (mode === "Mesh") { if (isFemBackend) openFemMeshWorkspace("mesh"); setViewMode("Mesh"); return; }
+    if (mode === "2D") {
+      setComponent((prev) => prev === "magnitude" ? "x" : prev);
+    }
     setViewMode(mode as ViewportMode);
   }, [isFemBackend, openFemMeshWorkspace]);
 
@@ -794,12 +797,39 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   ]);
 
   const handleCapture = useCallback(() => {
-    const canvas = document.querySelector<HTMLCanvasElement>(".viewport canvas, [class*='viewport'] canvas");
-    if (!canvas) return;
-    const link = document.createElement("a");
-    link.download = `fullmag_snapshot_${Date.now()}.png`;
-    link.href = canvas.toDataURL("image/png");
-    link.click();
+    // Try viewport-scoped WebGL canvas first (R3F 3D view)
+    const canvas =
+      document.querySelector<HTMLCanvasElement>("#workspace-viewport canvas") ??
+      document.querySelector<HTMLCanvasElement>("[class*='viewport'] canvas");
+    if (canvas) {
+      const link = document.createElement("a");
+      link.download = `fullmag_snapshot_${Date.now()}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+      return;
+    }
+    // Fallback: try any echarts instance on the page
+    const echartsContainer = document.querySelector<HTMLDivElement>("[_echarts_instance_]");
+    if (echartsContainer) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const echarts = (window as any).echarts ?? null;
+      const echartsCanvas = echartsContainer.querySelector<HTMLCanvasElement>("canvas");
+      if (echartsCanvas) {
+        const link = document.createElement("a");
+        link.download = `fullmag_snapshot_${Date.now()}.png`;
+        link.href = echartsCanvas.toDataURL("image/png");
+        link.click();
+        return;
+      }
+    }
+    // Last resort: any canvas
+    const anyCanvas = document.querySelector<HTMLCanvasElement>("canvas");
+    if (anyCanvas) {
+      const link = document.createElement("a");
+      link.download = `fullmag_snapshot_${Date.now()}.png`;
+      link.href = anyCanvas.toDataURL("image/png");
+      link.click();
+    }
   }, []);
 
   const handleExport = useCallback(() => { void enqueueCommand({ kind: "save_vtk" }); }, [enqueueCommand]);
@@ -863,7 +893,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     () => quantities.find((q) => q.id === (renderPreview?.quantity ?? requestedPreviewQuantity)) ?? null,
     [renderPreview?.quantity, requestedPreviewQuantity, quantities],
   );
-  const isVectorQuantity = quantityDescriptor?.kind === "vector_field";
+  // Default to true (vector) when descriptors haven't arrived yet — the default
+  // quantity "m" is always a vector field and we don't want to gate the 3D
+  // viewport behind EmptyState during the loading phase.
+  const isVectorQuantity = quantityDescriptor ? quantityDescriptor.kind === "vector_field" : true;
 
   const quickPreviewTargets = useMemo(
     () => [
@@ -1115,7 +1148,16 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     requestPreviewQuantity,
   ]);
 
-  if (!state) return null;
+  if (!state) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full w-full">
+        <div className="flex flex-col items-center gap-3 text-muted-foreground animate-pulse">
+          <div className="w-8 h-8 border-2 border-current border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm font-medium tracking-wide">Connecting to live workspace…</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <ControlRoomContext.Provider value={value}>

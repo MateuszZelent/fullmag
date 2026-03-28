@@ -94,6 +94,35 @@ struct Context {
 
     uint8_t *active_mask = nullptr;
     uint32_t *region_mask = nullptr;
+    double *exchange_lut = nullptr;  // device-side, MAX_EXCHANGE_REGIONS × MAX_EXCHANGE_REGIONS
+    bool has_exchange_lut = false;
+
+    // Boundary correction (T0 / T1)
+    uint8_t boundary_tier = 0;     // 0=none, 1=volume, 2=full
+    double  phi_floor = 0.05;
+    double  delta_min = 0.0;       // computed as 0.1*min(dx,dy,dz) if zero
+    double *volume_fraction = nullptr;  // f64[cell_count]
+    double *face_link_xp = nullptr;
+    double *face_link_xm = nullptr;
+    double *face_link_yp = nullptr;
+    double *face_link_ym = nullptr;
+    double *face_link_zp = nullptr;
+    double *face_link_zm = nullptr;
+    // T1 only: intersection distances
+    double *delta_xp = nullptr;
+    double *delta_xm = nullptr;
+    double *delta_yp = nullptr;
+    double *delta_ym = nullptr;
+    double *delta_zp = nullptr;
+    double *delta_zm = nullptr;
+    // Sparse demag boundary correction
+    bool     has_demag_boundary_corr = false;
+    uint32_t demag_corr_target_count = 0;
+    uint32_t demag_corr_stencil_size = 0;
+    int32_t *demag_corr_target_idx = nullptr;
+    int32_t *demag_corr_source_idx = nullptr;
+    double  *demag_corr_tensor = nullptr;
+
     double *reduction_scratch = nullptr;
     uint64_t reduction_scratch_len = 0;
     void *preview_download_scratch = nullptr;
@@ -153,6 +182,9 @@ bool context_upload_active_mask(Context &ctx, const uint8_t *mask, uint64_t len)
 /// Upload region ids (host u32 -> device u32).
 bool context_upload_region_mask(Context &ctx, const uint32_t *mask, uint64_t len);
 
+/// Upload inter-region exchange coupling LUT (host f64, MAX_EXCHANGE_REGIONS^2 entries).
+bool context_upload_exchange_lut(Context &ctx, const double *lut, uint64_t len);
+
 /// Upload precomputed Newell tensor spectra (host f64 interleaved complex -> device complex).
 bool context_upload_demag_kernel_spectra(
     Context &ctx,
@@ -163,6 +195,30 @@ bool context_upload_demag_kernel_spectra(
     const double *kxz,
     const double *kyz,
     uint64_t len);
+
+/// Upload boundary correction geometry data (T0/T1).
+bool context_upload_boundary_correction(
+    Context &ctx,
+    uint8_t tier,
+    double phi_floor,
+    double delta_min,
+    const double *volume_fraction,
+    const double *face_link_xp, const double *face_link_xm,
+    const double *face_link_yp, const double *face_link_ym,
+    const double *face_link_zp, const double *face_link_zm,
+    const double *delta_xp, const double *delta_xm,
+    const double *delta_yp, const double *delta_ym,
+    const double *delta_zp, const double *delta_zm,
+    uint64_t cell_count);
+
+/// Upload sparse demag boundary correction tensors.
+bool context_upload_demag_boundary_corr(
+    Context &ctx,
+    const int32_t *target_idx,
+    const int32_t *source_idx,
+    const double *tensor,
+    uint32_t target_count,
+    uint32_t stencil_size);
 
 /// Download a field observable from device to host as f64 AoS.
 bool context_download_field_f64(

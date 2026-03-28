@@ -456,6 +456,7 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
   const finishedRef = useRef(false);
   const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
   const unmountedRef = useRef(false);
   const intentionallyClosedRef = useRef(new WeakSet<WebSocket>());
 
@@ -518,6 +519,7 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
       }
       setConnection("connected");
       setError(null);
+      reconnectAttemptRef.current = 0;
     };
 
     ws.onmessage = (event: MessageEvent<string>) => {
@@ -579,10 +581,11 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
       reconnectTimerRef.current = setTimeout(() => {
         reconnectTimerRef.current = null;
         if (wsRef.current === ws) {
+          reconnectAttemptRef.current += 1;
           setConnection("connecting");
           connect();
         }
-      }, 1500);
+      }, Math.min(1500 * Math.pow(2, reconnectAttemptRef.current), 30000));
     };
   }, [sessionHint]);
 

@@ -215,7 +215,6 @@ export default function SceneAxes3D({
               color={LABEL_COLOR}
               anchorX="center"
               anchorY="top"
-              font="/fonts/inter-medium.woff"
             >
               {fmtTickLabel(tick.val)}
             </Text>
@@ -229,7 +228,7 @@ export default function SceneAxes3D({
           color={UNIT_COLOR}
           anchorX="center"
           anchorY="top"
-          font="/fonts/inter-medium.woff"
+
         >
           {`${axisLabels[0]} (${unit})`}
         </Text>
@@ -252,7 +251,6 @@ export default function SceneAxes3D({
               color={LABEL_COLOR}
               anchorX="right"
               anchorY="middle"
-              font="/fonts/inter-medium.woff"
             >
               {fmtTickLabel(tick.val)}
             </Text>
@@ -266,7 +264,7 @@ export default function SceneAxes3D({
           color={UNIT_COLOR}
           anchorX="center"
           anchorY="bottom"
-          font="/fonts/inter-medium.woff"
+
         >
           {`${axisLabels[1]} (${unit})`}
         </Text>
@@ -289,7 +287,6 @@ export default function SceneAxes3D({
               color={LABEL_COLOR}
               anchorX="center"
               anchorY="top"
-              font="/fonts/inter-medium.woff"
             >
               {fmtTickLabel(tick.val)}
             </Text>
@@ -303,7 +300,7 @@ export default function SceneAxes3D({
           color={UNIT_COLOR}
           anchorX="center"
           anchorY="top"
-          font="/fonts/inter-medium.woff"
+
         >
           {`${axisLabels[2]} (${unit})`}
         </Text>

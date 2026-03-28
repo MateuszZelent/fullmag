@@ -171,6 +171,30 @@ impl NativeFdmBackend {
         };
         let adaptive = plan.adaptive_timestep.as_ref();
 
+        // Build exchange LUT when region mask is present.
+        // Default: A_ii = A_material, A_ij (i≠j) = 0 (no inter-region coupling).
+        // User-provided inter_region_exchange triples override specific pairs.
+        let exchange_lut: Option<Vec<f64>> = if region_mask_flat.is_some() {
+            let n = ffi::FULLMAG_FDM_MAX_EXCHANGE_REGIONS;
+            let mut lut = vec![0.0f64; n * n];
+            // Diagonal: self-exchange = material A
+            for r in 0..n {
+                lut[r * n + r] = plan.material.exchange_stiffness;
+            }
+            // Apply caller overrides (symmetric)
+            for &(ri, rj, a_ij) in &plan.inter_region_exchange {
+                let ri = ri as usize;
+                let rj = rj as usize;
+                if ri < n && rj < n {
+                    lut[ri * n + rj] = a_ij;
+                    lut[rj * n + ri] = a_ij;
+                }
+            }
+            Some(lut)
+        } else {
+            None
+        };
+
         let plan_desc = ffi::fullmag_fdm_plan_desc {
             grid,
             material,
@@ -224,6 +248,12 @@ impl NativeFdmBackend {
             adaptive_dt_min: adaptive.map_or(0.0, |cfg| cfg.dt_min),
             adaptive_dt_max: adaptive.and_then(|cfg| cfg.dt_max).unwrap_or(0.0),
             adaptive_headroom: adaptive.map_or(0.0, |cfg| cfg.safety),
+            exchange_lut: exchange_lut
+                .as_ref()
+                .map_or(std::ptr::null(), |lut| lut.as_ptr()),
+            exchange_lut_len: exchange_lut
+                .as_ref()
+                .map_or(0, |lut| lut.len() as u64),
         };
 
         let handle = unsafe { ffi::fullmag_fdm_backend_create(&plan_desc) };
@@ -771,6 +801,7 @@ mod tests {
             fixed_timestep: Some(2.5e-13),
             adaptive_timestep: None,
             relaxation: None,
+            boundary_correction: None,
             enable_exchange: true,
             enable_demag,
             external_field: Some([1.5e3, -2.0e3, 7.5e2]),
@@ -815,6 +846,7 @@ mod tests {
             fixed_timestep: Some(2.0e-13),
             adaptive_timestep: None,
             relaxation: None,
+            boundary_correction: None,
             enable_exchange: true,
             enable_demag: true,
             external_field: Some([2.0e3, -1.0e3, 5.0e2]),

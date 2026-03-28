@@ -8,8 +8,8 @@ import fullmag as fm
 
 # ── Engine ──────────────────────────────────────────────────
 fm.engine("fem")
-fm.device("cuda:0")
-fm.cell(5e-9, 5e-9, 10e-9)
+fm.device("cuda:0",precision="single")
+# fm.cell(5e-9, 5e-9, 10e-9)
 
 # ── Geometry & Material ─────────────────────────────────────
 layer = fm.geometry(fm.Box(1000e-9, 1000e-9, 10e-9) - fm.Cylinder(radius=75e-9, height=10e-9))

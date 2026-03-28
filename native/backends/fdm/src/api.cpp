@@ -119,6 +119,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     ctx->has_external_field = plan->has_external_field != 0;
     ctx->has_active_mask = plan->active_mask != nullptr;
     ctx->has_region_mask = plan->region_mask != nullptr;
+    ctx->has_exchange_lut = ctx->has_region_mask; // always build LUT when regions are present
     ctx->has_demag_tensor_kernel = plan->demag_kernel_spectrum_len != 0;
     ctx->external_field[0] = plan->external_field_am[0];
     ctx->external_field[1] = plan->external_field_am[1];
@@ -209,6 +210,23 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         !context_upload_region_mask(*ctx, plan->region_mask, plan->region_mask_len))
     {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    // Build or upload inter-region exchange coupling LUT
+    if (ctx->has_exchange_lut) {
+        constexpr uint64_t N = FULLMAG_FDM_MAX_EXCHANGE_REGIONS;
+        std::vector<double> lut_host(N * N, 0.0);
+        if (plan->exchange_lut != nullptr && plan->exchange_lut_len == N * N) {
+            // Use caller-provided LUT
+            std::memcpy(lut_host.data(), plan->exchange_lut, N * N * sizeof(double));
+        } else {
+            // Auto-build default LUT: A_ii = A, A_ij(i!=j) = 0
+            for (uint64_t r = 0; r < N; ++r) {
+                lut_host[r * N + r] = ctx->A;
+            }
+        }
+        if (!context_upload_exchange_lut(*ctx, lut_host.data(), N * N)) {
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
     }
     if (ctx->has_demag_tensor_kernel &&
         !context_upload_demag_kernel_spectra(

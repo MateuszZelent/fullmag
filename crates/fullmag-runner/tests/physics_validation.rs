@@ -93,6 +93,8 @@ fn sp4_plan(algorithm: RelaxationAlgorithmIR, damping: f64, enable_demag: bool) 
         enable_exchange: true,
         enable_demag,
         external_field: None,
+        boundary_correction: None,
+        inter_region_exchange: vec![],
     }
 }
 
@@ -132,6 +134,8 @@ fn uniform_field_alignment() {
         enable_demag: false,
         // Strong field along +x: H = 1e6 A/m ≈ 1.26 T
         external_field: Some([1e6, 0.0, 0.0]),
+        boundary_correction: None,
+        inter_region_exchange: vec![],
     };
 
     let result = fullmag_runner::run_reference_fdm(&plan, 1e-9, &[]).expect("run should succeed");
@@ -179,6 +183,8 @@ fn exchange_only_random_to_uniform() {
         enable_exchange: true,
         enable_demag: false,
         external_field: None,
+        boundary_correction: None,
+        inter_region_exchange: vec![],
     };
 
     let result = fullmag_runner::run_reference_fdm(&plan, 1e-9, &[]).expect("run should succeed");
@@ -241,6 +247,8 @@ fn thin_film_shape_anisotropy() {
         enable_exchange: true,
         enable_demag: true,
         external_field: None,
+        boundary_correction: None,
+        inter_region_exchange: vec![],
     };
 
     let result = fullmag_runner::run_reference_fdm(&plan, 10e-9, &[]).expect("run should succeed");
@@ -416,6 +424,8 @@ fn sp4_reversal_dynamics() {
         fixed_timestep: Some(5e-14), // needs small dt for dynamics with α=0.02
         adaptive_timestep: None,
         relaxation: None, // no relaxation — pure dynamics
+        boundary_correction: None,
+        inter_region_exchange: vec![],
         enable_exchange: true,
         enable_demag: true,
         external_field: Some(h_ext),

@@ -335,7 +335,12 @@ export default function FdmInstances({
     }
   }, [vectors, grid, settings, geometryMode, activeMask, mode, count, nx, ny, nz, onVisibleCount]);
 
-  if (count === 0) return null;
+  if (count === 0) {
+    if (typeof window !== "undefined") {
+      console.warn("[FdmInstances] count=0 — grid is", grid, "— no instances will render");
+    }
+    return null;
+  }
 
   return (
     <instancedMesh

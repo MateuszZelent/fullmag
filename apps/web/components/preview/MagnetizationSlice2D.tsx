@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useEffect, useRef, useMemo } from "react";
@@ -219,8 +218,8 @@ export default function MagnetizationSlice2D({
         tooltip: {
           position: "top",
           confine: true,
-          formatter: (params: any) => {
-            const v = params.value;
+          formatter: (params: Record<string, unknown>) => {
+            const v = params.value as number[];
             return [
               `<strong>${quantityLabel}.${component}</strong>`,
               `${axisLabel}: ${v[0]}`,
@@ -255,13 +254,7 @@ export default function MagnetizationSlice2D({
             lineStyle: { color: THEME.accent, width: 1.5, type: "dashed" },
           },
           axisTick: { length: 6, lineStyle: { type: "solid", color: THEME.border } },
-          axisLabel: {
-            show: true,
-            color: THEME.text2,
-            showMinLabel: true,
-            showMaxLabel: true,
-            hideOverlap: true,
-          },
+          axisLabel: { show: false },
           splitLine: { show: false },
         },
         yAxis: {
@@ -285,13 +278,7 @@ export default function MagnetizationSlice2D({
             lineStyle: { color: THEME.accent, width: 1.5, type: "dashed" },
           },
           axisTick: { length: 6, lineStyle: { type: "solid", color: THEME.border } },
-          axisLabel: {
-            show: true,
-            color: THEME.text2,
-            showMinLabel: true,
-            showMaxLabel: true,
-            hideOverlap: true,
-          },
+          axisLabel: { show: false },
           splitLine: { show: false },
         },
         visualMap: [

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import * as THREE from "three";
 import { Canvas, useThree } from "@react-three/fiber";
 import { TrackballControls } from "@react-three/drei";
@@ -153,6 +153,7 @@ export default function MagnetizationView3D({
 
   const controlsRef = useRef<any>(null);
   const viewCubeSceneRef = useRef<any>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [nx, ny, nz] = grid;
   const cx = nx / 2, cy = nz / 2, cz = ny / 2;
@@ -177,17 +178,43 @@ export default function MagnetizationView3D({
     });
   };
 
-  // Reset camera
-  const resetCamera = useCallback(() => {
+  // Snap camera to a direction
+  const snapCamera = useCallback((dir: [number, number, number], up: [number, number, number] = [0, 1, 0]) => {
     const bridge = viewCubeSceneRef.current;
     if (!bridge?.camera || !bridge?.controls) return;
     const { camera, controls } = bridge;
-    camera.position.set(cx, cy, cz + orbitDist);
-    camera.up.set(0, 1, 0);
+    const len = Math.sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    const n = len > 0 ? [dir[0] / len, dir[1] / len, dir[2] / len] : [0, 0, 1];
+    camera.position.set(
+      cx + n[0] * orbitDist,
+      cy + n[1] * orbitDist,
+      cz + n[2] * orbitDist,
+    );
+    camera.up.set(up[0], up[1], up[2]);
     camera.lookAt(cx, cy, cz);
     controls.target.set(cx, cy, cz);
     controls.update();
   }, [cx, cy, cz, orbitDist]);
+
+  const resetCamera = useCallback(() => snapCamera([0, 0, 1]), [snapCamera]);
+
+  const cameraPresets = useMemo(() => [
+    { label: "Top",   fn: () => snapCamera([0, 1, 0], [0, 0, -1]) },
+    { label: "Front", fn: () => snapCamera([0, 0, 1]) },
+    { label: "Right", fn: () => snapCamera([1, 0, 0]) },
+    { label: "Iso",   fn: () => snapCamera([1, 1, 1]) },
+  ], [snapCamera]);
+
+  // Capture viewport as PNG
+  const captureSnapshot = useCallback(() => {
+    const bridge = viewCubeSceneRef.current;
+    const canvas = canvasRef.current;
+    if (!bridge || !canvas) return;
+    const link = document.createElement("a");
+    link.download = `fullmag_3d_${Date.now()}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }, []);
 
   // SceneAxes3D props — FDM coordinate mapping: scene-X=sim-X, scene-Y=sim-Z, scene-Z=sim-Y
   const axesWorldExtent = worldExtent
@@ -338,8 +365,26 @@ export default function MagnetizationView3D({
               </>
             ) : null}
 
+            <ControlGroup label="Camera">
+              <div className="grid grid-cols-4 rounded-md overflow-hidden border border-border/50 bg-white/5">
+                {cameraPresets.map((p) => (
+                  <button
+                    key={p.label}
+                    className="py-1.5 text-[0.65rem] font-bold tracking-wider text-muted-foreground bg-transparent border-none cursor-pointer transition-colors border-r border-border/50 last:border-r-0 hover:bg-primary/10 hover:text-foreground"
+                    onClick={p.fn}
+                  >
+                    {p.label.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </ControlGroup>
+
             <button className="w-full py-2 text-[0.65rem] font-bold tracking-wider text-muted-foreground bg-white/5 border border-border/50 rounded-md cursor-pointer transition-all hover:bg-primary/10 hover:border-primary/50 hover:text-foreground" onClick={resetCamera}>
               Reset Camera
+            </button>
+
+            <button className="w-full py-2 text-[0.65rem] font-bold tracking-wider text-emerald-400/80 bg-emerald-500/10 border border-emerald-500/30 rounded-md cursor-pointer transition-all hover:bg-emerald-500/20 hover:border-emerald-500/50 hover:text-emerald-300" onClick={captureSnapshot}>
+              📷 Snapshot
             </button>
           </div>
         ) : null}
@@ -356,7 +401,9 @@ export default function MagnetizationView3D({
         }}
         gl={{
           antialias: settings.quality !== "low",
+          preserveDrawingBuffer: true,
         }}
+        onCreated={({ gl }) => { canvasRef.current = gl.domElement; }}
         dpr={settings.quality === "ultra"
           ? Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, 2)
           : 1

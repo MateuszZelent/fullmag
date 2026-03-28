@@ -778,4 +778,129 @@ mod tests {
             "N_xy should be odd in x",
         );
     }
+
+    /// Validate absolute N_xy values against Python reference implementation.
+    ///
+    /// Reference values computed independently using the Boris Lodia stencil
+    /// applied to newell_g(). For cubic cells (dx=dy=dz=1):
+    ///   N_xy(1,1,0) ≈ -0.04556  (negative, near-field ~8% above asymptotic)
+    ///   N_xy(2,2,0) ≈ -0.00529  (negative, ~0.27% above asymptotic)
+    ///   N_xy(5,5,0) ≈ -0.000338 (negative, <0.01% above asymptotic)
+    ///
+    /// Python validation script (test_newell2.py) confirmed convergence to
+    /// the -3xy/(4πr⁵) asymptotic at large distances.
+    #[test]
+    fn nxy_absolute_values_match_reference() {
+        // Use nx=10, ny=10, nz=1 grid with unit cell size
+        let kernels = compute_newell_kernels(10, 10, 1, 1.0, 1.0, 1.0);
+        let px = kernels.px;
+        let py = kernels.py;
+        let idx = |x: usize, y: usize, z: usize| z * py * px + y * px + x;
+
+        // N_xy(1,1,0): near-field value, ~8% above asymptotic
+        // Reference: -4.55648226e-02
+        let nxy_11 = kernels.n_xy[idx(1, 1, 0)];
+        assert!(
+            (nxy_11 - (-4.5565e-2)).abs() < 1e-5,
+            "N_xy(1,1,0) should be ~-0.04556, got {}",
+            nxy_11
+        );
+
+        // N_xy(2,2,0): further distance, ~0.27% above asymptotic
+        // Reference: -5.28968456e-03
+        let nxy_22 = kernels.n_xy[idx(2, 2, 0)];
+        assert!(
+            (nxy_22 - (-5.2897e-3)).abs() < 1e-6,
+            "N_xy(2,2,0) should be ~-0.005290, got {}",
+            nxy_22
+        );
+
+        // N_xy(5,5,0): far-field, matches asymptotic closely
+        // Reference: -3.37642932e-04
+        let nxy_55 = kernels.n_xy[idx(5, 5, 0)];
+        assert!(
+            (nxy_55 - (-3.3764e-4)).abs() < 5e-8,
+            "N_xy(5,5,0) should be ~-3.376e-4, got {}",
+            nxy_55
+        );
+
+        // N_xy along x-axis should be exactly zero (y=0 symmetry)
+        let nxy_10 = kernels.n_xy[idx(1, 0, 0)];
+        assert!(
+            nxy_10.abs() < 1e-15,
+            "N_xy(1,0,0) should be 0, got {}",
+            nxy_10
+        );
+
+        // Signs: N_xy must be negative for positive (x,y) displacement
+        for i in 1..5 {
+            for j in 1..5 {
+                let v = kernels.n_xy[idx(i, j, 0)];
+                assert!(
+                    v < 0.0,
+                    "N_xy({},{},0) should be negative (physics: coupling pulls back), got {}",
+                    i, j, v
+                );
+            }
+        }
+    }
+
+    /// Verify N_xy far-field convergence to the point-dipole asymptotic.
+    ///
+    /// At large distances (r >> cell size), N_xy(r) → -3xy/(4πr⁵)·V.
+    /// This confirms the stencil operator is correctly computing the
+    /// double-volume integral of the Newell g potential.
+    #[test]
+    fn nxy_converges_to_asymptotic_at_large_distance() {
+        // Need large enough grid to have displacements of 8+ cells
+        let kernels = compute_newell_kernels(12, 12, 1, 1.0, 1.0, 1.0);
+        let px = kernels.px;
+        let py = kernels.py;
+        let idx = |x: usize, y: usize, z: usize| z * py * px + y * px + x;
+
+        // At r=8 cells, should match asymptotic to <0.01%
+        let x = 8.0_f64;
+        let y = 8.0_f64;
+        let r5 = (x * x + y * y).powf(2.5);
+        let n_asym = -3.0 * x * y / (4.0 * PI * r5);
+        let n_stencil = kernels.n_xy[idx(8, 8, 0)];
+        let rel_err = (n_stencil - n_asym).abs() / n_asym.abs();
+        assert!(
+            rel_err < 1e-3,
+            "N_xy(8,8,0) relative error vs asymptotic: {:.4}%, expected <0.1%",
+            rel_err * 100.0
+        );
+    }
+
+    /// Validate thin-film demagnetization factor ordering.
+    ///
+    /// For a thin cell (dz < dx), the out-of-plane demagnetization factor N_zz
+    /// must be greater than N_xx = N_yy (shape anisotropy prefers in-plane).
+    /// For a 5:5:1 cell: N_zz ≈ 0.694, N_xx = N_yy ≈ 0.153.
+    /// For extremely thin (50:50:1) cells: N_zz → 1.
+    #[test]
+    fn thin_film_self_term_nzz_dominates() {
+        // 1×1×1 cell, very thin: dx=dy=5nm, dz=1nm (aspect ratio 5)
+        let kernels = compute_newell_kernels(1, 1, 1, 5e-9, 5e-9, 1e-9);
+        // N_zz must be the largest component (thin-film easy-plane enforced by shape)
+        assert!(
+            kernels.n_zz[0] > kernels.n_xx[0],
+            "Thin film N_zz ({}) should be > N_xx ({})",
+            kernels.n_zz[0],
+            kernels.n_xx[0]
+        );
+        // N_xx + N_yy + N_zz = 1 always
+        let trace = kernels.n_xx[0] + kernels.n_yy[0] + kernels.n_zz[0];
+        assert!(
+            (trace - 1.0).abs() < 1e-10,
+            "Trace must be 1.0, got {}",
+            trace
+        );
+        // For 5:1 aspect ratio, N_zz should be well above 1/3
+        assert!(
+            kernels.n_zz[0] > 0.5,
+            "N_zz ({}) should be > 0.5 for 5:1 aspect ratio cell",
+            kernels.n_zz[0]
+        );
+    }
 }

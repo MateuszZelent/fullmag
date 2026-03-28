@@ -13,7 +13,7 @@ from .geometry import (
     Translate,
     Union,
 )
-from .outputs import SaveField, SaveScalar
+from .outputs import SaveField, SaveScalar, Snapshot
 from .problem import (
     BackendTarget,
     DeviceTarget,
@@ -57,6 +57,7 @@ __all__ = [
     "RuntimeSelection",
     "SaveField",
     "SaveScalar",
+    "Snapshot",
     "Sphere",
     "TimeEvolution",
     "Translate",

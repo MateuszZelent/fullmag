@@ -204,6 +204,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
                 "cell_size": fdm.cell_size,
                 "total_cell_count": total_cells,
                 "active_mask_present": fdm.active_mask.is_some(),
+                "active_mask": fdm.active_mask.as_ref().map(|mask| mask.as_slice()),
                 "active_cell_count": active_cell_count,
                 "inactive_cell_count": inactive_cell_count,
                 "active_fraction": if total_cells > 0 {
@@ -306,6 +307,8 @@ mod tests {
                 fixed_timestep: Some(1e-13),
                 adaptive_timestep: None,
                 relaxation: None,
+                boundary_correction: None,
+                inter_region_exchange: vec![],
             }),
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),

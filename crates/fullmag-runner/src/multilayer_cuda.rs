@@ -864,6 +864,8 @@ fn build_native_stacked_cuda_plan(
             fixed_timestep: plan.fixed_timestep,
             adaptive_timestep: None,
             relaxation: plan.relaxation.clone(),
+            boundary_correction: None,
+            inter_region_exchange: vec![],
         },
         layers,
         global_grid,
@@ -1109,6 +1111,8 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         fixed_timestep: plan.fixed_timestep,
         adaptive_timestep: None,
         relaxation: None,
+        boundary_correction: None,
+        inter_region_exchange: vec![],
     }
 }
 
@@ -1876,6 +1880,31 @@ fn select_field_values(
     observables: &StateObservables,
     name: &str,
 ) -> Result<Vec<[f64; 3]>, RunError> {
+    // Handle component-qualified names from fm.snapshot(), e.g. "m.z"
+    if let Some(dot_pos) = name.find('.') {
+        let base = &name[..dot_pos];
+        let comp = &name[dot_pos + 1..];
+        let full = select_base_field(observables, base)?;
+        let idx = match comp {
+            "x" => 0,
+            "y" => 1,
+            "z" => 2,
+            _ => {
+                return Err(RunError {
+                    message: format!("unsupported snapshot component '{}' in '{}'", comp, name),
+                })
+            }
+        };
+        // Store extracted scalar in x-component, zero the rest
+        return Ok(full.iter().map(|v| [v[idx], 0.0, 0.0]).collect());
+    }
+    select_base_field(observables, name)
+}
+
+fn select_base_field(
+    observables: &StateObservables,
+    name: &str,
+) -> Result<Vec<[f64; 3]>, RunError> {
     Ok(match name {
         "m" => observables.magnetization.clone(),
         "H_ex" => observables.exchange_field.clone(),
@@ -2339,6 +2368,7 @@ mod tests {
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
             relaxation: None,
+            boundary_correction: None,
             planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
                 requested_strategy: "multilayer_convolution".to_string(),
                 selected_strategy: "multilayer_convolution".to_string(),

@@ -721,6 +721,23 @@ fn make_step_stats(
 }
 
 fn select_field_values(observables: &StateObservables, name: &str) -> Vec<[f64; 3]> {
+    // Handle component-qualified snapshot names (e.g. "m.z")
+    if let Some(dot_pos) = name.find('.') {
+        let base = &name[..dot_pos];
+        let comp = &name[dot_pos + 1..];
+        let full = select_base_field(observables, base);
+        let idx = match comp {
+            "x" => 0,
+            "y" => 1,
+            "z" => 2,
+            _ => panic!("unsupported snapshot component '{}' in '{}'", comp, name),
+        };
+        return full.iter().map(|v| [v[idx], 0.0, 0.0]).collect();
+    }
+    select_base_field(observables, name)
+}
+
+fn select_base_field(observables: &StateObservables, name: &str) -> Vec<[f64; 3]> {
     match name {
         "m" => observables.magnetization.clone(),
         "H_ex" => observables.exchange_field.clone(),
@@ -767,6 +784,8 @@ mod tests {
             fixed_timestep: Some(1e-14),
             adaptive_timestep: None,
             relaxation: None,
+            boundary_correction: None,
+            inter_region_exchange: vec![],
             enable_exchange: true,
             enable_demag: false,
             external_field: None,
@@ -801,6 +820,8 @@ mod tests {
             enable_exchange: false,
             enable_demag: false,
             external_field: Some([0.0, 0.0, 8.0e5]),
+            boundary_correction: None,
+            inter_region_exchange: vec![],
         }
     }
 

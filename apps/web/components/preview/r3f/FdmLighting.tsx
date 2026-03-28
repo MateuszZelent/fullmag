@@ -18,7 +18,9 @@ export default function FdmLighting({ brightness, quality }: FdmLightingProps) {
   const useLighting = quality !== "low";
   const useHemisphere = quality !== "low";
 
-  if (!useLighting) return null;
+  if (!useLighting) {
+    return <ambientLight intensity={0.6 * brightness} color={0xffffff} />;
+  }
 
   return (
     <>

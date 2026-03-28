@@ -592,12 +592,14 @@ export default function EngineConsole({
                 Waiting for at least 2 data points to render chart…
               </div>
             ) : (
-              <div className="flex-1 min-h-0 relative p-2">
-                <ScalarPlot
-                  rows={scalarRows}
-                  xColumn="time"
-                  yColumns={CHART_PRESETS[chartPreset].yColumns}
-                />
+              <div className="flex-1 min-h-[180px] relative p-2">
+                <div className="absolute inset-0 p-2">
+                  <ScalarPlot
+                    rows={scalarRows}
+                    xColumn="time"
+                    yColumns={CHART_PRESETS[chartPreset].yColumns}
+                  />
+                </div>
               </div>
             )}
           </div>

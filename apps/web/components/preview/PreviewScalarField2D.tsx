@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
@@ -94,8 +93,8 @@ export default function PreviewScalarField2D({
         tooltip: {
           position: "top",
           confine: true,
-          formatter: (params: any) => {
-            const value = params.value;
+          formatter: (params: Record<string, unknown>) => {
+            const value = params.value as number[];
             return [
               `<strong>${quantityLabel}.${component}</strong>`,
               `x: ${value[0]}`,

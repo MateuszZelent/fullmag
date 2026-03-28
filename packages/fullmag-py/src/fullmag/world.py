@@ -39,7 +39,7 @@ from typing import Any, Sequence
 from fullmag._progress import emit_progress
 from fullmag.model.energy import Demag, Exchange, InterfacialDMI, Zeeman
 from fullmag.model.dynamics import AdaptiveTimestep, DEFAULT_GAMMA, LLG
-from fullmag.model.outputs import SaveField, SaveScalar
+from fullmag.model.outputs import SaveField, SaveScalar, Snapshot, parse_snapshot_quantity
 from fullmag.model.study import Relaxation, TimeEvolution
 from fullmag.model.structure import Ferromagnet, Material
 from fullmag.model.problem import (
@@ -853,6 +853,61 @@ def save(quantity: str, *, every: float) -> None:
         _state._outputs.append(SaveScalar(scalar=quantity, every=every))
     else:
         _state._outputs.append(SaveField(field=quantity, every=every))
+
+
+def snapshot(
+    layer_or_quantity: "str | MagnetHandle",
+    quantity: str | None = None,
+    *,
+    every: float,
+) -> None:
+    """Register a periodic field-component snapshot.
+
+    Parameters
+    ----------
+    layer_or_quantity : str or MagnetHandle
+        If a string, it is parsed as the quantity (e.g. ``"mz"``, ``"m"``,
+        ``"H_demag_x"``).  If a :class:`MagnetHandle`, it selects the layer
+        and the second positional argument is the quantity.
+    quantity : str, optional
+        Quantity string when *layer_or_quantity* is a layer handle.
+    every : float
+        Snapshot interval in seconds.
+
+    Examples
+    --------
+    ::
+
+        fm.snapshot("mz", every=1e-13)            # mz of all layers
+        fm.snapshot(layer, "mz", every=1e-13)     # mz of specific layer
+        fm.snapshot("H_demag_x", every=50e-12)    # x-component of demag field
+    """
+    layer_name: str | None = None
+
+    if isinstance(layer_or_quantity, MagnetHandle):
+        # fm.snapshot(layer, "mz", every=...)
+        if quantity is None:
+            raise TypeError(
+                "snapshot(layer, quantity, *, every=...) requires a quantity string "
+                "when the first arg is a layer handle"
+            )
+        layer_name = layer_or_quantity._name
+        raw_quantity = quantity
+    elif isinstance(layer_or_quantity, str):
+        # fm.snapshot("mz", every=...)
+        if quantity is not None:
+            raise TypeError(
+                "snapshot() got two string arguments — pass a layer handle as the "
+                "first arg if you want layer-specific snapshots"
+            )
+        raw_quantity = layer_or_quantity
+    else:
+        raise TypeError(
+            f"snapshot() first arg must be a str or MagnetHandle, got {type(layer_or_quantity).__name__}"
+        )
+
+    field, component = parse_snapshot_quantity(raw_quantity)
+    _state._outputs.append(Snapshot(field=field, component=component, every=every, layer=layer_name))
 
 
 def tableautosave(every: float) -> None:

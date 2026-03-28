@@ -324,6 +324,13 @@ impl StudyIR {
 pub enum OutputIR {
     Field { name: String, every_seconds: f64 },
     Scalar { name: String, every_seconds: f64 },
+    Snapshot {
+        field: String,
+        component: String,
+        every_seconds: f64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        layer: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -353,6 +360,9 @@ pub struct FdmHintsIR {
     /// Demagnetization solver policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag: Option<FdmDemagHintsIR>,
+    /// Boundary correction: "none" | "volume" (T0) | "full" (T1)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_correction: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -655,6 +665,12 @@ pub struct FdmPlanIR {
     pub enable_demag: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
+    /// Inter-region exchange coupling overrides.
+    /// Each entry `(region_i, region_j, A_ij)` sets the exchange stiffness [J/m]
+    /// between regions i and j (symmetric: A_ij = A_ji).
+    /// When empty, cross-region exchange defaults to zero (free-surface BC).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inter_region_exchange: Vec<(u32, u32, f64)>,
     pub gyromagnetic_ratio: f64,
     pub precision: ExecutionPrecision,
     pub exchange_bc: ExchangeBoundaryCondition,
@@ -664,6 +680,9 @@ pub struct FdmPlanIR {
     pub adaptive_timestep: Option<AdaptiveTimeStepIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relaxation: Option<RelaxationControlIR>,
+    /// Boundary correction tier: "none" | "volume" (T0) | "full" (T1)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_correction: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -807,6 +826,7 @@ impl ProblemIR {
                         default_cell: None,
                         per_magnet: None,
                         demag: None,
+                        boundary_correction: None,
                     }),
                     fem: Some(FemHintsIR {
                         order: 1,
@@ -888,6 +908,29 @@ impl ProblemIR {
                         errors.push(format!(
                             "scalar output '{}' must have positive every_seconds",
                             name
+                        ));
+                    }
+                }
+                OutputIR::Snapshot {
+                    field,
+                    component,
+                    every_seconds,
+                    ..
+                } => {
+                    if field.trim().is_empty() {
+                        errors.push("snapshot field name must not be empty".to_string());
+                    }
+                    let valid_components = ["x", "y", "z", "3D"];
+                    if !valid_components.contains(&component.as_str()) {
+                        errors.push(format!(
+                            "snapshot component '{}' must be one of: x, y, z, 3D",
+                            component
+                        ));
+                    }
+                    if *every_seconds <= 0.0 {
+                        errors.push(format!(
+                            "snapshot '{}' must have positive every_seconds",
+                            field
                         ));
                     }
                 }
@@ -1454,6 +1497,7 @@ mod tests {
                 fixed_timestep: Some(1e-13),
                 adaptive_timestep: None,
                 relaxation: None,
+                boundary_correction: None,
             }),
             output_plan: OutputPlanIR {
                 outputs: vec![OutputIR::Field {

@@ -4,10 +4,10 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 from fullmag.model.dynamics import LLG
-from fullmag.model.outputs import SaveField, SaveScalar
+from fullmag.model.outputs import SaveField, SaveScalar, Snapshot
 from fullmag._validation import require_positive
 
-OutputSpec = SaveField | SaveScalar
+OutputSpec = SaveField | SaveScalar | Snapshot
 SUPPORTED_RELAXATION_ALGORITHMS = {
     "llg_overdamped",
     "projected_gradient_bb",

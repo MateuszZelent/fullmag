@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 #include <cufft.h>
 #include <cmath>
+#include <cstdio>
 #include <vector>
 
 namespace fullmag {
@@ -250,6 +251,15 @@ __global__ void combine_effective_field_fp32_kernel(
 void launch_demag_field_fp32(Context &ctx) {
     if (!ctx.enable_demag) {
         return;
+    }
+
+    if (!ctx.has_demag_tensor_kernel) {
+        static bool warned = false;
+        if (!warned) {
+            fprintf(stderr, "[fullmag] WARNING: demag enabled but no Newell tensor kernel "
+                "loaded — using spectral projection fallback (inaccurate for finite cells)\n");
+            warned = true;
+        }
     }
 
     int total_padded = static_cast<int>(ctx.fft_cell_count);

@@ -59,22 +59,49 @@ pub(crate) fn collect_field_schedules(
 ) -> Result<Vec<OutputSchedule>, RunError> {
     let mut schedules = Vec::new();
     for output in outputs {
-        if let OutputIR::Field {
-            name,
-            every_seconds,
-        } = output
-        {
-            if !matches!(name.as_str(), "m" | "H_ex" | "H_demag" | "H_ext" | "H_eff") {
-                return Err(RunError {
-                    message: format!("field output '{}' is not executable in Phase 1", name),
+        match output {
+            OutputIR::Field {
+                name,
+                every_seconds,
+            } => {
+                if !matches!(name.as_str(), "m" | "H_ex" | "H_demag" | "H_ext" | "H_eff") {
+                    return Err(RunError {
+                        message: format!("field output '{}' is not executable in Phase 1", name),
+                    });
+                }
+                schedules.push(OutputSchedule {
+                    name: name.clone(),
+                    every_seconds: *every_seconds,
+                    next_time: 0.0,
+                    last_sampled_time: None,
                 });
             }
-            schedules.push(OutputSchedule {
-                name: name.clone(),
-                every_seconds: *every_seconds,
-                next_time: 0.0,
-                last_sampled_time: None,
-            });
+            OutputIR::Snapshot {
+                field,
+                component,
+                every_seconds,
+                ..
+            } => {
+                if !matches!(field.as_str(), "m" | "H_ex" | "H_demag" | "H_ext" | "H_eff") {
+                    return Err(RunError {
+                        message: format!("snapshot field '{}' is not executable in Phase 1", field),
+                    });
+                }
+                // For component-specific snapshots, qualify the name (e.g. "m.z").
+                // For "3D", use the raw field name — identical to SaveField behaviour.
+                let schedule_name = if component == "3D" {
+                    field.clone()
+                } else {
+                    format!("{}.{}", field, component)
+                };
+                schedules.push(OutputSchedule {
+                    name: schedule_name,
+                    every_seconds: *every_seconds,
+                    next_time: 0.0,
+                    last_sampled_time: None,
+                });
+            }
+            _ => {}                   // Scalar — handled by collect_scalar_schedules
         }
     }
     Ok(schedules)

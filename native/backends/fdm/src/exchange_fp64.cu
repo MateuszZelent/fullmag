@@ -3,15 +3,17 @@
  *
  * Matches CPU reference semantics from fullmag-engine:
  *   - 6-point Laplacian stencil
- *   - Clamped-neighbor Neumann boundary conditions
- *   - prefactor = 2A / (μ₀ · Ms)
- *   - Energy: forward-neighbor pair sum: A · V · |Δm|² / Δx²
+ *   - Clamped-neighbor Neumann boundary conditions for void/inactive
+ *   - Per-pair A_ij from exchange LUT for inter-region coupling
+ *   - prefactor = 2 / (μ₀ · Ms), then multiplied by A_ij per neighbor pair
+ *   - Energy: forward-neighbor pair sum: A_ij · V · |Δm|² / Δx²
  */
 
 #include "context.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
+#include <cstdio>
 namespace fullmag {
 namespace fdm {
 
@@ -25,14 +27,17 @@ __global__ void exchange_field_fp64_kernel(
     const double * __restrict__ mz,
     const uint8_t * __restrict__ active_mask,
     const uint32_t * __restrict__ region_mask,
+    const double * __restrict__ exchange_lut,
     double * __restrict__ hx,
     double * __restrict__ hy,
     double * __restrict__ hz,
     int nx, int ny, int nz,
     int has_active_mask,
     int has_region_mask,
+    int max_regions,
     double inv_dx2, double inv_dy2, double inv_dz2,
-    double prefactor)
+    double prefactor,
+    double inv_mu0_ms)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = nx * ny * nz;
@@ -69,32 +74,62 @@ __global__ void exchange_field_fp64_kernel(
         if (active_mask[zm] == 0) zm = idx;
         if (active_mask[zp] == 0) zp = idx;
     }
-    if (has_region_mask) {
-        if (region_mask[xm] != center_region) xm = idx;
-        if (region_mask[xp] != center_region) xp = idx;
-        if (region_mask[ym] != center_region) ym = idx;
-        if (region_mask[yp] != center_region) yp = idx;
-        if (region_mask[zm] != center_region) zm = idx;
-        if (region_mask[zp] != center_region) zp = idx;
-    }
 
     double cx = mx[idx], cy = my[idx], cz = mz[idx];
 
-    double lap_x = (mx[xp] - 2.0 * cx + mx[xm]) * inv_dx2
-                 + (mx[yp] - 2.0 * cx + mx[ym]) * inv_dy2
-                 + (mx[zp] - 2.0 * cx + mx[zm]) * inv_dz2;
+    if (has_region_mask) {
+        // Per-neighbor A_ij from exchange coupling LUT.
+        // This correctly handles:
+        //   - same region: A_ij = A_material (standard exchange)
+        //   - cross-region: A_ij from LUT (0 = decoupled, >0 = coupled)
+        //   - clamped boundary/inactive: (m_j - m_i) = 0 regardless of A_ij
+        uint32_t r_xm = region_mask[xm];
+        uint32_t r_xp = region_mask[xp];
+        uint32_t r_ym = region_mask[ym];
+        uint32_t r_yp = region_mask[yp];
+        uint32_t r_zm = region_mask[zm];
+        uint32_t r_zp = region_mask[zp];
 
-    double lap_y = (my[xp] - 2.0 * cy + my[xm]) * inv_dx2
-                 + (my[yp] - 2.0 * cy + my[ym]) * inv_dy2
-                 + (my[zp] - 2.0 * cy + my[zm]) * inv_dz2;
+        double A_xm = exchange_lut[center_region * max_regions + r_xm];
+        double A_xp = exchange_lut[center_region * max_regions + r_xp];
+        double A_ym = exchange_lut[center_region * max_regions + r_ym];
+        double A_yp = exchange_lut[center_region * max_regions + r_yp];
+        double A_zm = exchange_lut[center_region * max_regions + r_zm];
+        double A_zp = exchange_lut[center_region * max_regions + r_zp];
 
-    double lap_z = (mz[xp] - 2.0 * cz + mz[xm]) * inv_dx2
-                 + (mz[yp] - 2.0 * cz + mz[ym]) * inv_dy2
-                 + (mz[zp] - 2.0 * cz + mz[zm]) * inv_dz2;
+        double ex = A_xp * (mx[xp] - cx) * inv_dx2 + A_xm * (mx[xm] - cx) * inv_dx2
+                  + A_yp * (mx[yp] - cx) * inv_dy2 + A_ym * (mx[ym] - cx) * inv_dy2
+                  + A_zp * (mx[zp] - cx) * inv_dz2 + A_zm * (mx[zm] - cx) * inv_dz2;
 
-    hx[idx] = prefactor * lap_x;
-    hy[idx] = prefactor * lap_y;
-    hz[idx] = prefactor * lap_z;
+        double ey = A_xp * (my[xp] - cy) * inv_dx2 + A_xm * (my[xm] - cy) * inv_dx2
+                  + A_yp * (my[yp] - cy) * inv_dy2 + A_ym * (my[ym] - cy) * inv_dy2
+                  + A_zp * (my[zp] - cy) * inv_dz2 + A_zm * (my[zm] - cy) * inv_dz2;
+
+        double ez = A_xp * (mz[xp] - cz) * inv_dx2 + A_xm * (mz[xm] - cz) * inv_dx2
+                  + A_yp * (mz[yp] - cz) * inv_dy2 + A_ym * (mz[ym] - cz) * inv_dy2
+                  + A_zp * (mz[zp] - cz) * inv_dz2 + A_zm * (mz[zm] - cz) * inv_dz2;
+
+        hx[idx] = inv_mu0_ms * ex;
+        hy[idx] = inv_mu0_ms * ey;
+        hz[idx] = inv_mu0_ms * ez;
+    } else {
+        // Fast path: uniform A, classic Laplacian
+        double lap_x = (mx[xp] - 2.0 * cx + mx[xm]) * inv_dx2
+                     + (mx[yp] - 2.0 * cx + mx[ym]) * inv_dy2
+                     + (mx[zp] - 2.0 * cx + mx[zm]) * inv_dz2;
+
+        double lap_y = (my[xp] - 2.0 * cy + my[xm]) * inv_dx2
+                     + (my[yp] - 2.0 * cy + my[ym]) * inv_dy2
+                     + (my[zp] - 2.0 * cy + my[zm]) * inv_dz2;
+
+        double lap_z = (mz[xp] - 2.0 * cz + mz[xm]) * inv_dx2
+                     + (mz[yp] - 2.0 * cz + mz[ym]) * inv_dy2
+                     + (mz[zp] - 2.0 * cz + mz[zm]) * inv_dz2;
+
+        hx[idx] = prefactor * lap_x;
+        hy[idx] = prefactor * lap_y;
+        hz[idx] = prefactor * lap_z;
+    }
 }
 
 /* ── Host-side launch wrappers ── */
@@ -107,6 +142,7 @@ void launch_exchange_field_fp64(Context &ctx) {
 
     double MU0 = 4.0 * M_PI * 1e-7;
     double prefactor = 2.0 * ctx.A / (MU0 * ctx.Ms);
+    double inv_mu0_ms = 2.0 / (MU0 * ctx.Ms);
     double inv_dx2 = 1.0 / (ctx.dx * ctx.dx);
     double inv_dy2 = 1.0 / (ctx.dy * ctx.dy);
     double inv_dz2 = 1.0 / (ctx.dz * ctx.dz);
@@ -117,14 +153,17 @@ void launch_exchange_field_fp64(Context &ctx) {
         static_cast<const double*>(ctx.m.z),
         ctx.active_mask,
         ctx.region_mask,
+        ctx.exchange_lut,
         static_cast<double*>(ctx.h_ex.x),
         static_cast<double*>(ctx.h_ex.y),
         static_cast<double*>(ctx.h_ex.z),
         ctx.nx, ctx.ny, ctx.nz,
         ctx.has_active_mask ? 1 : 0,
         ctx.has_region_mask ? 1 : 0,
+        FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
         inv_dx2, inv_dy2, inv_dz2,
-        prefactor);
+        prefactor,
+        inv_mu0_ms);
 }
 
 double launch_exchange_energy_fp64(Context &ctx) {

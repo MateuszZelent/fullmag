@@ -138,6 +138,7 @@ class FDM:
     default_cell: tuple[float, float, float] | None = None
     per_magnet: dict[str, FDMGrid] | None = None
     demag: FDMDemag | None = None
+    boundary_correction: str | None = None  # "none" | "volume" (T0) | "full" (T1)
 
     # --- backward compatibility: FDM(cell=(...)) --------------------------
     def __init__(
@@ -147,6 +148,7 @@ class FDM:
         default_cell: Sequence[float] | None = None,
         per_magnet: dict[str, FDMGrid] | None = None,
         demag: FDMDemag | None = None,
+        boundary_correction: str | None = None,
     ) -> None:
         # Resolve old-style `cell=` to `default_cell=`
         if cell is not None and default_cell is not None:
@@ -163,6 +165,16 @@ class FDM:
 
         object.__setattr__(self, "per_magnet", per_magnet)
         object.__setattr__(self, "demag", demag)
+
+        # Validate boundary correction
+        _BOUNDARY_CORRECTIONS = ("none", "volume", "full")
+        if boundary_correction is not None:
+            if boundary_correction not in _BOUNDARY_CORRECTIONS:
+                raise ValueError(
+                    f"boundary_correction must be one of {_BOUNDARY_CORRECTIONS!r}, "
+                    f"got {boundary_correction!r}"
+                )
+        object.__setattr__(self, "boundary_correction", boundary_correction)
 
         # Must have at least one cell specification
         if self.default_cell is None and not self.per_magnet:
@@ -189,6 +201,8 @@ class FDM:
             }
         if self.demag is not None:
             ir["demag"] = self.demag.to_ir()
+        if self.boundary_correction is not None:
+            ir["boundary_correction"] = self.boundary_correction
         return ir
 
 

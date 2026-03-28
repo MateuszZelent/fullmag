@@ -28,7 +28,7 @@ export function applyMagnetizationHsl(
   const nz = mz / magnitude;
   const hue = Math.atan2(ny, nx) / (Math.PI * 2);
   const lightness = THREE.MathUtils.clamp(nz * 0.5 + 0.5, 0, 1);
-  return color.setHSL((hue + 1) % 1, 1, lightness);
+  return color.setHSL((hue + 1) % 1, 1, lightness, THREE.SRGBColorSpace);
 }
 
 export function magnetizationHslColor(mx: number, my: number, mz: number): THREE.Color {

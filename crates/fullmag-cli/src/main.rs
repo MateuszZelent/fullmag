@@ -3693,6 +3693,7 @@ fn spawn_fullmag_api(
             .stdin(Stdio::null())
             .stdout(stdout)
             .stderr(stderr);
+        configure_repo_local_library_env(&mut command, root, Some(path));
         if disable_static_control_room {
             command.env("FULLMAG_DISABLE_STATIC_CONTROL_ROOM", "1");
         }
@@ -3712,12 +3713,38 @@ fn spawn_fullmag_api(
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr);
+    configure_repo_local_library_env(&mut command, root, None);
     if disable_static_control_room {
         command.env("FULLMAG_DISABLE_STATIC_CONTROL_ROOM", "1");
     }
     command
         .spawn()
         .context("failed to spawn fullmag-api via cargo")
+}
+
+fn configure_repo_local_library_env(
+    command: &mut ProcessCommand,
+    root: &Path,
+    executable_path: Option<&Path>,
+) {
+    let mut library_dirs = Vec::new();
+    if let Some(parent) = executable_path.and_then(|path| path.parent()) {
+        library_dirs.push(parent.join("../lib"));
+    }
+    library_dirs.push(root.join(".fullmag").join("local").join("lib"));
+
+    let Some(lib_dir) = library_dirs.into_iter().find(|path| path.is_dir()) else {
+        return;
+    };
+
+    let mut merged = OsString::from(lib_dir.as_os_str());
+    if let Some(current) = std::env::var_os("LD_LIBRARY_PATH") {
+        if !current.is_empty() {
+            merged.push(":");
+            merged.push(current);
+        }
+    }
+    command.env("LD_LIBRARY_PATH", merged);
 }
 
 fn wait_for_api_ready(port: u16, child: &mut std::process::Child, timeout: Duration) -> Result<()> {
@@ -4006,6 +4033,8 @@ mod tests {
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
             relaxation: None,
+            boundary_correction: None,
+            inter_region_exchange: vec![],
         });
 
         let update = initial_step_update(&plan);
@@ -4117,6 +4146,8 @@ mod tests {
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
             relaxation: None,
+            boundary_correction: None,
+            inter_region_exchange: vec![],
         };
 
         let diagnostic = diagnose_initial_fdm_plan(&plan).expect("diagnostic should succeed");
@@ -4167,6 +4198,8 @@ mod tests {
                 energy_tolerance: None,
                 max_steps: 100,
             }),
+            boundary_correction: None,
+            inter_region_exchange: vec![],
         };
 
         let diagnostic = diagnose_initial_fdm_plan(&plan).expect("diagnostic should succeed");

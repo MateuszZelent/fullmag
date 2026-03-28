@@ -867,6 +867,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         enable_exchange,
         enable_demag,
         external_field,
+        inter_region_exchange: vec![],
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -874,6 +875,12 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         fixed_timestep,
         adaptive_timestep,
         relaxation,
+        boundary_correction: problem
+            .backend_policy
+            .discretization_hints
+            .as_ref()
+            .and_then(|h| h.fdm.as_ref())
+            .and_then(|fdm| fdm.boundary_correction.clone()),
     };
     let study_note = if let Some(control) = fdm_plan.relaxation.as_ref() {
         format!(
@@ -1809,6 +1816,31 @@ fn validate_executable_outputs(
                     ));
                 }
             }
+            OutputIR::Snapshot { field, component, .. } => {
+                if !allowed_fields.contains(&field.as_str()) {
+                    errors.push(format!(
+                        "snapshot field '{}' is not executable in the current path; allowed fields are m, H_ex, H_demag, H_ext, and H_eff",
+                        field
+                    ));
+                } else if field == "H_ex" && !enable_exchange {
+                    errors.push("snapshot field 'H_ex' requires Exchange()".to_string());
+                } else if field == "H_demag" && !enable_demag {
+                    errors.push("snapshot field 'H_demag' requires Demag()".to_string());
+                } else if field == "H_ext" && !enable_zeeman {
+                    errors.push("snapshot field 'H_ext' requires Zeeman(...)".to_string());
+                }
+                let key = if component == "3D" {
+                    format!("snapshot:{field}")
+                } else {
+                    format!("snapshot:{field}.{component}")
+                };
+                if !seen.insert(key) {
+                    errors.push(format!(
+                        "snapshot '{}.{}' is declared more than once",
+                        field, component
+                    ));
+                }
+            }
         }
     }
 }
@@ -2077,6 +2109,7 @@ mod tests {
                 default_cell: None,
                 per_magnet: None,
                 demag: None,
+                boundary_correction: None,
             }),
             fem: Some(fullmag_ir::FemHintsIR {
                 order: 1,
@@ -2148,6 +2181,7 @@ mod tests {
                 default_cell: None,
                 per_magnet: None,
                 demag: None,
+                boundary_correction: None,
             }),
             fem: Some(fullmag_ir::FemHintsIR {
                 order: 1,
@@ -2188,6 +2222,7 @@ mod tests {
                 default_cell: None,
                 per_magnet: None,
                 demag: None,
+                boundary_correction: None,
             }),
             fem: Some(fullmag_ir::FemHintsIR {
                 order: 1,

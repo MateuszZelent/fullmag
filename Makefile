@@ -158,10 +158,16 @@ install-cli install-cli-dev install-cli-static:
 	fi; \
 	mkdir -p .fullmag/local/lib; \
 	rm -f .fullmag/local/lib/libfullmag_fdm.so* .fullmag/local/lib/libfullmag_fem.so*; \
-	fdm_dir=$$(find .fullmag/target -path '*native-build/backends/fdm' -type d | head -n 1); \
+	fdm_dir=$$(find .fullmag/target/release/build -path '*fullmag-fdm-sys*/out/native-build/backends/fdm/libfullmag_fdm.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
+	if [ -z "$$fdm_dir" ]; then \
+		fdm_dir=$$(find .fullmag/target -path '*native-build/backends/fdm/libfullmag_fdm.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
+	fi; \
 	if [ -n "$$fdm_dir" ]; then cp -a "$$fdm_dir"/libfullmag_fdm.so* .fullmag/local/lib/ 2>/dev/null || true; fi; \
 	if [ "$$build_mode" = "cuda-fem-gpu" ]; then \
-		fem_dir=$$(find .fullmag/target -path '*native-build/backends/fem' -type d | head -n 1); \
+		fem_dir=$$(find .fullmag/target/release/build -path '*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
+		if [ -z "$$fem_dir" ]; then \
+			fem_dir=$$(find .fullmag/target -path '*native-build/backends/fem/libfullmag_fem.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
+		fi; \
 		if [ -n "$$fem_dir" ]; then cp -a "$$fem_dir"/libfullmag_fem.so* .fullmag/local/lib/ 2>/dev/null || true; fi; \
 	fi; \
 	printf '%s\n' "$$build_mode" > .fullmag/local/launcher-build-mode
@@ -170,6 +176,10 @@ install-cli install-cli-dev install-cli-static:
 	@mv -f .fullmag/local/bin/fullmag-bin.new .fullmag/local/bin/fullmag-bin
 	@cp .fullmag/target/release/fullmag-api .fullmag/local/bin/fullmag-api.new
 	@mv -f .fullmag/local/bin/fullmag-api.new .fullmag/local/bin/fullmag-api
+	@if command -v patchelf >/dev/null 2>&1; then \
+		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-bin; \
+		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api; \
+	fi
 		@printf '%s\n' '#!/usr/bin/env bash' \
 			'SELF_DIR="$$(cd "$$(dirname "$$0")" && pwd)"' \
 			'REPO_ROOT="$$(cd "$$SELF_DIR/../../.." && pwd)"' \

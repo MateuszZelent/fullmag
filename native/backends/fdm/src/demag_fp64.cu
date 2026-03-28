@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 #include <cufft.h>
 #include <cmath>
+#include <cstdio>
 #include <vector>
 
 namespace fullmag {
@@ -22,6 +23,11 @@ extern double reduce_external_energy_fp64(Context &ctx);
 
 extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 extern void set_cufft_error(Context &ctx, const char *operation, cufftResult err);
+extern "C" __global__ void demag_boundary_correction_fp64_kernel(
+    double *, double *, double *,
+    const double *, const double *, const double *,
+    const double *, const int32_t *, const int32_t *,
+    const double *, double, uint32_t, uint32_t);
 
 namespace {
 
@@ -50,12 +56,14 @@ __global__ void pack_magnetization_fft_fp64_kernel(
     const double * __restrict__ my,
     const double * __restrict__ mz,
     const uint8_t * __restrict__ active_mask,
+    const double * __restrict__ volume_fraction,
     cufftDoubleComplex * __restrict__ fx,
     cufftDoubleComplex * __restrict__ fy,
     cufftDoubleComplex * __restrict__ fz,
     int nx, int ny, int nz,
     int px, int py, int pz,
     int has_active_mask,
+    int has_volume_fraction,
     double ms)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -69,7 +77,13 @@ __global__ void pack_magnetization_fft_fp64_kernel(
 
     if (x < nx && y < ny && z < nz) {
         int src = z * ny * nx + y * nx + x;
-        if (!has_active_mask || active_mask[src] != 0) {
+        if (has_volume_fraction) {
+            // T0/T1: φ-weighted packing — M_i = φ_i × Ms × m_i
+            double phi = volume_fraction[src];
+            fx[idx] = make_cuDoubleComplex(phi * ms * mx[src], 0.0);
+            fy[idx] = make_cuDoubleComplex(phi * ms * my[src], 0.0);
+            fz[idx] = make_cuDoubleComplex(phi * ms * mz[src], 0.0);
+        } else if (!has_active_mask || active_mask[src] != 0) {
             fx[idx] = make_cuDoubleComplex(ms * mx[src], 0.0);
             fy[idx] = make_cuDoubleComplex(ms * my[src], 0.0);
             fz[idx] = make_cuDoubleComplex(ms * mz[src], 0.0);
@@ -252,6 +266,15 @@ void launch_demag_field_fp64(Context &ctx) {
         return;
     }
 
+    if (!ctx.has_demag_tensor_kernel) {
+        static bool warned = false;
+        if (!warned) {
+            fprintf(stderr, "[fullmag] WARNING: demag enabled but no Newell tensor kernel "
+                "loaded — using spectral projection fallback (inaccurate for finite cells)\n");
+            warned = true;
+        }
+    }
+
     int total_padded = static_cast<int>(ctx.fft_cell_count);
     int grid_padded = (total_padded + BLOCK_SIZE - 1) / BLOCK_SIZE;
     int total_physical = static_cast<int>(ctx.cell_count);
@@ -262,6 +285,7 @@ void launch_demag_field_fp64(Context &ctx) {
         static_cast<const double*>(ctx.m.y),
         static_cast<const double*>(ctx.m.z),
         ctx.active_mask,
+        ctx.volume_fraction,
         static_cast<cufftDoubleComplex*>(ctx.fft_x),
         static_cast<cufftDoubleComplex*>(ctx.fft_y),
         static_cast<cufftDoubleComplex*>(ctx.fft_z),
@@ -272,6 +296,7 @@ void launch_demag_field_fp64(Context &ctx) {
         static_cast<int>(ctx.fft_ny),
         static_cast<int>(ctx.fft_nz),
         ctx.has_active_mask ? 1 : 0,
+        (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0,
         ctx.Ms);
 
     cufftResult err = cufftExecZ2Z(ctx.fft_plan, static_cast<cufftDoubleComplex*>(ctx.fft_x),
@@ -334,6 +359,25 @@ void launch_demag_field_fp64(Context &ctx) {
         static_cast<int>(ctx.fft_ny),
         ctx.has_active_mask ? 1 : 0,
         1.0 / static_cast<double>(ctx.fft_cell_count));
+
+    // Sparse boundary correction: H_demag += H_corr
+    if (ctx.has_demag_boundary_corr && ctx.demag_corr_target_count > 0) {
+        int corr_grid = (ctx.demag_corr_target_count + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        demag_boundary_correction_fp64_kernel<<<corr_grid, BLOCK_SIZE>>>(
+            static_cast<double*>(ctx.h_demag.x),
+            static_cast<double*>(ctx.h_demag.y),
+            static_cast<double*>(ctx.h_demag.z),
+            static_cast<const double*>(ctx.m.x),
+            static_cast<const double*>(ctx.m.y),
+            static_cast<const double*>(ctx.m.z),
+            ctx.volume_fraction,
+            ctx.demag_corr_target_idx,
+            ctx.demag_corr_source_idx,
+            ctx.demag_corr_tensor,
+            ctx.Ms,
+            ctx.demag_corr_target_count,
+            ctx.demag_corr_stencil_size);
+    }
 }
 
 void launch_effective_field_fp64(Context &ctx) {

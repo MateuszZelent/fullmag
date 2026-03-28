@@ -729,6 +729,29 @@ fn select_field_values(
     observables: &StateObservables,
     name: &str,
 ) -> Result<Vec<[f64; 3]>, RunError> {
+    if let Some(dot_pos) = name.find('.') {
+        let base = &name[..dot_pos];
+        let comp = &name[dot_pos + 1..];
+        let full = select_base_field(observables, base)?;
+        let idx = match comp {
+            "x" => 0,
+            "y" => 1,
+            "z" => 2,
+            _ => {
+                return Err(RunError {
+                    message: format!("unsupported snapshot component '{}' in '{}'", comp, name),
+                })
+            }
+        };
+        return Ok(full.iter().map(|v| [v[idx], 0.0, 0.0]).collect());
+    }
+    select_base_field(observables, name)
+}
+
+fn select_base_field(
+    observables: &StateObservables,
+    name: &str,
+) -> Result<Vec<[f64; 3]>, RunError> {
     Ok(match name {
         "m" => observables.magnetization.clone(),
         "H_ex" => observables.exchange_field.clone(),

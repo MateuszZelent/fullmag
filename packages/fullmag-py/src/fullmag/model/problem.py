@@ -15,7 +15,7 @@ from fullmag._validation import ensure_unique_names, require_non_empty
 from fullmag.model.discretization import DiscretizationHints, FEM
 from fullmag.model.dynamics import LLG
 from fullmag.model.energy import Demag, Exchange, InterfacialDMI, Zeeman
-from fullmag.model.outputs import SaveField, SaveScalar
+from fullmag.model.outputs import SaveField, SaveScalar, Snapshot
 from fullmag.model.structure import Ferromagnet, Material, Region
 from fullmag.model.study import Relaxation, TimeEvolution
 
@@ -425,7 +425,7 @@ backend = RuntimeSelection()
 
 
 EnergyTerm = Exchange | Demag | InterfacialDMI | Zeeman
-OutputSpec = SaveField | SaveScalar
+OutputSpec = SaveField | SaveScalar | Snapshot
 
 
 @dataclass(frozen=True, slots=True)

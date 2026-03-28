@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 /**
@@ -138,7 +137,7 @@ export default function ViewCube({ sceneRef, grid, onRotate }: ViewCubeProps) {
       onRotate(new THREE.Quaternion());
       return;
     }
-    const scene = sceneRef.current;
+    const scene = sceneRef?.current;
     if (!scene || !grid) return;
     const { camera, controls } = scene;
     const [nx, ny, nz] = grid;
@@ -167,7 +166,7 @@ export default function ViewCube({ sceneRef, grid, onRotate }: ViewCubeProps) {
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) d.hasDragged = true;
       if (!d.hasDragged) return;
       // Orbit the actual Three.js camera
-      const scene = sceneRef.current;
+      const scene = sceneRef?.current;
       if (scene) {
         const { camera, controls } = scene;
         const target = controls.target.clone();

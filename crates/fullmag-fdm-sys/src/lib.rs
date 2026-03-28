@@ -7,6 +7,10 @@
 
 use std::os::raw::c_char;
 
+// ── Constants ──
+
+pub const FULLMAG_FDM_MAX_EXCHANGE_REGIONS: usize = 256;
+
 // ── Return codes ──
 
 pub const FULLMAG_FDM_OK: i32 = 0;
@@ -95,6 +99,8 @@ pub struct fullmag_fdm_plan_desc {
     pub active_mask_len: u64,
     pub region_mask: *const u32,
     pub region_mask_len: u64,
+    pub exchange_lut: *const f64,
+    pub exchange_lut_len: u64,
     pub initial_magnetization_xyz: *const f64,
     pub initial_magnetization_len: u64,
     // Adaptive step configuration (DP45 only)

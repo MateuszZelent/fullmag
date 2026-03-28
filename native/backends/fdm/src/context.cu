@@ -24,6 +24,7 @@ extern void launch_demag_field_fp64(Context &ctx);
 extern void launch_demag_field_fp32(Context &ctx);
 extern void launch_effective_field_fp64(Context &ctx);
 extern void launch_effective_field_fp32(Context &ctx);
+static void free_boundary_correction(Context &ctx);
 
 /* ── Helper: element size based on precision ── */
 
@@ -125,6 +126,27 @@ static void free_region_mask(Context &ctx) {
     if (ctx.region_mask) {
         cudaFree(ctx.region_mask);
         ctx.region_mask = nullptr;
+    }
+}
+
+static bool alloc_exchange_lut(Context &ctx) {
+    if (!ctx.has_exchange_lut) {
+        return true;
+    }
+    constexpr uint64_t N = FULLMAG_FDM_MAX_EXCHANGE_REGIONS;
+    size_t bytes = N * N * sizeof(double);
+    cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&ctx.exchange_lut), bytes);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(exchange_lut)", err);
+        return false;
+    }
+    return true;
+}
+
+static void free_exchange_lut(Context &ctx) {
+    if (ctx.exchange_lut) {
+        cudaFree(ctx.exchange_lut);
+        ctx.exchange_lut = nullptr;
     }
 }
 
@@ -355,6 +377,7 @@ static void free_fft_workspace(Context &ctx) {
 bool context_alloc_device(Context &ctx) {
     if (!alloc_active_mask(ctx)) return false;
     if (!alloc_region_mask(ctx)) return false;
+    if (!alloc_exchange_lut(ctx)) return false;
     if (!alloc_reduction_scratch(ctx)) return false;
     if (!alloc_vector_field(ctx, ctx.m))    return false;
     if (!alloc_vector_field(ctx, ctx.h_ex)) return false;
@@ -441,6 +464,8 @@ void context_free_device(Context &ctx) {
     free_demag_kernel(ctx);
     free_active_mask(ctx);
     free_region_mask(ctx);
+    free_exchange_lut(ctx);
+    free_boundary_correction(ctx);
     free_reduction_scratch(ctx);
     free_preview_download_scratch(ctx);
 }
@@ -480,6 +505,28 @@ bool context_upload_region_mask(Context &ctx, const uint32_t *mask, uint64_t len
         cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaMemcpy(region_mask)", err);
+        return false;
+    }
+    return true;
+}
+
+bool context_upload_exchange_lut(Context &ctx, const double *lut, uint64_t len) {
+    if (!ctx.has_exchange_lut) {
+        return true;
+    }
+    constexpr uint64_t N = FULLMAG_FDM_MAX_EXCHANGE_REGIONS;
+    if (!lut || len != N * N) {
+        ctx.last_error = "exchange_lut length mismatch: expected "
+            + std::to_string(N * N) + ", got " + std::to_string(len);
+        return false;
+    }
+    cudaError_t err = cudaMemcpy(
+        ctx.exchange_lut,
+        lut,
+        N * N * sizeof(double),
+        cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMemcpy(exchange_lut)", err);
         return false;
     }
     return true;
@@ -547,6 +594,140 @@ bool context_upload_demag_kernel_spectra(
         && convert_and_upload(ctx.demag_kernel.xy, kxy, "cudaMemcpy(kern_xy)")
         && convert_and_upload(ctx.demag_kernel.xz, kxz, "cudaMemcpy(kern_xz)")
         && convert_and_upload(ctx.demag_kernel.yz, kyz, "cudaMemcpy(kern_yz)");
+}
+
+/* ── Boundary correction upload ── */
+
+static void free_boundary_correction(Context &ctx) {
+    auto free_f64 = [](double *&ptr) {
+        if (ptr) { cudaFree(ptr); ptr = nullptr; }
+    };
+    free_f64(ctx.volume_fraction);
+    free_f64(ctx.face_link_xp); free_f64(ctx.face_link_xm);
+    free_f64(ctx.face_link_yp); free_f64(ctx.face_link_ym);
+    free_f64(ctx.face_link_zp); free_f64(ctx.face_link_zm);
+    free_f64(ctx.delta_xp); free_f64(ctx.delta_xm);
+    free_f64(ctx.delta_yp); free_f64(ctx.delta_ym);
+    free_f64(ctx.delta_zp); free_f64(ctx.delta_zm);
+    if (ctx.demag_corr_target_idx) { cudaFree(ctx.demag_corr_target_idx); ctx.demag_corr_target_idx = nullptr; }
+    if (ctx.demag_corr_source_idx) { cudaFree(ctx.demag_corr_source_idx); ctx.demag_corr_source_idx = nullptr; }
+    if (ctx.demag_corr_tensor)     { cudaFree(ctx.demag_corr_tensor);     ctx.demag_corr_tensor = nullptr; }
+    ctx.boundary_tier = 0;
+    ctx.has_demag_boundary_corr = false;
+}
+
+static bool upload_f64_array(Context &ctx, double *&dst, const double *src,
+                              uint64_t count, const char *label) {
+    size_t bytes = count * sizeof(double);
+    cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&dst), bytes);
+    if (err != cudaSuccess) { set_cuda_error(ctx, label, err); return false; }
+    err = cudaMemcpy(dst, src, bytes, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { set_cuda_error(ctx, label, err); return false; }
+    return true;
+}
+
+bool context_upload_boundary_correction(
+    Context &ctx,
+    uint8_t tier,
+    double phi_floor,
+    double delta_min,
+    const double *volume_fraction,
+    const double *face_link_xp, const double *face_link_xm,
+    const double *face_link_yp, const double *face_link_ym,
+    const double *face_link_zp, const double *face_link_zm,
+    const double *delta_xp, const double *delta_xm,
+    const double *delta_yp, const double *delta_ym,
+    const double *delta_zp, const double *delta_zm,
+    uint64_t cell_count)
+{
+    if (tier == 0 || cell_count != ctx.cell_count) {
+        return true; // nothing to upload
+    }
+    if (!volume_fraction) {
+        ctx.last_error = "boundary_correction: volume_fraction is required";
+        return false;
+    }
+
+    ctx.boundary_tier = tier;
+    ctx.phi_floor = (phi_floor > 0.0) ? phi_floor : 0.05;
+    ctx.delta_min = (delta_min > 0.0) ? delta_min
+                  : 0.1 * fmin(fmin(ctx.dx, ctx.dy), ctx.dz);
+
+    uint64_t n = ctx.cell_count;
+    if (!upload_f64_array(ctx, ctx.volume_fraction, volume_fraction, n, "cudaMalloc(volume_fraction)"))
+        return false;
+
+    // Face links (T0+T1)
+    if (face_link_xp && face_link_xm && face_link_yp && face_link_ym
+        && face_link_zp && face_link_zm)
+    {
+        if (!upload_f64_array(ctx, ctx.face_link_xp, face_link_xp, n, "face_link_xp")) return false;
+        if (!upload_f64_array(ctx, ctx.face_link_xm, face_link_xm, n, "face_link_xm")) return false;
+        if (!upload_f64_array(ctx, ctx.face_link_yp, face_link_yp, n, "face_link_yp")) return false;
+        if (!upload_f64_array(ctx, ctx.face_link_ym, face_link_ym, n, "face_link_ym")) return false;
+        if (!upload_f64_array(ctx, ctx.face_link_zp, face_link_zp, n, "face_link_zp")) return false;
+        if (!upload_f64_array(ctx, ctx.face_link_zm, face_link_zm, n, "face_link_zm")) return false;
+    }
+
+    // Intersection distances (T1 only)
+    if (tier >= 2 && delta_xp && delta_xm && delta_yp && delta_ym
+        && delta_zp && delta_zm)
+    {
+        if (!upload_f64_array(ctx, ctx.delta_xp, delta_xp, n, "delta_xp")) return false;
+        if (!upload_f64_array(ctx, ctx.delta_xm, delta_xm, n, "delta_xm")) return false;
+        if (!upload_f64_array(ctx, ctx.delta_yp, delta_yp, n, "delta_yp")) return false;
+        if (!upload_f64_array(ctx, ctx.delta_ym, delta_ym, n, "delta_ym")) return false;
+        if (!upload_f64_array(ctx, ctx.delta_zp, delta_zp, n, "delta_zp")) return false;
+        if (!upload_f64_array(ctx, ctx.delta_zm, delta_zm, n, "delta_zm")) return false;
+    }
+
+    return true;
+}
+
+bool context_upload_demag_boundary_corr(
+    Context &ctx,
+    const int32_t *target_idx,
+    const int32_t *source_idx,
+    const double *tensor,
+    uint32_t target_count,
+    uint32_t stencil_size)
+{
+    if (target_count == 0 || stencil_size == 0 || !target_idx || !source_idx || !tensor) {
+        return true; // nothing to upload
+    }
+
+    ctx.demag_corr_target_count = target_count;
+    ctx.demag_corr_stencil_size = stencil_size;
+
+    // Target indices
+    {
+        size_t bytes = target_count * sizeof(int32_t);
+        cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&ctx.demag_corr_target_idx), bytes);
+        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(demag_target_idx)", err); return false; }
+        err = cudaMemcpy(ctx.demag_corr_target_idx, target_idx, bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMemcpy(demag_target_idx)", err); return false; }
+    }
+
+    // Source indices
+    {
+        size_t bytes = (uint64_t)target_count * stencil_size * sizeof(int32_t);
+        cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&ctx.demag_corr_source_idx), bytes);
+        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(demag_source_idx)", err); return false; }
+        err = cudaMemcpy(ctx.demag_corr_source_idx, source_idx, bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMemcpy(demag_source_idx)", err); return false; }
+    }
+
+    // Correction tensors (6 components per pair)
+    {
+        size_t bytes = (uint64_t)target_count * stencil_size * 6 * sizeof(double);
+        cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&ctx.demag_corr_tensor), bytes);
+        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(demag_tensor)", err); return false; }
+        err = cudaMemcpy(ctx.demag_corr_tensor, tensor, bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMemcpy(demag_tensor)", err); return false; }
+    }
+
+    ctx.has_demag_boundary_corr = true;
+    return true;
 }
 
 template <typename HostScalar>

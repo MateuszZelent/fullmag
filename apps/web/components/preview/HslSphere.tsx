@@ -70,7 +70,6 @@ function AxisLabel({ text, color, position }: {
         color={color}
         anchorX="center"
         anchorY="middle"
-        font="/fonts/inter-medium.woff"
         fontWeight="bold"
       >
         {text}

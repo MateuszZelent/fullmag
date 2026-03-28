@@ -39,6 +39,9 @@ extern "C" {
 #define FULLMAG_FDM_ERR_CUDA     -2
 #define FULLMAG_FDM_ERR_INTERNAL -3
 
+/* Maximum number of distinct exchange regions supported by the LUT. */
+#define FULLMAG_FDM_MAX_EXCHANGE_REGIONS 256
+
 /* ── Enums ── */
 
 typedef enum {
@@ -66,6 +69,12 @@ typedef enum {
     FULLMAG_FDM_SNAPSHOT_SCALAR_F32 = 1,
     FULLMAG_FDM_SNAPSHOT_SCALAR_F64 = 2,
 } fullmag_fdm_snapshot_scalar_type;
+
+typedef enum {
+    FULLMAG_FDM_BOUNDARY_NONE   = 0,  /* binary active_mask (current) */
+    FULLMAG_FDM_BOUNDARY_VOLUME = 1,  /* T0: face-link + φ weighting */
+    FULLMAG_FDM_BOUNDARY_FULL   = 2,  /* T1: ECB stencil + H_corr    */
+} fullmag_fdm_boundary_correction;
 
 /* ── Plan descriptor ── */
 
@@ -116,11 +125,66 @@ typedef struct {
     /*
      * Optional region/body ids for exchange barriers.
      * Neighboring active cells with different non-zero region ids are treated
-     * as a sharp inter-body interface, i.e. exchange sees a free surface.
+     * according to the exchange LUT (see below).  When no LUT is provided,
+     * cross-region exchange coupling defaults to zero (free surface).
      * Length must equal cell_count when present.
      */
     const uint32_t            *region_mask;
     uint64_t                   region_mask_len;
+
+    /*
+     * Optional inter-region exchange coupling Look-Up Table (LUT).
+     * Flat row-major array of FULLMAG_FDM_MAX_EXCHANGE_REGIONS^2 doubles:
+     *   exchange_lut[ri * FULLMAG_FDM_MAX_EXCHANGE_REGIONS + rj] = A_ij [J/m]
+     *
+     * When present, the exchange kernel uses A_ij instead of material.exchange_stiffness
+     * for every cell pair whose regions are ri and rj.  This enables:
+     *   - Proper inter-region coupling with a per-pair A_ij (mumax parity)
+     *   - Free surface semantics by setting A_ij = 0
+     *
+     * When NULL and region_mask is present, the backend auto-builds a default
+     * LUT with A_ii = material.exchange_stiffness and A_ij(i!=j) = 0.
+     */
+    const double              *exchange_lut;
+    uint64_t                   exchange_lut_len; /* must be MAX_EXCHANGE_REGIONS^2 when present */
+
+    /*
+     * Boundary correction tier:
+     *   NONE   (0) = binary active_mask, current behavior
+     *   VOLUME (1) = T0: face-link-weighted exchange + φ-weighted demag
+     *   FULL   (2) = T1: ECB stencil (intersection distances) + sparse H_corr
+     */
+    fullmag_fdm_boundary_correction boundary_correction;
+    double                     boundary_phi_floor;  /* 0 → use default 0.05 */
+    double                     boundary_delta_min;   /* 0 → use default 0.1*min(dx,dy,dz) */
+
+    /* T0+T1: per-cell volume fraction φ ∈ [0,1], f64[cell_count] */
+    const double              *volume_fraction;
+    uint64_t                   volume_fraction_len;
+
+    /* T0+T1: per-cell face link fractions f64[cell_count] each */
+    const double              *face_link_xp;
+    const double              *face_link_xm;
+    const double              *face_link_yp;
+    const double              *face_link_ym;
+    const double              *face_link_zp;
+    const double              *face_link_zm;
+
+    /* T1 only: intersection distances δ (center-to-boundary along axis), f64[cell_count] each */
+    const double              *delta_xp;
+    const double              *delta_xm;
+    const double              *delta_yp;
+    const double              *delta_ym;
+    const double              *delta_zp;
+    const double              *delta_zm;
+
+    /* Sparse demag boundary correction (precomputed correction tensors) */
+    int                        has_demag_boundary_corr;
+    const int32_t             *demag_corr_target_idx; /* int32[target_count] */
+    const int32_t             *demag_corr_source_idx; /* int32[target_count × stencil_size] */
+    const double              *demag_corr_tensor;     /* f64[target_count × stencil_size × 6] */
+    uint32_t                   demag_corr_target_count;
+    uint32_t                   demag_corr_stencil_size;
 
     /* Initial m in AoS layout: [m0x, m0y, m0z, m1x, m1y, m1z, ...] */
     const double              *initial_magnetization_xyz;
