@@ -5,10 +5,15 @@
  *
  * 1:1 port of amumax table-plot.ts adapted for fullmag's scalar_rows format.
  * Shows a line chart with optional column selection.
+ *
+ * PERF: Chart initialization and data updates are split into separate effects.
+ *       Data updates use `notMerge: false` to only replace series data without
+ *       re-creating axes/tooltip/theme. The rows-to-series transform is
+ *       throttled to max ~4 Hz to avoid blocking the main thread on fast SSE.
  */
 
-import { useEffect, useRef, useMemo } from "react";
-import type { ECharts, EChartsOption } from "echarts";
+import { useEffect, useRef, useCallback, memo } from "react";
+import type { ECharts } from "echarts";
 import * as echarts from "echarts";
 import type { ScalarRow } from "../../lib/useSessionStream";
 
@@ -50,6 +55,9 @@ const COLUMN_LABELS: Record<string, string> = {
   step: "Step",
   time: "Time (s)",
   solver_dt: "Δt (s)",
+  mx: "m_x avg",
+  my: "m_y avg",
+  mz: "m_z avg",
   e_ex: "E_exchange (J)",
   e_demag: "E_demag (J)",
   e_ext: "E_external (J)",
@@ -59,21 +67,133 @@ const COLUMN_LABELS: Record<string, string> = {
   max_h_demag: "max |H_demag| (A/m)",
 };
 
-export default function ScalarPlot({
-  rows,
-  xColumn = "time",
-  yColumns = DEFAULT_Y_COLUMNS,
-}: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<echarts.ECharts | null>(null);
+function isMagnetizationAverageColumn(column: string): boolean {
+  return column === "mx" || column === "my" || column === "mz";
+}
 
-  // ─── Build series data ────────────────────────────────────────────
-  const accessor = (row: ScalarRow, key: string): number =>
-    (row as unknown as Record<string, number>)[key] ?? 0;
+const accessor = (row: ScalarRow, key: string): number =>
+  (row as unknown as Record<string, number>)[key] ?? 0;
 
-  const seriesData = useMemo(() => {
-    if (!rows.length) return [];
-    return yColumns.map((col, i) => ({
+/** Build the static chart config (axes, tooltip, legend, toolbox). */
+function buildChartConfig(xColumn: string, yColumns: string[], theme: ReturnType<typeof getTheme>) {
+  const xLabel = COLUMN_LABELS[xColumn] ?? xColumn;
+  const magnetizationOnly = yColumns.length > 0 && yColumns.every(isMagnetizationAverageColumn);
+  return {
+    animation: false,
+    axisPointer: {
+      show: true,
+      type: "line" as const,
+      lineStyle: { color: theme.accent, width: 2, type: "dashed" as const },
+      label: {
+        backgroundColor: theme.tooltipBg,
+        color: theme.tooltipText,
+        formatter: (params: any) => parseFloat(params.value).toPrecision(3),
+        padding: [8, 5, 8, 5],
+        borderColor: theme.accent,
+        borderWidth: 1,
+      },
+    },
+    tooltip: {
+      trigger: "axis" as const,
+      confine: true,
+      backgroundColor: theme.tooltipBg,
+      borderColor: theme.tooltipBorder,
+      borderWidth: 1,
+      textStyle: { color: theme.tooltipText, fontSize: 12 },
+        formatter: (params: any) => {
+        if (!Array.isArray(params)) return "";
+        const xVal = params[0]?.value?.[0];
+        let html = `<strong>${xLabel}: ${Number(xVal).toExponential(3)}</strong>`;
+        for (const p of params) {
+          const yVal = Number(p.value[1]);
+          html += `<br/><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color};margin-right:4px;"></span>${p.seriesName}: ${
+            magnetizationOnly ? yVal.toFixed(4) : yVal.toExponential(4)
+          }`;
+        }
+        return html;
+      },
+    },
+    legend: {
+      show: yColumns.length > 1,
+      bottom: 0,
+      textStyle: { color: theme.text2, fontSize: 11 },
+      itemWidth: 16,
+      itemHeight: 8,
+      itemGap: 16,
+    },
+    grid: {
+      containLabel: false,
+      left: "12%",
+      right: "6%",
+      top: 32,
+      bottom: yColumns.length > 1 ? 52 : 36,
+    },
+    xAxis: {
+      name: xLabel,
+      nameLocation: "middle" as const,
+      nameGap: 25,
+      nameTextStyle: { color: theme.text2 },
+      axisTick: {
+        alignWithLabel: true,
+        length: 6,
+        lineStyle: { type: "solid" as const, color: theme.border },
+      },
+      axisLabel: {
+        show: true,
+        formatter: (value: number) =>
+          Math.abs(value) >= 1e-3 || value === 0
+            ? Number(value).toPrecision(3)
+            : Number(value).toExponential(1),
+        color: theme.text2,
+      },
+      axisLine: { lineStyle: { color: theme.border } },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      nameLocation: "middle" as const,
+      nameGap: 55,
+      nameTextStyle: { color: theme.text2 },
+      axisTick: {
+        alignWithLabel: true,
+        length: 6,
+        lineStyle: { type: "solid" as const, color: theme.border },
+      },
+      axisLabel: {
+        show: true,
+        formatter: (value: number) => magnetizationOnly
+          ? Number(value).toFixed(2)
+          : Number(value).toExponential(2),
+        color: theme.text2,
+      },
+      axisLine: { lineStyle: { color: theme.border } },
+      splitLine: {
+        show: true,
+        lineStyle: { color: theme.border, type: "dashed" as const, opacity: 0.4 },
+      },
+    },
+    toolbox: {
+      show: true,
+      top: 6,
+      right: 10,
+      itemSize: 18,
+      itemGap: 10,
+      iconStyle: { borderColor: theme.toolboxIcon, borderWidth: 1 },
+      emphasis: { iconStyle: { borderColor: theme.text1 } },
+      feature: {
+        dataZoom: {
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          brushStyle: {
+            color: theme.brushBg,
+            borderColor: theme.brushBorder,
+            borderWidth: 2,
+          },
+        },
+        restore: { show: true },
+        saveAsImage: { type: "png" as const, name: "scalar_plot" },
+      },
+    },
+    series: yColumns.map((col, i) => ({
       type: "line" as const,
       name: COLUMN_LABELS[col] ?? col,
       showSymbol: false,
@@ -83,155 +203,115 @@ export default function ScalarPlot({
       animation: false,
       lineStyle: { width: 1.5 },
       itemStyle: { color: SERIES_COLORS[i % SERIES_COLORS.length] },
-      data: rows.map((row) => [accessor(row, xColumn), accessor(row, col)]),
-    }));
-  }, [rows, xColumn, yColumns]);
+      data: [] as [number, number][],
+    })),
+  };
+}
 
-  // ─── Init / update chart ──────────────────────────────────────────
-  useEffect(() => {
-    if (!containerRef.current || !seriesData.length) return;
+/* ── Component (memoized to block parent re-renders from propagating) ── */
 
-    const THEME = getTheme();
+const ScalarPlot = memo(function ScalarPlot({
+  rows,
+  xColumn = "time",
+  yColumns = DEFAULT_Y_COLUMNS,
+}: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<ECharts | null>(null);
+  const initColumnsRef = useRef<string>("");
+  const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRowsRef = useRef<ScalarRow[] | null>(null);
 
-    if (!chartRef.current || chartRef.current.isDisposed()) {
-      chartRef.current = echarts.init(containerRef.current, undefined, {
-        renderer: "canvas",
-      });
-    }
-
+  // ─── Flush pending data to the chart ──────────────────────────────
+  const flushData = useCallback(() => {
     const chart = chartRef.current;
-    const xLabel = COLUMN_LABELS[xColumn] ?? xColumn;
+    const rows = pendingRowsRef.current;
+    throttleRef.current = null;
+    if (!chart || chart.isDisposed() || !rows?.length) return;
+
+    const columnsKey = initColumnsRef.current;
+    const cols = columnsKey.split(",");
+    const xCol = cols[0];
+    const yCols = cols.slice(1);
 
     chart.setOption(
       {
-        animation: false,
-        axisPointer: {
-          show: true,
-          type: "line",
-          lineStyle: { color: THEME.accent, width: 2, type: "dashed" },
-          label: {
-            backgroundColor: THEME.tooltipBg,
-            color: THEME.tooltipText,
-            formatter: (params: any) => parseFloat(params.value).toPrecision(3),
-            padding: [8, 5, 8, 5],
-            borderColor: THEME.accent,
-            borderWidth: 1,
-          },
-        },
-        tooltip: {
-          trigger: "axis",
-          confine: true,
-          backgroundColor: THEME.tooltipBg,
-          borderColor: THEME.tooltipBorder,
-          borderWidth: 1,
-          textStyle: { color: THEME.tooltipText, fontSize: 12 },
-          formatter: (params: any) => {
-            if (!Array.isArray(params)) return "";
-            const xVal = params[0]?.value?.[0];
-            let html = `<strong>${xLabel}: ${Number(xVal).toExponential(3)}</strong>`;
-            for (const p of params) {
-              html += `<br/><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color};margin-right:4px;"></span>${p.seriesName}: ${Number(p.value[1]).toExponential(4)}`;
-            }
-            return html;
-          },
-        },
-        legend: {
-          show: yColumns.length > 1,
-          bottom: 0,
-          textStyle: { color: THEME.text2, fontSize: 11 },
-          itemWidth: 16,
-          itemHeight: 8,
-          itemGap: 16,
-        },
-        grid: {
-          containLabel: false,
-          left: "12%",
-          right: "6%",
-          top: 32,
-          bottom: yColumns.length > 1 ? 52 : 36,
-        },
-        xAxis: {
-          name: xLabel,
-          nameLocation: "middle",
-          nameGap: 25,
-          nameTextStyle: { color: THEME.text2 },
-          axisTick: {
-            alignWithLabel: true,
-            length: 6,
-            lineStyle: { type: "solid", color: THEME.border },
-          },
-          axisLabel: {
-            show: true,
-            formatter: (value: number) =>
-              Math.abs(value) >= 1e-3 || value === 0
-                ? Number(value).toPrecision(3)
-                : Number(value).toExponential(1),
-            color: THEME.text2,
-          },
-          axisLine: { lineStyle: { color: THEME.border } },
-          splitLine: { show: false },
-        },
-        yAxis: {
-          nameLocation: "middle",
-          nameGap: 55,
-          nameTextStyle: { color: THEME.text2 },
-          axisTick: {
-            alignWithLabel: true,
-            length: 6,
-            lineStyle: { type: "solid", color: THEME.border },
-          },
-          axisLabel: {
-            show: true,
-            formatter: (value: number) => Number(value).toExponential(2),
-            color: THEME.text2,
-          },
-          axisLine: { lineStyle: { color: THEME.border } },
-          splitLine: {
-            show: true,
-            lineStyle: { color: THEME.border, type: "dashed", opacity: 0.4 },
-          },
-        },
-        toolbox: {
-          show: true,
-          top: 6,
-          right: 10,
-          itemSize: 18,
-          itemGap: 10,
-          iconStyle: { borderColor: THEME.toolboxIcon, borderWidth: 1 },
-          emphasis: { iconStyle: { borderColor: THEME.text1 } },
-          feature: {
-            dataZoom: {
-              xAxisIndex: 0,
-              yAxisIndex: 0,
-              brushStyle: {
-                color: THEME.brushBg,
-                borderColor: THEME.brushBorder,
-                borderWidth: 2,
-              },
-            },
-            restore: { show: true },
-            saveAsImage: { type: "png", name: "scalar_plot" },
-          },
-        },
-        series: seriesData,
+        series: yCols.map((col) => ({
+          data: rows.map((row) => [accessor(row, xCol), accessor(row, col)]),
+        })),
       },
-      { notMerge: true },
+      { notMerge: false, lazyUpdate: true },
     );
+  }, []);
 
-    return () => {};
-  }, [seriesData, xColumn, yColumns]);
+  // ─── Init chart when columns change ───────────────────────────────
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const columnsKey = `${xColumn},${yColumns.join(",")}`;
+    const needsReinit =
+      !chartRef.current ||
+      chartRef.current.isDisposed() ||
+      initColumnsRef.current !== columnsKey;
+
+    if (!needsReinit) return;
+
+    // Dispose old chart only if it exists
+    if (chartRef.current && !chartRef.current.isDisposed()) {
+      chartRef.current.dispose();
+    }
+
+    const chart = echarts.init(containerRef.current, undefined, { renderer: "canvas" });
+    chartRef.current = chart;
+    initColumnsRef.current = columnsKey;
+
+    const theme = getTheme();
+    chart.setOption(buildChartConfig(xColumn, yColumns, theme), { notMerge: true });
+
+    // Flush any rows that were already available
+    if (rows.length) {
+      pendingRowsRef.current = rows;
+      flushData();
+    }
+
+    return () => {
+      if (throttleRef.current) {
+        clearTimeout(throttleRef.current);
+        throttleRef.current = null;
+      }
+    };
+  }, [xColumn, yColumns, flushData, rows]);
+
+  // ─── Update data (throttled ~4 Hz) ────────────────────────────────
+  useEffect(() => {
+    if (!chartRef.current || chartRef.current.isDisposed() || !rows.length) return;
+
+    pendingRowsRef.current = rows;
+
+    // If no throttle is pending, schedule one
+    if (!throttleRef.current) {
+      throttleRef.current = setTimeout(flushData, 250);
+    }
+  }, [rows, flushData]);
 
   // ─── Resize observer ──────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current) return;
-    const observer = new ResizeObserver(() => chartRef.current?.resize());
-    observer.observe(containerRef.current);
+    const el = containerRef.current;
+    const observer = new ResizeObserver(() => {
+      // Debounce resize to avoid layout thrashing
+      requestAnimationFrame(() => chartRef.current?.resize());
+    });
+    observer.observe(el);
     return () => observer.disconnect();
   }, []);
 
   // ─── Cleanup ──────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
+      if (throttleRef.current) {
+        clearTimeout(throttleRef.current);
+        throttleRef.current = null;
+      }
       if (chartRef.current && !chartRef.current.isDisposed()) {
         chartRef.current.dispose();
       }
@@ -245,11 +325,13 @@ export default function ScalarPlot({
       style={{
         width: "100%",
         height: "100%",
-        minHeight: "200px",
+        minHeight: 0,
         borderRadius: "var(--radius-md)",
         border: "1px solid var(--ide-border-subtle)",
         background: "var(--ide-bg)",
       }}
     />
   );
-}
+});
+
+export default ScalarPlot;

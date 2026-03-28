@@ -113,6 +113,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     // Execution config
     ctx->precision  = plan->precision;
     ctx->integrator = plan->integrator;
+    ctx->disable_precession = plan->disable_precession != 0;
     ctx->enable_exchange = plan->enable_exchange != 0;
     ctx->enable_demag = plan->enable_demag != 0;
     ctx->has_external_field = plan->has_external_field != 0;

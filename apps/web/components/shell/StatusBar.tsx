@@ -38,15 +38,13 @@ export default function StatusBar({
   status,
   activityLabel,
   activityDetail,
-  progressMode = "idle",
-  progressValue,
+  progressMode: _progressMode = "idle",
+  progressValue: _progressValue,
   nodeCount,
 }: StatusBarProps) {
-  const clampedProgress =
-    typeof progressValue === "number" ? Math.max(0, Math.min(100, progressValue)) : 0;
   return (
     <div className={s.statusBar}>
-      {(activityLabel || activityDetail || progressMode !== "idle") && (
+      {(activityLabel || activityDetail) && (
         <div className={s.statusBarActivity}>
           <div className={s.statusBarActivityRow}>
             <span className={s.statusBarActivityLabel}>{activityLabel ?? "Workspace"}</span>
@@ -55,16 +53,6 @@ export default function StatusBar({
                 {activityDetail}
               </span>
             )}
-            {progressMode === "determinate" && (
-              <span className={s.statusBarActivityPercent}>{clampedProgress.toFixed(0)}%</span>
-            )}
-          </div>
-          <div className={s.statusBarProgressTrack}>
-            <div
-              className={s.statusBarProgressFill}
-              data-mode={progressMode}
-              style={progressMode === "determinate" ? { width: `${clampedProgress}%` } : undefined}
-            />
           </div>
         </div>
       )}
@@ -105,7 +93,7 @@ export default function StatusBar({
         {wallTime !== "—" && (
           <>
             <span className={s.statusBarDivider} />
-            <span className={s.statusBarItem}>Wall: {wallTime}</span>
+            <span className={s.statusBarItem}>Elapsed: {wallTime}</span>
           </>
         )}
       </div>

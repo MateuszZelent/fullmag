@@ -11,7 +11,7 @@
  * Below the cube, a colour-coded XYZ axis gizmo shows the current orientation.
  */
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import * as THREE from "three";
 import type { TrackballControls } from "three/examples/jsm/controls/TrackballControls.js";
 import s from "./ViewCube.module.css";
@@ -68,9 +68,10 @@ const faces: { cssTransform: string; zones: FaceZone[][] }[] = [
 ];
 
 export default function ViewCube({ sceneRef, grid, onRotate }: ViewCubeProps) {
-  const [cubeTransform, setCubeTransform] = useState("none");
   const rafRef = useRef<number | null>(null);
   const dragRef = useRef({ dragging: false, startX: 0, startY: 0, hasDragged: false });
+  const cubeSceneRef = useRef<HTMLDivElement | null>(null);
+  const axisSceneRef = useRef<HTMLDivElement | null>(null);
 
   // ─── Camera matrix → CSS ──────────────────────────────────────────
   const getCameraMatrix = useCallback((): string => {
@@ -88,7 +89,13 @@ export default function ViewCube({ sceneRef, grid, onRotate }: ViewCubeProps) {
   // ─── Sync loop ────────────────────────────────────────────────────
   useEffect(() => {
     function loop() {
-      setCubeTransform(getCameraMatrix());
+      const transform = getCameraMatrix();
+      if (cubeSceneRef.current && cubeSceneRef.current.style.transform !== transform) {
+        cubeSceneRef.current.style.transform = transform;
+      }
+      if (axisSceneRef.current && axisSceneRef.current.style.transform !== transform) {
+        axisSceneRef.current.style.transform = transform;
+      }
       rafRef.current = requestAnimationFrame(loop);
     }
     rafRef.current = requestAnimationFrame(loop);
@@ -193,8 +200,8 @@ export default function ViewCube({ sceneRef, grid, onRotate }: ViewCubeProps) {
       {/* ViewCube */}
       <div className={s.vc}>
         <div
+          ref={cubeSceneRef}
           className={s.vcScene}
-          style={{ transform: cubeTransform }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -222,7 +229,7 @@ export default function ViewCube({ sceneRef, grid, onRotate }: ViewCubeProps) {
 
       {/* Axis Gizmo */}
       <div className={s.ag}>
-        <div className={s.agScene} style={{ transform: cubeTransform }}>
+        <div ref={axisSceneRef} className={s.agScene}>
           {/* X axis (red) */}
           <div className={`${s.agShaft} ${s.agShaftX}`} style={{ transform: "rotateZ(-90deg) translateY(-18px)" }} />
           <div className={`${s.agTip} ${s.agTipX}`} style={{ transform: "translateX(26px) rotate(-90deg)" }} />

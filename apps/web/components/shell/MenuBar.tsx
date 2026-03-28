@@ -6,7 +6,7 @@ import {
   FileText, FolderOpen, Save, Download, LogOut,
   Undo2, Redo2, Settings,
   Box, Columns2, Grid3X3, PanelRight, Monitor,
-  Play, Pause, Square, Zap,
+  Play, Pause, Square, Zap, Target,
   Terminal, LayoutGrid, BarChart3,
   BookOpen, Keyboard, Info,
 } from "lucide-react";
@@ -33,6 +33,10 @@ interface MenuBarProps {
   onSidebarToggle?: () => void;
   onSimAction?: (action: string) => void;
   interactiveEnabled?: boolean;
+  canRun?: boolean;
+  canRelax?: boolean;
+  canPause?: boolean;
+  canStop?: boolean;
   viewMode?: string;
 }
 
@@ -74,9 +78,10 @@ function buildMenus(props: MenuBarProps): MenuDef[] {
     {
       label: "Simulation",
       items: [
-        { label: "Run", icon: <Play size={14} />, shortcut: "F5", action: () => props.onSimAction?.("run") },
-        { label: "Pause", icon: <Pause size={14} />, action: () => props.onSimAction?.("pause") },
-        { label: "Stop", icon: <Square size={14} />, shortcut: "Shift+F5", action: () => props.onSimAction?.("stop") },
+        { label: "Relax", icon: <Target size={14} />, disabled: !props.canRelax, action: () => props.onSimAction?.("relax") },
+        { label: "Run", icon: <Play size={14} />, shortcut: "F5", disabled: !props.canRun, action: () => props.onSimAction?.("run") },
+        { label: "Pause", icon: <Pause size={14} />, disabled: !props.canPause, action: () => props.onSimAction?.("pause") },
+        { label: "Stop", icon: <Square size={14} />, shortcut: "Shift+F5", disabled: !props.canStop, action: () => props.onSimAction?.("stop") },
         { separator: true, label: "" },
         { label: "Interactive Mode", icon: <Zap size={14} />, disabled: !props.interactiveEnabled },
       ],

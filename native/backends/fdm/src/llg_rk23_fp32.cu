@@ -28,7 +28,7 @@ extern __global__ void llg_rhs_fp32_kernel(
     const float * __restrict__ mx, const float * __restrict__ my, const float * __restrict__ mz,
     const float * __restrict__ hx, const float * __restrict__ hy, const float * __restrict__ hz,
     float * __restrict__ out_x, float * __restrict__ out_y, float * __restrict__ out_z,
-    int n, float gamma_bar, float alpha);
+    int n, float gamma_bar, float alpha, int disable_precession);
 
 /* ── Stage kernels (fp32) ── */
 
@@ -104,7 +104,7 @@ static void compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
         static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
         static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
         static_cast<float*>(rhs_out.x), static_cast<float*>(rhs_out.y), static_cast<float*>(rhs_out.z),
-        n, gamma_bar, alpha);
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
 }
 
 static double reduce_max_error(Context &ctx, uint64_t n) {
@@ -186,6 +186,16 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             ctx.current_time += dt;
             ctx.fsal_valid = true;
 
+            // Compute optimal dt for next step (growth on accept)
+            double dt_next = dt;
+            if (error > 0.0) {
+                dt_next = ctx.adaptive_headroom * dt * pow(ctx.adaptive_max_error / error, 1.0 / 3.0);
+                dt_next = fmin(dt_next, ctx.adaptive_dt_max);
+                dt_next = fmax(dt_next, ctx.adaptive_dt_min);
+            } else {
+                dt_next = ctx.adaptive_dt_max;
+            }
+
             double e_ex = ctx.enable_exchange ? launch_exchange_energy_fp32(ctx) : 0.0;
             double e_demag = launch_demag_energy_fp32(ctx);
             double e_ext = launch_external_energy_fp32(ctx);
@@ -206,6 +216,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             stats->max_effective_field_amplitude = max_h_eff;
             stats->max_demag_field_amplitude = max_h_demag;
             stats->max_rhs_amplitude = max_dm_dt;
+            stats->suggested_next_dt = dt_next;
             return;
         }
 

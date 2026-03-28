@@ -84,6 +84,7 @@ typedef struct {
     fullmag_fdm_material_desc  material;
     fullmag_fdm_precision      precision;
     fullmag_fdm_integrator     integrator;
+    int                        disable_precession; /* 1 = pure-damping relax RHS */
     int                        enable_exchange;
     int                        enable_demag;
     int                        has_external_field;
@@ -139,6 +140,7 @@ typedef struct {
     double   max_effective_field_amplitude;  /* max |H_eff| */
     double   max_demag_field_amplitude;      /* max |H_demag| */
     double   max_rhs_amplitude;              /* max |dm/dt| */
+    double   suggested_next_dt;               /* adaptive optimal dt for next call */
     uint64_t wall_time_ns;
 } fullmag_fdm_step_stats;
 

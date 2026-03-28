@@ -14,6 +14,7 @@ import type {
   RenderMode,
 } from "../../preview/FemMeshView3D";
 import EmptyState from "../../ui/EmptyState";
+import DimensionOverlay from "../../preview/DimensionOverlay";
 import s from "../RunControlRoom.module.css";
 import type {
   PreviewComponent,
@@ -21,7 +22,7 @@ import type {
   VectorComponent,
   ViewportMode,
 } from "./shared";
-import { fmtExp, fmtSI } from "./shared";
+import { fmtExp, fmtPreviewMaxPoints, fmtSI } from "./shared";
 
 export interface ViewportBarProps {
   isMeshWorkspaceView: boolean;
@@ -33,6 +34,7 @@ export interface ViewportBarProps {
   requestedPreviewQuantity: string;
   requestedPreviewComponent: string;
   requestedPreviewEveryN: number;
+  requestedPreviewMaxPoints: number;
   requestedPreviewXChosenSize: number;
   requestedPreviewYChosenSize: number;
   requestedPreviewAutoScale: boolean;
@@ -42,6 +44,7 @@ export interface ViewportBarProps {
   previewQuantityOptions: { value: string; label: string; disabled: boolean }[];
   quantityOptions: { value: string; label: string; disabled: boolean }[];
   previewEveryNOptions: number[];
+  previewMaxPointOptions: number[];
   preview: PreviewState | null;
   effectiveViewMode: ViewportMode;
   solverGrid: [number, number, number];
@@ -54,17 +57,22 @@ export interface ViewportBarProps {
   setComponent: (c: VectorComponent) => void;
   setPlane: (p: SlicePlane) => void;
   setSliceIndex: (i: number) => void;
+  isFemBackend: boolean;
+  totalCells: number | null;
+  activeCells: number | null;
+  activeMaskPresent: boolean;
 }
 
 export function ViewportBar(props: ViewportBarProps) {
   const {
     isMeshWorkspaceView, meshName, effectiveFemMesh, meshRenderMode, meshSelection,
     previewControlsActive, requestedPreviewQuantity, requestedPreviewComponent,
-    requestedPreviewEveryN, requestedPreviewXChosenSize, requestedPreviewYChosenSize,
+    requestedPreviewEveryN, requestedPreviewMaxPoints, requestedPreviewXChosenSize, requestedPreviewYChosenSize,
     requestedPreviewAutoScale, requestedPreviewLayer, requestedPreviewAllLayers,
-    previewBusy, previewQuantityOptions, quantityOptions, previewEveryNOptions,
+    previewBusy, previewQuantityOptions, quantityOptions, previewEveryNOptions, previewMaxPointOptions,
     preview, effectiveViewMode, solverGrid, plane, sliceIndex, maxSliceCount, component,
     updatePreview, setSelectedQuantity, setComponent, setPlane, setSliceIndex,
+    isFemBackend, totalCells, activeCells, activeMaskPresent,
   } = props;
 
   return (
@@ -87,6 +95,28 @@ export function ViewportBar(props: ViewportBarProps) {
               <span className={s.viewportBarSep} />
               <span className={s.viewportBarLabel}>Face</span>
               <span className={s.viewportBarMetric}>#{meshSelection.primaryFaceIndex}</span>
+            </>
+          )}
+        </>
+      ) : isMeshWorkspaceView && !isFemBackend ? (
+        /* FDM geometry bar */
+        <>
+          <span className={s.viewportBarLabel}>Geometry</span>
+          <span className={s.viewportBarMetric}>
+            {solverGrid[0]}×{solverGrid[1]}×{solverGrid[2]}
+          </span>
+          <span className={s.viewportBarSep} />
+          <span className={s.viewportBarLabel}>Cells</span>
+          <span className={s.viewportBarMetric}>
+            {totalCells?.toLocaleString() ?? "—"}
+          </span>
+          {activeMaskPresent && (
+            <>
+              <span className={s.viewportBarSep} />
+              <span className={s.viewportBarLabel}>Active</span>
+              <span className={s.viewportBarMetric}>
+                {activeCells?.toLocaleString() ?? "—"}
+              </span>
             </>
           )}
         </>
@@ -160,6 +190,21 @@ export function ViewportBar(props: ViewportBarProps) {
                   </option>
                 ))}
               </select>
+              <span className={s.viewportBarLabel}>Pts</span>
+              <select
+                className={s.viewportBarSelect}
+                value={requestedPreviewMaxPoints}
+                onChange={(e) =>
+                  void updatePreview("/maxPoints", { maxPoints: Number(e.target.value) })
+                }
+                disabled={previewBusy}
+              >
+                {previewMaxPointOptions.map((value) => (
+                  <option key={value} value={value}>
+                    {fmtPreviewMaxPoints(value)}
+                  </option>
+                ))}
+              </select>
             </>
           )}
 
@@ -207,7 +252,7 @@ export function ViewportBar(props: ViewportBarProps) {
                   }
                   disabled={previewBusy}
                 />
-                <span>Auto-scale</span>
+                <span>Auto-fit</span>
               </label>
               {preview.spatial_kind === "grid" && solverGrid[2] > 1 && (
                 <>
@@ -321,6 +366,7 @@ export interface ViewportCanvasAreaProps {
   previewGrid: [number, number, number];
   component: VectorComponent;
   emptyStateMessage: { title: string; description: string };
+  activeMask: boolean[] | null;
   setMeshRenderMode: (m: RenderMode) => void;
   setMeshOpacity: (o: number) => void;
   setMeshClipEnabled: (e: boolean) => void;
@@ -328,6 +374,8 @@ export interface ViewportCanvasAreaProps {
   setMeshClipPos: (p: number) => void;
   setMeshShowArrows: (a: boolean) => void;
   setMeshSelection: (s: MeshSelectionSnapshot) => void;
+  worldExtent?: [number, number, number] | null;
+  gridCells?: [number, number, number] | null;
 }
 
 export function ViewportCanvasArea(props: ViewportCanvasAreaProps) {
@@ -337,10 +385,12 @@ export function ViewportCanvasArea(props: ViewportCanvasAreaProps) {
     femTopologyKey, femColorField, femMagnetization3DActive, femShouldShowArrows,
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos,
     selectedQuantity, effectiveVectorComponent, plane, sliceIndex, maxSliceCount,
-    selectedVectors, previewGrid, component, emptyStateMessage,
+    selectedVectors, previewGrid, component, emptyStateMessage, activeMask,
     setMeshRenderMode, setMeshOpacity, setMeshClipEnabled, setMeshClipAxis,
     setMeshClipPos, setMeshShowArrows, setMeshSelection,
   } = props;
+
+  const show3DOverlay = (effectiveViewMode === "3D" || effectiveViewMode === "Mesh") && !!props.worldExtent;
 
   return (
     <div className={s.viewportCanvas}>
@@ -353,6 +403,13 @@ export function ViewportCanvasArea(props: ViewportCanvasAreaProps) {
           </span>
         )}
       </div>
+      {show3DOverlay && (
+        <DimensionOverlay
+          worldExtent={props.worldExtent!}
+          gridCells={props.gridCells}
+          visible
+        />
+      )}
       {!isVectorQuantity ? (
         <div style={{ padding: "1rem" }}>
           <EmptyState
@@ -380,7 +437,7 @@ export function ViewportCanvasArea(props: ViewportCanvasAreaProps) {
         <FemMeshView3D
           topologyKey={femTopologyKey ?? undefined}
           meshData={femMeshData}
-          colorField="quality"
+          colorField="none"
           toolbarMode="hidden"
           renderMode={meshRenderMode}
           opacity={meshOpacity}
@@ -395,6 +452,14 @@ export function ViewportCanvasArea(props: ViewportCanvasAreaProps) {
           onClipPosChange={setMeshClipPos}
           onShowArrowsChange={setMeshShowArrows}
           onSelectionChange={setMeshSelection}
+        />
+      ) : effectiveViewMode === "Mesh" && !isFemBackend ? (
+        <MagnetizationView3D
+          grid={previewGrid}
+          vectors={null}
+          fieldLabel="Geometry"
+          geometryMode
+          activeMask={activeMask}
         />
       ) : effectiveViewMode === "3D" && isFemBackend && femMeshData ? (
         <FemMeshView3D

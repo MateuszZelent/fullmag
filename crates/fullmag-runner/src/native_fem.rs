@@ -105,36 +105,35 @@ impl NativeFemBackend {
             damping: plan.material.damping,
             gyromagnetic_ratio: plan.gyromagnetic_ratio,
         };
-        let demag_kernel_spectra = if plan.enable_demag
-            && plan.demag_realization.as_deref() != Some("poisson_airbox")
-        {
-            let (bbox_min, bbox_max) = mesh_bbox(&plan.mesh.nodes).ok_or_else(|| RunError {
-                message: "FEM GPU demag requires a non-empty mesh bounding box".to_string(),
-            })?;
-            let requested = plan.hmax.max(1e-12);
-            let extent = [
-                (bbox_max[0] - bbox_min[0]).abs(),
-                (bbox_max[1] - bbox_min[1]).abs(),
-                (bbox_max[2] - bbox_min[2]).abs(),
-            ];
-            let nx = transfer_axis_cells(extent[0], requested);
-            let ny = transfer_axis_cells(extent[1], requested);
-            let nz = transfer_axis_cells(extent[2], requested);
-            let dx = (extent[0] / nx as f64).max(1e-12);
-            let dy = (extent[1] / ny as f64).max(1e-12);
-            let dz = (extent[2] / nz as f64).max(1e-12);
-            if nz == 1 {
-                Some(fullmag_engine::compute_newell_kernel_spectra_thin_film_2d(
-                    nx, ny, dx, dy, dz,
-                ))
+        let demag_kernel_spectra =
+            if plan.enable_demag && plan.demag_realization.as_deref() != Some("poisson_airbox") {
+                let (bbox_min, bbox_max) = mesh_bbox(&plan.mesh.nodes).ok_or_else(|| RunError {
+                    message: "FEM GPU demag requires a non-empty mesh bounding box".to_string(),
+                })?;
+                let requested = plan.hmax.max(1e-12);
+                let extent = [
+                    (bbox_max[0] - bbox_min[0]).abs(),
+                    (bbox_max[1] - bbox_min[1]).abs(),
+                    (bbox_max[2] - bbox_min[2]).abs(),
+                ];
+                let nx = transfer_axis_cells(extent[0], requested);
+                let ny = transfer_axis_cells(extent[1], requested);
+                let nz = transfer_axis_cells(extent[2], requested);
+                let dx = (extent[0] / nx as f64).max(1e-12);
+                let dy = (extent[1] / ny as f64).max(1e-12);
+                let dz = (extent[2] / nz as f64).max(1e-12);
+                if nz == 1 {
+                    Some(fullmag_engine::compute_newell_kernel_spectra_thin_film_2d(
+                        nx, ny, dx, dy, dz,
+                    ))
+                } else {
+                    Some(fullmag_engine::compute_newell_kernel_spectra(
+                        nx, ny, nz, dx, dy, dz,
+                    ))
+                }
             } else {
-                Some(fullmag_engine::compute_newell_kernel_spectra(
-                    nx, ny, nz, dx, dy, dz,
-                ))
-            }
-        } else {
-            None
-        };
+                None
+            };
 
         let precision = match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => {
@@ -221,18 +220,19 @@ impl NativeFemBackend {
         };
 
         // Build adaptive config if present
-        let adaptive_cfg = plan.adaptive_timestep.as_ref().map(|a| {
-            ffi::fullmag_fem_adaptive_config {
-                atol: a.atol,
-                rtol: a.rtol,
-                dt_initial: a.dt_initial.unwrap_or(plan.fixed_timestep.unwrap_or(1e-13)),
-                dt_min: a.dt_min,
-                dt_max: a.dt_max.unwrap_or(1e-10),
-                safety: a.safety,
-                growth_limit: a.growth_limit,
-                shrink_limit: a.shrink_limit,
-            }
-        });
+        let adaptive_cfg =
+            plan.adaptive_timestep
+                .as_ref()
+                .map(|a| ffi::fullmag_fem_adaptive_config {
+                    atol: a.atol,
+                    rtol: a.rtol,
+                    dt_initial: a.dt_initial.unwrap_or(plan.fixed_timestep.unwrap_or(1e-13)),
+                    dt_min: a.dt_min,
+                    dt_max: a.dt_max.unwrap_or(1e-10),
+                    safety: a.safety,
+                    growth_limit: a.growth_limit,
+                    shrink_limit: a.shrink_limit,
+                });
         if let Some(ref cfg) = adaptive_cfg {
             plan_desc.adaptive_config = cfg as *const ffi::fullmag_fem_adaptive_config;
         }

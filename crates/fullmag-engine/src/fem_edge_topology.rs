@@ -11,14 +11,7 @@ use std::collections::HashMap;
 /// Each entry (i, j) with i < j is one local edge.
 /// Ordering follows the standard convention used by MFEM and Gmsh:
 ///   e0=(0,1), e1=(0,2), e2=(0,3), e3=(1,2), e4=(1,3), e5=(2,3)
-pub const TET_LOCAL_EDGES: [(usize, usize); 6] = [
-    (0, 1),
-    (0, 2),
-    (0, 3),
-    (1, 2),
-    (1, 3),
-    (2, 3),
-];
+pub const TET_LOCAL_EDGES: [(usize, usize); 6] = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
 
 /// Global edge with node indices (lo < hi always).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

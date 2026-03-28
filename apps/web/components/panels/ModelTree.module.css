@@ -124,3 +124,61 @@
   color: var(--text-3);
   padding: 8px 8px 2px;
 }
+
+/* ── Context menu ── */
+.contextMenu {
+  position: fixed;
+  z-index: 200;
+  min-width: 160px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--ide-surface, #1e1e2e);
+  border: 1px solid var(--ide-border, #2e2e3e);
+  box-shadow:
+    0 8px 24px hsla(220, 40%, 5%, 0.5),
+    0 2px 8px hsla(220, 40%, 5%, 0.3);
+  animation: ctxFadeIn 100ms ease-out;
+}
+
+@keyframes ctxFadeIn {
+  from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.ctxHeader {
+  padding: 4px 8px 4px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ide-text-3, #888);
+  border-bottom: 1px solid var(--ide-border-subtle, #2a2a3a);
+  margin-bottom: 2px;
+}
+
+.ctxItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ide-text-2, #ccc);
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 60ms, color 60ms;
+}
+
+.ctxItem:hover {
+  background: var(--ide-accent-bg, hsla(220, 80%, 55%, 0.15));
+  color: var(--ide-accent-text, #7bb0ff);
+}
+
+.ctxSep {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--ide-border-subtle, #2a2a3a);
+}

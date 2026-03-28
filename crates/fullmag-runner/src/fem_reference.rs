@@ -7,11 +7,14 @@
 //! - `double` precision
 
 use fullmag_engine::fem::{FemLlgProblem, FemLlgState, MeshTopology};
-use fullmag_engine::{EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator};
+use fullmag_engine::{AdaptiveStepConfig, EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator};
 use fullmag_ir::{ExecutionPrecision, FemPlanIR, IntegratorChoice, OutputIR};
 
 use crate::preview::{build_mesh_preview_field, flatten_vectors, select_observables};
-use crate::relaxation::relaxation_converged;
+use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
+use crate::scalar_metrics::{
+    apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
+};
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
     OutputSchedule,
@@ -107,9 +110,19 @@ fn execute_reference_fem_impl(
         IntegratorChoice::Rk45 => TimeIntegrator::RK45,
         IntegratorChoice::Abm3 => TimeIntegrator::ABM3,
     };
-    let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator).map_err(|e| RunError {
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+    let mut dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator).map_err(|e| RunError {
         message: format!("LLG: {}", e),
-    })?;
+    })?
+    .with_precession_enabled(!pure_damping_relax);
+    if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
+        dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
+            max_error: adaptive.atol,
+            dt_min: adaptive.dt_min,
+            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            headroom: adaptive.safety,
+        });
+    }
 
     let problem = FemLlgProblem::with_terms_and_demag_transfer_grid(
         topology,
@@ -129,7 +142,14 @@ fn execute_reference_fem_impl(
         })?;
     let initial_magnetization = state.magnetization().to_vec();
 
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let mut dt = plan
+        .fixed_timestep
+        .or_else(|| {
+            plan.adaptive_timestep
+                .as_ref()
+                .and_then(|a| a.dt_initial)
+        })
+        .unwrap_or(1e-13);
     let mut steps = Vec::new();
     let mut field_snapshots = Vec::new();
     let mut step_count = 0u64;
@@ -165,6 +185,9 @@ fn execute_reference_fem_impl(
         })?;
         let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
         step_count += 1;
+        if let Some(next) = report.suggested_next_dt {
+            dt = next;
+        }
         let latest_stats = StepStats {
             step: step_count,
             time: report.time_seconds,
@@ -222,14 +245,19 @@ fn execute_reference_fem_impl(
             } else {
                 None
             };
+            let due_scalar_row = scalar_row_due(&scalar_schedules, state.time_seconds);
+            let mut update_stats = make_step_stats(
+                step_count,
+                state.time_seconds,
+                dt_step,
+                wall_elapsed,
+                &observables,
+            );
+            if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
+                apply_average_m_to_step_stats(&mut update_stats, &observables.magnetization);
+            }
             let action = (live.on_step)(StepUpdate {
-                stats: make_step_stats(
-                    step_count,
-                    state.time_seconds,
-                    dt_step,
-                    wall_elapsed,
-                    &observables,
-                ),
+                stats: update_stats,
                 grid: live.grid,
                 fem_mesh: if step_count <= 1 {
                     Some(crate::types::FemMeshPayload {
@@ -242,6 +270,7 @@ fn execute_reference_fem_impl(
                 },
                 magnetization,
                 preview_field,
+                scalar_row_due: due_scalar_row,
                 finished: false,
             });
             if action == StepAction::Stop {
@@ -261,6 +290,7 @@ fn execute_reference_fem_impl(
                     previous_total_energy,
                     plan.gyromagnetic_ratio,
                     plan.material.damping,
+                    false,
                 )
         });
         previous_total_energy = Some(latest_stats.e_total);
@@ -282,7 +312,11 @@ fn execute_reference_fem_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
+            status: if cancelled {
+                RunStatus::Cancelled
+            } else {
+                RunStatus::Completed
+            },
             steps,
             final_magnetization: state.magnetization().to_vec(),
         },
@@ -466,7 +500,7 @@ fn make_step_stats(
     wall_time_ns: u64,
     observables: &StateObservables,
 ) -> StepStats {
-    StepStats {
+    let mut stats = StepStats {
         step,
         time,
         dt: solver_dt,
@@ -479,7 +513,9 @@ fn make_step_stats(
         max_h_demag: observables.max_h_demag,
         wall_time_ns,
         ..StepStats::default()
-    }
+    };
+    apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    stats
 }
 
 fn select_field_values(observables: &StateObservables, name: &str) -> Vec<[f64; 3]> {

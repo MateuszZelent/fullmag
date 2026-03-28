@@ -49,10 +49,7 @@ pub struct HcurlEstimatorParams<'a> {
 ///   ∇×A_h|_K = Σ_e  s_e · a_e · 2 (∇λ_i × ∇λ_j)
 ///
 /// where s_e = ±1 is the sign relating local to global edge orientation.
-pub fn compute_curl_per_element(
-    topology: &MeshTopology,
-    edges: &EdgeTopology,
-) -> Vec<Vector3> {
+pub fn compute_curl_per_element(topology: &MeshTopology, edges: &EdgeTopology) -> Vec<Vector3> {
     let n_el = topology.n_elements;
     let mut curls = Vec::with_capacity(n_el);
 
@@ -63,12 +60,7 @@ pub fn compute_curl_per_element(
 }
 
 /// Compute ∇×A_h for a single element, given DOF values.
-fn element_curl(
-    topology: &MeshTopology,
-    edges: &EdgeTopology,
-    ei: usize,
-    dofs: &[f64],
-) -> Vector3 {
+fn element_curl(topology: &MeshTopology, edges: &EdgeTopology, ei: usize, dofs: &[f64]) -> Vector3 {
     use crate::fem_edge_topology::TET_LOCAL_EDGES;
 
     let grad = &topology.grad_phi[ei];
@@ -120,7 +112,11 @@ fn element_divergence(
     let mut div_a = 0.0;
     for (le, &(li, lj)) in TET_LOCAL_EDGES.iter().enumerate() {
         let global_edge = edge_ids[le];
-        let a_e = if dofs.is_empty() { 0.0 } else { dofs[global_edge] };
+        let a_e = if dofs.is_empty() {
+            0.0
+        } else {
+            dofs[global_edge]
+        };
         let s = signs[le];
 
         // ∇·(λ_i ∇λ_j − λ_j ∇λ_i) = ∇λ_i · ∇λ_j − ∇λ_j · ∇λ_i = 0 (always)
@@ -229,8 +225,7 @@ pub fn compute_hcurl_error_indicators(params: &HcurlEstimatorParams) -> Result<E
         for ei in 0..n_el {
             let h_k = tet_diameter(&topo.coords, &topo.elements[ei]);
             let div_a = element_divergence(topo, edges, ei, params.dofs);
-            eta_gauge_sq[ei] =
-                params.beta * h_k * h_k * div_a * div_a * topo.element_volumes[ei];
+            eta_gauge_sq[ei] = params.beta * h_k * h_k * div_a * div_a * topo.element_volumes[ei];
         }
     }
 
@@ -269,8 +264,8 @@ pub fn error_indicators_from_raw(eta_sq_per_element: Vec<f64>) -> ErrorIndicator
         sum_sq += v;
     }
     ErrorIndicators {
-        eta_vol_sq: vec![0.0; n],   // decomposition unknown from FFI
-        eta_jump_sq: vec![0.0; n],   // decomposition unknown from FFI
+        eta_vol_sq: vec![0.0; n],  // decomposition unknown from FFI
+        eta_jump_sq: vec![0.0; n], // decomposition unknown from FFI
         eta_sq: eta_sq_per_element,
         eta,
         eta_global: sum_sq.sqrt(),
@@ -343,7 +338,10 @@ mod tests {
         // With zero DOFs, curl = 0, so jump = 0, and η should come from volume only.
         assert!(result.eta_global > 0.0, "η should be positive");
         for ei in 0..topo.n_elements {
-            assert!(result.eta_vol_sq[ei] > 0.0, "volume residual should be positive");
+            assert!(
+                result.eta_vol_sq[ei] > 0.0,
+                "volume residual should be positive"
+            );
             assert_eq!(result.eta_jump_sq[ei], 0.0, "jump should be zero");
         }
     }

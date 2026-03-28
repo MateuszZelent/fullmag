@@ -3,7 +3,7 @@
 
 - Status: implemented
 - Owners: Fullmag core
-- Last updated: 2026-03-25
+- Last updated: 2026-03-27
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -21,8 +21,9 @@
 This note specifies the relaxation (energy-minimization) algorithms available in
 the Fullmag FDM backend.  Three algorithms are implemented and executable:
 
-1. **Overdamped LLG** — reuses the time-integration pipeline with large damping
-   to drive the system toward equilibrium.
+1. **Overdamped LLG** — reuses the time-integration pipeline in a
+   precession-disabled damping-only mode to drive the system toward
+   equilibrium.
 2. **Projected Gradient with Barzilai–Borwein step selection (BB)** — direct
    energy minimization on the sphere product manifold using alternating
    BB1/BB2 step sizes and Armijo backtracking.
@@ -155,36 +156,40 @@ angular error.
 
 #### 3.1.1 Algorithm A — Overdamped LLG
 
-The overdamped LLG approach reuses the standard time-integration pipeline
-(Heun or future DOPRI5/4) with the Landau–Lifshitz–Gilbert equation:
+The public FDM `llg_overdamped` path follows the `mumax3` `Relax()` pattern:
+it reuses the standard time-integration pipeline, but **disables the
+precession term during relaxation**. The executable equation is therefore the
+pure-damping projection of Gilbert LLG:
 
 $$
 \frac{\partial \boldsymbol{m}}{\partial t}
 = -\frac{\gamma}{1 + \alpha^2}
 \left[
-    \boldsymbol{m} \times \boldsymbol{H}_{\mathrm{eff}}
-  + \alpha\,\boldsymbol{m} \times (\boldsymbol{m} \times \boldsymbol{H}_{\mathrm{eff}})
+    \alpha\,\boldsymbol{m} \times (\boldsymbol{m} \times \boldsymbol{H}_{\mathrm{eff}})
 \right].
 $$
 
-For relaxation, the user sets a high damping coefficient $\alpha \gg 1$ (the
-default from the Python API is $\alpha = 0.5$, which is already in the
-overdamped regime for many problems).  The precession term
-$\boldsymbol{m} \times \boldsymbol{H}_{\mathrm{eff}}$ is retained — it does not
-affect the equilibrium, only the trajectory.
+This removes the orbiting/overshoot behavior associated with time evolution and
+makes `relax()` behave as an energy descent rather than a damped precessional
+run. The material damping $\alpha$ still scales the descent rate, but the user
+does **not** need to inflate $\alpha$ merely to suppress visible precession.
+
+Fullmag currently still uses the runner's pseudo-time and output cadence during
+`llg_overdamped` relaxation, so reported stage time is an execution-control
+quantity rather than a physically meaningful evolution time.
 
 **Convergence criterion**: the runner monitors the approximate maximum torque
-derived from the LLG right-hand side:
+derived from the pure-damping right-hand side:
 
 $$
 \tau_{\max}
 \approx
-\frac{\sqrt{1 + \alpha^2}}{\gamma}
+\frac{1 + \alpha^2}{\gamma \alpha}
 \max_i \left\|\frac{d\boldsymbol{m}_i}{dt}\right\|.
 $$
 
-This estimate is exact only for the continuous-time LLG; the discrete-time
-Heun integrator introduces $O(\Delta t)$ error in the approximation.
+This estimate is exact for the continuous pure-damping LLG form above. The
+discrete-time integrator still introduces the usual $O(\Delta t)$ step error.
 
 **Stop criteria** (implemented in `relaxation_converged`):
 1. $\tau_{\max} \le \epsilon_\tau$ (torque tolerance),

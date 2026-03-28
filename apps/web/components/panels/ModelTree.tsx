@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import s from "./ModelTree.module.css";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
@@ -21,6 +21,7 @@ interface ModelTreeProps {
   nodes: TreeNodeData[];
   activeId?: string | null;
   onNodeClick?: (id: string) => void;
+  onContextAction?: (nodeId: string, action: string) => void;
   className?: string;
 }
 
@@ -31,11 +32,13 @@ function TreeNode({
   depth,
   activeId,
   onNodeClick,
+  onContextMenu,
 }: {
   node: TreeNodeData;
   depth: number;
   activeId?: string | null;
   onNodeClick?: (id: string) => void;
+  onContextMenu?: (e: React.MouseEvent, nodeId: string, label: string) => void;
 }) {
   const [open, setOpen] = useState(depth < 2);
   const hasChildren = node.children && node.children.length > 0;
@@ -53,6 +56,7 @@ function TreeNode({
         style={{ "--depth": depth } as React.CSSProperties}
         data-active={activeId === node.id ? "true" : undefined}
         onClick={handleClick}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextMenu?.(e, node.id, node.label); }}
         role="treeitem"
         aria-expanded={hasChildren ? open : undefined}
       >
@@ -79,6 +83,7 @@ function TreeNode({
               depth={depth + 1}
               activeId={activeId}
               onNodeClick={onNodeClick}
+              onContextMenu={onContextMenu}
             />
           ))}
         </div>
@@ -93,8 +98,35 @@ export default function ModelTree({
   nodes,
   activeId,
   onNodeClick,
+  onContextAction,
   className,
 }: ModelTreeProps) {
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId: string; label: string } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, nodeId: string, label: string) => {
+    setCtxMenu({ x: e.clientX, y: e.clientY, nodeId, label });
+  }, []);
+
+  /* Close on click outside or Escape */
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", onKey); };
+  }, [ctxMenu]);
+
+  const handleAction = useCallback((action: string) => {
+    if (ctxMenu) {
+      onContextAction?.(ctxMenu.nodeId, action);
+      if (action === "select") onNodeClick?.(ctxMenu.nodeId);
+      if (action === "copy-name" && ctxMenu.label) void navigator.clipboard.writeText(ctxMenu.label);
+    }
+    setCtxMenu(null);
+  }, [ctxMenu, onContextAction, onNodeClick]);
+
   return (
     <div className={`${s.tree} ${className ?? ""}`} role="tree">
       {nodes.map((node) => (
@@ -104,8 +136,25 @@ export default function ModelTree({
           depth={0}
           activeId={activeId}
           onNodeClick={onNodeClick}
+          onContextMenu={handleContextMenu}
         />
       ))}
+
+      {/* Context menu overlay */}
+      {ctxMenu && (
+        <div
+          ref={menuRef}
+          className={s.contextMenu}
+          style={{ top: ctxMenu.y, left: ctxMenu.x }}
+        >
+          <div className={s.ctxHeader}>{ctxMenu.label}</div>
+          <button className={s.ctxItem} onClick={() => handleAction("select")}>Select</button>
+          <button className={s.ctxItem} onClick={() => handleAction("copy-name")}>Copy Name</button>
+          <div className={s.ctxSep} />
+          <button className={s.ctxItem} onClick={() => handleAction("expand-all")}>Expand All</button>
+          <button className={s.ctxItem} onClick={() => handleAction("collapse-all")}>Collapse All</button>
+        </div>
+      )}
     </div>
   );
 }

@@ -59,6 +59,7 @@ struct Context {
     // Execution
     fullmag_fdm_precision precision;
     fullmag_fdm_integrator integrator;
+    bool disable_precession = false;
 
     // Step counter
     uint64_t step_count = 0;

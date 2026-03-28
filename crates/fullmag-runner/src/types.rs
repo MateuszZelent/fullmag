@@ -34,6 +34,9 @@ pub struct StepStats {
     pub step: u64,
     pub time: f64,
     pub dt: f64,
+    pub mx: f64,
+    pub my: f64,
+    pub mz: f64,
     pub e_ex: f64,
     pub e_demag: f64,
     pub e_ext: f64,
@@ -63,6 +66,9 @@ impl Default for StepStats {
             step: 0,
             time: 0.0,
             dt: 0.0,
+            mx: 0.0,
+            my: 0.0,
+            mz: 0.0,
             e_ex: 0.0,
             e_demag: 0.0,
             e_ext: 0.0,
@@ -98,6 +104,9 @@ pub struct StepUpdate {
     /// Optional active preview field driven by the current UI preview request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_field: Option<LivePreviewField>,
+    /// True when this update also represents a due scalar-row sample.
+    #[serde(default)]
+    pub scalar_row_due: bool,
     /// true when simulation has completed.
     #[serde(default)]
     pub finished: bool,
@@ -135,7 +144,7 @@ impl Default for LivePreviewRequest {
             x_chosen_size: 0,
             y_chosen_size: 0,
             auto_scale_enabled: true,
-            max_points: 16_384,
+            max_points: 65_536,
         }
     }
 }

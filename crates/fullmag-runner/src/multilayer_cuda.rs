@@ -1,4 +1,4 @@
-    //! CUDA-assisted runner for public multilayer / multi-body FDM problems.
+//! CUDA-assisted runner for public multilayer / multi-body FDM problems.
 //!
 //! Current scope:
 //! - body-local exchange / local field observables on CUDA per layer,
@@ -18,7 +18,8 @@ use fullmag_ir::{
 };
 
 use crate::native_fdm::{is_cuda_available, NativeFdmBackend};
-use crate::relaxation::relaxation_converged;
+use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
+use crate::scalar_metrics::apply_average_m_to_step_stats;
 use crate::schedules::{collect_field_schedules, collect_scalar_schedules, is_due, OutputSchedule};
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
@@ -118,6 +119,7 @@ fn execute_cuda_fdm_multilayer_impl(
             });
         }
     }
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
 
     if let Some(native_stacked) = build_native_stacked_cuda_plan(plan)? {
         return execute_native_stacked_cuda_multilayer(
@@ -129,7 +131,7 @@ fn execute_cuda_fdm_multilayer_impl(
         );
     }
 
-    let (contexts, mut states) = build_contexts_and_states(plan)?;
+    let (contexts, mut states) = build_contexts_and_states(plan, pure_damping_relax)?;
     let mut gpu_contexts = build_gpu_contexts(plan)?;
     let demag_runtime = if plan.enable_demag {
         Some(build_multilayer_demag_runtime(plan)?)
@@ -232,6 +234,7 @@ fn execute_cuda_fdm_multilayer_impl(
                 fem_mesh: None,
                 magnetization: None,
                 preview_field: None,
+                scalar_row_due: false,
                 finished: false,
             });
             if action == StepAction::Stop {
@@ -251,6 +254,7 @@ fn execute_cuda_fdm_multilayer_impl(
                     previous_total_energy,
                     plan.gyromagnetic_ratio,
                     average_damping(&contexts),
+                    pure_damping_relax,
                 )
         });
         previous_total_energy = Some(latest_stats.e_total);
@@ -291,7 +295,11 @@ fn execute_cuda_fdm_multilayer_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
+            status: if cancelled {
+                RunStatus::Cancelled
+            } else {
+                RunStatus::Completed
+            },
             steps,
             final_magnetization: flatten_layers(
                 &states
@@ -327,6 +335,7 @@ fn execute_cuda_fdm_multilayer_impl(
 
 fn build_contexts_and_states(
     plan: &FdmMultilayerPlanIR,
+    pure_damping_relax: bool,
 ) -> Result<(Vec<LayerContext>, Vec<ExchangeLlgState>), RunError> {
     let mut contexts = Vec::with_capacity(plan.layers.len());
     let mut states = Vec::with_capacity(plan.layers.len());
@@ -362,7 +371,8 @@ fn build_contexts_and_states(
         )
         .map_err(|error| RunError {
             message: format!("LLG for magnet '{}': {}", layer.magnet_name, error),
-        })?;
+        })?
+        .with_precession_enabled(!pure_damping_relax);
         let problem = ExchangeLlgProblem::with_terms_and_mask(
             grid,
             cell_size,
@@ -550,6 +560,7 @@ fn build_native_stacked_cuda_plan(
             exchange_bc: plan.exchange_bc,
             integrator: plan.integrator,
             fixed_timestep: plan.fixed_timestep,
+            adaptive_timestep: None,
             relaxation: plan.relaxation.clone(),
         },
         layers,
@@ -566,12 +577,23 @@ fn execute_native_stacked_cuda_multilayer(
 ) -> Result<ExecutedRun, RunError> {
     let mut backend = NativeFdmBackend::create(&native.combined_plan)?;
     let device_info = backend.device_info().ok();
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut steps: Vec<StepStats> = Vec::new();
     let mut field_snapshots: Vec<FieldSnapshot> = Vec::new();
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;
     let default_scalar_trace = scalar_schedules.is_empty();
-    let dt = native.combined_plan.fixed_timestep.unwrap_or(1e-13);
+    let mut dt = native
+        .combined_plan
+        .fixed_timestep
+        .or_else(|| {
+            native
+                .combined_plan
+                .adaptive_timestep
+                .as_ref()
+                .and_then(|a| a.dt_initial)
+        })
+        .unwrap_or(1e-13);
     let initial_magnetization = flatten_layers(
         &plan
             .layers
@@ -600,6 +622,9 @@ fn execute_native_stacked_cuda_multilayer(
         let current_time = latest_stats.as_ref().map_or(0.0, |stats| stats.time);
         let dt_step = dt.min(until_seconds - current_time);
         let stats = backend.step(dt_step)?;
+        if let Some(next) = stats.dt_suggested {
+            dt = next;
+        }
         let need_observables = default_scalar_trace
             || scalar_schedules
                 .iter()
@@ -643,6 +668,7 @@ fn execute_native_stacked_cuda_multilayer(
                     fem_mesh: None,
                     magnetization: None,
                     preview_field: None,
+                    scalar_row_due: false,
                     finished: false,
                 });
                 if action == StepAction::Stop {
@@ -656,6 +682,7 @@ fn execute_native_stacked_cuda_multilayer(
                 fem_mesh: None,
                 magnetization: None,
                 preview_field: None,
+                scalar_row_due: false,
                 finished: false,
             });
             if action == StepAction::Stop {
@@ -675,6 +702,7 @@ fn execute_native_stacked_cuda_multilayer(
                     previous_total_energy,
                     plan.gyromagnetic_ratio,
                     native.combined_plan.material.damping,
+                    pure_damping_relax,
                 )
         });
         previous_total_energy = Some(stats.e_total);
@@ -705,7 +733,11 @@ fn execute_native_stacked_cuda_multilayer(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
+            status: if cancelled {
+                RunStatus::Cancelled
+            } else {
+                RunStatus::Completed
+            },
             steps,
             final_magnetization: final_observables.magnetization.clone(),
         },
@@ -757,6 +789,7 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         integrator: plan.integrator,
         fixed_timestep: plan.fixed_timestep,
+        adaptive_timestep: None,
         relaxation: None,
     }
 }
@@ -1130,6 +1163,7 @@ fn observe_native_stacked_cuda(
             active_mask,
             native.combined_plan.material.damping,
             native.combined_plan.gyromagnetic_ratio,
+            !llg_overdamped_uses_pure_damping(native.combined_plan.relaxation.as_ref()),
         ),
         max_h_eff: max_norm_from_full(&effective_full, active_mask),
         max_h_demag: max_norm_from_full(&demag_full, active_mask),
@@ -1195,13 +1229,22 @@ fn max_rhs_norm_from_full(
     active_mask: Option<&[bool]>,
     damping: f64,
     gyromagnetic_ratio: f64,
+    precession_enabled: bool,
 ) -> f64 {
     magnetization
         .iter()
         .zip(effective_field.iter())
         .enumerate()
         .filter(|(index, _)| active_mask.is_none_or(|mask| mask[*index]))
-        .map(|(_, (m, h))| norm(llg_rhs_from_field(*m, *h, damping, gyromagnetic_ratio)))
+        .map(|(_, (m, h))| {
+            norm(llg_rhs_from_field(
+                *m,
+                *h,
+                damping,
+                gyromagnetic_ratio,
+                precession_enabled,
+            ))
+        })
         .fold(0.0, f64::max)
 }
 
@@ -1285,7 +1328,7 @@ fn make_step_stats(
     wall_time_ns: u64,
     observables: &StateObservables,
 ) -> StepStats {
-    StepStats {
+    let mut stats = StepStats {
         step,
         time,
         dt: solver_dt,
@@ -1298,7 +1341,9 @@ fn make_step_stats(
         max_h_demag: observables.max_h_demag,
         wall_time_ns,
         ..StepStats::default()
-    }
+    };
+    apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    stats
 }
 
 fn zero_outside_active(values: &mut [[f64; 3]], active_mask: Option<&[bool]>) {
@@ -1330,6 +1375,7 @@ fn llg_rhs_for_layer(
                 *h,
                 context.problem.material.damping,
                 context.problem.dynamics.gyromagnetic_ratio,
+                context.problem.dynamics.precession_enabled,
             )
         })
         .collect()
@@ -1340,11 +1386,20 @@ fn llg_rhs_from_field(
     field: [f64; 3],
     damping: f64,
     gyromagnetic_ratio: f64,
+    precession_enabled: bool,
 ) -> [f64; 3] {
     let gamma_bar = gyromagnetic_ratio / (1.0 + damping * damping);
     let precession = cross(magnetization, field);
     let damping_term = cross(magnetization, precession);
-    scale(add(precession, scale(damping_term, damping)), -gamma_bar)
+    let precession_term = if precession_enabled {
+        precession
+    } else {
+        [0.0, 0.0, 0.0]
+    };
+    scale(
+        add(precession_term, scale(damping_term, damping)),
+        -gamma_bar,
+    )
 }
 
 fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

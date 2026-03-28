@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -71,8 +72,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             final_magnetization = None
             step_offset = 0
             time_offset = 0.0
+            base_output_dir = Path(args.output_dir)
+            base_output_dir.mkdir(parents=True, exist_ok=True)
+            stage_manifest: list[dict[str, object]] = []
 
-            for stage in loaded.stages:
+            for index, stage in enumerate(loaded.stages, start=1):
                 until_seconds = _resolve_until_seconds(stage.problem.study, stage.default_until_seconds)
                 if until_seconds is None:
                     print(
@@ -90,7 +94,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 if final_magnetization is not None:
                     _apply_continuation_initial_state(ir, final_magnetization)
-                run_payload = run_problem_json(ir, until_seconds, args.output_dir)
+                stage_output_dir = _stage_output_dir(
+                    base_output_dir,
+                    stage_index=index,
+                    stage_total=len(loaded.stages),
+                    entrypoint_kind=stage.entrypoint_kind,
+                )
+                run_payload = run_problem_json(ir, until_seconds, str(stage_output_dir))
                 if run_payload is None:
                     print(
                         "Native runner (_fullmag_core) is not installed. "
@@ -107,9 +117,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 aggregate_payload["steps"].extend(offset_steps)
                 final_magnetization = run_payload.get("final_magnetization")
                 aggregate_payload["final_magnetization"] = final_magnetization
+                stage_manifest.append(
+                    {
+                        "index": index,
+                        "entrypoint_kind": stage.entrypoint_kind,
+                        "until_seconds": until_seconds,
+                        "output_dir": str(stage_output_dir),
+                    }
+                )
                 if offset_steps:
                     step_offset = int(offset_steps[-1]["step"])
                     time_offset = float(offset_steps[-1]["time"])
+            _write_stage_sequence_manifest(base_output_dir, stage_manifest)
         else:
             until_seconds = _resolve_until_seconds(loaded.problem.study, loaded.default_until_seconds)
             if until_seconds is None:
@@ -162,7 +181,11 @@ def _resolve_until_seconds(study, default_until_seconds: float | None) -> float 
         return default_until_seconds
     if isinstance(study, Relaxation):
         fixed_timestep = study.dynamics.fixed_timestep
-        return (fixed_timestep or 1e-13) * study.max_steps
+        adaptive_timestep = study.dynamics.adaptive_timestep
+        initial_timestep = fixed_timestep
+        if initial_timestep is None and adaptive_timestep is not None:
+            initial_timestep = adaptive_timestep.dt_initial
+        return (initial_timestep or 1e-13) * study.max_steps
     return None
 
 
@@ -176,6 +199,30 @@ def _apply_continuation_initial_state(ir: dict[str, object], final_magnetization
         "kind": "sampled_field",
         "values": final_magnetization,
     }
+
+
+def _stage_output_dir(
+    base_output_dir: Path,
+    *,
+    stage_index: int,
+    stage_total: int,
+    entrypoint_kind: str,
+) -> Path:
+    width = max(2, len(str(stage_total)))
+    safe_kind = re.sub(r"[^a-z0-9]+", "_", entrypoint_kind.lower()).strip("_") or "stage"
+    return base_output_dir / f"stage_{stage_index:0{width}d}_{safe_kind}"
+
+
+def _write_stage_sequence_manifest(
+    base_output_dir: Path,
+    stages: list[dict[str, object]],
+) -> None:
+    manifest_path = base_output_dir / "sequence_manifest.json"
+    payload = {
+        "kind": "flat_sequence",
+        "stages": stages,
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def build_summary(*, script_path: str, problem_name: str, result) -> dict[str, object]:

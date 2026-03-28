@@ -3,6 +3,8 @@
  *
  * Matches CPU reference semantics from fullmag-engine:
  *   - Gilbert-form LLG: dm/dt = -γ̄ · (m × H + α · m × (m × H))
+ *   - Optional relax mode: disable the precession term and keep only
+ *     -γ̄ · α · m × (m × H)
  *     where γ̄ = γ / (1 + α²)
  *   - Heun integrator:
  *     1. k1 = RHS(m)
@@ -32,7 +34,7 @@ extern double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy,
 
 /* ── LLG RHS kernel ──
  *
- * Computes dm/dt = -γ̄ · (m × H + α · m × (m × H))
+ * Computes dm/dt = -γ̄ · (precession + α · m × (m × H))
  * for each cell from the current m and H_eff fields.
  *
  * Output is written to (out_x, out_y, out_z) in SoA layout.
@@ -49,7 +51,7 @@ __global__ void llg_rhs_fp64_kernel(
     double * __restrict__ out_y,
     double * __restrict__ out_z,
     int n,
-    double gamma_bar, double alpha)
+    double gamma_bar, double alpha, int disable_precession)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
@@ -67,10 +69,12 @@ __global__ void llg_rhs_fp64_kernel(
     double dy = m2 * px - m0 * pz;
     double dz = m0 * py - m1 * px;
 
-    // dm/dt = -γ̄ · (precession + α · damping)
-    out_x[idx] = -gamma_bar * (px + alpha * dx);
-    out_y[idx] = -gamma_bar * (py + alpha * dy);
-    out_z[idx] = -gamma_bar * (pz + alpha * dz);
+    double precession_scale = disable_precession ? 0.0 : 1.0;
+
+    // dm/dt = -γ̄ · (precession_scale·precession + α · damping)
+    out_x[idx] = -gamma_bar * (precession_scale * px + alpha * dx);
+    out_y[idx] = -gamma_bar * (precession_scale * py + alpha * dy);
+    out_z[idx] = -gamma_bar * (precession_scale * pz + alpha * dz);
 }
 
 /* ── Heun predictor kernel ──
@@ -182,7 +186,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.k1.x),
         static_cast<double*>(ctx.k1.y),
         static_cast<double*>(ctx.k1.z),
-        n, gamma_bar, alpha);
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
 
     // --- Step 3: Predictor: m_pred = normalize(m + dt·k1) ---
     // Write predicted state into m (we saved original in tmp)
@@ -219,7 +223,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.h_ex.x),  // reuse as k2 storage
         static_cast<double*>(ctx.h_ex.y),
         static_cast<double*>(ctx.h_ex.z),
-        n, gamma_bar, alpha);
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
 
     // --- Step 6: Corrector: m_new = normalize(m_orig + 0.5·dt·(k1 + k2)) ---
     heun_corrector_fp64_kernel<<<grid, BLOCK_SIZE>>>(
@@ -274,7 +278,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.k1.x),
         static_cast<double*>(ctx.k1.y),
         static_cast<double*>(ctx.k1.z),
-        n, gamma_bar, alpha);
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
 
     double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 

@@ -1,14 +1,15 @@
 //! Relaxation algorithms: convergence checks and direct-minimization solvers.
 //!
 //! Provides three relaxation paths:
-//! - `llg_overdamped`: reuses the LLG time-stepping loop with large damping.
+//! - `llg_overdamped`: reuses the LLG time-stepping loop with the precession
+//!   term disabled, i.e. pure damping descent.
 //! - `projected_gradient_bb`: Barzilai–Borwein steepest descent on the sphere
 //!   product manifold (Boris-level quality).
 //! - `nonlinear_cg`: Nonlinear conjugate gradient (Polak–Ribière+) with
 //!   backtracking line search (OOMMF-level quality).
 
 use fullmag_engine::{add, dot, normalized, scale, sub, ExchangeLlgProblem, FftWorkspace, Vector3};
-use fullmag_ir::RelaxationControlIR;
+use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
 
 use crate::types::StepStats;
 
@@ -22,8 +23,14 @@ pub(crate) fn relaxation_converged(
     previous_total_energy: Option<f64>,
     gyromagnetic_ratio: f64,
     damping: f64,
+    pure_damping_rhs: bool,
 ) -> bool {
-    let max_torque = approximate_max_torque(stats.max_dm_dt, gyromagnetic_ratio, damping);
+    let max_torque = approximate_max_torque(
+        stats.max_dm_dt,
+        gyromagnetic_ratio,
+        damping,
+        pure_damping_rhs,
+    );
     if max_torque > control.torque_tolerance {
         return false;
     }
@@ -36,11 +43,26 @@ pub(crate) fn relaxation_converged(
     }
 }
 
-pub(crate) fn approximate_max_torque(max_dm_dt: f64, gyromagnetic_ratio: f64, damping: f64) -> f64 {
+pub(crate) fn approximate_max_torque(
+    max_dm_dt: f64,
+    gyromagnetic_ratio: f64,
+    damping: f64,
+    pure_damping_rhs: bool,
+) -> f64 {
     if gyromagnetic_ratio <= 0.0 {
         return f64::INFINITY;
     }
+    if pure_damping_rhs {
+        if damping <= 0.0 {
+            return f64::INFINITY;
+        }
+        return max_dm_dt * (1.0 + damping * damping) / (gyromagnetic_ratio * damping);
+    }
     max_dm_dt * (1.0 + damping * damping).sqrt() / gyromagnetic_ratio
+}
+
+pub(crate) fn llg_overdamped_uses_pure_damping(control: Option<&RelaxationControlIR>) -> bool {
+    control.is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::LlgOverdamped)
 }
 
 // ---------------------------------------------------------------------------

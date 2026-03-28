@@ -7,8 +7,8 @@
 //! - `cpu_reference` — CPU reference execution path (calibration baseline)
 //! - `dispatch`      — engine selection (CPU now, CUDA in Phase 2)
 
-mod artifacts;
 pub mod artifact_pipeline;
+mod artifacts;
 mod cpu_reference;
 mod dispatch;
 mod fem_reference;
@@ -19,6 +19,7 @@ mod native_fdm;
 mod native_fem;
 mod preview;
 mod relaxation;
+mod scalar_metrics;
 mod schedules;
 mod types;
 
@@ -172,6 +173,7 @@ pub fn run_problem_with_callback(
             BackendPlanIR::FdmMultilayer(_) | BackendPlanIR::Fem(_) => None,
         },
         preview_field: None,
+        scalar_row_due: true,
         finished: true,
     });
 
@@ -274,6 +276,7 @@ pub fn run_problem_with_live_preview(
         },
         magnetization: None,
         preview_field: None,
+        scalar_row_due: true,
         finished: true,
     });
 
@@ -404,8 +407,8 @@ pub fn run_reference_multilayer_fdm(
 mod tests {
     use super::*;
     use fullmag_ir::{
-        ExchangeBoundaryCondition, ExecutionPrecision, FdmGridAssetIR, FdmMaterialIR,
-        GeometryAssetsIR, GeometryEntryIR, GridDimensions, IntegratorChoice,
+        ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, GridDimensions,
+        IntegratorChoice,
     };
     use serde_json::json;
 
@@ -427,6 +430,7 @@ mod tests {
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-14),
+            adaptive_timestep: None,
             relaxation: None,
             enable_exchange: true,
             enable_demag: false,

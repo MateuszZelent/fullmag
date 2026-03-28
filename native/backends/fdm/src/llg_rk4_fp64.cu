@@ -35,7 +35,7 @@ extern __global__ void llg_rhs_fp64_kernel(
     const double * __restrict__ mx, const double * __restrict__ my, const double * __restrict__ mz,
     const double * __restrict__ hx, const double * __restrict__ hy, const double * __restrict__ hz,
     double * __restrict__ out_x, double * __restrict__ out_y, double * __restrict__ out_z,
-    int n, double gamma_bar, double alpha);
+    int n, double gamma_bar, double alpha, int disable_precession);
 
 /* ── Stage kernel: y = normalize(m0 + dt * a * k) ── */
 
@@ -112,7 +112,7 @@ static void compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
         static_cast<double*>(rhs_out.x),
         static_cast<double*>(rhs_out.y),
         static_cast<double*>(rhs_out.z),
-        n, gamma_bar, alpha);
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
 }
 
 /* ── Full RK4 step ── */
@@ -191,7 +191,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<double*>(ctx.k1.x),
         static_cast<double*>(ctx.k1.y),
         static_cast<double*>(ctx.k1.z),
-        n, gamma_bar, alpha);
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
     double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 
     cudaDeviceSynchronize();

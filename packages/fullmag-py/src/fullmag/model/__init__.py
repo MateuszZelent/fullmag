@@ -1,5 +1,5 @@
 from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, Hybrid
-from .dynamics import LLG
+from .dynamics import AdaptiveTimestep, LLG
 from .energy import Demag, Exchange, InterfacialDMI, Zeeman
 from .geometry import (
     Box,
@@ -28,6 +28,7 @@ from .study import Relaxation, TimeEvolution
 
 __all__ = [
     "BackendTarget",
+    "AdaptiveTimestep",
     "Box",
     "Cylinder",
     "Demag",

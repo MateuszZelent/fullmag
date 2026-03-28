@@ -29,7 +29,7 @@ pub enum fullmag_fdm_integrator {
     FULLMAG_FDM_INTEGRATOR_HEUN = 1,
     FULLMAG_FDM_INTEGRATOR_DP45 = 2,
     FULLMAG_FDM_INTEGRATOR_ABM3 = 3,
-    FULLMAG_FDM_INTEGRATOR_RK4  = 4,
+    FULLMAG_FDM_INTEGRATOR_RK4 = 4,
     FULLMAG_FDM_INTEGRATOR_RK23 = 5,
 }
 
@@ -72,6 +72,7 @@ pub struct fullmag_fdm_plan_desc {
     pub material: fullmag_fdm_material_desc,
     pub precision: fullmag_fdm_precision,
     pub integrator: fullmag_fdm_integrator,
+    pub disable_precession: i32,
     pub enable_exchange: i32,
     pub enable_demag: i32,
     pub has_external_field: i32,
@@ -111,6 +112,7 @@ pub struct fullmag_fdm_step_stats {
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
     pub max_rhs_amplitude: f64,
+    pub suggested_next_dt: f64,
     pub wall_time_ns: u64,
 }
 

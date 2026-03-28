@@ -281,6 +281,7 @@ impl FemLlgProblem {
             time_seconds: state.time_seconds,
             dt_used: dt,
             step_rejected: false,
+            suggested_next_dt: None,
             exchange_energy_joules: observables.exchange_energy_joules,
             demag_energy_joules: observables.demag_energy_joules,
             external_energy_joules: observables.external_energy_joules,
@@ -301,19 +302,25 @@ impl FemLlgProblem {
         let k1 = self.llg_rhs_from_vectors(&m0)?;
 
         let delta: Vec<Vector3> = (0..n).map(|i| scale(k1[i], 0.5 * dt)).collect();
-        let m1: Vec<Vector3> = m0.iter().zip(delta.iter())
+        let m1: Vec<Vector3> = m0
+            .iter()
+            .zip(delta.iter())
             .map(|(m, d)| normalized(add(*m, *d)))
             .collect::<Result<Vec<_>>>()?;
         let k2 = self.llg_rhs_from_vectors(&m1)?;
 
         let delta: Vec<Vector3> = (0..n).map(|i| scale(k2[i], 0.5 * dt)).collect();
-        let m2: Vec<Vector3> = m0.iter().zip(delta.iter())
+        let m2: Vec<Vector3> = m0
+            .iter()
+            .zip(delta.iter())
             .map(|(m, d)| normalized(add(*m, *d)))
             .collect::<Result<Vec<_>>>()?;
         let k3 = self.llg_rhs_from_vectors(&m2)?;
 
         let delta: Vec<Vector3> = (0..n).map(|i| scale(k3[i], dt)).collect();
-        let m3: Vec<Vector3> = m0.iter().zip(delta.iter())
+        let m3: Vec<Vector3> = m0
+            .iter()
+            .zip(delta.iter())
             .map(|(m, d)| normalized(add(*m, *d)))
             .collect::<Result<Vec<_>>>()?;
         let k4 = self.llg_rhs_from_vectors(&m3)?;
@@ -326,7 +333,9 @@ impl FemLlgProblem {
                 )
             })
             .collect();
-        state.magnetization = m0.iter().zip(delta.iter())
+        state.magnetization = m0
+            .iter()
+            .zip(delta.iter())
             .map(|(m, d)| normalized(add(*m, *d)))
             .collect::<Result<Vec<_>>>()?;
         state.time_seconds += dt;
@@ -336,6 +345,7 @@ impl FemLlgProblem {
             time_seconds: state.time_seconds,
             dt_used: dt,
             step_rejected: false,
+            suggested_next_dt: None,
             exchange_energy_joules: observables.exchange_energy_joules,
             demag_energy_joules: observables.demag_energy_joules,
             external_energy_joules: observables.external_energy_joules,
@@ -359,13 +369,17 @@ impl FemLlgProblem {
             let k1 = self.llg_rhs_from_vectors(&m0)?;
 
             let delta: Vec<Vector3> = (0..n).map(|i| scale(k1[i], 0.5 * dt)).collect();
-            let m1: Vec<Vector3> = m0.iter().zip(delta.iter())
+            let m1: Vec<Vector3> = m0
+                .iter()
+                .zip(delta.iter())
                 .map(|(m, d)| normalized(add(*m, *d)))
                 .collect::<Result<Vec<_>>>()?;
             let k2 = self.llg_rhs_from_vectors(&m1)?;
 
             let delta: Vec<Vector3> = (0..n).map(|i| scale(k2[i], 0.75 * dt)).collect();
-            let m2: Vec<Vector3> = m0.iter().zip(delta.iter())
+            let m2: Vec<Vector3> = m0
+                .iter()
+                .zip(delta.iter())
                 .map(|(m, d)| normalized(add(*m, *d)))
                 .collect::<Result<Vec<_>>>()?;
             let k3 = self.llg_rhs_from_vectors(&m2)?;
@@ -382,25 +396,37 @@ impl FemLlgProblem {
                     )
                 })
                 .collect();
-            let y3: Vec<Vector3> = m0.iter().zip(delta3.iter())
+            let y3: Vec<Vector3> = m0
+                .iter()
+                .zip(delta3.iter())
                 .map(|(m, d)| normalized(add(*m, *d)))
                 .collect::<Result<Vec<_>>>()?;
 
             let k4 = self.llg_rhs_from_vectors(&y3)?;
 
             let error = Self::max_error_norm_fem(
-                &[(&k1, -5.0 / 72.0), (&k2, 1.0 / 12.0), (&k3, 1.0 / 9.0), (&k4, -1.0 / 8.0)],
-                dt, n,
+                &[
+                    (&k1, -5.0 / 72.0),
+                    (&k2, 1.0 / 12.0),
+                    (&k3, 1.0 / 9.0),
+                    (&k4, -1.0 / 8.0),
+                ],
+                dt,
+                n,
             );
 
             if error <= cfg.max_error || dt <= cfg.dt_min {
                 state.magnetization = y3;
                 state.time_seconds += dt;
+                let dt_next = (cfg.headroom * dt * (cfg.max_error / error.max(1e-30)).powf(1.0 / 3.0))
+                    .max(cfg.dt_min)
+                    .min(cfg.dt_max);
                 let observables = self.observe_vectors(state.magnetization())?;
                 return Ok(StepReport {
                     time_seconds: state.time_seconds,
                     dt_used: dt,
                     step_rejected: false,
+                    suggested_next_dt: Some(dt_next),
                     exchange_energy_joules: observables.exchange_energy_joules,
                     demag_energy_joules: observables.demag_energy_joules,
                     external_energy_joules: observables.external_energy_joules,
@@ -463,74 +489,125 @@ impl FemLlgProblem {
 
             // Stage 2
             let delta: Vec<Vector3> = (0..n).map(|i| scale(k1[i], A21 * dt)).collect();
-            let ms: Vec<Vector3> = m0.iter().zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d))).collect::<Result<Vec<_>>>()?;
+            let ms: Vec<Vector3> = m0
+                .iter()
+                .zip(delta.iter())
+                .map(|(m, d)| normalized(add(*m, *d)))
+                .collect::<Result<Vec<_>>>()?;
             let k2 = self.llg_rhs_from_vectors(&ms)?;
 
             // Stage 3
             let delta: Vec<Vector3> = (0..n)
-                .map(|i| scale(add(scale(k1[i], A31), scale(k2[i], A32)), dt)).collect();
-            let ms: Vec<Vector3> = m0.iter().zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d))).collect::<Result<Vec<_>>>()?;
+                .map(|i| scale(add(scale(k1[i], A31), scale(k2[i], A32)), dt))
+                .collect();
+            let ms: Vec<Vector3> = m0
+                .iter()
+                .zip(delta.iter())
+                .map(|(m, d)| normalized(add(*m, *d)))
+                .collect::<Result<Vec<_>>>()?;
             let k3 = self.llg_rhs_from_vectors(&ms)?;
 
             // Stage 4
             let delta: Vec<Vector3> = (0..n)
-                .map(|i| scale(add(add(scale(k1[i], A41), scale(k2[i], A42)), scale(k3[i], A43)), dt))
+                .map(|i| {
+                    scale(
+                        add(add(scale(k1[i], A41), scale(k2[i], A42)), scale(k3[i], A43)),
+                        dt,
+                    )
+                })
                 .collect();
-            let ms: Vec<Vector3> = m0.iter().zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d))).collect::<Result<Vec<_>>>()?;
+            let ms: Vec<Vector3> = m0
+                .iter()
+                .zip(delta.iter())
+                .map(|(m, d)| normalized(add(*m, *d)))
+                .collect::<Result<Vec<_>>>()?;
             let k4 = self.llg_rhs_from_vectors(&ms)?;
 
             // Stage 5
             let delta: Vec<Vector3> = (0..n)
-                .map(|i| scale(
-                    add(add(scale(k1[i], A51), scale(k2[i], A52)),
-                        add(scale(k3[i], A53), scale(k4[i], A54))),
-                    dt))
+                .map(|i| {
+                    scale(
+                        add(
+                            add(scale(k1[i], A51), scale(k2[i], A52)),
+                            add(scale(k3[i], A53), scale(k4[i], A54)),
+                        ),
+                        dt,
+                    )
+                })
                 .collect();
-            let ms: Vec<Vector3> = m0.iter().zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d))).collect::<Result<Vec<_>>>()?;
+            let ms: Vec<Vector3> = m0
+                .iter()
+                .zip(delta.iter())
+                .map(|(m, d)| normalized(add(*m, *d)))
+                .collect::<Result<Vec<_>>>()?;
             let k5 = self.llg_rhs_from_vectors(&ms)?;
 
             // Stage 6
             let delta: Vec<Vector3> = (0..n)
-                .map(|i| scale(
-                    add(add(add(scale(k1[i], A61), scale(k2[i], A62)), scale(k3[i], A63)),
-                        add(scale(k4[i], A64), scale(k5[i], A65))),
-                    dt))
+                .map(|i| {
+                    scale(
+                        add(
+                            add(add(scale(k1[i], A61), scale(k2[i], A62)), scale(k3[i], A63)),
+                            add(scale(k4[i], A64), scale(k5[i], A65)),
+                        ),
+                        dt,
+                    )
+                })
                 .collect();
-            let ms: Vec<Vector3> = m0.iter().zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d))).collect::<Result<Vec<_>>>()?;
+            let ms: Vec<Vector3> = m0
+                .iter()
+                .zip(delta.iter())
+                .map(|(m, d)| normalized(add(*m, *d)))
+                .collect::<Result<Vec<_>>>()?;
             let k6 = self.llg_rhs_from_vectors(&ms)?;
 
             // 5th-order solution
             let delta5: Vec<Vector3> = (0..n)
-                .map(|i| scale(
-                    add(add(add(scale(k1[i], B1), scale(k3[i], B3)), scale(k4[i], B4)),
-                        add(scale(k5[i], B5), scale(k6[i], B6))),
-                    dt))
+                .map(|i| {
+                    scale(
+                        add(
+                            add(add(scale(k1[i], B1), scale(k3[i], B3)), scale(k4[i], B4)),
+                            add(scale(k5[i], B5), scale(k6[i], B6)),
+                        ),
+                        dt,
+                    )
+                })
                 .collect();
-            let y5: Vec<Vector3> = m0.iter().zip(delta5.iter())
-                .map(|(m, d)| normalized(add(*m, *d))).collect::<Result<Vec<_>>>()?;
+            let y5: Vec<Vector3> = m0
+                .iter()
+                .zip(delta5.iter())
+                .map(|(m, d)| normalized(add(*m, *d)))
+                .collect::<Result<Vec<_>>>()?;
 
             // k7 for error estimate (FSAL)
             let k7 = self.llg_rhs_from_vectors(&y5)?;
 
             let error = Self::max_error_norm_fem(
-                &[(&k1, E1), (&k3, E3), (&k4, E4), (&k5, E5), (&k6, E6), (&k7, E7)],
-                dt, n,
+                &[
+                    (&k1, E1),
+                    (&k3, E3),
+                    (&k4, E4),
+                    (&k5, E5),
+                    (&k6, E6),
+                    (&k7, E7),
+                ],
+                dt,
+                n,
             );
 
             if error <= cfg.max_error || dt <= cfg.dt_min {
                 state.magnetization = y5;
                 state.time_seconds += dt;
                 state.k_fsal = Some(k7);
+                let dt_next = (cfg.headroom * dt * (cfg.max_error / error.max(1e-30)).powf(0.2))
+                    .max(cfg.dt_min)
+                    .min(cfg.dt_max);
                 let observables = self.observe_vectors(state.magnetization())?;
                 return Ok(StepReport {
                     time_seconds: state.time_seconds,
                     dt_used: dt,
                     step_rejected: false,
+                    suggested_next_dt: Some(dt_next),
                     exchange_energy_joules: observables.exchange_energy_joules,
                     demag_energy_joules: observables.demag_energy_joules,
                     external_energy_joules: observables.external_energy_joules,
@@ -558,11 +635,15 @@ impl FemLlgProblem {
         if !state.abm_history.is_ready() {
             let m0 = state.magnetization.clone();
             let k1 = self.llg_rhs_from_vectors(&m0)?;
-            let predicted: Vec<Vector3> = m0.iter().zip(k1.iter())
+            let predicted: Vec<Vector3> = m0
+                .iter()
+                .zip(k1.iter())
                 .map(|(m, rhs)| normalized(add(*m, scale(*rhs, dt))))
                 .collect::<Result<Vec<_>>>()?;
             let k2 = self.llg_rhs_from_vectors(&predicted)?;
-            let corrected: Vec<Vector3> = m0.iter().zip(k1.iter().zip(k2.iter()))
+            let corrected: Vec<Vector3> = m0
+                .iter()
+                .zip(k1.iter().zip(k2.iter()))
                 .map(|(m, (rhs1, rhs2))| normalized(add(*m, scale(add(*rhs1, *rhs2), 0.5 * dt))))
                 .collect::<Result<Vec<_>>>()?;
 
@@ -577,6 +658,7 @@ impl FemLlgProblem {
                 time_seconds: state.time_seconds,
                 dt_used: dt,
                 step_rejected: false,
+                suggested_next_dt: None,
                 exchange_energy_joules: observables.exchange_energy_joules,
                 demag_energy_joules: observables.demag_energy_joules,
                 external_energy_joules: observables.external_energy_joules,
@@ -627,6 +709,7 @@ impl FemLlgProblem {
             time_seconds: state.time_seconds,
             dt_used: dt,
             step_rejected: false,
+            suggested_next_dt: None,
             exchange_energy_joules: observables.exchange_energy_joules,
             demag_energy_joules: observables.demag_energy_joules,
             external_energy_joules: observables.external_energy_joules,
@@ -851,7 +934,9 @@ impl FemLlgProblem {
                 eprintln!(
                     "[fullmag::fem] Transfer-grid demag active — grid {}×{}×{} ({} cells). \
                      FFT workspace will be cached across evaluations.",
-                    grid_desc.grid.nx, grid_desc.grid.ny, grid_desc.grid.nz,
+                    grid_desc.grid.nx,
+                    grid_desc.grid.ny,
+                    grid_desc.grid.nz,
                     grid_desc.grid.cell_count()
                 );
             });
@@ -1019,14 +1104,37 @@ impl FemLlgProblem {
             .sum()
     }
 
+    /// Compute the effective field (exchange + demag + external) without
+    /// computing energies, norms, or RHS.  This is the lightweight path
+    /// used by integrators that only need H_eff for the RHS evaluation.
+    fn effective_field_from_vectors(&self, magnetization: &[Vector3]) -> Result<Vec<Vector3>> {
+        let exchange_field = if self.terms.exchange {
+            self.exchange_field_from_vectors(magnetization)
+        } else {
+            vec![[0.0, 0.0, 0.0]; self.topology.n_nodes]
+        };
+        let (demag_field, _demag_energy) = if self.terms.demag {
+            self.demag_observables_from_vectors(magnetization)?
+        } else {
+            (vec![[0.0, 0.0, 0.0]; self.topology.n_nodes], 0.0)
+        };
+        let external_field = self.external_field_vectors();
+        Ok(exchange_field
+            .iter()
+            .zip(demag_field.iter())
+            .zip(external_field.iter())
+            .map(|((h_ex, h_demag), h_ext)| add(add(*h_ex, *h_demag), *h_ext))
+            .collect())
+    }
+
     fn llg_rhs_from_vectors(&self, magnetization: &[Vector3]) -> Result<Vec<Vector3>> {
-        let observables = self.observe_vectors(magnetization)?;
+        let effective_field = self.effective_field_from_vectors(magnetization)?;
         Ok(magnetization
             .iter()
             .enumerate()
             .map(|(node, m)| {
                 if self.topology.magnetic_node_volumes[node] > 0.0 {
-                    self.llg_rhs_from_field(*m, observables.effective_field[node])
+                    self.llg_rhs_from_field(*m, effective_field[node])
                 } else {
                     [0.0, 0.0, 0.0]
                 }
@@ -1039,7 +1147,12 @@ impl FemLlgProblem {
         let gamma_bar = self.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
         let precession = cross(magnetization, field);
         let damping = cross(magnetization, precession);
-        scale(add(precession, scale(damping, alpha)), -gamma_bar)
+        let precession_term = if self.dynamics.precession_enabled {
+            precession
+        } else {
+            [0.0, 0.0, 0.0]
+        };
+        scale(add(precession_term, scale(damping, alpha)), -gamma_bar)
     }
 
     fn magnetic_bbox(&self) -> Option<(Vector3, Vector3)> {

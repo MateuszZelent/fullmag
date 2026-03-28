@@ -3,6 +3,7 @@
 from . import init
 from .init import random, uniform
 from .model import (
+    AdaptiveTimestep,
     Box,
     DeviceTarget,
     Cylinder,
@@ -64,6 +65,7 @@ from .world import (
     solver,
     b_ext,
     save,
+    tableautosave,
     name as set_name,
     run,
     relax,
@@ -73,6 +75,7 @@ from .world import (
 __all__ = [
     # Class-based API
     "BackendTarget",
+    "AdaptiveTimestep",
     "Box",
     "Cylinder",
     "Demag",
@@ -132,6 +135,7 @@ __all__ = [
     "solver",
     "b_ext",
     "save",
+    "tableautosave",
     "set_name",
     "run",
     "relax",

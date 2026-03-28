@@ -16,6 +16,8 @@ use crate::preview::{
     build_grid_preview_field_from_flat_plan, normalize_quantity_id, plan_grid_preview,
 };
 #[cfg(feature = "cuda")]
+use crate::relaxation::llg_overdamped_uses_pure_damping;
+#[cfg(feature = "cuda")]
 use crate::types::StepStats;
 #[cfg(feature = "cuda")]
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError};
@@ -126,12 +128,18 @@ impl NativeFdmBackend {
         } else {
             None
         };
+        let adaptive = plan.adaptive_timestep.as_ref();
 
         let plan_desc = ffi::fullmag_fdm_plan_desc {
             grid,
             material,
             precision,
             integrator,
+            disable_precession: if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
+                1
+            } else {
+                0
+            },
             enable_exchange: if plan.enable_exchange { 1 } else { 0 },
             enable_demag: if plan.enable_demag { 1 } else { 0 },
             has_external_field: if plan.external_field.is_some() { 1 } else { 0 },
@@ -171,10 +179,10 @@ impl NativeFdmBackend {
                 .map_or(0, |mask| mask.len() as u64),
             initial_magnetization_xyz: m_flat.as_ptr(),
             initial_magnetization_len: m_flat.len() as u64,
-            adaptive_max_error: 0.0, // 0 → use backend default 1e-5
-            adaptive_dt_min: 0.0,    // 0 → use backend default 1e-18
-            adaptive_dt_max: 0.0,    // 0 → use backend default 1e-10
-            adaptive_headroom: 0.0,  // 0 → use backend default 0.8
+            adaptive_max_error: adaptive.map_or(0.0, |cfg| cfg.atol),
+            adaptive_dt_min: adaptive.map_or(0.0, |cfg| cfg.dt_min),
+            adaptive_dt_max: adaptive.and_then(|cfg| cfg.dt_max).unwrap_or(0.0),
+            adaptive_headroom: adaptive.map_or(0.0, |cfg| cfg.safety),
         };
 
         let handle = unsafe { ffi::fullmag_fdm_backend_create(&plan_desc) };
@@ -208,6 +216,7 @@ impl NativeFdmBackend {
             max_effective_field_amplitude: 0.0,
             max_demag_field_amplitude: 0.0,
             max_rhs_amplitude: 0.0,
+            suggested_next_dt: 0.0,
             wall_time_ns: 0,
         };
 
@@ -228,6 +237,11 @@ impl NativeFdmBackend {
             max_h_demag: stats.max_demag_field_amplitude,
             max_dm_dt: stats.max_rhs_amplitude,
             wall_time_ns: stats.wall_time_ns,
+            dt_suggested: if stats.suggested_next_dt > 0.0 {
+                Some(stats.suggested_next_dt)
+            } else {
+                None
+            },
             ..StepStats::default()
         })
     }
@@ -437,7 +451,7 @@ mod tests {
     };
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
-        IntegratorChoice,
+        IntegratorChoice, RelaxationAlgorithmIR, RelaxationControlIR,
     };
 
     fn make_masked_test_plan(enable_demag: bool) -> FdmPlanIR {
@@ -472,6 +486,7 @@ mod tests {
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(2.5e-13),
+            adaptive_timestep: None,
             relaxation: None,
             enable_exchange: true,
             enable_demag,
@@ -515,10 +530,42 @@ mod tests {
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(2.0e-13),
+            adaptive_timestep: None,
             relaxation: None,
             enable_exchange: true,
             enable_demag: true,
             external_field: Some([2.0e3, -1.0e3, 5.0e2]),
+        }
+    }
+
+    fn make_relaxation_precession_test_plan() -> FdmPlanIR {
+        FdmPlanIR {
+            grid: GridDimensions { cells: [1, 1, 1] },
+            cell_size: [5e-9, 5e-9, 5e-9],
+            region_mask: vec![0],
+            active_mask: None,
+            initial_magnetization: vec![[1.0, 0.0, 0.0]],
+            material: FdmMaterialIR {
+                name: "Py".to_string(),
+                saturation_magnetisation: 800e3,
+                exchange_stiffness: 13e-12,
+                damping: 0.1,
+            },
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            integrator: IntegratorChoice::Rk23,
+            fixed_timestep: Some(1e-15),
+            adaptive_timestep: None,
+            relaxation: Some(RelaxationControlIR {
+                algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+                torque_tolerance: 1e-6,
+                energy_tolerance: None,
+                max_steps: 10,
+            }),
+            enable_exchange: false,
+            enable_demag: false,
+            external_field: Some([0.0, 0.0, 8.0e5]),
         }
     }
 
@@ -580,8 +627,16 @@ mod tests {
             plan.material.damping,
         )
         .expect("material");
-        let dynamics =
-            LlgConfig::new(plan.gyromagnetic_ratio, TimeIntegrator::Heun).expect("dynamics");
+        let integrator = match plan.integrator {
+            fullmag_ir::IntegratorChoice::Heun => TimeIntegrator::Heun,
+            fullmag_ir::IntegratorChoice::Rk4 => TimeIntegrator::RK4,
+            fullmag_ir::IntegratorChoice::Rk23 => TimeIntegrator::RK23,
+            fullmag_ir::IntegratorChoice::Rk45 => TimeIntegrator::RK45,
+            fullmag_ir::IntegratorChoice::Abm3 => TimeIntegrator::ABM3,
+        };
+        let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator)
+            .expect("dynamics")
+            .with_precession_enabled(!llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()));
         let problem = ExchangeLlgProblem::with_terms_and_mask(
             grid,
             cell_size,
@@ -854,6 +909,45 @@ mod tests {
             expected_report.total_energy_joules,
             5e-4,
             1e-21,
+        );
+    }
+
+    #[test]
+    fn native_fdm_relaxation_disables_precession_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM relaxation test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let plan = make_relaxation_precession_test_plan();
+        let cell_count = plan.initial_magnetization.len();
+        let (expected_m, _, _, _, _, expected_report) = cpu_reference_single_step(&plan);
+
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm step");
+        let actual_m = backend.copy_m(cell_count).expect("copy m");
+
+        assert_vector_field_close("relax.m", &actual_m, &expected_m, 5e-6, 1e-10);
+        assert!(
+            actual_m[0][1].abs() <= 1e-10,
+            "relaxation should not precess into y, got {:?}",
+            actual_m[0]
+        );
+        assert!(
+            actual_m[0][2] > 0.0,
+            "relaxation should move toward +z field, got {:?}",
+            actual_m[0]
+        );
+        assert_scalar_close(
+            "relax.max_rhs",
+            stats.max_dm_dt,
+            expected_report.max_rhs_amplitude,
+            5e-6,
+            1e-10,
         );
     }
 }

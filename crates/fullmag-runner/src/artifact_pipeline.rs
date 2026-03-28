@@ -107,8 +107,7 @@ fn writer_loop(output_dir: &Path, rx: mpsc::Receiver<ArtifactJob>) {
                 data,
             } => {
                 let _ = fs::create_dir_all(&snapshots_dir);
-                let filename =
-                    snapshots_dir.join(format!("{}_{:08}.bin", field_name, step));
+                let filename = snapshots_dir.join(format!("{}_{:08}.bin", field_name, step));
                 if let Ok(mut f) = fs::File::create(&filename) {
                     let bytes: &[u8] = unsafe {
                         std::slice::from_raw_parts(
@@ -130,11 +129,10 @@ fn writer_loop(output_dir: &Path, rx: mpsc::Receiver<ArtifactJob>) {
                     .open(&scalars_path)
                 {
                     if !csv_header_written {
-                        let header: Vec<&str> =
-                            std::iter::once("step")
-                                .chain(std::iter::once("time_s"))
-                                .chain(values.iter().map(|(name, _)| name.as_str()))
-                                .collect();
+                        let header: Vec<&str> = std::iter::once("step")
+                            .chain(std::iter::once("time_s"))
+                            .chain(values.iter().map(|(name, _)| name.as_str()))
+                            .collect();
                         let _ = writeln!(f, "{}", header.join(","));
                         csv_header_written = true;
                     }

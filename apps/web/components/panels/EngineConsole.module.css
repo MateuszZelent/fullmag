@@ -299,7 +299,7 @@
 .energyCard[data-tone="demag"] { border-left: 3px solid var(--energy-demag); }
 .energyCard[data-tone="external"] { border-left: 3px solid var(--energy-external); }
 .energyCard[data-tone="total"] { border-left: 3px solid var(--energy-total); }
-.energyCard[data-tone=\"neutral\"] { border-left: 3px solid var(--ide-text-3); }
+.energyCard[data-tone="neutral"] { border-left: 3px solid var(--ide-text-3); }
 
 /* ── Charts preset bar ──────────────────────────── */
 .chartPresetBar {

@@ -94,8 +94,7 @@ run-nanoflower-static:
 
 run-nanoflower-interactive:
     just ensure-python
-    FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag
-    just build-static-control-room
+    FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag-dev
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag --dev -i examples/nanoflower_fdm.py
 
 run-nanoflower-headless:

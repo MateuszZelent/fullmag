@@ -57,6 +57,65 @@
 
 .titleBarSpacer { flex: 1; }
 
+.titleBarControls {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  -webkit-app-region: no-drag;
+}
+
+.titleBarAction {
+  appearance: none;
+  border: 1px solid var(--ide-border);
+  background: linear-gradient(180deg, hsla(220, 18%, 22%, 0.94), hsla(220, 16%, 16%, 0.94));
+  color: var(--ide-text-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  height: 18px;
+  padding: 0 0.45rem;
+  border-radius: 4px;
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms, box-shadow 120ms;
+  font-family: inherit;
+}
+
+.titleBarAction:hover:not(:disabled) {
+  background: linear-gradient(180deg, hsla(220, 22%, 26%, 0.98), hsla(220, 18%, 18%, 0.98));
+  border-color: var(--ide-border-strong);
+  color: var(--ide-text-1);
+}
+
+.titleBarAction[data-tone="relax"]:not(:disabled) {
+  color: var(--ide-accent-text);
+}
+
+.titleBarAction[data-tone="run"]:not(:disabled) {
+  color: var(--status-running);
+}
+
+.titleBarAction[data-tone="pause"]:not(:disabled) {
+  color: var(--status-warn);
+}
+
+.titleBarAction[data-tone="stop"]:not(:disabled) {
+  color: var(--status-failed);
+}
+
+.titleBarAction:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.titleBarActionSpinner {
+  animation: spin 1s linear infinite;
+}
+
 .titleBarStatus {
   display: flex;
   align-items: center;
@@ -226,7 +285,59 @@
   background: var(--ide-border-subtle);
 }
 
-/* ── RibbonBar (64px) ────────────────────────────── */
+/* ── RibbonBar (tabs + actions) ───────────────────── */
+
+.ribbonWrapper {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  background: var(--ide-surface);
+  border-bottom: 1px solid var(--ide-border);
+}
+
+.ribbonTabs {
+  display: flex;
+  align-items: stretch;
+  height: 22px;
+  padding: 0 0.5rem;
+  gap: 0;
+  border-bottom: 1px solid var(--ide-border-subtle);
+}
+
+.ribbonTabBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.75rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ide-text-3);
+  cursor: default;
+  position: relative;
+  transition: color 100ms;
+  user-select: none;
+}
+
+.ribbonTabBtn:hover {
+  color: var(--ide-text-2);
+}
+
+.ribbonTabBtn[data-active="true"] {
+  color: var(--ide-accent-text);
+}
+
+.ribbonTabBtn[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 15%;
+  right: 15%;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ide-accent);
+}
 
 .ribbonBar {
   display: flex;
@@ -234,7 +345,6 @@
   height: 64px;
   padding: 0 0.35rem;
   background: var(--ide-surface);
-  border-bottom: 1px solid var(--ide-border);
   flex-shrink: 0;
   gap: 0;
   overflow-x: auto;

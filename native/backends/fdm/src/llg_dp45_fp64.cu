@@ -33,7 +33,7 @@ extern __global__ void llg_rhs_fp64_kernel(
     const double * __restrict__ mx, const double * __restrict__ my, const double * __restrict__ mz,
     const double * __restrict__ hx, const double * __restrict__ hy, const double * __restrict__ hz,
     double * __restrict__ out_x, double * __restrict__ out_y, double * __restrict__ out_z,
-    int n, double gamma_bar, double alpha);
+    int n, double gamma_bar, double alpha, int disable_precession);
 
 /* ── Fused MADD + normalize kernel ──
  *
@@ -196,7 +196,7 @@ static void compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
         static_cast<double*>(rhs_out.x),
         static_cast<double*>(rhs_out.y),
         static_cast<double*>(rhs_out.z),
-        n, gamma_bar, alpha);
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
 }
 
 /* ── Max reduction for error ── */
@@ -256,7 +256,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
                 static_cast<double*>(ctx.k1.x),
                 static_cast<double*>(ctx.k1.y),
                 static_cast<double*>(ctx.k1.z),
-                n, gamma_bar, alpha);
+                n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
         }
 
         // Stage 2: y2 = m0 + dt*A21*k1 → compute k2
@@ -336,7 +336,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.k_fsal.x),
             static_cast<double*>(ctx.k_fsal.y),
             static_cast<double*>(ctx.k_fsal.z),
-            n, gamma_bar, alpha);
+            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
 
         // Error estimate
         dp45_error_kernel<<<grid, 256>>>(
@@ -357,6 +357,17 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             ctx.step_count++;
             ctx.current_time += dt;
             ctx.fsal_valid = true;
+
+            // Compute optimal dt for next step (growth on accept)
+            // DP45: error ~ O(h^5) so scaling exponent = 1/5 = 0.2
+            double dt_next = dt;
+            if (error > 0.0) {
+                dt_next = ctx.adaptive_headroom * dt * pow(ctx.adaptive_max_error / error, 0.2);
+                dt_next = fmin(dt_next, ctx.adaptive_dt_max);
+                dt_next = fmax(dt_next, ctx.adaptive_dt_min);
+            } else {
+                dt_next = ctx.adaptive_dt_max;
+            }
 
             // Diagnostics on accepted state (fields already computed above)
             double e_ex = ctx.enable_exchange ? launch_exchange_energy_fp64(ctx) : 0.0;
@@ -380,6 +391,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             stats->max_effective_field_amplitude = max_h_eff;
             stats->max_demag_field_amplitude = max_h_demag;
             stats->max_rhs_amplitude = max_dm_dt;
+            stats->suggested_next_dt = dt_next;
             return;
         }
 

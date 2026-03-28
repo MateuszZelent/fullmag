@@ -1,0 +1,151 @@
+/* ScalarTable — mumax-style CSV table */
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.6rem;
+  background: var(--ide-surface-raised);
+  border-bottom: 1px solid var(--ide-border-subtle);
+  flex-shrink: 0;
+}
+
+.toolbarLabel {
+  font-size: var(--ide-text-xs);
+  font-weight: 600;
+  color: var(--ide-text-3);
+  font-family: var(--font-mono);
+}
+
+.toolbarBtn {
+  appearance: none;
+  border: 1px solid var(--ide-border-strong);
+  background: var(--ide-surface-input);
+  color: var(--ide-text-2);
+  font-size: var(--ide-text-xs);
+  font-weight: 600;
+  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 80ms;
+}
+
+.toolbarBtn:hover {
+  background: var(--ide-surface-hover);
+  color: var(--ide-text-1);
+}
+
+.toolbarToggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+  font-size: var(--ide-text-xs);
+  color: var(--ide-text-3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.toolbarToggle input {
+  accent-color: var(--ide-accent);
+}
+
+.tableContainer {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.tableContainer::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.tableContainer::-webkit-scrollbar-thumb {
+  background: var(--ide-border-subtle);
+  border-radius: 2px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--ide-surface-raised);
+  padding: 0.3rem 0.45rem;
+  text-align: right;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.6rem;
+  color: var(--ide-text-3);
+  border-bottom: 1px solid var(--ide-border);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: color 80ms;
+}
+
+.th:first-child {
+  text-align: left;
+}
+
+.th:hover {
+  color: var(--ide-text-1);
+}
+
+.th[data-sorted="true"] {
+  color: var(--ide-accent-text);
+}
+
+.sortArrow {
+  margin-left: 0.2rem;
+  font-size: 0.5rem;
+}
+
+.tr {
+  transition: background 60ms;
+}
+
+.tr:hover {
+  background: hsla(220, 30%, 50%, 0.06);
+}
+
+.tr[data-latest="true"] {
+  background: hsla(210, 80%, 55%, 0.06);
+}
+
+.td {
+  padding: 0.22rem 0.45rem;
+  text-align: right;
+  color: var(--ide-text-1);
+  white-space: nowrap;
+  border-bottom: 1px solid var(--ide-border-subtle);
+}
+
+.td:first-child {
+  text-align: left;
+  color: var(--ide-text-2);
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--ide-text-3);
+  font-size: 0.82rem;
+}

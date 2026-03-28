@@ -8,15 +8,17 @@ import {
   ArrowRight, CheckCircle2, XCircle, AlertTriangle, Dot,
 } from "lucide-react";
 import ScalarPlot from "../plots/ScalarPlot";
+import ScalarTable from "./ScalarTable";
 import s from "./EngineConsole.module.css";
 
 /* ── Types ─────────────────────────────────────────────────── */
 
-type ConsoleTab = "live" | "log" | "energy" | "charts" | "perf";
-type ChartPreset = "energy" | "convergence" | "timestep" | "all";
+type ConsoleTab = "live" | "log" | "energy" | "charts" | "table" | "progress" | "perf";
+type ChartPreset = "energy" | "magnetization" | "convergence" | "timestep" | "all";
 
 const CHART_PRESETS: Record<ChartPreset, { label: string; yColumns: string[] }> = {
   energy:       { label: "Energy",       yColumns: ["e_ex", "e_demag", "e_ext", "e_total"] },
+  magnetization:{ label: "M avg",        yColumns: ["mx", "my", "mz"] },
   convergence:  { label: "Convergence",  yColumns: ["max_dm_dt", "max_h_eff"] },
   timestep:     { label: "Δt",           yColumns: ["solver_dt"] },
   all:          { label: "All",          yColumns: ["e_total", "max_dm_dt", "solver_dt", "max_h_eff"] },
@@ -289,6 +291,8 @@ const TABS: { value: ConsoleTab; label: string }[] = [
   { value: "log", label: "Log" },
   { value: "energy", label: "Energy" },
   { value: "charts", label: "Charts" },
+  { value: "table", label: "Table" },
+  { value: "progress", label: "Progress" },
   { value: "perf", label: "Perf" },
 ];
 
@@ -441,7 +445,7 @@ export default function EngineConsole({
                 </span>
               </div>
               <div className={s.metricCell}>
-                <span className={s.metricLabel}>Wall Time</span>
+                <span className={s.metricLabel}>Elapsed</span>
                 <span className={s.metricValue}>{fmtDuration(elapsed)}</span>
               </div>
               <div className={s.metricCell}>
@@ -604,6 +608,62 @@ export default function EngineConsole({
                 />
               </div>
             )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="table" className={s.tabPane}>
+          <ScalarTable rows={scalarRows} />
+        </TabsContent>
+
+        <TabsContent value="progress" className={s.tabPane}>
+          <div style={{ padding: "0.75rem", display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+            {/* Phase timeline */}
+            {[
+              { label: "Bootstrap", done: !!session, active: workspaceStatus === "bootstrapping" },
+              { label: "Materialize", done: workspaceStatus !== "materializing_script" && workspaceStatus !== "bootstrapping" && !!session, active: workspaceStatus === "materializing_script" },
+              { label: "Solving", done: workspaceStatus === "completed" || (hasSolverTelemetry && (liveState?.max_dm_dt ?? 1) < 1e-5), active: workspaceStatus === "running" || workspaceStatus === "awaiting_command" },
+              { label: "Converged", done: hasSolverTelemetry && (liveState?.max_dm_dt ?? 1) < 1e-5, active: false },
+            ].map((phase) => (
+              <div key={phase.label} className={s.convergenceRow}>
+                <span className={s.convergenceLabel} style={{ color: phase.done ? "var(--status-running)" : phase.active ? "var(--ide-accent-text)" : undefined }}>
+                  {phase.done ? "✓" : phase.active ? "●" : "○"} {phase.label}
+                </span>
+                <div className={s.convergenceTrack}>
+                  <div className={s.convergenceFill} style={{ width: phase.done ? "100%" : phase.active ? "50%" : "0%", background: phase.done ? "var(--status-running)" : "var(--ide-accent)" }} />
+                </div>
+              </div>
+            ))}
+
+            {/* Convergence metric */}
+            <div className={s.convergenceRow} style={{ marginTop: "0.5rem" }}>
+              <span className={s.convergenceLabel}>Convergence</span>
+              <div className={s.convergenceTrack}>
+                <div className={s.convergenceFill} style={{ width: `${convergenceDisplay}%`, background: convergenceDisplay > 80 ? "var(--status-running)" : convergenceDisplay > 40 ? "var(--status-warn)" : "var(--status-failed)" }} />
+              </div>
+              <span className={s.convergenceValue}>{convergenceDisplay.toFixed(0)}%</span>
+            </div>
+
+            {/* Key metrics */}
+            <div className={s.telemetryGrid} style={{ marginTop: "0.35rem" }}>
+              <div className={s.metricCell}>
+                <span className={s.metricLabel}>Steps</span>
+                <span className={s.metricValue}>{(liveState?.step ?? run?.total_steps ?? 0).toLocaleString()}</span>
+              </div>
+              <div className={s.metricCell}>
+                <span className={s.metricLabel}>Sim Time</span>
+                <span className={s.metricValue}>{fmtTimeOrDash(liveState?.time ?? 0, hasSolverTelemetry)}</span>
+              </div>
+              <div className={s.metricCell}>
+                <span className={s.metricLabel}>Elapsed</span>
+                <span className={s.metricValue}>{fmtDuration(elapsed)}</span>
+              </div>
+              <div className={s.metricCell}>
+                <span className={s.metricLabel}>max dm/dt</span>
+                <span className={s.metricValue} style={{ color: hasSolverTelemetry && (liveState?.max_dm_dt ?? 1) < 1e-5 ? "var(--status-running)" : undefined }}>
+                  {fmtExpOrDash(liveState?.max_dm_dt ?? 0, hasSolverTelemetry)}
+                </span>
+              </div>
+            </div>
           </div>
         </TabsContent>
 

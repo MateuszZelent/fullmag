@@ -230,6 +230,7 @@ pub struct LlgConfig {
     pub gyromagnetic_ratio: f64,
     pub integrator: TimeIntegrator,
     pub adaptive: AdaptiveStepConfig,
+    pub precession_enabled: bool,
 }
 
 impl Default for LlgConfig {
@@ -238,6 +239,7 @@ impl Default for LlgConfig {
             gyromagnetic_ratio: DEFAULT_GYROMAGNETIC_RATIO,
             integrator: TimeIntegrator::Heun,
             adaptive: AdaptiveStepConfig::default(),
+            precession_enabled: true,
         }
     }
 }
@@ -251,11 +253,17 @@ impl LlgConfig {
             gyromagnetic_ratio,
             integrator,
             adaptive: AdaptiveStepConfig::default(),
+            precession_enabled: true,
         })
     }
 
     pub fn with_adaptive(mut self, config: AdaptiveStepConfig) -> Self {
         self.adaptive = config;
+        self
+    }
+
+    pub fn with_precession_enabled(mut self, enabled: bool) -> Self {
+        self.precession_enabled = enabled;
         self
     }
 }
@@ -749,6 +757,7 @@ pub struct StepReport {
     pub time_seconds: f64,
     pub dt_used: f64,
     pub step_rejected: bool,
+    pub suggested_next_dt: Option<f64>,
     pub exchange_energy_joules: f64,
     pub demag_energy_joules: f64,
     pub external_energy_joules: f64,
@@ -790,11 +799,17 @@ pub struct RhsEvaluation {
 
 impl RhsEvaluation {
     /// Convert to a `StepReport`.
-    pub fn into_step_report(self, time_seconds: f64, dt_used: f64, step_rejected: bool) -> StepReport {
+    pub fn into_step_report(
+        self,
+        time_seconds: f64,
+        dt_used: f64,
+        step_rejected: bool,
+    ) -> StepReport {
         StepReport {
             time_seconds,
             dt_used,
             step_rejected,
+            suggested_next_dt: None,
             exchange_energy_joules: self.exchange_energy_joules,
             demag_energy_joules: self.demag_energy_joules,
             external_energy_joules: self.external_energy_joules,
@@ -922,7 +937,8 @@ impl SolverSession {
 
     /// Compute full observables at the current state.
     pub fn observe(&mut self) -> EffectiveFieldObservables {
-        self.problem.observe_vectors_ws(self.state.magnetization(), &mut self.fft_ws)
+        self.problem
+            .observe_vectors_ws(self.state.magnetization(), &mut self.fft_ws)
     }
 }
 
@@ -1184,6 +1200,7 @@ impl ExchangeLlgProblem {
             time_seconds: state.time_seconds,
             dt_used: dt,
             step_rejected: false,
+            suggested_next_dt: None,
             exchange_energy_joules: observables.exchange_energy_joules,
             demag_energy_joules: observables.demag_energy_joules,
             external_energy_joules: observables.external_energy_joules,
@@ -1220,8 +1237,10 @@ impl ExchangeLlgProblem {
 
         // corrected = normalize(m0 + dt/2 * (k1 + k2))
         for i in 0..n {
-            state.magnetization[i] =
-                normalized(add(bufs.m0[i], scale(add(bufs.k[0][i], bufs.k[1][i]), 0.5 * dt)))?;
+            state.magnetization[i] = normalized(add(
+                bufs.m0[i],
+                scale(add(bufs.k[0][i], bufs.k[1][i]), 0.5 * dt),
+            ))?;
         }
         state.time_seconds += dt;
 
@@ -1285,7 +1304,12 @@ impl ExchangeLlgProblem {
     // -----------------------------------------------------------------------
     // In-place RHS evaluation: writes result into `out` instead of allocating
     // -----------------------------------------------------------------------
-    fn llg_rhs_into_ws(&self, magnetization: &[Vector3], ws: &mut FftWorkspace, out: &mut [Vector3]) {
+    fn llg_rhs_into_ws(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        out: &mut [Vector3],
+    ) {
         let rhs = self.llg_rhs_from_vectors_ws(magnetization, ws);
         out[..rhs.len()].copy_from_slice(&rhs);
     }
@@ -1337,7 +1361,10 @@ impl ExchangeLlgProblem {
             for i in 0..n {
                 bufs.delta[i] = scale(
                     add(
-                        add(scale(bufs.k[0][i], 2.0 / 9.0), scale(bufs.k[1][i], 1.0 / 3.0)),
+                        add(
+                            scale(bufs.k[0][i], 2.0 / 9.0),
+                            scale(bufs.k[1][i], 1.0 / 3.0),
+                        ),
                         scale(bufs.k[2][i], 4.0 / 9.0),
                     ),
                     dt,
@@ -1350,15 +1377,27 @@ impl ExchangeLlgProblem {
 
             // Error
             let error = self.max_error_norm_buf(
-                &[(0, -5.0 / 72.0), (1, 1.0 / 12.0), (2, 1.0 / 9.0), (3, -1.0 / 8.0)],
-                bufs, dt, n,
+                &[
+                    (0, -5.0 / 72.0),
+                    (1, 1.0 / 12.0),
+                    (2, 1.0 / 9.0),
+                    (3, -1.0 / 8.0),
+                ],
+                bufs,
+                dt,
+                n,
             );
 
             if error <= cfg.max_error || dt <= cfg.dt_min {
                 state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
                 state.time_seconds += dt;
+                let dt_next = (cfg.headroom * dt * (cfg.max_error / error.max(1e-30)).powf(1.0 / 3.0))
+                    .max(cfg.dt_min)
+                    .min(cfg.dt_max);
                 let (_, eval) = self.llg_rhs_full_ws(&state.magnetization, ws);
-                return Ok(eval.into_step_report(state.time_seconds, dt, false));
+                let mut report = eval.into_step_report(state.time_seconds, dt, false);
+                report.suggested_next_dt = Some(dt_next);
+                return Ok(report);
             }
 
             let dt_new = cfg.headroom * dt * (cfg.max_error / error).powf(1.0 / 3.0);
@@ -1437,7 +1476,10 @@ impl ExchangeLlgProblem {
                 bufs.m_stage[i] = normalized(add(
                     bufs.m0[i],
                     scale(
-                        add(add(scale(bufs.k[0][i], A41), scale(bufs.k[1][i], A42)), scale(bufs.k[2][i], A43)),
+                        add(
+                            add(scale(bufs.k[0][i], A41), scale(bufs.k[1][i], A42)),
+                            scale(bufs.k[2][i], A43),
+                        ),
                         dt,
                     ),
                 ))?;
@@ -1465,7 +1507,10 @@ impl ExchangeLlgProblem {
                     bufs.m0[i],
                     scale(
                         add(
-                            add(add(scale(bufs.k[0][i], A61), scale(bufs.k[1][i], A62)), scale(bufs.k[2][i], A63)),
+                            add(
+                                add(scale(bufs.k[0][i], A61), scale(bufs.k[1][i], A62)),
+                                scale(bufs.k[2][i], A63),
+                            ),
                             add(scale(bufs.k[3][i], A64), scale(bufs.k[4][i], A65)),
                         ),
                         dt,
@@ -1480,7 +1525,10 @@ impl ExchangeLlgProblem {
                     bufs.m0[i],
                     scale(
                         add(
-                            add(add(scale(bufs.k[0][i], B1), scale(bufs.k[2][i], B3)), scale(bufs.k[3][i], B4)),
+                            add(
+                                add(scale(bufs.k[0][i], B1), scale(bufs.k[2][i], B3)),
+                                scale(bufs.k[3][i], B4),
+                            ),
                             add(scale(bufs.k[4][i], B5), scale(bufs.k[5][i], B6)),
                         ),
                         dt,
@@ -1494,7 +1542,9 @@ impl ExchangeLlgProblem {
             // Error estimate
             let error = self.max_error_norm_buf(
                 &[(0, E1), (2, E3), (3, E4), (4, E5), (5, E6), (6, E7)],
-                bufs, dt, n,
+                bufs,
+                dt,
+                n,
             );
 
             if error <= cfg.max_error || dt <= cfg.dt_min {
@@ -1502,8 +1552,13 @@ impl ExchangeLlgProblem {
                 state.time_seconds += dt;
                 // FSAL: save k7 for next step's k1
                 state.k_fsal = Some(bufs.k[6][..n].to_vec());
+                let dt_next = (cfg.headroom * dt * (cfg.max_error / error.max(1e-30)).powf(0.2))
+                    .max(cfg.dt_min)
+                    .min(cfg.dt_max);
                 let (_, eval) = self.llg_rhs_full_ws(&state.magnetization, ws);
-                return Ok(eval.into_step_report(state.time_seconds, dt, false));
+                let mut report = eval.into_step_report(state.time_seconds, dt, false);
+                report.suggested_next_dt = Some(dt_next);
+                return Ok(report);
             }
 
             let dt_new = cfg.headroom * dt * (cfg.max_error / error).powf(0.2);
@@ -1540,8 +1595,10 @@ impl ExchangeLlgProblem {
 
             // corrected = normalize(m0 + dt/2 * (k1 + k2))
             for i in 0..n {
-                state.magnetization[i] =
-                    normalized(add(bufs.m0[i], scale(add(bufs.k[0][i], bufs.k[1][i]), 0.5 * dt)))?;
+                state.magnetization[i] = normalized(add(
+                    bufs.m0[i],
+                    scale(add(bufs.k[0][i], bufs.k[1][i]), 0.5 * dt),
+                ))?;
             }
             state.time_seconds += dt;
 
@@ -1630,6 +1687,7 @@ impl ExchangeLlgProblem {
             time_seconds: state.time_seconds,
             dt_used,
             step_rejected,
+            suggested_next_dt: None,
             exchange_energy_joules: observables.exchange_energy_joules,
             demag_energy_joules: observables.demag_energy_joules,
             external_energy_joules: observables.external_energy_joules,
@@ -2511,7 +2569,9 @@ impl ExchangeLlgProblem {
             exchange_energy_joules,
             demag_energy_joules,
             external_energy_joules,
-            total_energy_joules: exchange_energy_joules + demag_energy_joules + external_energy_joules,
+            total_energy_joules: exchange_energy_joules
+                + demag_energy_joules
+                + external_energy_joules,
             max_effective_field_amplitude: max_norm(&effective_field),
             max_demag_field_amplitude: max_norm(&demag_field),
             max_rhs_amplitude: max_norm(&rhs),
@@ -2525,7 +2585,12 @@ impl ExchangeLlgProblem {
         let gamma_bar = self.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
         let precession = cross(magnetization, field);
         let damping = cross(magnetization, precession);
-        scale(add(precession, scale(damping, alpha)), -gamma_bar)
+        let precession_term = if self.dynamics.precession_enabled {
+            precession
+        } else {
+            [0.0, 0.0, 0.0]
+        };
+        scale(add(precession_term, scale(damping, alpha)), -gamma_bar)
     }
 
     pub fn exchange_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
@@ -2667,6 +2732,7 @@ pub fn run_reference_exchange_demo(steps: usize, dt: f64) -> Result<ReferenceDem
         time_seconds: 0.0,
         dt_used: dt,
         step_rejected: false,
+        suggested_next_dt: None,
         exchange_energy_joules: initial_exchange_energy_joules,
         demag_energy_joules: 0.0,
         external_energy_joules: 0.0,
@@ -3022,6 +3088,28 @@ mod tests {
         assert!(
             state.magnetization()[0][2] > 0.1,
             "magnetization should tilt toward the external field"
+        );
+    }
+
+    #[test]
+    fn damping_only_relaxation_disables_transverse_precession() {
+        let mut problem = zeeman_problem([0.0, 0.0, 1.0]);
+        problem.dynamics = problem.dynamics.with_precession_enabled(false);
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+            .expect("state should build");
+
+        problem.step(&mut state, 1e-3).expect("step should succeed");
+
+        assert!(
+            state.magnetization()[0][1].abs() <= 1e-12,
+            "pure-damping relax should not precess into y, got {:?}",
+            state.magnetization()[0]
+        );
+        assert!(
+            state.magnetization()[0][2] > 0.0,
+            "pure-damping relax should move toward the field, got {:?}",
+            state.magnetization()[0]
         );
     }
 

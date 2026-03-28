@@ -94,6 +94,9 @@ struct ScalarRow {
     step: u64,
     time: f64,
     solver_dt: f64,
+    mx: f64,
+    my: f64,
+    mz: f64,
     e_ex: f64,
     e_demag: f64,
     e_ext: f64,
@@ -182,6 +185,8 @@ type CurrentPreviewConfig = LivePreviewRequest;
 #[derive(Debug, Serialize, Clone)]
 struct PreviewState {
     config_revision: u64,
+    source_step: u64,
+    source_time: f64,
     spatial_kind: String,
     quantity: String,
     unit: String,
@@ -250,6 +255,12 @@ struct PreviewYChosenSizeRequest {
 struct PreviewAutoScaleRequest {
     #[serde(rename = "autoScaleEnabled")]
     auto_scale_enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewMaxPointsRequest {
+    #[serde(rename = "maxPoints")]
+    max_points: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -439,6 +450,10 @@ async fn main() {
             post(set_current_preview_auto_scale),
         )
         .route(
+            "/v1/live/current/preview/maxPoints",
+            post(set_current_preview_max_points),
+        )
+        .route(
             "/v1/live/current/preview/layer",
             post(set_current_preview_layer),
         )
@@ -494,6 +509,13 @@ async fn main() {
 }
 
 fn resolve_static_web_root(repo_root: &Path) -> Option<PathBuf> {
+    if std::env::var("FULLMAG_DISABLE_STATIC_CONTROL_ROOM")
+        .map(|value| value == "1")
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
     let candidates = [
         std::env::var_os("FULLMAG_WEB_STATIC_DIR").map(PathBuf::from),
         Some(repo_root.join(".fullmag").join("local").join("web")),
@@ -666,6 +688,16 @@ async fn set_current_preview_auto_scale(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     mutate_current_preview(&state, move |config| {
         config.auto_scale_enabled = req.auto_scale_enabled;
+    })
+    .await
+}
+
+async fn set_current_preview_max_points(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PreviewMaxPointsRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    mutate_current_preview(&state, move |config| {
+        config.max_points = req.max_points.min(u32::MAX as usize) as u32;
     })
     .await
 }
@@ -1041,13 +1073,30 @@ fn build_preview_state(
 ) -> Option<PreviewState> {
     let quantity = resolve_preview_quantity(current, &config.quantity)?;
     let component = normalize_preview_component(&config.component);
+    let source_step = current
+        .live_state
+        .as_ref()
+        .map(|state| state.latest_step.step)
+        .unwrap_or(0);
+    let source_time = current
+        .live_state
+        .as_ref()
+        .map(|state| state.latest_step.time)
+        .unwrap_or(0.0);
     if let Some(field) = current
         .live_state
         .as_ref()
         .and_then(|state| state.latest_step.preview_field.as_ref())
         .filter(|field| field.config_revision == config.revision && field.quantity == quantity)
     {
-        return build_preview_state_from_live_field(current, field, config, component);
+        return build_preview_state_from_live_field(
+            current,
+            field,
+            config,
+            component,
+            source_step,
+            source_time,
+        );
     }
 
     let unit = quantity_unit(&quantity).to_string();
@@ -1060,6 +1109,8 @@ fn build_preview_state(
         let (min, max) = component_min_max(&vectors, component);
         return Some(PreviewState {
             config_revision: config.revision,
+            source_step,
+            source_time,
             spatial_kind: "mesh".to_string(),
             quantity,
             unit,
@@ -1106,25 +1157,12 @@ fn build_preview_state(
     let requested_y = choose_preview_size(config.y_chosen_size as usize, &y_possible_sizes, full_y);
 
     if component == "3D" {
-        let mut applied_x = requested_x;
-        let mut applied_y = requested_y;
-        let mut stride = 1usize;
-        let mut preview_z = full_z;
-        let mut auto_downscaled = false;
-        while config.auto_scale_enabled
-            && applied_x * applied_y * preview_z > config.max_points as usize
-            && (applied_x > 1 || applied_y > 1 || preview_z > 1)
-        {
-            auto_downscaled = true;
-            if applied_x >= applied_y && applied_x > 1 {
-                applied_x = next_smaller_size(applied_x, &x_possible_sizes);
-            } else if applied_y > 1 {
-                applied_y = next_smaller_size(applied_y, &y_possible_sizes);
-            } else {
-                stride += 1;
-                preview_z = full_z.div_ceil(stride);
-            }
-        }
+        let (applied_x, applied_y, stride, auto_downscaled) = if config.auto_scale_enabled {
+            fit_preview_grid_3d(requested_x, requested_y, full_z, config.max_points as usize)
+        } else {
+            (requested_x, requested_y, 1, false)
+        };
+        let preview_z = full_z.div_ceil(stride).max(1);
 
         let vectors = resample_grid_vectors_3d(
             &vectors,
@@ -1135,12 +1173,14 @@ fn build_preview_state(
         let (min, max) = component_min_max(&vectors, component);
         let auto_downscale_message = auto_downscaled.then(|| {
             format!(
-                "Preview auto-scaled from {}x{}x{} to {}x{}x{} to stay within {} points",
+                "Preview auto-fit from {}x{}x{} to {}x{}x{} within {} points",
                 full_x, full_y, full_z, applied_x, applied_y, preview_z, config.max_points
             )
         });
         return Some(PreviewState {
             config_revision: config.revision,
+            source_step,
+            source_time,
             spatial_kind: "grid".to_string(),
             quantity,
             unit,
@@ -1173,21 +1213,17 @@ fn build_preview_state(
     }
 
     let layer = (config.layer as usize).min(full_z.saturating_sub(1));
-    let mut applied_x = requested_x;
-    let mut applied_y = requested_y;
     let effective_layers = if config.all_layers { full_z } else { 1 };
-    let mut auto_downscaled = false;
-    while config.auto_scale_enabled
-        && applied_x * applied_y * effective_layers > config.max_points as usize
-        && (applied_x > 1 || applied_y > 1)
-    {
-        auto_downscaled = true;
-        if applied_x >= applied_y && applied_x > 1 {
-            applied_x = next_smaller_size(applied_x, &x_possible_sizes);
-        } else if applied_y > 1 {
-            applied_y = next_smaller_size(applied_y, &y_possible_sizes);
-        }
-    }
+    let (applied_x, applied_y, auto_downscaled) = if config.auto_scale_enabled {
+        fit_preview_grid_2d(
+            requested_x,
+            requested_y,
+            effective_layers,
+            config.max_points as usize,
+        )
+    } else {
+        (requested_x, requested_y, false)
+    };
     let scalar_field = resample_grid_scalar_2d(
         &vectors,
         [full_x, full_y, full_z],
@@ -1199,12 +1235,14 @@ fn build_preview_state(
     let (min, max) = scalar_min_max(&scalar_field);
     let auto_downscale_message = auto_downscaled.then(|| {
         format!(
-            "Preview auto-scaled from {}x{} to {}x{} to stay within {} points",
+            "Preview auto-fit from {}x{} to {}x{} within {} points",
             full_x, full_y, applied_x, applied_y, config.max_points
         )
     });
     Some(PreviewState {
         config_revision: config.revision,
+        source_step,
+        source_time,
         spatial_kind: "grid".to_string(),
         quantity,
         unit,
@@ -1241,6 +1279,8 @@ fn build_preview_state_from_live_field(
     field: &LivePreviewField,
     config: &CurrentPreviewConfig,
     component: &str,
+    source_step: u64,
+    source_time: f64,
 ) -> Option<PreviewState> {
     let preview_grid = [
         field.preview_grid[0] as usize,
@@ -1272,6 +1312,8 @@ fn build_preview_state_from_live_field(
         let (min, max) = component_min_max(&vectors, component);
         return Some(PreviewState {
             config_revision: field.config_revision,
+            source_step,
+            source_time,
             spatial_kind: "mesh".to_string(),
             quantity: field.quantity.clone(),
             unit: field.unit.clone(),
@@ -1318,6 +1360,8 @@ fn build_preview_state_from_live_field(
         let (min, max) = component_min_max(&vectors, component);
         return Some(PreviewState {
             config_revision: field.config_revision,
+            source_step,
+            source_time,
             spatial_kind: "grid".to_string(),
             quantity: field.quantity.clone(),
             unit: field.unit.clone(),
@@ -1353,6 +1397,8 @@ fn build_preview_state_from_live_field(
     let (min, max) = scalar_min_max(&scalar_field);
     Some(PreviewState {
         config_revision: field.config_revision,
+        source_step,
+        source_time,
         spatial_kind: "grid".to_string(),
         quantity: field.quantity.clone(),
         unit: field.unit.clone(),
@@ -1525,6 +1571,95 @@ fn candidate_preview_sizes(full: usize) -> Vec<usize> {
     sizes
 }
 
+fn fit_preview_grid_3d(
+    requested_x: usize,
+    requested_y: usize,
+    full_z: usize,
+    max_points: usize,
+) -> (usize, usize, usize, bool) {
+    if max_points == 0 {
+        return (requested_x.max(1), requested_y.max(1), 1, false);
+    }
+    let requested_x = requested_x.max(1);
+    let requested_y = requested_y.max(1);
+    let full_z = full_z.max(1);
+    let total = requested_x
+        .saturating_mul(requested_y)
+        .saturating_mul(full_z);
+    if total <= max_points {
+        return (requested_x, requested_y, 1, false);
+    }
+
+    let scale = (max_points as f64 / total as f64).cbrt().clamp(0.0, 1.0);
+    let mut applied_x = ((requested_x as f64 * scale).round() as usize).clamp(1, requested_x);
+    let mut applied_y = ((requested_y as f64 * scale).round() as usize).clamp(1, requested_y);
+    let target_z = ((full_z as f64 * scale).round() as usize).clamp(1, full_z);
+    let mut stride = full_z.div_ceil(target_z).max(1);
+    let mut preview_z = full_z.div_ceil(stride).max(1);
+
+    while applied_x
+        .saturating_mul(applied_y)
+        .saturating_mul(preview_z)
+        > max_points
+    {
+        let ratio_x = applied_x as f64 / requested_x as f64;
+        let ratio_y = applied_y as f64 / requested_y as f64;
+        let ratio_z = preview_z as f64 / full_z as f64;
+        if ratio_x >= ratio_y && ratio_x >= ratio_z && applied_x > 1 {
+            applied_x -= 1;
+        } else if ratio_y >= ratio_z && applied_y > 1 {
+            applied_y -= 1;
+        } else {
+            stride += 1;
+            preview_z = full_z.div_ceil(stride).max(1);
+        }
+    }
+
+    (applied_x, applied_y, stride, true)
+}
+
+fn fit_preview_grid_2d(
+    requested_x: usize,
+    requested_y: usize,
+    effective_layers: usize,
+    max_points: usize,
+) -> (usize, usize, bool) {
+    if max_points == 0 {
+        return (requested_x.max(1), requested_y.max(1), false);
+    }
+    let requested_x = requested_x.max(1);
+    let requested_y = requested_y.max(1);
+    let effective_layers = effective_layers.max(1);
+    let total = requested_x
+        .saturating_mul(requested_y)
+        .saturating_mul(effective_layers);
+    if total <= max_points {
+        return (requested_x, requested_y, false);
+    }
+
+    let scale = (max_points as f64 / total as f64).sqrt().clamp(0.0, 1.0);
+    let mut applied_x = ((requested_x as f64 * scale).round() as usize).clamp(1, requested_x);
+    let mut applied_y = ((requested_y as f64 * scale).round() as usize).clamp(1, requested_y);
+
+    while applied_x
+        .saturating_mul(applied_y)
+        .saturating_mul(effective_layers)
+        > max_points
+    {
+        let ratio_x = applied_x as f64 / requested_x as f64;
+        let ratio_y = applied_y as f64 / requested_y as f64;
+        if ratio_x >= ratio_y && applied_x > 1 {
+            applied_x -= 1;
+        } else if applied_y > 1 {
+            applied_y -= 1;
+        } else {
+            break;
+        }
+    }
+
+    (applied_x, applied_y, true)
+}
+
 fn choose_preview_size(requested: usize, possible: &[usize], full: usize) -> usize {
     if requested == 0 {
         return full.max(1);
@@ -1534,14 +1669,6 @@ fn choose_preview_size(requested: usize, possible: &[usize], full: usize) -> usi
         .copied()
         .find(|size| *size <= requested)
         .unwrap_or(1)
-}
-
-fn next_smaller_size(current: usize, possible: &[usize]) -> usize {
-    let index = possible
-        .iter()
-        .position(|size| *size == current)
-        .unwrap_or(0);
-    possible.get(index + 1).copied().unwrap_or(1)
 }
 
 fn resample_grid_vectors_3d(

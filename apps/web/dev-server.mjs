@@ -1,5 +1,7 @@
 import http from "node:http";
 import net from "node:net";
+import fs from "node:fs";
+import path from "node:path";
 
 import next from "next";
 
@@ -8,6 +10,7 @@ function parseArgs(argv) {
     hostname: process.env.FULLMAG_WEB_BIND_HOST || "0.0.0.0",
     port: Number(process.env.PORT || process.env.FULLMAG_WEB_PORT || 3000),
     apiTarget: process.env.FULLMAG_API_PROXY_TARGET || "http://localhost:8080",
+    staticRoot: process.env.FULLMAG_STATIC_WEB_ROOT || "",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -21,6 +24,9 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === "--api-target" && nextValue) {
       args.apiTarget = nextValue;
+      index += 1;
+    } else if (arg === "--static-root" && nextValue) {
+      args.staticRoot = nextValue;
       index += 1;
     }
   }
@@ -108,27 +114,136 @@ function proxyWsUpgrade(req, socket, head, apiUrl) {
   socket.on("error", closeSockets);
 }
 
+function contentTypeFor(filePath) {
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".js":
+      return "application/javascript; charset=utf-8";
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".txt":
+      return "text/plain; charset=utf-8";
+    case ".svg":
+      return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    case ".ico":
+      return "image/x-icon";
+    case ".map":
+      return "application/json; charset=utf-8";
+    case ".wasm":
+      return "application/wasm";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+async function readableFile(filePath) {
+  try {
+    const stats = await fs.promises.stat(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveStaticAsset(staticRoot, pathname) {
+  const root = path.resolve(staticRoot);
+  const decodedPath = decodeURIComponent(pathname || "/");
+  const absolutePath = path.resolve(root, `.${decodedPath}`);
+  if (absolutePath !== root && !absolutePath.startsWith(`${root}${path.sep}`)) {
+    return null;
+  }
+
+  const directStats = await readableFile(absolutePath);
+  if (directStats) {
+    return { filePath: absolutePath, statusCode: 200, stats: directStats };
+  }
+
+  const indexPath = path.join(absolutePath, "index.html");
+  const indexStats = await readableFile(indexPath);
+  if (indexStats) {
+    return { filePath: indexPath, statusCode: 200, stats: indexStats };
+  }
+
+  if (!path.extname(absolutePath)) {
+    const htmlPath = `${absolutePath}.html`;
+    const htmlStats = await readableFile(htmlPath);
+    if (htmlStats) {
+      return { filePath: htmlPath, statusCode: 200, stats: htmlStats };
+    }
+  }
+
+  const notFoundPath = path.join(root, "404.html");
+  const notFoundStats = await readableFile(notFoundPath);
+  if (notFoundStats) {
+    return { filePath: notFoundPath, statusCode: 404, stats: notFoundStats };
+  }
+
+  return null;
+}
+
+async function serveStaticRequest(req, res, staticRoot) {
+  const pathname = requestPathname(req);
+  const asset = await resolveStaticAsset(staticRoot, pathname);
+  if (!asset) {
+    res.statusCode = 404;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({ error: `Static asset not found: ${pathname}` }));
+    return;
+  }
+
+  res.statusCode = asset.statusCode;
+  res.setHeader("content-type", contentTypeFor(asset.filePath));
+  res.setHeader("content-length", asset.stats.size);
+  res.setHeader("cache-control", "no-store");
+
+  const stream = fs.createReadStream(asset.filePath);
+  stream.on("error", (error) => writeHttpError(res, error));
+  stream.pipe(res);
+}
+
 async function main() {
-  const { hostname, port, apiTarget } = parseArgs(process.argv.slice(2));
+  const { hostname, port, apiTarget, staticRoot } = parseArgs(process.argv.slice(2));
   const apiUrl = new URL(apiTarget);
-  const dev = process.env.NODE_ENV !== "production";
+  const resolvedStaticRoot = staticRoot ? path.resolve(staticRoot) : null;
+  const useStaticServer = Boolean(resolvedStaticRoot);
+  const dev = !useStaticServer && process.env.NODE_ENV !== "production";
 
-  const app = next({
-    dev,
-    dir: process.cwd(),
-    hostname,
-    port,
-  });
-
-  await app.prepare();
-  const handle = app.getRequestHandler();
-  const handleUpgrade = app.getUpgradeHandler();
+  let handle = null;
+  let handleUpgrade = null;
+  if (!useStaticServer) {
+    const app = next({
+      dev,
+      dir: process.cwd(),
+      hostname,
+      port,
+    });
+    await app.prepare();
+    handle = app.getRequestHandler();
+    handleUpgrade = app.getUpgradeHandler();
+  }
 
   const server = http.createServer((req, res) => {
     const pathname = requestPathname(req);
 
     if (shouldProxyHttp(pathname)) {
       proxyHttpRequest(req, res, apiUrl);
+      return;
+    }
+
+    if (useStaticServer && resolvedStaticRoot) {
+      serveStaticRequest(req, res, resolvedStaticRoot).catch((error) =>
+        writeHttpError(res, error),
+      );
       return;
     }
 
@@ -141,13 +256,19 @@ async function main() {
       proxyWsUpgrade(req, socket, head, apiUrl);
       return;
     }
-    handleUpgrade(req, socket, head);
+    if (handleUpgrade) {
+      handleUpgrade(req, socket, head);
+      return;
+    }
+    socket.destroy();
   });
 
   server.listen(port, hostname, () => {
     // eslint-disable-next-line no-console
     console.log(
-      `fullmag control room ready on http://${hostname}:${port} (api proxy ${apiUrl.origin})`,
+      useStaticServer
+        ? `fullmag static control room ready on http://${hostname}:${port} (api proxy ${apiUrl.origin}, static root ${resolvedStaticRoot})`
+        : `fullmag control room ready on http://${hostname}:${port} (api proxy ${apiUrl.origin})`,
     );
   });
 }

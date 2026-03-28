@@ -51,6 +51,8 @@ export const SCALAR_FIELDS: Record<string, string> = {
 
 export const PREVIEW_EVERY_N_DEFAULT = 10;
 export const PREVIEW_EVERY_N_PRESETS = [1, 2, 5, 10, 25, 50, 100] as const;
+export const PREVIEW_MAX_POINTS_DEFAULT = 16_384;
+export const PREVIEW_MAX_POINTS_PRESETS = [4_096, 16_384, 65_536, 262_144, 1_048_576, 0] as const;
 
 export function fmtSI(v: number, unit: string): string {
   if (!Number.isFinite(v) || v === 0) return `0 ${unit}`;
@@ -82,6 +84,13 @@ export function fmtSIOrDash(v: number, unit: string, enabled: boolean): string {
 
 export function fmtExpOrDash(v: number, enabled: boolean): string {
   return enabled ? fmtExp(v) : "—";
+}
+
+export function fmtPreviewMaxPoints(value: number): string {
+  if (value <= 0) return "Full";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}k`;
+  return value.toLocaleString();
 }
 
 export function materializationProgressFromMessage(message: string | null): number {

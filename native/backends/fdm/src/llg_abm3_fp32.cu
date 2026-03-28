@@ -25,7 +25,7 @@ extern __global__ void llg_rhs_fp32_kernel(
     const float * __restrict__ mx, const float * __restrict__ my, const float * __restrict__ mz,
     const float * __restrict__ hx, const float * __restrict__ hy, const float * __restrict__ hz,
     float * __restrict__ out_x, float * __restrict__ out_y, float * __restrict__ out_z,
-    int n, float gamma_bar, float alpha);
+    int n, float gamma_bar, float alpha, int disable_precession);
 
 extern __global__ void heun_predictor_fp32_kernel(
     const float * __restrict__ mx, const float * __restrict__ my, const float * __restrict__ mz,
@@ -110,7 +110,7 @@ static void abm3_fill_diagnostics_fp32(Context &ctx, double dt, fullmag_fdm_step
         static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
         static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
         static_cast<float*>(ctx.k1.x), static_cast<float*>(ctx.k1.y), static_cast<float*>(ctx.k1.z),
-        n, gamma_bar_f, alpha_f);
+        n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0);
     double max_dm_dt = reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
     cudaDeviceSynchronize();
 
@@ -151,7 +151,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
             static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
             static_cast<float*>(ctx.k1.x), static_cast<float*>(ctx.k1.y), static_cast<float*>(ctx.k1.z),
-            n, gamma_bar_f, alpha_f);
+            n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0);
 
         heun_predictor_fp32_kernel<<<grid, 256>>>(
             static_cast<const float*>(ctx.tmp.x), static_cast<const float*>(ctx.tmp.y), static_cast<const float*>(ctx.tmp.z),
@@ -167,7 +167,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
             static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
             static_cast<float*>(ctx.h_ex.x), static_cast<float*>(ctx.h_ex.y), static_cast<float*>(ctx.h_ex.z),
-            n, gamma_bar_f, alpha_f);
+            n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0);
 
         heun_corrector_fp32_kernel<<<grid, 256>>>(
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
@@ -189,7 +189,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
             static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
             static_cast<float*>(ctx.abm_f_n.x), static_cast<float*>(ctx.abm_f_n.y), static_cast<float*>(ctx.abm_f_n.z),
-            n, gamma_bar_f, alpha_f);
+            n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0);
 
         ctx.abm_startup++;
         ctx.abm_last_dt = dt;
@@ -218,7 +218,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
         static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
         static_cast<float*>(ctx.k1.x), static_cast<float*>(ctx.k1.y), static_cast<float*>(ctx.k1.z),
-        n, gamma_bar_f, alpha_f);
+        n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0);
 
     abm3_corrector_fp32_kernel<<<grid, 256>>>(
         static_cast<const float*>(ctx.tmp.x), static_cast<const float*>(ctx.tmp.y), static_cast<const float*>(ctx.tmp.z),

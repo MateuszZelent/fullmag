@@ -165,6 +165,25 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(ir["cells"], [voxels.shape[2], voxels.shape[1], voxels.shape[0]])
         self.assertEqual(len(ir["active_mask"]), int(np.prod(voxels.shape)))
 
+    def test_voxel_mask_load_transposes_xyz_assets_to_canonical_zyx(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "legacy_xyz_mask.npz"
+            mask_xyz = np.zeros((2, 3, 4), dtype=np.bool_)
+            mask_xyz[1, 2, 3] = True
+            np.savez_compressed(
+                path,
+                mask=mask_xyz,
+                cell_size=np.asarray((1.0, 1.0, 1.0), dtype=np.float64),
+                origin=np.asarray((0.0, 0.0, 0.0), dtype=np.float64),
+                mask_axis_order=np.asarray("xyz"),
+            )
+
+            voxels = VoxelMaskData.load(path)
+
+        self.assertEqual(voxels.shape, (4, 3, 2))
+        self.assertTrue(voxels.mask[3, 2, 1])
+        self.assertEqual(voxels.to_ir("legacy")["cells"], [2, 3, 4])
+
     def test_imported_stl_export_passthrough(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             src = Path(tmp_dir) / "shape.stl"
@@ -285,6 +304,55 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertAlmostEqual(voxels_with_units.origin[0], voxels_with_scale.origin[0])
         self.assertAlmostEqual(voxels_with_units.origin[1], voxels_with_scale.origin[1])
         self.assertAlmostEqual(voxels_with_units.origin[2], voxels_with_scale.origin[2])
+
+    def test_trimesh_voxelization_transposes_xyz_matrix_to_canonical_zyx(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "shape.stl"
+            path.write_text("solid shape\nendsolid shape\n", encoding="utf-8")
+            geometry = fm.ImportedGeometry(source=str(path), name="shape")
+
+            class _FakeVoxelGrid:
+                def __init__(self) -> None:
+                    self.matrix = np.zeros((2, 3, 4), dtype=np.bool_)
+                    self.matrix[1, 2, 3] = True
+                    self.transform = np.asarray(
+                        [
+                            [1.0, 0.0, 0.0, -10.0],
+                            [0.0, 1.0, 0.0, -20.0],
+                            [0.0, 0.0, 1.0, -30.0],
+                            [0.0, 0.0, 0.0, 1.0],
+                        ],
+                        dtype=np.float64,
+                    )
+
+            class _FakeMesh:
+                def copy(self) -> "_FakeMesh":
+                    return self
+
+                def apply_transform(self, _transform: np.ndarray) -> None:
+                    return None
+
+                def voxelized(self, _pitch: float) -> _FakeVoxelGrid:
+                    return _FakeVoxelGrid()
+
+            class _FakeTrimesh:
+                @staticmethod
+                def load_mesh(_path: Path, force: str = "mesh") -> _FakeMesh:
+                    self.assertEqual(force, "mesh")
+                    return _FakeMesh()
+
+            with patch(
+                "fullmag.meshing.voxelization._import_trimesh_voxelization_stack",
+                return_value=_FakeTrimesh,
+            ):
+                voxels = voxelize_geometry(geometry, (1.0, 1.0, 1.0))
+
+        self.assertEqual(voxels.shape, (4, 3, 2))
+        self.assertTrue(voxels.mask[3, 2, 1])
+        self.assertEqual(voxels.to_ir("shape")["cells"], [2, 3, 4])
+        self.assertAlmostEqual(voxels.origin[0], -10.0)
+        self.assertAlmostEqual(voxels.origin[1], -20.0)
+        self.assertAlmostEqual(voxels.origin[2], -30.0)
 
     def test_nanoflower_stl_fallback_keeps_nonempty_domain_at_nm_scale(self) -> None:
         nanoflower = Path(__file__).resolve().parents[3] / "examples" / "nanoflower.stl"

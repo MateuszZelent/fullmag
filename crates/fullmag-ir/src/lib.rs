@@ -661,6 +661,8 @@ pub struct FdmPlanIR {
     pub integrator: IntegratorChoice,
     pub fixed_timestep: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_timestep: Option<AdaptiveTimeStepIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relaxation: Option<RelaxationControlIR>,
 }
 
@@ -1226,9 +1228,9 @@ impl RelaxationAlgorithmIR {
     /// - `TangentPlaneImplicit` → Heun (FEM implicit; Heun for explicit sub-steps)
     pub fn default_integrator(self) -> IntegratorChoice {
         match self {
-            Self::LlgOverdamped
-            | Self::ProjectedGradientBb
-            | Self::NonlinearCg => IntegratorChoice::Rk23,
+            Self::LlgOverdamped | Self::ProjectedGradientBb | Self::NonlinearCg => {
+                IntegratorChoice::Rk23
+            }
             Self::TangentPlaneImplicit => IntegratorChoice::Heun,
         }
     }
@@ -1277,8 +1279,7 @@ fn validate_study_dynamics(dynamics: &DynamicsIR, errors: &mut Vec<String>) {
                 errors.push("llg.integrator must not be empty".to_string());
             } else if !is_supported_llg_integrator(integrator.as_str()) {
                 errors.push(
-                    "llg.integrator must be one of: heun, rk4, rk23, rk45, abm3, auto"
-                        .to_string(),
+                    "llg.integrator must be one of: heun, rk4, rk23, rk45, abm3, auto".to_string(),
                 );
             }
             if fixed_timestep.is_some_and(|value| value <= 0.0) {
@@ -1451,6 +1452,7 @@ mod tests {
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
                 integrator: IntegratorChoice::Heun,
                 fixed_timestep: Some(1e-13),
+                adaptive_timestep: None,
                 relaxation: None,
             }),
             output_plan: OutputPlanIR {

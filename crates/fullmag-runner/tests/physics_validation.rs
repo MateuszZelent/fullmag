@@ -83,6 +83,7 @@ fn sp4_plan(algorithm: RelaxationAlgorithmIR, damping: f64, enable_demag: bool) 
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         integrator: IntegratorChoice::Heun,
         fixed_timestep: Some(1e-13),
+        adaptive_timestep: None,
         relaxation: Some(RelaxationControlIR {
             algorithm,
             torque_tolerance: 1e-4,
@@ -120,6 +121,7 @@ fn uniform_field_alignment() {
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         integrator: IntegratorChoice::Heun,
         fixed_timestep: Some(1e-14),
+        adaptive_timestep: None,
         relaxation: Some(RelaxationControlIR {
             algorithm: RelaxationAlgorithmIR::LlgOverdamped,
             torque_tolerance: 1e-5,
@@ -167,6 +169,7 @@ fn exchange_only_random_to_uniform() {
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         integrator: IntegratorChoice::Heun,
         fixed_timestep: Some(1e-14),
+        adaptive_timestep: None,
         relaxation: Some(RelaxationControlIR {
             algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
             torque_tolerance: 1e-6,
@@ -228,6 +231,7 @@ fn thin_film_shape_anisotropy() {
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         integrator: IntegratorChoice::Heun,
         fixed_timestep: Some(1e-13),
+        adaptive_timestep: None,
         relaxation: Some(RelaxationControlIR {
             algorithm: RelaxationAlgorithmIR::LlgOverdamped,
             torque_tolerance: 1e-3,
@@ -410,7 +414,8 @@ fn sp4_reversal_dynamics() {
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         integrator: IntegratorChoice::Heun,
         fixed_timestep: Some(5e-14), // needs small dt for dynamics with α=0.02
-        relaxation: None,            // no relaxation — pure dynamics
+        adaptive_timestep: None,
+        relaxation: None, // no relaxation — pure dynamics
         enable_exchange: true,
         enable_demag: true,
         external_field: Some(h_ext),

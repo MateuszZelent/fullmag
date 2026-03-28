@@ -40,9 +40,11 @@ class Relaxation:
 
     Three algorithms are implemented (see ``docs/physics/0500-fdm-relaxation-algorithms.md``):
 
-    * ``"llg_overdamped"`` — overdamped Landau–Lifshitz–Gilbert time-stepping.
-      Reuses the LLG pipeline with high damping (α ≥ 0.5).  Simplest path;
-      convergence speed depends on damping and time step.
+    * ``"llg_overdamped"`` — damping-only Landau–Lifshitz–Gilbert relaxation.
+      Reuses the LLG pipeline but disables precession during relax(), matching
+      the expected mumax-style semantics. Convergence speed still depends on
+      damping and time step, but a large ``alpha`` is not required just to
+      suppress orbiting.
 
     * ``"projected_gradient_bb"`` — projected steepest descent with
       Barzilai–Borwein step selection on the sphere product manifold.  Uses
@@ -109,4 +111,3 @@ class Relaxation:
             "max_steps": self.max_steps,
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
         }
-

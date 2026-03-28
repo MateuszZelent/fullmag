@@ -5,6 +5,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import * as THREE from "three";
 import { TrackballControls } from "three/examples/jsm/controls/TrackballControls.js";
 import HslSphere from "./HslSphere";
+import { applyMagnetizationHsl } from "./magnetizationColor";
 import ViewCube from "./ViewCube";
 import s from "./FemMeshView3D.module.css";
 
@@ -91,13 +92,6 @@ function divergingColor(value: number, color: THREE.Color): void {
   const v = THREE.MathUtils.clamp(value, -1, 1);
   if (v < 0) color.copy(COMP_NEUTRAL).lerp(COMP_NEGATIVE, Math.abs(v));
   else       color.copy(COMP_NEUTRAL).lerp(COMP_POSITIVE, v);
-}
-
-function magnetizationHSL(vx: number, vy: number, vz: number, color: THREE.Color): void {
-  const hue = Math.atan2(vy, vx) / (Math.PI * 2);
-  const saturation = Math.min(1, Math.sqrt(vx * vx + vy * vy + vz * vz));
-  const lightness = THREE.MathUtils.clamp(vz * 0.5 + 0.5, 0.18, 0.84);
-  color.setHSL((hue + 1) % 1, saturation, lightness);
 }
 
 function magnitudeColor(mag: number, color: THREE.Color): void {
@@ -392,7 +386,7 @@ export default function FemMeshView3D({
           const fy = fld.y[i] ?? 0;
           const fz = fld.z[i] ?? 0;
           switch (field) {
-            case "orientation": magnetizationHSL(fx, fy, fz, _c); break;
+            case "orientation": applyMagnetizationHsl(fx, fy, fz, _c); break;
             case "x": divergingColor(fx / scaleX, _c); break;
             case "y": divergingColor(fy / scaleY, _c); break;
             case "z": divergingColor(fz / scaleZ, _c); break;
@@ -844,7 +838,7 @@ export default function FemMeshView3D({
       // ── Color by selected field mode ────────────────────────
       switch (field) {
         case "orientation":
-          magnetizationHSL(vx, vy, vz, _color);
+          applyMagnetizationHsl(vx, vy, vz, _color);
           break;
         case "x":
           divergingColor(vx / scaleX, _color);
@@ -859,7 +853,7 @@ export default function FemMeshView3D({
           magnitudeColor(len / scaleMag, _color);
           break;
         default:
-          magnetizationHSL(vx, vy, vz, _color);
+          applyMagnetizationHsl(vx, vy, vz, _color);
           break;
       }
 

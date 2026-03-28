@@ -32,11 +32,7 @@ pub trait QoiFunctional {
     ///
     /// For a linear QoI J(v) = ∫_Ω g · v dx,  the weight on element K is
     /// just the representation of g in the test space.
-    fn element_weights(
-        &self,
-        topology: &MeshTopology,
-        solution: &[f64],
-    ) -> Result<Vec<f64>>;
+    fn element_weights(&self, topology: &MeshTopology, solution: &[f64]) -> Result<Vec<f64>>;
 }
 
 /// QoI: average scalar field over magnetically-active elements.
@@ -47,11 +43,7 @@ pub trait QoiFunctional {
 pub struct AverageFieldQoi;
 
 impl QoiFunctional for AverageFieldQoi {
-    fn element_weights(
-        &self,
-        topology: &MeshTopology,
-        _solution: &[f64],
-    ) -> Result<Vec<f64>> {
+    fn element_weights(&self, topology: &MeshTopology, _solution: &[f64]) -> Result<Vec<f64>> {
         let vol_m = topology.magnetic_total_volume;
         if vol_m <= 0.0 {
             return Err(EngineError::new(
@@ -81,11 +73,7 @@ pub struct MagneticEnergyQoi<'a> {
 }
 
 impl QoiFunctional for MagneticEnergyQoi<'_> {
-    fn element_weights(
-        &self,
-        topology: &MeshTopology,
-        solution: &[f64],
-    ) -> Result<Vec<f64>> {
+    fn element_weights(&self, topology: &MeshTopology, solution: &[f64]) -> Result<Vec<f64>> {
         let n_el = topology.n_elements;
         if self.nu.len() != n_el {
             return Err(EngineError::new(format!(
@@ -131,11 +119,7 @@ pub struct CustomWeightsQoi {
 }
 
 impl QoiFunctional for CustomWeightsQoi {
-    fn element_weights(
-        &self,
-        topology: &MeshTopology,
-        _solution: &[f64],
-    ) -> Result<Vec<f64>> {
+    fn element_weights(&self, topology: &MeshTopology, _solution: &[f64]) -> Result<Vec<f64>> {
         if self.weights.len() != topology.n_elements {
             return Err(EngineError::new(format!(
                 "custom weights length {} ≠ element count {}",
@@ -173,9 +157,7 @@ pub struct GoalEstimatorParams<'a> {
 /// by the QoI element weights rather than a full dual solve.
 /// For a full adjoint solve the user should supply `CustomWeightsQoi`
 /// with the actual dual residual weights.
-pub fn compute_goal_oriented_indicators(
-    params: &GoalEstimatorParams,
-) -> Result<ErrorIndicators> {
+pub fn compute_goal_oriented_indicators(params: &GoalEstimatorParams) -> Result<ErrorIndicators> {
     let n_el = params.topology.n_elements;
     let primal = params.primal_indicators;
 
@@ -187,7 +169,9 @@ pub fn compute_goal_oriented_indicators(
         )));
     }
 
-    let weights = params.qoi.element_weights(params.topology, params.solution)?;
+    let weights = params
+        .qoi
+        .element_weights(params.topology, params.solution)?;
 
     let mut eta_sq = Vec::with_capacity(n_el);
     let mut eta = Vec::with_capacity(n_el);
@@ -219,10 +203,7 @@ pub fn compute_goal_oriented_indicators(
 /// Useful for diagnostics: elements with ι_K close to 1 contribute equally
 /// to the QoI and to the global error; elements with ι_K << 1 are "wasted"
 /// refinement if using the primal estimator alone.
-pub fn effectivity_indices(
-    primal: &ErrorIndicators,
-    goal: &ErrorIndicators,
-) -> Vec<f64> {
+pub fn effectivity_indices(primal: &ErrorIndicators, goal: &ErrorIndicators) -> Vec<f64> {
     primal
         .eta
         .iter()
@@ -319,9 +300,7 @@ mod tests {
     fn custom_weights_wrong_length_fails() {
         let (topo, _) = two_tet_mesh();
         let solution = vec![0.0; topo.n_nodes];
-        let qoi = CustomWeightsQoi {
-            weights: vec![1.0],
-        };
+        let qoi = CustomWeightsQoi { weights: vec![1.0] };
         assert!(qoi.element_weights(&topo, &solution).is_err());
     }
 

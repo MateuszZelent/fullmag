@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { currentLiveApiClient } from "./liveApiClient";
+import { ApiHttpError, currentLiveApiClient } from "./liveApiClient";
 
 export interface SessionManifest {
   session_id: string;
@@ -67,6 +67,9 @@ export interface ScalarRow {
   step: number;
   time: number;
   solver_dt: number;
+  mx: number;
+  my: number;
+  mz: number;
   e_ex: number;
   e_demag: number;
   e_ext: number;
@@ -107,6 +110,8 @@ export interface LatestFields {
 
 export interface PreviewState {
   config_revision: number;
+  source_step: number;
+  source_time: number;
   spatial_kind: "grid" | "mesh";
   quantity: string;
   unit: string;
@@ -173,6 +178,117 @@ interface UseSessionStreamResult {
   error: string | null;
 }
 
+function currentSessionHint(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const value = new URLSearchParams(window.location.search).get("session");
+  return value && value.trim().length > 0 ? value.trim() : null;
+}
+
+function lastScalarStep(rows: ScalarRow[]): number {
+  return rows.length > 0 ? rows[rows.length - 1]?.step ?? -1 : -1;
+}
+
+function lastLogTimestamp(entries: EngineLogEntry[]): number {
+  return entries.length > 0 ? entries[entries.length - 1]?.timestamp_unix_ms ?? -1 : -1;
+}
+
+function previewSequence(preview: PreviewState | null): [number, number, number] {
+  if (!preview) return [-1, -1, -1];
+  return [preview.config_revision, preview.source_step, preview.source_time];
+}
+
+function compareLexicographic(
+  lhs: [number, number, number],
+  rhs: [number, number, number],
+): number {
+  for (let i = 0; i < lhs.length; i += 1) {
+    if (lhs[i] > rhs[i]) return 1;
+    if (lhs[i] < rhs[i]) return -1;
+  }
+  return 0;
+}
+
+function mergeSessionState(prev: SessionState | null, next: SessionState): SessionState {
+  if (!prev) {
+    return next;
+  }
+  if (prev.session.session_id !== next.session.session_id) {
+    return next;
+  }
+
+  const merged: SessionState = { ...next };
+
+  if (!merged.fem_mesh && prev.fem_mesh) {
+    merged.fem_mesh = prev.fem_mesh;
+  }
+
+  const prevLiveTs = prev.live_state?.updated_at_unix_ms ?? -1;
+  const nextLiveTs = next.live_state?.updated_at_unix_ms ?? -1;
+  const prevLiveStep = prev.live_state?.step ?? -1;
+  const nextLiveStep = next.live_state?.step ?? -1;
+  const liveRegressed =
+    prev.live_state != null &&
+    (
+      next.live_state == null ||
+      nextLiveTs < prevLiveTs ||
+      (nextLiveTs === prevLiveTs && nextLiveStep < prevLiveStep)
+    );
+
+  if (liveRegressed) {
+    merged.live_state = prev.live_state;
+    merged.latest_fields = prev.latest_fields;
+    if (prev.fem_mesh) {
+      merged.fem_mesh = prev.fem_mesh;
+    }
+  }
+
+  const prevRunSteps = prev.run?.total_steps ?? -1;
+  const nextRunSteps = next.run?.total_steps ?? -1;
+  if (prev.run && next.run && nextRunSteps < prevRunSteps) {
+    merged.run = prev.run;
+  }
+
+  if (
+    prev.preview_config &&
+    (
+      !next.preview_config ||
+      next.preview_config.revision < prev.preview_config.revision
+    )
+  ) {
+    merged.preview_config = prev.preview_config;
+  }
+
+  const previewOrdering = compareLexicographic(
+    previewSequence(next.preview),
+    previewSequence(prev.preview),
+  );
+  const previewRegressed = prev.preview != null && previewOrdering < 0;
+  const previewUnchanged = prev.preview != null && previewOrdering === 0;
+  if (previewRegressed || previewUnchanged) {
+    merged.preview = prev.preview;
+  }
+
+  const prevScalarStep = lastScalarStep(prev.scalar_rows);
+  const nextScalarStep = lastScalarStep(next.scalar_rows);
+  if (nextScalarStep < prevScalarStep) {
+    merged.scalar_rows = prev.scalar_rows;
+  } else if (next.scalar_rows.length === prev.scalar_rows.length) {
+    merged.scalar_rows = prev.scalar_rows;
+  }
+
+  const prevLogTs = lastLogTimestamp(prev.engine_log);
+  const nextLogTs = lastLogTimestamp(next.engine_log);
+  if (nextLogTs < prevLogTs) {
+    merged.engine_log = prev.engine_log;
+  } else if (next.engine_log.length === prev.engine_log.length) {
+    merged.engine_log = prev.engine_log;
+  }
+
+  return merged;
+}
+
 function flattenField(raw: any): number[] | null {
   if (!raw || !Array.isArray(raw.values)) {
     return null;
@@ -232,14 +348,24 @@ function normalizeSessionState(raw: any): SessionState {
     run: raw.run ?? null,
     live_state: liveState,
     metadata: raw.metadata ?? null,
-    scalar_rows: Array.isArray(raw.scalar_rows) ? raw.scalar_rows : [],
-    engine_log: Array.isArray(raw.engine_log)
-      ? raw.engine_log.map((entry: any) => ({
-          timestamp_unix_ms: Number(entry?.timestamp_unix_ms ?? 0),
-          level: String(entry?.level ?? "info"),
-          message: String(entry?.message ?? ""),
+    scalar_rows: Array.isArray(raw.scalar_rows)
+      ? raw.scalar_rows.map((row: any) => ({
+          step: Number(row?.step ?? 0),
+          time: Number(row?.time ?? 0),
+          solver_dt: Number(row?.solver_dt ?? 0),
+          mx: Number(row?.mx ?? 0),
+          my: Number(row?.my ?? 0),
+          mz: Number(row?.mz ?? 0),
+          e_ex: Number(row?.e_ex ?? 0),
+          e_demag: Number(row?.e_demag ?? 0),
+          e_ext: Number(row?.e_ext ?? 0),
+          e_total: Number(row?.e_total ?? 0),
+          max_dm_dt: Number(row?.max_dm_dt ?? 0),
+          max_h_eff: Number(row?.max_h_eff ?? 0),
+          max_h_demag: Number(row?.max_h_demag ?? 0),
         }))
       : [],
+    engine_log: Array.isArray(raw.engine_log) ? raw.engine_log : [],
     quantities: Array.isArray(raw.quantities) ? raw.quantities : [],
     fem_mesh: raw.fem_mesh ?? raw.live_state?.latest_step?.fem_mesh ?? null,
     latest_fields: {
@@ -268,6 +394,8 @@ function normalizeSessionState(raw: any): SessionState {
     preview: rawPreview
       ? {
           config_revision: Number(rawPreview.config_revision ?? 0),
+          source_step: Number(rawPreview.source_step ?? 0),
+          source_time: Number(rawPreview.source_time ?? 0),
           spatial_kind: rawPreview.spatial_kind === "mesh" ? "mesh" : "grid",
           quantity: rawPreview.quantity ?? "",
           unit: rawPreview.unit ?? "",
@@ -323,6 +451,7 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
   const [state, setState] = useState<SessionState | null>(null);
   const [connection, setConnection] = useState<ConnectionStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
+  const [sessionHint] = useState<string | null>(() => currentSessionHint());
   const wsRef = useRef<WebSocket | null>(null);
   const finishedRef = useRef(false);
   const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -346,18 +475,25 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
           return;
         }
         const nextState = normalizeSessionState(raw);
+        if (sessionHint && nextState.session.session_id !== sessionHint) {
+          setState(null);
+          setError(null);
+          return;
+        }
         if (nextState.live_state?.finished) {
           finishedRef.current = true;
         }
-        setState((prevState) => {
-          if (!nextState.fem_mesh && prevState?.fem_mesh) {
-            nextState.fem_mesh = prevState.fem_mesh;
-          }
-          return nextState;
-        });
+        setState((prevState) => mergeSessionState(prevState, nextState));
       })
       .catch((bootstrapError) => {
         if (unmountedRef.current) {
+          return;
+        }
+        if (bootstrapError instanceof ApiHttpError && bootstrapError.status === 404) {
+          // Keep the last good workspace visible while the singleton live API
+          // is restarting or waiting for the next snapshot. This avoids
+          // remounting the entire control room and resetting 3D camera state.
+          setError(null);
           return;
         }
         setError(
@@ -392,13 +528,13 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
         const raw = JSON.parse(event.data);
         setState((prevState) => {
           const nextState = normalizeSessionState(raw);
-          if (!nextState.fem_mesh && prevState?.fem_mesh) {
-            nextState.fem_mesh = prevState.fem_mesh;
+          if (sessionHint && nextState.session.session_id !== sessionHint) {
+            return null;
           }
           if (nextState.live_state?.finished) {
             finishedRef.current = true;
           }
-          return nextState;
+          return mergeSessionState(prevState, nextState);
         });
       } catch (parseError) {
         console.warn("Failed to parse current live ws payload", parseError);
@@ -430,6 +566,11 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
         return;
       }
 
+      // Preserve the last good workspace while reconnecting so viewer state
+      // (camera, selections, local tool state) survives transient disconnects.
+      setConnection("connecting");
+      setError(null);
+
       disconnectTimerRef.current = setTimeout(() => {
         disconnectTimerRef.current = null;
         setConnection("disconnected");
@@ -443,7 +584,7 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
         }
       }, 1500);
     };
-  }, []);
+  }, [sessionHint]);
 
   useEffect(() => {
     unmountedRef.current = false;

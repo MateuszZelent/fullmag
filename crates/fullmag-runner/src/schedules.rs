@@ -32,6 +32,9 @@ pub(crate) fn collect_scalar_schedules(
                     | "time"
                     | "step"
                     | "solver_dt"
+                    | "mx"
+                    | "my"
+                    | "mz"
                     | "max_dm_dt"
                     | "max_h_eff"
             ) {

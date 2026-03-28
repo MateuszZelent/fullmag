@@ -38,7 +38,7 @@ from typing import Any, Sequence
 
 from fullmag._progress import emit_progress
 from fullmag.model.energy import Demag, Exchange, InterfacialDMI, Zeeman
-from fullmag.model.dynamics import DEFAULT_GAMMA, LLG
+from fullmag.model.dynamics import AdaptiveTimestep, DEFAULT_GAMMA, LLG
 from fullmag.model.outputs import SaveField, SaveScalar
 from fullmag.model.study import Relaxation, TimeEvolution
 from fullmag.model.structure import Ferromagnet, Material
@@ -732,7 +732,8 @@ def solver(
     Parameters
     ----------
     dt : float, optional
-        Fixed timestep in seconds.
+        Fixed timestep in seconds. When ``max_error`` is also provided, this
+        becomes the initial timestep for adaptive RK23/RK45 stepping.
     max_error : float, optional
         Adaptive integrator error tolerance.
     integrator : str, optional
@@ -765,16 +766,73 @@ def solver(
 # External fields
 # ---------------------------------------------------------------------------
 
-def b_ext(bx: float, by: float, bz: float) -> None:
-    """Set uniform external field B in Tesla."""
-    _state._b_ext = (bx, by, bz)
+def b_ext(
+    magnitude: float,
+    by: float | None = None,
+    bz: float | None = None,
+    *,
+    theta: float | None = None,
+    phi: float | None = None,
+) -> None:
+    """Set uniform external field **B** in Tesla.
+
+    Two calling conventions:
+
+    * **Cartesian** – ``fm.b_ext(bx, by, bz)``
+    * **Spherical** – ``fm.b_ext(magnitude, theta=…, phi=…)``
+      where *theta* is the polar angle from +z (degrees)
+      and *phi* is the azimuthal angle from +x in the xy-plane (degrees).
+    """
+    import math
+
+    if theta is not None or phi is not None:
+        # Spherical mode: magnitude + angles
+        if by is not None or bz is not None:
+            raise TypeError(
+                "Cannot mix positional (bx,by,bz) with keyword (theta,phi) arguments"
+            )
+        _theta = math.radians(theta if theta is not None else 0.0)
+        _phi = math.radians(phi if phi is not None else 0.0)
+        bx = magnitude * math.sin(_theta) * math.cos(_phi)
+        by_val = magnitude * math.sin(_theta) * math.sin(_phi)
+        bz_val = magnitude * math.cos(_theta)
+        _state._b_ext = (bx, by_val, bz_val)
+    else:
+        # Cartesian mode: b_ext(bx, by, bz)
+        if by is None or bz is None:
+            raise TypeError("b_ext() requires either (bx, by, bz) or (magnitude, theta=…, phi=…)")
+        _state._b_ext = (magnitude, by, bz)
 
 
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
 
-_SCALAR_QUANTITIES = {"E_ex", "E_demag", "E_total", "E_ext", "max_h_eff", "max_dm_dt"}
+_SCALAR_QUANTITIES = {
+    "E_ex",
+    "E_demag",
+    "E_total",
+    "E_ext",
+    "time",
+    "step",
+    "solver_dt",
+    "mx",
+    "my",
+    "mz",
+    "max_h_eff",
+    "max_dm_dt",
+}
+_TABLE_DEFAULT_SCALARS = (
+    "time",
+    "step",
+    "solver_dt",
+    "mx",
+    "my",
+    "mz",
+    "E_total",
+    "max_dm_dt",
+    "max_h_eff",
+)
 
 
 def save(quantity: str, *, every: float) -> None:
@@ -792,6 +850,25 @@ def save(quantity: str, *, every: float) -> None:
         _state._outputs.append(SaveScalar(scalar=quantity, every=every))
     else:
         _state._outputs.append(SaveField(field=quantity, every=every))
+
+
+def tableautosave(every: float) -> None:
+    """Configure a mumax-style scalar table autosave cadence.
+
+    Registers the default time-series table columns:
+    ``time``, ``step``, ``solver_dt``, averaged ``mx/my/mz``,
+    ``E_total``, ``max_dm_dt``, and ``max_h_eff``.
+    Existing scalar outputs for those names are replaced so the cadence is
+    always unambiguous.
+    """
+    retained_outputs = []
+    for output in _state._outputs:
+        if isinstance(output, SaveScalar) and output.scalar in _TABLE_DEFAULT_SCALARS:
+            continue
+        retained_outputs.append(output)
+    _state._outputs = retained_outputs
+    for scalar in _TABLE_DEFAULT_SCALARS:
+        _state._outputs.append(SaveScalar(scalar=scalar, every=every))
 
 
 def name(problem_name: str) -> None:
@@ -839,7 +916,12 @@ def _build_problem(
 
     # Dynamics
     llg_kwargs: dict[str, Any] = {}
-    if s._dt is not None:
+    if s._max_error is not None:
+        adaptive_kwargs: dict[str, Any] = {"atol": s._max_error}
+        if s._dt is not None:
+            adaptive_kwargs["dt_initial"] = s._dt
+        llg_kwargs["adaptive_timestep"] = AdaptiveTimestep(**adaptive_kwargs)
+    elif s._dt is not None:
         llg_kwargs["fixed_timestep"] = s._dt
     if s._integrator is not None:
         llg_kwargs["integrator"] = s._integrator
@@ -945,6 +1027,13 @@ def relax(
         )
         return problem
 
-    fixed_timestep = problem.study.dynamics.fixed_timestep if isinstance(problem.study, Relaxation) else None
-    until_seconds = (fixed_timestep or 1e-13) * max_steps
+    if isinstance(problem.study, Relaxation):
+        fixed_timestep = problem.study.dynamics.fixed_timestep
+        adaptive_timestep = problem.study.dynamics.adaptive_timestep
+        initial_timestep = fixed_timestep
+        if initial_timestep is None and adaptive_timestep is not None:
+            initial_timestep = adaptive_timestep.dt_initial
+        until_seconds = (initial_timestep or 1e-13) * max_steps
+    else:
+        until_seconds = 1e-13 * max_steps
     return Simulation(problem).run(until=until_seconds)

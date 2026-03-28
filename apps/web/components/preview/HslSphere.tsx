@@ -7,8 +7,8 @@
  * The sphere surface is coloured with the exact same `magnetizationHSL`
  * mapping used for arrow colouring:
  *   hue        = atan2(y, x) / 2π
- *   saturation = sqrt(x² + y²)
- *   lightness  = clamp((z + 1) / 2, 0.18, 0.84)
+ *   saturation = 1
+ *   lightness  = (z + 1) / 2
  *
  * Three axis labels (X / Y / Z) protrude from the sphere to make the
  * mapping unambiguous. The whole thing rotates with the main viewport camera.
@@ -17,6 +17,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import * as THREE from "three";
 import type { TrackballControls } from "three/examples/jsm/controls/TrackballControls.js";
+import { magnetizationHslColor } from "./magnetizationColor";
 
 /* ── Types ─────────────────────────────────────────────────── */
 
@@ -33,15 +34,6 @@ const SIZE = 110; // px  (canvas size)
 const SPHERE_RADIUS = 0.9;
 const SEGMENTS = 64;
 
-/* ── Colour function (must match MagnetizationView3D) ─────── */
-
-function magnetizationHSL(nx: number, ny: number, nz: number): THREE.Color {
-  const hue = Math.atan2(ny, nx) / (Math.PI * 2);
-  const saturation = Math.min(1, Math.sqrt(nx * nx + ny * ny));
-  const lightness = THREE.MathUtils.clamp((nz + 1) / 2, 0.18, 0.84);
-  return new THREE.Color().setHSL((hue + 1) % 1, saturation, lightness);
-}
-
 /* ── Build sphere mesh with vertex colours ────────────────── */
 
 function buildColoredSphere(): THREE.Mesh {
@@ -54,7 +46,7 @@ function buildColoredSphere(): THREE.Mesh {
     _v.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).normalize();
     // Simulation convention: sim-X → world-X, sim-Z → world-Y, sim-Y → world-Z
     // The sphere directions map: world (x, y, z) → sim (x, z, y)
-    const c = magnetizationHSL(_v.x, _v.z, _v.y);
+    const c = magnetizationHslColor(_v.x, _v.z, _v.y);
     colors[i * 3] = c.r;
     colors[i * 3 + 1] = c.g;
     colors[i * 3 + 2] = c.b;

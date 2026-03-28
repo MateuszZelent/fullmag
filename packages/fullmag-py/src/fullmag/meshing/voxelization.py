@@ -325,13 +325,23 @@ class VoxelMaskData:
             mask=self.mask,
             cell_size=np.asarray(self.cell_size, dtype=np.float64),
             origin=np.asarray(self.origin, dtype=np.float64),
+            mask_axis_order=np.asarray("zyx"),
         )
 
     @classmethod
     def load(cls, path: str | Path) -> "VoxelMaskData":
         data = np.load(Path(path))
+        mask = np.asarray(data["mask"], dtype=np.bool_)
+        axis_order = "zyx"
+        if "mask_axis_order" in data.files:
+            raw_axis_order = data["mask_axis_order"]
+            axis_order = str(raw_axis_order.tolist() if hasattr(raw_axis_order, "tolist") else raw_axis_order)
+        if axis_order == "xyz":
+            mask = np.transpose(mask, (2, 1, 0))
+        elif axis_order != "zyx":
+            raise ValueError(f"unsupported voxel mask axis order '{axis_order}'")
         return cls(
-            mask=data["mask"],
+            mask=mask,
             cell_size=tuple(float(v) for v in data["cell_size"]),
             origin=tuple(float(v) for v in data["origin"]),
         )
@@ -548,6 +558,9 @@ def _voxelize_imported_geometry(
         mesh.apply_transform(scale_transform)
     voxel_grid = mesh.voxelized(dx)
     matrix = np.asarray(voxel_grid.matrix, dtype=np.bool_)
+    # trimesh exposes dense voxel grids in (x, y, z) order, while the rest of
+    # Fullmag uses canonical (z, y, x) masks so flattening stays x-fastest.
+    matrix = np.transpose(matrix, (2, 1, 0))
     translation = np.asarray(voxel_grid.transform[:3, 3], dtype=np.float64)
 
     return VoxelMaskData(

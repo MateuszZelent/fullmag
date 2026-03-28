@@ -37,15 +37,18 @@ pub(crate) fn write_artifacts(
     let mut csv_file = fs::File::create(&csv_path)?;
     writeln!(
         csv_file,
-        "step,time,solver_dt,E_ex,E_demag,E_ext,E_total,max_dm_dt,max_h_eff,max_h_demag"
+        "step,time,solver_dt,mx,my,mz,E_ex,E_demag,E_ext,E_total,max_dm_dt,max_h_eff,max_h_demag"
     )?;
     for step in &executed.result.steps {
         writeln!(
             csv_file,
-            "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
+            "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
             step.step,
             step.time,
             step.dt,
+            step.mx,
+            step.my,
+            step.mz,
             step.e_ex,
             step.e_demag,
             step.e_ext,
@@ -264,6 +267,7 @@ mod tests {
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
                 integrator: IntegratorChoice::Heun,
                 fixed_timestep: Some(1e-13),
+                adaptive_timestep: None,
                 relaxation: None,
             }),
             output_plan: OutputPlanIR {

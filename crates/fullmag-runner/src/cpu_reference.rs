@@ -4,8 +4,8 @@
 //! into the native CUDA backend.
 
 use fullmag_engine::{
-    CellSize, EffectiveFieldTerms, ExchangeLlgProblem, ExchangeLlgState, GridShape, LlgConfig,
-    MaterialParameters, TimeIntegrator,
+    AdaptiveStepConfig, CellSize, EffectiveFieldTerms, ExchangeLlgProblem, ExchangeLlgState,
+    GridShape, LlgConfig, MaterialParameters, TimeIntegrator,
 };
 use fullmag_ir::{
     ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
@@ -13,7 +13,11 @@ use fullmag_ir::{
 
 use crate::preview::{build_grid_preview_field, flatten_vectors, select_observables};
 use crate::relaxation::{
-    execute_nonlinear_cg, execute_projected_gradient_bb, relaxation_converged,
+    execute_nonlinear_cg, execute_projected_gradient_bb, llg_overdamped_uses_pure_damping,
+    relaxation_converged,
+};
+use crate::scalar_metrics::{
+    apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -133,9 +137,20 @@ fn execute_reference_fdm_impl(
         IntegratorChoice::Abm3 => TimeIntegrator::ABM3,
     };
 
-    let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator).map_err(|e| RunError {
-        message: format!("LLG: {}", e),
-    })?;
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+    let mut dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator)
+        .map_err(|e| RunError {
+            message: format!("LLG: {}", e),
+        })?
+        .with_precession_enabled(!pure_damping_relax);
+    if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
+        dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
+            max_error: adaptive.atol,
+            dt_min: adaptive.dt_min,
+            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            headroom: adaptive.safety,
+        });
+    }
 
     let problem = ExchangeLlgProblem::with_terms_and_mask(
         grid,
@@ -160,7 +175,15 @@ fn execute_reference_fdm_impl(
         })?;
     let initial_magnetization = state.magnetization().to_vec();
 
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let mut dt = plan
+        .fixed_timestep
+        .or_else(|| {
+            plan.adaptive_timestep
+                .as_ref()
+                .and_then(|adaptive| adaptive.dt_initial)
+        })
+        .unwrap_or(1e-13);
+    let mut last_solver_dt = 0.0;
     let mut steps: Vec<StepStats> = Vec::new();
     let mut field_snapshots: Vec<FieldSnapshot> = Vec::new();
     let mut step_count: u64 = 0;
@@ -243,12 +266,21 @@ fn execute_reference_fdm_impl(
             let dt_step = dt.min(until_seconds - state.time_seconds);
             let wall_start = Instant::now();
             let report = problem
-                .step_with_buffers(&mut state, dt_step, &mut fft_workspace, &mut integrator_bufs)
+                .step_with_buffers(
+                    &mut state,
+                    dt_step,
+                    &mut fft_workspace,
+                    &mut integrator_bufs,
+                )
                 .map_err(|e| RunError {
                     message: format!("Step {}: {}", step_count, e),
                 })?;
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             step_count += 1;
+            last_solver_dt = report.dt_used;
+            if let Some(next) = report.suggested_next_dt {
+                dt = next;
+            }
             let latest_stats = StepStats {
                 step: step_count,
                 time: report.time_seconds,
@@ -269,7 +301,7 @@ fn execute_reference_fdm_impl(
                     &problem,
                     &state,
                     step_count,
-                    dt_step,
+                    report.dt_used,
                     wall_elapsed,
                     &mut scalar_schedules,
                     &mut field_schedules,
@@ -308,14 +340,20 @@ fn execute_reference_fdm_impl(
                 } else {
                     None
                 };
+                let due_scalar_row = scalar_row_due(&scalar_schedules, state.time_seconds);
+                let mut update_stats = make_step_stats(
+                    step_count,
+                    state.time_seconds,
+                    report.dt_used,
+                    wall_elapsed,
+                    &observables,
+                );
+                if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
+                    apply_average_m_to_step_stats(&mut update_stats, &observables.magnetization);
+                }
                 let action = (live.on_step)(StepUpdate {
-                    stats: make_step_stats(
-                        step_count,
-                        state.time_seconds,
-                        dt_step,
-                        wall_elapsed,
-                        &observables,
-                    ),
+                    stats: update_stats,
+                    scalar_row_due: due_scalar_row,
                     grid: live.grid,
                     fem_mesh: None,
                     magnetization,
@@ -339,6 +377,7 @@ fn execute_reference_fdm_impl(
                         previous_total_energy,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
+                        pure_damping_relax,
                     )
             });
             previous_total_energy = Some(latest_stats.e_total);
@@ -352,7 +391,7 @@ fn execute_reference_fdm_impl(
         &problem,
         &state,
         step_count,
-        dt,
+        last_solver_dt,
         default_scalar_trace,
         &field_schedules,
         &mut steps,
@@ -361,7 +400,11 @@ fn execute_reference_fdm_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
+            status: if cancelled {
+                RunStatus::Cancelled
+            } else {
+                RunStatus::Completed
+            },
             steps,
             final_magnetization: state.magnetization().to_vec(),
         },
@@ -552,7 +595,7 @@ fn make_step_stats(
     wall_time_ns: u64,
     observables: &StateObservables,
 ) -> StepStats {
-    StepStats {
+    let mut stats = StepStats {
         step,
         time,
         dt: solver_dt,
@@ -565,7 +608,9 @@ fn make_step_stats(
         max_h_demag: observables.max_h_demag,
         wall_time_ns,
         ..StepStats::default()
-    }
+    };
+    apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    stats
 }
 
 fn select_field_values(observables: &StateObservables, name: &str) -> Vec<[f64; 3]> {
@@ -613,10 +658,42 @@ mod tests {
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-14),
+            adaptive_timestep: None,
             relaxation: None,
             enable_exchange: true,
             enable_demag: false,
             external_field: None,
+        }
+    }
+
+    fn make_relaxation_precession_test_plan() -> FdmPlanIR {
+        FdmPlanIR {
+            grid: GridDimensions { cells: [1, 1, 1] },
+            cell_size: [5e-9, 5e-9, 5e-9],
+            region_mask: vec![0],
+            active_mask: None,
+            initial_magnetization: vec![[1.0, 0.0, 0.0]],
+            material: FdmMaterialIR {
+                name: "Py".to_string(),
+                saturation_magnetisation: 800e3,
+                exchange_stiffness: 13e-12,
+                damping: 0.1,
+            },
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            integrator: IntegratorChoice::Rk23,
+            fixed_timestep: Some(1e-15),
+            adaptive_timestep: None,
+            relaxation: Some(RelaxationControlIR {
+                algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+                torque_tolerance: 1e-6,
+                energy_tolerance: None,
+                max_steps: 10,
+            }),
+            enable_exchange: false,
+            enable_demag: false,
+            external_field: Some([0.0, 0.0, 8.0e5]),
         }
     }
 
@@ -861,6 +938,24 @@ mod tests {
         assert!(
             final_time < 1e-9,
             "relaxation should stop early, got final_time={final_time}"
+        );
+    }
+
+    #[test]
+    fn llg_overdamped_relaxation_uses_pure_damping_rhs() {
+        let plan = make_relaxation_precession_test_plan();
+        let executed = execute_reference_fdm(&plan, 1e-12, &[]).expect("relaxation should succeed");
+        let final_m = executed.result.final_magnetization[0];
+
+        assert!(
+            final_m[1].abs() <= 1e-10,
+            "pure-damping relaxation should not precess into y, got {:?}",
+            final_m
+        );
+        assert!(
+            final_m[2] > 0.0,
+            "pure-damping relaxation should move toward +z field, got {:?}",
+            final_m
         );
     }
 

@@ -1,0 +1,153 @@
+/* DimensionOverlay — COMSOL-style axis annotations */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 8;
+  overflow: hidden;
+}
+
+/* ── Bottom axis (X) ── */
+.axisBottom {
+  position: absolute;
+  bottom: 28px;
+  left: 64px;
+  right: 48px;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+.axisBottom .axisLine {
+  flex: 1;
+  height: 20px;
+  position: relative;
+  border-bottom: 1px solid hsla(210, 30%, 70%, 0.35);
+}
+
+.axisBottom .tick {
+  position: absolute;
+  bottom: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.axisBottom .tickMark {
+  width: 1px;
+  height: 6px;
+  background: hsla(210, 30%, 70%, 0.5);
+}
+
+.axisBottom .tickLabel {
+  font-size: 0.55rem;
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+  color: hsla(210, 30%, 80%, 0.7);
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.axisBottom .axisLabel {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: hsla(210, 30%, 80%, 0.6);
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+  margin-bottom: 1px;
+}
+
+/* ── Left axis (Y) ── */
+.axisLeft {
+  position: absolute;
+  left: 28px;
+  top: 16px;
+  bottom: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+.axisLeft .axisLine {
+  flex: 1;
+  width: 20px;
+  position: relative;
+  border-left: 1px solid hsla(210, 30%, 70%, 0.35);
+}
+
+.axisLeft .tick {
+  position: absolute;
+  left: 0;
+  transform: translateY(50%);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.axisLeft .tickMark {
+  width: 6px;
+  height: 1px;
+  background: hsla(210, 30%, 70%, 0.5);
+}
+
+.axisLeft .tickLabel {
+  font-size: 0.55rem;
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+  color: hsla(210, 30%, 80%, 0.7);
+  margin-left: -20px;
+  white-space: nowrap;
+  text-align: right;
+  min-width: 16px;
+}
+
+.axisLeft .axisLabel {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: hsla(210, 30%, 80%, 0.6);
+  font-family: var(--font-mono, monospace);
+  writing-mode: vertical-lr;
+  transform: rotate(180deg);
+  white-space: nowrap;
+}
+
+/* ── Axis gizmo ── */
+.axisGizmo {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  opacity: 0.75;
+}
+
+/* ── Grid badge ── */
+.gridBadge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  font-family: var(--font-mono, monospace);
+  color: hsla(210, 30%, 80%, 0.6);
+  background: hsla(220, 30%, 12%, 0.7);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid hsla(210, 30%, 40%, 0.2);
+}
+
+/* ── Dimension summary badge ── */
+.dimBadge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  font-family: var(--font-mono, monospace);
+  color: hsla(210, 30%, 80%, 0.6);
+  background: hsla(220, 30%, 12%, 0.7);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid hsla(210, 30%, 40%, 0.2);
+}

@@ -12,6 +12,7 @@ from unittest.mock import patch
 import numpy as np
 
 import fullmag as fm
+import fullmag.world as flat_world
 from fullmag.meshing.voxelization import VoxelMaskData
 from fullmag.runtime import cli as runtime_cli
 from fullmag.runtime import helper as runtime_helper
@@ -167,6 +168,28 @@ class ProblemApiTests(unittest.TestCase):
                 outputs=[fm.SaveField("m", every=1e-12)],
             )
 
+    def test_flat_tableautosave_registers_default_scalar_table(self) -> None:
+        fm.reset()
+        fm.engine("fdm")
+        fm.cell(2e-9, 2e-9, 2e-9)
+        track = fm.geometry(fm.Box(size=(20e-9, 10e-9, 2e-9), name="track"), name="track")
+        track.Ms = 800e3
+        track.Aex = 13e-12
+        track.alpha = 0.1
+        track.m = fm.uniform(1.0, 0.0, 0.0)
+
+        fm.tableautosave(5e-12)
+        problem = flat_world._build_problem()
+        ir = problem.to_ir()
+        outputs = ir["study"]["sampling"]["outputs"]
+        scalar_names = [output["name"] for output in outputs if output["kind"] == "scalar"]
+
+        self.assertEqual(
+            scalar_names,
+            ["time", "step", "solver_dt", "mx", "my", "mz", "E_total", "max_dm_dt", "max_h_eff"],
+        )
+        self.assertTrue(all(output["every_seconds"] == 5e-12 for output in outputs if output["kind"] == "scalar"))
+
     def test_cylinder_serializes_to_ir(self) -> None:
         geometry = fm.Cylinder(radius=50e-9, height=10e-9, name="pillar")
 
@@ -309,6 +332,28 @@ class ProblemApiTests(unittest.TestCase):
             ir["geometry"]["entries"][0]["source"],
             "examples/nanoflower.stl",
         )
+
+    def test_imported_nanoflower_problem_preserves_xyz_axis_order_in_fdm_grid_asset(self) -> None:
+        geometry = fm.ImportedGeometry(source="examples/nanoflower.stl", name="flower", units="nm")
+        material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
+        magnet = fm.Ferromagnet(name="flower", geometry=geometry, material=material)
+        problem = fm.Problem(
+            name="flower_problem_real_asset",
+            magnets=[magnet],
+            energy=[fm.Exchange()],
+            study=fm.TimeEvolution(
+                dynamics=fm.LLG(),
+                outputs=[fm.SaveField("m", every=1e-12)],
+            ),
+            discretization=fm.DiscretizationHints(fdm=fm.FDM(cell=(5e-9, 5e-9, 5e-9))),
+        )
+
+        ir = problem.to_ir(requested_backend=fm.BackendTarget.FDM)
+
+        assets = ir["geometry_assets"]["fdm_grid_assets"]
+        self.assertEqual(len(assets), 1)
+        self.assertEqual(assets[0]["cells"], [66, 66, 23])
+        self.assertEqual(len(assets[0]["active_mask"]), 66 * 66 * 23)
 
     def test_imported_geometry_supports_anisotropic_scale_in_ir(self) -> None:
         geometry = fm.ImportedGeometry(
@@ -594,6 +639,33 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(loaded.entrypoint_kind, "flat_relax")
         self.assertIsNone(loaded.default_until_seconds)
         self.assertEqual(loaded.problem.study.to_ir()["kind"], "relaxation")
+
+    def test_flat_solver_max_error_lowers_to_adaptive_timestep(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        fm.solver(dt=2e-15, max_error=1e-6, integrator="rk23")
+        fm.save("m", every=1e-12)
+        fm.run(2.5e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_flat_adaptive_solver.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        dynamics = loaded.problem.study.to_ir()["dynamics"]
+        self.assertIsNone(dynamics["fixed_timestep"])
+        self.assertEqual(dynamics["adaptive_timestep"]["atol"], 1e-6)
+        self.assertEqual(dynamics["adaptive_timestep"]["dt_initial"], 2e-15)
+        self.assertEqual(dynamics["integrator"], "rk23")
 
     def test_flat_stage_sequence_is_supported(self) -> None:
         script = """
@@ -917,10 +989,10 @@ class ProblemApiTests(unittest.TestCase):
         fm.run(4e-12)
         """
 
-        calls: list[tuple[dict[str, object], float]] = []
+        calls: list[tuple[dict[str, object], float, str | None]] = []
 
         def fake_run_problem_json(ir, until_seconds, output_dir):
-            calls.append((ir, until_seconds))
+            calls.append((ir, until_seconds, output_dir))
             return {
                 "status": "completed",
                 "steps": [
@@ -942,13 +1014,19 @@ class ProblemApiTests(unittest.TestCase):
 
         with TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "script_cli_flat_sequence.py"
+            output_dir = Path(tmp_dir) / "artifacts"
             path.write_text(textwrap.dedent(script), encoding="utf-8")
 
             with patch(
                 "fullmag.runtime.cli.run_problem_json",
                 side_effect=fake_run_problem_json,
             ):
-                exit_code = runtime_cli.main([str(path), "--json"])
+                exit_code = runtime_cli.main(
+                    [str(path), "--json", "--output-dir", str(output_dir)]
+                )
+            manifest = json.loads(
+                (output_dir / "sequence_manifest.json").read_text(encoding="utf-8")
+            )
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(calls), 2)
@@ -959,6 +1037,18 @@ class ProblemApiTests(unittest.TestCase):
             calls[1][0]["magnets"][0]["initial_magnetization"]["kind"],
             "sampled_field",
         )
+        self.assertEqual(
+            calls[0][2],
+            str(output_dir / "stage_01_flat_relax"),
+        )
+        self.assertEqual(
+            calls[1][2],
+            str(output_dir / "stage_02_flat_run"),
+        )
+        self.assertEqual(manifest["kind"], "flat_sequence")
+        self.assertEqual(len(manifest["stages"]), 2)
+        self.assertEqual(manifest["stages"][0]["output_dir"], str(output_dir / "stage_01_flat_relax"))
+        self.assertEqual(manifest["stages"][1]["output_dir"], str(output_dir / "stage_02_flat_run"))
 
     def test_cli_json_mode_prints_machine_readable_summary(self) -> None:
         script = """
@@ -1098,6 +1188,56 @@ class ProblemApiTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(captured["until_seconds"], 250 * 2e-13)
+
+    def test_cli_derives_until_from_adaptive_relaxation_initial_timestep(self) -> None:
+        script = """
+        import fullmag as fm
+
+        problem = fm.Problem(
+            name="adaptive_relax_default_until_problem",
+            magnets=[
+                fm.Ferromagnet(
+                    name="track",
+                    geometry=fm.Box(size=(100e-9, 20e-9, 5e-9), name="track"),
+                    material=fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.1),
+                )
+            ],
+            energy=[fm.Exchange()],
+            study=fm.Relaxation(
+                max_steps=250,
+                dynamics=fm.LLG(
+                    integrator="rk23",
+                    adaptive_timestep=fm.AdaptiveTimestep(atol=1e-6, dt_initial=3e-13),
+                ),
+                outputs=[fm.SaveField("m", every=1e-12)],
+            ),
+            discretization=fm.DiscretizationHints(
+                fdm=fm.FDM(cell=(5e-9, 5e-9, 5e-9)),
+            ),
+        )
+        """
+
+        captured: dict[str, object] = {}
+
+        def fake_run_problem_json(ir, until_seconds, output_dir):
+            captured["until_seconds"] = until_seconds
+            return {
+                "status": "completed",
+                "steps": [],
+                "final_magnetization": None,
+            }
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_adaptive_relax_default_until.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            with patch(
+                "fullmag.runtime.cli.run_problem_json",
+                side_effect=fake_run_problem_json,
+            ):
+                exit_code = runtime_cli.main([str(path), "--json"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(captured["until_seconds"], 250 * 3e-13)
 
     def test_helper_exports_ir_for_rust_host(self) -> None:
         script = """

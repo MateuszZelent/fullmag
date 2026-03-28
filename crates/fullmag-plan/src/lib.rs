@@ -341,9 +341,7 @@ fn planned_study_controls(
         Some(choice) => choice,
         None => match &problem.study {
             fullmag_ir::StudyIR::TimeEvolution { .. } => IntegratorChoice::Rk45,
-            fullmag_ir::StudyIR::Relaxation { algorithm, .. } => {
-                algorithm.default_integrator()
-            }
+            fullmag_ir::StudyIR::Relaxation { algorithm, .. } => algorithm.default_integrator(),
         },
     };
 
@@ -378,9 +376,7 @@ fn planned_study_controls(
 
     // Validate adaptive/fixed exclusivity and integrator compatibility.
     if adaptive_timestep.is_some() && fixed_timestep.is_some() {
-        errors.push(
-            "adaptive_timestep and fixed_timestep are mutually exclusive".to_string(),
-        );
+        errors.push("adaptive_timestep and fixed_timestep are mutually exclusive".to_string());
     }
     if adaptive_timestep.is_some()
         && !matches!(integrator, IntegratorChoice::Rk23 | IntegratorChoice::Rk45)
@@ -391,7 +387,13 @@ fn planned_study_controls(
         ));
     }
 
-    (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, adaptive_timestep)
+    (
+        integrator,
+        fixed_timestep,
+        gyromagnetic_ratio,
+        relaxation,
+        adaptive_timestep,
+    )
 }
 
 /// Plans a `ProblemIR` into an `ExecutionPlanIR`.
@@ -799,7 +801,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         }
     };
 
-    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, _adaptive_timestep) =
+    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, adaptive_timestep) =
         planned_study_controls(problem, &mut errors);
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
@@ -857,6 +859,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         integrator,
         fixed_timestep,
+        adaptive_timestep,
         relaxation,
     };
     let study_note = if let Some(control) = fdm_plan.relaxation.as_ref() {
@@ -1272,12 +1275,17 @@ fn plan_fdm_multilayer(
         (common_cells[0] * 2) as u64 * (common_cells[1] * 2) as u64 * (common_cells[2] * 2) as u64;
     let estimated_kernel_bytes = padded_len * 6 * 16 * estimated_unique_kernels as u64;
 
-    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, _adaptive_timestep) =
+    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, adaptive_timestep) =
         planned_study_controls(problem, &mut errors);
     if integrator != IntegratorChoice::Heun {
         errors.push(
             "the public multilayer FDM runner currently supports only the 'heun' integrator"
                 .to_string(),
+        );
+    }
+    if adaptive_timestep.is_some() {
+        errors.push(
+            "the public multilayer FDM runner does not yet support adaptive_timestep".to_string(),
         );
     }
     if relaxation
@@ -1734,6 +1742,9 @@ fn validate_executable_outputs(
         "time",
         "step",
         "solver_dt",
+        "mx",
+        "my",
+        "mz",
         "max_dm_dt",
         "max_h_eff",
     ];
@@ -1764,7 +1775,7 @@ fn validate_executable_outputs(
             OutputIR::Scalar { name, .. } => {
                 if !allowed_scalars.contains(&name.as_str()) {
                     errors.push(format!(
-                        "scalar output '{}' is not executable in the current FDM path; allowed scalars are E_ex, E_demag, E_ext, E_total, time, step, solver_dt, max_dm_dt, and max_h_eff",
+                        "scalar output '{}' is not executable in the current FDM path; allowed scalars are E_ex, E_demag, E_ext, E_total, time, step, solver_dt, mx, my, mz, max_dm_dt, and max_h_eff",
                         name
                     ));
                 } else if name == "E_ex" && !enable_exchange {

@@ -28,7 +28,7 @@ extern __global__ void llg_rhs_fp64_kernel(
     const double * __restrict__ mx, const double * __restrict__ my, const double * __restrict__ mz,
     const double * __restrict__ hx, const double * __restrict__ hy, const double * __restrict__ hz,
     double * __restrict__ out_x, double * __restrict__ out_y, double * __restrict__ out_z,
-    int n, double gamma_bar, double alpha);
+    int n, double gamma_bar, double alpha, int disable_precession);
 
 // From llg_fp64.cu — Heun kernels
 extern __global__ void heun_predictor_fp64_kernel(
@@ -148,7 +148,7 @@ static void abm3_fill_diagnostics(Context &ctx, double dt, fullmag_fdm_step_stat
         static_cast<double*>(ctx.k1.x),
         static_cast<double*>(ctx.k1.y),
         static_cast<double*>(ctx.k1.z),
-        n, gamma_bar, alpha);
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
     double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 
     cudaDeviceSynchronize();
@@ -202,7 +202,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.k1.x),
             static_cast<double*>(ctx.k1.y),
             static_cast<double*>(ctx.k1.z),
-            n, gamma_bar, alpha);
+            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
 
         // Predictor: m_pred = normalize(m + dt·k1)
         heun_predictor_fp64_kernel<<<grid, 256>>>(
@@ -232,7 +232,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.h_ex.x),  // reuse as k2 storage
             static_cast<double*>(ctx.h_ex.y),
             static_cast<double*>(ctx.h_ex.z),
-            n, gamma_bar, alpha);
+            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
 
         // Corrector: m_new = normalize(m_orig + 0.5·dt·(k1 + k2))
         heun_corrector_fp64_kernel<<<grid, 256>>>(
@@ -271,7 +271,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.abm_f_n.x),
             static_cast<double*>(ctx.abm_f_n.y),
             static_cast<double*>(ctx.abm_f_n.z),
-            n, gamma_bar, alpha);
+            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
 
         ctx.abm_startup++;
         ctx.abm_last_dt = dt;
@@ -323,7 +323,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.k1.x),          // f* stored in k1
         static_cast<double*>(ctx.k1.y),
         static_cast<double*>(ctx.k1.z),
-        n, gamma_bar, alpha);
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0);
 
     // AM3 corrector: m = normalize(m_orig + dt·(5/12·f* + 8/12·f_n - 1/12·f_{n-1}))
     abm3_corrector_kernel<<<grid, 256>>>(

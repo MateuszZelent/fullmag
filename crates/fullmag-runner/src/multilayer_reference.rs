@@ -14,7 +14,8 @@ use fullmag_engine::{
 use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel};
 use fullmag_ir::{ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR};
 
-use crate::relaxation::relaxation_converged;
+use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
+use crate::scalar_metrics::apply_average_m_to_step_stats;
 use crate::schedules::{collect_field_schedules, collect_scalar_schedules, is_due, OutputSchedule};
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
@@ -83,8 +84,9 @@ fn execute_reference_fdm_multilayer_impl(
         IntegratorChoice::Rk45 => fullmag_engine::TimeIntegrator::RK45,
         IntegratorChoice::Abm3 => fullmag_engine::TimeIntegrator::ABM3,
     };
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
 
-    let (contexts, mut states) = build_contexts_and_states(plan, integrator)?;
+    let (contexts, mut states) = build_contexts_and_states(plan, integrator, pure_damping_relax)?;
     let demag_runtime = if plan.enable_demag {
         Some(build_multilayer_demag_runtime(plan)?)
     } else {
@@ -166,6 +168,7 @@ fn execute_reference_fdm_multilayer_impl(
                 fem_mesh: None,
                 magnetization: None,
                 preview_field: None,
+                scalar_row_due: false,
                 finished: false,
             });
             if action == StepAction::Stop {
@@ -185,6 +188,7 @@ fn execute_reference_fdm_multilayer_impl(
                     previous_total_energy,
                     plan.gyromagnetic_ratio,
                     average_damping(&contexts),
+                    pure_damping_relax,
                 )
         });
         previous_total_energy = Some(latest_stats.e_total);
@@ -220,7 +224,11 @@ fn execute_reference_fdm_multilayer_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
+            status: if cancelled {
+                RunStatus::Cancelled
+            } else {
+                RunStatus::Completed
+            },
             steps,
             final_magnetization: flatten_layers(
                 &states
@@ -255,6 +263,7 @@ fn execute_reference_fdm_multilayer_impl(
 fn build_contexts_and_states(
     plan: &FdmMultilayerPlanIR,
     integrator: fullmag_engine::TimeIntegrator,
+    pure_damping_relax: bool,
 ) -> Result<(Vec<LayerContext>, Vec<ExchangeLlgState>), RunError> {
     let mut contexts = Vec::with_capacity(plan.layers.len());
     let mut states = Vec::with_capacity(plan.layers.len());
@@ -284,13 +293,11 @@ fn build_contexts_and_states(
         .map_err(|error| RunError {
             message: format!("material for magnet '{}': {}", layer.magnet_name, error),
         })?;
-        let dynamics = LlgConfig::new(
-            plan.gyromagnetic_ratio,
-            integrator,
-        )
-        .map_err(|error| RunError {
-            message: format!("LLG for magnet '{}': {}", layer.magnet_name, error),
-        })?;
+        let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator)
+            .map_err(|error| RunError {
+                message: format!("LLG for magnet '{}': {}", layer.magnet_name, error),
+            })?
+            .with_precession_enabled(!pure_damping_relax);
         let problem = ExchangeLlgProblem::with_terms_and_mask(
             grid,
             cell_size,
@@ -719,7 +726,7 @@ fn make_step_stats(
     wall_time_ns: u64,
     observables: &StateObservables,
 ) -> StepStats {
-    StepStats {
+    let mut stats = StepStats {
         step,
         time,
         dt: solver_dt,
@@ -732,7 +739,9 @@ fn make_step_stats(
         max_h_demag: observables.max_h_demag,
         wall_time_ns,
         ..StepStats::default()
-    }
+    };
+    apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    stats
 }
 
 fn zero_outside_active(values: &mut [[f64; 3]], active_mask: Option<&[bool]>) {
@@ -764,6 +773,7 @@ fn llg_rhs_for_layer(
                 *h,
                 context.problem.material.damping,
                 context.problem.dynamics.gyromagnetic_ratio,
+                context.problem.dynamics.precession_enabled,
             )
         })
         .collect()
@@ -774,11 +784,20 @@ fn llg_rhs_from_field(
     field: [f64; 3],
     damping: f64,
     gyromagnetic_ratio: f64,
+    precession_enabled: bool,
 ) -> [f64; 3] {
     let gamma_bar = gyromagnetic_ratio / (1.0 + damping * damping);
     let precession = cross(magnetization, field);
     let damping_term = cross(magnetization, precession);
-    scale(add(precession, scale(damping_term, damping)), -gamma_bar)
+    let precession_term = if precession_enabled {
+        precession
+    } else {
+        [0.0, 0.0, 0.0]
+    };
+    scale(
+        add(precession_term, scale(damping_term, damping)),
+        -gamma_bar,
+    )
 }
 
 fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

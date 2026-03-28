@@ -3,7 +3,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
 import Button from "../../ui/Button";
-import { type FemDockTab, type PreviewComponent, type ViewportMode, fmtPreviewEveryN, fmtSI, parseOptionalNumber } from "./shared";
+import { type FemDockTab, type PreviewComponent, type ViewportMode, fmtPreviewEveryN, fmtPreviewMaxPoints, fmtSI, parseOptionalNumber } from "./shared";
 import s from "../RunControlRoom.module.css";
 
 interface MaterialSummary {
@@ -64,6 +64,8 @@ interface SidebarSelectionInspectorProps {
   previewQuantityOptions: PreviewOption[];
   requestedPreviewEveryN: number;
   previewEveryNOptions: number[];
+  requestedPreviewMaxPoints: number;
+  previewMaxPointOptions: number[];
   requestedPreviewAutoScale: boolean;
   material: MaterialSummary | null;
   meshName: string | null;
@@ -106,6 +108,8 @@ export default function SidebarSelectionInspector(props: SidebarSelectionInspect
     previewQuantityOptions,
     requestedPreviewEveryN,
     previewEveryNOptions,
+    requestedPreviewMaxPoints,
+    previewMaxPointOptions,
     requestedPreviewAutoScale,
     material,
     meshName,
@@ -340,6 +344,21 @@ export default function SidebarSelectionInspector(props: SidebarSelectionInspect
                 ))}
               </select>
             </label>
+            <label className={s.interactiveLabel}>
+              Points
+              <select
+                className={s.interactiveInput}
+                value={requestedPreviewMaxPoints}
+                onChange={(event) => void updatePreview("/maxPoints", { maxPoints: Number(event.target.value) })}
+                disabled={previewBusy}
+              >
+                {previewMaxPointOptions.map((value) => (
+                  <option key={value} value={value}>
+                    {fmtPreviewMaxPoints(value)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className={s.interactiveLabel} style={{ justifyContent: "end" }}>
               <span style={{ display: "flex", alignItems: "center", gap: "0.45rem", minHeight: "36px" }}>
                 <input
@@ -350,7 +369,7 @@ export default function SidebarSelectionInspector(props: SidebarSelectionInspect
                   }
                   disabled={previewBusy}
                 />
-                Auto-scale
+                Auto-fit
               </span>
             </label>
           </div>

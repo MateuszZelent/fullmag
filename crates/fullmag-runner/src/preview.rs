@@ -68,29 +68,21 @@ pub(crate) fn plan_grid_preview(
         choose_preview_size(request.y_chosen_size as usize, &y_possible_sizes, full_y);
 
     if request.component == "3D" {
-        let mut applied_x = requested_x;
-        let mut applied_y = requested_y;
-        let mut stride = 1usize;
-        let mut preview_z = full_z;
-        let mut auto_downscaled = false;
-        let max_points = request.max_points.max(1) as usize;
-        while request.auto_scale_enabled
-            && applied_x * applied_y * preview_z > max_points
-            && (applied_x > 1 || applied_y > 1 || preview_z > 1)
-        {
-            auto_downscaled = true;
-            if applied_x >= applied_y && applied_x > 1 {
-                applied_x = next_smaller_size(applied_x, &x_possible_sizes);
-            } else if applied_y > 1 {
-                applied_y = next_smaller_size(applied_y, &y_possible_sizes);
-            } else {
-                stride += 1;
-                preview_z = full_z.div_ceil(stride);
-            }
-        }
+        let (applied_x, applied_y, stride, auto_downscaled) = if request.auto_scale_enabled {
+            fit_preview_grid_3d(
+                requested_x,
+                requested_y,
+                full_z,
+                request.max_points as usize,
+            )
+        } else {
+            (requested_x, requested_y, 1, false)
+        };
+        let preview_z = full_z.div_ceil(stride).max(1);
+        let max_points = request.max_points as usize;
         let auto_downscale_message = auto_downscaled.then(|| {
             format!(
-                "Preview auto-scaled from {}x{}x{} to {}x{}x{} to stay within {} points",
+                "Preview auto-fit from {}x{}x{} to {}x{}x{} within {} points",
                 full_x, full_y, full_z, applied_x, applied_y, preview_z, max_points
             )
         });
@@ -108,25 +100,21 @@ pub(crate) fn plan_grid_preview(
         };
     }
 
-    let mut applied_x = requested_x;
-    let mut applied_y = requested_y;
     let effective_layers = if request.all_layers { full_z } else { 1 };
-    let mut auto_downscaled = false;
-    let max_points = request.max_points.max(1) as usize;
-    while request.auto_scale_enabled
-        && applied_x * applied_y * effective_layers > max_points
-        && (applied_x > 1 || applied_y > 1)
-    {
-        auto_downscaled = true;
-        if applied_x >= applied_y && applied_x > 1 {
-            applied_x = next_smaller_size(applied_x, &x_possible_sizes);
-        } else if applied_y > 1 {
-            applied_y = next_smaller_size(applied_y, &y_possible_sizes);
-        }
-    }
+    let (applied_x, applied_y, auto_downscaled) = if request.auto_scale_enabled {
+        fit_preview_grid_2d(
+            requested_x,
+            requested_y,
+            effective_layers,
+            request.max_points as usize,
+        )
+    } else {
+        (requested_x, requested_y, false)
+    };
+    let max_points = request.max_points as usize;
     let auto_downscale_message = auto_downscaled.then(|| {
         format!(
-            "Preview auto-scaled from {}x{} to {}x{} to stay within {} points",
+            "Preview auto-fit from {}x{} to {}x{} within {} points",
             full_x, full_y, applied_x, applied_y, max_points
         )
     });
@@ -264,6 +252,95 @@ fn candidate_preview_sizes(full: usize) -> Vec<usize> {
     sizes
 }
 
+fn fit_preview_grid_3d(
+    requested_x: usize,
+    requested_y: usize,
+    full_z: usize,
+    max_points: usize,
+) -> (usize, usize, usize, bool) {
+    if max_points == 0 {
+        return (requested_x.max(1), requested_y.max(1), 1, false);
+    }
+    let requested_x = requested_x.max(1);
+    let requested_y = requested_y.max(1);
+    let full_z = full_z.max(1);
+    let total = requested_x
+        .saturating_mul(requested_y)
+        .saturating_mul(full_z);
+    if total <= max_points {
+        return (requested_x, requested_y, 1, false);
+    }
+
+    let scale = (max_points as f64 / total as f64).cbrt().clamp(0.0, 1.0);
+    let mut applied_x = ((requested_x as f64 * scale).round() as usize).clamp(1, requested_x);
+    let mut applied_y = ((requested_y as f64 * scale).round() as usize).clamp(1, requested_y);
+    let target_z = ((full_z as f64 * scale).round() as usize).clamp(1, full_z);
+    let mut stride = full_z.div_ceil(target_z).max(1);
+    let mut preview_z = full_z.div_ceil(stride).max(1);
+
+    while applied_x
+        .saturating_mul(applied_y)
+        .saturating_mul(preview_z)
+        > max_points
+    {
+        let ratio_x = applied_x as f64 / requested_x as f64;
+        let ratio_y = applied_y as f64 / requested_y as f64;
+        let ratio_z = preview_z as f64 / full_z as f64;
+        if ratio_x >= ratio_y && ratio_x >= ratio_z && applied_x > 1 {
+            applied_x -= 1;
+        } else if ratio_y >= ratio_z && applied_y > 1 {
+            applied_y -= 1;
+        } else {
+            stride += 1;
+            preview_z = full_z.div_ceil(stride).max(1);
+        }
+    }
+
+    (applied_x, applied_y, stride, true)
+}
+
+fn fit_preview_grid_2d(
+    requested_x: usize,
+    requested_y: usize,
+    effective_layers: usize,
+    max_points: usize,
+) -> (usize, usize, bool) {
+    if max_points == 0 {
+        return (requested_x.max(1), requested_y.max(1), false);
+    }
+    let requested_x = requested_x.max(1);
+    let requested_y = requested_y.max(1);
+    let effective_layers = effective_layers.max(1);
+    let total = requested_x
+        .saturating_mul(requested_y)
+        .saturating_mul(effective_layers);
+    if total <= max_points {
+        return (requested_x, requested_y, false);
+    }
+
+    let scale = (max_points as f64 / total as f64).sqrt().clamp(0.0, 1.0);
+    let mut applied_x = ((requested_x as f64 * scale).round() as usize).clamp(1, requested_x);
+    let mut applied_y = ((requested_y as f64 * scale).round() as usize).clamp(1, requested_y);
+
+    while applied_x
+        .saturating_mul(applied_y)
+        .saturating_mul(effective_layers)
+        > max_points
+    {
+        let ratio_x = applied_x as f64 / requested_x as f64;
+        let ratio_y = applied_y as f64 / requested_y as f64;
+        if ratio_x >= ratio_y && applied_x > 1 {
+            applied_x -= 1;
+        } else if applied_y > 1 {
+            applied_y -= 1;
+        } else {
+            break;
+        }
+    }
+
+    (applied_x, applied_y, true)
+}
+
 fn choose_preview_size(requested: usize, possible: &[usize], full: usize) -> usize {
     if requested == 0 {
         return full.max(1);
@@ -273,12 +350,4 @@ fn choose_preview_size(requested: usize, possible: &[usize], full: usize) -> usi
         .copied()
         .find(|size| *size <= requested)
         .unwrap_or(1)
-}
-
-fn next_smaller_size(current: usize, possible: &[usize]) -> usize {
-    let index = possible
-        .iter()
-        .position(|size| *size == current)
-        .unwrap_or(0);
-    possible.get(index + 1).copied().unwrap_or(1)
 }

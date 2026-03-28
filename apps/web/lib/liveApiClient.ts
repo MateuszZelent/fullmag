@@ -4,6 +4,16 @@ import { resolveApiBase, resolveApiWsBase } from "./apiBase";
 
 type JsonObject = Record<string, unknown>;
 
+export class ApiHttpError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiHttpError";
+    this.status = status;
+  }
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   const payload = await response.json().catch(() => null);
@@ -12,7 +22,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
       (payload && typeof payload === "object" && ("message" in payload || "error" in payload)
         ? String((payload as { message?: unknown; error?: unknown }).message ?? (payload as { error?: unknown }).error)
         : null) ?? `HTTP ${response.status}`;
-    throw new Error(detail);
+    throw new ApiHttpError(response.status, detail);
   }
   return payload as T;
 }

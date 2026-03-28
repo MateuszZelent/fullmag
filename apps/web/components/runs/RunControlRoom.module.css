@@ -727,6 +727,11 @@
   min-height: 0;
 }
 
+.viewportCanvas > :not(.viewportOverlay) {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
 .previewNotice {
   padding: 0.3rem 0.6rem;
   border-bottom: 1px solid hsla(42, 45%, 28%, 0.35);

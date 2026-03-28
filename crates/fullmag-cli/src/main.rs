@@ -235,6 +235,9 @@ struct CurrentLiveScalarRow {
     step: u64,
     time: f64,
     solver_dt: f64,
+    mx: f64,
+    my: f64,
+    mz: f64,
     e_ex: f64,
     e_demag: f64,
     e_ext: f64,
@@ -510,6 +513,9 @@ fn scalar_row_from_update(update: &fullmag_runner::StepUpdate) -> CurrentLiveSca
         step: update.stats.step,
         time: update.stats.time,
         solver_dt: update.stats.dt,
+        mx: update.stats.mx,
+        my: update.stats.my,
+        mz: update.stats.mz,
         e_ex: update.stats.e_ex,
         e_demag: update.stats.e_demag,
         e_ext: update.stats.e_ext,
@@ -517,6 +523,15 @@ fn scalar_row_from_update(update: &fullmag_runner::StepUpdate) -> CurrentLiveSca
         max_dm_dt: update.stats.max_dm_dt,
         max_h_eff: update.stats.max_h_eff,
         max_h_demag: update.stats.max_h_demag,
+    }
+}
+
+fn set_latest_scalar_row_if_due(
+    state: &mut LocalLiveWorkspaceState,
+    update: &fullmag_runner::StepUpdate,
+) {
+    if update.scalar_row_due {
+        state.latest_scalar_row = Some(scalar_row_from_update(update));
     }
 }
 
@@ -589,7 +604,7 @@ fn format_length_m(value: f64) -> String {
 
 fn format_extent(extent: [f64; 3]) -> String {
     format!(
-        "{} x {} x {}",
+        "x={}  y={}  z={}",
         format_length_m(extent[0]),
         format_length_m(extent[1]),
         format_length_m(extent[2]),
@@ -1696,6 +1711,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
                         if adjusted.stats.step <= 1
                             || adjusted.stats.step % field_every_n == 0
+                            || adjusted.scalar_row_due
                             || adjusted.preview_field.is_some()
                             || adjusted.finished
                         {
@@ -1712,7 +1728,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     &adjusted,
                                 );
                                 state.live_state = live_state_manifest_from_update(&adjusted);
-                                state.latest_scalar_row = Some(scalar_row_from_update(&adjusted));
+                                set_latest_scalar_row_if_due(state, &adjusted);
                             });
                         }
                         fullmag_runner::StepAction::Continue
@@ -1756,6 +1772,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
                         if adjusted.stats.step <= 1
                             || adjusted.stats.step % field_every_n == 0
+                            || adjusted.scalar_row_due
                             || adjusted.finished
                         {
                             live_workspace.update(|state| {
@@ -1771,7 +1788,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     &adjusted,
                                 );
                                 state.live_state = live_state_manifest_from_update(&adjusted);
-                                state.latest_scalar_row = Some(scalar_row_from_update(&adjusted));
+                                set_latest_scalar_row_if_due(state, &adjusted);
                             });
                         }
                         fullmag_runner::StepAction::Continue
@@ -1854,10 +1871,12 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         None
                     },
                     preview_field: None,
+                    scalar_row_due: true,
                     finished: is_final_step && is_session_final_stage,
                 };
                 if update.stats.step <= 1
                     || update.stats.step % field_every_n == 0
+                    || update.scalar_row_due
                     || update.finished
                 {
                     live_workspace.update(|state| {
@@ -1873,7 +1892,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &update,
                         );
                         state.live_state = live_state_manifest_from_update(&update);
-                        state.latest_scalar_row = Some(scalar_row_from_update(&update));
+                        set_latest_scalar_row_if_due(state, &update);
                     });
                 }
             }
@@ -1900,7 +1919,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &final_update,
                 );
                 state.live_state = live_state_manifest_from_update(&final_update);
-                state.latest_scalar_row = Some(scalar_row_from_update(&final_update));
+                set_latest_scalar_row_if_due(state, &final_update);
             });
         }
 
@@ -2078,6 +2097,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
                             if adjusted.stats.step <= 1
                                 || adjusted.stats.step % field_every_n == 0
+                                || adjusted.scalar_row_due
                                 || adjusted.preview_field.is_some()
                             {
                                 live_workspace.update(|state| {
@@ -2089,8 +2109,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         &adjusted,
                                     );
                                     state.live_state = live_state_manifest_from_update(&adjusted);
-                                    state.latest_scalar_row =
-                                        Some(scalar_row_from_update(&adjusted));
+                                    set_latest_scalar_row_if_due(state, &adjusted);
                                 });
                             }
 
@@ -2098,7 +2117,10 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             if s.step % 100 == 0 {
                                 if let Ok(Some(cmd)) = next_current_live_command() {
                                     if cmd.kind == "stop" || cmd.kind == "close" {
-                                        eprintln!("interactive: received '{}' command — cancelling stage", cmd.kind);
+                                        eprintln!(
+                                            "interactive: received '{}' command — cancelling stage",
+                                            cmd.kind
+                                        );
                                         return fullmag_runner::StepAction::Stop;
                                     }
                                 }
@@ -2135,7 +2157,9 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 );
                             }
 
-                            if adjusted.stats.step <= 1 || adjusted.stats.step % field_every_n == 0
+                            if adjusted.stats.step <= 1
+                                || adjusted.stats.step % field_every_n == 0
+                                || adjusted.scalar_row_due
                             {
                                 live_workspace.update(|state| {
                                     state.session.status = "running".to_string();
@@ -2146,8 +2170,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         &adjusted,
                                     );
                                     state.live_state = live_state_manifest_from_update(&adjusted);
-                                    state.latest_scalar_row =
-                                        Some(scalar_row_from_update(&adjusted));
+                                    set_latest_scalar_row_if_due(state, &adjusted);
                                 });
                             }
 
@@ -2155,7 +2178,10 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             if s.step % 100 == 0 {
                                 if let Ok(Some(cmd)) = next_current_live_command() {
                                     if cmd.kind == "stop" || cmd.kind == "close" {
-                                        eprintln!("interactive: received '{}' command — cancelling stage", cmd.kind);
+                                        eprintln!(
+                                            "interactive: received '{}' command — cancelling stage",
+                                            cmd.kind
+                                        );
                                         return fullmag_runner::StepAction::Stop;
                                     }
                                 }
@@ -2214,8 +2240,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
             // Handle mid-stage cancellation: preserve partial state, return to awaiting_command
             if stage_result.status == fullmag_runner::RunStatus::Cancelled {
-                let offset_steps =
-                    offset_step_stats(&stage_result.steps, step_offset, time_offset);
+                let offset_steps = offset_step_stats(&stage_result.steps, step_offset, time_offset);
                 if let Some(last) = offset_steps.last() {
                     step_offset = last.step;
                     time_offset = last.time;
@@ -2248,11 +2273,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &artifact_dir,
                         &aggregated_steps,
                     );
-                    set_live_state_status(
-                        &mut state.live_state,
-                        "awaiting_command",
-                        Some(false),
-                    );
+                    set_live_state_status(&mut state.live_state, "awaiting_command", Some(false));
                 });
                 eprintln!("interactive command {} cancelled by user", command.kind);
                 live_workspace.push_log(
@@ -2299,9 +2320,13 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         fem_mesh: fem_mesh.clone(),
                         magnetization: None,
                         preview_field: None,
+                        scalar_row_due: true,
                         finished: false,
                     };
-                    if update.stats.step <= 1 || update.stats.step % field_every_n == 0 {
+                    if update.stats.step <= 1
+                        || update.stats.step % field_every_n == 0
+                        || update.scalar_row_due
+                    {
                         live_workspace.update(|state| {
                             state.session.status = "running".to_string();
                             state.run = running_run_manifest_from_update(
@@ -2311,7 +2336,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 &update,
                             );
                             state.live_state = live_state_manifest_from_update(&update);
-                            state.latest_scalar_row = Some(scalar_row_from_update(&update));
+                            set_latest_scalar_row_if_due(state, &update);
                         });
                     }
                 }
@@ -2338,7 +2363,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &final_update,
                     );
                     state.live_state = live_state_manifest_from_update(&final_update);
-                    state.latest_scalar_row = Some(scalar_row_from_update(&final_update));
+                    set_latest_scalar_row_if_due(state, &final_update);
                 });
             }
 
@@ -2439,6 +2464,9 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             step: step.step,
             time: step.time,
             solver_dt: step.dt,
+            mx: step.mx,
+            my: step.my,
+            mz: step.mz,
             e_ex: step.e_ex,
             e_demag: step.e_demag,
             e_ext: step.e_ext,
@@ -3003,7 +3031,7 @@ fn run_python_helper_with_progress(
 }
 
 fn spawn_control_room(
-    _session_id: &str,
+    session_id: &str,
     dev_mode: bool,
     requested_port: Option<u16>,
     live_workspace: &LocalLiveWorkspace,
@@ -3011,6 +3039,16 @@ fn spawn_control_room(
     let root = repo_root();
     let log_dir = root.join(".fullmag").join("logs");
     let url_file = root.join(".fullmag").join("control-room-url.txt");
+    let mode_file = root.join(".fullmag").join("control-room-mode.txt");
+    let web_dir = root.join("apps").join("web");
+    let static_web_root = root.join(".fullmag").join("local").join("web");
+    let external_control_room_available = if dev_mode {
+        command_exists("node") && web_dir.join("dev-server.mjs").is_file()
+    } else {
+        command_exists("node")
+            && web_dir.join("dev-server.mjs").is_file()
+            && static_web_root.join("index.html").is_file()
+    };
     fs::create_dir_all(&log_dir)?;
 
     // 1. Always restart fullmag-api so the local live workspace runs against
@@ -3022,20 +3060,86 @@ fn spawn_control_room(
     let api_err = api_log.try_clone()?;
 
     let self_exe = std::env::current_exe().unwrap_or_default();
-    let mut child = spawn_fullmag_api(&root, &self_exe, api_log, api_err)?;
+    let mut child = spawn_fullmag_api(
+        &root,
+        &self_exe,
+        api_log,
+        api_err,
+        external_control_room_available,
+    )?;
     wait_for_api_ready(LOCAL_API_PORT, &mut child, Duration::from_secs(60))?;
     publish_current_live_workspace_snapshot(live_workspace)?;
     live_workspace.publish_snapshot();
 
-    if !dev_mode {
-        if !static_control_room_is_ready(LOCAL_API_PORT, Duration::from_secs(20)) {
-            bail!(
-                "built control room did not become ready on :{}; rebuild the static control room with `make web-build-static` or `just build-static-control-room`, or run `fullmag --dev ...`",
-                LOCAL_API_PORT
-            );
+    let web_port = resolve_web_port(requested_port, &url_file)?;
+    let desired_mode = if dev_mode { "dev" } else { "static" };
+
+    if external_control_room_available {
+        let web_cache_dir = web_dir.join(".next");
+        let current_mode = fs::read_to_string(&mode_file).ok();
+
+        if port_is_listening(web_port)
+            && (!frontend_is_ready(web_port)
+                || current_mode.as_deref().map(str::trim) != Some(desired_mode))
+        {
+            eprintln!("  restarting control room on :{} ...", web_port);
+            stop_control_room_frontend_processes(web_port);
+            if dev_mode {
+                let _ = fs::remove_dir_all(&web_cache_dir);
+            }
         }
 
-        let url = format!("http://{LOCALHOST_HTTP_HOST}:{LOCAL_API_PORT}");
+        if !frontend_is_ready(web_port) {
+            eprintln!("  starting control room on :{} ...", web_port);
+            let web_log = fs::File::create(log_dir.join("control-room.log"))
+                .context("failed to create frontend log")?;
+            let web_err = web_log.try_clone()?;
+
+            let mut command = ProcessCommand::new("node");
+            command
+                .args([
+                    "dev-server.mjs",
+                    "--hostname",
+                    "0.0.0.0",
+                    "--port",
+                    &web_port.to_string(),
+                    "--api-target",
+                    LOCALHOST_API_BASE,
+                ])
+                .current_dir(&web_dir)
+                .env("FULLMAG_API_PROXY_TARGET", LOCALHOST_API_BASE)
+                .stdin(Stdio::null())
+                .stdout(web_log)
+                .stderr(web_err);
+
+            if !dev_mode {
+                command
+                    .arg("--static-root")
+                    .arg(&static_web_root)
+                    .env("FULLMAG_STATIC_WEB_ROOT", &static_web_root);
+            }
+
+            command
+                .spawn()
+                .context("failed to spawn control room server")?;
+
+            let _ = fs::write(&url_file, format!("http://localhost:{}", web_port));
+            let _ = fs::write(&mode_file, desired_mode);
+
+            for _ in 0..300 {
+                if frontend_is_ready_for_bootstrap(web_port) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            if !frontend_is_ready_for_bootstrap(web_port) {
+                bail!("control room did not become ready on :{}", web_port);
+            }
+        } else {
+            eprintln!("  reusing control room on :{}", web_port);
+        }
+
+        let url = format!("http://localhost:{web_port}/?session={session_id}");
         eprintln!("  gui server: {}", url);
         if let Ok(opener) = which_opener() {
             let _ = ProcessCommand::new(opener)
@@ -3048,76 +3152,30 @@ fn spawn_control_room(
         return Ok(());
     }
 
-    // 2. Resolve frontend port
-    let web_port = resolve_web_port(requested_port, &url_file)?;
-    let web_dir = root.join("apps").join("web");
-    let web_cache_dir = web_dir.join(".next");
-
-    if port_is_listening(web_port) && !frontend_is_ready(web_port) {
-        eprintln!("  restarting unhealthy control room on :{} ...", web_port);
-        stop_control_room_frontend_processes(web_port);
-        let _ = fs::remove_dir_all(&web_cache_dir);
-    }
-
-    if !frontend_is_ready(web_port) && web_dir.exists() {
-        eprintln!("  starting control room frontend on :{} ...", web_port);
-        let web_log = fs::File::create(log_dir.join("control-room.log"))
-            .context("failed to create frontend log")?;
-        let web_err = web_log.try_clone()?;
-
-        ProcessCommand::new("node")
-            .args([
-                "dev-server.mjs",
-                "--hostname",
-                "0.0.0.0",
-                "--port",
-                &web_port.to_string(),
-                "--api-target",
-                LOCALHOST_API_BASE,
-            ])
-            .current_dir(&web_dir)
-            .env("FULLMAG_API_PROXY_TARGET", LOCALHOST_API_BASE)
-            .stdin(Stdio::null())
-            .stdout(web_log)
-            .stderr(web_err)
-            .spawn()
-            .context("failed to spawn frontend dev server")?;
-
-        // Persist the URL for next invocations
-        let _ = fs::write(&url_file, format!("http://localhost:{}", web_port));
-
-        for _ in 0..300 {
-            if frontend_is_ready_for_bootstrap(web_port) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        if !frontend_is_ready_for_bootstrap(web_port) {
+    if !dev_mode {
+        if !static_control_room_is_ready(LOCAL_API_PORT, Duration::from_secs(20)) {
             bail!(
-                "control room frontend did not become ready on :{}",
-                web_port
+                "built control room did not become ready on :{}; rebuild the static control room with `make web-build-static` or `just build-static-control-room`, or run `fullmag --dev ...`",
+                LOCAL_API_PORT
             );
         }
-    } else if frontend_is_ready(web_port) {
-        eprintln!("  reusing control room on :{}", web_port);
-    } else {
-        bail!("control room frontend directory missing or failed to start");
+
+        let url = format!("http://{LOCALHOST_HTTP_HOST}:{LOCAL_API_PORT}/?session={session_id}");
+        eprintln!("  gui server: {}", url);
+        if let Ok(opener) = which_opener() {
+            let _ = ProcessCommand::new(opener)
+                .arg(&url)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+        }
+        return Ok(());
     }
 
-    // 3. Open browser
-    let url = format!("http://localhost:{}", web_port);
-    eprintln!("  gui server: {}", url);
-
-    if let Ok(opener) = which_opener() {
-        let _ = ProcessCommand::new(opener)
-            .arg(&url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-    }
-
-    Ok(())
+    bail!(
+        "control room dev mode requires a local Node frontend; run `just build-static-control-room` and omit `--dev`, or install Node and keep `apps/web/dev-server.mjs` available"
+    )
 }
 
 fn publish_current_live_workspace_snapshot(live_workspace: &LocalLiveWorkspace) -> Result<()> {
@@ -3321,6 +3379,7 @@ fn spawn_fullmag_api(
     self_exe: &Path,
     stdout: fs::File,
     stderr: fs::File,
+    disable_static_control_room: bool,
 ) -> Result<std::process::Child> {
     let sibling_api = self_exe.with_file_name("fullmag-api");
     let candidates = [
@@ -3342,7 +3401,8 @@ fn spawn_fullmag_api(
     ];
 
     if let Some(path) = candidates.iter().find(|candidate| candidate.exists()) {
-        return ProcessCommand::new(path)
+        let mut command = ProcessCommand::new(path);
+        command
             .current_dir(root)
             .env(
                 "FULLMAG_WEB_STATIC_DIR",
@@ -3350,12 +3410,17 @@ fn spawn_fullmag_api(
             )
             .stdin(Stdio::null())
             .stdout(stdout)
-            .stderr(stderr)
+            .stderr(stderr);
+        if disable_static_control_room {
+            command.env("FULLMAG_DISABLE_STATIC_CONTROL_ROOM", "1");
+        }
+        return command
             .spawn()
             .with_context(|| format!("failed to spawn fullmag-api binary {}", path.display()));
     }
 
-    ProcessCommand::new("cargo")
+    let mut command = ProcessCommand::new("cargo");
+    command
         .args(["run", "-p", "fullmag-api"])
         .current_dir(root)
         .env(
@@ -3364,7 +3429,11 @@ fn spawn_fullmag_api(
         )
         .stdin(Stdio::null())
         .stdout(stdout)
-        .stderr(stderr)
+        .stderr(stderr);
+    if disable_static_control_room {
+        command.env("FULLMAG_DISABLE_STATIC_CONTROL_ROOM", "1");
+    }
+    command
         .spawn()
         .context("failed to spawn fullmag-api via cargo")
 }
@@ -3405,6 +3474,16 @@ fn which_opener() -> Result<String> {
         }
     }
     bail!("no browser opener found")
+}
+
+fn command_exists(cmd: &str) -> bool {
+    ProcessCommand::new("which")
+        .arg(cmd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn repo_root() -> PathBuf {
@@ -3449,6 +3528,7 @@ fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runner::StepUpda
             fem_mesh: None,
             magnetization: Some(flatten_magnetization(&fdm.initial_magnetization)),
             preview_field: None,
+            scalar_row_due: false,
             finished: false,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
@@ -3461,6 +3541,7 @@ fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runner::StepUpda
             fem_mesh: None,
             magnetization: None,
             preview_field: None,
+            scalar_row_due: false,
             finished: false,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
@@ -3473,6 +3554,7 @@ fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runner::StepUpda
             }),
             magnetization: Some(flatten_magnetization(&fem.initial_magnetization)),
             preview_field: None,
+            scalar_row_due: false,
             finished: false,
         },
     }
@@ -3499,6 +3581,7 @@ fn final_stage_step_update(
             fem_mesh: None,
             magnetization: Some(flatten_magnetization(final_magnetization)),
             preview_field: None,
+            scalar_row_due: true,
             finished,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
@@ -3511,6 +3594,7 @@ fn final_stage_step_update(
             fem_mesh: None,
             magnetization: None,
             preview_field: None,
+            scalar_row_due: true,
             finished,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
@@ -3523,6 +3607,7 @@ fn final_stage_step_update(
             }),
             magnetization: Some(flatten_magnetization(final_magnetization)),
             preview_field: None,
+            scalar_row_due: true,
             finished,
         },
     })
@@ -3637,6 +3722,7 @@ mod tests {
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
+            adaptive_timestep: None,
             relaxation: None,
         });
 

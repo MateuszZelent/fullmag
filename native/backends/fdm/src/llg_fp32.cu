@@ -37,7 +37,7 @@ __global__ void llg_rhs_fp32_kernel(
     float * __restrict__ out_y,
     float * __restrict__ out_z,
     int n,
-    float gamma_bar, float alpha)
+    float gamma_bar, float alpha, int disable_precession)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
@@ -53,9 +53,10 @@ __global__ void llg_rhs_fp32_kernel(
     float dy = m2 * px - m0 * pz;
     float dz = m0 * py - m1 * px;
 
-    out_x[idx] = -gamma_bar * (px + alpha * dx);
-    out_y[idx] = -gamma_bar * (py + alpha * dy);
-    out_z[idx] = -gamma_bar * (pz + alpha * dz);
+    float precession_scale = disable_precession ? 0.0f : 1.0f;
+    out_x[idx] = -gamma_bar * (precession_scale * px + alpha * dx);
+    out_y[idx] = -gamma_bar * (precession_scale * py + alpha * dy);
+    out_z[idx] = -gamma_bar * (precession_scale * pz + alpha * dz);
 }
 
 /* ── Heun predictor (fp32) ── */
@@ -151,7 +152,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (const float*)ctx.m.x, (const float*)ctx.m.y, (const float*)ctx.m.z,
         (const float*)ctx.work.x, (const float*)ctx.work.y, (const float*)ctx.work.z,
         (float*)ctx.k1.x, (float*)ctx.k1.y, (float*)ctx.k1.z,
-        n, gamma_bar_f, alpha_f);
+        n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0);
 
     // Step 3: predictor → m
     heun_predictor_fp32_kernel<<<grid, BLOCK_SIZE>>>(
@@ -174,7 +175,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (const float*)ctx.m.x, (const float*)ctx.m.y, (const float*)ctx.m.z,
         (const float*)ctx.work.x, (const float*)ctx.work.y, (const float*)ctx.work.z,
         (float*)ctx.h_ex.x, (float*)ctx.h_ex.y, (float*)ctx.h_ex.z,
-        n, gamma_bar_f, alpha_f);
+        n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0);
 
     // Step 6: corrector → m
     heun_corrector_fp32_kernel<<<grid, BLOCK_SIZE>>>(
@@ -211,7 +212,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (const float*)ctx.m.x, (const float*)ctx.m.y, (const float*)ctx.m.z,
         (const float*)ctx.work.x, (const float*)ctx.work.y, (const float*)ctx.work.z,
         (float*)ctx.k1.x, (float*)ctx.k1.y, (float*)ctx.k1.z,
-        n, gamma_bar_f, alpha_f);
+        n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0);
 
     double max_dm_dt = reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 

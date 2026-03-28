@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import ViewCube from "./ViewCube";
 import HslSphere from "./HslSphere";
+import { applyMagnetizationHsl } from "./magnetizationColor";
 import { TrackballControls } from "three/examples/jsm/controls/TrackballControls.js";
 import t from "./Toolbar3D.module.css";
 
@@ -13,6 +14,8 @@ interface Props {
   grid: [number, number, number];
   vectors: Float64Array | null;
   fieldLabel?: string;
+  geometryMode?: boolean;
+  activeMask?: boolean[] | null;
 }
 
 export type QualityLevel = "low" | "high" | "ultra";
@@ -49,17 +52,6 @@ const _defaultUp = new THREE.Vector3(0, 1, 0);
 const _tempVec = new THREE.Vector3();
 const _color = new THREE.Color();
 
-// ─── Coloring (matching amumax 3D frontend) ────────────────────────
-// s = sqrt(x²+y²+z²)  → for unit vectors always ≈1 (full saturation)
-// l clamped to [0.18, 0.84]: keeps arrows visible on dark background
-//   (amumax Go uses [0,1] for flat 2D renders, but 3D scene needs clamping)
-function magnetizationHSL(vx: number, vy: number, vz: number, color: THREE.Color) {
-  const hue = Math.atan2(vy, vx) / (Math.PI * 2);
-  const saturation = Math.min(1, Math.sqrt(vx * vx + vy * vy + vz * vz));
-  const lightness = THREE.MathUtils.clamp(vz * 0.5 + 0.5, 0.18, 0.84);
-  color.setHSL((hue + 1) % 1, saturation, lightness);
-}
-
 function applyComponentColor(value: number, color: THREE.Color) {
   const normalized = THREE.MathUtils.clamp(value, -1, 1);
   if (normalized < 0) {
@@ -79,7 +71,7 @@ function componentValue(mx: number, my: number, mz: number, mode: "x" | "y" | "z
 
 function applyVoxelColor(mx: number, my: number, mz: number, mode: VoxelColorMode, color: THREE.Color) {
   if (mode === "orientation") {
-    magnetizationHSL(mx, my, mz, color);
+    applyMagnetizationHsl(mx, my, mz, color);
   } else {
     applyComponentColor(componentValue(mx, my, mz, mode), color);
   }
@@ -194,7 +186,7 @@ interface Settings {
 // ═══════════════════════════════════════════════════════════════════
 // COMPONENT
 // ═══════════════════════════════════════════════════════════════════
-export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vector Field" }: Props) {
+export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vector Field", geometryMode = false, activeMask = null }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [expanded, setExpanded] = useState(false);
@@ -358,9 +350,66 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
 
   // ─── Update mesh (1:1 from amumax updateGlyphMesh + updateVoxelMesh) ──
   useEffect(() => {
-    if (!sceneRef.current || !vectors) return;
+    if (!sceneRef.current) return;
     const { mesh, currentMode } = sceneRef.current;
     const [nx, ny, nz] = grid;
+    const expectedVectorCount = nx * ny * nz * 3;
+    const clearMesh = () => {
+      mesh.count = 0;
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) {
+        mesh.instanceColor.needsUpdate = true;
+      }
+      setVisibleCount(0);
+    };
+    if (!vectors || expectedVectorCount === 0 || vectors.length < expectedVectorCount) {
+      if (!geometryMode) {
+        clearMesh();
+        return;
+      }
+      // Geometry mode: render cells even without field vectors
+      mesh.count = nx * ny * nz;
+      const instanceColor = mesh.instanceColor;
+      if (!instanceColor) return;
+      const colors = instanceColor.array as Float32Array;
+      const gapScale = Math.max(0.12, 1 - settings.voxelGap);
+      let visible = 0;
+      let idx = 0;
+      for (let iz = 0; iz < nz; iz++) {
+        for (let iy = 0; iy < ny; iy++) {
+          for (let ix = 0; ix < nx; ix++) {
+            const isActive = !activeMask || activeMask[idx];
+            _dummy.position.set(ix, iz, iy);
+            _dummy.quaternion.identity();
+            if (!isActive) {
+              _dummy.scale.set(0, 0, 0);
+            } else {
+              visible++;
+              const depthS = nz > 1 ? gapScale : Math.max(0.22, gapScale * 0.42);
+              _dummy.scale.set(gapScale, depthS, gapScale);
+            }
+            // Steel-gray color for geometry mode
+            _color.setHSL(210 / 360, 0.08, 0.55);
+            colors[idx * 3 + 0] = _color.r;
+            colors[idx * 3 + 1] = _color.g;
+            colors[idx * 3 + 2] = _color.b;
+            _dummy.updateMatrix();
+            mesh.setMatrixAt(idx, _dummy.matrix);
+            idx++;
+          }
+        }
+      }
+      setVisibleCount(visible);
+      mesh.instanceMatrix.needsUpdate = true;
+      instanceColor.needsUpdate = true;
+      // Force voxel opacity
+      if (!Array.isArray(mesh.material)) {
+        (mesh.material as THREE.MeshPhongMaterial | THREE.MeshBasicMaterial).opacity = 0.85;
+        mesh.material.needsUpdate = true;
+      }
+      return;
+    }
+    mesh.count = nx * ny * nz;
     const { sampling, voxelColorMode, voxelGap, voxelThreshold, topoEnabled, topoComponent, topoMultiplier } = settings;
     const isVoxel = currentMode === "voxel";
 
@@ -458,7 +507,7 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
               _dummy.quaternion.setFromUnitVectors(_defaultUp, _tempVec);
             }
 
-            magnetizationHSL(mx, my, mz, _color);
+            applyMagnetizationHsl(mx, my, mz, _color);
           }
 
           colors[idx * 3 + 0] = _color.r;
@@ -481,7 +530,7 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
       (mesh.material as THREE.MeshPhongMaterial | THREE.MeshBasicMaterial).opacity = settings.voxelOpacity;
       mesh.material.needsUpdate = true;
     }
-  }, [vectors, grid, settings]);
+  }, [vectors, grid, settings, geometryMode, activeMask]);
 
   // ─── Reset camera (amumax resetCamera) ────────────────────────────
   const resetCamera = () => {
@@ -498,25 +547,39 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
   };
 
   return (
-    <div style={{ position: "relative", display: "flex", flexDirection: "column", height: "100%" }}>
-      {/* ─── Floating Toolbar (1:1 from amumax Toolbar3D.svelte) ──── */}
+    <div
+      style={{ position: "relative", display: "flex", flexDirection: "column", height: "100%" }}
+    >
       <div className={t.toolbar}>
-        <button className={t.toggleBtn} onClick={() => setExpanded(!expanded)} title="3D Controls">⚙</button>
+        <button
+          className={t.toggleBtn}
+          onClick={() => setExpanded(!expanded)}
+          title="3D Controls"
+        >
+          ⚙
+        </button>
 
-        {expanded && (
+        {expanded ? (
           <div className={t.toolbarContent}>
-            <ControlGroup label="Render mode">
-              <SegmentedGroup
-                options={[["glyph", "ARROWS"], ["voxel", "VOXEL"]]}
-                value={settings.renderMode}
-                onChange={(v) => update({ renderMode: v as RenderMode })}
-                columns={2}
-              />
-            </ControlGroup>
+            {!geometryMode ? (
+              <ControlGroup label="Render mode">
+                <SegmentedGroup
+                  options={[["glyph", "ARROWS"], ["voxel", "VOXEL"]]}
+                  value={settings.renderMode}
+                  onChange={(v) => update({ renderMode: v as RenderMode })}
+                  columns={2}
+                />
+              </ControlGroup>
+            ) : null}
 
             <ControlGroup label="Brightness" value={settings.brightness.toFixed(1)}>
-              <Slider min={0.3} max={3.0} step={0.1} value={settings.brightness}
-                onChange={(v) => update({ brightness: v })} />
+              <Slider
+                min={0.3}
+                max={3.0}
+                step={0.1}
+                value={settings.brightness}
+                onChange={(v) => update({ brightness: v })}
+              />
             </ControlGroup>
 
             <ControlGroup label="Quality">
@@ -528,7 +591,7 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
               />
             </ControlGroup>
 
-            {settings.renderMode === "voxel" && (
+            {settings.renderMode === "voxel" ? (
               <>
                 <ControlGroup label="Color by">
                   <SegmentedGroup
@@ -540,66 +603,94 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
                 </ControlGroup>
 
                 <ControlGroup label="Opacity" value={settings.voxelOpacity.toFixed(2)}>
-                  <Slider min={0.15} max={0.95} step={0.01} value={settings.voxelOpacity}
-                    onChange={(v) => update({ voxelOpacity: v })} />
+                  <Slider
+                    min={0.15}
+                    max={0.95}
+                    step={0.01}
+                    value={settings.voxelOpacity}
+                    onChange={(v) => update({ voxelOpacity: v })}
+                  />
                 </ControlGroup>
 
                 <ControlGroup label="Spacing" value={`${Math.round(settings.voxelGap * 100)}%`}>
-                  <Slider min={0.02} max={0.42} step={0.01} value={settings.voxelGap}
-                    onChange={(v) => update({ voxelGap: v })} />
+                  <Slider
+                    min={0.02}
+                    max={0.42}
+                    step={0.01}
+                    value={settings.voxelGap}
+                    onChange={(v) => update({ voxelGap: v })}
+                  />
                 </ControlGroup>
 
                 <ControlGroup label="Min strength" value={settings.voxelThreshold.toFixed(2)}>
-                  <Slider min={0} max={0.95} step={0.01} value={settings.voxelThreshold}
-                    onChange={(v) => update({ voxelThreshold: v })} />
+                  <Slider
+                    min={0}
+                    max={0.95}
+                    step={0.01}
+                    value={settings.voxelThreshold}
+                    onChange={(v) => update({ voxelThreshold: v })}
+                  />
                 </ControlGroup>
 
                 <ControlGroup label="Sampling">
                   <SegmentedGroup
                     options={[["1", "1X"], ["2", "2X"], ["4", "4X"]]}
                     value={String(settings.sampling)}
-                    onChange={(v) => update({ sampling: parseInt(v) as VoxelSampling })}
+                    onChange={(v) => update({ sampling: parseInt(v, 10) as VoxelSampling })}
                     columns={3}
                   />
                 </ControlGroup>
               </>
-            )}
+            ) : null}
 
-            <div className={t.divider} />
-
-            <ControlGroup label="Topography">
-              <button
-                className={`${t.actionBtn} ${settings.topoEnabled ? t.topoActive : ""}`}
-                onClick={() => update({ topoEnabled: !settings.topoEnabled })}
-              >
-                {settings.topoEnabled ? "⛰ ON" : "OFF"}
-              </button>
-            </ControlGroup>
-
-            {settings.topoEnabled && (
+            {!geometryMode ? (
               <>
-                <ControlGroup label="Displace by">
-                  <SegmentedGroup
-                    options={[["x", "mX"], ["y", "mY"], ["z", "mZ"]]}
-                    value={settings.topoComponent}
-                    onChange={(v) => update({ topoComponent: v as TopoComponent })}
-                    columns={3}
-                  />
+                <div className={t.divider} />
+
+                <ControlGroup label="Topography">
+                  <button
+                    className={`${t.actionBtn} ${settings.topoEnabled ? t.topoActive : ""}`}
+                    onClick={() => update({ topoEnabled: !settings.topoEnabled })}
+                  >
+                    {settings.topoEnabled ? "⛰ ON" : "OFF"}
+                  </button>
                 </ControlGroup>
 
-                <ControlGroup label="Amplitude" value={`${settings.topoMultiplier.toFixed(1)}×`}>
-                  <Slider min={0.5} max={50} step={0.5} value={settings.topoMultiplier}
-                    onChange={(v) => update({ topoMultiplier: v })} />
-                </ControlGroup>
+                {settings.topoEnabled ? (
+                  <>
+                    <ControlGroup label="Displace by">
+                      <SegmentedGroup
+                        options={[["x", "mX"], ["y", "mY"], ["z", "mZ"]]}
+                        value={settings.topoComponent}
+                        onChange={(v) => update({ topoComponent: v as TopoComponent })}
+                        columns={3}
+                      />
+                    </ControlGroup>
+
+                    <ControlGroup
+                      label="Amplitude"
+                      value={`${settings.topoMultiplier.toFixed(1)}×`}
+                    >
+                      <Slider
+                        min={0.5}
+                        max={50}
+                        step={0.5}
+                        value={settings.topoMultiplier}
+                        onChange={(v) => update({ topoMultiplier: v })}
+                      />
+                    </ControlGroup>
+                  </>
+                ) : null}
               </>
-            )}
+            ) : null}
 
-            <button className={t.actionBtn} onClick={resetCamera}>Reset Camera</button>
+            <button className={t.actionBtn} onClick={resetCamera}>
+              Reset Camera
+            </button>
           </div>
-        )}
+        ) : null}
       </div>
 
-      {/* ─── Canvas ──── */}
       <div
         ref={containerRef}
         style={{
@@ -610,11 +701,8 @@ export default function MagnetizationView3D({ grid, vectors, fieldLabel = "Vecto
         }}
       />
 
-      {/* ─── ViewCube + Axis Gizmo ──── */}
       <ViewCube sceneRef={sceneRef} grid={grid} />
-
-      {/* ─── HSL Colour Sphere ──── */}
-      <HslSphere sceneRef={sceneRef} />
+      {!geometryMode ? <HslSphere sceneRef={sceneRef} /> : null}
     </div>
   );
 }

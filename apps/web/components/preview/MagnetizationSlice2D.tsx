@@ -193,7 +193,11 @@ export default function MagnetizationSlice2D({
 
   // ─── Init / update chart ──────────────────────────────────────────
   useEffect(() => {
-    if (!containerRef.current || !data.length) return;
+    if (!containerRef.current) return;
+    if (!data.length) {
+      chartRef.current?.clear();
+      return;
+    }
 
     if (!chartRef.current || chartRef.current.isDisposed()) {
       chartRef.current = echarts.init(containerRef.current, undefined, {

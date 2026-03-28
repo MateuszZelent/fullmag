@@ -24,8 +24,14 @@ use crate::native_fdm::NativeFdmBackend;
 use crate::native_fem;
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::NativeFemBackend;
+#[cfg(feature = "cuda")]
+use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::relaxation_converged;
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+use crate::scalar_metrics::{
+    apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
+};
 #[cfg(feature = "cuda")]
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -33,7 +39,9 @@ use crate::schedules::{
 };
 #[cfg(all(feature = "fem-gpu", not(feature = "cuda")))]
 use crate::schedules::{collect_field_schedules, collect_scalar_schedules};
-use crate::types::{ExecutedRun, LivePreviewRequest, LiveStepConsumer, RunError, StepAction, StepUpdate};
+use crate::types::{
+    ExecutedRun, LivePreviewRequest, LiveStepConsumer, RunError, StepAction, StepUpdate,
+};
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::types::{ExecutionProvenance, FieldSnapshot, RunResult, RunStatus, StepStats};
 
@@ -498,7 +506,14 @@ fn execute_cuda_fdm_impl(
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);
     let initial_magnetization = backend.copy_m(cell_count)?;
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let dt = plan
+        .fixed_timestep
+        .or_else(|| {
+            plan.adaptive_timestep
+                .as_ref()
+                .and_then(|adaptive| adaptive.dt_initial)
+        })
+        .unwrap_or(1e-13);
 
     let mut steps = Vec::new();
     let mut field_snapshots = Vec::new();
@@ -522,6 +537,21 @@ fn execute_cuda_fdm_impl(
         let stats = backend.step(dt_step)?;
         current_time = stats.time;
         latest_stats = Some(stats.clone());
+        let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
+        let average_requested = scalar_outputs_request_average_m(&scalar_schedules);
+        let mut sampled_stats = stats.clone();
+        let mut magnetization_cache: Option<Vec<[f64; 3]>> = None;
+        if due_scalar_row && average_requested {
+            if magnetization_cache.is_none() {
+                magnetization_cache = Some(backend.copy_m(cell_count)?);
+            }
+            apply_average_m_to_step_stats(
+                &mut sampled_stats,
+                magnetization_cache
+                    .as_deref()
+                    .expect("magnetization cache initialized"),
+            );
+        }
         if let Some(live) = live.as_mut() {
             let emit_every = live.field_every_n.max(1);
             let preview_request = live.preview_request.map(|get| get());
@@ -535,7 +565,14 @@ fn execute_cuda_fdm_impl(
                 })
                 .unwrap_or(false);
             let magnetization = if live.preview_request.is_none() && stats.step % emit_every == 0 {
-                Some(flatten_vectors(&backend.copy_m(cell_count)?))
+                if magnetization_cache.is_none() {
+                    magnetization_cache = Some(backend.copy_m(cell_count)?);
+                }
+                Some(flatten_vectors(
+                    magnetization_cache
+                        .as_deref()
+                        .expect("magnetization cache initialized"),
+                ))
             } else {
                 None
             };
@@ -548,11 +585,12 @@ fn execute_cuda_fdm_impl(
                 None
             };
             let action = (live.on_step)(StepUpdate {
-                stats: stats.clone(),
+                stats: sampled_stats.clone(),
                 grid: live.grid,
                 fem_mesh: None,
                 magnetization,
                 preview_field,
+                scalar_row_due: due_scalar_row,
                 finished: false,
             });
             if action == StepAction::Stop {
@@ -565,7 +603,7 @@ fn execute_cuda_fdm_impl(
         record_cuda_due_outputs(
             &backend,
             cell_count,
-            &stats,
+            &sampled_stats,
             &mut scalar_schedules,
             &mut field_schedules,
             &mut steps,
@@ -579,6 +617,7 @@ fn execute_cuda_fdm_impl(
                     previous_total_energy,
                     plan.gyromagnetic_ratio,
                     plan.material.damping,
+                    llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
                 )
         });
         previous_total_energy = Some(stats.e_total);
@@ -592,6 +631,7 @@ fn execute_cuda_fdm_impl(
         cell_count,
         latest_stats,
         default_scalar_trace,
+        &scalar_schedules,
         &field_schedules,
         &mut steps,
         &mut field_snapshots,
@@ -601,7 +641,11 @@ fn execute_cuda_fdm_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
+            status: if cancelled {
+                RunStatus::Cancelled
+            } else {
+                RunStatus::Completed
+            },
             steps,
             final_magnetization,
         },
@@ -657,7 +701,14 @@ fn execute_native_fem_impl(
     let device_info = backend.device_info()?;
     let node_count = plan.mesh.nodes.len();
     let initial_magnetization = backend.copy_m(node_count)?;
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let dt = plan
+        .fixed_timestep
+        .or_else(|| {
+            plan.adaptive_timestep
+                .as_ref()
+                .and_then(|adaptive| adaptive.dt_initial)
+        })
+        .unwrap_or(1e-13);
 
     let mut steps = Vec::new();
     let mut field_snapshots = Vec::new();
@@ -710,6 +761,7 @@ fn execute_native_fem_impl(
                 }),
                 magnetization,
                 preview_field,
+                scalar_row_due: false,
                 finished: false,
             });
             if action == StepAction::Stop {
@@ -733,6 +785,7 @@ fn execute_native_fem_impl(
                     previous_total_energy,
                     plan.gyromagnetic_ratio,
                     plan.material.damping,
+                    false,
                 )
         });
         previous_total_energy = Some(latest.e_total);
@@ -782,7 +835,11 @@ fn execute_native_fem_impl(
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled { RunStatus::Cancelled } else { RunStatus::Completed },
+            status: if cancelled {
+                RunStatus::Cancelled
+            } else {
+                RunStatus::Completed
+            },
             steps,
             final_magnetization,
         },
@@ -958,6 +1015,7 @@ fn record_cuda_final_outputs(
     cell_count: usize,
     latest_stats: Option<StepStats>,
     default_scalar_trace: bool,
+    scalar_schedules: &[OutputSchedule],
     field_schedules: &[OutputSchedule],
     steps: &mut Vec<StepStats>,
     field_snapshots: &mut Vec<FieldSnapshot>,
@@ -972,7 +1030,12 @@ fn record_cuda_final_outputs(
             .map(|stats| !same_time(stats.time, latest_stats.time))
             .unwrap_or(true);
     if need_scalar {
-        steps.push(latest_stats.clone());
+        let mut final_stats = latest_stats.clone();
+        if scalar_outputs_request_average_m(scalar_schedules) {
+            let magnetization = backend.copy_m(cell_count)?;
+            apply_average_m_to_step_stats(&mut final_stats, &magnetization);
+        }
+        steps.push(final_stats);
     }
 
     let requested_field_names = field_schedules
