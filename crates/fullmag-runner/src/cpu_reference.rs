@@ -196,7 +196,7 @@ pub(crate) fn snapshot_vector_fields(
     Ok(cached)
 }
 
-fn build_snapshot_problem_and_state(
+pub(crate) fn build_snapshot_problem_and_state(
     plan: &FdmPlanIR,
 ) -> Result<(ExchangeLlgProblem, ExchangeLlgState), RunError> {
     let grid = GridShape::new(
@@ -781,7 +781,7 @@ fn record_final_outputs(
     Ok(())
 }
 
-fn observe_state(
+pub(crate) fn observe_state(
     problem: &ExchangeLlgProblem,
     state: &ExchangeLlgState,
 ) -> Result<StateObservables, RunError> {

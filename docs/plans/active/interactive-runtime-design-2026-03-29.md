@@ -678,7 +678,33 @@ Dopiero po stabilnym FDM:
 
 ---
 
-## 15. Zależność od masterplanu refaktoryzacji
+## 15. Status wdrożenia
+
+Stan po ostatnim slice:
+
+1. control-plane preview i solver commands są już spięte do jednego sekwencjonowanego strumienia `seq`,
+2. CLI przestało mieć osobny preview-poller obok command-pollera,
+3. dla FDM w stanie `awaiting_command` istnieje już pierwszy **persistent preview runtime**:
+   - trzyma backend CPU/CUDA po stronie CLI,
+   - pozwala wielokrotnie wywoływać `snapshot_preview()` bez rematerializacji problemu,
+   - jest synchronizowany nową magnetyzacją po zakończonych interactive commands,
+4. interactive `run` / `relax` dla single-layer FDM potrafią już wykonać się **na tym samym runtime** zamiast zawsze odpalać one-shot runner:
+   - CLI przed wykonaniem komendy sprawdza zgodność `FdmPlanIR`,
+   - przy mismatchu odbudowuje runtime z nowego `stage.ir` i ładuje `continuation_magnetization`,
+   - po zgodności wykonuje komendę bez rematerializacji backendu i bez utraty idle-preview state,
+5. stary file-backed preview cache nadal istnieje jako fallback / reconnect path, ale nie jest już jedyną drogą dla idle preview.
+
+To jest już pierwszy prawdziwy `InteractiveRuntime` z własnym execute path dla FDM, a nie tylko "persistent preview cache". Fullmag przeszedł z modelu "cache-based preview" do modelu "live backend owned by CLI" także dla interactive commands.
+
+Największe brakujące elementy:
+
+- brak jednej actorowej pętli ownership dla całego backend lifecycle,
+- brak first-class runtime queries dla global scalar / energy display,
+- fast path runtime-backed zapisuje dziś podstawowe artefakty etapu (`metadata`, `scalars`, `m_initial`, `m_final`), ale nie ma jeszcze pełnej parity z one-shot output scheduling dla wszystkich field snapshots.
+
+---
+
+## 16. Zależność od masterplanu refaktoryzacji
 
 Ten design jest wykonalny już teraz jako kierunek architektoniczny, ale technicznie najczyściej wejdzie w życie w następującej kolejności:
 
@@ -695,7 +721,7 @@ Możliwy jest też szybszy vertical slice FDM before full cleanup, ale wtedy trz
 
 ---
 
-## 16. Kryteria sukcesu
+## 17. Kryteria sukcesu
 
 ### Responsywność
 
@@ -721,7 +747,7 @@ Na referencyjnym przypadku FDM CUDA `200 x 200 x 1`:
 
 ---
 
-## 17. Ryzyka i mitygacja
+## 18. Ryzyka i mitygacja
 
 | Ryzyko | Skutek | Mitygacja |
 |--------|--------|-----------|
@@ -733,7 +759,7 @@ Na referencyjnym przypadku FDM CUDA `200 x 200 x 1`:
 
 ---
 
-## 18. Alternatywy rozważone
+## 19. Alternatywy rozważone
 
 ### A. Trzymać runtime w API
 
@@ -780,7 +806,7 @@ Decyzja: **nie teraz**.
 
 ---
 
-## 19. Rekomendacja wykonawcza
+## 20. Rekomendacja wykonawcza
 
 Najrozsądniejsza kolejność wdrożenia:
 

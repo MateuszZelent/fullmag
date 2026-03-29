@@ -7,7 +7,6 @@ import MenuBar from "../shell/MenuBar";
 import RibbonBar from "../shell/RibbonBar";
 import StatusBar from "../shell/StatusBar";
 import ColorLegend from "../preview/ColorLegend";
-import FemWorkspacePanel from "./control-room/FemWorkspacePanel";
 import RunSidebar from "./control-room/RunSidebar";
 import { ViewportBar, ViewportCanvasArea } from "./control-room/ViewportPanels";
 import {
@@ -120,6 +119,22 @@ function ControlRoomShell() {
         className="flex flex-row flex-1 min-h-0 min-w-0 overflow-hidden"
         resizeTargetMinimumSize={{ coarse: 40, fine: 12 }}
       >
+        {!ctx.sidebarCollapsed && (
+          <>
+            <Panel
+              id="workspace-sidebar"
+              defaultSize={PANEL_SIZES.sidebarDefault}
+              minSize={PANEL_SIZES.sidebarMin}
+              maxSize={PANEL_SIZES.sidebarMax}
+              collapsible
+              collapsedSize="0%"
+            >
+              <RunSidebar />
+            </Panel>
+            <PanelResizeHandle className="h-full w-2 bg-transparent cursor-ew-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:w-[2px] after:h-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
+          </>
+        )}
+
         <Panel
           id="workspace-main"
           defaultSize={ctx.sidebarCollapsed ? "100%" : PANEL_SIZES.bodyMainDefault}
@@ -135,15 +150,6 @@ function ControlRoomShell() {
               defaultSize={PANEL_SIZES.viewportDefault}
               minSize={PANEL_SIZES.viewportMin}
             >
-              {ctx.isFemBackend ? (
-                <PanelGroup
-                  orientation="horizontal"
-                  className="w-full h-full min-h-0 min-w-0"
-                  resizeTargetMinimumSize={{ coarse: 40, fine: 12 }}
-                >
-                  <FemWorkspacePanel />
-                </PanelGroup>
-              ) : (
                 <div className="flex flex-row h-full min-h-0 min-w-0 overflow-hidden bg-black flex-1 relative shadow-[inset_0_0_60px_rgba(0,0,0,0.5)]">
                   <div className="flex flex-col flex-1 min-w-0 min-h-0">
                     <ViewportBar />
@@ -152,7 +158,6 @@ function ControlRoomShell() {
                   </div>
                   <ColorLegend />
                 </div>
-              )}
             </Panel>
 
             <PanelResizeHandle className="w-full h-1 bg-transparent cursor-ns-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:h-[2px] after:w-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
@@ -181,22 +186,6 @@ function ControlRoomShell() {
             </Panel>
           </PanelGroup>
         </Panel>
-
-        {!ctx.sidebarCollapsed && (
-          <>
-            <PanelResizeHandle className="h-full w-2 bg-transparent cursor-ew-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:w-[2px] after:h-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
-            <Panel
-              id="workspace-sidebar"
-              defaultSize={PANEL_SIZES.sidebarDefault}
-              minSize={PANEL_SIZES.sidebarMin}
-              maxSize={PANEL_SIZES.sidebarMax}
-              collapsible
-              collapsedSize="0%"
-            >
-              <RunSidebar />
-            </Panel>
-          </>
-        )}
       </PanelGroup>
 
       <StatusBar

@@ -1785,17 +1785,16 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
 
         loop {
-            std::thread::sleep(Duration::from_millis(250));
-            let cmd = match next_current_live_command() {
-                Ok(Some(cmd)) => cmd,
-                Ok(None) => continue,
-                Err(e) => {
-                    eprintln!("[fullmag] command poll error: {}", e);
-                    continue;
-                }
+            let Some(cmd) = preview_config_handle.wait_next_command(Duration::from_millis(250))
+            else {
+                continue;
             };
 
             match cmd.kind.as_str() {
+                "preview_update" | "preview_refresh" => {
+                    preview_config_handle.apply_preview_command(&cmd);
+                    continue;
+                }
                 "solve" | "compute" => {
                     eprintln!("[fullmag] compute requested — starting solver");
                     live_workspace.push_log("system", "Compute requested — starting solver");
@@ -2301,16 +2300,27 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         } else {
             0
         };
+        let mut interactive_preview_runtime =
+            if matches!(&initial_execution_plan.backend_plan, BackendPlanIR::Fdm(_)) {
+                match create_interactive_fdm_preview_runtime(
+                    &interactive_template_ir,
+                    continuation_magnetization.as_deref(),
+                ) {
+                    Ok(runtime) => Some(runtime),
+                    Err(error) => {
+                        eprintln!("interactive preview runtime warning: {}", error);
+                        live_workspace.push_log(
+                            "warn",
+                            format!("Idle live preview runtime unavailable: {}", error),
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
         let latest_field_cache_supported =
             supports_interactive_latest_field_cache(&initial_execution_plan.backend_plan);
-        let interactive_preview_stop =
-            (!latest_field_cache_supported && dynamic_idle_preview_supported).then(|| {
-                spawn_interactive_preview_refresh_worker(
-                    interactive_template_ir.clone(),
-                    live_workspace.clone(),
-                    Arc::clone(&interactive_preview_source),
-                )
-            });
         if latest_field_cache_supported {
             let preview_request = preview_config_handle.snapshot();
             spawn_interactive_preview_cache_refresh(
@@ -2320,6 +2330,17 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 preview_request,
                 awaiting_generation,
             );
+        }
+        if let Some(runtime) = interactive_preview_runtime.as_mut() {
+            let initial_preview_request = preview_config_handle.snapshot();
+            if let Err(error) = refresh_interactive_preview_runtime_snapshot(
+                runtime,
+                &initial_preview_request,
+                &live_workspace,
+            ) {
+                eprintln!("interactive preview runtime warning: {}", error);
+                interactive_preview_runtime = None;
+            }
         } else if dynamic_idle_preview_supported {
             let initial_preview_request = preview_config_handle.snapshot();
             if let Err(error) = refresh_interactive_preview_snapshot(
@@ -2334,10 +2355,50 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
         let mut interactive_stage_index = stage_count;
         loop {
-            let Some(command) = next_current_live_command()? else {
-                std::thread::sleep(std::time::Duration::from_millis(250));
+            let Some(command) = preview_config_handle.wait_next_command(Duration::from_millis(250))
+            else {
                 continue;
             };
+
+            if matches!(command.kind.as_str(), "preview_update" | "preview_refresh") {
+                preview_config_handle.apply_preview_command(&command);
+                let current_generation = interactive_preview_source
+                    .lock()
+                    .map(|state| state.generation)
+                    .unwrap_or(0);
+                if latest_field_cache_supported {
+                    let preview_request = preview_config_handle.snapshot();
+                    spawn_interactive_preview_cache_refresh(
+                        artifact_dir.clone(),
+                        interactive_template_ir.clone(),
+                        Arc::clone(&interactive_preview_source),
+                        preview_request,
+                        current_generation,
+                    );
+                }
+                if let Some(runtime) = interactive_preview_runtime.as_mut() {
+                    let preview_request = preview_config_handle.snapshot();
+                    if let Err(error) = refresh_interactive_preview_runtime_snapshot(
+                        runtime,
+                        &preview_request,
+                        &live_workspace,
+                    ) {
+                        eprintln!("interactive preview runtime warning: {}", error);
+                        interactive_preview_runtime = None;
+                    }
+                } else if dynamic_idle_preview_supported {
+                    let preview_request = preview_config_handle.snapshot();
+                    if let Err(error) = refresh_interactive_preview_snapshot(
+                        &interactive_template_ir,
+                        continuation_magnetization.as_deref(),
+                        &preview_request,
+                        &live_workspace,
+                    ) {
+                        eprintln!("interactive preview refresh warning: {}", error);
+                    }
+                }
+                continue;
+            }
 
             // Pause just returns to awaiting_command without closing
             if command.kind == "pause" {
@@ -2427,68 +2488,95 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let stage_result = match if use_live_callback {
                 if supports_dynamic_live_preview(&execution_plan.backend_plan) {
                     let preview_request = || preview_config_handle.snapshot();
-                    fullmag_runner::run_problem_with_live_preview(
-                        &stage.ir,
-                        stage.until_seconds,
-                        &current_stage_artifact_dir,
-                        field_every_n,
-                        &preview_request,
-                        |update| {
-                            let adjusted =
-                                offset_step_update(&update, step_offset, time_offset, false);
-                            let s = &adjusted.stats;
-                            let print_step = s.step <= 10
-                                || (s.step <= 100 && s.step % 10 == 0)
-                                || (s.step <= 1000 && s.step % 100 == 0)
-                                || s.step % 1000 == 0;
-                            if print_step {
-                                let wall_ms = s.wall_time_ns as f64 / 1e6;
-                                eprintln!(
-                                    "interactive {}  step {:>6}  t={:.4e}  dt={:.3e}  maxTorque={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
-                                    stage.entrypoint_kind,
-                                    s.step,
-                                    s.time,
-                                    s.dt,
-                                    s.max_dm_dt,
-                                    s.e_total,
-                                    s.max_h_eff,
-                                    wall_ms
+                    let mut on_step = |update| {
+                        let adjusted =
+                            offset_step_update(&update, step_offset, time_offset, false);
+                        let s = &adjusted.stats;
+                        let print_step = s.step <= 10
+                            || (s.step <= 100 && s.step % 10 == 0)
+                            || (s.step <= 1000 && s.step % 100 == 0)
+                            || s.step % 1000 == 0;
+                        if print_step {
+                            let wall_ms = s.wall_time_ns as f64 / 1e6;
+                            eprintln!(
+                                "interactive {}  step {:>6}  t={:.4e}  dt={:.3e}  maxTorque={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
+                                stage.entrypoint_kind,
+                                s.step,
+                                s.time,
+                                s.dt,
+                                s.max_dm_dt,
+                                s.e_total,
+                                s.max_h_eff,
+                                wall_ms
+                            );
+                        }
+
+                        if adjusted.stats.step <= 1
+                            || adjusted.stats.step % field_every_n == 0
+                            || adjusted.scalar_row_due
+                            || adjusted.preview_field.is_some()
+                        {
+                            live_workspace.update(|state| {
+                                state.session.status = "running".to_string();
+                                state.run = running_run_manifest_from_update(
+                                    &run_id,
+                                    &session_id,
+                                    &artifact_dir,
+                                    &adjusted,
                                 );
-                            }
+                                state.live_state = live_state_manifest_from_update(&adjusted);
+                                set_latest_scalar_row_if_due(state, &adjusted);
+                            });
+                        }
 
-                            if adjusted.stats.step <= 1
-                                || adjusted.stats.step % field_every_n == 0
-                                || adjusted.scalar_row_due
-                                || adjusted.preview_field.is_some()
+                        if s.step % 100 == 0 {
+                            if let Some(action) =
+                                process_running_interactive_control(&preview_config_handle)
                             {
-                                live_workspace.update(|state| {
-                                    state.session.status = "running".to_string();
-                                    state.run = running_run_manifest_from_update(
-                                        &run_id,
-                                        &session_id,
-                                        &artifact_dir,
-                                        &adjusted,
-                                    );
-                                    state.live_state = live_state_manifest_from_update(&adjusted);
-                                    set_latest_scalar_row_if_due(state, &adjusted);
-                                });
+                                return action;
                             }
+                        }
+                        fullmag_runner::StepAction::Continue
+                    };
 
-                            // Poll for stop commands every 100 steps
-                            if s.step % 100 == 0 {
-                                if let Ok(Some(cmd)) = next_current_live_command() {
-                                    if cmd.kind == "stop" || cmd.kind == "close" {
-                                        eprintln!(
-                                            "interactive: received '{}' command — cancelling stage",
-                                            cmd.kind
-                                        );
-                                        return fullmag_runner::StepAction::Stop;
-                                    }
-                                }
-                            }
-                            fullmag_runner::StepAction::Continue
-                        },
-                    )
+                    if matches!(&execution_plan.backend_plan, BackendPlanIR::Fdm(_)) {
+                        if let Err(error) = ensure_interactive_fdm_preview_runtime(
+                            &mut interactive_preview_runtime,
+                            &stage.ir,
+                            continuation_magnetization.as_deref(),
+                        ) {
+                            eprintln!("interactive preview runtime warning: {}", error);
+                            live_workspace.push_log(
+                                "warn",
+                                format!(
+                                    "Falling back to one-shot interactive runner path: {}",
+                                    error
+                                ),
+                            );
+                            interactive_preview_runtime = None;
+                        }
+                    }
+
+                    if let Some(runtime) = interactive_preview_runtime.as_mut() {
+                        fullmag_runner::run_problem_with_interactive_fdm_runtime_live_preview(
+                            runtime,
+                            &stage.ir,
+                            stage.until_seconds,
+                            &current_stage_artifact_dir,
+                            field_every_n,
+                            &preview_request,
+                            &mut on_step,
+                        )
+                    } else {
+                        fullmag_runner::run_problem_with_live_preview(
+                            &stage.ir,
+                            stage.until_seconds,
+                            &current_stage_artifact_dir,
+                            field_every_n,
+                            &preview_request,
+                            &mut on_step,
+                        )
+                    }
                 } else {
                     fullmag_runner::run_problem_with_callback(
                         &stage.ir,
@@ -2535,16 +2623,12 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 });
                             }
 
-                            // Poll for stop commands every 100 steps
+                            // Poll for live-control commands every 100 steps.
                             if s.step % 100 == 0 {
-                                if let Ok(Some(cmd)) = next_current_live_command() {
-                                    if cmd.kind == "stop" || cmd.kind == "close" {
-                                        eprintln!(
-                                            "interactive: received '{}' command — cancelling stage",
-                                            cmd.kind
-                                        );
-                                        return fullmag_runner::StepAction::Stop;
-                                    }
+                                if let Some(action) =
+                                    process_running_interactive_control(&preview_config_handle)
+                                {
+                                    return action;
                                 }
                             }
                             fullmag_runner::StepAction::Continue
@@ -2651,6 +2735,17 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 } else {
                     0
                 };
+                if let Some(runtime) = interactive_preview_runtime.as_mut() {
+                    if let Some(previous_final_magnetization) = continuation_magnetization.as_deref()
+                    {
+                        if let Err(error) =
+                            runtime.upload_magnetization(previous_final_magnetization)
+                        {
+                            eprintln!("interactive preview runtime warning: {}", error);
+                            interactive_preview_runtime = None;
+                        }
+                    }
+                }
                 if latest_field_cache_supported {
                     let preview_request = preview_config_handle.snapshot();
                     spawn_interactive_preview_cache_refresh(
@@ -2660,6 +2755,17 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         preview_request,
                         awaiting_generation,
                     );
+                }
+                if let Some(runtime) = interactive_preview_runtime.as_mut() {
+                    let preview_request = preview_config_handle.snapshot();
+                    if let Err(error) = refresh_interactive_preview_runtime_snapshot(
+                        runtime,
+                        &preview_request,
+                        &live_workspace,
+                    ) {
+                        eprintln!("interactive preview runtime warning: {}", error);
+                        interactive_preview_runtime = None;
+                    }
                 } else if dynamic_idle_preview_supported {
                     let preview_request = preview_config_handle.snapshot();
                     if let Err(error) = refresh_interactive_preview_snapshot(
@@ -2807,6 +2913,15 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 } else {
                     0
                 };
+            if let Some(runtime) = interactive_preview_runtime.as_mut() {
+                if let Some(previous_final_magnetization) = continuation_magnetization.as_deref() {
+                    if let Err(error) = runtime.upload_magnetization(previous_final_magnetization)
+                    {
+                        eprintln!("interactive preview runtime warning: {}", error);
+                        interactive_preview_runtime = None;
+                    }
+                }
+            }
             if latest_field_cache_supported {
                 let preview_request = preview_config_handle.snapshot();
                 spawn_interactive_preview_cache_refresh(
@@ -2816,6 +2931,17 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     preview_request,
                     awaiting_generation,
                 );
+            }
+            if let Some(runtime) = interactive_preview_runtime.as_mut() {
+                let preview_request = preview_config_handle.snapshot();
+                if let Err(error) = refresh_interactive_preview_runtime_snapshot(
+                    runtime,
+                    &preview_request,
+                    &live_workspace,
+                ) {
+                    eprintln!("interactive preview runtime warning: {}", error);
+                    interactive_preview_runtime = None;
+                }
             } else if dynamic_idle_preview_supported {
                 let preview_request = preview_config_handle.snapshot();
                 if let Err(error) = refresh_interactive_preview_snapshot(
@@ -2834,9 +2960,6 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
         if let Ok(mut preview_state) = interactive_preview_source.lock() {
             preview_state.status = InteractivePreviewStatus::Closed;
-        }
-        if let Some(stop) = interactive_preview_stop {
-            stop.store(true, Ordering::Relaxed);
         }
         live_workspace.update(|state| {
             set_live_state_status(&mut state.live_state, "completed", Some(true));
@@ -3211,59 +3334,122 @@ impl Drop for ControlRoomGuard {
     }
 }
 
+#[derive(Debug, Default)]
+struct CurrentLiveControlState {
+    preview_request: fullmag_runner::LivePreviewRequest,
+    queue: VecDeque<SessionCommand>,
+}
+
 #[derive(Clone)]
 struct CurrentLivePreviewConfigHandle {
-    current: Arc<Mutex<fullmag_runner::LivePreviewRequest>>,
+    shared: Arc<(Mutex<CurrentLiveControlState>, Condvar)>,
     stop: Arc<AtomicBool>,
 }
 
 impl CurrentLivePreviewConfigHandle {
     fn spawn() -> Self {
+        let initial_preview_request = current_live_preview_config().unwrap_or_default();
         let handle = Self {
-            current: Arc::new(Mutex::new(fullmag_runner::LivePreviewRequest::default())),
+            shared: Arc::new((
+                Mutex::new(CurrentLiveControlState {
+                    preview_request: initial_preview_request,
+                    queue: VecDeque::new(),
+                }),
+                Condvar::new(),
+            )),
             stop: Arc::new(AtomicBool::new(false)),
         };
         let worker = handle.clone();
         std::thread::spawn(move || {
+            let mut after_seq = 0u64;
             while !worker.stop.load(Ordering::Relaxed) {
-                let after_revision = worker
-                    .current
-                    .lock()
-                    .map(|current| current.revision)
-                    .unwrap_or_default();
-                match wait_for_current_live_preview_config(after_revision, 15_000) {
-                    Ok(Some(config)) => {
-                        if let Ok(mut current) = worker.current.lock() {
-                            *current = config;
+                match wait_for_current_live_control(after_seq, 15_000) {
+                    Ok(Some(command)) => {
+                        after_seq = after_seq.max(command.seq);
+                        let (lock, cvar) = &*worker.shared;
+                        if let Ok(mut state) = lock.lock() {
+                            state.queue.push_back(command);
+                            cvar.notify_all();
                         }
                     }
                     Ok(None) => {}
-                    Err(_) => {
-                        if let Ok(config) = current_live_preview_config() {
-                            if let Ok(mut current) = worker.current.lock() {
-                                *current = config;
-                            }
-                        } else {
-                            std::thread::sleep(Duration::from_millis(250));
-                        }
-                    }
+                    Err(_) => std::thread::sleep(Duration::from_millis(100)),
                 }
             }
+            let (_, cvar) = &*worker.shared;
+            cvar.notify_all();
         });
         handle
     }
 
     fn snapshot(&self) -> fullmag_runner::LivePreviewRequest {
-        self.current
-            .lock()
-            .map(|request| request.clone())
+        let (lock, _) = &*self.shared;
+        lock.lock()
+            .map(|state| state.preview_request.clone())
             .unwrap_or_default()
+    }
+
+    fn apply_preview_command(&self, command: &SessionCommand) {
+        let Some(preview_config) = command.preview_config.clone() else {
+            return;
+        };
+        let (lock, _) = &*self.shared;
+        if let Ok(mut state) = lock.lock() {
+            state.preview_request = preview_config;
+        }
+    }
+
+    fn pop_front_matching(&self, predicate: impl Fn(&SessionCommand) -> bool) -> Option<SessionCommand> {
+        let (lock, _) = &*self.shared;
+        let mut state = lock.lock().ok()?;
+        if !state.queue.front().is_some_and(&predicate) {
+            return None;
+        }
+        state.queue.pop_front()
+    }
+
+    fn wait_next_command(&self, timeout: Duration) -> Option<SessionCommand> {
+        let (lock, cvar) = &*self.shared;
+        let mut state = lock.lock().ok()?;
+        if state.queue.is_empty() {
+            let waited = cvar.wait_timeout(state, timeout).ok()?;
+            state = waited.0;
+        }
+        state.queue.pop_front()
     }
 }
 
 impl Drop for CurrentLivePreviewConfigHandle {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        let (_, cvar) = &*self.shared;
+        cvar.notify_all();
+    }
+}
+
+fn process_running_interactive_control(
+    control: &CurrentLivePreviewConfigHandle,
+) -> Option<fullmag_runner::StepAction> {
+    loop {
+        let Some(command) = control.pop_front_matching(|command| {
+            matches!(
+                command.kind.as_str(),
+                "preview_update" | "preview_refresh" | "pause" | "stop" | "close"
+            )
+        }) else {
+            return None;
+        };
+        match command.kind.as_str() {
+            "preview_update" | "preview_refresh" => control.apply_preview_command(&command),
+            "pause" | "stop" | "close" => {
+                eprintln!(
+                    "interactive: received '{}' command — cancelling stage",
+                    command.kind
+                );
+                return Some(fullmag_runner::StepAction::Stop);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -3292,6 +3478,54 @@ fn refresh_interactive_preview_snapshot(
         apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
     }
     let preview_field = fullmag_runner::snapshot_problem_preview(&problem, request)?;
+    live_workspace.update(|state| {
+        state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
+        state.live_state.latest_step.preview_field = Some(preview_field.clone());
+    });
+    Ok(())
+}
+
+fn create_interactive_fdm_preview_runtime(
+    base_problem: &ProblemIR,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<fullmag_runner::InteractiveFdmPreviewRuntime> {
+    let mut runtime = fullmag_runner::InteractiveFdmPreviewRuntime::create(base_problem)?;
+    if let Some(previous_final_magnetization) = continuation_magnetization {
+        runtime.upload_magnetization(previous_final_magnetization)?;
+    }
+    Ok(runtime)
+}
+
+fn ensure_interactive_fdm_preview_runtime(
+    runtime: &mut Option<fullmag_runner::InteractiveFdmPreviewRuntime>,
+    problem: &ProblemIR,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<()> {
+    let execution_plan = fullmag_plan::plan(problem).map_err(|error| anyhow!(error.to_string()))?;
+    let BackendPlanIR::Fdm(fdm) = &execution_plan.backend_plan else {
+        bail!("interactive FDM runtime requires a single-layer FDM execution plan");
+    };
+
+    let needs_rebuild = runtime
+        .as_ref()
+        .map(|current| !current.matches_plan(fdm))
+        .unwrap_or(true);
+    if needs_rebuild {
+        *runtime = Some(create_interactive_fdm_preview_runtime(
+            problem,
+            continuation_magnetization,
+        )?);
+    }
+
+    Ok(())
+}
+
+fn refresh_interactive_preview_runtime_snapshot(
+    runtime: &mut fullmag_runner::InteractiveFdmPreviewRuntime,
+    request: &fullmag_runner::LivePreviewRequest,
+    live_workspace: &LocalLiveWorkspace,
+) -> Result<()> {
+    let preview_field = runtime.snapshot_preview(request)?;
     live_workspace.update(|state| {
         state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
         state.live_state.latest_step.preview_field = Some(preview_field.clone());
@@ -3380,50 +3614,6 @@ fn spawn_interactive_preview_cache_refresh(
     });
 }
 
-fn spawn_interactive_preview_refresh_worker(
-    base_problem: ProblemIR,
-    live_workspace: LocalLiveWorkspace,
-    source_state: Arc<Mutex<InteractivePreviewSourceState>>,
-) -> Arc<AtomicBool> {
-    let stop = Arc::new(AtomicBool::new(false));
-    let worker_stop = Arc::clone(&stop);
-    std::thread::spawn(move || {
-        let mut last_revision = 0u64;
-        while !worker_stop.load(Ordering::Relaxed) {
-            let next_config = match wait_for_current_live_preview_config(last_revision, 1_000) {
-                Ok(Some(config)) => config,
-                Ok(None) => continue,
-                Err(_) => {
-                    std::thread::sleep(Duration::from_millis(25));
-                    continue;
-                }
-            };
-            last_revision = next_config.revision;
-
-            let snapshot_source = source_state.lock().map(|state| state.clone()).unwrap_or(
-                InteractivePreviewSourceState {
-                    status: InteractivePreviewStatus::Closed,
-                    continuation_magnetization: None,
-                    generation: 0,
-                },
-            );
-            if snapshot_source.status != InteractivePreviewStatus::AwaitingCommand {
-                continue;
-            }
-
-            if let Err(error) = refresh_interactive_preview_snapshot(
-                &base_problem,
-                snapshot_source.continuation_magnetization.as_deref(),
-                &next_config,
-                &live_workspace,
-            ) {
-                eprintln!("interactive preview refresh warning: {}", error);
-            }
-        }
-    });
-    stop
-}
-
 /// Estimate available system RAM in bytes.
 ///
 /// Reads `/proc/meminfo` (Linux). Falls back to 16 GB if unavailable.
@@ -3486,11 +3676,15 @@ fn invoke_remesh(
     Ok(mesh)
 }
 
-fn next_current_live_command() -> Result<Option<SessionCommand>> {
+fn wait_for_current_live_control(after_seq: u64, timeout_ms: u64) -> Result<Option<SessionCommand>> {
     let response = match current_live_api_client()
         .get(format!(
-            "{LOCALHOST_API_BASE}/v1/live/current/commands/next"
+            "{LOCALHOST_API_BASE}/v1/live/current/control/wait"
         ))
+        .query(&[
+            ("afterSeq", after_seq.to_string()),
+            ("timeoutMs", timeout_ms.to_string()),
+        ])
         .send()
     {
         Ok(response) => response,
@@ -3502,9 +3696,9 @@ fn next_current_live_command() -> Result<Option<SessionCommand>> {
         reqwest::StatusCode::NOT_FOUND => Ok(None),
         status if status.is_success() => response
             .json::<SessionCommand>()
-            .context("failed to decode current live command")
+            .context("failed to decode current live control command")
             .map(Some),
-        status => bail!("current live command queue returned HTTP {}", status),
+        status => bail!("current live control wait endpoint returned HTTP {}", status),
     }
 }
 
@@ -3519,34 +3713,6 @@ fn current_live_preview_config() -> Result<fullmag_runner::LivePreviewRequest> {
         .context("current live preview config endpoint returned error")?
         .json::<fullmag_runner::LivePreviewRequest>()
         .context("failed to decode current live preview config")
-}
-
-fn wait_for_current_live_preview_config(
-    after_revision: u64,
-    timeout_ms: u64,
-) -> Result<Option<fullmag_runner::LivePreviewRequest>> {
-    let response = current_live_api_client()
-        .get(format!(
-            "{LOCALHOST_API_BASE}/v1/live/current/preview/config/wait"
-        ))
-        .query(&[
-            ("afterRevision", after_revision.to_string()),
-            ("timeoutMs", timeout_ms.to_string()),
-        ])
-        .send()
-        .context("failed to wait for current live preview config")?;
-
-    match response.status() {
-        reqwest::StatusCode::NO_CONTENT => Ok(None),
-        status if status.is_success() => response
-            .json::<fullmag_runner::LivePreviewRequest>()
-            .context("failed to decode waited current live preview config")
-            .map(Some),
-        status => Err(anyhow!(
-            "current live preview wait endpoint returned HTTP {}",
-            status
-        )),
-    }
 }
 
 fn build_interactive_command_stage(

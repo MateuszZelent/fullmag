@@ -12,6 +12,7 @@ mod artifacts;
 mod cpu_reference;
 mod dispatch;
 mod fem_reference;
+mod interactive_runtime;
 #[cfg(feature = "cuda")]
 mod multilayer_cuda;
 mod multilayer_reference;
@@ -24,6 +25,7 @@ mod schedules;
 mod types;
 
 // Public re-exports (unchanged API surface).
+pub use interactive_runtime::InteractiveFdmPreviewRuntime;
 pub use types::{
     ExecutionProvenance, FemMeshPayload, LivePreviewField, LivePreviewRequest,
     LiveVectorFieldSnapshot, RunError, RunResult, RunStatus, RuntimeEngineInfo, StepAction,
@@ -390,6 +392,80 @@ pub fn run_problem_with_live_preview(
     });
 
     Ok(executed.result)
+}
+
+/// Run an FDM problem using a persistent interactive runtime for low-latency
+/// live preview and interactive follow-up commands.
+pub fn run_problem_with_interactive_fdm_runtime_live_preview(
+    runtime: &mut InteractiveFdmPreviewRuntime,
+    problem: &ProblemIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let plan = fullmag_plan::plan(problem)?;
+    let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+        return Err(RunError {
+            message:
+                "interactive FDM runtime execute path requires a single-layer FDM execution plan"
+                    .to_string(),
+        });
+    };
+
+    let result = runtime.execute_with_live_preview(
+        fdm,
+        until_seconds,
+        fdm.grid.cells,
+        field_every_n,
+        preview_request,
+        &mut on_step,
+    )?;
+
+    let executed = types::ExecutedRun {
+        result: result.clone(),
+        initial_magnetization: fdm.initial_magnetization.clone(),
+        field_snapshots: Vec::new(),
+        field_snapshot_count: 0,
+        provenance: runtime.execution_provenance(),
+    };
+    if let Err(error) = artifacts::write_artifacts(output_dir, problem, &plan, &executed, None) {
+        return Err(RunError {
+            message: format!("Failed to write artifacts: {}", error),
+        });
+    }
+
+    let final_stats = result.steps.last().cloned().unwrap_or(StepStats {
+        step: 0,
+        time: 0.0,
+        dt: 0.0,
+        e_ex: 0.0,
+        e_demag: 0.0,
+        e_ext: 0.0,
+        e_total: 0.0,
+        max_dm_dt: 0.0,
+        max_h_eff: 0.0,
+        max_h_demag: 0.0,
+        wall_time_ns: 0,
+        ..StepStats::default()
+    });
+    let final_m: Vec<f64> = result
+        .final_magnetization
+        .iter()
+        .flat_map(|vector| vector.iter().copied())
+        .collect();
+    on_step(StepUpdate {
+        stats: final_stats,
+        grid: fdm.grid.cells,
+        fem_mesh: None,
+        magnetization: Some(final_m),
+        preview_field: None,
+        scalar_row_due: true,
+        finished: true,
+    });
+
+    Ok(result)
 }
 
 pub fn snapshot_problem_preview(

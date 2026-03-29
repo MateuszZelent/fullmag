@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  startTransition,
   useCallback,
   useContext,
   useEffect,
@@ -766,16 +767,23 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   }, [enqueueCommand]);
 
   const openFemMeshWorkspace = useCallback((tab: "mesh" | "quality" = "mesh") => {
-    setViewMode("Mesh"); setFemDockTab(tab);
+    startTransition(() => {
+      setViewMode("Mesh");
+      setFemDockTab(tab);
+    });
     setMeshRenderMode((c) => (c === "surface" ? "surface+edges" : c));
   }, []);
 
   const handleViewModeChange = useCallback((mode: string) => {
-    if (mode === "Mesh") { if (isFemBackend) openFemMeshWorkspace("mesh"); setViewMode("Mesh"); return; }
+    if (mode === "Mesh") { if (isFemBackend) openFemMeshWorkspace("mesh"); startTransition(() => setViewMode("Mesh")); return; }
     if (mode === "2D") {
-      setComponent((prev) => prev === "magnitude" ? "x" : prev);
+      startTransition(() => {
+        setComponent((prev) => prev === "magnitude" ? "x" : prev);
+      });
     }
-    setViewMode(mode as ViewportMode);
+    startTransition(() => {
+      setViewMode(mode as ViewportMode);
+    });
   }, [isFemBackend, openFemMeshWorkspace]);
 
   const handleSimulationAction = useCallback((action: string) => {
@@ -859,8 +867,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const handleExport = useCallback(() => { void enqueueCommand({ kind: "save_vtk" }); }, [enqueueCommand]);
 
   const requestPreviewQuantity = useCallback((nextQuantity: string) => {
-    if (isFemBackend && effectiveViewMode === "Mesh") setViewMode("3D");
-    setSelectedQuantity(nextQuantity);
+    startTransition(() => {
+      if (isFemBackend && effectiveViewMode === "Mesh") setViewMode("3D");
+      setSelectedQuantity(nextQuantity);
+    });
     if (isGlobalScalarQuantity(nextQuantity)) return;
     if (awaitingCommand && nextQuantity === "m") return;
     if (previewControlsActive) {
