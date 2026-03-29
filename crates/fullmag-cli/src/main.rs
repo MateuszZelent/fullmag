@@ -493,7 +493,7 @@ fn current_live_publisher_loop(
             }
             let snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
             if let Err(error) = publish_current_live_state(&session_id, &snapshot) {
-                if api_is_ready(LOCAL_API_PORT) {
+                if api_is_ready(api_port()) {
                     eprintln!("fullmag live publish warning: {}", error);
                 }
             }
@@ -504,7 +504,7 @@ fn current_live_publisher_loop(
     if pending.swap(false, Ordering::AcqRel) {
         let snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
         if let Err(error) = publish_current_live_state(&session_id, &snapshot) {
-            if api_is_ready(LOCAL_API_PORT) {
+            if api_is_ready(api_port()) {
                 eprintln!("fullmag live publish warning: {}", error);
             }
         }
@@ -1354,6 +1354,7 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
 }
 
 fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
+    RESOLVED_API_PORT.set(resolve_api_port()?).expect("Should set API port exactly once");
     let args = ScriptCli::parse_from(raw_args);
     let started_at_unix_ms = unix_time_millis()?;
     let script_path = args
@@ -1448,7 +1449,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
     let mut _control_room_guard = ControlRoomGuard::inactive();
     if !args.headless {
-        let web_port = spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace)
+        let (web_port, child) = spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace)
             .with_context(|| {
                 format!(
                     "failed to bootstrap control room for workspace {}",
@@ -1459,7 +1460,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         live_workspace.push_log("system", "Control room bootstrap verified");
         // Guard tears down the API + frontend when run_script_mode returns
         // (on success, error, or panic) — amumax-style lifecycle.
-        _control_room_guard = ControlRoomGuard::active(web_port);
+        _control_room_guard = ControlRoomGuard::active(web_port, child);
     }
 
     live_workspace.publish_snapshot();
@@ -2566,19 +2567,8 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
                     if let Some(runtime) = interactive_preview_runtime.as_mut() {
                         match runtime {
-                            InteractivePreviewRuntime::Fdm(runtime) => {
-                                fullmag_runner::run_problem_with_interactive_fdm_runtime_live_preview(
-                                    runtime,
-                                    &stage.ir,
-                                    stage.until_seconds,
-                                    &current_stage_artifact_dir,
-                                    field_every_n,
-                                    &preview_request,
-                                    &mut on_step,
-                                )
-                            }
-                            InteractivePreviewRuntime::Fem(runtime) => {
-                                fullmag_runner::run_problem_with_interactive_fem_runtime_live_preview(
+                            InteractivePreviewRuntime::Unified(runtime) => {
+                                fullmag_runner::run_problem_with_interactive_runtime_live_preview(
                                     runtime,
                                     &stage.ir,
                                     stage.until_seconds,
@@ -3518,15 +3508,14 @@ struct InteractivePreviewSourceState {
 }
 
 enum InteractivePreviewRuntime {
-    Fdm(fullmag_runner::InteractiveFdmPreviewRuntime),
-    Fem(fullmag_runner::InteractiveFemPreviewRuntime),
+    /// New unified runtime backed by `InteractiveBackend` trait.
+    Unified(fullmag_runner::InteractiveRuntime),
 }
 
 impl InteractivePreviewRuntime {
     fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<()> {
         match self {
-            Self::Fdm(runtime) => runtime.upload_magnetization(magnetization)?,
-            Self::Fem(runtime) => runtime.upload_magnetization(magnetization)?,
+            Self::Unified(runtime) => runtime.upload_magnetization(magnetization)?,
         }
         Ok(())
     }
@@ -3536,8 +3525,17 @@ impl InteractivePreviewRuntime {
         request: &fullmag_runner::LivePreviewRequest,
     ) -> Result<fullmag_runner::LivePreviewField> {
         Ok(match self {
-            Self::Fdm(runtime) => runtime.snapshot_preview(request)?,
-            Self::Fem(runtime) => runtime.snapshot_preview(request)?,
+            Self::Unified(runtime) => runtime.snapshot_preview(request)?,
+        })
+    }
+
+    fn snapshot_vector_fields(
+        &mut self,
+        quantities: &[&str],
+        request: &fullmag_runner::LivePreviewRequest,
+    ) -> Result<Vec<fullmag_runner::LivePreviewField>> {
+        Ok(match self {
+            Self::Unified(runtime) => runtime.snapshot_vector_fields(quantities, request)?,
         })
     }
 }
@@ -3564,21 +3562,12 @@ fn create_interactive_preview_runtime(
     base_problem: &ProblemIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<InteractivePreviewRuntime> {
-    let execution_plan =
-        fullmag_plan::plan(base_problem).map_err(|error| anyhow!(error.to_string()))?;
-    let mut runtime = match &execution_plan.backend_plan {
-        BackendPlanIR::Fdm(_) => InteractivePreviewRuntime::Fdm(
-            fullmag_runner::InteractiveFdmPreviewRuntime::create(base_problem)?,
-        ),
-        BackendPlanIR::Fem(_) => InteractivePreviewRuntime::Fem(
-            fullmag_runner::InteractiveFemPreviewRuntime::create(base_problem)?,
-        ),
-        _ => bail!("interactive preview runtime requires FDM or FEM execution plan"),
-    };
-    if let Some(previous_final_magnetization) = continuation_magnetization {
-        runtime.upload_magnetization(previous_final_magnetization)?;
-    }
-    Ok(runtime)
+    let runtime = fullmag_runner::create_interactive_runtime(
+        base_problem,
+        continuation_magnetization,
+    )
+    .map_err(|error| anyhow!(error.to_string()))?;
+    Ok(InteractivePreviewRuntime::Unified(runtime))
 }
 
 fn ensure_interactive_preview_runtime(
@@ -3586,16 +3575,9 @@ fn ensure_interactive_preview_runtime(
     problem: &ProblemIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<()> {
-    let execution_plan = fullmag_plan::plan(problem).map_err(|error| anyhow!(error.to_string()))?;
-    let needs_rebuild = runtime.as_ref().map_or(true, |current| {
-        match (&execution_plan.backend_plan, current) {
-            (BackendPlanIR::Fdm(fdm), InteractivePreviewRuntime::Fdm(runtime)) => {
-                !runtime.matches_plan(fdm)
-            }
-            (BackendPlanIR::Fem(fem), InteractivePreviewRuntime::Fem(runtime)) => {
-                !runtime.matches_plan(fem)
-            }
-            _ => true,
+    let needs_rebuild = runtime.as_ref().map_or(true, |current| match current {
+        InteractivePreviewRuntime::Unified(rt) => {
+            !rt.matches_problem(problem).unwrap_or(true)
         }
     });
     if needs_rebuild {
@@ -3769,7 +3751,7 @@ fn wait_for_current_live_control(
     timeout_ms: u64,
 ) -> Result<Option<SessionCommand>> {
     let response = match current_live_api_client()
-        .get(format!("{LOCALHOST_API_BASE}/v1/live/current/control/wait"))
+        .get(format!("{}/v1/live/current/control/wait", api_base_url()))
         .query(&[
             ("afterSeq", after_seq.to_string()),
             ("timeoutMs", timeout_ms.to_string()),
@@ -3797,7 +3779,8 @@ fn wait_for_current_live_control(
 fn current_live_preview_config() -> Result<fullmag_runner::LivePreviewRequest> {
     current_live_api_client()
         .get(format!(
-            "{LOCALHOST_API_BASE}/v1/live/current/preview/config"
+            "{}/v1/live/current/preview/config",
+            api_base_url()
         ))
         .send()
         .context("failed to fetch current live preview config")?
@@ -4292,7 +4275,7 @@ fn spawn_control_room(
     dev_mode: bool,
     requested_port: Option<u16>,
     live_workspace: &LocalLiveWorkspace,
-) -> Result<u16> {
+) -> Result<(u16, std::process::Child)> {
     let root = repo_root();
     let log_dir = root.join(".fullmag").join("logs");
     let url_file = root.join(".fullmag").join("control-room-url.txt");
@@ -4310,8 +4293,7 @@ fn spawn_control_room(
 
     // 1. Always restart fullmag-api so the local live workspace runs against
     // the current code and a fresh in-memory state spine.
-    stop_fullmag_api_processes();
-    eprintln!("  starting fullmag-api on :{} ...", LOCAL_API_PORT);
+    eprintln!("  starting fullmag-api on :{} ...", api_port());
     let api_log =
         fs::File::create(log_dir.join("fullmag-api.log")).context("failed to create api log")?;
     let api_err = api_log.try_clone()?;
@@ -4324,7 +4306,7 @@ fn spawn_control_room(
         api_err,
         external_control_room_available,
     )?;
-    wait_for_api_ready(LOCAL_API_PORT, &mut child, Duration::from_secs(60))?;
+    wait_for_api_ready(api_port(), &mut child, Duration::from_secs(60))?;
     publish_current_live_workspace_snapshot(live_workspace)?;
     live_workspace.publish_snapshot();
 
@@ -4406,18 +4388,18 @@ fn spawn_control_room(
                 .stderr(Stdio::null())
                 .spawn();
         }
-        return Ok(web_port);
+        return Ok((web_port, child));
     }
 
     if !dev_mode {
-        if !static_control_room_is_ready(LOCAL_API_PORT, Duration::from_secs(20)) {
+        if !static_control_room_is_ready(api_port(), Duration::from_secs(20)) {
             bail!(
                 "built control room did not become ready on :{}; rebuild the static control room with `make web-build-static` or `just build-static-control-room`, or run `fullmag --dev ...`",
-                LOCAL_API_PORT
+                api_port()
             );
         }
 
-        let url = format!("http://{LOCALHOST_HTTP_HOST}:{LOCAL_API_PORT}/?session={session_id}");
+        let url = format!("http://{LOCALHOST_HTTP_HOST}:{}/?session={session_id}", api_port());
         eprintln!("  gui server: {}", url);
         if let Ok(opener) = which_opener() {
             let _ = ProcessCommand::new(opener)
@@ -4427,7 +4409,7 @@ fn spawn_control_room(
                 .stderr(Stdio::null())
                 .spawn();
         }
-        return Ok(web_port);
+        return Ok((web_port, child));
     }
 
     bail!(

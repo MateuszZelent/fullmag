@@ -363,12 +363,12 @@ function FemMeshView3DInner({
         </div>
       )}
 
-      <div className="absolute bottom-2 left-2 text-[0.65rem] text-muted-foreground font-mono pointer-events-none flex items-baseline gap-3">
-        <span>{meshData.nNodes.toLocaleString()} nodes</span><span className="w-[3px] h-[3px] rounded-full bg-border/50" />
-        <span>{meshData.nElements.toLocaleString()} tets</span><span className="w-[3px] h-[3px] rounded-full bg-border/50" />
+      <div className="absolute bottom-3 left-3 text-[0.65rem] text-slate-300 font-mono pointer-events-none flex items-baseline gap-3 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-md border border-slate-500/30 shadow-md z-20">
+        <span>{meshData.nNodes.toLocaleString()} nodes</span><span className="w-[3px] h-[3px] rounded-full bg-slate-500/50" />
+        <span>{meshData.nElements.toLocaleString()} tets</span><span className="w-[3px] h-[3px] rounded-full bg-slate-500/50" />
         <span>{(meshData.boundaryFaces.length / 3).toLocaleString()} faces</span>
-        {clipEnabled && <><span className="w-[3px] h-[3px] rounded-full bg-border/50" /><span className="text-amber-500">clip {clipAxis.toUpperCase()} @ {clipPos}%</span></>}
-        {selectedFaces.length > 0 && <><span className="w-[3px] h-[3px] rounded-full bg-border/50" /><span className="text-blue-400">{selectedFaces.length} selected</span></>}
+        {clipEnabled && <><span className="w-[3px] h-[3px] rounded-full bg-slate-500/50" /><span className="text-amber-500">clip {clipAxis.toUpperCase()} @ {clipPos}%</span></>}
+        {selectedFaces.length > 0 && <><span className="w-[3px] h-[3px] rounded-full bg-slate-500/50" /><span className="text-blue-400">{selectedFaces.length} selected</span></>}
       </div>
 
       <ViewCube sceneRef={viewCubeSceneRef} onRotate={handleViewCubeRotate} />

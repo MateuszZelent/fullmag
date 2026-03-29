@@ -301,11 +301,11 @@ export function ViewportCanvasArea() {
 
   return (
     <div className="flex flex-col flex-1 h-full min-h-0 min-w-0 relative overflow-hidden [&>*]:min-w-0 [&>*]:min-h-0 [&>*:not(.viewportOverlay)]:flex-1 [&>*:not(.viewportOverlay)]:w-full">
-      <div className="viewportOverlay absolute top-2 right-2 flex flex-col gap-1 z-10 pointer-events-none text-right font-mono text-xs text-muted-foreground bg-background/50 backdrop-blur-sm p-1.5 rounded-md border border-border/30 shadow-sm">
+      <div className="viewportOverlay absolute top-3 left-1/2 -translate-x-1/2 flex items-center justify-center gap-4 z-10 pointer-events-none text-center font-mono text-[0.7rem] font-bold tracking-wide text-foreground/80 bg-background/60 backdrop-blur-md px-5 py-1.5 rounded-full border border-border/30 shadow-md">
         <span>Step {ctx.effectiveStep.toLocaleString()}</span>
         <span>{fmtSI(ctx.effectiveTime, "s")}</span>
         {ctx.effectiveDmDt > 0 && (
-          <span className={cn(ctx.effectiveDmDt < 1e-5 && "text-emerald-500")}>
+          <span className={cn(ctx.effectiveDmDt < 1e-5 ? "text-emerald-400" : "text-amber-400")}>
             dm/dt {fmtExp(ctx.effectiveDmDt)}
           </span>
         )}

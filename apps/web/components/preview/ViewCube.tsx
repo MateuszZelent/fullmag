@@ -221,7 +221,7 @@ export default function ViewCube({
   return (
     <>
       {/* ViewCube */}
-      <div className="absolute top-16 right-8 w-[88px] h-[98px] z-10 flex flex-col items-center pointer-events-none pt-[6px] rounded-xl bg-gradient-to-b from-slate-800/90 to-slate-900/80 border border-slate-500/20 shadow-xl backdrop-blur-md [perspective:220px]">
+      <div className="absolute top-[80px] right-3 w-[88px] h-[98px] z-10 flex flex-col items-center pointer-events-none pt-[6px] rounded-xl bg-gradient-to-b from-slate-800/90 to-slate-900/80 border border-slate-500/20 shadow-xl backdrop-blur-md [perspective:220px]">
         <div
           ref={cubeSceneRef}
           className="relative w-[60px] h-[60px] [transform-style:preserve-3d] cursor-grab active:cursor-grabbing touch-none pointer-events-auto"

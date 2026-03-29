@@ -2436,3 +2436,146 @@ fn make_step_stats(
     crate::scalar_metrics::apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
     stats
 }
+
+// ---------------------------------------------------------------------------
+// InteractiveBackend trait implementations
+// ---------------------------------------------------------------------------
+
+use crate::interactive::backend::{BackendGeometry, InteractiveBackend};
+
+impl InteractiveBackend for InteractiveFdmPreviewRuntime {
+    fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {
+        self.upload_magnetization(magnetization)
+    }
+
+    fn snapshot_preview(
+        &mut self,
+        request: &LivePreviewRequest,
+    ) -> Result<LivePreviewField, RunError> {
+        self.snapshot_preview(request)
+    }
+
+    fn snapshot_vector_fields(
+        &mut self,
+        quantities: &[&str],
+        request: &LivePreviewRequest,
+    ) -> Result<Vec<LivePreviewField>, RunError> {
+        self.snapshot_vector_fields(quantities, request)
+    }
+
+    fn execution_provenance(&self) -> ExecutionProvenance {
+        self.execution_provenance()
+    }
+
+    fn matches_problem(&self, problem: &ProblemIR) -> Result<bool, RunError> {
+        let plan = fullmag_plan::plan(problem)?;
+        let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+            return Ok(false);
+        };
+        Ok(self.matches_plan(fdm))
+    }
+
+    fn geometry(&self) -> BackendGeometry {
+        let grid = match &self.inner {
+            InteractiveFdmPreviewRuntimeInner::Cpu(r) => r.original_grid,
+            #[cfg(feature = "cuda")]
+            InteractiveFdmPreviewRuntimeInner::Cuda(r) => r.original_grid,
+        };
+        BackendGeometry::Fdm { grid }
+    }
+
+    fn execute_streaming(
+        &mut self,
+        problem: &ProblemIR,
+        until_seconds: f64,
+        field_every_n: u64,
+        preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+        artifact_writer: Option<ArtifactPipelineSender>,
+        on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+    ) -> Result<ExecutedRun, RunError> {
+        let plan = fullmag_plan::plan(problem)?;
+        let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+            return Err(RunError {
+                message: "InteractiveBackend(FDM)::execute_streaming requires FDM plan".into(),
+            });
+        };
+        self.execute_with_live_preview_streaming(
+            fdm,
+            until_seconds,
+            &plan.output_plan.outputs,
+            fdm.grid.cells,
+            field_every_n,
+            preview_request,
+            artifact_writer,
+            on_step,
+        )
+    }
+}
+
+impl InteractiveBackend for InteractiveFemPreviewRuntime {
+    fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {
+        self.upload_magnetization(magnetization)
+    }
+
+    fn snapshot_preview(
+        &mut self,
+        request: &LivePreviewRequest,
+    ) -> Result<LivePreviewField, RunError> {
+        self.snapshot_preview(request)
+    }
+
+    fn snapshot_vector_fields(
+        &mut self,
+        quantities: &[&str],
+        request: &LivePreviewRequest,
+    ) -> Result<Vec<LivePreviewField>, RunError> {
+        self.snapshot_vector_fields(quantities, request)
+    }
+
+    fn execution_provenance(&self) -> ExecutionProvenance {
+        self.execution_provenance()
+    }
+
+    fn matches_problem(&self, problem: &ProblemIR) -> Result<bool, RunError> {
+        let plan = fullmag_plan::plan(problem)?;
+        let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+            return Ok(false);
+        };
+        Ok(self.matches_plan(fem))
+    }
+
+    fn geometry(&self) -> BackendGeometry {
+        let mesh = match &self.inner {
+            InteractiveFemPreviewRuntimeInner::Cpu(r) => r.mesh.clone(),
+            #[cfg(feature = "fem-gpu")]
+            InteractiveFemPreviewRuntimeInner::Gpu(r) => r.mesh.clone(),
+        };
+        BackendGeometry::Fem { mesh }
+    }
+
+    fn execute_streaming(
+        &mut self,
+        problem: &ProblemIR,
+        until_seconds: f64,
+        field_every_n: u64,
+        preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+        artifact_writer: Option<ArtifactPipelineSender>,
+        on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+    ) -> Result<ExecutedRun, RunError> {
+        let plan = fullmag_plan::plan(problem)?;
+        let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+            return Err(RunError {
+                message: "InteractiveBackend(FEM)::execute_streaming requires FEM plan".into(),
+            });
+        };
+        self.execute_with_live_preview_streaming(
+            fem,
+            until_seconds,
+            &plan.output_plan.outputs,
+            field_every_n,
+            artifact_writer,
+            preview_request,
+            on_step,
+        )
+    }
+}

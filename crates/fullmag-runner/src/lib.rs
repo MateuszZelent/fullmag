@@ -12,6 +12,7 @@ mod artifacts;
 mod cpu_reference;
 mod dispatch;
 mod fem_reference;
+pub mod interactive;
 mod interactive_runtime;
 #[cfg(feature = "cuda")]
 mod multilayer_cuda;
@@ -25,6 +26,10 @@ mod schedules;
 mod types;
 
 // Public re-exports (unchanged API surface).
+pub use interactive::backend::BackendGeometry;
+pub use interactive::commands::LiveControlCommand;
+pub use interactive::display::{DisplayKind, DisplayPayload, DisplaySelection};
+pub use interactive::runtime::InteractiveRuntime;
 pub use interactive_runtime::{InteractiveFdmPreviewRuntime, InteractiveFemPreviewRuntime};
 pub use types::{
     ExecutionProvenance, FemMeshPayload, LivePreviewField, LivePreviewRequest,
@@ -33,6 +38,7 @@ pub use types::{
 };
 
 use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, OutputIR, ProblemIR};
+use interactive::InteractiveBackend;
 use serde_json::Value;
 
 use std::path::Path;
@@ -593,6 +599,62 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview(
     });
 
     Ok(executed.result)
+}
+
+// ---------------------------------------------------------------------------
+// Unified InteractiveRuntime API (new)
+// ---------------------------------------------------------------------------
+
+/// Create a unified `InteractiveRuntime` for the given problem.
+///
+/// Automatically selects FDM or FEM backend based on the execution plan.
+/// If `continuation_magnetization` is provided, it is uploaded into the backend.
+pub fn create_interactive_runtime(
+    problem: &ProblemIR,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<InteractiveRuntime, RunError> {
+    let plan = fullmag_plan::plan(problem)?;
+    let backend: Box<dyn InteractiveBackend> = match &plan.backend_plan {
+        BackendPlanIR::Fdm(_) => {
+            Box::new(InteractiveFdmPreviewRuntime::create(problem)?)
+        }
+        BackendPlanIR::Fem(_) => {
+            Box::new(InteractiveFemPreviewRuntime::create(problem)?)
+        }
+        _ => {
+            return Err(RunError {
+                message: "interactive runtime requires FDM or FEM execution plan".to_string(),
+            });
+        }
+    };
+    let mut runtime = InteractiveRuntime::new(backend);
+    if let Some(magnetization) = continuation_magnetization {
+        runtime.upload_magnetization(magnetization)?;
+    }
+    Ok(runtime)
+}
+
+/// Run a problem using a unified `InteractiveRuntime` with live preview.
+///
+/// This replaces the separate `run_problem_with_interactive_fdm_runtime_live_preview`
+/// and `run_problem_with_interactive_fem_runtime_live_preview` functions.
+pub fn run_problem_with_interactive_runtime_live_preview(
+    runtime: &mut InteractiveRuntime,
+    problem: &ProblemIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    runtime.execute_streaming(
+        problem,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        preview_request,
+        on_step,
+    )
 }
 
 pub fn snapshot_problem_preview(

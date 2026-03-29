@@ -293,12 +293,26 @@ const ScalarPlot = memo(function ScalarPlot({
   useEffect(() => {
     if (!containerRef.current) return;
     const el = containerRef.current;
+    
+    // Create an explicit instance resize function
+    const handleResize = () => {
+      if (chartRef.current && !chartRef.current.isDisposed()) {
+        const width = el.clientWidth;
+        const height = el.clientHeight;
+        if (width > 0 && height > 0) {
+          chartRef.current.resize({ width, height });
+        }
+      }
+    };
+
     const observer = new ResizeObserver(() => {
-      // Debounce resize to avoid layout thrashing
-      requestAnimationFrame(() => chartRef.current?.resize());
+      requestAnimationFrame(handleResize);
     });
+    
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+    };
   }, []);
 
   // ─── Cleanup ──────────────────────────────────────────────────────

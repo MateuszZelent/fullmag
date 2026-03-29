@@ -85,12 +85,13 @@ Na start nie robimy jeszcze wszystkiego:
 2. Nie budujemy osobnego daemon/service managera.
 3. Nie rozwiązujemy od razu pełnej edycji wszystkich parametrów materiałowych w locie.
 4. Nie wprowadzamy od razu binarnego transportu WS.
-5. Nie wymagamy pełnej parity dla FEM w pierwszym vertical slice.
+5. ~~Nie wymagamy pełnej parity dla FEM w pierwszym vertical slice.~~ **UPDATED**: FEM jest już zaimplementowane na równi z FDM — `InteractiveFemPreviewRuntime` obsługuje CPU reference i native GPU. Pierwszy vertical slice obejmuje FEM.
 
 Pierwszy production-grade slice ma objąć:
 
 - FDM CPU,
 - FDM CUDA,
+- **FEM CPU reference + FEM native GPU**,
 - interactive preview i focused scalar,
 - `run`, `relax`, `pause`, `break`, `resume`, `close`,
 - `awaiting_command` z żywym backendem.
