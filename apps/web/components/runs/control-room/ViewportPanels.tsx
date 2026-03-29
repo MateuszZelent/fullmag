@@ -7,7 +7,7 @@ import FemMeshView3D from "../../preview/FemMeshView3D";
 import FemMeshSlice2D from "../../preview/FemMeshSlice2D";
 import PreviewScalarField2D from "../../preview/PreviewScalarField2D";
 import EmptyState from "../../ui/EmptyState";
-import DimensionOverlay from "../../preview/DimensionOverlay";
+
 import { Slider } from "../../ui/slider";
 import { Switch } from "../../ui/switch";
 import { fmtExp, fmtPreviewMaxPoints, fmtSI } from "./shared";
@@ -66,19 +66,12 @@ export function ViewportBar() {
           <span className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/40 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">Qty</span>
           <select
             className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
-            value={ctx.requestedPreviewQuantity}
-            onChange={(e) => {
-              const next = e.target.value;
-              if (ctx.previewControlsActive) {
-                void ctx.updatePreview("/quantity", { quantity: next });
-              } else {
-                ctx.setSelectedQuantity(next);
-              }
-            }}
+            value={ctx.selectedQuantity}
+            onChange={(e) => ctx.requestPreviewQuantity(e.target.value)}
             disabled={ctx.previewBusy}
           >
-            {((ctx.previewControlsActive ? ctx.previewQuantityOptions : ctx.quantityOptions).length
-              ? (ctx.previewControlsActive ? ctx.previewQuantityOptions : ctx.quantityOptions)
+            {((ctx.quantityOptions).length
+              ? ctx.quantityOptions
               : [{ value: "m", label: "Magnetization", disabled: false }]).map((opt) => (
               <option key={opt.value} value={opt.value} disabled={opt.disabled}>
                 {opt.label}
@@ -283,7 +276,6 @@ export function ViewportBar() {
 
 export function ViewportCanvasArea() {
   const ctx = useControlRoom();
-  const show3DOverlay = (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") && !!ctx.worldExtent;
 
   return (
     <div className="flex flex-col flex-1 h-full min-h-0 min-w-0 relative overflow-hidden [&>*]:min-w-0 [&>*]:min-h-0 [&>*:not(.viewportOverlay)]:flex-1 [&>*:not(.viewportOverlay)]:w-full">
@@ -296,13 +288,6 @@ export function ViewportCanvasArea() {
           </span>
         )}
       </div>
-      {show3DOverlay && (
-        <DimensionOverlay
-          worldExtent={ctx.worldExtent!}
-          gridCells={ctx.solverGrid[0] > 0 ? ctx.solverGrid : null}
-          visible
-        />
-      )}
       {!ctx.isVectorQuantity ? (
         <div className="flex flex-col items-center justify-center h-full w-full opacity-60">
           <EmptyState

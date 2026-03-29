@@ -1,6 +1,7 @@
 use async_stream::stream;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{DefaultBodyLimit, Path as AxumPath, State};
+use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, State};
+use axum::http::header::CONTENT_TYPE;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -16,7 +17,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, watch, Mutex, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
@@ -31,10 +32,14 @@ struct AppState {
     live_channels: Arc<RwLock<HashMap<String, broadcast::Sender<StepUpdate>>>>,
     /// Sessionless local-live workspace snapshot used by the root `/` GUI.
     current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,
+    /// Latest public snapshot JSON served to `/state`, bootstrap, and initial WS/SSE clients.
+    current_live_public_snapshot: Arc<RwLock<Option<String>>>,
     /// Full current-workspace snapshots broadcast to SSE/WS clients.
     current_live_events: broadcast::Sender<String>,
     /// Preview controls for the sessionless root workspace.
     current_preview_config: Arc<RwLock<CurrentPreviewConfig>>,
+    /// Change notifications for preview controls so the CLI can wait instead of polling.
+    current_preview_events: watch::Sender<CurrentPreviewConfig>,
     /// In-memory command queue for the root local-live workspace.
     current_command_queue: Arc<Mutex<VecDeque<SessionCommand>>>,
 }
@@ -139,7 +144,7 @@ struct StepUpdateView {
     fem_mesh: Option<FemMeshPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     magnetization: Option<Vec<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
     preview_field: Option<LivePreviewField>,
     finished: bool,
 }
@@ -155,10 +160,58 @@ struct SessionStateResponse {
     quantities: Vec<QuantityDescriptor>,
     fem_mesh: Option<FemMeshPayload>,
     latest_fields: LatestFields,
+    #[serde(skip_serializing, default)]
+    preview_cache: CachedPreviewFields,
     artifacts: Vec<ArtifactEntry>,
     preview_config: CurrentPreviewConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     preview: Option<PreviewState>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CurrentLiveEvent<'a> {
+    Snapshot {
+        state: SessionStateEventView<'a>,
+    },
+    Preview {
+        session_id: &'a str,
+        preview_config: &'a CurrentPreviewConfig,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        preview: Option<&'a PreviewState>,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct SessionStateEventView<'a> {
+    session: &'a SessionManifest,
+    run: Option<&'a RunManifest>,
+    live_state: Option<&'a LiveState>,
+    metadata: Option<&'a Value>,
+    scalar_rows: &'a [ScalarRow],
+    engine_log: &'a [EngineLogEntry],
+    quantities: &'a [QuantityDescriptor],
+    fem_mesh: Option<&'a FemMeshPayload>,
+    artifacts: &'a [ArtifactEntry],
+    preview_config: &'a CurrentPreviewConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<&'a PreviewState>,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionStateResponseView<'a> {
+    session: &'a SessionManifest,
+    run: Option<&'a RunManifest>,
+    live_state: Option<&'a LiveState>,
+    metadata: Option<&'a Value>,
+    scalar_rows: &'a [ScalarRow],
+    engine_log: &'a [EngineLogEntry],
+    quantities: &'a [QuantityDescriptor],
+    fem_mesh: Option<&'a FemMeshPayload>,
+    artifacts: &'a [ArtifactEntry],
+    preview_config: &'a CurrentPreviewConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<&'a PreviewState>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -171,13 +224,21 @@ struct QuantityDescriptor {
     available: bool,
 }
 
-#[derive(Debug, Default, Serialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 struct LatestFields {
     m: Option<Value>,
     h_ex: Option<Value>,
     h_demag: Option<Value>,
     h_ext: Option<Value>,
     h_eff: Option<Value>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct CachedPreviewFields {
+    h_ex: Option<LivePreviewField>,
+    h_demag: Option<LivePreviewField>,
+    h_ext: Option<LivePreviewField>,
+    h_eff: Option<LivePreviewField>,
 }
 
 type CurrentPreviewConfig = LivePreviewRequest;
@@ -258,6 +319,18 @@ struct PreviewAutoScaleRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct PreviewConfigWaitQuery {
+    #[serde(rename = "afterRevision", default)]
+    after_revision: u64,
+    #[serde(rename = "timeoutMs", default = "default_preview_wait_timeout_ms")]
+    timeout_ms: u64,
+}
+
+const fn default_preview_wait_timeout_ms() -> u64 {
+    15_000
+}
+
+#[derive(Debug, Deserialize)]
 struct PreviewMaxPointsRequest {
     #[serde(rename = "maxPoints")]
     max_points: usize,
@@ -301,10 +374,16 @@ struct SessionAssetImportResponse {
 #[derive(Debug, Deserialize)]
 struct SessionCommandRequest {
     kind: String,
+    #[serde(default)]
     until_seconds: Option<f64>,
+    #[serde(default)]
     max_steps: Option<u64>,
+    #[serde(default)]
     torque_tolerance: Option<f64>,
+    #[serde(default)]
     energy_tolerance: Option<f64>,
+    #[serde(default)]
+    mesh_options: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,6 +402,10 @@ struct CurrentLivePublishRequest {
     #[serde(default)]
     latest_scalar_row: Option<ScalarRow>,
     #[serde(default)]
+    latest_fields: Option<LatestFields>,
+    #[serde(default)]
+    preview_fields: Option<Vec<LivePreviewField>>,
+    #[serde(default)]
     engine_log: Option<Vec<EngineLogEntry>>,
 }
 
@@ -339,10 +422,16 @@ struct SessionCommand {
     command_id: String,
     kind: String,
     created_at_unix_ms: u128,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     until_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     max_steps: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     torque_tolerance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     energy_tolerance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mesh_options: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -401,8 +490,10 @@ async fn main() {
         current_workspace_root,
         live_channels: Arc::new(RwLock::new(HashMap::new())),
         current_live_state: Arc::new(RwLock::new(None)),
+        current_live_public_snapshot: Arc::new(RwLock::new(None)),
         current_live_events: broadcast::channel(256).0,
         current_preview_config: Arc::new(RwLock::new(CurrentPreviewConfig::default())),
+        current_preview_events: watch::channel(CurrentPreviewConfig::default()).0,
         current_command_queue: Arc::new(Mutex::new(VecDeque::new())),
     });
 
@@ -424,6 +515,10 @@ async fn main() {
         .route(
             "/v1/live/current/preview/config",
             get(get_current_preview_config),
+        )
+        .route(
+            "/v1/live/current/preview/config/wait",
+            get(wait_current_preview_config),
         )
         .route(
             "/v1/live/current/preview/quantity",
@@ -460,6 +555,10 @@ async fn main() {
         .route(
             "/v1/live/current/preview/allLayers",
             post(set_current_preview_all_layers),
+        )
+        .route(
+            "/v1/live/current/preview/refresh",
+            post(refresh_current_preview),
         )
         .route(
             "/v1/live/current/commands",
@@ -546,18 +645,18 @@ async fn vision() -> Json<VisionResponse> {
 
 async fn get_current_live_bootstrap(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<SessionStateResponse>, ApiError> {
-    let current = state.current_live_state.read().await;
-    let snapshot = current
+) -> Result<Response, ApiError> {
+    let json = state
+        .current_live_public_snapshot
+        .read()
+        .await
         .as_ref()
         .cloned()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    Ok(Json(snapshot))
+    Ok(([(CONTENT_TYPE, "application/json")], json).into_response())
 }
 
-async fn get_current_live_state(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<SessionStateResponse>, ApiError> {
+async fn get_current_live_state(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
     get_current_live_bootstrap(State(state)).await
 }
 
@@ -567,21 +666,50 @@ async fn get_current_preview_config(
     Ok(Json(state.current_preview_config.read().await.clone()))
 }
 
+async fn wait_current_preview_config(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PreviewConfigWaitQuery>,
+) -> Result<Response, ApiError> {
+    let current = state.current_preview_config.read().await.clone();
+    if current.revision != query.after_revision {
+        return Ok(Json(current).into_response());
+    }
+
+    let timeout_ms = query.timeout_ms.clamp(100, 20_000);
+    let mut rx = state.current_preview_events.subscribe();
+    let waited = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async move {
+        loop {
+            rx.changed()
+                .await
+                .map_err(|_| ApiError::internal("preview config stream closed"))?;
+            let next = rx.borrow().clone();
+            if next.revision != query.after_revision {
+                return Ok::<CurrentPreviewConfig, ApiError>(next);
+            }
+        }
+    })
+    .await;
+
+    match waited {
+        Ok(Ok(config)) => Ok(Json(config).into_response()),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Ok(StatusCode::NO_CONTENT.into_response()),
+    }
+}
+
 async fn get_current_live_events(
     State(state): State<Arc<AppState>>,
 ) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let mut rx = state.current_live_events.subscribe();
-    let initial_snapshot = state.current_live_state.read().await.as_ref().cloned();
+    let initial_snapshot = state
+        .current_live_public_snapshot
+        .read()
+        .await
+        .as_ref()
+        .cloned();
     let stream = stream! {
-        if let Some(snapshot) = initial_snapshot {
-            match serde_json::to_string(&snapshot) {
-                Ok(json) => yield Ok(Event::default().event("session_state").data(json)),
-                Err(error) => {
-                    let json = serde_json::json!({ "error": error.to_string() }).to_string();
-                    yield Ok(Event::default().event("session_error").data(json));
-                    return;
-                }
-            }
+        if let Some(json) = initial_snapshot {
+            yield Ok(Event::default().event("session_state").data(json));
         }
 
         loop {
@@ -600,6 +728,8 @@ async fn publish_current_live_state(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CurrentLivePublishRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let has_latest_fields_update = req.latest_fields.is_some();
+    let has_cached_preview_update = req.preview_fields.is_some();
     let reset_preview = state
         .current_live_state
         .read()
@@ -608,7 +738,9 @@ async fn publish_current_live_state(
         .map(|existing| existing.session.session_id != req.session_id)
         .unwrap_or(false);
     if reset_preview {
-        *state.current_preview_config.write().await = CurrentPreviewConfig::default();
+        let config = CurrentPreviewConfig::default();
+        *state.current_preview_config.write().await = config.clone();
+        let _ = state.current_preview_events.send(config);
         state.current_command_queue.lock().await.clear();
         let _ = std::fs::remove_dir_all(&state.current_workspace_root);
     }
@@ -621,14 +753,33 @@ async fn publish_current_live_state(
     let previous_preview = next.preview.clone();
     apply_current_live_publish(&mut next, req)?;
     next.preview_config = preview_config.clone();
-    next.preview = build_preview_state(&next, &preview_config).or(previous_preview);
-    let json = serde_json::to_string(&next).map_err(|error| {
-        ApiError::internal(format!("failed to serialize current state: {}", error))
-    })?;
+    let has_fresh_preview = live_state_has_fresh_preview(next.live_state.as_ref());
+    let should_rebuild_preview =
+        has_fresh_preview || has_latest_fields_update || has_cached_preview_update;
+    next.preview = if should_rebuild_preview {
+        build_preview_state(&next, &preview_config).or(previous_preview)
+    } else {
+        previous_preview
+    };
+    let snapshot_json = serialize_current_live_snapshot_event(&next, false)?;
+    let public_json = serialize_current_live_response(&next, true)?;
+    let preview_json = if should_rebuild_preview {
+        Some(serialize_current_live_preview(
+            &next.session.session_id,
+            &next.preview_config,
+            next.preview.as_ref(),
+        )?)
+    } else {
+        None
+    };
     *current = Some(next);
     drop(current);
+    *state.current_live_public_snapshot.write().await = Some(public_json);
 
-    let _ = state.current_live_events.send(json);
+    let _ = state.current_live_events.send(snapshot_json);
+    if let Some(preview_json) = preview_json {
+        let _ = state.current_live_events.send(preview_json);
+    }
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 
@@ -720,6 +871,12 @@ async fn set_current_preview_all_layers(
         config.all_layers = req.all_layers;
     })
     .await
+}
+
+async fn refresh_current_preview(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    mutate_current_preview(&state, |_config| {}).await
 }
 
 async fn enqueue_current_live_command(
@@ -880,11 +1037,15 @@ async fn handle_ws(mut socket: WebSocket, tx: broadcast::Sender<StepUpdate>) {
 }
 
 async fn handle_current_live_ws(mut socket: WebSocket, state: Arc<AppState>) {
-    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
-        if let Ok(json) = serde_json::to_string(&snapshot) {
-            if socket.send(Message::Text(json.into())).await.is_err() {
-                return;
-            }
+    if let Some(json) = state
+        .current_live_public_snapshot
+        .read()
+        .await
+        .as_ref()
+        .cloned()
+    {
+        if socket.send(Message::Text(json.into())).await.is_err() {
+            return;
         }
     }
 
@@ -914,7 +1075,10 @@ async fn handle_current_live_ws(mut socket: WebSocket, state: Arc<AppState>) {
 
 fn build_session_command(req: SessionCommandRequest) -> Result<SessionCommand, ApiError> {
     let kind = req.kind.trim().to_lowercase();
-    if !matches!(kind.as_str(), "run" | "relax" | "close" | "stop" | "pause") {
+    if !matches!(
+        kind.as_str(),
+        "run" | "relax" | "close" | "stop" | "pause" | "remesh" | "solve" | "compute"
+    ) {
         return Err(ApiError::bad_request(format!(
             "unsupported command kind '{}'",
             req.kind
@@ -939,6 +1103,7 @@ fn build_session_command(req: SessionCommandRequest) -> Result<SessionCommand, A
         max_steps: req.max_steps,
         torque_tolerance: req.torque_tolerance,
         energy_tolerance: req.energy_tolerance,
+        mesh_options: req.mesh_options,
     })
 }
 
@@ -959,16 +1124,17 @@ async fn import_asset_for_current_workspace(
 
     let response = import_asset_into_dir(state, &session_id, imports_dir.clone(), req)?;
     let artifacts = read_artifacts_from_dir(imports_dir.parent())?;
-    let json = {
+    let (json, public_json) = {
         let mut current = state.current_live_state.write().await;
         let snapshot = current
             .as_mut()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
         snapshot.artifacts = artifacts;
-        serde_json::to_string(snapshot).map_err(|error| {
-            ApiError::internal(format!("failed to serialize current state: {}", error))
-        })?
+        let snapshot_json = serialize_current_live_snapshot_event(snapshot, false)?;
+        let public_json = serialize_current_live_response(snapshot, true)?;
+        (snapshot_json, public_json)
     };
+    *state.current_live_public_snapshot.write().await = Some(public_json);
     let _ = state.current_live_events.send(json);
     Ok(response)
 }
@@ -1049,8 +1215,9 @@ where
         config.revision = config.revision.saturating_add(1);
         config.clone()
     };
+    let _ = state.current_preview_events.send(preview_config.clone());
 
-    let json = {
+    let (json, public_json) = {
         let mut current = state.current_live_state.write().await;
         let snapshot = current
             .as_mut()
@@ -1058,13 +1225,83 @@ where
         let previous_preview = snapshot.preview.clone();
         snapshot.preview_config = preview_config.clone();
         snapshot.preview = build_preview_state(snapshot, &preview_config).or(previous_preview);
-        serde_json::to_string(snapshot).map_err(|error| {
-            ApiError::internal(format!("failed to serialize current state: {}", error))
-        })?
+        let public_json = serialize_current_live_response(snapshot, true)?;
+        let preview_json = serialize_current_live_preview(
+            &snapshot.session.session_id,
+            &snapshot.preview_config,
+            snapshot.preview.as_ref(),
+        )?;
+        (preview_json, public_json)
     };
+    *state.current_live_public_snapshot.write().await = Some(public_json);
 
     let _ = state.current_live_events.send(json);
     Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+fn serialize_current_live_snapshot_event(
+    snapshot: &SessionStateResponse,
+    include_preview: bool,
+) -> Result<String, ApiError> {
+    serde_json::to_string(&CurrentLiveEvent::Snapshot {
+        state: SessionStateEventView {
+            session: &snapshot.session,
+            run: snapshot.run.as_ref(),
+            live_state: snapshot.live_state.as_ref(),
+            metadata: snapshot.metadata.as_ref(),
+            scalar_rows: &snapshot.scalar_rows,
+            engine_log: &snapshot.engine_log,
+            quantities: &snapshot.quantities,
+            fem_mesh: snapshot.fem_mesh.as_ref(),
+            artifacts: &snapshot.artifacts,
+            preview_config: &snapshot.preview_config,
+            preview: include_preview
+                .then_some(snapshot.preview.as_ref())
+                .flatten(),
+        },
+    })
+    .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
+}
+
+fn serialize_current_live_response(
+    snapshot: &SessionStateResponse,
+    include_preview: bool,
+) -> Result<String, ApiError> {
+    serde_json::to_string(&SessionStateResponseView {
+        session: &snapshot.session,
+        run: snapshot.run.as_ref(),
+        live_state: snapshot.live_state.as_ref(),
+        metadata: snapshot.metadata.as_ref(),
+        scalar_rows: &snapshot.scalar_rows,
+        engine_log: &snapshot.engine_log,
+        quantities: &snapshot.quantities,
+        fem_mesh: snapshot.fem_mesh.as_ref(),
+        artifacts: &snapshot.artifacts,
+        preview_config: &snapshot.preview_config,
+        preview: include_preview
+            .then_some(snapshot.preview.as_ref())
+            .flatten(),
+    })
+    .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
+}
+
+fn serialize_current_live_preview(
+    session_id: &str,
+    preview_config: &CurrentPreviewConfig,
+    preview: Option<&PreviewState>,
+) -> Result<String, ApiError> {
+    serde_json::to_string(&CurrentLiveEvent::Preview {
+        session_id,
+        preview_config,
+        preview,
+    })
+    .map_err(|error| ApiError::internal(format!("failed to serialize preview state: {}", error)))
+}
+
+fn live_state_has_fresh_preview(live_state: Option<&LiveState>) -> bool {
+    live_state
+        .and_then(|state| state.latest_step.preview_field.as_ref())
+        .is_some()
 }
 
 fn build_preview_state(
@@ -1092,6 +1329,36 @@ fn build_preview_state(
         return build_preview_state_from_live_field(
             current,
             field,
+            config,
+            component,
+            source_step,
+            source_time,
+        );
+    }
+
+    if let Some(mut field) = current
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.preview_field.as_ref())
+        .filter(|field| field.quantity == quantity)
+        .cloned()
+    {
+        field.config_revision = config.revision;
+        return build_preview_state_from_live_field(
+            current,
+            &field,
+            config,
+            component,
+            source_step,
+            source_time,
+        );
+    }
+
+    if let Some(mut field) = cached_preview_field_owned(current, &quantity) {
+        field.config_revision = config.revision;
+        return build_preview_state_from_live_field(
+            current,
+            &field,
             config,
             component,
             source_step,
@@ -1486,6 +1753,33 @@ fn current_vector_field(
     parse_field_value(raw)
 }
 
+fn cached_preview_field_owned(
+    current: &SessionStateResponse,
+    quantity: &str,
+) -> Option<LivePreviewField> {
+    let in_memory = match quantity {
+        "H_ex" => current.preview_cache.h_ex.as_ref(),
+        "H_demag" => current.preview_cache.h_demag.as_ref(),
+        "H_ext" => current.preview_cache.h_ext.as_ref(),
+        "H_eff" => current.preview_cache.h_eff.as_ref(),
+        _ => None,
+    };
+    in_memory
+        .cloned()
+        .or_else(|| load_cached_preview_field_from_artifacts(current, quantity))
+}
+
+fn load_cached_preview_field_from_artifacts(
+    current: &SessionStateResponse,
+    quantity: &str,
+) -> Option<LivePreviewField> {
+    let artifact_dir = current_artifact_dir(current)?;
+    let cache_path = artifact_dir.join("interactive_preview_cache.json");
+    let bytes = std::fs::read(cache_path).ok()?;
+    let fields = serde_json::from_slice::<Vec<LivePreviewField>>(&bytes).ok()?;
+    fields.into_iter().find(|field| field.quantity == quantity)
+}
+
 fn parse_field_value(raw: &Value) -> Option<(Vec<[f64; 3]>, [usize; 3])> {
     let grid = raw
         .get("layout")?
@@ -1834,6 +2128,7 @@ fn default_current_live_state(req: &CurrentLivePublishRequest) -> SessionStateRe
         quantities: Vec::new(),
         fem_mesh: None,
         latest_fields: LatestFields::default(),
+        preview_cache: CachedPreviewFields::default(),
         artifacts: Vec::new(),
         preview_config: CurrentPreviewConfig::default(),
         preview: None,
@@ -1871,6 +2166,12 @@ fn apply_current_live_publish(
     }
     if let Some(row) = req.latest_scalar_row {
         upsert_scalar_row(&mut current.scalar_rows, row);
+    }
+    if let Some(latest_fields) = req.latest_fields {
+        merge_latest_fields(&mut current.latest_fields, latest_fields);
+    }
+    if let Some(preview_fields) = req.preview_fields {
+        merge_cached_preview_fields(&mut current.preview_cache, preview_fields);
     }
     if let Some(engine_log) = req.engine_log {
         current.engine_log = engine_log;
@@ -1910,6 +2211,7 @@ fn apply_current_live_publish(
     };
     current.quantities = build_quantities(
         &current.latest_fields,
+        &current.preview_cache,
         current.live_state.as_ref(),
         current.run.as_ref(),
         current.metadata.as_ref(),
@@ -1959,6 +2261,36 @@ fn upsert_scalar_row(rows: &mut Vec<ScalarRow>, row: ScalarRow) {
     match rows.last_mut() {
         Some(last) if last.step == row.step => *last = row,
         _ => rows.push(row),
+    }
+}
+
+fn merge_latest_fields(current: &mut LatestFields, incoming: LatestFields) {
+    if incoming.m.is_some() {
+        current.m = incoming.m;
+    }
+    if incoming.h_ex.is_some() {
+        current.h_ex = incoming.h_ex;
+    }
+    if incoming.h_demag.is_some() {
+        current.h_demag = incoming.h_demag;
+    }
+    if incoming.h_ext.is_some() {
+        current.h_ext = incoming.h_ext;
+    }
+    if incoming.h_eff.is_some() {
+        current.h_eff = incoming.h_eff;
+    }
+}
+
+fn merge_cached_preview_fields(current: &mut CachedPreviewFields, incoming: Vec<LivePreviewField>) {
+    for field in incoming {
+        match field.quantity.as_str() {
+            "H_ex" => current.h_ex = Some(field),
+            "H_demag" => current.h_demag = Some(field),
+            "H_ext" => current.h_ext = Some(field),
+            "H_eff" => current.h_eff = Some(field),
+            _ => {}
+        }
     }
 }
 
@@ -2284,6 +2616,7 @@ fn bounds_from_points(points: &[[f64; 3]]) -> Option<BoundsSummary> {
 
 fn build_quantities(
     latest_fields: &LatestFields,
+    preview_cache: &CachedPreviewFields,
     live_state: Option<&LiveState>,
     run: Option<&RunManifest>,
     metadata: Option<&Value>,
@@ -2325,6 +2658,7 @@ fn build_quantities(
             location: field_location.to_string(),
             available: dynamic_available("H_ex")
                 || latest_fields.h_ex.is_some()
+                || preview_cache.h_ex.is_some()
                 || live_state
                     .and_then(|state| state.latest_step.preview_field.as_ref())
                     .is_some_and(|field| field.quantity == "H_ex"),
@@ -2337,6 +2671,7 @@ fn build_quantities(
             location: field_location.to_string(),
             available: dynamic_available("H_demag")
                 || latest_fields.h_demag.is_some()
+                || preview_cache.h_demag.is_some()
                 || live_state
                     .and_then(|state| state.latest_step.preview_field.as_ref())
                     .is_some_and(|field| field.quantity == "H_demag"),
@@ -2349,6 +2684,7 @@ fn build_quantities(
             location: field_location.to_string(),
             available: dynamic_available("H_ext")
                 || latest_fields.h_ext.is_some()
+                || preview_cache.h_ext.is_some()
                 || live_state
                     .and_then(|state| state.latest_step.preview_field.as_ref())
                     .is_some_and(|field| field.quantity == "H_ext"),
@@ -2361,6 +2697,7 @@ fn build_quantities(
             location: field_location.to_string(),
             available: dynamic_available("H_eff")
                 || latest_fields.h_eff.is_some()
+                || preview_cache.h_eff.is_some()
                 || live_state
                     .and_then(|state| state.latest_step.preview_field.as_ref())
                     .is_some_and(|field| field.quantity == "H_eff"),

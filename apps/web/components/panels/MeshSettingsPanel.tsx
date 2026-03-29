@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 export interface MeshOptionsState {
   algorithm2d: number;
   algorithm3d: number;
+  hmax: string;          // string for controlled input (SI metres) — primary size control
   hmin: string;          // string for controlled input (SI metres)
   sizeFactor: number;
   sizeFromCurvature: number;
@@ -42,6 +43,8 @@ interface MeshSettingsPanelProps {
   disabled?: boolean;
   generating?: boolean;
   onGenerate?: () => void;
+  nodeCount?: number;
+  waitMode?: boolean;
 }
 
 /* ── Algorithm options ─────────────────────────────────────────────── */
@@ -76,6 +79,7 @@ const OPTIMIZE_OPTIONS = [
 export const DEFAULT_MESH_OPTIONS: MeshOptionsState = {
   algorithm2d: 6,
   algorithm3d: 1,
+  hmax: "",
   hmin: "",
   sizeFactor: 1.0,
   sizeFromCurvature: 0,
@@ -209,6 +213,8 @@ export default function MeshSettingsPanel({
   disabled = false,
   generating = false,
   onGenerate,
+  nodeCount,
+  waitMode,
 }: MeshSettingsPanelProps) {
   const sicnCanvasRef = useRef<HTMLCanvasElement>(null);
   const gammaCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -299,6 +305,22 @@ export default function MeshSettingsPanel({
           <span className="text-xs font-bold uppercase tracking-widest text-foreground">Element Size</span>
         </div>
         <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+              hmax
+              <span className="text-[0.55rem] text-muted-foreground/40">(primary)</span>
+            </span>
+            <div className="flex-1 max-w-[140px]">
+              <input
+                className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+                type="text"
+                placeholder="auto"
+                value={options.hmax}
+                onChange={(e) => set({ hmax: e.target.value })}
+                disabled={disabled}
+              />
+            </div>
+          </div>
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">hmin</span>
             <div className="flex-1 max-w-[140px]">
@@ -496,6 +518,38 @@ export default function MeshSettingsPanel({
           )}
         </div>
       </div>
+      {/* ── Solver Compatibility ── */}
+      {nodeCount != null && nodeCount > 0 && (
+        <div className="flex flex-col gap-2 p-3 rounded-lg border border-border/40 bg-card/20 shadow-sm">
+          <div className="flex items-center justify-between gap-2 border-b border-border/20 pb-2 mb-1">
+            <span className="text-xs font-bold uppercase tracking-widest text-foreground">Solver Compatibility</span>
+          </div>
+          <div className="grid grid-cols-[92px_1fr] gap-2 items-center">
+            <span className="text-[0.65rem] font-bold uppercase tracking-widest text-muted-foreground">Nodes</span>
+            <span className="font-mono text-xs text-foreground">{nodeCount.toLocaleString()}</span>
+          </div>
+          <div className="grid grid-cols-[92px_1fr] gap-2 items-center">
+            <span className="text-[0.65rem] font-bold uppercase tracking-widest text-muted-foreground">Est. RAM</span>
+            <span className={cn("font-mono text-xs",
+              nodeCount > 50000 ? "text-destructive font-bold" :
+              nodeCount > 10000 ? "text-amber-500" : "text-emerald-500")}>
+              {((nodeCount * nodeCount * 24) / 1e9).toFixed(1)} GB
+              {nodeCount > 50000 && " ⛔ too large"}
+              {nodeCount > 10000 && nodeCount <= 50000 && " ⚠️ large"}
+            </span>
+          </div>
+          {nodeCount > 10000 && (
+            <div className={cn("mt-1 p-2 rounded-md text-xs",
+              nodeCount > 50000
+                ? "bg-destructive/10 border border-destructive/30 text-destructive"
+                : "bg-amber-500/10 border border-amber-500/30 text-amber-500")}>
+              {nodeCount > 50000
+                ? "Mesh too large for CPU dense solver. Increase hmax to reduce node count."
+                : "Large mesh — may be slow. Target <10,000 nodes for CPU reference solver."}
+            </div>
+          )}
+        </div>
+      )}
       {/* ── Generate button ── */}
       {onGenerate && (
         <div className="flex flex-col gap-2 p-3 rounded-lg border border-border/40 bg-card/20 shadow-sm">

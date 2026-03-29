@@ -322,8 +322,14 @@ impl StudyIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OutputIR {
-    Field { name: String, every_seconds: f64 },
-    Scalar { name: String, every_seconds: f64 },
+    Field {
+        name: String,
+        every_seconds: f64,
+    },
+    Scalar {
+        name: String,
+        every_seconds: f64,
+    },
     Snapshot {
         field: String,
         component: String,

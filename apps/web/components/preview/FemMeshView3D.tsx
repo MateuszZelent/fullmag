@@ -91,6 +91,22 @@ function FemClipPlanes({ enabled, axis, posPercentage, maxDim }: { enabled: bool
   return null;
 }
 
+/** Auto-fit the R3F camera to the geometry bounding sphere whenever maxDim changes. */
+function CameraAutoFit({ maxDim, generation }: { maxDim: number; generation: number }) {
+  const { camera, invalidate } = useThree();
+  useEffect(() => {
+    if (maxDim <= 0 || generation === 0) return;
+    const d = maxDim * 2;
+    (camera as THREE.PerspectiveCamera).near = maxDim * 0.001;
+    (camera as THREE.PerspectiveCamera).far = maxDim * 200;
+    camera.position.set(d * 0.75, d * 0.6, d * 0.75);
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    invalidate();
+  }, [camera, invalidate, maxDim, generation]);
+  return null;
+}
+
 function SyncedControls({ 
   controlsRefObject, viewCubeBridgeRef, setCameraPresetEvent 
 }: { 
@@ -141,8 +157,9 @@ export default function FemMeshView3D({
   const [selectedFaces, setSelectedFaces] = useState<number[]>([]);
   
   const [geomCenter, setGeomCenter] = useState<THREE.Vector3>(new THREE.Vector3());
-  const [maxDim, setMaxDim] = useState<number>(1);
+  const [maxDim, setMaxDim] = useState<number>(0);
   const [geomSize, setGeomSize] = useState<[number, number, number]>([1, 1, 1]);
+  const [cameraFitGeneration, setCameraFitGeneration] = useState(0);
   const [cameraPresetEvent, setCameraPresetEvent] = useState<string | null>(null);
 
   const controlsRef = useRef<any>(null);
@@ -202,13 +219,7 @@ export default function FemMeshView3D({
 
   const handleGeometryCenter = useCallback((c: THREE.Vector3, m: number, s: THREE.Vector3) => {
     setGeomCenter(c); setMaxDim(m); setGeomSize([s.x, s.y, s.z]);
-    if (!viewCubeSceneRef.current?.camera) return;
-    const cam = viewCubeSceneRef.current.camera;
-    if (cam.position.lengthSq() < 1e-6) {
-      cam.position.set(m * 1.5, m * 1.2, m * 1.5);
-      cam.lookAt(0, 0, 0);
-      cam.near = m * 0.001; cam.far = m * 100; cam.updateProjectionMatrix();
-    }
+    setCameraFitGeneration((g) => g + 1);
   }, []);
 
   const setCameraPreset = useCallback((view: "reset" | "front" | "top" | "right") => {
@@ -257,7 +268,7 @@ export default function FemMeshView3D({
   return (
     <div className="relative flex flex-1 w-[100%] h-[100%] min-w-0 min-h-0 bg-background overflow-hidden rounded-md fem-canvas-container">
       <Canvas
-        camera={{ position: [3, 2.4, 3], fov: 45, near: 0.001, far: 1000 }}
+        camera={{ position: [3, 2.4, 3], fov: 45, near: 0.0001, far: 10000 }}
         gl={{ antialias: true, preserveDrawingBuffer: true, localClippingEnabled: true }}
         onPointerMissed={() => setSelectedFaces([])}
         onContextMenu={(e) => e.preventDefault()}
@@ -266,6 +277,8 @@ export default function FemMeshView3D({
         <ambientLight intensity={0.4} />
         <directionalLight position={[1, 2, 3]} intensity={0.9} />
         <directionalLight position={[-1, -1, -2]} intensity={0.3} color={0x6688cc} />
+        
+        <CameraAutoFit maxDim={maxDim} generation={cameraFitGeneration} />
         
         <FemClipPlanes enabled={clipEnabled} axis={clipAxis} posPercentage={clipPos} maxDim={maxDim} />
         

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useMemo } from "react";
+import { memo, useRef, useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { applyMagnetizationHsl } from "../magnetizationColor";
@@ -51,6 +51,10 @@ const COMP_POSITIVE = new THREE.Color("#cf6256");
 const _dummy = new THREE.Object3D();
 const _defaultUp = new THREE.Vector3(0, 1, 0);
 const _tempVec = new THREE.Vector3();
+const _tempPos = new THREE.Vector3();
+const _tempScale = new THREE.Vector3();
+const _tempQuat = new THREE.Quaternion();
+const _tempMatrix = new THREE.Matrix4();
 const _color = new THREE.Color();
 
 /* ── Color helpers ─────────────────────────────────────────────────── */
@@ -111,9 +115,41 @@ function createVoxelGeometry(): THREE.BufferGeometry {
   return new THREE.BoxGeometry(1, 1, 1);
 }
 
+function writeScaleTranslateMatrix(
+  matrices: Float32Array,
+  offset: number,
+  x: number,
+  y: number,
+  z: number,
+  sx: number,
+  sy: number,
+  sz: number,
+) {
+  matrices[offset + 0] = sx;
+  matrices[offset + 1] = 0;
+  matrices[offset + 2] = 0;
+  matrices[offset + 3] = 0;
+  matrices[offset + 4] = 0;
+  matrices[offset + 5] = sy;
+  matrices[offset + 6] = 0;
+  matrices[offset + 7] = 0;
+  matrices[offset + 8] = 0;
+  matrices[offset + 9] = 0;
+  matrices[offset + 10] = sz;
+  matrices[offset + 11] = 0;
+  matrices[offset + 12] = x;
+  matrices[offset + 13] = y;
+  matrices[offset + 14] = z;
+  matrices[offset + 15] = 1;
+}
+
+function writeHiddenMatrix(matrices: Float32Array, offset: number) {
+  writeScaleTranslateMatrix(matrices, offset, 0, 0, 0, 0, 0, 0);
+}
+
 /* ── Component ─────────────────────────────────────────────────────── */
 
-export default function FdmInstances({
+function FdmInstances({
   grid,
   vectors,
   geometryMode,
@@ -175,6 +211,7 @@ export default function FdmInstances({
     const instanceColor = mesh.instanceColor;
     if (!instanceColor) return;
     const colors = instanceColor.array as Float32Array;
+    const matrices = mesh.instanceMatrix.array as Float32Array;
 
     const expectedVectorCount = nx * ny * nz * 3;
     const hasVectors = vectors && vectors.length >= expectedVectorCount;
@@ -198,21 +235,26 @@ export default function FdmInstances({
         for (let iy = 0; iy < ny; iy++) {
           for (let ix = 0; ix < nx; ix++) {
             const isActive = !activeMask || activeMask[idx];
-            _dummy.position.set(ix, iz, iy);
-            _dummy.quaternion.identity();
             if (!isActive) {
-              _dummy.scale.set(0, 0, 0);
+              writeHiddenMatrix(matrices, idx * 16);
             } else {
               visible++;
               const depthS = nz > 1 ? gapScale : Math.max(0.22, gapScale * 0.42);
-              _dummy.scale.set(gapScale, depthS, gapScale);
+              writeScaleTranslateMatrix(
+                matrices,
+                idx * 16,
+                ix,
+                iz,
+                iy,
+                gapScale,
+                depthS,
+                gapScale,
+              );
             }
             _color.setHSL(210 / 360, 0.08, 0.55);
             colors[idx * 3 + 0] = _color.r;
             colors[idx * 3 + 1] = _color.g;
             colors[idx * 3 + 2] = _color.b;
-            _dummy.updateMatrix();
-            mesh.setMatrixAt(idx, _dummy.matrix);
             idx++;
           }
         }
@@ -228,16 +270,28 @@ export default function FdmInstances({
     }
 
     // Full field rendering (glyph or voxel)
-    const { sampling, voxelColorMode, voxelGap, voxelThreshold, topoEnabled, topoComponent, topoMultiplier } = settings;
+    const {
+      sampling,
+      voxelColorMode,
+      voxelGap,
+      voxelThreshold,
+      topoEnabled,
+      topoComponent,
+      topoMultiplier,
+    } = settings;
     const isVoxel = mode === "voxel";
     const step = sampling;
     const baseScale = isVoxel ? Math.max(0.12, step * (1 - voxelGap)) : 1;
     const depthScale = nz > 1 ? baseScale : Math.max(0.22, baseScale * 0.42);
 
     let maxMagnitude = 0;
-    for (let i = 0; i < vectors!.length; i += 3) {
-      const mx = vectors![i], my = vectors![i + 1], mz = vectors![i + 2];
-      maxMagnitude = Math.max(maxMagnitude, Math.sqrt(mx * mx + my * my + mz * mz));
+    if (isVoxel) {
+      for (let i = 0; i < vectors!.length; i += 3) {
+        const mx = vectors![i];
+        const my = vectors![i + 1];
+        const mz = vectors![i + 2];
+        maxMagnitude = Math.max(maxMagnitude, Math.sqrt(mx * mx + my * my + mz * mz));
+      }
     }
     const normMag = Math.max(maxMagnitude, 1e-30);
 
@@ -262,9 +316,10 @@ export default function FdmInstances({
 
           if (isVoxel) {
             const cellActive = !activeMask || activeMask[idx];
-            const metric = voxelColorMode === "orientation"
-              ? mag
-              : Math.abs(componentValue(mx, my, mz, voxelColorMode as "x" | "y" | "z"));
+            const metric =
+              voxelColorMode === "orientation"
+                ? mag
+                : Math.abs(componentValue(mx, my, mz, voxelColorMode as "x" | "y" | "z"));
             const isVisible = cellActive && sampled && metric >= voxelThreshold;
 
             let worldY = iz;
@@ -279,14 +334,20 @@ export default function FdmInstances({
               vH = topo.depthScale;
             }
 
-            _dummy.position.set(ix, worldY, iy);
-            _dummy.quaternion.identity();
-
             if (!isVisible) {
-              _dummy.scale.set(0, 0, 0);
+              writeHiddenMatrix(matrices, idx * 16);
             } else {
               visible++;
-              _dummy.scale.set(voxelScale, vH, voxelScale);
+              writeScaleTranslateMatrix(
+                matrices,
+                idx * 16,
+                ix,
+                worldY,
+                iy,
+                voxelScale,
+                vH,
+                voxelScale,
+              );
             }
 
             applyVoxelColor(mx, my, mz, voxelColorMode, _color);
@@ -294,21 +355,21 @@ export default function FdmInstances({
             const cellActive = !activeMask || activeMask[idx];
             const isVisible = cellActive && (mx !== 0 || my !== 0 || mz !== 0) && sampled;
 
-            _dummy.position.set(ix, iz, iy);
-
             if (!isVisible) {
-              _dummy.scale.set(0, 0, 0);
-              _dummy.quaternion.identity();
+              writeHiddenMatrix(matrices, idx * 16);
             } else {
               visible++;
-              _dummy.scale.set(1, 1, 1);
+              _tempPos.set(ix, iz, iy);
+              _tempScale.set(1, 1, 1);
               _tempVec.set(mx, mz, my);
               if (_tempVec.lengthSq() > 1e-30) {
                 _tempVec.normalize();
               } else {
                 _tempVec.set(0, 1, 0);
               }
-              _dummy.quaternion.setFromUnitVectors(_defaultUp, _tempVec);
+              _tempQuat.setFromUnitVectors(_defaultUp, _tempVec);
+              _tempMatrix.compose(_tempPos, _tempQuat, _tempScale);
+              _tempMatrix.toArray(matrices, idx * 16);
             }
 
             applyMagnetizationHsl(mx, my, mz, _color);
@@ -317,9 +378,6 @@ export default function FdmInstances({
           colors[idx * 3 + 0] = _color.r;
           colors[idx * 3 + 1] = _color.g;
           colors[idx * 3 + 2] = _color.b;
-
-          _dummy.updateMatrix();
-          mesh.setMatrixAt(idx, _dummy.matrix);
           idx++;
         }
       }
@@ -349,3 +407,5 @@ export default function FdmInstances({
     />
   );
 }
+
+export default memo(FdmInstances);

@@ -927,14 +927,16 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         };
 
         if let Some(sdf) = sdf_opt {
-            fdm_plan.boundary_geometry = Some(
-                boundary_geometry::compute_boundary_geometry(
-                    &*sdf,
-                    grid_cells[0], grid_cells[1], grid_cells[2],
-                    cell_size[0], cell_size[1], cell_size[2],
-                    compute_delta,
-                ),
-            );
+            fdm_plan.boundary_geometry = Some(boundary_geometry::compute_boundary_geometry(
+                &*sdf,
+                grid_cells[0],
+                grid_cells[1],
+                grid_cells[2],
+                cell_size[0],
+                cell_size[1],
+                cell_size[2],
+                compute_delta,
+            ));
         }
     }
 
@@ -1872,7 +1874,9 @@ fn validate_executable_outputs(
                     ));
                 }
             }
-            OutputIR::Snapshot { field, component, .. } => {
+            OutputIR::Snapshot {
+                field, component, ..
+            } => {
                 if !allowed_fields.contains(&field.as_str()) {
                     errors.push(format!(
                         "snapshot field '{}' is not executable in the current path; allowed fields are m, H_ex, H_demag, H_ext, and H_eff",

@@ -22,8 +22,12 @@ const SUB_SAMPLE_R: usize = 4;
 /// * `compute_delta` — If true, compute intersection distances (T1 mode).
 pub fn compute_boundary_geometry(
     sdf: &dyn Fn(f64, f64, f64) -> f64,
-    nx: u32, ny: u32, nz: u32,
-    dx: f64, dy: f64, dz: f64,
+    nx: u32,
+    ny: u32,
+    nz: u32,
+    dx: f64,
+    dy: f64,
+    dz: f64,
     compute_delta: bool,
 ) -> BoundaryGeometryIR {
     let n = (nx as usize) * (ny as usize) * (nz as usize);
@@ -70,12 +74,66 @@ pub fn compute_boundary_geometry(
 
                 // ── Face-link fractions: R² sub-sampling on each face ──
                 // +x face: x = (ix+1)*dx, y ∈ [iy*dy, (iy+1)*dy], z ∈ [iz*dz, (iz+1)*dz]
-                face_link_xp[idx] = face_fraction(sdf, (ix + 1) as f64 * dx, iy as f64 * dy, iz as f64 * dz, 0.0, dy, dz, r);
-                face_link_xm[idx] = face_fraction(sdf, ix as f64 * dx, iy as f64 * dy, iz as f64 * dz, 0.0, dy, dz, r);
-                face_link_yp[idx] = face_fraction(sdf, ix as f64 * dx, (iy + 1) as f64 * dy, iz as f64 * dz, dx, 0.0, dz, r);
-                face_link_ym[idx] = face_fraction(sdf, ix as f64 * dx, iy as f64 * dy, iz as f64 * dz, dx, 0.0, dz, r);
-                face_link_zp[idx] = face_fraction(sdf, ix as f64 * dx, iy as f64 * dy, (iz + 1) as f64 * dz, dx, dy, 0.0, r);
-                face_link_zm[idx] = face_fraction(sdf, ix as f64 * dx, iy as f64 * dy, iz as f64 * dz, dx, dy, 0.0, r);
+                face_link_xp[idx] = face_fraction(
+                    sdf,
+                    (ix + 1) as f64 * dx,
+                    iy as f64 * dy,
+                    iz as f64 * dz,
+                    0.0,
+                    dy,
+                    dz,
+                    r,
+                );
+                face_link_xm[idx] = face_fraction(
+                    sdf,
+                    ix as f64 * dx,
+                    iy as f64 * dy,
+                    iz as f64 * dz,
+                    0.0,
+                    dy,
+                    dz,
+                    r,
+                );
+                face_link_yp[idx] = face_fraction(
+                    sdf,
+                    ix as f64 * dx,
+                    (iy + 1) as f64 * dy,
+                    iz as f64 * dz,
+                    dx,
+                    0.0,
+                    dz,
+                    r,
+                );
+                face_link_ym[idx] = face_fraction(
+                    sdf,
+                    ix as f64 * dx,
+                    iy as f64 * dy,
+                    iz as f64 * dz,
+                    dx,
+                    0.0,
+                    dz,
+                    r,
+                );
+                face_link_zp[idx] = face_fraction(
+                    sdf,
+                    ix as f64 * dx,
+                    iy as f64 * dy,
+                    (iz + 1) as f64 * dz,
+                    dx,
+                    dy,
+                    0.0,
+                    r,
+                );
+                face_link_zm[idx] = face_fraction(
+                    sdf,
+                    ix as f64 * dx,
+                    iy as f64 * dy,
+                    iz as f64 * dz,
+                    dx,
+                    dy,
+                    0.0,
+                    r,
+                );
 
                 // ── Intersection distances (T1 mode) ──
                 if compute_delta {
@@ -95,8 +153,12 @@ pub fn compute_boundary_geometry(
     let (demag_corr_target_idx, demag_corr_source_idx, demag_corr_tensor, demag_corr_stencil_size) =
         compute_sparse_demag_correction(
             &volume_fraction,
-            nx as usize, ny as usize, nz as usize,
-            dx, dy, dz,
+            nx as usize,
+            ny as usize,
+            nz as usize,
+            dx,
+            dy,
+            dz,
         );
 
     BoundaryGeometryIR {
@@ -127,8 +189,12 @@ pub fn compute_boundary_geometry(
 /// should be non-zero (the face lies in a plane).
 fn face_fraction(
     sdf: &dyn Fn(f64, f64, f64) -> f64,
-    x0: f64, y0: f64, z0: f64,
-    span_x: f64, span_y: f64, span_z: f64,
+    x0: f64,
+    y0: f64,
+    z0: f64,
+    span_x: f64,
+    span_y: f64,
+    span_z: f64,
     r: usize,
 ) -> f64 {
     // Determine which two axes are non-zero
@@ -167,8 +233,12 @@ fn face_fraction(
 /// or the full step length `|dir|` if no sign change is detected.
 fn find_boundary_distance(
     sdf: &dyn Fn(f64, f64, f64) -> f64,
-    x0: f64, y0: f64, z0: f64,
-    dir_x: f64, dir_y: f64, dir_z: f64,
+    x0: f64,
+    y0: f64,
+    z0: f64,
+    dir_x: f64,
+    dir_y: f64,
+    dir_z: f64,
 ) -> f64 {
     let step_len = (dir_x * dir_x + dir_y * dir_y + dir_z * dir_z).sqrt();
     if step_len == 0.0 {
@@ -188,11 +258,7 @@ fn find_boundary_distance(
     let mut hi = 1.0f64;
     for _ in 0..20 {
         let mid = 0.5 * (lo + hi);
-        let f_mid = sdf(
-            x0 + mid * dir_x,
-            y0 + mid * dir_y,
-            z0 + mid * dir_z,
-        );
+        let f_mid = sdf(x0 + mid * dir_x, y0 + mid * dir_y, z0 + mid * dir_z);
         if f0 * f_mid <= 0.0 {
             hi = mid;
         } else {
@@ -206,11 +272,7 @@ fn find_boundary_distance(
 ///
 /// Returns a closure `sdf(x, y, z) -> f64` for a cylinder of given radius
 /// centered at `(cx, cy)` spanning all z. Negative = inside.
-pub fn cylinder_sdf(
-    radius: f64,
-    cx: f64,
-    cy: f64,
-) -> impl Fn(f64, f64, f64) -> f64 {
+pub fn cylinder_sdf(radius: f64, cx: f64, cy: f64) -> impl Fn(f64, f64, f64) -> f64 {
     move |x, y, _z| {
         let dx = x - cx;
         let dy = y - cy;
@@ -260,8 +322,12 @@ const CORR_RADIUS: i32 = 3;
 /// - `stencil_size` — max sources per target
 fn compute_sparse_demag_correction(
     volume_fraction: &[f64],
-    nx: usize, ny: usize, nz: usize,
-    dx: f64, dy: f64, dz: f64,
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    dx: f64,
+    dy: f64,
+    dz: f64,
 ) -> (Vec<i32>, Vec<i32>, Vec<f64>, u32) {
     let phi_thr_lo = 0.001; // cells with φ < this are empty
     let phi_thr_hi = 0.999; // cells with φ > this are fully interior
@@ -278,15 +344,10 @@ fn compute_sparse_demag_correction(
     // Compute the Newell kernel on the padded grid.
     // We only need values up to CORR_RADIUS displacement, so use a small grid.
     let kr = CORR_RADIUS as usize + 1; // need indices 0..CORR_RADIUS in positive octant
-    let nk = fullmag_fdm_demag::newell::compute_newell_kernels(
-        kr.max(nx), kr.max(ny), kr.max(nz),
-        dx, dy, dz,
-    );
+    let nk = fullmag_fdm_demag::newell::compute_newell_kernels(kr, kr, kr, dx, dy, dz);
     let kpx = nk.px;
     let kpy = nk.py;
-    let kidx = |x: usize, y: usize, z: usize| -> usize {
-        z * kpy * kpx + y * kpx + x
-    };
+    let kidx = |x: usize, y: usize, z: usize| -> usize { z * kpy * kpx + y * kpx + x };
 
     // Look up N_ij at displacement (di, dj, dk) using octant symmetry encoded in the padded grid.
     // The padded grid has size (2*nx_kern, 2*ny_kern, 2*nz_kern) with octant-reflected values.
@@ -305,8 +366,7 @@ fn compute_sparse_demag_correction(
         let iz = if dk >= 0 { az } else { nk.pz - az };
         let p = kidx(ix, iy, iz);
         [
-            nk.n_xx[p], nk.n_yy[p], nk.n_zz[p],
-            nk.n_xy[p], nk.n_xz[p], nk.n_yz[p],
+            nk.n_xx[p], nk.n_yy[p], nk.n_zz[p], nk.n_xy[p], nk.n_xz[p], nk.n_yz[p],
         ]
     };
 
@@ -322,9 +382,7 @@ fn compute_sparse_demag_correction(
         tensors: Vec<[f64; 6]>,
     }
 
-    let cell_idx = |x: usize, y: usize, z: usize| -> usize {
-        x + nx * (y + ny * z)
-    };
+    let cell_idx = |x: usize, y: usize, z: usize| -> usize { x + nx * (y + ny * z) };
 
     let mut entries: Vec<CorrEntry> = Vec::with_capacity(boundary_cells.len());
     let mut actual_max_stencil = 0usize;
@@ -340,21 +398,33 @@ fn compute_sparse_demag_correction(
 
         for dk in -CORR_RADIUS..=CORR_RADIUS {
             let sz = tz as i32 + dk;
-            if sz < 0 || sz >= nz as i32 { continue; }
+            if sz < 0 || sz >= nz as i32 {
+                continue;
+            }
             for dj in -CORR_RADIUS..=CORR_RADIUS {
                 let sy = ty as i32 + dj;
-                if sy < 0 || sy >= ny as i32 { continue; }
+                if sy < 0 || sy >= ny as i32 {
+                    continue;
+                }
                 for di in -CORR_RADIUS..=CORR_RADIUS {
                     let sx = tx as i32 + di;
-                    if sx < 0 || sx >= nx as i32 { continue; }
-                    if di == 0 && dj == 0 && dk == 0 { continue; } // self-term handled by FFT
+                    if sx < 0 || sx >= nx as i32 {
+                        continue;
+                    }
+                    if di == 0 && dj == 0 && dk == 0 {
+                        continue;
+                    } // self-term handled by FFT
 
                     let s_flat = cell_idx(sx as usize, sy as usize, sz as usize);
                     let phi_s = volume_fraction[s_flat];
-                    if phi_s < phi_thr_lo { continue; } // empty cell
+                    if phi_s < phi_thr_lo {
+                        continue;
+                    } // empty cell
 
                     let correction_factor = phi_t * phi_s - 1.0;
-                    if correction_factor.abs() < 1e-12 { continue; } // no correction needed
+                    if correction_factor.abs() < 1e-12 {
+                        continue;
+                    } // no correction needed
 
                     let n_raw = n_lookup(di, dj, dk);
                     let dn = [

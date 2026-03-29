@@ -839,7 +839,9 @@ mod tests {
                 assert!(
                     v < 0.0,
                     "N_xy({},{},0) should be negative (physics: coupling pulls back), got {}",
-                    i, j, v
+                    i,
+                    j,
+                    v
                 );
             }
         }

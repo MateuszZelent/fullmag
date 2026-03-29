@@ -229,10 +229,16 @@ struct SessionCommand {
     command_id: String,
     kind: String,
     created_at_unix_ms: u128,
+    #[serde(default)]
     until_seconds: Option<f64>,
+    #[serde(default)]
     max_steps: Option<u64>,
+    #[serde(default)]
     torque_tolerance: Option<f64>,
+    #[serde(default)]
     energy_tolerance: Option<f64>,
+    #[serde(default)]
+    mesh_options: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -260,7 +266,21 @@ struct CurrentLivePublishPayload {
     run: Option<RunManifest>,
     live_state: Option<LiveStateManifest>,
     latest_scalar_row: Option<CurrentLiveScalarRow>,
+    latest_fields: Option<CurrentLiveLatestFields>,
+    preview_fields: Option<Vec<fullmag_runner::LivePreviewField>>,
     engine_log: Option<Vec<EngineLogEntry>>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct CurrentLiveLatestFields {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    h_ex: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    h_demag: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    h_ext: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    h_eff: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -278,6 +298,10 @@ struct CurrentLivePublishRequest<'a> {
     live_state: Option<&'a LiveStateManifest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     latest_scalar_row: Option<&'a CurrentLiveScalarRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_fields: Option<&'a CurrentLiveLatestFields>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview_fields: Option<&'a [fullmag_runner::LivePreviewField]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     engine_log: Option<&'a [EngineLogEntry]>,
 }
@@ -332,6 +356,8 @@ impl LocalLiveWorkspaceState {
             run: Some(self.run.clone()),
             live_state: Some(live_state),
             latest_scalar_row: self.latest_scalar_row.clone(),
+            latest_fields: None,
+            preview_fields: None,
             engine_log: Some(self.engine_log.clone()),
         }
     }
@@ -1121,6 +1147,10 @@ fn supports_dynamic_live_preview(backend_plan: &BackendPlanIR) -> bool {
     matches!(backend_plan, BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_))
 }
 
+fn supports_interactive_latest_field_cache(backend_plan: &BackendPlanIR) -> bool {
+    matches!(backend_plan, BackendPlanIR::Fdm(_))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_session_manifest(
     session_id: &str,
@@ -1411,17 +1441,20 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         args.headless,
     );
 
+    let mut _control_room_guard = ControlRoomGuard::inactive();
     if !args.headless {
-        spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace).with_context(
-            || {
+        let web_port = spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace)
+            .with_context(|| {
                 format!(
                     "failed to bootstrap control room for workspace {}",
                     session_id
                 )
-            },
-        )?;
+            })?;
         eprintln!("fullmag control room bootstrap verified");
         live_workspace.push_log("system", "Control room bootstrap verified");
+        // Guard tears down the API + frontend when run_script_mode returns
+        // (on success, error, or panic) — amumax-style lifecycle.
+        _control_room_guard = ControlRoomGuard::active(web_port);
     }
 
     live_workspace.publish_snapshot();
@@ -1482,7 +1515,7 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             return Err(error);
         }
     };
-    let stages = materialize_script_stages(script_config)?;
+    let mut stages = materialize_script_stages(script_config)?;
     if stages.is_empty() {
         bail!("script did not produce any executable stages");
     }
@@ -1597,6 +1630,274 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut step_offset = 0u64;
     let mut time_offset = 0.0f64;
     let mut continuation_magnetization: Option<Vec<[f64; 3]>> = None;
+    let interactive_preview_source = Arc::new(Mutex::new(InteractivePreviewSourceState {
+        status: if interactive_requested {
+            InteractivePreviewStatus::AwaitingCommand
+        } else {
+            InteractivePreviewStatus::Closed
+        },
+        continuation_magnetization: None,
+        generation: 0,
+    }));
+
+    // ── wait_for_solve gate ──────────────────────────────────────────────
+    // When the script sets fm.wait_for_solve(True) and the backend is FEM,
+    // pause execution so the user can inspect/refine the mesh in the GUI.
+    let wait_for_solve_requested = stages
+        .first()
+        .map(|stage| {
+            stage
+                .ir
+                .problem_meta
+                .runtime_metadata
+                .get("wait_for_solve")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    let is_fem_backend = matches!(&initial_execution_plan.backend_plan, BackendPlanIR::Fem(_));
+
+    if wait_for_solve_requested && is_fem_backend {
+        eprintln!("[fullmag] waiting for compute — adjust mesh in GUI, then click COMPUTE");
+        live_workspace.push_log(
+            "system",
+            "Waiting for compute — adjust mesh in the control room, then click COMPUTE",
+        );
+        live_workspace.update(|state| {
+            state.session.status = "waiting_for_compute".to_string();
+            state.run.status = "waiting_for_compute".to_string();
+            set_live_state_status(&mut state.live_state, "waiting_for_compute", Some(false));
+        });
+
+        // ── Auto-coarsen: if mesh exceeds available RAM, remesh with larger hmax ──
+        if let BackendPlanIR::Fem(fem_plan) = &initial_execution_plan.backend_plan {
+            let node_count = fem_plan.mesh.nodes.len();
+            let available_ram = available_system_ram_bytes();
+            let required_ram = estimate_fem_dense_ram(node_count);
+            let ram_budget = (available_ram as f64 * 0.8) as u64; // 80% safety margin
+
+            if required_ram > ram_budget {
+                eprintln!(
+                    "[fullmag] mesh too large for available RAM ({} nodes, {:.1} GB required, {:.1} GB available)",
+                    node_count,
+                    required_ram as f64 / 1e9,
+                    available_ram as f64 / 1e9
+                );
+                live_workspace.push_log(
+                    "warn",
+                    format!(
+                        "⛔ Mesh ({} nodes) requires {:.1} GB but only {:.1} GB available — auto-optimizing",
+                        node_count,
+                        required_ram as f64 / 1e9,
+                        available_ram as f64 / 1e9
+                    ),
+                );
+
+                let geometry_entry = stages[0].ir.geometry.entries.first().cloned();
+                let fe_order = fem_plan.fe_order;
+                let mut current_hmax = fem_plan.hmax;
+
+                if let Some(geom) = geometry_entry {
+                    for attempt in 1..=5 {
+                        current_hmax *= 1.5;
+                        eprintln!(
+                            "[fullmag] auto-coarsen attempt {}/5 — trying hmax={:.2e}",
+                            attempt, current_hmax
+                        );
+                        live_workspace.push_log(
+                            "info",
+                            format!(
+                                "Auto-coarsen attempt {}/5 — hmax = {:.2e} m",
+                                attempt, current_hmax
+                            ),
+                        );
+
+                        match invoke_remesh(&geom, current_hmax, fe_order, &serde_json::json!({"compute_quality": true})) {
+                            Ok(new_mesh) => {
+                                let new_nodes = new_mesh.nodes.len();
+                                let new_ram = estimate_fem_dense_ram(new_nodes);
+                                eprintln!(
+                                    "[fullmag] auto-coarsen: {} nodes, {:.1} GB required",
+                                    new_nodes,
+                                    new_ram as f64 / 1e9
+                                );
+
+                                // Update mesh in all stages
+                                for stage in stages.iter_mut() {
+                                    if let Some(assets) = stage.ir.geometry_assets.as_mut() {
+                                        for fem_asset in assets.fem_mesh_assets.iter_mut() {
+                                            fem_asset.mesh = Some(new_mesh.clone());
+                                        }
+                                    }
+                                }
+
+                                if new_ram <= ram_budget {
+                                    live_workspace.push_log(
+                                        "success",
+                                        format!(
+                                            "✅ Auto-coarsen complete — {} nodes ({:.1} GB), hmax = {:.2e} m",
+                                            new_nodes,
+                                            new_ram as f64 / 1e9,
+                                            current_hmax
+                                        ),
+                                    );
+                                    eprintln!(
+                                        "[fullmag] auto-coarsen: mesh fits in RAM ({} nodes)",
+                                        new_nodes
+                                    );
+                                    break;
+                                }
+                                live_workspace.push_log(
+                                    "info",
+                                    format!(
+                                        "Still too large ({} nodes, {:.1} GB) — trying larger hmax",
+                                        new_nodes,
+                                        new_ram as f64 / 1e9
+                                    ),
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!("[fullmag] auto-coarsen remesh failed: {}", e);
+                                live_workspace.push_log(
+                                    "error",
+                                    format!("Auto-coarsen remesh failed: {}", e),
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                let ram_msg = format!(
+                    "Mesh: {} nodes · Est. RAM: {:.1} GB / {:.1} GB available",
+                    node_count,
+                    required_ram as f64 / 1e9,
+                    available_ram as f64 / 1e9
+                );
+                live_workspace.push_log("info", &ram_msg);
+                eprintln!("[fullmag] {}", ram_msg);
+            }
+        }
+
+        loop {
+            std::thread::sleep(Duration::from_millis(250));
+            let cmd = match next_current_live_command() {
+                Ok(Some(cmd)) => cmd,
+                Ok(None) => continue,
+                Err(e) => {
+                    eprintln!("[fullmag] command poll error: {}", e);
+                    continue;
+                }
+            };
+
+            match cmd.kind.as_str() {
+                "solve" | "compute" => {
+                    eprintln!("[fullmag] compute requested — starting solver");
+                    live_workspace.push_log("system", "Compute requested — starting solver");
+                    live_workspace.update(|state| {
+                        state.session.status = "running".to_string();
+                        state.run.status = "running".to_string();
+                        set_live_state_status(&mut state.live_state, "running", Some(false));
+                    });
+                    break;
+                }
+                "remesh" => {
+                    let opts = cmd.mesh_options.unwrap_or(serde_json::json!({}));
+                    eprintln!("[fullmag] remesh requested with options: {}", opts);
+                    live_workspace
+                        .push_log("info", format!("Remesh requested — options: {}", opts));
+                    // Extract geometry entry and FEM params from the first stage
+                    let first_stage = &stages[0];
+                    let geometry_entry = first_stage.ir.geometry.entries.first();
+                    let fem_plan = match &stage_execution_plans[0].backend_plan {
+                        BackendPlanIR::Fem(plan) => Some(plan),
+                        _ => None,
+                    };
+                    if let (Some(geom), Some(plan)) = (geometry_entry, fem_plan) {
+                        let hmax = opts
+                            .get("hmax")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(plan.hmax);
+                        match invoke_remesh(geom, hmax, plan.fe_order, &opts) {
+                            Ok(new_mesh) => {
+                                let node_count = new_mesh.nodes.len();
+                                let elem_count = new_mesh.elements.len();
+                                let face_count = new_mesh.boundary_faces.len();
+                                live_workspace.push_log(
+                                    "success",
+                                    format!(
+                                        "Remesh complete — {} nodes, {} elements, {} boundary faces",
+                                        node_count, elem_count, face_count
+                                    ),
+                                );
+                                eprintln!(
+                                    "[fullmag] remesh complete — {} nodes, {} elements",
+                                    node_count, elem_count
+                                );
+                                // Warn if mesh is too large for the dense solver
+                                if node_count > 50_000 {
+                                    live_workspace.push_log(
+                                        "warn",
+                                        format!(
+                                            "⛔ Mesh has {} nodes — CPU dense solver will likely OOM. Increase hmax.",
+                                            node_count
+                                        ),
+                                    );
+                                } else if node_count > 10_000 {
+                                    live_workspace.push_log(
+                                        "warn",
+                                        format!(
+                                            "⚠ Mesh has {} nodes — may be slow with CPU dense solver.",
+                                            node_count
+                                        ),
+                                    );
+                                }
+                                // Update the FEM mesh in the geometry assets of all stages
+                                for stage in stages.iter_mut() {
+                                    if let Some(assets) = stage.ir.geometry_assets.as_mut() {
+                                        for fem_asset in assets.fem_mesh_assets.iter_mut() {
+                                            fem_asset.mesh = Some(new_mesh.clone());
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[fullmag] remesh failed: {}", e);
+                                live_workspace.push_log("error", format!("Remesh failed: {}", e));
+                            }
+                        }
+                    } else {
+                        live_workspace.push_log(
+                            "warn",
+                            "Cannot remesh — no geometry entry or FEM plan available",
+                        );
+                    }
+                }
+                "stop" => {
+                    eprintln!("[fullmag] aborted by user during wait_for_solve");
+                    live_workspace.push_log("system", "Aborted by user");
+                    live_workspace.update(|state| {
+                        state.session.status = "stopped".to_string();
+                        state.run.status = "stopped".to_string();
+                        set_live_state_status(&mut state.live_state, "stopped", Some(true));
+                    });
+                    return Ok(());
+                }
+                other => {
+                    eprintln!(
+                        "[fullmag] ignoring command '{}' during wait_for_solve",
+                        other
+                    );
+                }
+            }
+        }
+    } else if wait_for_solve_requested && !is_fem_backend {
+        eprintln!("[fullmag] wait_for_solve ignored — only supported for FEM backend");
+        live_workspace.push_log(
+            "warn",
+            "wait_for_solve is only supported for FEM backend — proceeding immediately",
+        );
+    }
 
     for (stage_index, mut stage) in stages.into_iter().enumerate() {
         if stage.entrypoint_kind == "flat_workspace" {
@@ -1951,6 +2252,8 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     }
 
     if interactive_requested {
+        let dynamic_idle_preview_supported =
+            supports_dynamic_live_preview(&initial_execution_plan.backend_plan);
         let awaiting_at_unix_ms = unix_time_millis()?;
         live_workspace.update(|state| {
             state.session = build_session_manifest(
@@ -1984,6 +2287,45 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         eprintln!("interactive workspace ready");
         eprintln!("- workspace_id: {}", session_id);
         eprintln!("- queue: submit commands through the control room or API");
+
+        let awaiting_generation = if let Ok(mut preview_state) = interactive_preview_source.lock() {
+            preview_state.status = InteractivePreviewStatus::AwaitingCommand;
+            preview_state.continuation_magnetization = continuation_magnetization.clone();
+            preview_state.generation = preview_state.generation.saturating_add(1);
+            preview_state.generation
+        } else {
+            0
+        };
+        let latest_field_cache_supported =
+            supports_interactive_latest_field_cache(&initial_execution_plan.backend_plan);
+        let interactive_preview_stop =
+            (!latest_field_cache_supported && dynamic_idle_preview_supported).then(|| {
+                spawn_interactive_preview_refresh_worker(
+                    interactive_template_ir.clone(),
+                    live_workspace.clone(),
+                    Arc::clone(&interactive_preview_source),
+                )
+            });
+        if latest_field_cache_supported {
+            let preview_request = preview_config_handle.snapshot();
+            spawn_interactive_preview_cache_refresh(
+                artifact_dir.clone(),
+                interactive_template_ir.clone(),
+                Arc::clone(&interactive_preview_source),
+                preview_request,
+                awaiting_generation,
+            );
+        } else if dynamic_idle_preview_supported {
+            let initial_preview_request = preview_config_handle.snapshot();
+            if let Err(error) = refresh_interactive_preview_snapshot(
+                &interactive_template_ir,
+                continuation_magnetization.as_deref(),
+                &initial_preview_request,
+                &live_workspace,
+            ) {
+                eprintln!("interactive preview refresh warning: {}", error);
+            }
+        }
 
         let mut interactive_stage_index = stage_count;
         loop {
@@ -2046,6 +2388,10 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 "system",
                 format!("Executing interactive command: {}", command.kind),
             );
+            if let Ok(mut preview_state) = interactive_preview_source.lock() {
+                preview_state.status = InteractivePreviewStatus::Running;
+                preview_state.generation = preview_state.generation.saturating_add(1);
+            }
             live_workspace.update(|state| {
                 state.session = build_session_manifest(
                     &session_id,
@@ -2239,6 +2585,11 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             Some(false),
                         );
                     });
+                    if let Ok(mut preview_state) = interactive_preview_source.lock() {
+                        preview_state.status = InteractivePreviewStatus::AwaitingCommand;
+                        preview_state.continuation_magnetization =
+                            continuation_magnetization.clone();
+                    }
                     eprintln!("interactive command failed: {}", error);
                     live_workspace.push_log(
                         "error",
@@ -2285,6 +2636,36 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     );
                     set_live_state_status(&mut state.live_state, "awaiting_command", Some(false));
                 });
+                let awaiting_generation = if let Ok(mut preview_state) =
+                    interactive_preview_source.lock()
+                {
+                    preview_state.status = InteractivePreviewStatus::AwaitingCommand;
+                    preview_state.continuation_magnetization = continuation_magnetization.clone();
+                    preview_state.generation = preview_state.generation.saturating_add(1);
+                    preview_state.generation
+                } else {
+                    0
+                };
+                if latest_field_cache_supported {
+                    let preview_request = preview_config_handle.snapshot();
+                    spawn_interactive_preview_cache_refresh(
+                        artifact_dir.clone(),
+                        interactive_template_ir.clone(),
+                        Arc::clone(&interactive_preview_source),
+                        preview_request,
+                        awaiting_generation,
+                    );
+                } else if dynamic_idle_preview_supported {
+                    let preview_request = preview_config_handle.snapshot();
+                    if let Err(error) = refresh_interactive_preview_snapshot(
+                        &interactive_template_ir,
+                        continuation_magnetization.as_deref(),
+                        &preview_request,
+                        &live_workspace,
+                    ) {
+                        eprintln!("interactive preview refresh warning: {}", error);
+                    }
+                }
                 eprintln!("interactive command {} cancelled by user", command.kind);
                 live_workspace.push_log(
                     "warning",
@@ -2412,10 +2793,45 @@ fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 );
                 set_live_state_status(&mut state.live_state, "awaiting_command", Some(false));
             });
+            let awaiting_generation =
+                if let Ok(mut preview_state) = interactive_preview_source.lock() {
+                    preview_state.status = InteractivePreviewStatus::AwaitingCommand;
+                    preview_state.continuation_magnetization = continuation_magnetization.clone();
+                    preview_state.generation = preview_state.generation.saturating_add(1);
+                    preview_state.generation
+                } else {
+                    0
+                };
+            if latest_field_cache_supported {
+                let preview_request = preview_config_handle.snapshot();
+                spawn_interactive_preview_cache_refresh(
+                    artifact_dir.clone(),
+                    interactive_template_ir.clone(),
+                    Arc::clone(&interactive_preview_source),
+                    preview_request,
+                    awaiting_generation,
+                );
+            } else if dynamic_idle_preview_supported {
+                let preview_request = preview_config_handle.snapshot();
+                if let Err(error) = refresh_interactive_preview_snapshot(
+                    &interactive_template_ir,
+                    continuation_magnetization.as_deref(),
+                    &preview_request,
+                    &live_workspace,
+                ) {
+                    eprintln!("interactive preview refresh warning: {}", error);
+                }
+            }
             live_workspace.push_log(
                 "success",
                 format!("Interactive command {} completed", command.kind),
             );
+        }
+        if let Ok(mut preview_state) = interactive_preview_source.lock() {
+            preview_state.status = InteractivePreviewStatus::Closed;
+        }
+        if let Some(stop) = interactive_preview_stop {
+            stop.store(true, Ordering::Relaxed);
         }
         live_workspace.update(|state| {
             set_live_state_status(&mut state.live_state, "completed", Some(true));
@@ -2757,6 +3173,39 @@ const LOCALHOST_API_BASE: &str = "http://localhost:8080";
 const LOOPBACK_V4_OCTETS: [u8; 4] = [127, 0, 0, 1];
 const LOCAL_API_PORT: u16 = 8080;
 
+/// RAII guard that tears down the control room (fullmag-api + frontend)
+/// when the current simulation session ends — regardless of success, error,
+/// or panic.  Modelled after the amumax pattern where the web UI lives only
+/// as long as the simulation process itself.
+struct ControlRoomGuard {
+    web_port: Option<u16>,
+}
+
+impl ControlRoomGuard {
+    /// Create an *inactive* guard (headless mode — nothing to tear down).
+    fn inactive() -> Self {
+        Self { web_port: None }
+    }
+
+    /// Create an *active* guard that will stop the API and frontend on drop.
+    fn active(web_port: u16) -> Self {
+        Self {
+            web_port: Some(web_port),
+        }
+    }
+}
+
+impl Drop for ControlRoomGuard {
+    fn drop(&mut self) {
+        let Some(web_port) = self.web_port else {
+            return;
+        };
+        eprintln!("fullmag tearing down control room (port {web_port})");
+        stop_control_room_frontend_processes(web_port);
+        stop_fullmag_api_processes();
+    }
+}
+
 #[derive(Clone)]
 struct CurrentLivePreviewConfigHandle {
     current: Arc<Mutex<fullmag_runner::LivePreviewRequest>>,
@@ -2772,12 +3221,28 @@ impl CurrentLivePreviewConfigHandle {
         let worker = handle.clone();
         std::thread::spawn(move || {
             while !worker.stop.load(Ordering::Relaxed) {
-                if let Ok(config) = current_live_preview_config() {
-                    if let Ok(mut current) = worker.current.lock() {
-                        *current = config;
+                let after_revision = worker
+                    .current
+                    .lock()
+                    .map(|current| current.revision)
+                    .unwrap_or_default();
+                match wait_for_current_live_preview_config(after_revision, 15_000) {
+                    Ok(Some(config)) => {
+                        if let Ok(mut current) = worker.current.lock() {
+                            *current = config;
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        if let Ok(config) = current_live_preview_config() {
+                            if let Ok(mut current) = worker.current.lock() {
+                                *current = config;
+                            }
+                        } else {
+                            std::thread::sleep(Duration::from_millis(250));
+                        }
                     }
                 }
-                std::thread::sleep(Duration::from_millis(200));
             }
         });
         handle
@@ -2795,6 +3260,225 @@ impl Drop for CurrentLivePreviewConfigHandle {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InteractivePreviewStatus {
+    Running,
+    AwaitingCommand,
+    Closed,
+}
+
+#[derive(Debug, Clone)]
+struct InteractivePreviewSourceState {
+    status: InteractivePreviewStatus,
+    continuation_magnetization: Option<Vec<[f64; 3]>>,
+    generation: u64,
+}
+
+fn refresh_interactive_preview_snapshot(
+    base_problem: &ProblemIR,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+    request: &fullmag_runner::LivePreviewRequest,
+    live_workspace: &LocalLiveWorkspace,
+) -> Result<()> {
+    let mut problem = base_problem.clone();
+    if let Some(previous_final_magnetization) = continuation_magnetization {
+        apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
+    }
+    let preview_field = fullmag_runner::snapshot_problem_preview(&problem, request)?;
+    live_workspace.update(|state| {
+        state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
+        state.live_state.latest_step.preview_field = Some(preview_field.clone());
+    });
+    Ok(())
+}
+
+fn refresh_interactive_preview_fields(
+    base_problem: &ProblemIR,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+    request: &fullmag_runner::LivePreviewRequest,
+) -> Result<Vec<fullmag_runner::LivePreviewField>> {
+    let mut problem = base_problem.clone();
+    if let Some(previous_final_magnetization) = continuation_magnetization {
+        apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
+    }
+    Ok(fullmag_runner::snapshot_problem_vector_fields(
+        &problem,
+        &["H_ex", "H_demag", "H_ext", "H_eff"],
+        request,
+    )?)
+}
+
+fn interactive_preview_cache_path(artifact_dir: &Path) -> PathBuf {
+    artifact_dir.join("interactive_preview_cache.json")
+}
+
+fn write_interactive_preview_cache(
+    artifact_dir: &Path,
+    preview_fields: &[fullmag_runner::LivePreviewField],
+) -> Result<()> {
+    fs::create_dir_all(artifact_dir)?;
+    let path = interactive_preview_cache_path(artifact_dir);
+    let tmp_path = path.with_extension("json.tmp");
+    let payload =
+        serde_json::to_vec(preview_fields).context("failed to encode interactive preview cache")?;
+    fs::write(&tmp_path, payload)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, &path).with_context(|| format!("failed to move {}", path.display()))?;
+    Ok(())
+}
+
+fn spawn_interactive_preview_cache_refresh(
+    artifact_dir: PathBuf,
+    base_problem: ProblemIR,
+    source_state: Arc<Mutex<InteractivePreviewSourceState>>,
+    request: fullmag_runner::LivePreviewRequest,
+    generation: u64,
+) {
+    std::thread::spawn(move || {
+        let continuation_magnetization = source_state
+            .lock()
+            .map(|state| {
+                if state.status == InteractivePreviewStatus::AwaitingCommand
+                    && state.generation == generation
+                {
+                    state.continuation_magnetization.clone()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(None);
+
+        let Ok(preview_fields) = refresh_interactive_preview_fields(
+            &base_problem,
+            continuation_magnetization.as_deref(),
+            &request,
+        ) else {
+            return;
+        };
+
+        let should_publish = source_state
+            .lock()
+            .map(|state| {
+                state.status == InteractivePreviewStatus::AwaitingCommand
+                    && state.generation == generation
+            })
+            .unwrap_or(false);
+        if !should_publish {
+            return;
+        }
+
+        if let Err(error) = write_interactive_preview_cache(&artifact_dir, &preview_fields) {
+            eprintln!("interactive preview-cache warning: {}", error);
+        }
+    });
+}
+
+fn spawn_interactive_preview_refresh_worker(
+    base_problem: ProblemIR,
+    live_workspace: LocalLiveWorkspace,
+    source_state: Arc<Mutex<InteractivePreviewSourceState>>,
+) -> Arc<AtomicBool> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = Arc::clone(&stop);
+    std::thread::spawn(move || {
+        let mut last_revision = 0u64;
+        while !worker_stop.load(Ordering::Relaxed) {
+            let next_config = match wait_for_current_live_preview_config(last_revision, 1_000) {
+                Ok(Some(config)) => config,
+                Ok(None) => continue,
+                Err(_) => {
+                    std::thread::sleep(Duration::from_millis(25));
+                    continue;
+                }
+            };
+            last_revision = next_config.revision;
+
+            let snapshot_source = source_state.lock().map(|state| state.clone()).unwrap_or(
+                InteractivePreviewSourceState {
+                    status: InteractivePreviewStatus::Closed,
+                    continuation_magnetization: None,
+                    generation: 0,
+                },
+            );
+            if snapshot_source.status != InteractivePreviewStatus::AwaitingCommand {
+                continue;
+            }
+
+            if let Err(error) = refresh_interactive_preview_snapshot(
+                &base_problem,
+                snapshot_source.continuation_magnetization.as_deref(),
+                &next_config,
+                &live_workspace,
+            ) {
+                eprintln!("interactive preview refresh warning: {}", error);
+            }
+        }
+    });
+    stop
+}
+
+/// Estimate available system RAM in bytes.
+///
+/// Reads `/proc/meminfo` (Linux). Falls back to 16 GB if unavailable.
+fn available_system_ram_bytes() -> u64 {
+    if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+        for line in content.lines() {
+            if let Some(rest) = line.strip_prefix("MemAvailable:") {
+                let kb_str = rest.trim().trim_end_matches("kB").trim();
+                if let Ok(kb) = kb_str.parse::<u64>() {
+                    return kb * 1024;
+                }
+            }
+        }
+    }
+    16 * 1024 * 1024 * 1024 // fallback: 16 GB
+}
+
+/// Estimate RAM required for dense FEM demag solver.
+///
+/// The CPU reference solver allocates 3 dense N×N matrices of f64 (8 bytes each).
+fn estimate_fem_dense_ram(node_count: usize) -> u64 {
+    let n = node_count as u64;
+    n * n * 24 // 3 × N × N × 8 bytes
+}
+
+/// Invoke `remesh_cli.py` as a subprocess to regenerate the FEM mesh.
+///
+/// The subprocess receives geometry IR + hmax + mesh_options as JSON on stdin
+/// and returns the new `MeshIR`-compatible JSON on stdout.
+fn invoke_remesh(
+    geometry_entry: &fullmag_ir::GeometryEntryIR,
+    hmax: f64,
+    fe_order: u32,
+    mesh_options: &serde_json::Value,
+) -> Result<fullmag_ir::MeshIR> {
+    let payload = serde_json::json!({
+        "geometry": geometry_entry,
+        "hmax": hmax,
+        "order": fe_order,
+        "mesh_options": mesh_options,
+    });
+    let payload_str = serde_json::to_string(&payload)?;
+
+    let script = format!(
+        "import sys; sys.stdin = __import__('io').StringIO({payload_json}); \
+         from fullmag.meshing.remesh_cli import main; main()",
+        payload_json = serde_json::to_string(&payload_str)?,
+    );
+    let output = run_python_helper(&["-c".to_string(), script])?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "remesh_cli.py failed (exit {}):\n{}",
+            output.status.code().unwrap_or(-1),
+            stderr.trim()
+        );
+    }
+    let mesh: fullmag_ir::MeshIR =
+        serde_json::from_slice(&output.stdout).context("failed to parse remesh output")?;
+    Ok(mesh)
 }
 
 fn next_current_live_command() -> Result<Option<SessionCommand>> {
@@ -2830,6 +3514,34 @@ fn current_live_preview_config() -> Result<fullmag_runner::LivePreviewRequest> {
         .context("current live preview config endpoint returned error")?
         .json::<fullmag_runner::LivePreviewRequest>()
         .context("failed to decode current live preview config")
+}
+
+fn wait_for_current_live_preview_config(
+    after_revision: u64,
+    timeout_ms: u64,
+) -> Result<Option<fullmag_runner::LivePreviewRequest>> {
+    let response = current_live_api_client()
+        .get(format!(
+            "{LOCALHOST_API_BASE}/v1/live/current/preview/config/wait"
+        ))
+        .query(&[
+            ("afterRevision", after_revision.to_string()),
+            ("timeoutMs", timeout_ms.to_string()),
+        ])
+        .send()
+        .context("failed to wait for current live preview config")?;
+
+    match response.status() {
+        reqwest::StatusCode::NO_CONTENT => Ok(None),
+        status if status.is_success() => response
+            .json::<fullmag_runner::LivePreviewRequest>()
+            .context("failed to decode waited current live preview config")
+            .map(Some),
+        status => Err(anyhow!(
+            "current live preview wait endpoint returned HTTP {}",
+            status
+        )),
+    }
 }
 
 fn build_interactive_command_stage(
@@ -3317,7 +4029,7 @@ fn spawn_control_room(
     dev_mode: bool,
     requested_port: Option<u16>,
     live_workspace: &LocalLiveWorkspace,
-) -> Result<()> {
+) -> Result<u16> {
     let root = repo_root();
     let log_dir = root.join(".fullmag").join("logs");
     let url_file = root.join(".fullmag").join("control-room-url.txt");
@@ -3431,7 +4143,7 @@ fn spawn_control_room(
                 .stderr(Stdio::null())
                 .spawn();
         }
-        return Ok(());
+        return Ok(web_port);
     }
 
     if !dev_mode {
@@ -3452,7 +4164,7 @@ fn spawn_control_room(
                 .stderr(Stdio::null())
                 .spawn();
         }
-        return Ok(());
+        return Ok(web_port);
     }
 
     bail!(
@@ -3647,6 +4359,8 @@ fn publish_current_live_state(session_id: &str, payload: &CurrentLivePublishPayl
             run: payload.run.as_ref(),
             live_state: payload.live_state.as_ref(),
             latest_scalar_row: payload.latest_scalar_row.as_ref(),
+            latest_fields: payload.latest_fields.as_ref(),
+            preview_fields: payload.preview_fields.as_deref(),
             engine_log: payload.engine_log.as_deref(),
         })
         .send()
@@ -4034,7 +4748,7 @@ mod tests {
             adaptive_timestep: None,
             relaxation: None,
             boundary_correction: None,
-                boundary_geometry: None,
+            boundary_geometry: None,
             inter_region_exchange: vec![],
         });
 
@@ -4148,7 +4862,7 @@ mod tests {
             adaptive_timestep: None,
             relaxation: None,
             boundary_correction: None,
-                boundary_geometry: None,
+            boundary_geometry: None,
             inter_region_exchange: vec![],
         };
 
@@ -4201,7 +4915,7 @@ mod tests {
                 max_steps: 100,
             }),
             boundary_correction: None,
-                boundary_geometry: None,
+            boundary_geometry: None,
             inter_region_exchange: vec![],
         };
 

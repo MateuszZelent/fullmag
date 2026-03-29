@@ -23,6 +23,8 @@ interface ViewCubeProps {
   sceneRef?: React.MutableRefObject<SceneHandle | null>;
   grid?: [number, number, number];
   onRotate?: (quaternion: THREE.Quaternion) => void;
+  defaultDirection?: [number, number, number];
+  defaultUp?: [number, number, number];
 }
 
 type FaceZone = {
@@ -62,7 +64,13 @@ const faces: { cssTransform: string; zones: FaceZone[][] }[] = [
   { cssTransform: "vcFaceBack", zones: buildZones([0, 0, -1], [0, -1, 0], [1, 0, 0], "-Z") },
 ];
 
-export default function ViewCube({ sceneRef, grid, onRotate }: ViewCubeProps) {
+export default function ViewCube({
+  sceneRef,
+  grid,
+  onRotate,
+  defaultDirection = [0, 0, 1],
+  defaultUp = [0, 1, 0],
+}: ViewCubeProps) {
   const rafRef = useRef<number | null>(null);
   const dragRef = useRef({ dragging: false, startX: 0, startY: 0, hasDragged: false });
   const cubeSceneRef = useRef<HTMLDivElement | null>(null);
@@ -143,12 +151,16 @@ export default function ViewCube({ sceneRef, grid, onRotate }: ViewCubeProps) {
     const [nx, ny, nz] = grid;
     const cx = nx / 2, cy = nz / 2, cz = ny / 2;
     const dist = Math.max(nx, ny, nz) * 1.5;
-    camera.position.set(cx, cy, cz + dist);
-    camera.up.set(0, 1, 0);
+    camera.position.set(
+      cx + defaultDirection[0] * dist,
+      cy + defaultDirection[1] * dist,
+      cz + defaultDirection[2] * dist,
+    );
+    camera.up.set(defaultUp[0], defaultUp[1], defaultUp[2]);
     camera.lookAt(cx, cy, cz);
     controls.target.set(cx, cy, cz);
     controls.update();
-  }, [sceneRef, grid, onRotate]);
+  }, [sceneRef, grid, onRotate, defaultDirection, defaultUp]);
 
   // ─── Drag orbit ──────────────────────────────────────────────────
   const onPointerDown = useCallback((e: React.PointerEvent) => {

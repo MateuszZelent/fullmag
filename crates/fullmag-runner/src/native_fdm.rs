@@ -245,9 +245,7 @@ impl NativeFdmBackend {
             exchange_lut: exchange_lut
                 .as_ref()
                 .map_or(std::ptr::null(), |lut| lut.as_ptr()),
-            exchange_lut_len: exchange_lut
-                .as_ref()
-                .map_or(0, |lut| lut.len() as u64),
+            exchange_lut_len: exchange_lut.as_ref().map_or(0, |lut| lut.len() as u64),
             // Boundary correction — wire geometry data from planner when available.
             boundary_correction: match plan.boundary_correction.as_deref() {
                 Some("volume") => ffi::fullmag_fdm_boundary_correction::FULLMAG_FDM_BOUNDARY_VOLUME,
@@ -256,45 +254,88 @@ impl NativeFdmBackend {
             },
             boundary_phi_floor: 0.0,
             boundary_delta_min: 0.0,
-            volume_fraction: plan.boundary_geometry.as_ref()
+            volume_fraction: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.volume_fraction.as_ptr()),
-            volume_fraction_len: plan.boundary_geometry.as_ref()
+            volume_fraction_len: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(0, |bg| bg.volume_fraction.len() as u64),
-            face_link_xp: plan.boundary_geometry.as_ref()
+            face_link_xp: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.face_link_xp.as_ptr()),
-            face_link_xm: plan.boundary_geometry.as_ref()
+            face_link_xm: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.face_link_xm.as_ptr()),
-            face_link_yp: plan.boundary_geometry.as_ref()
+            face_link_yp: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.face_link_yp.as_ptr()),
-            face_link_ym: plan.boundary_geometry.as_ref()
+            face_link_ym: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.face_link_ym.as_ptr()),
-            face_link_zp: plan.boundary_geometry.as_ref()
+            face_link_zp: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.face_link_zp.as_ptr()),
-            face_link_zm: plan.boundary_geometry.as_ref()
+            face_link_zm: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.face_link_zm.as_ptr()),
-            delta_xp: plan.boundary_geometry.as_ref()
+            delta_xp: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.delta_xp.as_ptr()),
-            delta_xm: plan.boundary_geometry.as_ref()
+            delta_xm: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.delta_xm.as_ptr()),
-            delta_yp: plan.boundary_geometry.as_ref()
+            delta_yp: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.delta_yp.as_ptr()),
-            delta_ym: plan.boundary_geometry.as_ref()
+            delta_ym: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.delta_ym.as_ptr()),
-            delta_zp: plan.boundary_geometry.as_ref()
+            delta_zp: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.delta_zp.as_ptr()),
-            delta_zm: plan.boundary_geometry.as_ref()
+            delta_zm: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.delta_zm.as_ptr()),
-            has_demag_boundary_corr: plan.boundary_geometry.as_ref()
-                .map_or(0, |bg| if bg.demag_corr_target_idx.is_empty() { 0 } else { 1 }),
-            demag_corr_target_idx: plan.boundary_geometry.as_ref()
+            has_demag_boundary_corr: plan.boundary_geometry.as_ref().map_or(0, |bg| {
+                if bg.demag_corr_target_idx.is_empty() {
+                    0
+                } else {
+                    1
+                }
+            }),
+            demag_corr_target_idx: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.demag_corr_target_idx.as_ptr()),
-            demag_corr_source_idx: plan.boundary_geometry.as_ref()
+            demag_corr_source_idx: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.demag_corr_source_idx.as_ptr()),
-            demag_corr_tensor: plan.boundary_geometry.as_ref()
+            demag_corr_tensor: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(std::ptr::null(), |bg| bg.demag_corr_tensor.as_ptr()),
-            demag_corr_target_count: plan.boundary_geometry.as_ref()
+            demag_corr_target_count: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(0, |bg| bg.demag_corr_target_idx.len() as u32),
-            demag_corr_stencil_size: plan.boundary_geometry.as_ref()
+            demag_corr_stencil_size: plan
+                .boundary_geometry
+                .as_ref()
                 .map_or(0, |bg| bg.demag_corr_stencil_size),
             initial_magnetization_xyz: m_flat.as_ptr(),
             initial_magnetization_len: m_flat.len() as u64,
@@ -850,10 +891,11 @@ mod tests {
             adaptive_timestep: None,
             relaxation: None,
             boundary_correction: None,
-                boundary_geometry: None,
+            boundary_geometry: None,
             enable_exchange: true,
             enable_demag,
             external_field: Some([1.5e3, -2.0e3, 7.5e2]),
+            inter_region_exchange: vec![],
         }
     }
 
@@ -896,10 +938,11 @@ mod tests {
             adaptive_timestep: None,
             relaxation: None,
             boundary_correction: None,
-                boundary_geometry: None,
+            boundary_geometry: None,
             enable_exchange: true,
             enable_demag: true,
             external_field: Some([2.0e3, -1.0e3, 5.0e2]),
+            inter_region_exchange: vec![],
         }
     }
 
@@ -931,6 +974,9 @@ mod tests {
             enable_exchange: false,
             enable_demag: false,
             external_field: Some([0.0, 0.0, 8.0e5]),
+            inter_region_exchange: vec![],
+            boundary_correction: None,
+            boundary_geometry: None,
         }
     }
 

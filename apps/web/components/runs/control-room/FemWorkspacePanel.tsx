@@ -148,6 +148,23 @@ export default function FemWorkspacePanel() {
           <DockTabButton active={femDockTab === "quality"} label="Quality" onClick={() => openFemMeshWorkspace("quality")} />
         </div>
 
+        {ctx.isWaitingForCompute && (
+          <div className="mx-3.5 mt-2.5 p-3 rounded-xl bg-gradient-to-r from-emerald-500/10 to-emerald-500/5 border border-emerald-500/30 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[0.65rem] font-bold uppercase tracking-widest text-emerald-500">Ready to Compute</div>
+                <div className="text-xs text-muted-foreground mt-0.5">Review mesh quality, then start the solver.</div>
+              </div>
+              <button
+                onClick={ctx.handleCompute}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold uppercase tracking-wider shadow-md transition-all hover:shadow-lg active:scale-95"
+              >
+                ⚡ Compute
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="min-h-0 overflow-auto pt-3 px-3.5 pb-3.5 grid gap-3 scrollbar-thin scrollbar-thumb-muted-foreground/20">
           {femDockTab === "mesh" && (
             <>
@@ -378,6 +395,8 @@ export default function FemWorkspacePanel() {
                 quality={meshQualityData}
                 generating={meshGenerating}
                 onGenerate={handleMeshGenerate}
+                nodeCount={effectiveFemMesh?.nodes.length ?? undefined}
+                waitMode={ctx.isWaitingForCompute}
               />
             </>
           )}

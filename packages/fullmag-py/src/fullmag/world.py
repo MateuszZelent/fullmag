@@ -389,6 +389,7 @@ class _WorldState:
     _integrator: str | None = None
     _gamma: float | None = None
     _interactive: bool = False
+    _wait_for_solve: bool = False
 
     # Outputs
     _outputs: list = field(default_factory=list)
@@ -561,6 +562,16 @@ def interactive(enabled: bool = True) -> None:
     This is the script-owned counterpart of ``fullmag -i``.
     """
     _state._interactive = bool(enabled)
+
+
+def wait_for_solve(enabled: bool = True) -> None:
+    """Gate FEM execution: parse → materialize → WAIT → user clicks Compute → solve.
+
+    When enabled, the launcher pauses after mesh generation so the user can
+    inspect and refine the mesh in the GUI before committing to the solver.
+    Only applies to the FEM backend; FDM scripts ignore this flag.
+    """
+    _state._wait_for_solve = bool(enabled)
 
 
 def _mesh_source_root() -> Path:
@@ -1031,6 +1042,8 @@ def _build_problem(
         rt = rt.precision(s._precision)
 
     runtime_metadata: dict[str, Any] = {"interactive_session_requested": s._interactive}
+    if s._wait_for_solve:
+        runtime_metadata["wait_for_solve"] = True
     mesh_workflow = _collect_mesh_workflow_metadata()
     if mesh_workflow is not None:
         runtime_metadata["mesh_workflow"] = mesh_workflow

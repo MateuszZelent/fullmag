@@ -144,7 +144,7 @@ impl Default for LivePreviewRequest {
             x_chosen_size: 0,
             y_chosen_size: 0,
             auto_scale_enabled: true,
-            max_points: 65_536,
+            max_points: 16_384,
         }
     }
 }
@@ -166,6 +166,13 @@ pub struct LivePreviewField {
     pub auto_downscaled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_downscale_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveVectorFieldSnapshot {
+    pub quantity: String,
+    pub grid: [u32; 3],
+    pub values: Vec<[f64; 3]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -25,8 +25,9 @@ mod types;
 
 // Public re-exports (unchanged API surface).
 pub use types::{
-    ExecutionProvenance, FemMeshPayload, LivePreviewField, LivePreviewRequest, RunError, RunResult,
-    RunStatus, RuntimeEngineInfo, StepAction, StepStats, StepUpdate,
+    ExecutionProvenance, FemMeshPayload, LivePreviewField, LivePreviewRequest,
+    LiveVectorFieldSnapshot, RunError, RunResult, RunStatus, RuntimeEngineInfo, StepAction,
+    StepStats, StepUpdate,
 };
 
 use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, OutputIR, ProblemIR};
@@ -391,6 +392,51 @@ pub fn run_problem_with_live_preview(
     Ok(executed.result)
 }
 
+pub fn snapshot_problem_preview(
+    problem: &ProblemIR,
+    request: &LivePreviewRequest,
+) -> Result<LivePreviewField, RunError> {
+    let plan = fullmag_plan::plan(problem)?;
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            let engine = dispatch::resolve_fdm_engine(problem)?;
+            dispatch::snapshot_fdm_preview(engine, fdm, request)
+        }
+        BackendPlanIR::FdmMultilayer(_) => Err(RunError {
+            message:
+                "interactive preview snapshot is not supported for FDM multilayer backends yet"
+                    .to_string(),
+        }),
+        BackendPlanIR::Fem(fem) => {
+            let engine = dispatch::resolve_fem_engine(problem)?;
+            dispatch::snapshot_fem_preview(engine, fem, request)
+        }
+    }
+}
+
+pub fn snapshot_problem_vector_fields(
+    problem: &ProblemIR,
+    quantities: &[&str],
+    request: &LivePreviewRequest,
+) -> Result<Vec<LivePreviewField>, RunError> {
+    let plan = fullmag_plan::plan(problem)?;
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            let engine = dispatch::resolve_fdm_engine(problem)?;
+            dispatch::snapshot_fdm_vector_fields(engine, fdm, quantities, request)
+        }
+        BackendPlanIR::FdmMultilayer(_) => Err(RunError {
+            message:
+                "interactive vector-field cache is not supported for FDM multilayer backends yet"
+                    .to_string(),
+        }),
+        BackendPlanIR::Fem(_) => Err(RunError {
+            message: "interactive vector-field cache is not supported for FEM backends yet"
+                .to_string(),
+        }),
+    }
+}
+
 pub fn resolve_runtime_engine(problem: &ProblemIR) -> Result<RuntimeEngineInfo, RunError> {
     let plan = fullmag_plan::plan(problem)?;
     match &plan.backend_plan {
@@ -545,7 +591,7 @@ mod tests {
             adaptive_timestep: None,
             relaxation: None,
             boundary_correction: None,
-                boundary_geometry: None,
+            boundary_geometry: None,
             inter_region_exchange: vec![],
             enable_exchange: true,
             enable_demag: false,

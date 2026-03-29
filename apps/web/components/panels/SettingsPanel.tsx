@@ -630,7 +630,7 @@ function ResultsPanel() {
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-1 p-2.5 bg-card/40 border border-border/40 shadow-sm rounded-md">
           <span className="text-[0.65rem] font-bold uppercase tracking-widest text-muted-foreground">Quantity</span>
-          <span className="font-mono text-xs text-foreground">{ctx.requestedPreviewQuantity}</span>
+          <span className="font-mono text-xs text-foreground">{ctx.selectedQuantity}</span>
         </div>
         <div className="flex flex-col gap-1 p-2.5 bg-card/40 border border-border/40 shadow-sm rounded-md">
           <span className="text-[0.65rem] font-bold uppercase tracking-widest text-muted-foreground">Component</span>
@@ -653,11 +653,11 @@ function ResultsPanel() {
         <div className="grid grid-cols-2 gap-3 mt-5 p-3 rounded-lg border border-border/30 bg-muted/10">
           <label className="flex flex-col gap-1.5 text-[0.65rem] font-bold uppercase tracking-widest text-muted-foreground">
             Quantity
-            <select className="flex h-7 w-full rounded-md border border-border/60 bg-background/50 px-2.5 py-1 text-xs text-foreground font-mono focus:border-primary focus:outline-none transition-colors shadow-sm disabled:opacity-50" value={ctx.requestedPreviewQuantity}
-              onChange={(e) => void ctx.updatePreview("/quantity", { quantity: e.target.value })}
+            <select className="flex h-7 w-full rounded-md border border-border/60 bg-background/50 px-2.5 py-1 text-xs text-foreground font-mono focus:border-primary focus:outline-none transition-colors shadow-sm disabled:opacity-50" value={ctx.selectedQuantity}
+              onChange={(e) => ctx.requestPreviewQuantity(e.target.value)}
               disabled={ctx.previewBusy}
             >
-              {ctx.previewQuantityOptions.map((o) => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>)}
+              {ctx.quantityOptions.map((o) => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1.5 text-[0.65rem] font-bold uppercase tracking-widest text-muted-foreground">

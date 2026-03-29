@@ -7,9 +7,10 @@ Flat scripting API — inspired by mumax3.
 import fullmag as fm
 
 # ── Engine ──────────────────────────────────────────────────
-fm.engine("fdm")
-fm.device("cuda:0",precision="single")
-fm.boundary_correction("volume")  
+fm.engine("fem")
+fm.device("cuda:0",precision="double")
+
+# fm.boundary_correction("full")  
 fm.cell(5e-9, 5e-9, 10e-9)
 
 
@@ -19,6 +20,7 @@ layer.Ms    = 800e3       # saturation magnetisation [A/m]
 layer.Aex   = 13e-12      # exchange stiffness [J/m]
 layer.alpha = 0.5         # Gilbert damping
 layer.m     = fm.uniform(1, 0, 0)
+layer.mesh(hmax=10e-9, order=1).build()
 
 # ── Solver ──────────────────────────────────────────────────
 fm.solver(dt=1e-13)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useDeferredValue, useEffect, useRef, useState, useCallback, useMemo } from "react";
 import * as THREE from "three";
 import { Canvas, useThree } from "@react-three/fiber";
 import { TrackballControls } from "@react-three/drei";
@@ -27,6 +27,9 @@ export type RenderMode = "glyph" | "voxel";
 export type VoxelColorMode = "orientation" | "x" | "y" | "z";
 export type VoxelSampling = 1 | 2 | 4;
 export type TopoComponent = "x" | "y" | "z";
+
+const DEFAULT_CAMERA_DIRECTION: [number, number, number] = [0, 1, 0];
+const DEFAULT_CAMERA_UP: [number, number, number] = [0, 0, -1];
 
 // ─── localStorage persistence ───────────────────────────────────────
 const STORAGE_KEYS = {
@@ -150,6 +153,8 @@ export default function MagnetizationView3D({
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [expanded, setExpanded] = useState(false);
   const [visibleCount, setVisibleCount] = useState(0);
+  const deferredVectors = useDeferredValue(vectors);
+  const deferredSettings = useDeferredValue(settings);
 
   const controlsRef = useRef<any>(null);
   const viewCubeSceneRef = useRef<any>(null);
@@ -196,7 +201,10 @@ export default function MagnetizationView3D({
     controls.update();
   }, [cx, cy, cz, orbitDist]);
 
-  const resetCamera = useCallback(() => snapCamera([0, 0, 1]), [snapCamera]);
+  const resetCamera = useCallback(
+    () => snapCamera(DEFAULT_CAMERA_DIRECTION, DEFAULT_CAMERA_UP),
+    [snapCamera],
+  );
 
   const cameraPresets = useMemo(() => [
     { label: "Top",   fn: () => snapCamera([0, 1, 0], [0, 0, -1]) },
@@ -397,7 +405,12 @@ export default function MagnetizationView3D({
           fov: 50,
           near: 0.1,
           far: 1000,
-          position: [cx, cy, cz + orbitDist],
+          position: [
+            cx + DEFAULT_CAMERA_DIRECTION[0] * orbitDist,
+            cy + DEFAULT_CAMERA_DIRECTION[1] * orbitDist,
+            cz + DEFAULT_CAMERA_DIRECTION[2] * orbitDist,
+          ],
+          up: DEFAULT_CAMERA_UP,
         }}
         gl={{
           antialias: settings.quality !== "low",
@@ -417,10 +430,10 @@ export default function MagnetizationView3D({
 
         <FdmInstances
           grid={grid}
-          vectors={vectors}
+          vectors={deferredVectors}
           geometryMode={geometryMode}
           activeMask={activeMask}
-          settings={settings}
+          settings={deferredSettings}
           onVisibleCount={setVisibleCount}
         />
 
@@ -440,7 +453,12 @@ export default function MagnetizationView3D({
         />
       </Canvas>
 
-      <ViewCube sceneRef={viewCubeSceneRef} grid={grid} />
+      <ViewCube
+        sceneRef={viewCubeSceneRef}
+        grid={grid}
+        defaultDirection={DEFAULT_CAMERA_DIRECTION}
+        defaultUp={DEFAULT_CAMERA_UP}
+      />
       {!geometryMode ? <HslSphere sceneRef={viewCubeSceneRef} /> : null}
     </div>
   );

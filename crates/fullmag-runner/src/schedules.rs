@@ -101,7 +101,7 @@ pub(crate) fn collect_field_schedules(
                     last_sampled_time: None,
                 });
             }
-            _ => {}                   // Scalar — handled by collect_scalar_schedules
+            _ => {} // Scalar — handled by collect_scalar_schedules
         }
     }
     Ok(schedules)

@@ -94,7 +94,7 @@ fn sp4_plan(algorithm: RelaxationAlgorithmIR, damping: f64, enable_demag: bool) 
         enable_demag,
         external_field: None,
         boundary_correction: None,
-                boundary_geometry: None,
+        boundary_geometry: None,
         inter_region_exchange: vec![],
     }
 }
@@ -136,7 +136,7 @@ fn uniform_field_alignment() {
         // Strong field along +x: H = 1e6 A/m ≈ 1.26 T
         external_field: Some([1e6, 0.0, 0.0]),
         boundary_correction: None,
-                boundary_geometry: None,
+        boundary_geometry: None,
         inter_region_exchange: vec![],
     };
 
@@ -186,7 +186,7 @@ fn exchange_only_random_to_uniform() {
         enable_demag: false,
         external_field: None,
         boundary_correction: None,
-                boundary_geometry: None,
+        boundary_geometry: None,
         inter_region_exchange: vec![],
     };
 
@@ -251,7 +251,7 @@ fn thin_film_shape_anisotropy() {
         enable_demag: true,
         external_field: None,
         boundary_correction: None,
-                boundary_geometry: None,
+        boundary_geometry: None,
         inter_region_exchange: vec![],
     };
 
@@ -429,7 +429,7 @@ fn sp4_reversal_dynamics() {
         adaptive_timestep: None,
         relaxation: None, // no relaxation — pure dynamics
         boundary_correction: None,
-                boundary_geometry: None,
+        boundary_geometry: None,
         inter_region_exchange: vec![],
         enable_exchange: true,
         enable_demag: true,

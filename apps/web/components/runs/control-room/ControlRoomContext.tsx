@@ -57,6 +57,10 @@ import {
 const EMPTY_SCALAR_ROWS: ScalarRow[] = [];
 const EMPTY_ENGINE_LOG: EngineLogEntry[] = [];
 
+function isGlobalScalarQuantity(quantity: string | null | undefined): boolean {
+  return Boolean(quantity && SCALAR_FIELDS[quantity]);
+}
+
 /* ── Activity descriptor ── */
 export interface ActivityInfo {
   label: string;
@@ -254,6 +258,7 @@ export interface ControlRoomState {
 
   /* Workspace status */
   workspaceStatus: string;
+  isWaitingForCompute: boolean;
   hasSolverTelemetry: boolean;
   solverNotStartedMessage: string;
   isFemBackend: boolean;
@@ -418,6 +423,7 @@ export interface ControlRoomActions {
   setRunUntilInput: React.Dispatch<React.SetStateAction<string>>;
   setSelectedSidebarNodeId: React.Dispatch<React.SetStateAction<string | null>>;
   enqueueCommand: (payload: Record<string, unknown>) => Promise<void>;
+  handleCompute: () => void;
   updatePreview: (path: string, payload?: Record<string, unknown>) => Promise<void>;
   handleMeshGenerate: () => Promise<void>;
   openFemMeshWorkspace: (tab?: "mesh" | "quality") => void;
@@ -501,7 +507,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       ? "Solver has not started yet. FEM materialization and tetrahedral meshing are still in progress."
       : workspaceStatus === "bootstrapping"
         ? "Solver has not started yet. Workspace bootstrap is still in progress."
-        : "Solver telemetry is not available yet.";
+        : workspaceStatus === "waiting_for_compute"
+          ? "Waiting for compute — adjust mesh in the control room, then click COMPUTE."
+          : "Solver telemetry is not available yet.";
+
+  const isWaitingForCompute = workspaceStatus === "waiting_for_compute";
 
   /* Effective solver values (fallback to run manifest when live is stale) */
   const liveIsStale = (liveState?.step ?? 0) === 0 && (run?.total_steps ?? 0) > 0;
@@ -679,7 +689,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     preview && !isFemBackend && viewMode === "3D" ? (preview.type === "3D" ? "3D" : "2D") : null;
   const effectiveViewMode = previewDrivenMode ?? viewMode;
   const previewControlsActive = Boolean(previewConfig ?? preview);
-  const requestedPreviewQuantity = previewConfig?.quantity ?? preview?.quantity ?? selectedQuantity;
+  const requestedPreviewQuantity = previewConfig?.quantity ?? preview?.quantity ?? "m";
   const requestedPreviewComponent = previewConfig?.component ?? preview?.component ?? "3D";
   const requestedPreviewLayer = previewConfig?.layer ?? preview?.layer ?? 0;
   const requestedPreviewAllLayers = previewConfig?.all_layers ?? preview?.all_layers ?? false;
@@ -701,6 +711,15 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const previewIsStale = Boolean(preview && previewConfig && preview.config_revision !== previewConfig.revision);
   const previewIsBootstrapStale = Boolean(previewControlsActive && preview && effectiveStep > 0 && preview.source_step === 0);
   const renderPreview = preview;
+  const selectedQuantityIsScalar = isGlobalScalarQuantity(selectedQuantity);
+  const selectedQuantityUsesLocalData =
+    selectedQuantityIsScalar || (awaitingCommand && selectedQuantity === "m");
+  const activeQuantityId =
+    selectedQuantityUsesLocalData
+      ? selectedQuantity
+      : (previewControlsActive
+          ? (previewIsStale ? requestedPreviewQuantity : (renderPreview?.quantity ?? requestedPreviewQuantity))
+          : selectedQuantity);
   const isMeshPreview = renderPreview?.spatial_kind === "mesh";
   const previewVectorComponent: VectorComponent =
     renderPreview?.component && renderPreview.component !== "3D"
@@ -730,6 +749,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         kind: "remesh",
         mesh_options: {
           algorithm_2d: meshOptions.algorithm2d, algorithm_3d: meshOptions.algorithm3d,
+          hmax: meshOptions.hmax ? parseFloat(meshOptions.hmax) : null,
           hmin: meshOptions.hmin ? parseFloat(meshOptions.hmin) : null,
           size_factor: meshOptions.sizeFactor, size_from_curvature: meshOptions.sizeFromCurvature,
           smoothing_steps: meshOptions.smoothingSteps, optimize: meshOptions.optimize || null,
@@ -740,6 +760,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     } catch (err) { setCommandMessage(err instanceof Error ? err.message : "Mesh generation failed"); }
     finally { setMeshGenerating(false); }
   }, [meshOptions, liveApi]);
+
+  const handleCompute = useCallback(() => {
+    void enqueueCommand({ kind: "solve" });
+  }, [enqueueCommand]);
 
   const openFemMeshWorkspace = useCallback((tab: "mesh" | "quality" = "mesh") => {
     setViewMode("Mesh"); setFemDockTab(tab);
@@ -836,9 +860,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
 
   const requestPreviewQuantity = useCallback((nextQuantity: string) => {
     if (isFemBackend && effectiveViewMode === "Mesh") setViewMode("3D");
-    if (previewControlsActive) void updatePreview("/quantity", { quantity: nextQuantity });
-    else setSelectedQuantity(nextQuantity);
-  }, [effectiveViewMode, isFemBackend, previewControlsActive, updatePreview]);
+    setSelectedQuantity(nextQuantity);
+    if (isGlobalScalarQuantity(nextQuantity)) return;
+    if (awaitingCommand && nextQuantity === "m") return;
+    if (previewControlsActive) {
+      void updatePreview("/quantity", { quantity: nextQuantity });
+    }
+  }, [awaitingCommand, effectiveViewMode, isFemBackend, previewControlsActive, updatePreview]);
 
   /* Keyboard shortcuts */
   useEffect(() => {
@@ -877,21 +905,21 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    const options = previewControlsActive ? previewQuantityOptions : quantityOptions;
+    const options = quantityOptions;
     if (!options.length) return;
     if (!options.some((opt) => opt.value === selectedQuantity)) {
       const fallback = options.find((opt) => !opt.disabled) ?? options[0];
       setSelectedQuantity(fallback.value);
     }
-  }, [previewControlsActive, previewQuantityOptions, quantityOptions, selectedQuantity]);
+  }, [quantityOptions, selectedQuantity]);
 
   useEffect(() => {
-    if (requestedPreviewQuantity) setSelectedQuantity(requestedPreviewQuantity);
-  }, [requestedPreviewQuantity]);
+    if (!selectedQuantityUsesLocalData && requestedPreviewQuantity) setSelectedQuantity(requestedPreviewQuantity);
+  }, [requestedPreviewQuantity, selectedQuantityUsesLocalData]);
 
   const quantityDescriptor = useMemo(
-    () => quantities.find((q) => q.id === (renderPreview?.quantity ?? requestedPreviewQuantity)) ?? null,
-    [renderPreview?.quantity, requestedPreviewQuantity, quantities],
+    () => quantities.find((q) => q.id === activeQuantityId) ?? null,
+    [activeQuantityId, quantities],
   );
   // Default to true (vector) when descriptors haven't arrived yet — the default
   // quantity "m" is always a vector field and we don't want to gate the 3D
@@ -911,11 +939,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   );
 
   const selectedScalarValue = useMemo(() => {
-    const scalarKey = SCALAR_FIELDS[selectedQuantity];
+    const scalarKey = SCALAR_FIELDS[activeQuantityId];
     if (!scalarKey) return null;
     const lastRow = scalarRows[scalarRows.length - 1];
     return lastRow ? (lastRow[scalarKey as keyof typeof lastRow] as number) ?? null : null;
-  }, [scalarRows, selectedQuantity]);
+  }, [activeQuantityId, scalarRows]);
 
   /* Field data */
   const fieldMap = useMemo(
@@ -931,11 +959,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   );
 
   const selectedVectors = useMemo(() => {
-    if (renderPreview?.vector_field_values) return new Float64Array(renderPreview.vector_field_values);
-    if (previewControlsActive) { const bv = fieldMap.m; return bv ? new Float64Array(bv) : null; }
-    const values = fieldMap[selectedQuantity as keyof typeof fieldMap] ?? null;
-    return values ? new Float64Array(values) : null;
-  }, [fieldMap, previewControlsActive, renderPreview?.vector_field_values, selectedQuantity]);
+    if (isGlobalScalarQuantity(activeQuantityId)) return null;
+    if (!previewIsStale && renderPreview?.vector_field_values) return renderPreview.vector_field_values;
+    return fieldMap[activeQuantityId as keyof typeof fieldMap] ?? null;
+  }, [activeQuantityId, fieldMap, previewIsStale, renderPreview?.vector_field_values]);
 
   /* FEM mesh data */
   const effectiveFemMesh = useMemo(
@@ -961,7 +988,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   }, [isFemBackend, effectiveFemMesh, femMesh?.elements.length, flatNodes, flatFaces, selectedVectors]);
 
   const femHasFieldData = Boolean(femMeshData?.fieldData);
-  const femMagnetization3DActive = isFemBackend && effectiveViewMode === "3D" && (renderPreview?.quantity ?? selectedQuantity) === "m" && femHasFieldData;
+  const femMagnetization3DActive = isFemBackend && effectiveViewMode === "3D" && activeQuantityId === "m" && femHasFieldData;
   const femShouldShowArrows = isFemBackend && effectiveViewMode === "3D" && femHasFieldData ? meshShowArrows : false;
 
   const femTopologyKey = useMemo(() => {
@@ -970,13 +997,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   }, [effectiveFemMesh, femMesh?.elements.length]);
 
   const femColorField = useMemo<FemColorField>(() => {
-    const qId = renderPreview?.quantity ?? selectedQuantity;
+    const qId = activeQuantityId;
     if (qId === "m" && effectiveViewMode === "3D" && femHasFieldData) return "orientation";
     if (effectiveVectorComponent === "x") return "x";
     if (effectiveVectorComponent === "y") return "y";
     if (effectiveVectorComponent === "z") return "z";
     return "magnitude";
-  }, [effectiveVectorComponent, effectiveViewMode, femHasFieldData, renderPreview?.quantity, selectedQuantity]);
+  }, [activeQuantityId, effectiveVectorComponent, effectiveViewMode, femHasFieldData]);
 
   useEffect(() => {
     setMeshSelection({ selectedFaceIndices: [], primaryFaceIndex: null });
@@ -1082,7 +1109,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     connection, error,
     session, run, liveState, effectiveLiveState, preview, femMesh, scalarRows, engineLog,
     quantities, artifacts: artifactsArr, metadata,
-    workspaceStatus, hasSolverTelemetry, solverNotStartedMessage, isFemBackend, runtimeEngineLabel,
+    workspaceStatus, isWaitingForCompute, hasSolverTelemetry, solverNotStartedMessage, isFemBackend, runtimeEngineLabel,
     activity, sessionFooter,
     effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveHEff, effectiveHDemag,
     effectiveEEx, effectiveEDemag, effectiveEExt, effectiveETotal,
@@ -1116,7 +1143,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setMeshRenderMode, setMeshOpacity, setMeshClipEnabled, setMeshClipAxis, setMeshClipPos,
     setMeshShowArrows, setMeshSelection, setMeshOptions, setFemDockTab,
     setSolverSettings, setSolverSetupOpen, setRunUntilInput, setSelectedSidebarNodeId,
-    enqueueCommand, updatePreview, handleMeshGenerate, openFemMeshWorkspace,
+    enqueueCommand, handleCompute, updatePreview, handleMeshGenerate, openFemMeshWorkspace,
     handleViewModeChange, handleSimulationAction, handleCapture, handleExport,
     requestPreviewQuantity,
   }), [
@@ -1143,7 +1170,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     material, solverPlan, dmDtSpark, dtSpark, eTotalSpark, meshName, meshSource, meshExtent, meshBoundsMin,
     meshBoundsMax, meshFeOrder, meshHmax, mesherBackend, mesherSourceKind, mesherCurrentSettings,
     selectedSidebarNodeId, emptyStateMessage,
-    enqueueCommand, updatePreview, handleMeshGenerate, openFemMeshWorkspace,
+    enqueueCommand, handleCompute, updatePreview, handleMeshGenerate, openFemMeshWorkspace,
     handleViewModeChange, handleSimulationAction, handleCapture, handleExport,
     requestPreviewQuantity,
   ]);

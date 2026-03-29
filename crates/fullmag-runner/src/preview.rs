@@ -286,13 +286,20 @@ fn fit_preview_grid_3d(
         let ratio_x = applied_x as f64 / requested_x as f64;
         let ratio_y = applied_y as f64 / requested_y as f64;
         let ratio_z = preview_z as f64 / full_z as f64;
-        if ratio_x >= ratio_y && ratio_x >= ratio_z && applied_x > 1 {
-            applied_x -= 1;
-        } else if ratio_y >= ratio_z && applied_y > 1 {
-            applied_y -= 1;
-        } else {
+        // When preview_z is already 1, increasing stride won't help — skip
+        // directly to reducing the larger XY dimension.
+        let can_reduce_z = preview_z > 1;
+        if can_reduce_z && ratio_z >= ratio_x && ratio_z >= ratio_y {
             stride += 1;
             preview_z = full_z.div_ceil(stride).max(1);
+        } else if ratio_x >= ratio_y && applied_x > 1 {
+            applied_x -= 1;
+        } else if applied_y > 1 {
+            applied_y -= 1;
+        } else {
+            // All dimensions are at their minimum — break to avoid
+            // an infinite loop (can happen when max_points < full_z).
+            break;
         }
     }
 

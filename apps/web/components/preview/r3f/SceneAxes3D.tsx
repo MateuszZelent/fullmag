@@ -71,7 +71,6 @@ const AXIS_COLORS = {
   z: "#3b82f6", // blue
 };
 
-const WIREFRAME_COLOR = "#475569"; // slate-600
 const TICK_COLOR = "#64748b";      // slate-500
 const LABEL_COLOR = "#94a3b8";     // slate-400
 const UNIT_COLOR = "#cbd5e1";      // slate-300
@@ -130,29 +129,6 @@ export default function SceneAxes3D({
   const tickLen = maxScene * 0.015;
   const labelOffset = maxScene * 0.06;
 
-  /* ── Bounding box wireframe edges ─────────────────────────────── */
-  const wireframeEdges = useMemo(() => {
-    const mn = [cx + min[0], cy + min[1], cz + min[2]];
-    const mx = [cx + max[0], cy + max[1], cz + max[2]];
-    return [
-      // Bottom face (y = min)
-      [mn, [mx[0], mn[1], mn[2]]],
-      [[mx[0], mn[1], mn[2]], [mx[0], mn[1], mx[2]]],
-      [[mx[0], mn[1], mx[2]], [mn[0], mn[1], mx[2]]],
-      [[mn[0], mn[1], mx[2]], mn],
-      // Top face (y = max)
-      [[mn[0], mx[1], mn[2]], [mx[0], mx[1], mn[2]]],
-      [[mx[0], mx[1], mn[2]], mx],
-      [mx, [mn[0], mx[1], mx[2]]],
-      [[mn[0], mx[1], mx[2]], [mn[0], mx[1], mn[2]]],
-      // Vertical edges
-      [mn, [mn[0], mx[1], mn[2]]],
-      [[mx[0], mn[1], mn[2]], [mx[0], mx[1], mn[2]]],
-      [[mx[0], mn[1], mx[2]], mx],
-      [[mn[0], mn[1], mx[2]], [mn[0], mx[1], mx[2]]],
-    ] as [number[], number[]][];
-  }, [cx, cy, cz, min, max]);
-
   /* ── Tick marks and labels for each axis ──────────────────────── */
   const xTickElements = useMemo(() => {
     return ticks.x.map((val) => {
@@ -186,17 +162,6 @@ export default function SceneAxes3D({
 
   return (
     <group>
-      {/* ── Bounding box wireframe ─────────────────────────────── */}
-      {wireframeEdges.map((edge, i) => (
-        <Line
-          key={`edge-${i}`}
-          points={edge as [THREE.Vector3Tuple, THREE.Vector3Tuple]}
-          color={WIREFRAME_COLOR}
-          lineWidth={0.8}
-          transparent
-          opacity={0.4}
-        />
-      ))}
 
       {/* ── X-axis ticks + labels (along bottom-front edge) ───── */}
       {xTickElements.map((tick, i) => (

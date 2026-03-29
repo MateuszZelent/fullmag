@@ -186,6 +186,114 @@ pub(crate) fn resolve_fem_engine(problem: &ProblemIR) -> Result<FemEngine, RunEr
     }
 }
 
+pub(crate) fn snapshot_fdm_preview(
+    engine: FdmEngine,
+    plan: &FdmPlanIR,
+    request: &LivePreviewRequest,
+) -> Result<crate::LivePreviewField, RunError> {
+    match engine {
+        FdmEngine::CpuReference => cpu_reference::snapshot_preview(plan, request),
+        FdmEngine::CudaFdm => snapshot_native_fdm_preview(plan, request),
+    }
+}
+
+pub(crate) fn snapshot_fdm_vector_fields(
+    engine: FdmEngine,
+    plan: &FdmPlanIR,
+    quantities: &[&str],
+    request: &LivePreviewRequest,
+) -> Result<Vec<crate::LivePreviewField>, RunError> {
+    match engine {
+        FdmEngine::CpuReference => cpu_reference::snapshot_vector_fields(plan, quantities, request),
+        FdmEngine::CudaFdm => snapshot_native_fdm_vector_fields(plan, quantities, request),
+    }
+}
+
+pub(crate) fn snapshot_fem_preview(
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    request: &LivePreviewRequest,
+) -> Result<crate::LivePreviewField, RunError> {
+    match engine {
+        FemEngine::CpuReference => fem_reference::snapshot_preview(plan, request),
+        FemEngine::NativeGpu => snapshot_native_fem_preview(plan, request),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn snapshot_native_fdm_preview(
+    plan: &FdmPlanIR,
+    request: &LivePreviewRequest,
+) -> Result<crate::LivePreviewField, RunError> {
+    let backend = NativeFdmBackend::create(plan)?;
+    backend.copy_live_preview_field(request, plan.grid.cells)
+}
+
+#[cfg(feature = "cuda")]
+fn snapshot_native_fdm_vector_fields(
+    plan: &FdmPlanIR,
+    quantities: &[&str],
+    request: &LivePreviewRequest,
+) -> Result<Vec<crate::LivePreviewField>, RunError> {
+    let backend = NativeFdmBackend::create(plan)?;
+    let mut cached = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for quantity in quantities
+        .iter()
+        .map(|quantity| crate::preview::normalize_quantity_id(quantity))
+    {
+        if !seen.insert(quantity) {
+            continue;
+        }
+        let mut preview_request = request.clone();
+        preview_request.quantity = quantity.to_string();
+        cached.push(backend.copy_live_preview_field(&preview_request, plan.grid.cells)?);
+    }
+
+    Ok(cached)
+}
+
+#[cfg(not(feature = "cuda"))]
+fn snapshot_native_fdm_preview(
+    _plan: &FdmPlanIR,
+    _request: &LivePreviewRequest,
+) -> Result<crate::LivePreviewField, RunError> {
+    Err(RunError {
+        message: "CUDA FDM preview snapshot requested but fullmag-runner was built without the 'cuda' feature".to_string(),
+    })
+}
+
+#[cfg(not(feature = "cuda"))]
+fn snapshot_native_fdm_vector_fields(
+    _plan: &FdmPlanIR,
+    _quantities: &[&str],
+    _request: &LivePreviewRequest,
+) -> Result<Vec<crate::LivePreviewField>, RunError> {
+    Err(RunError {
+        message: "CUDA FDM vector-field cache requested but fullmag-runner was built without the 'cuda' feature".to_string(),
+    })
+}
+
+#[cfg(feature = "fem-gpu")]
+fn snapshot_native_fem_preview(
+    plan: &FemPlanIR,
+    request: &LivePreviewRequest,
+) -> Result<crate::LivePreviewField, RunError> {
+    let backend = NativeFemBackend::create(plan)?;
+    backend.copy_live_preview_field(request, plan.mesh.nodes.len())
+}
+
+#[cfg(not(feature = "fem-gpu"))]
+fn snapshot_native_fem_preview(
+    _plan: &FemPlanIR,
+    _request: &LivePreviewRequest,
+) -> Result<crate::LivePreviewField, RunError> {
+    Err(RunError {
+        message: "native FEM preview snapshot requested but fullmag-runner was built without the 'fem-gpu' feature".to_string(),
+    })
+}
+
 fn runtime_selection(problem: &ProblemIR) -> Option<&serde_json::Map<String, Value>> {
     problem
         .problem_meta

@@ -146,6 +146,65 @@ pub(crate) fn execute_reference_fem_with_live_preview_streaming(
     )
 }
 
+pub(crate) fn snapshot_preview(
+    plan: &FemPlanIR,
+    request: &LivePreviewRequest,
+) -> Result<crate::LivePreviewField, RunError> {
+    let topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
+        message: format!("MeshTopology: {}", error),
+    })?;
+    let material = MaterialParameters::new(
+        plan.material.saturation_magnetisation,
+        plan.material.exchange_stiffness,
+        plan.material.damping,
+    )
+    .map_err(|e| RunError {
+        message: format!("Material: {}", e),
+    })?;
+    let integrator = match plan.integrator {
+        IntegratorChoice::Heun => TimeIntegrator::Heun,
+        IntegratorChoice::Rk4 => TimeIntegrator::RK4,
+        IntegratorChoice::Rk23 => TimeIntegrator::RK23,
+        IntegratorChoice::Rk45 => TimeIntegrator::RK45,
+        IntegratorChoice::Abm3 => TimeIntegrator::ABM3,
+    };
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+    let mut dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator)
+        .map_err(|e| RunError {
+            message: format!("LLG: {}", e),
+        })?
+        .with_precession_enabled(!pure_damping_relax);
+    if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
+        dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
+            max_error: adaptive.atol,
+            dt_min: adaptive.dt_min,
+            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            headroom: adaptive.safety,
+        });
+    }
+    let problem = FemLlgProblem::with_terms_and_demag_transfer_grid(
+        topology,
+        material,
+        dynamics,
+        EffectiveFieldTerms {
+            exchange: plan.enable_exchange,
+            demag: plan.enable_demag,
+            external_field: plan.external_field,
+        },
+        Some([plan.hmax, plan.hmax, plan.hmax]),
+    );
+    let state = problem
+        .new_state(plan.initial_magnetization.clone())
+        .map_err(|e| RunError {
+            message: format!("State: {}", e),
+        })?;
+    let observables = observe_state(&problem, &state)?;
+    Ok(build_mesh_preview_field(
+        request,
+        select_observables(&observables, &request.quantity),
+    ))
+}
+
 fn execute_reference_fem_impl(
     plan: &FemPlanIR,
     until_seconds: f64,

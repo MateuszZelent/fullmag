@@ -154,6 +154,116 @@ pub(crate) fn execute_reference_fdm_with_live_preview_streaming(
     )
 }
 
+pub(crate) fn snapshot_preview(
+    plan: &FdmPlanIR,
+    request: &LivePreviewRequest,
+) -> Result<crate::LivePreviewField, RunError> {
+    let (problem, state) = build_snapshot_problem_and_state(plan)?;
+    let observables = observe_state(&problem, &state)?;
+    Ok(build_grid_preview_field(
+        request,
+        select_observables(&observables, &request.quantity),
+        plan.grid.cells,
+    ))
+}
+
+pub(crate) fn snapshot_vector_fields(
+    plan: &FdmPlanIR,
+    quantities: &[&str],
+    request: &LivePreviewRequest,
+) -> Result<Vec<crate::LivePreviewField>, RunError> {
+    let (problem, state) = build_snapshot_problem_and_state(plan)?;
+    let observables = observe_state(&problem, &state)?;
+    let mut cached = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for quantity in quantities
+        .iter()
+        .map(|quantity| crate::preview::normalize_quantity_id(quantity))
+    {
+        if !seen.insert(quantity) {
+            continue;
+        }
+        let mut preview_request = request.clone();
+        preview_request.quantity = quantity.to_string();
+        cached.push(build_grid_preview_field(
+            &preview_request,
+            select_observables(&observables, quantity),
+            plan.grid.cells,
+        ));
+    }
+
+    Ok(cached)
+}
+
+fn build_snapshot_problem_and_state(
+    plan: &FdmPlanIR,
+) -> Result<(ExchangeLlgProblem, ExchangeLlgState), RunError> {
+    let grid = GridShape::new(
+        plan.grid.cells[0] as usize,
+        plan.grid.cells[1] as usize,
+        plan.grid.cells[2] as usize,
+    )
+    .map_err(|e| RunError {
+        message: format!("Grid: {}", e),
+    })?;
+    let cell_size = CellSize::new(plan.cell_size[0], plan.cell_size[1], plan.cell_size[2])
+        .map_err(|e| RunError {
+            message: format!("CellSize: {}", e),
+        })?;
+    let material = MaterialParameters::new(
+        plan.material.saturation_magnetisation,
+        plan.material.exchange_stiffness,
+        plan.material.damping,
+    )
+    .map_err(|e| RunError {
+        message: format!("Material: {}", e),
+    })?;
+    let integrator = match plan.integrator {
+        IntegratorChoice::Heun => TimeIntegrator::Heun,
+        IntegratorChoice::Rk4 => TimeIntegrator::RK4,
+        IntegratorChoice::Rk23 => TimeIntegrator::RK23,
+        IntegratorChoice::Rk45 => TimeIntegrator::RK45,
+        IntegratorChoice::Abm3 => TimeIntegrator::ABM3,
+    };
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+    let mut dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator)
+        .map_err(|e| RunError {
+            message: format!("LLG: {}", e),
+        })?
+        .with_precession_enabled(!pure_damping_relax);
+    if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
+        dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
+            max_error: adaptive.atol,
+            dt_min: adaptive.dt_min,
+            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            headroom: adaptive.safety,
+        });
+    }
+
+    let problem = ExchangeLlgProblem::with_terms_and_mask(
+        grid,
+        cell_size,
+        material,
+        dynamics,
+        EffectiveFieldTerms {
+            exchange: plan.enable_exchange,
+            demag: plan.enable_demag,
+            external_field: plan.external_field,
+        },
+        plan.active_mask.clone(),
+    )
+    .map_err(|e| RunError {
+        message: format!("Problem construction: {}", e),
+    })?;
+    let state = problem
+        .new_state(plan.initial_magnetization.clone())
+        .map_err(|e| RunError {
+            message: format!("State: {}", e),
+        })?;
+    Ok((problem, state))
+}
+
 fn execute_reference_fdm_impl(
     plan: &FdmPlanIR,
     until_seconds: f64,
@@ -785,7 +895,7 @@ mod tests {
             adaptive_timestep: None,
             relaxation: None,
             boundary_correction: None,
-                boundary_geometry: None,
+            boundary_geometry: None,
             inter_region_exchange: vec![],
             enable_exchange: true,
             enable_demag: false,
@@ -822,7 +932,7 @@ mod tests {
             enable_demag: false,
             external_field: Some([0.0, 0.0, 8.0e5]),
             boundary_correction: None,
-                boundary_geometry: None,
+            boundary_geometry: None,
             inter_region_exchange: vec![],
         }
     }
