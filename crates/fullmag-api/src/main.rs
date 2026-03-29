@@ -40,8 +40,12 @@ struct AppState {
     current_preview_config: Arc<RwLock<CurrentPreviewConfig>>,
     /// Change notifications for preview controls so the CLI can wait instead of polling.
     current_preview_events: watch::Sender<CurrentPreviewConfig>,
-    /// In-memory command queue for the root local-live workspace.
-    current_command_queue: Arc<Mutex<VecDeque<SessionCommand>>>,
+    /// In-memory sequenced control queue for the root local-live workspace.
+    current_control_queue: Arc<Mutex<VecDeque<SessionCommand>>>,
+    /// Latest queued control sequence number.
+    current_control_events: watch::Sender<u64>,
+    /// Monotonic sequence generator for the current session control stream.
+    current_control_next_seq: Arc<Mutex<u64>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -331,6 +335,14 @@ const fn default_preview_wait_timeout_ms() -> u64 {
 }
 
 #[derive(Debug, Deserialize)]
+struct ControlWaitQuery {
+    #[serde(rename = "afterSeq", default)]
+    after_seq: u64,
+    #[serde(rename = "timeoutMs", default = "default_preview_wait_timeout_ms")]
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
 struct PreviewMaxPointsRequest {
     #[serde(rename = "maxPoints")]
     max_points: usize,
@@ -413,12 +425,14 @@ struct CurrentLivePublishRequest {
 struct SessionCommandResponse {
     command_id: String,
     session_id: String,
+    seq: u64,
     kind: String,
     queued_path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct SessionCommand {
+    seq: u64,
     command_id: String,
     kind: String,
     created_at_unix_ms: u128,
@@ -432,6 +446,8 @@ struct SessionCommand {
     energy_tolerance: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mesh_options: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preview_config: Option<CurrentPreviewConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -494,7 +510,9 @@ async fn main() {
         current_live_events: broadcast::channel(256).0,
         current_preview_config: Arc::new(RwLock::new(CurrentPreviewConfig::default())),
         current_preview_events: watch::channel(CurrentPreviewConfig::default()).0,
-        current_command_queue: Arc::new(Mutex::new(VecDeque::new())),
+        current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
+        current_control_events: watch::channel(0).0,
+        current_control_next_seq: Arc::new(Mutex::new(0)),
     });
 
     let cors = CorsLayer::new()
@@ -567,6 +585,10 @@ async fn main() {
         .route(
             "/v1/live/current/commands/next",
             get(dequeue_current_live_command),
+        )
+        .route(
+            "/v1/live/current/control/wait",
+            get(wait_current_live_control),
         )
         .route(
             "/v1/live/current/assets/import",
@@ -724,6 +746,81 @@ async fn get_current_live_events(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
+fn is_preview_control_command(command: &SessionCommand) -> bool {
+    matches!(
+        command.kind.as_str(),
+        "preview_update" | "preview_refresh"
+    )
+}
+
+async fn enqueue_current_control_command(
+    state: &Arc<AppState>,
+    mut command: SessionCommand,
+) -> SessionCommand {
+    let seq = {
+        let mut next_seq = state.current_control_next_seq.lock().await;
+        *next_seq = next_seq.saturating_add(1);
+        *next_seq
+    };
+    command.seq = seq;
+    state.current_control_queue.lock().await.push_back(command.clone());
+    let _ = state.current_control_events.send(seq);
+    command
+}
+
+async fn take_next_current_control_command_after(
+    state: &Arc<AppState>,
+    after_seq: u64,
+    include_preview: bool,
+) -> Option<SessionCommand> {
+    let mut queue = state.current_control_queue.lock().await;
+    let mut index = 0usize;
+    while index < queue.len() {
+        let Some(command) = queue.get(index) else {
+            break;
+        };
+        if command.seq <= after_seq {
+            let _ = queue.remove(index);
+            continue;
+        }
+        if !include_preview && is_preview_control_command(command) {
+            index += 1;
+            continue;
+        }
+        return queue.remove(index);
+    }
+    None
+}
+
+fn build_preview_control_command(
+    preview_config: &CurrentPreviewConfig,
+    refresh_only: bool,
+) -> SessionCommand {
+    SessionCommand {
+        seq: 0,
+        command_id: format!(
+            "cmd-{}",
+            if refresh_only {
+                format!("preview-refresh-{}", uuid_v4_hex())
+            } else {
+                format!("preview-{}", uuid_v4_hex())
+            }
+        ),
+        kind: if refresh_only {
+            "preview_refresh".to_string()
+        } else {
+            "preview_update".to_string()
+        },
+        created_at_unix_ms: unix_time_millis_now(),
+        until_seconds: None,
+        max_steps: None,
+        torque_tolerance: None,
+        energy_tolerance: None,
+        mesh_options: None,
+        preview_config: Some(preview_config.clone()),
+    }
+}
+
 async fn publish_current_live_state(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CurrentLivePublishRequest>,
@@ -741,7 +838,9 @@ async fn publish_current_live_state(
         let config = CurrentPreviewConfig::default();
         *state.current_preview_config.write().await = config.clone();
         let _ = state.current_preview_events.send(config);
-        state.current_command_queue.lock().await.clear();
+        state.current_control_queue.lock().await.clear();
+        *state.current_control_next_seq.lock().await = 0;
+        let _ = state.current_control_events.send(0);
         let _ = std::fs::remove_dir_all(&state.current_workspace_root);
     }
     let preview_config = state.current_preview_config.read().await.clone();
@@ -787,7 +886,7 @@ async fn set_current_preview_quantity(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewQuantityRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
         config.quantity = req.quantity;
     })
     .await
@@ -797,7 +896,7 @@ async fn set_current_preview_component(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewComponentRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
         config.component = req.component;
     })
     .await
@@ -807,7 +906,7 @@ async fn set_current_preview_x_chosen_size(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewXChosenSizeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
         config.x_chosen_size = req.x_chosen_size as u32;
     })
     .await
@@ -817,7 +916,7 @@ async fn set_current_preview_every_n(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewEveryNRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
         config.every_n = req.every_n.clamp(1, u32::MAX as usize) as u32;
     })
     .await
@@ -827,7 +926,7 @@ async fn set_current_preview_y_chosen_size(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewYChosenSizeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
         config.y_chosen_size = req.y_chosen_size as u32;
     })
     .await
@@ -837,7 +936,7 @@ async fn set_current_preview_auto_scale(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewAutoScaleRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
         config.auto_scale_enabled = req.auto_scale_enabled;
     })
     .await
@@ -847,7 +946,7 @@ async fn set_current_preview_max_points(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewMaxPointsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
         config.max_points = req.max_points.min(u32::MAX as usize) as u32;
     })
     .await
@@ -857,7 +956,7 @@ async fn set_current_preview_layer(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewLayerRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
         config.layer = req.layer as u32;
     })
     .await
@@ -867,7 +966,7 @@ async fn set_current_preview_all_layers(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewAllLayersRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
         config.all_layers = req.all_layers;
     })
     .await
@@ -876,7 +975,7 @@ async fn set_current_preview_all_layers(
 async fn refresh_current_preview(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, |_config| {}).await
+    mutate_current_preview(&state, PreviewControlMode::Refresh, |_config| {}).await
 }
 
 async fn enqueue_current_live_command(
@@ -884,24 +983,59 @@ async fn enqueue_current_live_command(
     Json(req): Json<SessionCommandRequest>,
 ) -> Result<Json<SessionCommandResponse>, ApiError> {
     let session_id = current_live_session_id(&state).await?;
-    let command = build_session_command(req)?;
+    let command = enqueue_current_control_command(&state, build_session_command(req)?).await;
     let response = SessionCommandResponse {
         command_id: command.command_id.clone(),
         session_id,
+        seq: command.seq,
         kind: command.kind.clone(),
         queued_path: format!("memory://current/{}", command.command_id),
     };
-    state.current_command_queue.lock().await.push_back(command);
     Ok(Json(response))
 }
 
 async fn dequeue_current_live_command(
     State(state): State<Arc<AppState>>,
 ) -> Result<Response, ApiError> {
-    let command = state.current_command_queue.lock().await.pop_front();
+    let command = take_next_current_control_command_after(&state, 0, false).await;
     match command {
         Some(command) => Ok(Json(command).into_response()),
         None => Ok(StatusCode::NO_CONTENT.into_response()),
+    }
+}
+
+async fn wait_current_live_control(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ControlWaitQuery>,
+) -> Result<Response, ApiError> {
+    let _ = current_live_session_id(&state).await?;
+    if let Some(command) = take_next_current_control_command_after(&state, query.after_seq, true).await
+    {
+        return Ok(Json(command).into_response());
+    }
+
+    let timeout_ms = query.timeout_ms.clamp(100, 20_000);
+    let mut rx = state.current_control_events.subscribe();
+    let state_for_wait = Arc::clone(&state);
+    let waited = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async move {
+        loop {
+            rx.changed()
+                .await
+                .map_err(|_| ApiError::internal("control command stream closed"))?;
+            if let Some(command) =
+                take_next_current_control_command_after(&state_for_wait, query.after_seq, true)
+                    .await
+            {
+                return Ok::<SessionCommand, ApiError>(command);
+            }
+        }
+    })
+    .await;
+
+    match waited {
+        Ok(Ok(command)) => Ok(Json(command).into_response()),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Ok(StatusCode::NO_CONTENT.into_response()),
     }
 }
 
@@ -1096,6 +1230,7 @@ fn build_session_command(req: SessionCommandRequest) -> Result<SessionCommand, A
     }
 
     Ok(SessionCommand {
+        seq: 0,
         command_id: format!("cmd-{}", uuid_v4_hex()),
         kind,
         created_at_unix_ms: unix_time_millis_now(),
@@ -1104,6 +1239,7 @@ fn build_session_command(req: SessionCommandRequest) -> Result<SessionCommand, A
         torque_tolerance: req.torque_tolerance,
         energy_tolerance: req.energy_tolerance,
         mesh_options: req.mesh_options,
+        preview_config: None,
     })
 }
 
@@ -1202,8 +1338,15 @@ async fn list_physics_docs(
     Ok(Json(docs))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewControlMode {
+    Update,
+    Refresh,
+}
+
 async fn mutate_current_preview<F>(
     state: &Arc<AppState>,
+    control_mode: PreviewControlMode,
     mutate: F,
 ) -> Result<Json<serde_json::Value>, ApiError>
 where
@@ -1236,7 +1379,15 @@ where
     *state.current_live_public_snapshot.write().await = Some(public_json);
 
     let _ = state.current_live_events.send(json);
-    Ok(Json(serde_json::json!({ "status": "ok" })))
+    let command = enqueue_current_control_command(
+        state,
+        build_preview_control_command(
+            &preview_config,
+            matches!(control_mode, PreviewControlMode::Refresh),
+        ),
+    )
+    .await;
+    Ok(Json(serde_json::json!({ "status": "ok", "control_seq": command.seq })))
 }
 
 fn serialize_current_live_snapshot_event(

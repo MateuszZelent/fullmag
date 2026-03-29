@@ -123,9 +123,9 @@ export default function SceneAxes3D({
   const { unit, min, max, hx, hy, hz, scaled, ticks } = axesData;
   const [cx, cy, cz] = center;
 
-  // Adaptive font size based on geometry scale
+  // Adaptive font size — purely proportional to scene scale (no absolute minimum)
   const maxScene = Math.max(hx * 2, hy * 2, hz * 2);
-  const fontSize = Math.max(maxScene * 0.028, 0.08);
+  const fontSize = maxScene * 0.035;
   const tickLen = maxScene * 0.015;
   const labelOffset = maxScene * 0.06;
 

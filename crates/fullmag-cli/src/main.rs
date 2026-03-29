@@ -11,13 +11,14 @@ use fullmag_ir::{
     IntegratorChoice, ProblemIR, RelaxationAlgorithmIR,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Parser)]
@@ -226,6 +227,8 @@ struct ResolvedScriptStage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionCommand {
+    #[serde(default)]
+    seq: u64,
     command_id: String,
     kind: String,
     created_at_unix_ms: u128,
@@ -239,6 +242,8 @@ struct SessionCommand {
     energy_tolerance: Option<f64>,
     #[serde(default)]
     mesh_options: Option<serde_json::Value>,
+    #[serde(default)]
+    preview_config: Option<fullmag_runner::LivePreviewRequest>,
 }
 
 #[derive(Debug, Clone, Serialize)]
