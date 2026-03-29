@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { Input } from "../ui/input";
+import { Button } from "../ui/button";
 
 /* ── Types ─────────────────────────────────────────────────── */
 
@@ -99,18 +102,22 @@ export default function SolverSettingsPanel({
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">Integrator</span>
             <div className="flex-1 max-w-[140px]">
-              <select
-                className="w-full appearance-none bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary disabled:opacity-50"
+              <Select
                 value={settings.integrator}
-                onChange={(e) => update({ integrator: e.target.value })}
+                onValueChange={(val) => update({ integrator: val })}
                 disabled={disabled}
               >
-                {INTEGRATOR_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-7 w-full border-border/50 bg-card text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {INTEGRATOR_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           {selectedIntegrator && (
@@ -123,8 +130,8 @@ export default function SolverSettingsPanel({
               <HelpTip text="Leave empty for adaptive timestep (recommended for RK2(3)/RK4(5)). Set to e.g. 1e-13 for fixed-step integrators." />
             </span>
             <div className="flex-1 max-w-[140px]">
-              <input
-                className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+              <Input
+                className="h-7 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50 focus-visible:ring-1"
                 type="text"
                 value={settings.fixedTimestep}
                 onChange={(e) => update({ fixedTimestep: e.target.value })}
@@ -146,18 +153,22 @@ export default function SolverSettingsPanel({
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">Algorithm</span>
             <div className="flex-1 max-w-[140px]">
-              <select
-                className="w-full appearance-none bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary disabled:opacity-50"
+              <Select
                 value={settings.relaxAlgorithm}
-                onChange={(e) => update({ relaxAlgorithm: e.target.value })}
+                onValueChange={(val) => update({ relaxAlgorithm: val })}
                 disabled={disabled}
               >
-                {RELAX_ALGORITHM_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-7 w-full border-border/50 bg-card text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {RELAX_ALGORITHM_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           {selectedRelax && (
@@ -170,8 +181,8 @@ export default function SolverSettingsPanel({
               <HelpTip text="Convergence criterion: max|m × H_eff| < tolerance. Typical: 1e-5 (fast) to 1e-7 (precise). Unit: T." />
             </span>
             <div className="flex-1 max-w-[140px]">
-              <input
-                className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+              <Input
+                className="h-7 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50 focus-visible:ring-1"
                 type="text"
                 value={settings.torqueTolerance}
                 onChange={(e) => update({ torqueTolerance: e.target.value })}
@@ -187,8 +198,8 @@ export default function SolverSettingsPanel({
               <HelpTip text="Optional secondary criterion: |ΔE_total| < tolerance between steps. Leave empty to use torque-only convergence." />
             </span>
             <div className="flex-1 max-w-[140px]">
-              <input
-                className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+              <Input
+                className="h-7 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50 focus-visible:ring-1"
                 type="text"
                 value={settings.energyTolerance}
                 onChange={(e) => update({ energyTolerance: e.target.value })}
@@ -204,8 +215,8 @@ export default function SolverSettingsPanel({
               <HelpTip text="Maximum number of iterations before giving up. Increase for complex geometries or tight tolerances." />
             </span>
             <div className="flex-1 max-w-[140px]">
-              <input
-                className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+              <Input
+                className="h-7 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50 focus-visible:ring-1"
                 type="text"
                 value={settings.maxRelaxSteps}
                 onChange={(e) => update({ maxRelaxSteps: e.target.value })}
@@ -221,8 +232,8 @@ export default function SolverSettingsPanel({
               <HelpTip text="Override the material damping for relaxation. Leave empty to use the material value. Higher α (e.g. 0.5–1.0) speeds convergence." />
             </span>
             <div className="flex-1 max-w-[140px]">
-              <input
-                className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+              <Input
+                className="h-7 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50 focus-visible:ring-1"
                 type="text"
                 value={settings.relaxAlpha}
                 onChange={(e) => update({ relaxAlpha: e.target.value })}
@@ -236,13 +247,14 @@ export default function SolverSettingsPanel({
 
       {/* ── Apply button ── */}
       {canApply && onApply && (
-        <button
-          className="mt-2 w-full py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-bold uppercase tracking-widest hover:bg-primary/90 transition-colors"
+        <Button
+          className="mt-2 w-full h-8 text-xs font-bold uppercase tracking-widest"
+          variant="default"
           onClick={onApply}
           type="button"
         >
           Apply settings to next command
-        </button>
+        </Button>
       )}
 
       {solverRunning && (

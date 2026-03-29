@@ -813,6 +813,43 @@ mod tests {
     }
 
     #[test]
+    fn fem_snapshot_vector_cache_contains_nonzero_demag_related_fields() {
+        let plan = make_box_demag_plan();
+        let fields = snapshot_vector_fields(
+            &plan,
+            &["H_ex", "H_demag", "H_eff"],
+            &crate::LivePreviewRequest::default(),
+        )
+        .expect("FEM preview cache snapshot should succeed");
+
+        assert_eq!(fields.len(), 3);
+        let h_demag = fields
+            .iter()
+            .find(|field| field.quantity == "H_demag")
+            .expect("H_demag preview should be present");
+        let h_eff = fields
+            .iter()
+            .find(|field| field.quantity == "H_eff")
+            .expect("H_eff preview should be present");
+        assert_eq!(h_demag.spatial_kind, "mesh");
+        assert_eq!(h_eff.spatial_kind, "mesh");
+        assert!(
+            h_demag
+                .vector_field_values
+                .iter()
+                .any(|value| value.abs() > 0.0),
+            "expected FEM cached H_demag preview to contain nonzero values"
+        );
+        assert!(
+            h_eff
+                .vector_field_values
+                .iter()
+                .any(|value| value.abs() > 0.0),
+            "expected FEM cached H_eff preview to contain nonzero values"
+        );
+    }
+
+    #[test]
     fn fem_callback_emits_live_updates() {
         let plan = make_test_plan(true);
         let mut seen = 0usize;

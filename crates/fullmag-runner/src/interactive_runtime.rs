@@ -1,10 +1,8 @@
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use std::collections::HashSet;
 
-use fullmag_engine::{
-    ExchangeLlgProblem, ExchangeLlgState, FftWorkspace, IntegratorBuffers,
-};
 use fullmag_engine::fem::{FemLlgProblem, FemLlgState};
+use fullmag_engine::{ExchangeLlgProblem, ExchangeLlgState, FftWorkspace, IntegratorBuffers};
 use fullmag_ir::{BackendPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR, RelaxationAlgorithmIR};
 
 use crate::cpu_reference;
@@ -22,7 +20,7 @@ use crate::schedules::{
 };
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewField, LivePreviewRequest,
-    RunError, RunResult, RunStatus, StepAction, StepStats, StepUpdate, StateObservables,
+    RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
 };
 
 pub struct InteractiveFdmPreviewRuntime {
@@ -149,7 +147,9 @@ impl InteractiveFdmPreviewRuntime {
         match &self.inner {
             InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => runtime.plan_signature == normalized,
             #[cfg(feature = "cuda")]
-            InteractiveFdmPreviewRuntimeInner::Cuda(runtime) => runtime.plan_signature == normalized,
+            InteractiveFdmPreviewRuntimeInner::Cuda(runtime) => {
+                runtime.plan_signature == normalized
+            }
         }
     }
 
@@ -242,8 +242,8 @@ impl InteractiveFdmPreviewRuntime {
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
         match &mut self.inner {
-            InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => {
-                runtime.execute_with_live_preview_streaming(
+            InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => runtime
+                .execute_with_live_preview_streaming(
                     plan,
                     until_seconds,
                     outputs,
@@ -252,11 +252,10 @@ impl InteractiveFdmPreviewRuntime {
                     preview_request,
                     artifact_writer,
                     on_step,
-                )
-            }
+                ),
             #[cfg(feature = "cuda")]
-            InteractiveFdmPreviewRuntimeInner::Cuda(runtime) => {
-                runtime.execute_with_live_preview_streaming(
+            InteractiveFdmPreviewRuntimeInner::Cuda(runtime) => runtime
+                .execute_with_live_preview_streaming(
                     plan,
                     until_seconds,
                     outputs,
@@ -265,8 +264,7 @@ impl InteractiveFdmPreviewRuntime {
                     preview_request,
                     artifact_writer,
                     on_step,
-                )
-            }
+                ),
         }
     }
 }
@@ -432,8 +430,8 @@ impl InteractiveFemPreviewRuntime {
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
         match &mut self.inner {
-            InteractiveFemPreviewRuntimeInner::Cpu(runtime) => {
-                runtime.execute_with_live_preview_streaming(
+            InteractiveFemPreviewRuntimeInner::Cpu(runtime) => runtime
+                .execute_with_live_preview_streaming(
                     plan,
                     until_seconds,
                     outputs,
@@ -441,11 +439,10 @@ impl InteractiveFemPreviewRuntime {
                     artifact_writer,
                     preview_request,
                     on_step,
-                )
-            }
+                ),
             #[cfg(feature = "fem-gpu")]
-            InteractiveFemPreviewRuntimeInner::Gpu(runtime) => {
-                runtime.execute_with_live_preview_streaming(
+            InteractiveFemPreviewRuntimeInner::Gpu(runtime) => runtime
+                .execute_with_live_preview_streaming(
                     plan,
                     until_seconds,
                     outputs,
@@ -453,8 +450,7 @@ impl InteractiveFemPreviewRuntime {
                     artifact_writer,
                     preview_request,
                     on_step,
-                )
-            }
+                ),
         }
     }
 }
@@ -488,7 +484,10 @@ impl CpuInteractiveFdmPreviewRuntime {
         let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
         let mut cached = Vec::new();
         let mut seen = HashSet::new();
-        for quantity in quantities.iter().map(|quantity| normalize_quantity_id(quantity)) {
+        for quantity in quantities
+            .iter()
+            .map(|quantity| normalize_quantity_id(quantity))
+        {
             if !seen.insert(quantity) {
                 continue;
             }
@@ -600,7 +599,8 @@ impl CpuInteractiveFdmPreviewRuntime {
             } else {
                 None
             };
-            let scalar_row_due = local_stats.step <= 1 || local_stats.step % field_every_n.max(1) == 0;
+            let scalar_row_due =
+                local_stats.step <= 1 || local_stats.step % field_every_n.max(1) == 0;
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
@@ -892,7 +892,8 @@ impl CudaInteractiveFdmPreviewRuntime {
         &mut self,
         request: &LivePreviewRequest,
     ) -> Result<LivePreviewField, RunError> {
-        self.backend.copy_live_preview_field(request, self.original_grid)
+        self.backend
+            .copy_live_preview_field(request, self.original_grid)
     }
 
     fn snapshot_vector_fields(
@@ -903,7 +904,10 @@ impl CudaInteractiveFdmPreviewRuntime {
         let mut cached = Vec::new();
         let mut seen = HashSet::new();
 
-        for quantity in quantities.iter().map(|quantity| normalize_quantity_id(quantity)) {
+        for quantity in quantities
+            .iter()
+            .map(|quantity| normalize_quantity_id(quantity))
+        {
             if !seen.insert(quantity) {
                 continue;
             }
@@ -981,7 +985,8 @@ impl CudaInteractiveFdmPreviewRuntime {
             } else {
                 None
             };
-            let scalar_row_due = local_stats.step <= 1 || local_stats.step % field_every_n.max(1) == 0;
+            let scalar_row_due =
+                local_stats.step <= 1 || local_stats.step % field_every_n.max(1) == 0;
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
@@ -1183,7 +1188,678 @@ impl CudaInteractiveFdmPreviewRuntime {
     }
 }
 
+impl CpuInteractiveFemPreviewRuntime {
+    fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {
+        self.state
+            .set_magnetization(magnetization.to_vec())
+            .map_err(|error| RunError {
+                message: format!(
+                    "setting interactive FEM CPU magnetization failed: {}",
+                    error
+                ),
+            })
+    }
+
+    fn snapshot_preview(
+        &mut self,
+        request: &LivePreviewRequest,
+    ) -> Result<LivePreviewField, RunError> {
+        let observables = fem_reference::observe_state(&self.problem, &self.state)?;
+        Ok(crate::preview::build_mesh_preview_field(
+            request,
+            select_observables(&observables, &request.quantity),
+        ))
+    }
+
+    fn snapshot_vector_fields(
+        &mut self,
+        quantities: &[&str],
+        request: &LivePreviewRequest,
+    ) -> Result<Vec<LivePreviewField>, RunError> {
+        let observables = fem_reference::observe_state(&self.problem, &self.state)?;
+        let mut cached = Vec::new();
+        let mut seen = HashSet::new();
+        for quantity in quantities
+            .iter()
+            .map(|quantity| normalize_quantity_id(quantity))
+        {
+            if !seen.insert(quantity) {
+                continue;
+            }
+            let mut preview_request = request.clone();
+            preview_request.quantity = quantity.to_string();
+            cached.push(crate::preview::build_mesh_preview_field(
+                &preview_request,
+                select_observables(&observables, quantity),
+            ));
+        }
+        Ok(cached)
+    }
+
+    fn execute_with_live_preview(
+        &mut self,
+        plan: &FemPlanIR,
+        until_seconds: f64,
+        field_every_n: u64,
+        preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+        on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+    ) -> Result<RunResult, RunError> {
+        if !self.plan_signature.eq(&normalize_fem_plan_signature(plan)) {
+            return Err(RunError {
+                message:
+                    "interactive FEM CPU runtime plan mismatch; caller must rebuild runtime before executing"
+                        .to_string(),
+            });
+        }
+        if until_seconds <= 0.0 {
+            return Err(RunError {
+                message: "interactive runtime until_seconds must be positive".to_string(),
+            });
+        }
+
+        let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+        let base_step = self.total_steps;
+        let base_time = self.state.time_seconds;
+        let mut dt = plan
+            .fixed_timestep
+            .or_else(|| {
+                plan.adaptive_timestep
+                    .as_ref()
+                    .and_then(|adaptive| adaptive.dt_initial)
+            })
+            .unwrap_or(1e-13);
+        let mut previous_total_energy =
+            Some(fem_reference::observe_state(&self.problem, &self.state)?.total_energy);
+        let mut last_preview_revision: Option<u64> = None;
+        let mut cancelled = false;
+        let mut steps: Vec<StepStats> = Vec::new();
+
+        while self.state.time_seconds - base_time < until_seconds {
+            let dt_step = dt.min(until_seconds - (self.state.time_seconds - base_time));
+            let wall_start = std::time::Instant::now();
+            let report = self
+                .problem
+                .step(&mut self.state, dt_step)
+                .map_err(|error| RunError {
+                    message: format!("interactive FEM CPU step failed: {}", error),
+                })?;
+            let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
+            self.total_steps += 1;
+            if let Some(next) = report.suggested_next_dt {
+                dt = next;
+            }
+
+            let observables = fem_reference::observe_state(&self.problem, &self.state)?;
+            let total_stats = make_step_stats(
+                self.total_steps,
+                self.state.time_seconds,
+                report.dt_used,
+                wall_elapsed,
+                &observables,
+            );
+            let mut local_stats = total_stats.clone();
+            local_stats.step -= base_step;
+            local_stats.time -= base_time;
+            let preview_cfg = preview_request();
+            let preview_emit_every = u64::from(preview_cfg.every_n.max(1));
+            let preview_due = last_preview_revision != Some(preview_cfg.revision)
+                || local_stats.step <= 1
+                || local_stats.step % preview_emit_every == 0;
+            let preview_field = if preview_due {
+                last_preview_revision = Some(preview_cfg.revision);
+                Some(crate::preview::build_mesh_preview_field(
+                    &preview_cfg,
+                    select_observables(&observables, &preview_cfg.quantity),
+                ))
+            } else {
+                None
+            };
+            let scalar_row_due =
+                local_stats.step <= 1 || local_stats.step % field_every_n.max(1) == 0;
+            let action = on_step(StepUpdate {
+                stats: local_stats.clone(),
+                grid: [0, 0, 0],
+                fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),
+                magnetization: None,
+                preview_field,
+                scalar_row_due,
+                finished: false,
+            });
+            steps.push(local_stats.clone());
+            if action == StepAction::Stop {
+                cancelled = true;
+                break;
+            }
+
+            let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
+                local_stats.step >= control.max_steps
+                    || relaxation_converged(
+                        control,
+                        &total_stats,
+                        previous_total_energy,
+                        plan.gyromagnetic_ratio,
+                        plan.material.damping,
+                        pure_damping_relax,
+                    )
+            });
+            previous_total_energy = Some(total_stats.e_total);
+            if stop_for_relaxation {
+                break;
+            }
+        }
+
+        Ok(RunResult {
+            status: if cancelled {
+                RunStatus::Cancelled
+            } else {
+                RunStatus::Completed
+            },
+            steps,
+            final_magnetization: self.state.magnetization().to_vec(),
+        })
+    }
+
+    fn execute_with_live_preview_streaming(
+        &mut self,
+        plan: &FemPlanIR,
+        until_seconds: f64,
+        outputs: &[OutputIR],
+        field_every_n: u64,
+        artifact_writer: Option<ArtifactPipelineSender>,
+        preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+        on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+    ) -> Result<ExecutedRun, RunError> {
+        if !self.plan_signature.eq(&normalize_fem_plan_signature(plan)) {
+            return Err(RunError {
+                message:
+                    "interactive FEM CPU runtime plan mismatch; caller must rebuild runtime before executing"
+                        .to_string(),
+            });
+        }
+        if until_seconds <= 0.0 {
+            return Err(RunError {
+                message: "interactive runtime until_seconds must be positive".to_string(),
+            });
+        }
+
+        let initial_magnetization = self.state.magnetization().to_vec();
+        let mut artifacts = if let Some(writer) = artifact_writer {
+            ArtifactRecorder::streaming(self.provenance.clone(), writer)
+        } else {
+            ArtifactRecorder::in_memory(self.provenance.clone())
+        };
+        let mut scalar_schedules = collect_scalar_schedules(outputs)?;
+        let mut field_schedules = collect_field_schedules(outputs)?;
+        let default_scalar_trace = scalar_schedules.is_empty();
+        let initial_observables = fem_reference::observe_state(&self.problem, &self.state)?;
+        let mut steps = Vec::new();
+        if default_scalar_trace {
+            let stats = make_step_stats(0, 0.0, 0.0, 0, &initial_observables);
+            artifacts.record_scalar(&stats)?;
+            steps.push(stats);
+        } else {
+            record_due_cpu_outputs(
+                &initial_observables,
+                0,
+                0.0,
+                0.0,
+                0,
+                &mut scalar_schedules,
+                &mut field_schedules,
+                &mut steps,
+                &mut artifacts,
+            )?;
+        }
+
+        let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+        let base_step = self.total_steps;
+        let base_time = self.state.time_seconds;
+        let mut dt = plan
+            .fixed_timestep
+            .or_else(|| {
+                plan.adaptive_timestep
+                    .as_ref()
+                    .and_then(|adaptive| adaptive.dt_initial)
+            })
+            .unwrap_or(1e-13);
+        let mut previous_total_energy =
+            Some(fem_reference::observe_state(&self.problem, &self.state)?.total_energy);
+        let mut last_preview_revision: Option<u64> = None;
+        let mut cancelled = false;
+        let mut latest_local_stats: Option<StepStats> = None;
+
+        while self.state.time_seconds - base_time < until_seconds {
+            let dt_step = dt.min(until_seconds - (self.state.time_seconds - base_time));
+            let wall_start = std::time::Instant::now();
+            let report = self
+                .problem
+                .step(&mut self.state, dt_step)
+                .map_err(|error| RunError {
+                    message: format!("interactive FEM CPU step failed: {}", error),
+                })?;
+            let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
+            self.total_steps += 1;
+            if let Some(next) = report.suggested_next_dt {
+                dt = next;
+            }
+
+            let observables = fem_reference::observe_state(&self.problem, &self.state)?;
+            let total_stats = make_step_stats(
+                self.total_steps,
+                self.state.time_seconds,
+                report.dt_used,
+                wall_elapsed,
+                &observables,
+            );
+            let mut local_stats = total_stats.clone();
+            local_stats.step -= base_step;
+            local_stats.time -= base_time;
+            latest_local_stats = Some(local_stats.clone());
+
+            record_due_cpu_outputs(
+                &observables,
+                local_stats.step,
+                local_stats.time,
+                report.dt_used,
+                wall_elapsed,
+                &mut scalar_schedules,
+                &mut field_schedules,
+                &mut steps,
+                &mut artifacts,
+            )?;
+
+            let preview_cfg = preview_request();
+            let preview_emit_every = u64::from(preview_cfg.every_n.max(1));
+            let preview_due = last_preview_revision != Some(preview_cfg.revision)
+                || local_stats.step <= 1
+                || local_stats.step % preview_emit_every == 0;
+            let preview_field = if preview_due {
+                last_preview_revision = Some(preview_cfg.revision);
+                Some(crate::preview::build_mesh_preview_field(
+                    &preview_cfg,
+                    select_observables(&observables, &preview_cfg.quantity),
+                ))
+            } else {
+                None
+            };
+            let scalar_row_due =
+                local_stats.step <= 1 || local_stats.step % field_every_n.max(1) == 0;
+            let action = on_step(StepUpdate {
+                stats: local_stats.clone(),
+                grid: [0, 0, 0],
+                fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),
+                magnetization: None,
+                preview_field,
+                scalar_row_due,
+                finished: false,
+            });
+            if action == StepAction::Stop {
+                cancelled = true;
+                break;
+            }
+
+            let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
+                local_stats.step >= control.max_steps
+                    || relaxation_converged(
+                        control,
+                        &total_stats,
+                        previous_total_energy,
+                        plan.gyromagnetic_ratio,
+                        plan.material.damping,
+                        pure_damping_relax,
+                    )
+            });
+            previous_total_energy = Some(total_stats.e_total);
+            if stop_for_relaxation {
+                break;
+            }
+        }
+
+        if let Some(final_stats) = latest_local_stats {
+            let final_observables = fem_reference::observe_state(&self.problem, &self.state)?;
+            record_final_cpu_outputs(
+                &final_observables,
+                final_stats.step,
+                final_stats.time,
+                final_stats.dt,
+                default_scalar_trace,
+                &field_schedules,
+                &mut steps,
+                &mut artifacts,
+            )?;
+        }
+
+        let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+        Ok(ExecutedRun {
+            result: RunResult {
+                status: if cancelled {
+                    RunStatus::Cancelled
+                } else {
+                    RunStatus::Completed
+                },
+                steps,
+                final_magnetization: self.state.magnetization().to_vec(),
+            },
+            initial_magnetization,
+            field_snapshots,
+            field_snapshot_count,
+            provenance,
+        })
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+impl GpuInteractiveFemPreviewRuntime {
+    fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {
+        self.backend.upload_magnetization(magnetization)
+    }
+
+    fn snapshot_preview(
+        &mut self,
+        request: &LivePreviewRequest,
+    ) -> Result<LivePreviewField, RunError> {
+        self.backend
+            .copy_live_preview_field(request, self.node_count)
+    }
+
+    fn snapshot_vector_fields(
+        &mut self,
+        quantities: &[&str],
+        request: &LivePreviewRequest,
+    ) -> Result<Vec<LivePreviewField>, RunError> {
+        let mut cached = Vec::new();
+        let mut seen = HashSet::new();
+
+        for quantity in quantities
+            .iter()
+            .map(|quantity| normalize_quantity_id(quantity))
+        {
+            if !seen.insert(quantity) {
+                continue;
+            }
+            let mut preview_request = request.clone();
+            preview_request.quantity = quantity.to_string();
+            cached.push(
+                self.backend
+                    .copy_live_preview_field(&preview_request, self.node_count)?,
+            );
+        }
+
+        Ok(cached)
+    }
+
+    fn execute_with_live_preview(
+        &mut self,
+        plan: &FemPlanIR,
+        until_seconds: f64,
+        field_every_n: u64,
+        preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+        on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+    ) -> Result<RunResult, RunError> {
+        if !self.plan_signature.eq(&normalize_fem_plan_signature(plan)) {
+            return Err(RunError {
+                message:
+                    "interactive FEM GPU runtime plan mismatch; caller must rebuild runtime before executing"
+                        .to_string(),
+            });
+        }
+        if until_seconds <= 0.0 {
+            return Err(RunError {
+                message: "interactive runtime until_seconds must be positive".to_string(),
+            });
+        }
+
+        let base_step = self.total_steps;
+        let base_time = self.total_time;
+        let mut dt = plan
+            .fixed_timestep
+            .or_else(|| {
+                plan.adaptive_timestep
+                    .as_ref()
+                    .and_then(|adaptive| adaptive.dt_initial)
+            })
+            .unwrap_or(1e-13);
+        let mut previous_total_energy: Option<f64> = None;
+        let mut last_preview_revision: Option<u64> = None;
+        let mut cancelled = false;
+        let mut steps: Vec<StepStats> = Vec::new();
+        let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+
+        while self.total_time - base_time < until_seconds {
+            let dt_step = dt.min(until_seconds - (self.total_time - base_time));
+            let total_stats = self.backend.step(dt_step)?;
+            self.total_steps = total_stats.step;
+            self.total_time = total_stats.time;
+            if let Some(next) = total_stats.dt_suggested {
+                dt = next;
+            }
+
+            let mut local_stats = total_stats.clone();
+            local_stats.step -= base_step;
+            local_stats.time -= base_time;
+            let preview_cfg = preview_request();
+            let preview_emit_every = u64::from(preview_cfg.every_n.max(1));
+            let preview_due = last_preview_revision != Some(preview_cfg.revision)
+                || local_stats.step <= 1
+                || local_stats.step % preview_emit_every == 0;
+            let preview_field = if preview_due {
+                last_preview_revision = Some(preview_cfg.revision);
+                Some(
+                    self.backend
+                        .copy_live_preview_field(&preview_cfg, self.node_count)?,
+                )
+            } else {
+                None
+            };
+            let scalar_row_due =
+                local_stats.step <= 1 || local_stats.step % field_every_n.max(1) == 0;
+            let action = on_step(StepUpdate {
+                stats: local_stats.clone(),
+                grid: [0, 0, 0],
+                fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),
+                magnetization: None,
+                preview_field,
+                scalar_row_due,
+                finished: false,
+            });
+            steps.push(local_stats.clone());
+            if action == StepAction::Stop {
+                cancelled = true;
+                break;
+            }
+
+            let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
+                local_stats.step >= control.max_steps
+                    || relaxation_converged(
+                        control,
+                        &total_stats,
+                        previous_total_energy,
+                        plan.gyromagnetic_ratio,
+                        plan.material.damping,
+                        pure_damping_relax,
+                    )
+            });
+            previous_total_energy = Some(total_stats.e_total);
+            if stop_for_relaxation {
+                break;
+            }
+        }
+
+        Ok(RunResult {
+            status: if cancelled {
+                RunStatus::Cancelled
+            } else {
+                RunStatus::Completed
+            },
+            steps,
+            final_magnetization: self.backend.copy_m(self.node_count)?,
+        })
+    }
+
+    fn execute_with_live_preview_streaming(
+        &mut self,
+        plan: &FemPlanIR,
+        until_seconds: f64,
+        outputs: &[OutputIR],
+        field_every_n: u64,
+        artifact_writer: Option<ArtifactPipelineSender>,
+        preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+        on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+    ) -> Result<ExecutedRun, RunError> {
+        if !self.plan_signature.eq(&normalize_fem_plan_signature(plan)) {
+            return Err(RunError {
+                message:
+                    "interactive FEM GPU runtime plan mismatch; caller must rebuild runtime before executing"
+                        .to_string(),
+            });
+        }
+        if until_seconds <= 0.0 {
+            return Err(RunError {
+                message: "interactive runtime until_seconds must be positive".to_string(),
+            });
+        }
+
+        let initial_magnetization = self.backend.copy_m(self.node_count)?;
+        let mut artifacts = if let Some(writer) = artifact_writer {
+            ArtifactRecorder::streaming(self.provenance.clone(), writer)
+        } else {
+            ArtifactRecorder::in_memory(self.provenance.clone())
+        };
+        let mut scalar_schedules = collect_scalar_schedules(outputs)?;
+        let mut field_schedules = collect_field_schedules(outputs)?;
+        let default_scalar_trace = scalar_schedules.is_empty();
+        capture_initial_native_fem_runtime_fields(
+            &self.backend,
+            self.node_count,
+            &mut field_schedules,
+            &mut artifacts,
+        )?;
+
+        let base_step = self.total_steps;
+        let base_time = self.total_time;
+        let mut dt = plan
+            .fixed_timestep
+            .or_else(|| {
+                plan.adaptive_timestep
+                    .as_ref()
+                    .and_then(|adaptive| adaptive.dt_initial)
+            })
+            .unwrap_or(1e-13);
+        let mut previous_total_energy: Option<f64> = None;
+        let mut last_preview_revision: Option<u64> = None;
+        let mut cancelled = false;
+        let mut steps: Vec<StepStats> = Vec::new();
+        let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+        let mut latest_local_stats: Option<StepStats> = None;
+
+        while self.total_time - base_time < until_seconds {
+            let dt_step = dt.min(until_seconds - (self.total_time - base_time));
+            let total_stats = self.backend.step(dt_step)?;
+            self.total_steps = total_stats.step;
+            self.total_time = total_stats.time;
+            if let Some(next) = total_stats.dt_suggested {
+                dt = next;
+            }
+
+            let mut local_stats = total_stats.clone();
+            local_stats.step -= base_step;
+            local_stats.time -= base_time;
+            latest_local_stats = Some(local_stats.clone());
+            let preview_cfg = preview_request();
+            let preview_emit_every = u64::from(preview_cfg.every_n.max(1));
+            let preview_due = last_preview_revision != Some(preview_cfg.revision)
+                || local_stats.step <= 1
+                || local_stats.step % preview_emit_every == 0;
+            let preview_field = if preview_due {
+                last_preview_revision = Some(preview_cfg.revision);
+                Some(
+                    self.backend
+                        .copy_live_preview_field(&preview_cfg, self.node_count)?,
+                )
+            } else {
+                None
+            };
+            let scalar_row_due =
+                local_stats.step <= 1 || local_stats.step % field_every_n.max(1) == 0;
+            let action = on_step(StepUpdate {
+                stats: local_stats.clone(),
+                grid: [0, 0, 0],
+                fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),
+                magnetization: None,
+                preview_field,
+                scalar_row_due,
+                finished: false,
+            });
+            if action == StepAction::Stop {
+                cancelled = true;
+                break;
+            }
+
+            record_due_native_fem_runtime_outputs(
+                &self.backend,
+                self.node_count,
+                &local_stats,
+                &mut scalar_schedules,
+                &mut field_schedules,
+                &mut steps,
+                &mut artifacts,
+            )?;
+
+            let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
+                local_stats.step >= control.max_steps
+                    || relaxation_converged(
+                        control,
+                        &total_stats,
+                        previous_total_energy,
+                        plan.gyromagnetic_ratio,
+                        plan.material.damping,
+                        pure_damping_relax,
+                    )
+            });
+            previous_total_energy = Some(total_stats.e_total);
+            if stop_for_relaxation {
+                break;
+            }
+        }
+
+        record_final_native_fem_runtime_outputs(
+            &self.backend,
+            self.node_count,
+            latest_local_stats,
+            default_scalar_trace,
+            &scalar_schedules,
+            &field_schedules,
+            &mut steps,
+            &mut artifacts,
+        )?;
+
+        let final_magnetization = self.backend.copy_m(self.node_count)?;
+        let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+        Ok(ExecutedRun {
+            result: RunResult {
+                status: if cancelled {
+                    RunStatus::Cancelled
+                } else {
+                    RunStatus::Completed
+                },
+                steps,
+                final_magnetization,
+            },
+            initial_magnetization,
+            field_snapshots,
+            field_snapshot_count,
+            provenance,
+        })
+    }
+}
+
 fn normalize_plan_signature(plan: &FdmPlanIR) -> FdmPlanIR {
+    let mut normalized = plan.clone();
+    normalized.initial_magnetization.clear();
+    normalized
+}
+
+fn normalize_fem_plan_signature(plan: &FemPlanIR) -> FemPlanIR {
     let mut normalized = plan.clone();
     normalized.initial_magnetization.clear();
     normalized
@@ -1328,6 +2004,168 @@ fn select_output_base_field_from_observables(
             })
         }
     })
+}
+
+#[cfg(feature = "fem-gpu")]
+fn capture_initial_native_fem_runtime_fields(
+    backend: &NativeFemBackend,
+    node_count: usize,
+    field_schedules: &mut [OutputSchedule],
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    let due_field_names = field_schedules
+        .iter()
+        .filter(|schedule| is_due(0.0, schedule.next_time))
+        .map(|schedule| schedule.name.clone())
+        .collect::<Vec<_>>();
+
+    for name in due_field_names {
+        artifacts.record_field_snapshot(FieldSnapshot {
+            name: name.clone(),
+            step: 0,
+            time: 0.0,
+            solver_dt: 0.0,
+            values: copy_native_fem_field_values(backend, node_count, &name)?,
+        })?;
+    }
+    advance_due_schedules(field_schedules, 0.0);
+    Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn record_due_native_fem_runtime_outputs(
+    backend: &NativeFemBackend,
+    node_count: usize,
+    stats: &StepStats,
+    scalar_schedules: &mut [OutputSchedule],
+    field_schedules: &mut [OutputSchedule],
+    steps: &mut Vec<StepStats>,
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    let scalar_due = scalar_schedules
+        .iter()
+        .any(|schedule| is_due(stats.time, schedule.next_time));
+    if scalar_due {
+        artifacts.record_scalar(stats)?;
+        steps.push(stats.clone());
+        advance_due_schedules(scalar_schedules, stats.time);
+    }
+
+    let due_field_names = field_schedules
+        .iter()
+        .filter(|schedule| is_due(stats.time, schedule.next_time))
+        .map(|schedule| schedule.name.clone())
+        .collect::<Vec<_>>();
+    for name in due_field_names {
+        artifacts.record_field_snapshot(FieldSnapshot {
+            name: name.clone(),
+            step: stats.step,
+            time: stats.time,
+            solver_dt: stats.dt,
+            values: copy_native_fem_field_values(backend, node_count, &name)?,
+        })?;
+    }
+    advance_due_schedules(field_schedules, stats.time);
+    Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn record_final_native_fem_runtime_outputs(
+    backend: &NativeFemBackend,
+    node_count: usize,
+    latest_stats: Option<StepStats>,
+    default_scalar_trace: bool,
+    scalar_schedules: &[OutputSchedule],
+    field_schedules: &[OutputSchedule],
+    steps: &mut Vec<StepStats>,
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    let Some(latest_stats) = latest_stats else {
+        return Ok(());
+    };
+
+    let need_scalar = default_scalar_trace
+        || steps
+            .last()
+            .map(|stats| !same_time(stats.time, latest_stats.time))
+            .unwrap_or(true);
+    if need_scalar {
+        artifacts.record_scalar(&latest_stats)?;
+        steps.push(latest_stats.clone());
+    }
+
+    let missing_field_names = field_schedules
+        .iter()
+        .filter(|schedule| {
+            schedule
+                .last_sampled_time
+                .map(|sampled| !same_time(sampled, latest_stats.time))
+                .unwrap_or(true)
+        })
+        .map(|schedule| schedule.name.clone())
+        .collect::<Vec<_>>();
+
+    for name in &missing_field_names {
+        artifacts.record_field_snapshot(FieldSnapshot {
+            name: name.clone(),
+            step: latest_stats.step,
+            time: latest_stats.time,
+            solver_dt: latest_stats.dt,
+            values: copy_native_fem_field_values(backend, node_count, name)?,
+        })?;
+    }
+    let _ = scalar_schedules;
+    Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn copy_native_fem_field_values(
+    backend: &NativeFemBackend,
+    node_count: usize,
+    name: &str,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    if let Some(dot_pos) = name.find('.') {
+        let base = &name[..dot_pos];
+        let component = &name[dot_pos + 1..];
+        let full = copy_native_fem_base_field_values(backend, node_count, base)?;
+        let idx = match component {
+            "x" => 0,
+            "y" => 1,
+            "z" => 2,
+            other => {
+                return Err(RunError {
+                    message: format!(
+                        "unsupported interactive FEM snapshot component '{}' in '{}'",
+                        other, name
+                    ),
+                })
+            }
+        };
+        return Ok(full.iter().map(|value| [value[idx], 0.0, 0.0]).collect());
+    }
+
+    copy_native_fem_base_field_values(backend, node_count, name)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn copy_native_fem_base_field_values(
+    backend: &NativeFemBackend,
+    node_count: usize,
+    name: &str,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    match name {
+        "m" => backend.copy_m(node_count),
+        "H_ex" => backend.copy_h_ex(node_count),
+        "H_demag" => backend.copy_h_demag(node_count),
+        "H_ext" => backend.copy_h_ext(node_count),
+        "H_eff" => backend.copy_h_eff(node_count),
+        other => Err(RunError {
+            message: format!(
+                "unsupported interactive FEM output field snapshot '{}'",
+                other
+            ),
+        }),
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -1484,7 +2322,10 @@ fn copy_cuda_base_field_values(
         "H_ext" => backend.copy_h_ext(cell_count),
         "H_eff" => backend.copy_h_eff(cell_count),
         other => Err(RunError {
-            message: format!("unsupported interactive CUDA output field snapshot '{}'", other),
+            message: format!(
+                "unsupported interactive CUDA output field snapshot '{}'",
+                other
+            ),
         }),
     }
 }
@@ -1527,6 +2368,39 @@ fn cuda_execution_provenance(
             None
         },
         fft_backend: if plan.enable_demag {
+            Some("cuFFT".to_string())
+        } else {
+            None
+        },
+        device_name: Some(device_info.name.clone()),
+        compute_capability: Some(device_info.compute_capability.clone()),
+        cuda_driver_version: Some(device_info.driver_version),
+        cuda_runtime_version: Some(device_info.runtime_version),
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn fem_gpu_execution_provenance(
+    plan: &FemPlanIR,
+    device_info: &FemDeviceInfo,
+) -> ExecutionProvenance {
+    ExecutionProvenance {
+        execution_engine: "native_fem_gpu".to_string(),
+        precision: match plan.precision {
+            fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
+            fullmag_ir::ExecutionPrecision::Double => "double".to_string(),
+        },
+        demag_operator_kind: if plan.enable_demag {
+            Some(match plan.demag_realization.as_deref() {
+                Some("poisson_airbox") => "fem_poisson_airbox".to_string(),
+                _ => "fem_transfer_grid_tensor_fft_newell".to_string(),
+            })
+        } else {
+            None
+        },
+        fft_backend: if plan.enable_demag
+            && plan.demag_realization.as_deref() != Some("poisson_airbox")
+        {
             Some("cuFFT".to_string())
         } else {
             None

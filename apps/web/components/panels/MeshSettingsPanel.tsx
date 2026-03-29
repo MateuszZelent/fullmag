@@ -2,6 +2,10 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { cn } from "@/lib/utils";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { Input } from "../ui/input";
+import { Switch } from "../ui/switch";
+import { Button } from "../ui/button";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
 
@@ -269,31 +273,39 @@ export default function MeshSettingsPanel({
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">2D surface</span>
             <div className="flex-1 max-w-[140px]">
-              <select
-                className="w-full appearance-none bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary disabled:opacity-50"
+              <Select
                 value={String(options.algorithm2d)}
-                onChange={(e) => set({ algorithm2d: Number(e.target.value) })}
+                onValueChange={(val) => set({ algorithm2d: Number(val) })}
                 disabled={disabled}
               >
-                {ALGO_2D_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
+                <SelectTrigger className="h-7 w-full border-border/50 bg-card text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ALGO_2D_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">3D volume</span>
             <div className="flex-1 max-w-[140px]">
-              <select
-                className="w-full appearance-none bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary disabled:opacity-50"
+              <Select
                 value={String(options.algorithm3d)}
-                onChange={(e) => set({ algorithm3d: Number(e.target.value) })}
+                onValueChange={(val) => set({ algorithm3d: Number(val) })}
                 disabled={disabled}
               >
-                {ALGO_3D_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
+                <SelectTrigger className="h-7 w-full border-border/50 bg-card text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ALGO_3D_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </div>
@@ -311,8 +323,8 @@ export default function MeshSettingsPanel({
               <span className="text-[0.55rem] text-muted-foreground/40">(primary)</span>
             </span>
             <div className="flex-1 max-w-[140px]">
-              <input
-                className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+              <Input
+                className="h-7 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50 focus-visible:ring-1"
                 type="text"
                 placeholder="auto"
                 value={options.hmax}
@@ -324,8 +336,8 @@ export default function MeshSettingsPanel({
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">hmin</span>
             <div className="flex-1 max-w-[140px]">
-              <input
-                className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+              <Input
+                className="h-7 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50 focus-visible:ring-1"
                 type="text"
                 placeholder="auto"
                 value={options.hmin}
@@ -337,8 +349,8 @@ export default function MeshSettingsPanel({
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">Size factor</span>
             <div className="flex-1 max-w-[140px]">
-              <input
-                className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+              <Input
+                className="h-7 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50 focus-visible:ring-1"
                 type="number"
                 step="0.1"
                 min="0.1"
@@ -352,8 +364,8 @@ export default function MeshSettingsPanel({
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">From curvature</span>
             <div className="flex-1 max-w-[140px]">
-              <input
-                className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+              <Input
+                className="h-7 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50 focus-visible:ring-1"
                 type="number"
                 step="1"
                 min="0"
@@ -376,24 +388,28 @@ export default function MeshSettingsPanel({
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">Method</span>
             <div className="flex-1 max-w-[140px]">
-              <select
-                className="w-full appearance-none bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary disabled:opacity-50"
+              <Select
                 value={options.optimize}
-                onChange={(e) => set({ optimize: e.target.value })}
+                onValueChange={(val) => set({ optimize: val })}
                 disabled={disabled}
               >
-                {OPTIMIZE_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
+                <SelectTrigger className="h-7 w-full border-border/50 bg-card text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {OPTIMIZE_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           {options.optimize !== "" && (
             <div className="flex items-center justify-between gap-3">
               <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">Iterations</span>
               <div className="flex-1 max-w-[140px]">
-                <input
-                  className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+                <Input
+                  className="h-7 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50 focus-visible:ring-1"
                   type="number"
                   step="1"
                   min="1"
@@ -408,8 +424,8 @@ export default function MeshSettingsPanel({
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">Smoothing</span>
             <div className="flex-1 max-w-[140px]">
-              <input
-                className="w-full bg-card border border-border/50 rounded-md py-1 px-2 text-xs text-foreground focus:outline-none focus:border-primary placeholder:text-muted-foreground/30 disabled:opacity-50 text-right font-mono"
+              <Input
+                className="h-7 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50 focus-visible:ring-1"
                 type="number"
                 step="1"
                 min="0"
@@ -436,22 +452,20 @@ export default function MeshSettingsPanel({
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between py-1">
             <span className="text-xs font-medium text-foreground">Extract quality metrics</span>
-            <input
-              type="checkbox"
-              className="accent-primary w-3 h-3"
+            <Switch
+              className="data-[state=checked]:bg-primary data-[state=unchecked]:bg-muted/80 h-[18px] w-8"
               checked={options.computeQuality}
-              onChange={(e) => set({ computeQuality: e.target.checked })}
+              onCheckedChange={(checked) => set({ computeQuality: checked })}
               disabled={disabled}
             />
           </div>
           {options.computeQuality && (
             <div className="flex items-center justify-between py-1">
               <span className="text-xs font-medium text-foreground">Per-element data</span>
-              <input
-                type="checkbox"
-                className="accent-primary w-3 h-3"
+              <Switch
+                className="data-[state=checked]:bg-primary data-[state=unchecked]:bg-muted/80 h-[18px] w-8"
                 checked={options.perElementQuality}
-                onChange={(e) => set({ perElementQuality: e.target.checked })}
+                onCheckedChange={(checked) => set({ perElementQuality: checked })}
                 disabled={disabled}
               />
             </div>
@@ -553,17 +567,18 @@ export default function MeshSettingsPanel({
       {/* ── Generate button ── */}
       {onGenerate && (
         <div className="flex flex-col gap-2 p-3 rounded-lg border border-border/40 bg-card/20 shadow-sm">
-          <button
-            className="w-full flex items-center justify-center gap-2 py-2 text-sm font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
+          <Button
+            className="w-full h-8 text-sm font-semibold"
+            variant="default"
             onClick={onGenerate}
             disabled={disabled || generating}
           >
             {generating ? (
-              <><span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" /> Generating…</>
+              <><span className="w-4 h-4 mr-2 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" /> Generating…</>
             ) : (
               "⚡ Generate Mesh"
             )}
-          </button>
+          </Button>
         </div>
       )}
     </div>

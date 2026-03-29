@@ -617,7 +617,11 @@ async fn main() {
         app
     };
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let port: u16 = std::env::var("FULLMAG_API_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8080);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!(%addr, "starting fullmag-api");
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -747,10 +751,7 @@ async fn get_current_live_events(
 }
 
 fn is_preview_control_command(command: &SessionCommand) -> bool {
-    matches!(
-        command.kind.as_str(),
-        "preview_update" | "preview_refresh"
-    )
+    matches!(command.kind.as_str(), "preview_update" | "preview_refresh")
 }
 
 async fn enqueue_current_control_command(
@@ -763,7 +764,11 @@ async fn enqueue_current_control_command(
         *next_seq
     };
     command.seq = seq;
-    state.current_control_queue.lock().await.push_back(command.clone());
+    state
+        .current_control_queue
+        .lock()
+        .await
+        .push_back(command.clone());
     let _ = state.current_control_events.send(seq);
     command
 }
@@ -1009,7 +1014,8 @@ async fn wait_current_live_control(
     Query(query): Query<ControlWaitQuery>,
 ) -> Result<Response, ApiError> {
     let _ = current_live_session_id(&state).await?;
-    if let Some(command) = take_next_current_control_command_after(&state, query.after_seq, true).await
+    if let Some(command) =
+        take_next_current_control_command_after(&state, query.after_seq, true).await
     {
         return Ok(Json(command).into_response());
     }
@@ -1387,7 +1393,9 @@ where
         ),
     )
     .await;
-    Ok(Json(serde_json::json!({ "status": "ok", "control_seq": command.seq })))
+    Ok(Json(
+        serde_json::json!({ "status": "ok", "control_seq": command.seq }),
+    ))
 }
 
 fn serialize_current_live_snapshot_event(

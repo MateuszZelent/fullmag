@@ -25,7 +25,7 @@ mod schedules;
 mod types;
 
 // Public re-exports (unchanged API surface).
-pub use interactive_runtime::InteractiveFdmPreviewRuntime;
+pub use interactive_runtime::{InteractiveFdmPreviewRuntime, InteractiveFemPreviewRuntime};
 pub use types::{
     ExecutionProvenance, FemMeshPayload, LivePreviewField, LivePreviewRequest,
     LiveVectorFieldSnapshot, RunError, RunResult, RunStatus, RuntimeEngineInfo, StepAction,
@@ -448,9 +448,13 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview(
     };
     let pipeline_summary = pipeline_summary?;
 
-    if let Err(error) =
-        artifacts::write_artifacts(output_dir, problem, &plan, &executed, Some(&pipeline_summary))
-    {
+    if let Err(error) = artifacts::write_artifacts(
+        output_dir,
+        problem,
+        &plan,
+        &executed,
+        Some(&pipeline_summary),
+    ) {
         return Err(RunError {
             message: format!("Failed to write artifacts: {}", error),
         });
@@ -481,6 +485,108 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview(
         grid: fdm.grid.cells,
         fem_mesh: None,
         magnetization: Some(final_m),
+        preview_field: None,
+        scalar_row_due: true,
+        finished: true,
+    });
+
+    Ok(executed.result)
+}
+
+/// Run a FEM problem using a persistent interactive runtime for low-latency
+/// live preview and interactive follow-up commands.
+pub fn run_problem_with_interactive_fem_runtime_live_preview(
+    runtime: &mut InteractiveFemPreviewRuntime,
+    problem: &ProblemIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    preview_request: &(dyn Fn() -> LivePreviewRequest + Send + Sync),
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let plan = fullmag_plan::plan(problem)?;
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return Err(RunError {
+            message: "interactive FEM runtime execute path requires a FEM execution plan"
+                .to_string(),
+        });
+    };
+
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
+        output_dir.to_path_buf(),
+        artifacts::build_field_context(problem, &plan),
+        artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
+    )?;
+    let artifact_writer = Some(artifact_pipeline.sender());
+
+    let executed_result = runtime.execute_with_live_preview_streaming(
+        fem,
+        until_seconds,
+        &plan.output_plan.outputs,
+        field_every_n,
+        artifact_writer,
+        preview_request,
+        &mut on_step,
+    );
+    let pipeline_summary = artifact_pipeline.finish();
+    let executed = match executed_result {
+        Ok(executed) => executed,
+        Err(error) => {
+            if let Err(writer_error) = pipeline_summary {
+                return Err(RunError {
+                    message: format!(
+                        "{}\nartifact pipeline shutdown also failed: {}",
+                        error.message, writer_error.message
+                    ),
+                });
+            }
+            return Err(error);
+        }
+    };
+    let pipeline_summary = pipeline_summary?;
+
+    if let Err(error) = artifacts::write_artifacts(
+        output_dir,
+        problem,
+        &plan,
+        &executed,
+        Some(&pipeline_summary),
+    ) {
+        return Err(RunError {
+            message: format!("Failed to write artifacts: {}", error),
+        });
+    }
+
+    let final_stats = executed.result.steps.last().cloned().unwrap_or(StepStats {
+        step: 0,
+        time: 0.0,
+        dt: 0.0,
+        e_ex: 0.0,
+        e_demag: 0.0,
+        e_ext: 0.0,
+        e_total: 0.0,
+        max_dm_dt: 0.0,
+        max_h_eff: 0.0,
+        max_h_demag: 0.0,
+        wall_time_ns: 0,
+        ..StepStats::default()
+    });
+    on_step(StepUpdate {
+        stats: final_stats,
+        grid: [0, 0, 0],
+        fem_mesh: Some(FemMeshPayload {
+            nodes: fem.mesh.nodes.clone(),
+            elements: fem.mesh.elements.clone(),
+            boundary_faces: fem.mesh.boundary_faces.clone(),
+        }),
+        magnetization: Some(
+            executed
+                .result
+                .final_magnetization
+                .iter()
+                .flat_map(|vector| vector.iter().copied())
+                .collect(),
+        ),
         preview_field: None,
         scalar_row_due: true,
         finished: true,
@@ -527,10 +633,10 @@ pub fn snapshot_problem_vector_fields(
                 "interactive vector-field cache is not supported for FDM multilayer backends yet"
                     .to_string(),
         }),
-        BackendPlanIR::Fem(_) => Err(RunError {
-            message: "interactive vector-field cache is not supported for FEM backends yet"
-                .to_string(),
-        }),
+        BackendPlanIR::Fem(fem) => {
+            let engine = dispatch::resolve_fem_engine(problem)?;
+            dispatch::snapshot_fem_vector_fields(engine, fem, quantities, request)
+        }
     }
 }
 

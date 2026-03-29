@@ -1,5 +1,7 @@
 "use client";
 
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
 import { cn } from "@/lib/utils";
 import MagnetizationSlice2D from "../../preview/MagnetizationSlice2D";
 import MagnetizationView3D from "../../preview/MagnetizationView3D";
@@ -64,81 +66,93 @@ export function ViewportBar() {
       ) : (
         <>
           <span className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/40 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">Qty</span>
-          <select
-            className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
+          <Select
             value={ctx.selectedQuantity}
-            onChange={(e) => ctx.requestPreviewQuantity(e.target.value)}
+            onValueChange={(val) => ctx.requestPreviewQuantity(val)}
             disabled={ctx.previewBusy}
           >
-            {((ctx.quantityOptions).length
-              ? ctx.quantityOptions
-              : [{ value: "m", label: "Magnetization", disabled: false }]).map((opt) => (
-              <option key={opt.value} value={opt.value} disabled={opt.disabled}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="h-6 min-w-[120px] max-w-[200px] border-border/40 bg-card/30 text-[0.65rem]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {((ctx.quantityOptions).length
+                ? ctx.quantityOptions
+                : [{ value: "m", label: "Magnetization", disabled: false }]).map((opt) => (
+                <SelectItem key={opt.value} value={opt.value} disabled={opt.disabled}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
           <span className="w-[1px] h-4 bg-border/40 shrink-0" />
           <span className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/40 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">Comp</span>
           {ctx.previewControlsActive ? (
-            <select
-              className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
+            <Select
               value={ctx.requestedPreviewComponent}
-              onChange={(e) => void ctx.updatePreview("/component", { component: e.target.value })}
+              onValueChange={(val) => void ctx.updatePreview("/component", { component: val })}
               disabled={ctx.previewBusy}
             >
-              <option value="3D">3D</option>
-              <option value="x">x</option>
-              <option value="y">y</option>
-              <option value="z">z</option>
-            </select>
+              <SelectTrigger className="h-6 w-[60px] border-border/40 bg-card/30 text-[0.65rem] justify-between">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="3D">3D</SelectItem>
+                <SelectItem value="x">x</SelectItem>
+                <SelectItem value="y">y</SelectItem>
+                <SelectItem value="z">z</SelectItem>
+              </SelectContent>
+            </Select>
           ) : (
-            <select
-              className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
+            <Select
               value={ctx.component}
-              onChange={(e) => ctx.setComponent(e.target.value as any)}
+              onValueChange={(val) => ctx.setComponent(val as any)}
             >
-              <option value="magnitude">|v|</option>
-              <option value="x">x</option>
-              <option value="y">y</option>
-              <option value="z">z</option>
-            </select>
+              <SelectTrigger className="h-6 w-[60px] border-border/40 bg-card/30 text-[0.65rem] justify-between">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="magnitude">|v|</SelectItem>
+                <SelectItem value="x">x</SelectItem>
+                <SelectItem value="y">y</SelectItem>
+                <SelectItem value="z">z</SelectItem>
+              </SelectContent>
+            </Select>
           )}
 
           {ctx.previewControlsActive && (
             <>
               <span className="w-[1px] h-4 bg-border/40 shrink-0" />
               <span className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/40 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">Every</span>
-              <select
-                className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
-                value={ctx.requestedPreviewEveryN}
-                onChange={(e) =>
-                  void ctx.updatePreview("/everyN", { everyN: Number(e.target.value) })
-                }
+              <Select
+                value={String(ctx.requestedPreviewEveryN)}
+                onValueChange={(val) => void ctx.updatePreview("/everyN", { everyN: Number(val) })}
                 disabled={ctx.previewBusy}
               >
-                {ctx.previewEveryNOptions.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-6 w-[60px] border-border/40 bg-card/30 text-[0.65rem]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ctx.previewEveryNOptions.map((val) => (
+                    <SelectItem key={val} value={String(val)}>{val}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <span className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/40 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">Pts</span>
-              <select
-                className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
-                value={ctx.requestedPreviewMaxPoints}
-                onChange={(e) =>
-                  void ctx.updatePreview("/maxPoints", { maxPoints: Number(e.target.value) })
-                }
+              <Select
+                value={String(ctx.requestedPreviewMaxPoints)}
+                onValueChange={(val) => void ctx.updatePreview("/maxPoints", { maxPoints: Number(val) })}
                 disabled={ctx.previewBusy}
               >
-                {ctx.previewMaxPointOptions.map((value) => (
-                  <option key={value} value={value}>
-                    {fmtPreviewMaxPoints(value)}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-6 w-[70px] border-border/40 bg-card/30 text-[0.65rem]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ctx.previewMaxPointOptions.map((val) => (
+                    <SelectItem key={val} value={String(val)}>{fmtPreviewMaxPoints(val)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </>
           )}
 
@@ -148,31 +162,35 @@ export function ViewportBar() {
                 <>
                   <span className="w-[1px] h-4 bg-border/40 shrink-0" />
                   <span className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/40 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">X</span>
-                  <select
-                    className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
-                    value={ctx.requestedPreviewXChosenSize}
-                    onChange={(e) =>
-                      void ctx.updatePreview("/XChosenSize", { xChosenSize: Number(e.target.value) })
-                    }
+                  <Select
+                    value={String(ctx.requestedPreviewXChosenSize)}
+                    onValueChange={(val) => void ctx.updatePreview("/XChosenSize", { xChosenSize: Number(val) })}
                     disabled={ctx.previewBusy}
                   >
-                    {ctx.preview.x_possible_sizes.map((size) => (
-                      <option key={size} value={size}>{size}</option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="h-6 w-[60px] border-border/40 bg-card/30 text-[0.65rem]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ctx.preview.x_possible_sizes.map((size) => (
+                        <SelectItem key={size} value={String(size)}>{size}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <span className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/40 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">Y</span>
-                  <select
-                    className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
-                    value={ctx.requestedPreviewYChosenSize}
-                    onChange={(e) =>
-                      void ctx.updatePreview("/YChosenSize", { yChosenSize: Number(e.target.value) })
-                    }
+                  <Select
+                    value={String(ctx.requestedPreviewYChosenSize)}
+                    onValueChange={(val) => void ctx.updatePreview("/YChosenSize", { yChosenSize: Number(val) })}
                     disabled={ctx.previewBusy}
                   >
-                    {ctx.preview.y_possible_sizes.map((size) => (
-                      <option key={size} value={size}>{size}</option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="h-6 w-[60px] border-border/40 bg-card/30 text-[0.65rem]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ctx.preview.y_possible_sizes.map((size) => (
+                        <SelectItem key={size} value={String(size)}>{size}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </>
               )}
               <label className="inline-flex items-center gap-1.5 text-[0.65rem] text-muted-foreground [accent-color:hsl(var(--primary))]">
@@ -221,25 +239,27 @@ export function ViewportBar() {
                 <>
                   <span className="w-[1px] h-4 bg-border/40 shrink-0" />
                   <span className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/40 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">Plane</span>
-                  <select
-                    className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
-                    value={ctx.plane}
-                    onChange={(e) => ctx.setPlane(e.target.value as any)}
-                  >
-                    <option value="xy">XY</option>
-                    <option value="xz">XZ</option>
-                    <option value="yz">YZ</option>
-                  </select>
+                  <Select value={ctx.plane} onValueChange={(val) => ctx.setPlane(val as any)}>
+                    <SelectTrigger className="h-6 w-16 bg-card/30 border-border/40 text-[0.65rem]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="xy">XY</SelectItem>
+                      <SelectItem value="xz">XZ</SelectItem>
+                      <SelectItem value="yz">YZ</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <span className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/40 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">Slice</span>
-                  <select
-                    className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
-                    value={ctx.sliceIndex}
-                    onChange={(e) => ctx.setSliceIndex(Number(e.target.value))}
-                  >
-                    {Array.from({ length: ctx.maxSliceCount }, (_, i) => (
-                      <option key={i} value={i}>{i + 1}</option>
-                    ))}
-                  </select>
+                  <Select value={String(ctx.sliceIndex)} onValueChange={(val) => ctx.setSliceIndex(Number(val))}>
+                    <SelectTrigger className="h-6 min-w-[3.5rem] bg-card/30 border-border/40 text-[0.65rem]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Array.from({ length: ctx.maxSliceCount }, (_, i) => (
+                        <SelectItem key={i} value={String(i)}>{i + 1}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </>
               )}
             </>
@@ -247,25 +267,27 @@ export function ViewportBar() {
             <>
               <span className="w-[1px] h-4 bg-border/40 shrink-0" />
               <span className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/40 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">Plane</span>
-              <select
-                className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
-                value={ctx.plane}
-                onChange={(e) => ctx.setPlane(e.target.value as any)}
-              >
-                <option value="xy">XY</option>
-                <option value="xz">XZ</option>
-                <option value="yz">YZ</option>
-              </select>
+              <Select value={ctx.plane} onValueChange={(val) => ctx.setPlane(val as any)}>
+                <SelectTrigger className="h-6 w-16 bg-card/30 border-border/40 text-[0.65rem]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="xy">XY</SelectItem>
+                  <SelectItem value="xz">XZ</SelectItem>
+                  <SelectItem value="yz">YZ</SelectItem>
+                </SelectContent>
+              </Select>
               <span className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/40 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">Slice</span>
-              <select
-                className="appearance-none bg-card/30 border border-border/40 rounded text-foreground text-[0.65rem] py-1 px-1.5 cursor-pointer min-w-0 focus:outline-none focus:border-primary"
-                value={ctx.sliceIndex}
-                onChange={(e) => ctx.setSliceIndex(Number(e.target.value))}
-              >
-                {Array.from({ length: ctx.maxSliceCount }, (_, i) => (
-                  <option key={i} value={i}>{i + 1}</option>
-                ))}
-              </select>
+              <Select value={String(ctx.sliceIndex)} onValueChange={(val) => ctx.setSliceIndex(Number(val))}>
+                <SelectTrigger className="h-6 min-w-[3.5rem] bg-card/30 border-border/40 text-[0.65rem]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: ctx.maxSliceCount }, (_, i) => (
+                    <SelectItem key={i} value={String(i)}>{i + 1}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </>
           )}
         </>
