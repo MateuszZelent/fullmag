@@ -170,13 +170,14 @@ export default function DockCenterTabs() {
         <>
           {(spatialPreview?.auto_downscaled || tp.liveState?.preview_auto_downscaled) && (
             <div
-              className="border-b border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs leading-snug text-amber-500"
+              className="border-b border-border/25 bg-background/40 px-2.5 py-1 text-[0.65rem] leading-tight text-muted-foreground"
               title={
                 spatialPreview?.auto_downscale_message ??
                 tp.liveState?.preview_auto_downscale_message ??
                 undefined
               }
             >
+              <span className="opacity-70 uppercase tracking-wider font-semibold mr-2 text-[0.6rem]">Resolution Scale</span>
               {spatialPreview?.auto_downscale_message ??
                 tp.liveState?.preview_auto_downscale_message ??
                 `Preview auto-fit to ${vp.previewGrid[0]}×${vp.previewGrid[1]}×${vp.previewGrid[2]}`}
@@ -198,15 +199,16 @@ export default function DockCenterTabs() {
         onValueChange={(nextId) => activateTab(currentStage, nextId)}
         className="flex min-h-0 min-w-0 flex-1 flex-col"
       >
-        <div className="shrink-0 border-b border-border/25 bg-card/20 px-2 py-1.5">
-          <TabsList className="h-8 w-full justify-start gap-1 overflow-x-auto bg-transparent p-0">
+        <div className="shrink-0 border-b border-border bg-card/40 px-2 pt-1.5">
+          <TabsList className="h-8 w-full justify-start gap-1 overflow-x-auto bg-transparent p-0 pb-0">
             {tabs.map((tab) => (
               <TabsTrigger
                 key={tab.id}
                 value={tab.id}
                 className={cn(
-                  "group h-7 min-w-[120px] max-w-[220px] justify-start gap-1 rounded-md border border-transparent px-2.5 py-0 text-[0.7rem] normal-case tracking-wide",
-                  "data-[state=active]:border-border/35 data-[state=active]:bg-background/60",
+                  "group relative h-8 min-w-[120px] max-w-[220px] justify-start gap-1 rounded-none rounded-t-md border-b-0 border border-transparent bg-transparent px-2.5 py-0 text-[0.7rem] normal-case tracking-wide text-muted-foreground transition-colors hover:text-foreground",
+                  "data-[state=active]:border-border data-[state=active]:border-t-2 data-[state=active]:border-t-primary data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-none",
+                  "after:absolute after:-bottom-[1px] after:left-0 after:right-0 after:h-[1px] data-[state=active]:after:bg-background"
                 )}
                 title={tab.title}
               >

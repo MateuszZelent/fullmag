@@ -146,7 +146,11 @@
     --z-modal: 2000;
     --z-toast: 3000;
 
-    /* Shadows */
+    /* Glass Effects */
+    --glass-bg: hsl(var(--card) / 0.65);
+    --glass-blur: 16px;
+    --glass-border: hsl(var(--border) / 0.5);
+    --glass-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
     --shadow-glass: 0 4px 24px rgba(0, 0, 0, 0.2);
     --shadow-glass-side: 4px 0 24px rgba(0, 0, 0, 0.2);
   }

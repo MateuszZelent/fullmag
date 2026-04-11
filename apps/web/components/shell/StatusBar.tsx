@@ -223,7 +223,7 @@ export default function StatusBar({
                 detail={pipelineDetail}
                 mode={pipelineProgressMode}
                 value={pipelineProgressValue}
-                tone="amber"
+                tone="sky"
               />
             ) : null}
             {stageLabel ? (
@@ -242,7 +242,7 @@ export default function StatusBar({
           {hasSolverTelemetry ? (
             <>
               <Sparkline values={eTotalSpark} stroke="#0ea5e9" title="E_total trend" />
-              <Sparkline values={dmDtSpark} stroke="#f59e0b" title="max dm/dt trend" />
+              <Sparkline values={dmDtSpark} stroke="#89b4fa" title="max dm/dt trend" />
               <Sparkline values={dtSpark} stroke="#10b981" title="solver dt trend" />
             </>
           ) : (
@@ -295,14 +295,14 @@ export default function StatusBar({
                   "rounded-full border px-2 py-0.5 text-[0.58rem] font-bold uppercase tracking-[0.16em]",
                   solverAccelerator === "GPU"
                     ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
-                    : "border-amber-500/25 bg-amber-500/10 text-amber-300",
+                    : "border-primary/25 bg-primary/10 text-primary",
                 )}>
                   Solver {solverAccelerator}
                 </span>
                 <span className="h-3 w-px bg-border/50" />
               </>
             ) : null}
-            <span className={cn("font-medium text-[0.62rem]", runtimeCanAcceptCommands ? "text-emerald-400" : "text-amber-400")}>
+            <span className={cn("font-medium text-[0.62rem]", runtimeCanAcceptCommands ? "text-emerald-400" : "text-muted-foreground/70")}>
               {runtimeCanAcceptCommands ? "Ready" : "Busy"}
             </span>
             <span className="h-3 w-px bg-border/50" />
