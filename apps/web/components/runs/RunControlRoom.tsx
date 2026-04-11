@@ -66,6 +66,7 @@ import type { WorkspaceMode } from "./control-room/context-hooks";
 import SettingsDialog from "../workspace/overlays/SettingsDialog";
 import PhysicsDocsDrawer from "../workspace/overlays/PhysicsDocsDrawer";
 import BottomUtilityDock from "../workspace/shell/BottomUtilityDock";
+import WorkspaceDockingShell from "../workspace/docking/WorkspaceDockingShell";
 import { useActiveStageLayout, useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
@@ -1105,102 +1106,106 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
           />
         </div>
       ) : null}
-      <PanelGroup
-        orientation="horizontal"
-        className="flex flex-row flex-1 min-h-0 min-w-0 overflow-hidden"
-        resizeTargetMinimumSize={{ coarse: 40, fine: 12 }}
-      >
-        {FRONTEND_DIAGNOSTIC_FLAGS.shell.showSidebar && !ctx.sidebarCollapsed && (
-          <>
-            <Panel
-              id="workspace-sidebar"
-              defaultSize={PANEL_SIZES.sidebarDefault}
-              minSize={PANEL_SIZES.sidebarMin}
-              maxSize={PANEL_SIZES.sidebarMax}
-              collapsible
-              collapsedSize="0%"
-            >
-              <RunSidebar />
-            </Panel>
-            <PanelResizeHandle className="h-full w-2 bg-transparent cursor-ew-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:w-[2px] after:h-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
-          </>
-        )}
-
-        <Panel
-          id="workspace-main"
-          defaultSize={ctx.sidebarCollapsed ? "100%" : PANEL_SIZES.bodyMainDefault}
-          minSize={PANEL_SIZES.bodyMainMin}
+      {FRONTEND_DIAGNOSTIC_FLAGS.shell.useDockingShell ? (
+        <WorkspaceDockingShell />
+      ) : (
+        <PanelGroup
+          orientation="horizontal"
+          className="flex flex-row flex-1 min-h-0 min-w-0 overflow-hidden"
+          resizeTargetMinimumSize={{ coarse: 40, fine: 12 }}
         >
-          <PanelGroup
-            key={layoutBucket}
-            orientation="vertical"
-            className="relative flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden"
-            resizeTargetMinimumSize={{ coarse: 40, fine: 10 }}
+          {FRONTEND_DIAGNOSTIC_FLAGS.shell.showSidebar && !ctx.sidebarCollapsed && (
+            <>
+              <Panel
+                id="workspace-sidebar"
+                defaultSize={PANEL_SIZES.sidebarDefault}
+                minSize={PANEL_SIZES.sidebarMin}
+                maxSize={PANEL_SIZES.sidebarMax}
+                collapsible
+                collapsedSize="0%"
+              >
+                <RunSidebar />
+              </Panel>
+              <PanelResizeHandle className="h-full w-2 bg-transparent cursor-ew-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:w-[2px] after:h-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
+            </>
+          )}
+
+          <Panel
+            id="workspace-main"
+            defaultSize={ctx.sidebarCollapsed ? "100%" : PANEL_SIZES.bodyMainDefault}
+            minSize={PANEL_SIZES.bodyMainMin}
           >
-            <Panel
-              id="workspace-viewport"
-              defaultSize={viewportPanelDefaultSize}
-              minSize={PANEL_SIZES.viewportMin}
+            <PanelGroup
+              key={layoutBucket}
+              orientation="vertical"
+              className="relative flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden"
+              resizeTargetMinimumSize={{ coarse: 40, fine: 10 }}
             >
-                <div className="flex flex-row h-full min-h-0 min-w-0 overflow-hidden bg-background flex-1 relative">
-                  <div className="flex flex-col flex-1 min-w-0 min-h-0">
-                    {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar ? <ViewportBar /> : null}
-                    {FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices ? previewNotices : null}
-                    <ViewportCanvasArea />
+              <Panel
+                id="workspace-viewport"
+                defaultSize={viewportPanelDefaultSize}
+                minSize={PANEL_SIZES.viewportMin}
+              >
+                  <div className="flex flex-row h-full min-h-0 min-w-0 overflow-hidden bg-background flex-1 relative">
+                    <div className="flex flex-col flex-1 min-w-0 min-h-0">
+                      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar ? <ViewportBar /> : null}
+                      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices ? previewNotices : null}
+                      <ViewportCanvasArea />
+                    </div>
                   </div>
-                </div>
-            </Panel>
+              </Panel>
 
-            <PanelResizeHandle className="w-full h-1 bg-transparent cursor-ns-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:h-[2px] after:w-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
+              <PanelResizeHandle className="w-full h-1 bg-transparent cursor-ns-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:h-[2px] after:w-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
 
-            <Panel
-              id="workspace-console"
-              defaultSize={consolePanelDefaultSize}
-              minSize={PANEL_SIZES.consoleMin}
-              maxSize={PANEL_SIZES.consoleMax}
-              collapsible
-              collapsedSize="3%"
-            >
-              {FRONTEND_DIAGNOSTIC_FLAGS.shell.showBottomDock ? <BottomUtilityDock
-                session={ctx.session ?? null}
-                run={ctx.run ?? null}
-                liveState={ctx.effectiveLiveState ?? null}
-                scalarRows={ctx.scalarRows}
-                engineLog={ctx.engineLog}
-                artifacts={ctx.artifacts}
-                connection={ctx.connection}
-                error={ctx.error}
-                convergenceThreshold={Number(ctx.solverSettings.torqueTolerance) || DEFAULT_CONVERGENCE_THRESHOLD}
-                commandStatus={ctx.commandStatus}
-                commandBusy={ctx.commandBusy}
-                commandMessage={ctx.commandMessage}
-                activity={ctx.activity}
-                meshWorkspace={ctx.meshWorkspace}
-                workspaceStatus={ctx.workspaceStatus}
-              /> : null}
-            </Panel>
-          </PanelGroup>
-        </Panel>
+              <Panel
+                id="workspace-console"
+                defaultSize={consolePanelDefaultSize}
+                minSize={PANEL_SIZES.consoleMin}
+                maxSize={PANEL_SIZES.consoleMax}
+                collapsible
+                collapsedSize="3%"
+              >
+                {FRONTEND_DIAGNOSTIC_FLAGS.shell.showBottomDock ? <BottomUtilityDock
+                  session={ctx.session ?? null}
+                  run={ctx.run ?? null}
+                  liveState={ctx.effectiveLiveState ?? null}
+                  scalarRows={ctx.scalarRows}
+                  engineLog={ctx.engineLog}
+                  artifacts={ctx.artifacts}
+                  connection={ctx.connection}
+                  error={ctx.error}
+                  convergenceThreshold={Number(ctx.solverSettings.torqueTolerance) || DEFAULT_CONVERGENCE_THRESHOLD}
+                  commandStatus={ctx.commandStatus}
+                  commandBusy={ctx.commandBusy}
+                  commandMessage={ctx.commandMessage}
+                  activity={ctx.activity}
+                  meshWorkspace={ctx.meshWorkspace}
+                  workspaceStatus={ctx.workspaceStatus}
+                /> : null}
+              </Panel>
+            </PanelGroup>
+          </Panel>
 
-        {/* ── Right inspector (mode-specific) ── */}
-        {FRONTEND_DIAGNOSTIC_FLAGS.shell.showRightInspector && rightInspectorOpen ? (
-          <>
-            <PanelResizeHandle className="h-full w-2 bg-transparent cursor-ew-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:w-[2px] after:h-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
-            <Panel
-              id="workspace-right-inspector"
-              defaultSize={rightInspectorDefaultSize}
-              minSize={rightInspectorMinSize}
-              maxSize={rightInspectorMaxSize}
-              collapsible
-              collapsedSize={0}
-            >
-              {ctx.workspaceMode === "build" && <BuildRightInspector />}
-              {ctx.workspaceMode === "study" && <StudyRightInspector />}
-              {ctx.workspaceMode === "analyze" && <AnalyzeRightInspector />}
-            </Panel>
-          </>
-        ) : null}
-      </PanelGroup>
+          {/* ── Right inspector (mode-specific) ── */}
+          {FRONTEND_DIAGNOSTIC_FLAGS.shell.showRightInspector && rightInspectorOpen ? (
+            <>
+              <PanelResizeHandle className="h-full w-2 bg-transparent cursor-ew-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:w-[2px] after:h-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
+              <Panel
+                id="workspace-right-inspector"
+                defaultSize={rightInspectorDefaultSize}
+                minSize={rightInspectorMinSize}
+                maxSize={rightInspectorMaxSize}
+                collapsible
+                collapsedSize={0}
+              >
+                {ctx.workspaceMode === "build" && <BuildRightInspector />}
+                {ctx.workspaceMode === "study" && <StudyRightInspector />}
+                {ctx.workspaceMode === "analyze" && <AnalyzeRightInspector />}
+              </Panel>
+            </>
+          ) : null}
+        </PanelGroup>
+      )}
 
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showStatusBar ? <StatusBar
         connection={ctx.connection}

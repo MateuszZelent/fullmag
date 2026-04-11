@@ -84,6 +84,7 @@ import type { MeshWorkspacePresetId } from "./meshWorkspace";
 import type { AnalyzeSelectionState, AnalyzeTab } from "./analyzeSelection";
 import type { VisibleSubmeshSnapshot } from "./submeshSnapshot";
 import type { ArrowVisibilityStatus } from "../../../features/viewport-fem/model/femArrowVisibility";
+import type { WorkspaceTab, WorkspaceTabInput, WorkspaceMode as WorkspaceStageMode } from "@/lib/workspace/workspace-store";
 
 /* ── Transport: high-frequency telemetry ── */
 export interface TransportContextValue {
@@ -355,6 +356,8 @@ export interface ModelContextValue {
   analyzeSelection: AnalyzeSelectionState;
   resultWorkspaceEntries: ResultWorkspaceEntry[];
   activeResultWorkspaceId: string | null;
+  workspaceTabs: WorkspaceTab[];
+  activeWorkspaceTabId: string | null;
   /* Actions */
   setSolverSettings: React.Dispatch<React.SetStateAction<SolverSettingsState>>;
   setSceneDocument: React.Dispatch<React.SetStateAction<SceneDocument | null>>;
@@ -433,6 +436,10 @@ export interface ModelContextValue {
   removeResultWorkspaceEntry: (id: string) => void;
   duplicateResultWorkspaceEntry: (id: string) => string | null;
   setResultWorkspacePinned: (id: string, pinned: boolean) => void;
+  openWorkspaceTab: (stage: WorkspaceStageMode, tab: WorkspaceTabInput) => string;
+  activateWorkspaceTab: (stage: WorkspaceStageMode, tabId: string | null) => void;
+  closeWorkspaceTab: (stage: WorkspaceStageMode, tabId: string) => void;
+  pinWorkspaceTab: (stage: WorkspaceStageMode, tabId: string, pinned: boolean) => void;
   requestFocusObject: (objectId: string) => void;
   handleStudyDomainMeshGenerate: (meshReason?: string) => Promise<void>;
   handleAirboxMeshGenerate: () => Promise<void>;

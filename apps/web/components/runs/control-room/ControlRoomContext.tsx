@@ -14,7 +14,7 @@ import {
   type GpuTelemetryResponse,
 } from "../../../lib/liveApiClient";
 import { useCurrentLiveStream } from "../../../lib/useSessionStream";
-import { useWorkspaceStore } from "../../../lib/workspace/workspace-store";
+import { coreTabIdForViewMode, useWorkspaceStore } from "../../../lib/workspace/workspace-store";
 import { useBuilderAutoSync } from "./hooks/useBuilderAutoSync";
 import { useDomainLayout } from "./hooks/useDomainLayout";
 import { useFemMeshDerived } from "./hooks/useFemMeshDerived";
@@ -171,6 +171,15 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   /* ── Local UI state ── */
   const workspaceMode = useWorkspaceStore((s) => s.currentStage);
   const _setPerspective = useWorkspaceStore((s) => s.setCurrentStage);
+  const workspaceTabs = useWorkspaceStore((s) => s.workspaceTabsByStage[s.currentStage]);
+  const activeWorkspaceTabId = useWorkspaceStore(
+    (s) => s.activeWorkspaceTabByStage[s.currentStage],
+  );
+  const openWorkspaceTab = useWorkspaceStore((s) => s.openTab);
+  const activateWorkspaceTab = useWorkspaceStore((s) => s.activateTab);
+  const closeWorkspaceTab = useWorkspaceStore((s) => s.closeTab);
+  const pinWorkspaceTab = useWorkspaceStore((s) => s.pinTab);
+  const syncWorkspaceTabsFromArtifacts = useWorkspaceStore((s) => s.syncTabsFromArtifacts);
   const setWorkspaceMode = useCallback(
     (v: WorkspaceMode | ((prev: WorkspaceMode) => WorkspaceMode)) => {
       _setPerspective(typeof v === "function" ? v(workspaceMode) : v);
@@ -407,6 +416,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const workspaceStatus =
     runtimeStatus?.code ?? liveState?.status ?? session?.status ?? run?.status ?? "idle";
   const runtimeUsesGpu = runtimeEngineAccelerator === "gpu" || /gpu|cuda/i.test(runtimeEngineLabel ?? "");
+
+  useEffect(() => {
+    syncWorkspaceTabsFromArtifacts(
+      "analyze",
+      artifactsArr.map((artifact) => artifact.path),
+    );
+  }, [artifactsArr, syncWorkspaceTabsFromArtifacts]);
 
   useEffect(() => {
     if (!runtimeUsesGpu) {
@@ -1087,6 +1103,15 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   /* Preview derived — keep the user's explicit viewport mode stable.
    * A transient preview payload should not silently downgrade 3D to 2D. */
   const effectiveViewMode = viewMode;
+  useEffect(() => {
+    activateWorkspaceTab(
+      workspaceMode,
+      coreTabIdForViewMode(
+        effectiveViewMode === "Analyze" ? "Analyze" : effectiveViewMode,
+      ),
+    );
+  }, [activateWorkspaceTab, effectiveViewMode, workspaceMode]);
+
   const requestedDisplaySelection = useMemo<DisplaySelection>(() => {
     if (optimisticDisplaySelection) {
       return optimisticDisplaySelection;
@@ -1799,10 +1824,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     analyzeSelection,
     resultWorkspaceEntries,
     activeResultWorkspaceId,
+    workspaceTabs,
+    activeWorkspaceTabId,
     setSolverSettings, setSceneDocument, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis, setMeshRenderMode, setMeshOpacity, setMeshClipEnabled, setMeshClipAxis,
     setMeshClipPos, setMeshShowArrows, setFemArrowColorMode, setFemArrowMonoColor, setFemArrowAlpha, setFemArrowLengthScale, setFemArrowThickness, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
     setFemVectorDomainFilter, setFemFerromagnetVisibilityMode,
     setSelectedSidebarNodeId, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setAirMeshVisible, setAirMeshOpacity, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
+    openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset,
     resetViewportDisplayState,
   }), [
@@ -1819,9 +1847,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshSummary, meshName, meshSource, meshExtent, meshBoundsMin, meshBoundsMax, meshFeOrder, liveMeshName,
     domainFrame, worldExtent, worldCenter, worldExtentSource, meshHmax, mesherBackend, mesherSourceKind, mesherCurrentSettings,
     meshWorkspacePreset,
-    selectedSidebarNodeId, selectedObjectId, viewportScope, focusObjectRequest, objectViewMode, airMeshVisible, airMeshOpacity, meshEntityViewState, visibleSubmeshSnapshot, selectedEntityId, focusedEntityId, meshParts, visibleMeshPartIds, visibleMagneticObjectIds, selectedMeshPart, focusedMeshPart, magneticParts, airPart, interfaceParts, analyzeSelection, resultWorkspaceEntries, activeResultWorkspaceId, requestFocusObject,
+    selectedSidebarNodeId, selectedObjectId, viewportScope, focusObjectRequest, objectViewMode, airMeshVisible, airMeshOpacity, meshEntityViewState, visibleSubmeshSnapshot, selectedEntityId, focusedEntityId, meshParts, visibleMeshPartIds, visibleMagneticObjectIds, selectedMeshPart, focusedMeshPart, magneticParts, airPart, interfaceParts, analyzeSelection, resultWorkspaceEntries, activeResultWorkspaceId, workspaceTabs, activeWorkspaceTabId, requestFocusObject,
     setSceneDocument, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis,
-    handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset, createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned,
+    handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset, createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     applyAntennaTranslation, applyGeometryTranslation, setMeshOptions, setSolverSettings, activeTransformScope,
     resetViewportDisplayState,
   ]);

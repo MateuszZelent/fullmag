@@ -1,4 +1,5 @@
 import './globals.css';
+import 'flexlayout-react/style/dark.css';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { ThemeProvider } from '../components/theme';

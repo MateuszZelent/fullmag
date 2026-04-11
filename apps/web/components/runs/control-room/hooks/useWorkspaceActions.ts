@@ -42,6 +42,11 @@ import {
 import type { useBuilderAutoSync } from "./useBuilderAutoSync";
 import type { AnalyzeSelectionState } from "../analyzeSelection";
 import type { ResultWorkspaceEntry, ResultWorkspaceKind, WorkspaceMode } from "../context-hooks";
+import {
+  coreTabIdForViewMode,
+  useWorkspaceStore,
+  type WorkspaceTabInput,
+} from "@/lib/workspace/workspace-store";
 
 type LiveApiClient = ReturnType<typeof currentLiveApiClient>;
 type BuilderAutoSync = ReturnType<typeof useBuilderAutoSync>;
@@ -201,6 +206,9 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     addResultWorkspaceEntry,
     lastLoggedCommandStatusRef,
   } = params;
+  const currentStage = useWorkspaceStore((state) => state.currentStage);
+  const openWorkspaceTab = useWorkspaceStore((state) => state.openTab);
+  const activateWorkspaceTab = useWorkspaceStore((state) => state.activateTab);
 
   /* ── handleCompute ── */
   const handleCompute = useCallback(() => {
@@ -312,7 +320,10 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     startTransition(() => {
       setViewMode(mode as ViewportMode);
     });
-  }, [isFemBackend, openFemMeshWorkspace]);
+    if (mode === "3D" || mode === "2D" || mode === "Mesh" || mode === "Analyze") {
+      activateWorkspaceTab(currentStage, coreTabIdForViewMode(mode as "3D" | "2D" | "Mesh" | "Analyze"));
+    }
+  }, [activateWorkspaceTab, currentStage, isFemBackend, openFemMeshWorkspace]);
 
   /* ── handleSimulationAction ── */
   const handleSimulationAction = useCallback((action: string) => {
@@ -655,6 +666,38 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       if (!entry) {
         return;
       }
+      const tabKind: WorkspaceTabInput["kind"] =
+        entry.kind === "spectrum"
+          ? "result-spectrum"
+          : entry.kind === "dispersion"
+            ? "result-dispersion"
+            : entry.kind === "modes"
+              ? "result-modes"
+              : entry.kind === "time-traces"
+                ? "result-time-traces"
+                : entry.kind === "vortex-frequency"
+                  ? "result-vortex-frequency"
+                  : entry.kind === "vortex-trajectory"
+                    ? "result-vortex-trajectory"
+                    : entry.kind === "vortex-orbit"
+                      ? "result-vortex-orbit"
+                      : entry.kind === "table"
+                        ? "result-table"
+                        : "result-quantity";
+      const openedTabId = openWorkspaceTab("analyze", {
+        key: `result:${entry.id}`,
+        id: `result-tab:${entry.id}`,
+        kind: tabKind,
+        title: entry.label,
+        closable: true,
+        pinned: entry.pinned,
+        keepAlive: tabKind === "result-quantity",
+        payload: {
+          resultWorkspaceId: entry.id,
+          quantityId: entry.quantityId ?? undefined,
+        },
+      });
+      activateWorkspaceTab("analyze", openedTabId);
       if (entry.kind === "spectrum") {
         setWorkspaceMode("analyze");
         openAnalyze({ tab: "spectrum", selectedModeIndex: null });
@@ -705,9 +748,11 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       }
     },
     [
+      activateWorkspaceTab,
       effectiveViewMode,
       isFemBackend,
       openAnalyze,
+      openWorkspaceTab,
       requestPreviewQuantity,
       resultWorkspaceEntries,
       setWorkspaceMode,

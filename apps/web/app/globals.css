@@ -1277,3 +1277,50 @@ th {
 [data-side="bottom"] .slide-in-from-top-2  { animation: slideInFromTop 150ms ease-out; }
 [data-side="left"]  .slide-in-from-right-2 { animation: slideInFromRight 150ms ease-out; }
 [data-side="right"] .slide-in-from-left-2  { animation: slideInFromLeft 150ms ease-out; }
+
+/* ── Docking shell (flexlayout) ─────────────────────────────── */
+
+.workspace-docking.flexlayout__layout {
+  background: transparent;
+  --font-family: "Inter", sans-serif;
+  --font-size: 12px;
+  --color-background: hsl(var(--background));
+  --color-base: hsl(var(--background));
+  --color-text: hsl(var(--foreground));
+  --color-tabset-background: hsl(var(--background));
+  --color-tabset-background-selected: hsl(var(--card));
+  --color-tabset-background-maximized: hsl(var(--muted));
+  --color-tabset-header-background: color-mix(in oklab, hsl(var(--card)) 82%, transparent);
+  --color-tabset-header: hsl(var(--foreground));
+  --color-tabset-divider-line: color-mix(in oklab, hsl(var(--border)) 65%, transparent);
+  --color-tab-content: hsl(var(--background));
+  --color-tab-selected: hsl(var(--foreground));
+  --color-tab-selected-background: hsl(var(--muted));
+  --color-tab-unselected: hsl(var(--muted-foreground));
+  --color-tab-unselected-background: transparent;
+  --color-border-tab-content: hsl(var(--card));
+  --color-border-background: hsl(var(--card));
+  --color-border-divider-line: color-mix(in oklab, hsl(var(--border)) 65%, transparent);
+  --color-border-tab-selected: hsl(var(--foreground));
+  --color-border-tab-selected-background: color-mix(in oklab, hsl(var(--muted)) 60%, transparent);
+  --color-border-tab-unselected: hsl(var(--muted-foreground));
+  --color-border-tab-unselected-background: transparent;
+  --color-splitter: color-mix(in oklab, hsl(var(--border)) 72%, transparent);
+  --color-splitter-hover: color-mix(in oklab, hsl(var(--primary)) 38%, transparent);
+  --color-splitter-drag: color-mix(in oklab, hsl(var(--primary)) 45%, transparent);
+  --color-drag1: hsl(var(--primary));
+  --color-drag2: hsl(var(--accent));
+  --color-drag1-background: color-mix(in oklab, hsl(var(--primary)) 14%, transparent);
+  --color-drag2-background: color-mix(in oklab, hsl(var(--accent)) 14%, transparent);
+  --color-overflow: hsl(var(--muted-foreground));
+  --color-icon: hsl(var(--muted-foreground));
+  --color-toolbar-button-hover: color-mix(in oklab, hsl(var(--muted)) 80%, transparent);
+}
+
+.workspace-docking .flexlayout__tabset_header {
+  border-bottom: 1px solid color-mix(in oklab, hsl(var(--border)) 55%, transparent);
+}
+
+.workspace-docking .flexlayout__tab {
+  border-radius: 8px 8px 0 0;
+}

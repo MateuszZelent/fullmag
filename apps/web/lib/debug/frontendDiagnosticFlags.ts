@@ -10,6 +10,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableLiveWebSocket: true,
   },
   shell: {
+    useDockingShell: true,
     showRibbonBar: true,
     showSidebar: true,
     showViewportBar: true,
