@@ -465,3 +465,68 @@ export function quantityColumnLabel(id: QuantityId): string {
     ? `${d.label} (${d.unit})`
     : d.label;
 }
+
+// ── Remote catalog fetch (QB-13 integration) ─────────────────────
+
+/** Wire shape of a single quantity from GET /v1/quantities/catalog */
+interface WireQuantityDescriptor {
+  id: string;
+  label: string;
+  description: string;
+  shape: string;
+  unit: string;
+  location: string;
+  domain: string;
+  n_comp: number;
+  normalization_hint: string;
+  interactive_preview: boolean;
+  supports_preview_2d: boolean;
+  supports_preview_3d: boolean;
+  supports_history: boolean;
+  supports_export: boolean;
+  quick_access_label?: string | null;
+  scalar_metric_key?: string | null;
+}
+
+interface WireCatalogResponse {
+  schema_version: string;
+  quantities: WireQuantityDescriptor[];
+}
+
+function wireToDescriptor(w: WireQuantityDescriptor): QuantityDescriptor {
+  return {
+    id: w.id as QuantityId,
+    label: w.label,
+    shape: w.shape as QuantityShape,
+    unit: w.unit,
+    nComp: w.n_comp,
+    location: w.location as import("./types").QuantityLocation,
+    domain: w.domain as import("./types").QuantityDomain,
+    normalizationHint: w.normalization_hint as import("./types").NormalizationHint,
+    interactivePreview: w.interactive_preview,
+    supportsPreview2d: w.supports_preview_2d,
+    supportsPreview3d: w.supports_preview_3d,
+    supportsHistory: w.supports_history,
+    supportsExport: w.supports_export,
+    uiExposed: true,
+    quickAccessLabel: w.quick_access_label ?? undefined,
+    scalarMetricKey: w.scalar_metric_key ?? undefined,
+  };
+}
+
+/**
+ * Fetch the quantity catalog from the backend API.
+ * Falls back to the static catalog on failure.
+ */
+export async function fetchQuantityCatalog(
+  baseUrl: string = "",
+): Promise<readonly QuantityDescriptor[]> {
+  try {
+    const resp = await fetch(`${baseUrl}/v1/quantities/catalog`);
+    if (!resp.ok) return CATALOG;
+    const body: WireCatalogResponse = await resp.json();
+    return body.quantities.map(wireToDescriptor);
+  } catch {
+    return CATALOG;
+  }
+}

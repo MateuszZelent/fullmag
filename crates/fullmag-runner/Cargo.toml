@@ -16,6 +16,7 @@ fullmag-fdm-sys = { path = "../fullmag-fdm-sys", optional = true }
 fullmag-fem-sys = { path = "../fullmag-fem-sys", optional = true }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }
+fullmag-quantities = { path = "../fullmag-quantities" }
 rayon = "1.10"
 nalgebra = "0.33"
 num-complex = "0.4"

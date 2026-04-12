@@ -162,6 +162,50 @@ impl Default for StepStats {
     }
 }
 
+impl StepStats {
+    /// Extract solver diagnostics (non-physics telemetry).
+    pub fn to_diagnostics(&self) -> fullmag_quantities::StepDiagnostics {
+        fullmag_quantities::StepDiagnostics {
+            step: self.step,
+            time: self.time,
+            dt: self.dt,
+            wall_time_ns: self.wall_time_ns,
+            exchange_wall_time_ns: self.exchange_wall_time_ns,
+            demag_wall_time_ns: self.demag_wall_time_ns,
+            rhs_wall_time_ns: self.rhs_wall_time_ns,
+            extra_energy_wall_time_ns: self.extra_energy_wall_time_ns,
+            snapshot_wall_time_ns: self.snapshot_wall_time_ns,
+            error_estimate: self.error_estimate,
+            dt_suggested: self.dt_suggested,
+            rejected_attempts: self.rejected_attempts,
+            rhs_evals: self.rhs_evals,
+            demag_solves: self.demag_solves,
+            fsal_reused: self.fsal_reused,
+        }
+    }
+
+    /// Extract per-step physical scalar observations.
+    pub fn to_quantity_row(&self) -> fullmag_quantities::GlobalQuantityRow {
+        fullmag_quantities::GlobalQuantityRow {
+            step: self.step,
+            time: self.time,
+            mx: self.mx,
+            my: self.my,
+            mz: self.mz,
+            e_ex: self.e_ex,
+            e_demag: self.e_demag,
+            e_ext: self.e_ext,
+            e_ani: self.e_ani,
+            e_dmi: self.e_dmi,
+            e_total: self.e_total,
+            max_dm_dt: self.max_dm_dt,
+            max_h_eff: self.max_h_eff,
+            max_h_demag: self.max_h_demag,
+            per_object_scalars: self.per_object_scalars.clone(),
+        }
+    }
+}
+
 /// Lightweight update emitted by the runner for live WebSocket streaming.
 /// Contains step stats plus optional field snapshot for 3D preview.
 #[derive(Debug, Clone, Serialize, Deserialize)]

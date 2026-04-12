@@ -85,3 +85,10 @@ pub struct QuantitySpec {
     /// from the scalar row (e.g. `"e_ex"` for energy terms).
     pub scalar_metric_key: Option<&'static str>,
 }
+
+impl QuantitySpec {
+    /// Legacy accessor — old code used `spec.kind` instead of `spec.shape`.
+    pub const fn kind(&self) -> crate::QuantityShape {
+        self.shape
+    }
+}

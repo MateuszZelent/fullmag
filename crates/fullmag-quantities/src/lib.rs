@@ -16,9 +16,12 @@
 
 pub mod catalog;
 pub mod descriptor;
+pub mod eval;
 pub mod id;
 pub mod reduction;
 pub mod schema_version;
+pub mod step_data;
+pub mod transport;
 
 pub use catalog::{
     all_quantity_ids, cached_preview_quantity_ids, interactive_preview_quantity_ids,
@@ -28,6 +31,12 @@ pub use descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, Quanti
 pub use id::{normalize_quantity_id, QuantityId, QuantityIdError};
 pub use reduction::QuantityReduction;
 pub use schema_version::SCHEMA_VERSION;
+pub use step_data::{GlobalQuantityRow, StepDiagnostics};
+pub use eval::{eval_global_scalar, reduce_scalars, reduce_vector_field, QuantityValue};
+pub use transport::{
+    build_wire_catalog, LiveQuantityFrame, QuantityCatalogResponse,
+    QuantityDescriptorWire, QuantityPreviewRequest, StepUpdateV2,
+};
 
 /// Shape / kind of a quantity (determines renderer and transport).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -45,6 +54,11 @@ impl QuantityShape {
             Self::SpatialScalar => "spatial_scalar",
             Self::GlobalScalar => "global_scalar",
         }
+    }
+
+    /// Legacy alias used by existing API code.
+    pub const fn as_api_kind(self) -> &'static str {
+        self.as_str()
     }
 }
 

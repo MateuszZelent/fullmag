@@ -243,6 +243,25 @@ pub(crate) fn validate_executable_outputs(
                 "eigenmode outputs require StudyIR::Eigenmodes and the FEM eigen planner"
                     .to_string(),
             ),
+            OutputIR::SaveQuantity {
+                quantity_id,
+                every_seconds,
+                ..
+            } => {
+                if *every_seconds <= 0.0 {
+                    errors.push(format!(
+                        "save_quantity '{}' must have positive every_seconds",
+                        quantity_id
+                    ));
+                }
+                let key = format!("save_quantity:{quantity_id}");
+                if !seen.insert(key) {
+                    errors.push(format!(
+                        "save_quantity '{}' is declared more than once",
+                        quantity_id
+                    ));
+                }
+            }
         }
     }
 }
@@ -292,7 +311,8 @@ pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<Stri
                     errors.push("eigen diagnostics output is declared more than once".to_string());
                 }
             }
-            OutputIR::Field { .. } | OutputIR::Scalar { .. } | OutputIR::Snapshot { .. } => {
+            OutputIR::Field { .. } | OutputIR::Scalar { .. } | OutputIR::Snapshot { .. }
+            | OutputIR::SaveQuantity { .. } => {
                 errors.push(
                     "StudyIR::Eigenmodes supports only eigen_spectrum, eigen_mode, dispersion_curve, and eigen_diagnostics outputs"
                         .to_string(),

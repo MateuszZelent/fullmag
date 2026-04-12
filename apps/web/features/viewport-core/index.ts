@@ -21,3 +21,7 @@ export type {
   ViewportDiagnosticFlags,
   ViewHostProps,
 } from "./routing/viewportBridgeTypes";
+
+// Viewport host (Layer 8)
+export { ViewportHost } from "./shell/ViewportHost";
+export type { ViewportHostProps, ComponentKeyRenderer } from "./shell/ViewportHost";

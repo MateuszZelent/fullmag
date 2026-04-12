@@ -1,8 +1,7 @@
 //! Grid resampling, preview math, and vector field utilities.
 
 use crate::types::*;
-use fullmag_runner::quantities::quantity_spec;
-use fullmag_runner::quantities::QuantityKind;
+use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
 use fullmag_runner::{FemMeshPayload, LivePreviewField};
 use serde_json::Value;
 
@@ -22,7 +21,7 @@ pub(crate) fn live_step_metric_value(step: &StepUpdateView, metric_key: &str) ->
 
 pub(crate) fn display_kind_for_quantity(quantity: &str) -> &'static str {
     quantity_spec(quantity)
-        .map(|spec| spec.kind.as_api_kind())
+        .map(|spec| spec.shape.as_api_kind())
         .unwrap_or(QuantityKind::VectorField.as_api_kind())
 }
 

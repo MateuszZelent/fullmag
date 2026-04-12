@@ -1036,6 +1036,19 @@ pub enum OutputIR {
         #[serde(default)]
         include_orthogonality: bool,
     },
+    /// Generic quantity save — canonical QuantityId-driven output.
+    SaveQuantity {
+        /// Canonical quantity ID (e.g. "M", "H_ex", "E_ex").
+        quantity_id: String,
+        /// Save cadence in simulated seconds.
+        every_seconds: f64,
+        /// Optional reduction: "average", "sum", "min", "max", "magnitude".
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reduction: Option<String>,
+        /// Optional component: "x", "y", "z", "magnitude", "3D".
+        #[serde(skip_serializing_if = "Option::is_none")]
+        component: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2721,6 +2734,21 @@ impl ProblemIR {
                 }
                 OutputIR::EigenDiagnostics { .. } => {
                     // No additional validation needed for diagnostics flags
+                }
+                OutputIR::SaveQuantity {
+                    quantity_id,
+                    every_seconds,
+                    ..
+                } => {
+                    if quantity_id.trim().is_empty() {
+                        errors.push("save_quantity quantity_id must not be empty".to_string());
+                    }
+                    if *every_seconds <= 0.0 {
+                        errors.push(format!(
+                            "save_quantity '{}' must have positive every_seconds",
+                            quantity_id
+                        ));
+                    }
                 }
             }
         }

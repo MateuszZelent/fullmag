@@ -24,5 +24,6 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 fullmag-authoring = { path = "../fullmag-authoring" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }
+fullmag-quantities = { path = "../fullmag-quantities" }
 fullmag-runner = { path = "../fullmag-runner" }
 fullmag-session = { path = "../fullmag-session" }

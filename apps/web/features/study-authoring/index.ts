@@ -18,3 +18,18 @@ export {
   stageIconToken,
 } from "./registry/stageTemplateRegistry";
 export type { StageTemplateEntry, StageCategory } from "./registry/stageTemplateRegistry";
+
+// Study authoring dialogs
+export { AddStudyDialog } from "./components/AddStudyDialog";
+export type { AddStudyDialogProps } from "./components/AddStudyDialog";
+export { AddStageDialog } from "./components/AddStageDialog";
+export type { AddStageDialogProps } from "./components/AddStageDialog";
+
+// Python projection types
+export type {
+  StagePythonProjection,
+  PythonArgValue,
+  StudyPythonProjection,
+  WorkspacePythonProjection,
+  UniverseSetupProjection,
+} from "./model/pythonProjection.types";

@@ -2,7 +2,7 @@
 
 use crate::types::*;
 use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
-use fullmag_runner::quantities::{quantity_specs, QuantityKind};
+use fullmag_quantities::{quantity_specs, QuantityShape};
 use fullmag_runner::{BackendCapabilities, FemMeshPayload};
 use serde_json::Value;
 
@@ -45,8 +45,8 @@ pub(crate) fn build_quantities(
         .map(|spec| {
             let interactive_preview = spec.interactive_preview
                 && (dynamic_supported.is_empty() || dynamic_available(spec.id.as_str()));
-            let available = match spec.kind {
-                QuantityKind::VectorField | QuantityKind::SpatialScalar => {
+            let available = match spec.shape {
+                QuantityShape::VectorField | QuantityShape::SpatialScalar => {
                     dynamic_available(spec.id.as_str())
                         || latest_fields.get(spec.id.as_str()).is_some()
                         || preview_cache.get(spec.id.as_str()).is_some()
@@ -58,7 +58,7 @@ pub(crate) fn build_quantities(
                             .and_then(|state| state.latest_step.preview_field.as_ref())
                             .is_some_and(|field| field.quantity == spec.id.as_str())
                 }
-                QuantityKind::GlobalScalar => scalar_available(
+                QuantityShape::GlobalScalar => scalar_available(
                     spec.scalar_metric_key
                         .and_then(|metric_key| run_manifest_scalar_value(run, metric_key)),
                 ),
@@ -67,7 +67,7 @@ pub(crate) fn build_quantities(
             QuantityDescriptor {
                 id: spec.id.as_str().to_string(),
                 label: spec.label.to_string(),
-                kind: spec.kind.as_api_kind().to_string(),
+                kind: spec.shape.as_api_kind().to_string(),
                 unit: spec.unit.to_string(),
                 location: spec.location.as_str().to_string(),
                 available,

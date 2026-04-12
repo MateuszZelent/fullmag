@@ -86,7 +86,7 @@ impl DisplaySelectionState {
 impl DisplaySelection {
     /// Classify a quantity string into its display kind.
     pub fn kind_for_quantity(quantity: &str) -> DisplayKind {
-        match quantity_spec(quantity).map(|spec| spec.kind) {
+        match quantity_spec(quantity).map(|spec| spec.shape) {
             Some(QuantityKind::GlobalScalar) => DisplayKind::GlobalScalar,
             Some(QuantityKind::SpatialScalar) => DisplayKind::SpatialScalar,
             Some(QuantityKind::VectorField) | None => DisplayKind::VectorField,

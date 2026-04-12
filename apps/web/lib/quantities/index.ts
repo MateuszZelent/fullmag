@@ -34,6 +34,7 @@ export {
   quantitiesByShape,
   allQuantityIds,
   quantityColumnLabel,
+  fetchQuantityCatalog,
 } from "./catalog";
 
 export type {

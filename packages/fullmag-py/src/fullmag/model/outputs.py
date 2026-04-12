@@ -9,6 +9,8 @@ _KNOWN_SCALARS = {
     "E_ex",
     "E_demag",
     "E_ext",
+    "E_ani",
+    "E_dmi",
     "E_total",
     "time",
     "step",
@@ -18,6 +20,7 @@ _KNOWN_SCALARS = {
     "mz",
     "max_h_eff",
     "max_dm_dt",
+    "max_h_demag",
 }
 
 
@@ -51,7 +54,10 @@ class SaveScalar:
         return {"kind": "scalar", "name": self.scalar, "every_seconds": self.every}
 
 
-_KNOWN_FIELDS = {"m", "H_demag", "H_eff", "H_ex", "H_ext", "H_ant", "H_ani", "H_dmi", "H_mel"}
+_KNOWN_FIELDS = {
+    "m", "H_demag", "H_eff", "H_ex", "H_ext", "H_ant",
+    "H_ani", "H_dmi", "H_mel", "H_ani_cubic", "H_dmi_bulk", "H_oe", "H_therm",
+}
 _COMPONENTS = {"x", "y", "z"}
 
 # Short aliases: "mz" → ("m", "z"), "mx" → ("m", "x"), etc.
@@ -234,3 +240,65 @@ class SaveEigenDiagnostics:
             "include_tangent_leakage": self.include_tangent_leakage,
             "include_orthogonality": self.include_orthogonality,
         }
+
+
+# Canonical quantity IDs (must match fullmag-quantities Rust crate).
+_KNOWN_QUANTITY_IDS = {
+    "M", "H_ex", "H_demag", "H_ext", "H_ant", "H_eff",
+    "H_ani", "H_dmi", "H_mel", "H_ani_cubic", "H_dmi_bulk", "H_oe", "H_therm",
+    "E_ex", "E_demag", "E_ext", "E_ani", "E_dmi", "E_total",
+    "mode_amplitude", "mode_real", "mode_imag", "mode_phase",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class SaveQuantity:
+    """Generic quantity-ID-driven output.
+
+    Parameters
+    ----------
+    quantity_id : str
+        Canonical quantity ID (e.g. ``"M"``, ``"H_ex"``, ``"E_ex"``).
+    every : float
+        Save interval in seconds.
+    reduction : str | None
+        Optional reduction: ``"average"``, ``"sum"``, ``"min"``, ``"max"``, ``"magnitude"``.
+    component : str | None
+        Optional component: ``"x"``, ``"y"``, ``"z"``, ``"magnitude"``, ``"3D"``.
+    """
+    quantity_id: str
+    every: float
+    reduction: str | None = None
+    component: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "quantity_id", require_non_empty(self.quantity_id, "quantity_id")
+        )
+        if self.quantity_id not in _KNOWN_QUANTITY_IDS:
+            raise ValueError(f"unsupported quantity_id '{self.quantity_id}'")
+        require_positive(self.every, "every")
+        if self.reduction is not None:
+            valid = {"average", "sum", "min", "max", "magnitude"}
+            if self.reduction not in valid:
+                raise ValueError(
+                    f"reduction must be one of {sorted(valid)}, got '{self.reduction}'"
+                )
+        if self.component is not None:
+            valid_comp = {"x", "y", "z", "magnitude", "3D"}
+            if self.component not in valid_comp:
+                raise ValueError(
+                    f"component must be one of {sorted(valid_comp)}, got '{self.component}'"
+                )
+
+    def to_ir(self) -> dict[str, object]:
+        d: dict[str, object] = {
+            "kind": "save_quantity",
+            "quantity_id": self.quantity_id,
+            "every_seconds": self.every,
+        }
+        if self.reduction is not None:
+            d["reduction"] = self.reduction
+        if self.component is not None:
+            d["component"] = self.component
+        return d

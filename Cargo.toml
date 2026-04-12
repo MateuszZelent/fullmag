@@ -12,6 +12,7 @@ members = [
   "crates/fullmag-ir",
   "crates/fullmag-plan",
   "crates/fullmag-py-core",
+  "crates/fullmag-quantities",
   "crates/fullmag-runner",
   "crates/fullmag-session",
 ]

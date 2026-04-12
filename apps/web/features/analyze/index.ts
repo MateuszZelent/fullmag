@@ -52,3 +52,18 @@ export {
   resultContextToNodeKind,
 } from "./model/resultNodeContext";
 export type { ResultNodeContext } from "./model/resultNodeContext";
+
+// Results template registry
+export {
+  registerResultTemplate,
+  getResultTemplate,
+  getAllResultTemplates,
+  getResultTemplatesByCategory,
+  resultLabel,
+  resultIconToken,
+} from "./registry/resultsTemplateRegistry";
+export type { ResultTemplateEntry, ResultTemplateCategory } from "./registry/resultsTemplateRegistry";
+
+// Results authoring UI
+export { ResultsAuthoringShell } from "./views/ResultsAuthoringShell";
+export type { ResultsAuthoringShellProps } from "./views/ResultsAuthoringShell";

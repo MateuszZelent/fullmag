@@ -27,7 +27,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
-use fullmag_runner::quantities::{quantity_spec, QuantityKind};
+use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
 use fullmag_runner::{
     CommandAckEvent, DisplaySelection, LivePreviewField, MeshCommandTargetEvent,
     RuntimeEventEnvelope, StepUpdate,
@@ -214,6 +214,7 @@ async fn main() {
             get(get_current_live_eigen_branches),
         )
         .route("/v1/docs/physics", get(list_physics_docs))
+        .route("/v1/quantities/catalog", get(get_quantities_catalog))
         .route("/v1/run", post(start_run))
         // ── Session persistence ────────────────────────────────────────
         .route(
@@ -315,6 +316,10 @@ async fn get_runtime_capabilities(
 ) -> Json<fullmag_runner::HostCapabilityMatrix> {
     let runtimes_dir = state.repo_root.join("runtimes");
     Json(fullmag_runner::RuntimeRegistry::discover(&runtimes_dir).capability_matrix())
+}
+
+async fn get_quantities_catalog() -> Json<fullmag_quantities::QuantityCatalogResponse> {
+    Json(fullmag_quantities::QuantityCatalogResponse::build())
 }
 
 async fn get_current_gpu_telemetry() -> Result<Json<GpuTelemetryResponse>, ApiError> {
@@ -3285,7 +3290,7 @@ fn build_preview_state_from_live_field(
 
 fn resolve_preview_quantity(current: &SessionStateResponse, requested: &str) -> Option<String> {
     let is_preview_compatible = |quantity_id: &str| {
-        quantity_spec(quantity_id).is_some_and(|spec| spec.kind != QuantityKind::GlobalScalar)
+        quantity_spec(quantity_id).is_some_and(|spec| spec.shape != QuantityKind::GlobalScalar)
     };
     if current.quantities.iter().any(|quantity| {
         quantity.available && quantity.id == requested && is_preview_compatible(&quantity.id)
@@ -3312,7 +3317,7 @@ fn resolve_global_scalar_quantity(
     requested: &str,
 ) -> Option<String> {
     let is_global_scalar = |quantity_id: &str| {
-        quantity_spec(quantity_id).is_some_and(|spec| spec.kind == QuantityKind::GlobalScalar)
+        quantity_spec(quantity_id).is_some_and(|spec| spec.shape == QuantityKind::GlobalScalar)
     };
     if current.quantities.iter().any(|quantity| {
         quantity.available && quantity.id == requested && is_global_scalar(&quantity.id)

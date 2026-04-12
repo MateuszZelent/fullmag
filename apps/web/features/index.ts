@@ -38,6 +38,14 @@ export {
 } from "./study-authoring";
 export { DraftSyncController } from "./study-authoring";
 export * as authoringCommands from "./study-authoring/commands";
+export { AddStudyDialog, AddStageDialog } from "./study-authoring";
+export type {
+  StagePythonProjection,
+  PythonArgValue,
+  StudyPythonProjection,
+  WorkspacePythonProjection,
+  UniverseSetupProjection,
+} from "./study-authoring";
 
 /* Layer D: Viewport Core */
 export {
@@ -52,6 +60,8 @@ export {
   type CameraProfile,
   type InputEvent,
 } from "./viewport-core";
+export { ViewportHost, ViewportRouter } from "./viewport-core";
+export type { ViewportHostProps, ComponentKeyRenderer } from "./viewport-core";
 
 /* Layer D: FEM Viewport Engine */
 export {
@@ -89,6 +99,16 @@ export {
   type AnalyzeDomain,
   type AnalyzeQueryKey,
   type AnalyzeQueryState,
+} from "./analyze";
+export { ResultsAuthoringShell } from "./analyze";
+export type { ResultsAuthoringShellProps, ResultTemplateEntry, ResultTemplateCategory } from "./analyze";
+export {
+  registerResultTemplate,
+  getResultTemplate,
+  getAllResultTemplates,
+  getResultTemplatesByCategory,
+  resultLabel,
+  resultIconToken,
 } from "./analyze";
 
 /* Viewport-FDM */

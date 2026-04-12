@@ -1094,6 +1094,7 @@ dependencies = [
  "fullmag-authoring",
  "fullmag-ir",
  "fullmag-plan",
+ "fullmag-quantities",
  "fullmag-runner",
  "fullmag-session",
  "futures-core",
@@ -1214,6 +1215,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fullmag-quantities"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fullmag-runner"
 version = "0.1.0"
 dependencies = [
@@ -1223,6 +1232,7 @@ dependencies = [
  "fullmag-fem-sys",
  "fullmag-ir",
  "fullmag-plan",
+ "fullmag-quantities",
  "nalgebra",
  "num-complex",
  "rayon",
