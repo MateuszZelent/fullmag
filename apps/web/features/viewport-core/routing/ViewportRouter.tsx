@@ -50,7 +50,7 @@ export interface ViewportRouterProps {
  *   context={viewCtx}
  *   renderView={(entry) => {
  *     switch (entry.componentKey) {
- *       case "MagnetizationView3D": return <MagnetizationView3D {...props} />;
+ *       case "VectorFieldView3D": return <VectorFieldView3D {...props} />;
  *       case "FemMeshView3D":       return <FemMeshView3D {...props} />;
  *       // …
  *     }

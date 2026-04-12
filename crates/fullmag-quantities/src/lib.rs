@@ -46,7 +46,7 @@ pub use provider::{
 };
 pub use registry::{
     register_standard_providers, GlobalScalarProvider, QuantityRegistry,
-    VectorFieldProvider,
+    SpatialScalarFieldProvider, VectorFieldProvider,
 };
 
 /// Shape / kind of a quantity (determines renderer and transport).

@@ -75,6 +75,7 @@ export interface LiveState {
   preview_auto_downscaled: boolean;
   preview_auto_downscale_message: string | null;
   fem_mesh: FemLiveMesh | null;
+  /** @deprecated Use `latest_fields.fields["m"]` instead. Remove once StepUpdate migrates to StepUpdateV2 (Q16). */
   magnetization: Float64Array | null;
   finished: boolean;
 }

@@ -1,6 +1,7 @@
 //! Output scheduling: decides when scalar/field outputs are due.
 
 use fullmag_ir::OutputIR;
+use fullmag_quantities::QuantityShape;
 
 use crate::types::RunError;
 
@@ -54,6 +55,14 @@ pub(crate) fn collect_scalar_schedules(
     Ok(schedules)
 }
 
+/// Returns `true` if the given field name corresponds to a vector or
+/// spatial-scalar quantity in the canonical catalog.  Used to validate
+/// output schedule requests.
+fn is_supported_field_quantity(name: &str) -> bool {
+    fullmag_quantities::quantity_spec(name)
+        .is_some_and(|spec| matches!(spec.shape, QuantityShape::VectorField | QuantityShape::SpatialScalar))
+}
+
 pub(crate) fn collect_field_schedules(
     outputs: &[OutputIR],
 ) -> Result<Vec<OutputSchedule>, RunError> {
@@ -64,12 +73,9 @@ pub(crate) fn collect_field_schedules(
                 name,
                 every_seconds,
             } => {
-                if !matches!(
-                    name.as_str(),
-                    "m" | "H_ex" | "H_demag" | "H_ant" | "H_ext" | "H_eff"
-                ) {
+                if !is_supported_field_quantity(name) {
                     return Err(RunError {
-                        message: format!("field output '{}' is not executable in Phase 1", name),
+                        message: format!("field output '{}' is not a recognized vector/spatial quantity", name),
                     });
                 }
                 schedules.push(OutputSchedule {
@@ -85,12 +91,9 @@ pub(crate) fn collect_field_schedules(
                 every_seconds,
                 ..
             } => {
-                if !matches!(
-                    field.as_str(),
-                    "m" | "H_ex" | "H_demag" | "H_ant" | "H_ext" | "H_eff"
-                ) {
+                if !is_supported_field_quantity(field) {
                     return Err(RunError {
-                        message: format!("snapshot field '{}' is not executable in Phase 1", field),
+                        message: format!("snapshot field '{}' is not a recognized vector/spatial quantity", field),
                     });
                 }
                 // For component-specific snapshots, qualify the name (e.g. "m.z").

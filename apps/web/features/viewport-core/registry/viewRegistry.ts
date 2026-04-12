@@ -63,7 +63,7 @@ const VIEWPORT_3D_FDM: ViewRegistryEntry = {
   id: "viewport-3d-fdm",
   kind: "viewport-3d",
   title: "3-D FDM Viewport",
-  componentKey: "MagnetizationView3D",
+  componentKey: "VectorFieldView3D",
   canOpen: (ctx) => ctx.viewportMode === "3D" && ctx.discretization !== "fem",
 };
 

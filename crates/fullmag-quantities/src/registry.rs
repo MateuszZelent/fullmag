@@ -151,10 +151,39 @@ impl QuantityProvider for GlobalScalarProvider {
     }
 }
 
+/// A provider that reads a named spatial-scalar field from the eval context.
+///
+/// Covers `mode_amplitude` and `mode_phase`.
+pub struct SpatialScalarFieldProvider {
+    id: QuantityId,
+}
+
+impl SpatialScalarFieldProvider {
+    pub fn new(id: QuantityId) -> Self {
+        Self { id }
+    }
+}
+
+impl QuantityProvider for SpatialScalarFieldProvider {
+    fn quantity_id(&self) -> QuantityId {
+        self.id
+    }
+
+    fn evaluate(&self, ctx: &QuantityEvalContext<'_>) -> Option<QuantityValue> {
+        let data = ctx.named_fields.get_field(self.id.as_str())?;
+        Some(QuantityValue::SpatialScalar(data.to_vec()))
+    }
+
+    fn is_available(&self, ctx: &QuantityEvalContext<'_>) -> bool {
+        ctx.named_fields.get_field(self.id.as_str()).is_some()
+    }
+}
+
 /// Populate a registry with the standard set of providers.
 ///
 /// This registers providers for all 23 catalog quantities using the
-/// built-in `VectorFieldProvider` and `GlobalScalarProvider` types.
+/// built-in `VectorFieldProvider`, `SpatialScalarFieldProvider` and
+/// `GlobalScalarProvider` types.
 pub fn register_standard_providers(registry: &mut QuantityRegistry) {
     use QuantityId::*;
 
@@ -165,6 +194,11 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
         ModeReal, ModeImag,
     ] {
         registry.register(Box::new(VectorFieldProvider::new(id)));
+    }
+
+    // Spatial-scalar fields
+    for id in [ModeAmplitude, ModePhase] {
+        registry.register(Box::new(SpatialScalarFieldProvider::new(id)));
     }
 
     // Global scalars (with their metric keys from the catalog)
@@ -191,9 +225,8 @@ mod tests {
     fn standard_providers_register_all_23() {
         let mut reg = QuantityRegistry::new();
         register_standard_providers(&mut reg);
-        // 13 vector fields + 2 mode vectors + 6 global scalars = 21
-        // (mode_amplitude and mode_phase are SpatialScalar — not yet covered)
-        assert_eq!(reg.len(), 21);
+        // 13 vector fields + 2 mode vectors + 2 mode spatial-scalars + 6 global scalars = 23
+        assert_eq!(reg.len(), 23);
     }
 
     #[test]

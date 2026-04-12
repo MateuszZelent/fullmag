@@ -549,7 +549,7 @@ function FdmAntennaOverlayMeshes({
 // ═══════════════════════════════════════════════════════════════════
 // COMPONENT
 // ═══════════════════════════════════════════════════════════════════
-function MagnetizationView3DInner({
+function VectorFieldView3DInner({
   grid,
   vectors,
   fieldLabel = "Vector Field",
@@ -1188,4 +1188,4 @@ function MagnetizationView3DInner({
 
 
 
-export default memo(MagnetizationView3DInner);
+export default memo(VectorFieldView3DInner);

@@ -6,7 +6,7 @@ import { useThree } from "@react-three/fiber";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { applyMagnetizationHsl } from "../magnetizationColor";
 import { COMP_NEGATIVE, COMP_NEUTRAL, COMP_POSITIVE } from "./colorUtils";
-import type { QualityLevel, RenderMode, VoxelColorMode, VoxelSampling, TopoComponent } from "../MagnetizationView3D";
+import type { QualityLevel, RenderMode, VoxelColorMode, VoxelSampling, TopoComponent } from "../VectorFieldView3D";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
 

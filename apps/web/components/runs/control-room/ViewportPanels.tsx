@@ -9,7 +9,7 @@ import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import type { TextureTransform3D as PreviewTextureTransform3D } from "@/lib/textureTransform";
 import type { TextureGizmoMode } from "../../preview/TextureTransformGizmo";
 import MagnetizationSlice2D from "../../preview/MagnetizationSlice2D";
-import MagnetizationView3D from "../../preview/MagnetizationView3D";
+import VectorFieldView3D from "../../preview/VectorFieldView3D";
 import FemMeshView3D from "../../preview/FemMeshView3D";
 import { ViewportErrorBoundary } from "../../preview/ViewportErrorBoundary";
 import FemMeshSlice2D from "../../preview/FemMeshSlice2DPlotly";
@@ -790,7 +790,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       {showFdm3D ? (
         <div className="absolute inset-0">
           <ViewportErrorBoundary label="FDM 3D Viewport">
-          <MagnetizationView3D
+          <VectorFieldView3D
             grid={ctx.previewGrid}
             vectors={isFdm3DActive ? ctx.selectedVectors : null}
             fieldLabel={

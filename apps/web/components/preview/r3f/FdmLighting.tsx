@@ -1,6 +1,6 @@
 "use client";
 
-import type { QualityLevel } from "../MagnetizationView3D";
+import type { QualityLevel } from "../VectorFieldView3D";
 
 interface FdmLightingProps {
   brightness: number;

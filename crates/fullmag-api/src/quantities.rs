@@ -50,10 +50,13 @@ pub(crate) fn build_quantities(
                     dynamic_available(spec.id.as_str())
                         || latest_fields.get(spec.id.as_str()).is_some()
                         || preview_cache.get(spec.id.as_str()).is_some()
-                        || (spec.id.as_str() == "m"
-                            && live_state
-                                .and_then(|state| state.latest_step.magnetization.as_ref())
-                                .is_some())
+                        // Legacy compat: magnetization payload in StepUpdate implies "m".
+                        // Also counts as available when a preview_field carries any
+                        // matching quantity (not just "m").
+                        || live_state
+                            .and_then(|s| s.latest_step.magnetization.as_ref())
+                            .filter(|_| spec.id == fullmag_quantities::QuantityId::M)
+                            .is_some()
                         || live_state
                             .and_then(|state| state.latest_step.preview_field.as_ref())
                             .is_some_and(|field| field.quantity == spec.id.as_str())
