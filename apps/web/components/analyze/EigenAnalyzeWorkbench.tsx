@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import dynamic from "next/dynamic";
+import type { PlotMouseEvent } from "plotly.js";
+import Plot from "../plots/DynamicPlot";
 import type {
   AnyModeArtifact,
   AnySpectrumArtifact,
@@ -16,7 +17,6 @@ import {
   normalizeSpectrumArtifact,
 } from "./eigenTypes";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 export interface EigenAnalyzeWorkbenchProps {
   spectrum: AnySpectrumArtifact | null;
@@ -210,7 +210,7 @@ export default function EigenAnalyzeWorkbench({
           }}
           config={{ responsive: true, displaylogo: false }}
           style={{ width: "100%", height: 320 }}
-          onClick={(event) => {
+          onClick={(event: Readonly<PlotMouseEvent>) => {
             const raw = event.points?.[0]?.customdata;
             if (typeof raw === "number") {
               setSelection((prev) => ({
@@ -242,7 +242,7 @@ export default function EigenAnalyzeWorkbench({
               }}
               config={{ responsive: true, displaylogo: false }}
               style={{ width: "100%", height: 320 }}
-              onClick={(event) => {
+              onClick={(event: Readonly<PlotMouseEvent>) => {
                 const raw = event.points?.[0]?.customdata;
                 if (Array.isArray(raw) && raw.length >= 3) {
                   setSelection({

@@ -1,11 +1,10 @@
 "use client";
 
 import { useMemo } from "react";
-import dynamic from "next/dynamic";
+import Plot from "../plots/DynamicPlot";
 
 import type { VortexTimeSample, VortexChannel } from "./vortexTypes";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const CHANNEL_CONFIG: Record<VortexChannel, { color: string; label: string }> = {
   mx: { color: "#8ec5ff", label: "mₓ(t)" },

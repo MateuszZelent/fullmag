@@ -1,11 +1,10 @@
 "use client";
 
 import { useMemo } from "react";
-import dynamic from "next/dynamic";
+import Plot from "../plots/DynamicPlot";
 
 import type { VortexTimeSample } from "./vortexTypes";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 interface VortexTrajectoryPlotProps {
   samples: VortexTimeSample[];

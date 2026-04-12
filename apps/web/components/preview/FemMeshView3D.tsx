@@ -99,7 +99,7 @@ interface Props {
   clipEnabled?: boolean;
   clipAxis?: ClipAxis;
   clipPos?: number;
-  showArrows?: boolean;
+  showArrowsRequested?: boolean;
   arrowColorMode?: FemArrowColorMode;
   arrowMonoColor?: string;
   arrowAlpha?: number;
@@ -182,7 +182,7 @@ function FemMeshView3DInner({
   clipEnabled: controlledClipEnabled,
   clipAxis: controlledClipAxis,
   clipPos: controlledClipPos,
-  showArrows: controlledShowArrows,
+  showArrowsRequested: controlledShowArrowsRequested,
   arrowColorMode: controlledArrowColorMode,
   arrowMonoColor: controlledArrowMonoColor,
   arrowAlpha: controlledArrowAlpha,
@@ -308,7 +308,7 @@ function FemMeshView3DInner({
   const clipEnabled = controlledClipEnabled ?? internalClipEnabled;
   const clipAxis = controlledClipAxis ?? internalClipAxis;
   const clipPos = controlledClipPos ?? internalClipPos;
-  const showArrows = controlledShowArrows ?? internalShowArrows;
+  const showArrowsRequested = controlledShowArrowsRequested ?? internalShowArrows;
   const arrowColorMode = controlledArrowColorMode ?? internalArrowColorMode;
   const arrowMonoColor = controlledArrowMonoColor ?? internalArrowMonoColor;
   const arrowAlpha = controlledArrowAlpha ?? internalArrowAlpha;
@@ -499,7 +499,7 @@ function FemMeshView3DInner({
     field,
     opacity,
     arrowColorMode,
-    showArrows,
+    showArrows: showArrowsRequested,
     missingMagneticMask,
     visibleArrowNodeCount,
     meshData,
@@ -783,7 +783,7 @@ function FemMeshView3DInner({
     arrowAlpha,
     arrowLengthScale,
     arrowThickness,
-    showArrows,
+    showArrows: showArrowsRequested,
     effectiveShowArrows,
     arrowsBlockReason,
     baseArrowDensity,

@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import dynamic from "next/dynamic";
+import type { PlotHoverEvent, PlotMouseEvent } from "plotly.js";
 import type { FemMeshData, FemVectorDomainFilter } from "./FemMeshView3D";
 import type { AntennaOverlay } from "../runs/control-room/shared";
+import Plot from "../plots/DynamicPlot";
 import { ViewportOverlayLayout } from "./ViewportOverlayLayout";
 import type { FemMeshPart, MeshEntityViewStateMap } from "../../lib/session/types";
 import type { ObjectViewMode } from "../runs/control-room/shared";
@@ -30,8 +31,6 @@ import {
   PREVIEW_MAX_POINTS_DEFAULT,
 } from "./fem/vectorDensityBudget";
 import { DIVERGING_PALETTE, POSITIVE_PALETTE, SEQUENTIAL_BLUE_PALETTE } from "../../lib/colorPalettes";
-
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 interface Props {
   meshData: FemMeshData;
@@ -581,7 +580,7 @@ export default function FemMeshSlice2DPlotly({
         useResizeHandler
         className="h-full w-full"
         style={{ width: "100%", height: "100%" }}
-        onHover={(event) => {
+        onHover={(event: Readonly<PlotHoverEvent>) => {
           const point = event.points?.[0];
           if (!point) return;
           const pointData = point as typeof point & { fullData?: { hovertemplate?: string } };
@@ -605,7 +604,7 @@ export default function FemMeshSlice2DPlotly({
           });
         }}
         onUnhover={() => setHoverProbe(null)}
-        onClick={(event) => {
+        onClick={(event: Readonly<PlotMouseEvent>) => {
           const point = event.points?.[0];
           if (!point) return;
           const pointData = point as typeof point & { fullData?: { hovertemplate?: string } };
@@ -706,7 +705,11 @@ export default function FemMeshSlice2DPlotly({
                   className={`rounded-md border px-2 py-1 text-xs font-mono ${arrowsVisible ? "border-primary/40 bg-primary/15 text-primary-foreground" : "border-border/50 bg-background/50 text-muted-foreground"}`}
                   onClick={() => {
                     const next = !arrowsVisible;
-                    onShowArrowsChange ? onShowArrowsChange(next) : setInternalShowArrows(next);
+                    if (onShowArrowsChange) {
+                      onShowArrowsChange(next);
+                    } else {
+                      setInternalShowArrows(next);
+                    }
                   }}
                 >
                   Vectors {arrowsVisible ? "ON" : "OFF"}
@@ -721,9 +724,11 @@ export default function FemMeshSlice2DPlotly({
                     value={arrowBudget}
                     onChange={(event) => {
                       const nextMaxPoints = glyphBudgetToMaxPoints(Number(event.target.value));
-                      onPreviewMaxPointsChange
-                        ? onPreviewMaxPointsChange(nextMaxPoints)
-                        : setInternalPreviewMaxPoints(nextMaxPoints);
+                      if (onPreviewMaxPointsChange) {
+                        onPreviewMaxPointsChange(nextMaxPoints);
+                      } else {
+                        setInternalPreviewMaxPoints(nextMaxPoints);
+                      }
                     }}
                     className="w-28 h-[3px] accent-primary"
                   />

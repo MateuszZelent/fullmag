@@ -1,11 +1,10 @@
 "use client";
 
 import { useMemo } from "react";
-import dynamic from "next/dynamic";
+import Plot from "../plots/DynamicPlot";
 
 import type { DispersionRow } from "./eigenTypes";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 /** Palette consistent with ModeSpectrumPlot polarization colors */
 const BRANCH_COLORS = [

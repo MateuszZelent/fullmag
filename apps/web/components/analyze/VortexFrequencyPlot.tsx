@@ -1,11 +1,10 @@
 "use client";
 
 import { useMemo } from "react";
-import dynamic from "next/dynamic";
+import Plot from "../plots/DynamicPlot";
 
 import type { VortexSpectrumResult, LinewidthResult } from "./vortexTypes";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const CH_COLORS = {
   mx: "#8ec5ff",

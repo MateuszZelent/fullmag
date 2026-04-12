@@ -15,15 +15,7 @@ study.universe(mode="auto", size=(1.5e-07, 1.5e-07, 2e-08), center=(0, 0, 0), pa
 study.interactive(True)
 
 # Geometry & Material
-# Force the generic OCC path, which is more stable for thin nanoscale cylinders
-# than the direct cylinder mesher path.
-body = study.geometry(
-    fm.Translate(
-        fm.Cylinder(radius=5e-08, height=9e-09, name="free"),
-        (0.0, 0.0, 0.0),
-    ),
-    name="free",
-)
+body = study.geometry(fm.Cylinder(radius=5e-08, height=9e-09, name="free"), name="free")
 body.Ms = 700000
 body.Aex = 1.2e-11
 body.alpha = 0.01
@@ -37,7 +29,7 @@ study.demag(realization="poisson_robin")
 
 # Mesh
 study.object_mesh_defaults(algorithm_2d=8, algorithm_3d=1, size_factor=1, size_from_curvature=3, smoothing_steps=1, optimize_iterations=1, narrow_regions=1, compute_quality=True, per_element_quality=True)
-body.mesh(hmax=6e-09, order=1, algorithm_2d=8, algorithm_3d=1, size_from_curvature=1, narrow_regions=1, optimize="Netgen", compute_quality=True, per_element_quality=True)
+body.mesh(hmax=5e-09, order=1, algorithm_2d=8, algorithm_3d=1, size_from_curvature=1, narrow_regions=1, compute_quality=True, per_element_quality=True)
 study.build_domain_mesh()
 
 # Solver

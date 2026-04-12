@@ -10,11 +10,8 @@
  */
 
 import { useMemo, memo } from "react";
-import dynamic from "next/dynamic";
 import type { ScalarRow } from "../../lib/useSessionStream";
-
-// Dynamically import Plotly to avoid SSR window-is-not-defined errors
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
+import Plot from "./DynamicPlot";
 
 // ─── Constants ──────────────────────────────────────────────────────
 
