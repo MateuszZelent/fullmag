@@ -46,7 +46,17 @@ export type QuantityId =
   | "mode_amplitude"
   | "mode_real"
   | "mode_imag"
-  | "mode_phase";
+  | "mode_phase"
+  // ── Second wave (QB-17): energy densities, torques, dm/dt ──
+  | "eden_ex"
+  | "eden_demag"
+  | "eden_ext"
+  | "eden_ani"
+  | "eden_dmi"
+  | "eden_total"
+  | "dm_dt"
+  | "torque_stt"
+  | "torque_sot";
 
 // ── Shape / Kind ─────────────────────────────────────────────────
 

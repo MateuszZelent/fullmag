@@ -4,19 +4,87 @@
  * Single source of truth — all components should import from here.
  */
 
-export function fmtSI(v: number, unit: string): string {
-  if (!Number.isFinite(v) || v === 0) return `0 ${unit}`;
+type DisplayContext = "value" | "axis" | "legend";
+
+interface DisplayUnitPolicy {
+  displayUnit: string;
+  allowPrefixes: boolean;
+  allowSubPrefixes?: boolean;
+}
+
+const PREFIX_STEPS = [
+  { factor: 1e12, prefix: "T" },
+  { factor: 1e9, prefix: "G" },
+  { factor: 1e6, prefix: "M" },
+  { factor: 1e3, prefix: "k" },
+  { factor: 1, prefix: "" },
+  { factor: 1e-3, prefix: "m" },
+  { factor: 1e-6, prefix: "µ" },
+  { factor: 1e-9, prefix: "n" },
+  { factor: 1e-12, prefix: "p" },
+] as const;
+
+export function displayUnitPolicy(
+  quantityId: string | null | undefined,
+  canonicalUnit: string,
+  _context: DisplayContext = "value",
+): DisplayUnitPolicy {
+  void quantityId;
+  switch (canonicalUnit) {
+    case "":
+    case "dimensionless":
+      return { displayUnit: "", allowPrefixes: false };
+    case "rad":
+      return { displayUnit: "rad", allowPrefixes: false };
+    case "1/s":
+      return { displayUnit: "s^-1", allowPrefixes: true, allowSubPrefixes: true };
+    case "A/m":
+    case "J":
+    case "J/m":
+    case "J/m^3":
+    case "J/m³":
+    case "m":
+    case "s":
+    case "Hz":
+      return { displayUnit: normalizeUnitLabel(canonicalUnit), allowPrefixes: true };
+    default:
+      return { displayUnit: normalizeUnitLabel(canonicalUnit), allowPrefixes: false };
+  }
+}
+
+export function normalizeUnitLabel(unit: string): string {
+  switch (unit) {
+    case "":
+    case "dimensionless":
+      return "";
+    case "J/m³":
+      return "J/m^3";
+    case "1/s":
+      return "s^-1";
+    default:
+      return unit;
+  }
+}
+
+export function fmtSI(v: number, unit: string, quantityId?: string): string {
+  const policy = displayUnitPolicy(quantityId, unit);
+  if (!Number.isFinite(v) || v === 0) {
+    return policy.displayUnit ? `0 ${policy.displayUnit}` : "0";
+  }
+  if (!policy.allowPrefixes) {
+    return policy.displayUnit ? `${v.toPrecision(3)} ${policy.displayUnit}` : `${v.toPrecision(3)}`;
+  }
   const abs = Math.abs(v);
-  if (abs >= 1e12) return `${(v / 1e12).toPrecision(3)} T${unit}`;
-  if (abs >= 1e9) return `${(v / 1e9).toPrecision(3)} G${unit}`;
-  if (abs >= 1e6) return `${(v / 1e6).toPrecision(3)} M${unit}`;
-  if (abs >= 1e3) return `${(v / 1e3).toPrecision(3)} k${unit}`;
-  if (abs >= 1) return `${v.toPrecision(3)} ${unit}`;
-  if (abs >= 1e-3) return `${(v * 1e3).toPrecision(3)} m${unit}`;
-  if (abs >= 1e-6) return `${(v * 1e6).toPrecision(3)} µ${unit}`;
-  if (abs >= 1e-9) return `${(v * 1e9).toPrecision(3)} n${unit}`;
-  if (abs >= 1e-12) return `${(v * 1e12).toPrecision(3)} p${unit}`;
-  return `${v.toExponential(2)} ${unit}`;
+  const prefixSteps = policy.allowSubPrefixes
+    ? PREFIX_STEPS
+    : PREFIX_STEPS.filter((step) => step.factor >= 1 || step.prefix === "");
+  const chosen = prefixSteps.find((step) => abs >= step.factor) ?? prefixSteps[prefixSteps.length - 1];
+  const scaled = v / chosen.factor;
+  const unitLabel = `${chosen.prefix}${policy.displayUnit}`;
+  const valueLabel = chosen.factor === 1e-12 && abs < 1e-12
+    ? v.toExponential(2)
+    : scaled.toPrecision(3);
+  return unitLabel ? `${valueLabel} ${unitLabel}` : valueLabel;
 }
 
 export function fmtExp(v: number): string {

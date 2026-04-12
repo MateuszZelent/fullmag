@@ -25,6 +25,7 @@ import type {
   FemLiveMesh,
   ScalarRow,
   EngineLogEntry,
+  StepUpdateV2,
 } from "@/lib/session/types";
 import type {
   LiveState,
@@ -57,6 +58,7 @@ interface SessionRuntimeStoreState {
   runtimeStatus: RuntimeStatusState | null;
   commandStatus: CommandStatus | null;
   meshWorkspace: MeshWorkspaceState | null;
+  stepUpdateV2: StepUpdateV2 | null;
   workspaceStatus: string;
   isFemBackend: boolean;
 
@@ -89,6 +91,7 @@ const INITIAL_STATE: Omit<SessionRuntimeStoreState,
   runtimeStatus: null,
   commandStatus: null,
   meshWorkspace: null,
+  stepUpdateV2: null,
   workspaceStatus: "idle",
   isFemBackend: false,
   bootstrapTimestamp: null,
@@ -125,3 +128,4 @@ export const selectQuantities = (s: SessionRuntimeStoreState) => s.quantities;
 export const selectArtifacts = (s: SessionRuntimeStoreState) => s.artifacts;
 export const selectScriptBuilder = (s: SessionRuntimeStoreState) => s.scriptBuilder;
 export const selectMeshWorkspace = (s: SessionRuntimeStoreState) => s.meshWorkspace;
+export const selectStepUpdateV2 = (s: SessionRuntimeStoreState) => s.stepUpdateV2;

@@ -7,6 +7,7 @@ import type {
   FemLiveMesh,
   FemLiveMeshObjectSegment,
   FemMeshPart,
+  LatestFieldFrame,
   LatestFields,
   LiveState,
   MeshCommandTarget,
@@ -70,22 +71,6 @@ function normalizeSessionManifest(raw: any) {
 
 /* ── Field helpers ── */
 
-function flattenField(raw: any): Float64Array | null {
-  if (!raw || !Array.isArray(raw.values)) {
-    return null;
-  }
-  const source = raw.values;
-  const flattened = new Float64Array(source.length * 3);
-  let offset = 0;
-  for (const vector of source) {
-    flattened[offset] = Number(Array.isArray(vector) ? vector[0] ?? 0 : 0);
-    flattened[offset + 1] = Number(Array.isArray(vector) ? vector[1] ?? 0 : 0);
-    flattened[offset + 2] = Number(Array.isArray(vector) ? vector[2] ?? 0 : 0);
-    offset += 3;
-  }
-  return flattened;
-}
-
 function toFloat64Array(raw: unknown): Float64Array | null {
   if (!Array.isArray(raw)) {
     return null;
@@ -119,7 +104,21 @@ function normalizeVectorFieldValues(raw: unknown): Float64Array | null {
   return toFloat64Array(raw);
 }
 
+function normalizeActiveMask(raw: unknown): Uint8Array | null {
+  if (!Array.isArray(raw)) {
+    return null;
+  }
+  const mask = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) {
+    mask[i] = raw[i] ? 1 : 0;
+  }
+  return mask;
+}
+
 function fieldGrid(raw: any): [number, number, number] | null {
+  if (Array.isArray(raw?.grid) && raw.grid.length === 3) {
+    return [Number(raw.grid[0]), Number(raw.grid[1]), Number(raw.grid[2])];
+  }
   const grid = raw?.layout?.grid_cells;
   if (!Array.isArray(grid) || grid.length !== 3) {
     return null;
@@ -127,25 +126,55 @@ function fieldGrid(raw: any): [number, number, number] | null {
   return [Number(grid[0]), Number(grid[1]), Number(grid[2])];
 }
 
+function normalizeLatestFieldFrame(
+  quantityId: string,
+  raw: any,
+): LatestFieldFrame | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const values = normalizeVectorFieldValues(raw.values);
+  const grid = fieldGrid(raw);
+  if (!values || !grid) {
+    return null;
+  }
+  const nComp =
+    typeof raw.n_comp === "number" && Number.isFinite(raw.n_comp)
+      ? Math.max(1, Math.trunc(raw.n_comp))
+      : Array.isArray(raw.values) && raw.values.length > 0 && Array.isArray(raw.values[0])
+        ? Math.max(1, (raw.values[0] as unknown[]).length)
+        : 1;
+  return {
+    quantity_id: quantityId,
+    unit: typeof raw.unit === "string" ? raw.unit : "",
+    n_comp: nComp,
+    grid,
+    values,
+    active_mask: normalizeActiveMask(raw.active_mask),
+    location: typeof raw.location === "string" ? raw.location : null,
+    domain: typeof raw.domain === "string" ? raw.domain : null,
+  };
+}
+
 function normalizeLatestFields(raw: any): LatestFields {
   if (!raw || typeof raw !== "object") {
-    return { fields: {}, grid: null };
+    return { frames: {}, grid: null };
   }
 
-  const fields: Record<string, Float64Array | null> = {};
+  const frames: Record<string, LatestFieldFrame> = {};
   let grid: [number, number, number] | null = null;
 
   for (const [quantity, value] of Object.entries(raw)) {
-    const flattened = flattenField(value);
-    if (flattened) {
-      fields[quantity] = flattened;
+    const frame = normalizeLatestFieldFrame(quantity, value);
+    if (frame) {
+      frames[quantity] = frame;
     }
-    if (!grid) {
-      grid = fieldGrid(value);
+    if (!grid && frame) {
+      grid = frame.grid;
     }
   }
 
-  return { fields, grid };
+  return { frames, grid };
 }
 
 /* ── Enum-like normalizers ── */
@@ -1606,6 +1635,40 @@ export function normalizeSessionState(
 ): SessionState {
   const rawLive = raw.live_state;
   const latestFields = normalizeLatestFields(raw.latest_fields);
+
+  // Merge step_update_v2 frames into latest_fields so transport metadata stays
+  // attached to the values all the way into the frontend store.
+  const rawStepV2 = raw.step_update_v2;
+  if (rawStepV2 && Array.isArray(rawStepV2.frames)) {
+    for (const frame of rawStepV2.frames) {
+      if (
+        frame &&
+        typeof frame.quantity_id === "string" &&
+        Array.isArray(frame.values) &&
+        frame.values.length > 0
+      ) {
+        latestFields.frames[frame.quantity_id] = {
+          quantity_id: frame.quantity_id,
+          unit: typeof frame.unit === "string" ? frame.unit : "",
+          n_comp:
+            typeof frame.n_comp === "number" && Number.isFinite(frame.n_comp)
+              ? Math.max(1, Math.trunc(frame.n_comp))
+              : 1,
+          grid: Array.isArray(frame.grid) && frame.grid.length === 3
+            ? [Number(frame.grid[0]), Number(frame.grid[1]), Number(frame.grid[2])]
+            : latestFields.grid ?? [1, 1, 1],
+          values: new Float64Array(frame.values),
+          active_mask: normalizeActiveMask(frame.active_mask),
+          location: null,
+          domain: null,
+        };
+        if (!latestFields.grid) {
+          latestFields.grid = latestFields.frames[frame.quantity_id].grid;
+        }
+      }
+    }
+  }
+
   const rawPreview = raw.preview ?? null;
   const rawPreviewConfig = raw.preview_config ?? null;
   const displaySelection = normalizeDisplaySelection(raw.display_selection);

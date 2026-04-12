@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import warnings
 
 from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive
 from fullmag.init import InitialMagnetization, uniform
@@ -10,6 +11,31 @@ from fullmag.model.geometry import Geometry
 
 @dataclass(frozen=True, slots=True)
 class Material:
+    """Magnetic material parameters expressed in SI units only.
+
+    Units:
+        Ms: saturation magnetization in A/m
+        A: exchange stiffness in J/m
+        alpha: Gilbert damping, dimensionless
+        Ku1, Ku2: uniaxial anisotropy constants in J/m^3
+        anisU: uniaxial easy axis as a dimensionless direction vector
+        Kc1, Kc2, Kc3: cubic anisotropy constants in J/m^3
+        anisC1, anisC2: cubic anisotropy axes as dimensionless direction vectors
+        *_field: per-node overrides in the same SI unit as the corresponding scalar
+
+    Example:
+        Material(
+            name="Py",
+            Ms=8.0e5,
+            A=1.3e-11,
+            alpha=0.01,
+            Ku1=0.0,
+            anisU=(0.0, 0.0, 1.0),
+        )
+
+    Notes:
+        Fullmag does not accept CGS-style authoring here. Pass SI values directly.
+    """
     name: str
     Ms: float
     A: float
@@ -47,6 +73,19 @@ class Material:
             object.__setattr__(self, "anisC1", as_vector3(self.anisC1, "anisC1"))
         if self.anisC2 is not None:
             object.__setattr__(self, "anisC2", as_vector3(self.anisC2, "anisC2"))
+        _warn_if_suspicious_si("Ms", self.Ms, lower=1.0e3, upper=1.0e8, unit="A/m")
+        _warn_if_suspicious_si("A", self.A, lower=1.0e-14, upper=1.0e-8, unit="J/m")
+        _warn_if_suspicious_si("alpha", self.alpha, lower=0.0, upper=10.0, unit="dimensionless")
+        if self.Ku1 is not None:
+            _warn_if_suspicious_si("Ku1", self.Ku1, lower=0.0, upper=1.0e10, unit="J/m^3")
+        if self.Ku2 is not None:
+            _warn_if_suspicious_si("Ku2", self.Ku2, lower=0.0, upper=1.0e10, unit="J/m^3")
+        if self.Kc1 is not None:
+            _warn_if_suspicious_si("Kc1", self.Kc1, lower=0.0, upper=1.0e10, unit="J/m^3")
+        if self.Kc2 is not None:
+            _warn_if_suspicious_si("Kc2", self.Kc2, lower=0.0, upper=1.0e10, unit="J/m^3")
+        if self.Kc3 is not None:
+            _warn_if_suspicious_si("Kc3", self.Kc3, lower=0.0, upper=1.0e10, unit="J/m^3")
 
     def to_ir(self) -> dict[str, object]:
         return {
@@ -71,6 +110,22 @@ class Material:
             "kc2_field": self.Kc2_field,
             "kc3_field": self.Kc3_field,
         }
+
+
+def _warn_if_suspicious_si(
+    name: str,
+    value: float,
+    *,
+    lower: float,
+    upper: float,
+    unit: str,
+) -> None:
+    if not (lower <= value <= upper):
+        warnings.warn(
+            f"{name}={value!r} looks unusual for SI input ({unit}). "
+            "Double-check that the value is already expressed in SI units.",
+            stacklevel=3,
+        )
 
 
 @dataclass(frozen=True, slots=True)

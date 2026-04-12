@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useMemo } from "react";
-import type { LiveState, ScalarRow, SessionManifest, RunManifest, ArtifactEntry, EngineLogEntry, CommandStatus, MeshWorkspaceState } from "../../lib/useSessionStream";
+import type { LiveState, ScalarRow, SessionManifest, RunManifest, ArtifactEntry, EngineLogEntry, CommandStatus, MeshWorkspaceState, QuantityDescriptor } from "../../lib/useSessionStream";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { fmtSI, fmtExp, fmtTime, fmtDuration, fmtStepValue, fmtSIOrDash, fmtExpOrDash } from "@/lib/format";
@@ -25,6 +25,7 @@ interface EngineConsoleProps {
   scalarRows: ScalarRow[];
   engineLog: EngineLogEntry[];
   artifacts: ArtifactEntry[];
+  quantities?: QuantityDescriptor[];
   connection: "connecting" | "connected" | "disconnected";
   error: string | null;
   presentationMode?: "session" | "current";
@@ -80,6 +81,7 @@ export default function EngineConsole({
   scalarRows,
   engineLog,
   artifacts,
+  quantities = [],
   connection,
   error,
   presentationMode = "current",
@@ -434,6 +436,7 @@ export default function EngineConsole({
                 <div className="absolute inset-0 p-2">
                   <ScalarPlot
                     rows={scalarRows}
+                    quantities={quantities}
                     xColumn="time"
                     yColumns={CHART_PRESETS[chartPreset].yColumns}
                   />
@@ -444,7 +447,7 @@ export default function EngineConsole({
         </TabsContent>
 
         <TabsContent value="table" className="min-h-0 flex-1 flex flex-col focus-visible:outline-none data-[state=inactive]:hidden outline-none">
-          <ScalarTable rows={scalarRows} />
+          <ScalarTable rows={scalarRows} quantities={quantities} />
         </TabsContent>
 
         <TabsContent value="progress" className="min-h-0 flex-1 flex flex-col focus-visible:outline-none data-[state=inactive]:hidden outline-none">

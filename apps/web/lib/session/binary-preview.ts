@@ -96,6 +96,7 @@ export function attachPreviewBinaryPayload(
   prev: SessionState | null,
   payloadId: number,
   vectorFieldValues: Float64Array,
+  v2Meta?: { quantityId: string; nComp: number; grid: [number, number, number] },
 ): SessionState | null {
   if (!prev || !prev.preview || prev.preview.kind !== "spatial") {
     return prev;
@@ -111,6 +112,7 @@ export function attachPreviewBinaryPayload(
     preview: {
       ...prev.preview,
       vector_field_values: vectorFieldValues,
+      ...(v2Meta ? { n_comp: v2Meta.nComp, preview_grid: v2Meta.grid } : {}),
     },
   };
 }

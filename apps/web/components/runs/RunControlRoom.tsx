@@ -1172,6 +1172,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
                   scalarRows={ctx.scalarRows}
                   engineLog={ctx.engineLog}
                   artifacts={ctx.artifacts}
+                  quantities={ctx.quantities}
                   connection={ctx.connection}
                   error={ctx.error}
                   convergenceThreshold={Number(ctx.solverSettings.torqueTolerance) || DEFAULT_CONVERGENCE_THRESHOLD}

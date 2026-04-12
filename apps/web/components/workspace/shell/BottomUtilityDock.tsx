@@ -7,6 +7,7 @@ import type {
   EngineLogEntry,
   LiveState,
   MeshWorkspaceState,
+  QuantityDescriptor,
   RunManifest,
   ScalarRow,
   SessionManifest,
@@ -25,6 +26,7 @@ interface BottomUtilityDockProps {
   scalarRows: ScalarRow[];
   engineLog: EngineLogEntry[];
   artifacts: ArtifactEntry[];
+  quantities: QuantityDescriptor[];
   connection: "connecting" | "connected" | "disconnected";
   error: string | null;
   convergenceThreshold: number;
@@ -54,6 +56,7 @@ export default function BottomUtilityDock(props: BottomUtilityDockProps) {
           scalarRows={props.scalarRows}
           engineLog={props.engineLog}
           artifacts={props.artifacts}
+          quantities={props.quantities}
           connection={props.connection}
           error={props.error}
           presentationMode="current"
@@ -68,4 +71,3 @@ export default function BottomUtilityDock(props: BottomUtilityDockProps) {
     </div>
   );
 }
-

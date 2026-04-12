@@ -130,6 +130,7 @@ export default function WorkspaceDockingShell() {
             scalarRows={tp.scalarRows}
             engineLog={cmd.engineLog}
             artifacts={cmd.artifacts}
+            quantities={cmd.quantities}
             connection={cmd.connection}
             error={cmd.error}
             convergenceThreshold={

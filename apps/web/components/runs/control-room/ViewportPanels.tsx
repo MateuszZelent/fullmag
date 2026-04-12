@@ -449,6 +449,25 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         component={spatialPreview.component}
         min={spatialPreview.min}
         max={spatialPreview.max}
+        axisExtent={
+          ctx.worldExtent
+            ? {
+                x: ctx.worldCenter
+                  ? [
+                      ctx.worldCenter[0] - ctx.worldExtent[0] * 0.5,
+                      ctx.worldCenter[0] + ctx.worldExtent[0] * 0.5,
+                    ]
+                  : [0, ctx.worldExtent[0]],
+                y: ctx.worldCenter
+                  ? [
+                      ctx.worldCenter[1] - ctx.worldExtent[1] * 0.5,
+                      ctx.worldCenter[1] + ctx.worldExtent[1] * 0.5,
+                    ]
+                  : [0, ctx.worldExtent[1]],
+                unit: "m",
+              }
+            : null
+        }
       />
     );
   } else if (

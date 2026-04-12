@@ -10,8 +10,10 @@
  */
 
 import { useMemo, memo } from "react";
-import type { ScalarRow } from "../../lib/useSessionStream";
+import type { QuantityDescriptor, ScalarRow } from "../../lib/useSessionStream";
 import Plot from "./DynamicPlot";
+import { scalarSeriesList, type ScalarSeriesMeta } from "../../lib/quantities/scalars";
+import { normalizeUnitLabel } from "../../lib/format";
 
 // ─── Constants ──────────────────────────────────────────────────────
 
@@ -19,24 +21,6 @@ const SERIES_COLORS = [
   "#60a5fa", "#34d399", "#f472b6", "#fbbf24",
   "#a78bfa", "#fb923c", "#38bdf8", "#e879f9",
 ];
-
-const COLUMN_LABELS: Record<string, string> = {
-  step: "Step",
-  time: "Time (s)",
-  solver_dt: "Δt (s)",
-  mx: "m_x avg",
-  my: "m_y avg",
-  mz: "m_z avg",
-  e_ex: "E_exchange (J)",
-  e_demag: "E_demag (J)",
-  e_ext: "E_external (J)",
-  e_ani: "E_anisotropy (J)",
-  e_dmi: "E_DMI (J)",
-  e_total: "E_total (J)",
-  max_dm_dt: "max dm/dt (rad/s)",
-  max_h_eff: "max |H_eff| (A/m)",
-  max_h_demag: "max |H_demag| (A/m)",
-};
 
 const DEFAULT_Y_COLUMNS = ["e_ex", "e_demag", "e_ext", "e_ani", "e_dmi", "e_total"];
 
@@ -63,6 +47,7 @@ const THEME = {
 
 interface Props {
   rows: ScalarRow[];
+  quantities?: QuantityDescriptor[];
   xColumn?: string;
   yColumns?: string[];
 }
@@ -71,31 +56,40 @@ interface Props {
 
 const ScalarPlot = memo(function ScalarPlot({
   rows,
+  quantities = [],
   xColumn = "time",
   yColumns = DEFAULT_Y_COLUMNS,
 }: Props) {
+  const xMeta = useMemo(
+    () => scalarSeriesList([xColumn], quantities)[0] ?? { key: xColumn, label: xColumn, unit: "", kind: "diagnostic" as const },
+    [quantities, xColumn],
+  );
+  const seriesMeta = useMemo(
+    () => scalarSeriesList(yColumns, quantities),
+    [quantities, yColumns],
+  );
   const magnetizationOnly =
-    yColumns.length > 0 && yColumns.every(isMagnetizationAverageColumn);
+    seriesMeta.length > 0 && seriesMeta.every((meta) => isMagnetizationAverageColumn(meta.key));
 
-  const xLabel = COLUMN_LABELS[xColumn] ?? xColumn;
+  const xLabel = buildAxisLabel(xMeta);
 
   // Build Plotly traces (memoised on rows + column identity)
   const traces = useMemo(() => {
-    return yColumns.map((col, i) => ({
+    return seriesMeta.map((series, i) => ({
       x: rows.map((r) => accessor(r, xColumn)),
-      y: rows.map((r) => accessor(r, col)),
+      y: rows.map((r) => accessor(r, series.key)),
       type: "scattergl" as const,
       mode: "lines" as const,
-      name: COLUMN_LABELS[col] ?? col,
+      name: buildAxisLabel(series),
       line: {
         color: SERIES_COLORS[i % SERIES_COLORS.length],
         width: 1.5,
       },
       hovertemplate: magnetizationOnly
-        ? `%{y:.4f}<extra>${COLUMN_LABELS[col] ?? col}</extra>`
-        : `%{y:.4e}<extra>${COLUMN_LABELS[col] ?? col}</extra>`,
+        ? `%{y:.4f}<extra>${buildAxisLabel(series)}</extra>`
+        : `%{y:.4e}<extra>${buildAxisLabel(series)}</extra>`,
     }));
-  }, [rows, xColumn, yColumns, magnetizationOnly]);
+  }, [rows, xColumn, seriesMeta, magnetizationOnly]);
 
   const layout = useMemo(
     (): Partial<Plotly.Layout> => ({
@@ -117,6 +111,10 @@ const ScalarPlot = memo(function ScalarPlot({
         tickformat: magnetizationOnly ? ".3f" : undefined,
       },
       yaxis: {
+        title: {
+          text: seriesMeta.length === 1 ? buildAxisLabel(seriesMeta[0]) : undefined,
+          standoff: 8,
+        },
         color: THEME.text,
         gridcolor: THEME.gridLine,
         gridwidth: 1,
@@ -146,7 +144,7 @@ const ScalarPlot = memo(function ScalarPlot({
         orientation: "v",
       },
     }),
-    [xLabel, magnetizationOnly],
+    [xLabel, magnetizationOnly, seriesMeta],
   );
 
   const config = useMemo(
@@ -182,3 +180,8 @@ const ScalarPlot = memo(function ScalarPlot({
 });
 
 export default ScalarPlot;
+
+function buildAxisLabel(meta: ScalarSeriesMeta): string {
+  const unit = normalizeUnitLabel(meta.unit);
+  return unit ? `${meta.label} (${unit})` : meta.label;
+}

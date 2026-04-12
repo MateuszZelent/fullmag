@@ -75,7 +75,7 @@ export interface LiveState {
   preview_auto_downscaled: boolean;
   preview_auto_downscale_message: string | null;
   fem_mesh: FemLiveMesh | null;
-  /** @deprecated Use `latest_fields.fields["m"]` instead. Remove once StepUpdate migrates to StepUpdateV2 (Q16). */
+  /** @deprecated Use `latest_fields.frames["m"]?.values` instead. Remove once StepUpdate migrates to StepUpdateV2 (Q16). */
   magnetization: Float64Array | null;
   finished: boolean;
 }
@@ -244,8 +244,19 @@ export interface ArtifactEntry {
   kind: string;
 }
 
+export interface LatestFieldFrame {
+  quantity_id: string;
+  unit: string;
+  n_comp: number;
+  grid: [number, number, number];
+  values: Float64Array;
+  active_mask?: Uint8Array | null;
+  location?: string | null;
+  domain?: string | null;
+}
+
 export interface LatestFields {
-  fields: Record<string, Float64Array | null>;
+  frames: Record<string, LatestFieldFrame>;
   grid: [number, number, number] | null;
 }
 

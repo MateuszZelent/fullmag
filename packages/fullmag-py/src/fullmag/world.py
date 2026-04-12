@@ -688,7 +688,20 @@ _VECTOR_QUANTITIES = {
     "H_ex",
     "H_demag",
     "H_ext",
+    "H_ant",
     "H_eff",
+    "H_ani",
+    "H_dmi",
+    "H_mel",
+    "H_ani_cubic",
+    "H_dmi_bulk",
+    "H_oe",
+    "H_therm",
+    # Second wave (QB-17)
+    "dm_dt",
+    "torque_stt",
+    "torque_sot",
+    # Legacy B-field aliases
     "B_exch",
     "B_demag",
     "B_ext",
@@ -2539,8 +2552,10 @@ def spin_wave_excitation(
 _SCALAR_QUANTITIES = {
     "E_ex",
     "E_demag",
-    "E_total",
     "E_ext",
+    "E_ani",
+    "E_dmi",
+    "E_total",
     "time",
     "step",
     "solver_dt",
@@ -2549,6 +2564,7 @@ _SCALAR_QUANTITIES = {
     "mz",
     "max_h_eff",
     "max_dm_dt",
+    "max_h_demag",
 }
 _TABLE_DEFAULT_SCALARS = (
     "time",

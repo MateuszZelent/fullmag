@@ -646,10 +646,17 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
         return { title: "Bootstrapping live workspace", description: latestEngineMessage ?? "Starting the local workspace." };
       return { title: "Waiting for FEM preview data", description: latestEngineMessage ?? "The mesh topology is not available yet." };
     }
+    // Mesh topology exists but no field data for the selected quantity
+    if (isFemBackend && femMeshData && !femMeshData.fieldData && activeQuantityId) {
+      return {
+        title: `No live frame for "${activeQuantityId}"`,
+        description: "Mesh topology is ready but the solver has not yet sent vector data for this quantity. Waiting for the next step update.",
+      };
+    }
     if (workspaceStatus === "materializing_script")
       return { title: "Materializing workspace", description: latestEngineMessage ?? "Preparing problem description and first preview." };
     return { title: "No preview data yet", description: latestEngineMessage ?? "Waiting for the first live field snapshot." };
-  }, [femMeshData, isFemBackend, latestEngineMessage, workspaceStatus]);
+  }, [activeQuantityId, femMeshData, isFemBackend, latestEngineMessage, workspaceStatus]);
 
   const sessionFooter = useMemo<SessionFooterData>(() => ({
     requestedBackend: session?.requested_backend ?? null,

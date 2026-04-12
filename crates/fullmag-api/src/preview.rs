@@ -44,30 +44,10 @@ pub(crate) fn current_vector_field(
     current: &SessionStateResponse,
     quantity: &str,
 ) -> Option<(Vec<[f64; 3]>, [usize; 3])> {
-    // Unified path: try latest_fields first for ALL quantities (including "m").
-    if let Some(parsed) = current.latest_fields.get(quantity).and_then(parse_field_value) {
-        return Some(parsed);
-    }
-    // Legacy fallback: magnetization is still transmitted inline in the step
-    // update payload.  Once the pipeline publishes it as a regular field this
-    // branch will never trigger.
-    if quantity == "m" {
-        if let Some(live) = current.live_state.as_ref() {
-            if let Some(values) = live.latest_step.magnetization.as_ref() {
-                let vectors = values
-                    .chunks_exact(3)
-                    .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-                    .collect::<Vec<_>>();
-                let grid = [
-                    live.latest_step.grid[0] as usize,
-                    live.latest_step.grid[1] as usize,
-                    live.latest_step.grid[2] as usize,
-                ];
-                return Some((vectors, grid));
-            }
-        }
-    }
-    None
+    current
+        .latest_fields
+        .get(quantity)
+        .and_then(parse_field_value)
 }
 
 pub(crate) fn mesh_preview_active_mask(mesh: &FemMeshPayload, quantity: &str) -> Option<Vec<bool>> {

@@ -301,9 +301,11 @@ impl StepUpdateView {
         if let Some(ref mag) = self.magnetization {
             frames.push(LiveQuantityFrame {
                 quantity_id: "m".to_string(),
-                unit: String::new(),
+                unit: fullmag_quantities::quantity_unit("m").to_string(),
                 grid: self.grid,
-                n_comp: 3,
+                n_comp: fullmag_quantities::quantity_spec("m")
+                    .map(|spec| spec.n_comp)
+                    .unwrap_or(3),
                 values: mag.clone(),
                 active_mask: None,
             });
@@ -347,6 +349,37 @@ pub(crate) struct SessionStateResponse {
     pub preview: Option<PreviewState>,
     #[serde(skip_serializing, default)]
     pub builder_adapter: Option<ScriptBuilderState>,
+}
+
+impl SessionStateResponse {
+    /// Build `StepUpdateV2` that includes both the base step data (magnetization)
+    /// AND all cached preview fields (H_ext, H_demag, H_ex, etc.).
+    ///
+    /// This allows the frontend to populate `fieldMap` with all available
+    /// quantities from a single `step_update_v2.frames` array, enabling
+    /// instant quantity switching without waiting for preview round-trips.
+    pub(crate) fn build_step_update_v2(&self) -> Option<fullmag_quantities::StepUpdateV2> {
+        let ls = self.live_state.as_ref()?;
+        let mut v2 = ls.latest_step.to_step_update_v2();
+
+        // Inject cached preview fields as additional frames.
+        for (quantity_id, field) in self.preview_cache.iter() {
+            // Skip "m" — already in frames from to_step_update_v2().
+            if quantity_id == "m" {
+                continue;
+            }
+            v2.frames.push(fullmag_quantities::LiveQuantityFrame {
+                quantity_id: quantity_id.clone(),
+                unit: field.unit.clone(),
+                grid: field.preview_grid,
+                n_comp: 3,
+                values: field.vector_field_values.clone(),
+                active_mask: field.active_mask.clone(),
+            });
+        }
+
+        Some(v2)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -453,6 +486,10 @@ impl CachedPreviewFields {
 
     pub(crate) fn insert(&mut self, field: LivePreviewField) {
         self.0.insert(field.quantity.clone(), field);
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &LivePreviewField)> {
+        self.0.iter()
     }
 }
 
@@ -908,6 +945,12 @@ mod tests {
                     source_format: None,
                     dataset: None,
                     sample_index: None,
+                    mapping: None,
+                    texture_transform: None,
+                    preset_kind: None,
+                    preset_params: None,
+                    preset_version: None,
+                    ui_label: None,
                 },
                 physics_stack: vec![],
                 mesh: None,
@@ -993,6 +1036,7 @@ mod tests {
             display_selection: &response.display_selection,
             preview_config: &response.preview_config,
             preview: response.preview.as_ref(),
+            step_update_v2: None,
         })
         .expect("response should serialize");
 
@@ -1000,5 +1044,41 @@ mod tests {
         assert!(value.get("builder_adapter").is_none());
         assert!(value.get("script_builder").is_none());
         assert!(value.get("model_builder_graph").is_none());
+    }
+
+    #[test]
+    fn step_update_v2_uses_registry_metadata_for_magnetization() {
+        let view = StepUpdateView {
+            step: 12,
+            time: 1.25,
+            dt: 1.0e-12,
+            e_ex: 0.0,
+            e_demag: 0.0,
+            e_ext: 0.0,
+            e_ani: 0.0,
+            e_dmi: 0.0,
+            e_total: 0.0,
+            max_dm_dt: 0.0,
+            max_h_eff: 0.0,
+            max_h_demag: 0.0,
+            wall_time_ns: 0,
+            grid: [2, 1, 1],
+            fem_mesh: None,
+            magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            preview_field: None,
+            finished: false,
+        };
+
+        let v2 = view.to_step_update_v2();
+        let frame = v2
+            .frames
+            .iter()
+            .find(|entry| entry.quantity_id == "m")
+            .expect("missing magnetization frame");
+        let spec = fullmag_quantities::quantity_spec("m").expect("missing quantity spec");
+
+        assert_eq!(frame.unit, spec.unit);
+        assert_eq!(frame.n_comp, spec.n_comp);
+        assert!(!frame.unit.is_empty());
     }
 }

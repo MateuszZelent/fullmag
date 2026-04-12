@@ -44,6 +44,15 @@ class StepStats:
 
 
 @dataclass(frozen=True, slots=True)
+class ScalarQuantityDescriptor:
+    quantity_id: str
+    label: str
+    unit: str
+    scalar_key: str
+    kind: str = "global_scalar"
+
+
+@dataclass(frozen=True, slots=True)
 class Result:
     status: str
     backend: BackendTarget
@@ -79,6 +88,13 @@ class Result:
             raise ValueError("result does not contain any step statistics")
         canonical = _normalize_scalar_quantity_name(quantity)
         return _step_scalar(self.steps[-1], canonical, region=region)
+
+    def scalar_descriptor(self, quantity: str) -> ScalarQuantityDescriptor:
+        canonical = _normalize_scalar_quantity_name(quantity)
+        return _SCALAR_QUANTITY_DESCRIPTORS[canonical]
+
+    def scalar_descriptors(self) -> tuple[ScalarQuantityDescriptor, ...]:
+        return tuple(_SCALAR_QUANTITY_DESCRIPTORS[key] for key in _SCALAR_QUANTITY_ORDER)
 
 
 @dataclass(slots=True)
@@ -241,11 +257,42 @@ _SCALAR_QUANTITY_ALIASES: Mapping[str, str] = {
     "max_h_demag": "max_h_demag",
 }
 
+_SCALAR_QUANTITY_DESCRIPTORS: Mapping[str, ScalarQuantityDescriptor] = {
+    "e_ex": ScalarQuantityDescriptor("e_ex", "Exchange Energy", "J", "e_ex"),
+    "e_demag": ScalarQuantityDescriptor("e_demag", "Demagnetization Energy", "J", "e_demag"),
+    "e_ext": ScalarQuantityDescriptor("e_ext", "External Energy", "J", "e_ext"),
+    "e_ani": ScalarQuantityDescriptor("e_ani", "Anisotropy Energy", "J", "e_ani"),
+    "e_dmi": ScalarQuantityDescriptor("e_dmi", "DMI Energy", "J", "e_dmi"),
+    "e_total": ScalarQuantityDescriptor("e_total", "Total Energy", "J", "e_total"),
+    "mx": ScalarQuantityDescriptor("m", "m_x avg", "dimensionless", "mx", kind="derived"),
+    "my": ScalarQuantityDescriptor("m", "m_y avg", "dimensionless", "my", kind="derived"),
+    "mz": ScalarQuantityDescriptor("m", "m_z avg", "dimensionless", "mz", kind="derived"),
+    "max_dm_dt": ScalarQuantityDescriptor("dm_dt", "max |dm/dt|", "1/s", "max_dm_dt", kind="derived"),
+    "max_h_eff": ScalarQuantityDescriptor("H_eff", "max |H_eff|", "A/m", "max_h_eff", kind="derived"),
+    "max_h_demag": ScalarQuantityDescriptor("H_demag", "max |H_demag|", "A/m", "max_h_demag", kind="derived"),
+}
+
+_SCALAR_QUANTITY_ORDER: tuple[str, ...] = (
+    "e_ex",
+    "e_demag",
+    "e_ext",
+    "e_ani",
+    "e_dmi",
+    "e_total",
+    "mx",
+    "my",
+    "mz",
+    "max_dm_dt",
+    "max_h_eff",
+    "max_h_demag",
+)
+
 
 def _normalize_scalar_quantity_name(quantity: str) -> str:
     key = quantity.strip().lower()
     if key not in _SCALAR_QUANTITY_ALIASES:
-        raise ValueError(f"unsupported scalar quantity {quantity!r}")
+        known = ", ".join(_SCALAR_QUANTITY_ORDER)
+        raise ValueError(f"unsupported scalar quantity {quantity!r}. Known scalars: {known}")
     return _SCALAR_QUANTITY_ALIASES[key]
 
 

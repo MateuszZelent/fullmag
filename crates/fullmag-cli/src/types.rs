@@ -342,6 +342,9 @@ pub(crate) struct SessionCommand {
     pub display_selection: Option<CurrentDisplaySelection>,
     #[serde(default)]
     pub preview_config: Option<fullmag_runner::LivePreviewRequest>,
+    /// Stages for `run_sequence` command.
+    #[serde(default)]
+    pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
 }
 
 #[derive(Debug, Clone, Serialize)]

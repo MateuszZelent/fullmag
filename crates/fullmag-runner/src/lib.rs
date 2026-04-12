@@ -39,7 +39,7 @@ const DEFAULT_ADAPTIVE_DT_MAX: f64 = 1e-10;
 pub use capabilities::{BackendCapabilities, RuntimeEngineId};
 pub use interactive::backend::BackendGeometry;
 pub use interactive::checkpoints::RunOutcome;
-pub use interactive::commands::{parse_session_command, LiveControlCommand, RuntimeControlOutcome};
+pub use interactive::commands::{parse_session_command, LiveControlCommand, RuntimeControlOutcome, SequenceStage};
 pub use interactive::display::{
     DisplayKind, DisplayPayload, DisplaySelection, DisplaySelectionState,
 };

@@ -50,13 +50,6 @@ pub(crate) fn build_quantities(
                     dynamic_available(spec.id.as_str())
                         || latest_fields.get(spec.id.as_str()).is_some()
                         || preview_cache.get(spec.id.as_str()).is_some()
-                        // Legacy compat: magnetization payload in StepUpdate implies "m".
-                        // Also counts as available when a preview_field carries any
-                        // matching quantity (not just "m").
-                        || live_state
-                            .and_then(|s| s.latest_step.magnetization.as_ref())
-                            .filter(|_| spec.id == fullmag_quantities::QuantityId::M)
-                            .is_some()
                         || live_state
                             .and_then(|state| state.latest_step.preview_field.as_ref())
                             .is_some_and(|field| field.quantity == spec.id.as_str())
@@ -111,5 +104,69 @@ pub(crate) fn extract_fem_mesh_from_metadata(metadata: &Value) -> Option<FemMesh
         BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(&fem)),
         BackendPlanIR::FemEigen(fem) => Some(FemMeshPayload::from(&fem)),
         BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_quantities;
+    use crate::types::{
+        CachedPreviewFields, LatestFields, LiveState, StepUpdateView,
+    };
+
+    #[test]
+    fn magnetization_is_not_marked_available_from_legacy_inline_field() {
+        let live_state = LiveState {
+            status: "running".to_string(),
+            updated_at_unix_ms: 1,
+            latest_step: StepUpdateView {
+                step: 1,
+                time: 0.0,
+                dt: 1.0e-12,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                wall_time_ns: 0,
+                grid: [2, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                preview_field: None,
+                finished: false,
+            },
+        };
+
+        let quantities = build_quantities(
+            &LatestFields::default(),
+            &CachedPreviewFields::default(),
+            Some(&live_state),
+            None,
+            None,
+            &[],
+            "node",
+        );
+
+        let magnetization = quantities
+            .iter()
+            .find(|quantity| quantity.id == "m")
+            .expect("missing magnetization descriptor");
+
+        assert!(!magnetization.available);
+    }
+
+    #[test]
+    fn canonical_quantity_catalog_has_no_empty_units() {
+        for spec in fullmag_quantities::quantity_specs() {
+            assert!(
+                !spec.unit.trim().is_empty(),
+                "quantity {} unexpectedly has empty unit",
+                spec.id.as_str()
+            );
+        }
     }
 }

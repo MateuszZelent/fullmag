@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as echarts from "echarts";
 import { DIVERGING_PALETTE, SEQUENTIAL_BLUE_PALETTE, POSITIVE_PALETTE } from "../../lib/colorPalettes";
 import { ECHARTS_THEME } from "../../lib/echartsTheme";
+import { fmtSI } from "../../lib/format";
 
 interface Props {
   data: [number, number, number][];
@@ -13,6 +14,11 @@ interface Props {
   component: string;
   min: number;
   max: number;
+  axisExtent?: {
+    x: [number, number];
+    y: [number, number];
+    unit: string;
+  } | null;
 }
 
 const NEGATIVE_PALETTE = SEQUENTIAL_BLUE_PALETTE;
@@ -45,6 +51,7 @@ export default function PreviewScalarField2D({
   component,
   min,
   max,
+  axisExtent = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
@@ -71,6 +78,8 @@ export default function PreviewScalarField2D({
     const chart = chartRef.current;
     const xCategories = Array.from({ length: xLen }, (_, i) => i);
     const yCategories = Array.from({ length: yLen }, (_, i) => i);
+    const xAxisName = axisExtent ? `x (${axisExtent.unit})` : "x (preview index)";
+    const yAxisName = axisExtent ? `y (${axisExtent.unit})` : "y (preview index)";
 
     chart.setOption(
       {
@@ -83,8 +92,8 @@ export default function PreviewScalarField2D({
             const value = params.value as number[];
             return [
               `<strong>${quantityLabel}.${component}</strong>`,
-              `x: ${value[0]}`,
-              `y: ${value[1]}`,
+              `x: ${formatAxisCoordinate(value[0], xLen, axisExtent?.x ?? null, axisExtent?.unit ?? "m")}`,
+              `y: ${formatAxisCoordinate(value[1], yLen, axisExtent?.y ?? null, axisExtent?.unit ?? "m")}`,
               `value: ${formatMagnitude(value[2])}${quantityUnit ? ` ${quantityUnit}` : ""}`,
             ].join("<br/>");
           },
@@ -97,23 +106,33 @@ export default function PreviewScalarField2D({
         xAxis: {
           type: "category",
           data: xCategories,
-          name: "x (preview)",
+          name: xAxisName,
           nameLocation: "middle",
           nameGap: 28,
           nameTextStyle: { color: THEME.text2, fontWeight: 600 },
           axisLine: { show: true, lineStyle: { color: THEME.border } },
-          axisLabel: { color: THEME.text2, hideOverlap: true },
+          axisLabel: {
+            color: THEME.text2,
+            hideOverlap: true,
+            formatter: (value: string) =>
+              formatAxisCoordinate(Number(value), xLen, axisExtent?.x ?? null, axisExtent?.unit ?? "m"),
+          },
           splitLine: { show: false },
         },
         yAxis: {
           type: "category",
           data: yCategories,
-          name: "y (preview)",
+          name: yAxisName,
           nameLocation: "middle",
           nameGap: 38,
           nameTextStyle: { color: THEME.text2, fontWeight: 600 },
           axisLine: { show: true, lineStyle: { color: THEME.border } },
-          axisLabel: { color: THEME.text2, hideOverlap: true },
+          axisLabel: {
+            color: THEME.text2,
+            hideOverlap: true,
+            formatter: (value: string) =>
+              formatAxisCoordinate(Number(value), yLen, axisExtent?.y ?? null, axisExtent?.unit ?? "m"),
+          },
           splitLine: { show: false },
         },
         visualMap: {
@@ -148,7 +167,7 @@ export default function PreviewScalarField2D({
     return () => {
       window.removeEventListener("resize", resize);
     };
-  }, [component, data, quantityLabel, quantityUnit, scale.max, scale.min, scale.palette, xLen, yLen]);
+  }, [axisExtent, component, data, quantityLabel, quantityUnit, scale.max, scale.min, scale.palette, xLen, yLen]);
 
   useEffect(() => {
     return () => {
@@ -159,4 +178,19 @@ export default function PreviewScalarField2D({
   }, []);
 
   return <div ref={containerRef} className="h-full w-full" />;
+}
+
+function formatAxisCoordinate(
+  index: number,
+  size: number,
+  extent: [number, number] | null,
+  unit: string,
+): string {
+  if (!extent || !Number.isFinite(index)) {
+    return Number.isFinite(index) ? index.toFixed(0) : "—";
+  }
+  const span = extent[1] - extent[0];
+  const step = size > 1 ? span / Math.max(1, size - 1) : 0;
+  const coordinate = extent[0] + index * step;
+  return fmtSI(coordinate, unit);
 }

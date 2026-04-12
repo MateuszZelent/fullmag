@@ -231,7 +231,10 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
           const p = decodePreviewBinaryFrame(event.data);
           if (!p) return;
           pendingPreviewPayloadsRef.current.set(p.payloadId, p.vectorFieldValues);
-          setState((prev) => attachPreviewBinaryPayload(prev, p.payloadId, p.vectorFieldValues));
+          const v2Meta = "version" in p && p.version === 2
+            ? { quantityId: (p as any).quantityId as string, nComp: (p as any).nComp as number, grid: (p as any).grid as [number, number, number] }
+            : undefined;
+          setState((prev) => attachPreviewBinaryPayload(prev, p.payloadId, p.vectorFieldValues, v2Meta));
           return;
         }
         try {

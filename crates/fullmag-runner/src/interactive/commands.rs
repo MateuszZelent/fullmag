@@ -1,5 +1,52 @@
 use serde::{Deserialize, Serialize};
 
+// ── Sequence stage definition ────────────────────────────────────────────
+
+/// A single stage within a multi-step execution sequence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SequenceStage {
+    /// Time-evolution stage.
+    Run {
+        until_seconds: f64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_steps: Option<u64>,
+    },
+    /// Relaxation stage.
+    Relax {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        until_seconds: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_steps: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        torque_tolerance: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        energy_tolerance: Option<f64>,
+    },
+}
+
+impl SequenceStage {
+    /// Human-readable label for the stage.
+    pub fn label(&self) -> &'static str {
+        match self {
+            SequenceStage::Run { .. } => "run",
+            SequenceStage::Relax { .. } => "relax",
+        }
+    }
+
+    /// Convert this stage to a standalone `LiveControlCommand`.
+    pub fn to_command(&self) -> LiveControlCommand {
+        match self.clone() {
+            SequenceStage::Run { until_seconds, max_steps } => {
+                LiveControlCommand::Run { until_seconds, max_steps }
+            }
+            SequenceStage::Relax { until_seconds, max_steps, torque_tolerance, energy_tolerance } => {
+                LiveControlCommand::Relax { until_seconds, max_steps, torque_tolerance, energy_tolerance }
+            }
+        }
+    }
+}
+
 /// Typed control commands replacing string-based `kind` field.
 ///
 /// These map 1:1 to the current `SessionCommand.kind` strings used by the API,
@@ -37,6 +84,13 @@ pub enum LiveControlCommand {
     SetDisplaySelection(super::DisplaySelection),
     /// Refresh the display from current backend state.
     RefreshDisplay,
+
+    /// Execute a sequence of stages (run/relax) automatically.
+    RunSequence {
+        stages: Vec<SequenceStage>,
+    },
+    /// Skip the current stage in an active sequence and advance to the next one.
+    SkipStage,
 }
 
 /// A control command with a monotonic sequence number for total ordering.
@@ -76,6 +130,7 @@ pub fn parse_session_command(
     torque_tolerance: Option<f64>,
     energy_tolerance: Option<f64>,
     display_selection: Option<&super::DisplaySelectionState>,
+    stages: Option<Vec<SequenceStage>>,
 ) -> Option<LiveControlCommand> {
     match kind {
         "run" => Some(LiveControlCommand::Run {
@@ -96,6 +151,15 @@ pub fn parse_session_command(
             .cloned()
             .map(|ds| LiveControlCommand::SetDisplaySelection(ds.selection)),
         "preview_refresh" => Some(LiveControlCommand::RefreshDisplay),
+        "run_sequence" => {
+            let stages = stages.unwrap_or_default();
+            if stages.is_empty() {
+                None
+            } else {
+                Some(LiveControlCommand::RunSequence { stages })
+            }
+        }
+        "skip" | "skip_stage" => Some(LiveControlCommand::SkipStage),
         _ => None,
     }
 }

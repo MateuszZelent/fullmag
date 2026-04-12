@@ -262,9 +262,11 @@ impl StepUpdate {
         if let Some(ref mag) = self.magnetization {
             frames.push(fullmag_quantities::LiveQuantityFrame {
                 quantity_id: "m".to_string(),
-                unit: "".to_string(),
+                unit: fullmag_quantities::quantity_unit("m").to_string(),
                 grid: self.grid,
-                n_comp: 3,
+                n_comp: fullmag_quantities::quantity_spec("m")
+                    .map(|spec| spec.n_comp)
+                    .unwrap_or(3),
                 values: mag.clone(),
                 active_mask: None,
             });
@@ -274,9 +276,11 @@ impl StepUpdate {
         if let Some(ref pf) = self.preview_field {
             frames.push(fullmag_quantities::LiveQuantityFrame {
                 quantity_id: pf.quantity.clone(),
-                unit: pf.unit.clone(),
+                unit: fullmag_quantities::quantity_unit(&pf.quantity).to_string(),
                 grid: pf.preview_grid,
-                n_comp: 3,
+                n_comp: fullmag_quantities::quantity_spec(&pf.quantity)
+                    .map(|spec| spec.n_comp)
+                    .unwrap_or(3),
                 values: pf.vector_field_values.clone(),
                 active_mask: pf.active_mask.clone(),
             });
@@ -287,9 +291,11 @@ impl StepUpdate {
             for cf in cached {
                 frames.push(fullmag_quantities::LiveQuantityFrame {
                     quantity_id: cf.quantity.clone(),
-                    unit: cf.unit.clone(),
+                    unit: fullmag_quantities::quantity_unit(&cf.quantity).to_string(),
                     grid: cf.preview_grid,
-                    n_comp: 3,
+                    n_comp: fullmag_quantities::quantity_spec(&cf.quantity)
+                        .map(|spec| spec.n_comp)
+                        .unwrap_or(3),
                     values: cf.vector_field_values.clone(),
                     active_mask: cf.active_mask.clone(),
                 });
@@ -835,7 +841,9 @@ pub(crate) struct StateObservables {
 
 #[cfg(test)]
 mod tests {
-    use super::normalized_payload_element_markers;
+    use super::{
+        normalized_payload_element_markers, LivePreviewField, StepStats, StepUpdate,
+    };
     use std::collections::BTreeSet;
 
     #[test]
@@ -861,5 +869,74 @@ mod tests {
             normalized_payload_element_markers(&[5, 5], None),
             vec![1, 1]
         );
+    }
+
+    #[test]
+    fn to_v2_uses_registry_metadata_for_magnetization() {
+        let update = StepUpdate {
+            stats: StepStats::default(),
+            grid: [4, 1, 1],
+            fem_mesh: None,
+            magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            preview_field: None,
+            cached_preview_fields: None,
+            scalar_row_due: false,
+            finished: false,
+        };
+
+        let v2 = update.to_v2();
+        let frame = v2
+            .frames
+            .iter()
+            .find(|entry| entry.quantity_id == "m")
+            .expect("missing magnetization frame");
+        let spec = fullmag_quantities::quantity_spec("m").expect("missing quantity spec");
+
+        assert_eq!(frame.unit, spec.unit);
+        assert_eq!(frame.n_comp, spec.n_comp);
+        assert!(!frame.unit.is_empty());
+    }
+
+    #[test]
+    fn to_v2_uses_registry_metadata_for_preview_fields() {
+        let update = StepUpdate {
+            stats: StepStats::default(),
+            grid: [4, 1, 1],
+            fem_mesh: None,
+            magnetization: None,
+            preview_field: Some(LivePreviewField {
+                config_revision: 1,
+                quantity: "eden_total".to_string(),
+                unit: "wrong".to_string(),
+                spatial_kind: "grid".to_string(),
+                quantity_domain: "magnetic_only".to_string(),
+                preview_grid: [4, 1, 1],
+                original_grid: [4, 1, 1],
+                vector_field_values: vec![1.0, 2.0, 3.0, 4.0],
+                x_chosen_size: 4,
+                y_chosen_size: 1,
+                applied_x_chosen_size: 4,
+                applied_y_chosen_size: 1,
+                applied_layer_stride: 1,
+                auto_downscaled: false,
+                auto_downscale_message: None,
+                active_mask: None,
+            }),
+            cached_preview_fields: None,
+            scalar_row_due: false,
+            finished: false,
+        };
+
+        let v2 = update.to_v2();
+        let frame = v2
+            .frames
+            .iter()
+            .find(|entry| entry.quantity_id == "eden_total")
+            .expect("missing preview frame");
+        let spec = fullmag_quantities::quantity_spec("eden_total").expect("missing quantity spec");
+
+        assert_eq!(frame.unit, spec.unit);
+        assert_eq!(frame.n_comp, spec.n_comp);
+        assert!(!frame.unit.is_empty());
     }
 }
