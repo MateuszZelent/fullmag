@@ -1722,5 +1722,6 @@ export function normalizeSessionState(
       previewConfigFromDisplaySelection(displaySelection),
     preview: normalizePreviewState(rawPreview, pendingVectorPayloads),
     command_status: null,
+    step_update_v2: raw.step_update_v2 ?? null,
   };
 }

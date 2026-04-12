@@ -44,6 +44,7 @@ import { useFemSceneGeometry } from "./fem/useFemSceneGeometry";
 import { useFemOverlayItems } from "./fem/useFemOverlayItems";
 import { RENDER_MODE_DISPLAY_PRESETS } from "./fem/renderModePresets";
 import { useFemSubmeshSnapshot } from "./fem/useFemSubmeshSnapshot";
+import { useFemFaceInteraction } from "./fem/useFemFaceInteraction";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 import { buildVisibleLayers } from "@/features/viewport-fem/model/femRenderModel";
@@ -283,10 +284,7 @@ function FemMeshView3DInner({
   const [sampledArrowCount, setSampledArrowCount] = useState<number | undefined>(undefined);
   const [captureActive, setCaptureActive] = useState(false);
   const [captureOverlayHidden, setCaptureOverlayHidden] = useState(false);
-  
-  const [hoveredFace, setHoveredFace] = useState<{ idx: number; x: number; y: number } | null>(null);
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; faceIdx: number } | null>(null);
-  const [selectedFaces, setSelectedFaces] = useState<number[]>([]);
+
   const partExplorerOpen = controlledPartExplorerOpen ?? internalPartExplorerOpen;
   
 
@@ -472,6 +470,22 @@ function FemMeshView3DInner({
   
   const topologySignature = topologyKey ?? `${meshData.nNodes}:${meshData.nElements}:${meshData.boundaryFaces.length}`;
   const {
+    hoveredFace,
+    ctxMenu,
+    selectedFaces,
+    handleFaceHover,
+    handleFaceUnhover,
+    handleFaceClick,
+    handleFaceContextMenu,
+    setSelectedFaces,
+    setHoveredFace,
+    setCtxMenu,
+  } = useFemFaceInteraction({
+    topologySignature,
+    geometryPointerInteractionsEnabled,
+    onSelectionChange,
+  });
+  const {
     toolbarStylePartIds,
     toolbarStylePartIdSet,
     toolbarColorPartIds,
@@ -524,46 +538,6 @@ function FemMeshView3DInner({
         : "orientation",
     );
   }, [colorField, controlledArrowColorMode]);
-  useEffect(() => {
-    setSelectedFaces([]); setHoveredFace(null); setCtxMenu(null);
-    // Note: Camera auto-fit is now handled in handleGeometryCenter based on physical bounds, 
-    // not purely on node counts, to prevent camera resets during remeshing operations.
-  }, [topologySignature]);
-
-  useEffect(() => {
-    onSelectionChange?.({
-      selectedFaceIndices: selectedFaces,
-      primaryFaceIndex: selectedFaces.length > 0 ? selectedFaces[selectedFaces.length - 1] : null,
-    });
-  }, [onSelectionChange, selectedFaces]);
-
-  // Click & Raycast handlers
-  const handleFaceHover = useCallback((e: any) => {
-    if (e.faceIndex != null) setHoveredFace({ idx: e.faceIndex, x: e.clientX, y: e.clientY });
-  }, []);
-  const handleFaceUnhover = useCallback(() => setHoveredFace(null), []);
-  const handleFaceClick = useCallback((e: any) => {
-    if (e.button !== 0 || e.faceIndex == null) return;
-    e.stopPropagation();
-    const fIdx = e.faceIndex;
-    setSelectedFaces((prev) => {
-      if (e.shiftKey || e.ctrlKey) return prev.includes(fIdx) ? prev.filter((i) => i !== fIdx) : [...prev, fIdx];
-      if (prev.length === 1 && prev[0] === fIdx) return [];
-      return [fIdx];
-    });
-  }, []);
-  const handleFaceContextMenu = useCallback((e: any) => {
-    e?.stopPropagation?.();
-    e?.preventDefault?.();
-    e?.nativeEvent?.preventDefault?.();
-    if (e.faceIndex != null) setCtxMenu({ x: e.clientX, y: e.clientY, faceIdx: e.faceIndex });
-  }, []);
-  useEffect(() => {
-    if (!ctxMenu) return;
-    const dismiss = () => setCtxMenu(null);
-    window.addEventListener("click", dismiss, { once: true });
-    return () => window.removeEventListener("click", dismiss);
-  }, [ctxMenu]);
 
   const {
     dynamicGeomCenter,
@@ -753,15 +727,7 @@ function FemMeshView3DInner({
     if (interactionActive) {
       setHoveredFace(null);
     }
-  }, [interactionActive]);
-  useEffect(() => {
-    if (geometryPointerInteractionsEnabled) {
-      return;
-    }
-    setHoveredFace(null);
-    setCtxMenu(null);
-    setSelectedFaces([]);
-  }, [geometryPointerInteractionsEnabled]);
+  }, [interactionActive, setHoveredFace]);
   useEffect(() => {
     if (activeTransformScope === "object" && textureGizmoDragging) {
       setTextureGizmoDragging(false);

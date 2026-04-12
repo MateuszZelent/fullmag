@@ -17,7 +17,7 @@
  */
 
 import { create } from "zustand";
-import type { NormalizedSessionState } from "../model/normalizeSessionState";
+import type { NormalizedSessionState } from "../model/deriveSessionReadModel";
 import type { ConnectionStatus } from "../model/sessionRuntime.types";
 import type {
   SessionManifest,

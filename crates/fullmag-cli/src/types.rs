@@ -134,7 +134,10 @@ pub(crate) struct LiveStepView {
     pub wall_time_ns: u64,
     pub grid: [u32; 3],
     pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
+    /// **Deprecated (Q16):** Spatial data flows through `latest_fields`.
     pub magnetization: Option<Vec<f64>>,
+    /// **Deprecated (Q17):** Preview fields flow through `preview_fields`
+    /// in `CurrentLivePublishPayload`, not inside the step view.
     pub preview_field: Option<fullmag_runner::LivePreviewField>,
     pub finished: bool,
 }

@@ -208,6 +208,12 @@ impl StepStats {
 
 /// Lightweight update emitted by the runner for live WebSocket streaming.
 /// Contains step stats plus optional field snapshot for 3D preview.
+///
+/// **Migration note (Q16/Q17):** The canonical wire format for external
+/// consumers is [`fullmag_quantities::StepUpdateV2`].  Use [`Self::to_v2()`]
+/// to convert.  The legacy fields `magnetization`, `preview_field`, and
+/// `cached_preview_fields` are retained for the internal runner→CLI callback
+/// contract but should not be serialized to new external consumers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepUpdate {
     pub stats: StepStats,
@@ -216,13 +222,22 @@ pub struct StepUpdate {
     /// Optional FEM mesh payload for mesh-native preview in the control room.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_mesh: Option<FemMeshPayload>,
-    /// Magnetization snapshot as flat [mx,my,mz, mx,my,mz, ...].
+    /// **Deprecated (Q16):** Use [`fullmag_quantities::LiveQuantityFrame`]
+    /// with `quantity_id = "m"` via [`Self::to_v2()`] instead.
+    ///
+    /// Magnetization snapshot as flat \[mx,my,mz, mx,my,mz, ...\].
     /// Sent periodically (not every step) to limit bandwidth.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub magnetization: Option<Vec<f64>>,
+    /// **Deprecated (Q17):** Use [`fullmag_quantities::LiveQuantityFrame`]
+    /// via [`Self::to_v2()`] instead.
+    ///
     /// Optional active preview field driven by the current UI preview request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_field: Option<LivePreviewField>,
+    /// **Deprecated (Q17):** Use [`fullmag_quantities::LiveQuantityFrame`]
+    /// via [`Self::to_v2()`] instead.
+    ///
     /// Optional cached preview fields warmed in the background for instant
     /// quantity switching without waiting for a fresh live preview snapshot.
     #[serde(skip_serializing_if = "Option::is_none")]

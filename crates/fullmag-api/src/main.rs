@@ -1182,14 +1182,17 @@ async fn handle_ws(mut socket: WebSocket, tx: broadcast::Sender<StepUpdate>) {
             result = rx.recv() => {
                 match result {
                     Ok(update) => {
-                        let json = match serde_json::to_string(&update) {
+                        let finished = update.finished;
+                        // Q16/Q17: serialize the canonical V2 format for external consumers.
+                        let v2 = update.to_v2();
+                        let json = match serde_json::to_string(&v2) {
                             Ok(j) => j,
                             Err(_) => continue,
                         };
                         if socket.send(Message::Text(json.into())).await.is_err() {
                             break; // client disconnected
                         }
-                        if update.finished {
+                        if finished {
                             break;
                         }
                     }
@@ -2660,6 +2663,26 @@ const CURRENT_LIVE_VECTOR_FRAME_VERSION: u8 = 1;
 const CURRENT_LIVE_VECTOR_FRAME_KIND_F64: u8 = 1;
 const CURRENT_LIVE_VECTOR_FRAME_HEADER_LEN: usize = 16;
 
+/// V2 binary frame header length.
+///
+/// Layout (48 bytes):
+///   [0..4)   magic "FMVP"
+///   [4]      version = 2
+///   [5]      kind = 1 (f64)
+///   [6]      n_comp (u8)
+///   [7]      reserved (0)
+///   [8..12)  payload_id (u32 LE)
+///   [12..16) element_count (u32 LE)
+///   [16..20) grid_x (u32 LE)
+///   [20..24) grid_y (u32 LE)
+///   [24..28) grid_z (u32 LE)
+///   [28..44) quantity_id (16 bytes, null-padded UTF-8)
+///   [44..48) reserved (0)
+///   [48..)   f64 values
+const CURRENT_LIVE_VECTOR_FRAME_V2_HEADER_LEN: usize = 48;
+const CURRENT_LIVE_VECTOR_FRAME_V2_VERSION: u8 = 2;
+const CURRENT_LIVE_VECTOR_FRAME_QUANTITY_ID_LEN: usize = 16;
+
 fn next_current_live_vector_payload_id(state: &AppState) -> u32 {
     state
         .current_live_vector_payload_seq
@@ -2706,6 +2729,45 @@ fn serialize_current_live_vector_binary(payload_id: u32, values: &[f64]) -> Vec<
     out
 }
 
+/// Serialize a quantity frame to the V2 binary format (FMVP version 2).
+///
+/// Includes quantity_id, n_comp, and grid dimensions in the header so
+/// that the frontend can identify and reconstruct spatial fields without
+/// relying on a paired JSON message.
+#[allow(dead_code)]
+fn serialize_current_live_vector_binary_v2(
+    payload_id: u32,
+    quantity_id: &str,
+    n_comp: u8,
+    grid: [u32; 3],
+    values: &[f64],
+) -> Vec<u8> {
+    let mut out =
+        Vec::with_capacity(CURRENT_LIVE_VECTOR_FRAME_V2_HEADER_LEN + values.len() * 8);
+    out.extend_from_slice(&CURRENT_LIVE_VECTOR_FRAME_MAGIC);
+    out.push(CURRENT_LIVE_VECTOR_FRAME_V2_VERSION);
+    out.push(CURRENT_LIVE_VECTOR_FRAME_KIND_F64);
+    out.push(n_comp);
+    out.push(0u8); // reserved
+    out.extend_from_slice(&payload_id.to_le_bytes());
+    out.extend_from_slice(&(values.len() as u32).to_le_bytes());
+    out.extend_from_slice(&grid[0].to_le_bytes());
+    out.extend_from_slice(&grid[1].to_le_bytes());
+    out.extend_from_slice(&grid[2].to_le_bytes());
+    // quantity_id: 16 bytes, null-padded
+    let id_bytes = quantity_id.as_bytes();
+    let copy_len = id_bytes.len().min(CURRENT_LIVE_VECTOR_FRAME_QUANTITY_ID_LEN);
+    out.extend_from_slice(&id_bytes[..copy_len]);
+    for _ in copy_len..CURRENT_LIVE_VECTOR_FRAME_QUANTITY_ID_LEN {
+        out.push(0u8);
+    }
+    out.extend_from_slice(&[0u8; 4]); // reserved
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
 fn build_current_live_ws_messages(
     state: &AppState,
     snapshot: &SessionStateResponse,
@@ -2737,6 +2799,10 @@ fn serialize_current_live_session_event(
     snapshot: &SessionStateResponse,
     vector_payload_id: Option<u32>,
 ) -> Result<String, ApiError> {
+    let step_update_v2 = snapshot
+        .live_state
+        .as_ref()
+        .map(|ls| ls.latest_step.to_step_update_v2());
     serde_json::to_string(&CurrentLiveEvent::SessionState {
         state: SessionStateEventView {
             session_protocol_version: &snapshot.session_protocol_version,
@@ -2758,6 +2824,7 @@ fn serialize_current_live_session_event(
             display_selection: &snapshot.display_selection,
             preview_config: &snapshot.preview_config,
             preview: ws_preview_state(snapshot.preview.as_ref(), vector_payload_id),
+            step_update_v2,
         },
     })
     .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
@@ -2767,6 +2834,10 @@ fn serialize_current_live_response(
     snapshot: &SessionStateResponse,
     include_preview: bool,
 ) -> Result<String, ApiError> {
+    let step_update_v2 = snapshot
+        .live_state
+        .as_ref()
+        .map(|ls| ls.latest_step.to_step_update_v2());
     serde_json::to_string(&SessionStateResponseView {
         session: &snapshot.session,
         run: snapshot.run.as_ref(),
@@ -2786,6 +2857,7 @@ fn serialize_current_live_response(
         preview: include_preview
             .then_some(snapshot.preview.as_ref())
             .flatten(),
+        step_update_v2,
     })
     .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
 }

@@ -5,9 +5,20 @@ import type { PreviewBinaryPayload, SessionState } from "./types";
 
 const PREVIEW_BINARY_FRAME_MAGIC = "FMVP";
 const PREVIEW_BINARY_FRAME_HEADER_LEN = 16;
+const PREVIEW_BINARY_FRAME_V2_HEADER_LEN = 48;
 const PREVIEW_BINARY_FRAME_KIND_F64 = 1;
 
-export function decodePreviewBinaryFrame(data: ArrayBuffer): PreviewBinaryPayload | null {
+/** Decoded V2 binary frame with quantity metadata. */
+export interface PreviewBinaryPayloadV2 extends PreviewBinaryPayload {
+  version: 2;
+  quantityId: string;
+  nComp: number;
+  grid: [number, number, number];
+}
+
+export function decodePreviewBinaryFrame(
+  data: ArrayBuffer,
+): PreviewBinaryPayload | PreviewBinaryPayloadV2 | null {
   if (data.byteLength < PREVIEW_BINARY_FRAME_HEADER_LEN) {
     return null;
   }
@@ -25,7 +36,14 @@ export function decodePreviewBinaryFrame(data: ArrayBuffer): PreviewBinaryPayloa
 
   const version = view.getUint8(4);
   const kind = view.getUint8(5);
-  if (version !== 1 || kind !== PREVIEW_BINARY_FRAME_KIND_F64) {
+  if (kind !== PREVIEW_BINARY_FRAME_KIND_F64) {
+    return null;
+  }
+
+  if (version === 2) {
+    return decodePreviewBinaryFrameV2(data, view);
+  }
+  if (version !== 1) {
     return null;
   }
 
@@ -39,6 +57,38 @@ export function decodePreviewBinaryFrame(data: ArrayBuffer): PreviewBinaryPayloa
   return {
     payloadId,
     vectorFieldValues: new Float64Array(data, PREVIEW_BINARY_FRAME_HEADER_LEN, elementCount),
+  };
+}
+
+function decodePreviewBinaryFrameV2(
+  data: ArrayBuffer,
+  view: DataView,
+): PreviewBinaryPayloadV2 | null {
+  if (data.byteLength < PREVIEW_BINARY_FRAME_V2_HEADER_LEN) {
+    return null;
+  }
+  const nComp = view.getUint8(6);
+  const payloadId = view.getUint32(8, true);
+  const elementCount = view.getUint32(12, true);
+  const gridX = view.getUint32(16, true);
+  const gridY = view.getUint32(20, true);
+  const gridZ = view.getUint32(24, true);
+  // quantity_id: 16 bytes null-padded at offset 28
+  const idBytes = new Uint8Array(data, 28, 16);
+  let idEnd = idBytes.indexOf(0);
+  if (idEnd === -1) idEnd = 16;
+  const quantityId = new TextDecoder().decode(idBytes.subarray(0, idEnd));
+  const expectedLength = PREVIEW_BINARY_FRAME_V2_HEADER_LEN + elementCount * 8;
+  if (data.byteLength !== expectedLength) {
+    return null;
+  }
+  return {
+    version: 2,
+    payloadId,
+    quantityId,
+    nComp,
+    grid: [gridX, gridY, gridZ],
+    vectorFieldValues: new Float64Array(data, PREVIEW_BINARY_FRAME_V2_HEADER_LEN, elementCount),
   };
 }
 

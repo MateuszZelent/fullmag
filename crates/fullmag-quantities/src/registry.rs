@@ -58,6 +58,40 @@ impl QuantityRegistry {
             .is_some_and(|p| p.is_available(ctx))
     }
 
+    /// Evaluate all available quantities in the current context.
+    ///
+    /// **QB-10**: unified evaluator — this is the single entry-point for
+    /// every output sink (live WebSocket, snapshot file, scalar table,
+    /// Python `SaveQuantity`, artifact export). Each call iterates the
+    /// full provider set and returns only those that are currently
+    /// computable.
+    pub fn evaluate_all(
+        &self,
+        ctx: &QuantityEvalContext<'_>,
+    ) -> Vec<(QuantityId, QuantityValue)> {
+        let mut results = Vec::new();
+        for (&id, provider) in &self.providers {
+            if let Some(value) = provider.evaluate(ctx) {
+                results.push((id, value));
+            }
+        }
+        results
+    }
+
+    /// Evaluate a subset of quantities by id.
+    ///
+    /// Useful when a specific output sink only needs a handful of quantities
+    /// (e.g., only the global scalars for the table output).
+    pub fn evaluate_subset(
+        &self,
+        ids: &[QuantityId],
+        ctx: &QuantityEvalContext<'_>,
+    ) -> Vec<(QuantityId, QuantityValue)> {
+        ids.iter()
+            .filter_map(|&id| self.evaluate(id, ctx).map(|v| (id, v)))
+            .collect()
+    }
+
     /// List all registered quantity ids.
     pub fn registered_ids(&self) -> Vec<QuantityId> {
         self.providers.keys().copied().collect()
@@ -192,12 +226,18 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
         M, HEx, HDemag, HExt, HAnt, HEff, HAni, HDmi, HMel,
         HAniCubic, HDmiBulk, HOe, HTherm,
         ModeReal, ModeImag,
+        // Second wave (QB-17)
+        DmDt, TorqueStt, TorqueSot,
     ] {
         registry.register(Box::new(VectorFieldProvider::new(id)));
     }
 
     // Spatial-scalar fields
-    for id in [ModeAmplitude, ModePhase] {
+    for id in [
+        ModeAmplitude, ModePhase,
+        // Second wave (QB-17): energy densities
+        EdenEx, EdenDemag, EdenExt, EdenAni, EdenDmi, EdenTotal,
+    ] {
         registry.register(Box::new(SpatialScalarFieldProvider::new(id)));
     }
 
@@ -222,11 +262,12 @@ mod tests {
     use crate::GlobalQuantityRow;
 
     #[test]
-    fn standard_providers_register_all_23() {
+    fn standard_providers_register_all_32() {
         let mut reg = QuantityRegistry::new();
         register_standard_providers(&mut reg);
-        // 13 vector fields + 2 mode vectors + 2 mode spatial-scalars + 6 global scalars = 23
-        assert_eq!(reg.len(), 23);
+        // 15 vector + 3 torque/dmdt + 2 mode vectors + 8 spatial-scalars + 6 global scalars = 32
+        // (but grouped: 18 vector + 8 spatial-scalar + 6 global = 32)
+        assert_eq!(reg.len(), 32);
     }
 
     #[test]

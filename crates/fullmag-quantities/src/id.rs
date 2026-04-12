@@ -32,6 +32,25 @@ pub enum QuantityId {
     ModeReal,
     ModeImag,
     ModePhase,
+    // ── Second wave (QB-17) ──
+    /// Spatial exchange energy density (J/m³).
+    EdenEx,
+    /// Spatial demagnetization energy density (J/m³).
+    EdenDemag,
+    /// Spatial Zeeman energy density (J/m³).
+    EdenExt,
+    /// Spatial anisotropy energy density (J/m³).
+    EdenAni,
+    /// Spatial DMI energy density (J/m³).
+    EdenDmi,
+    /// Spatial total energy density (J/m³).
+    EdenTotal,
+    /// Magnetization rate of change (spatial vector field).
+    DmDt,
+    /// Spin-transfer torque — adiabatic / field-like (spatial vector field).
+    TorqueStt,
+    /// Spin-orbit torque — damping-like (spatial vector field).
+    TorqueSot,
 }
 
 impl QuantityId {
@@ -60,6 +79,16 @@ impl QuantityId {
             Self::ModeReal => "mode_real",
             Self::ModeImag => "mode_imag",
             Self::ModePhase => "mode_phase",
+            // Second wave (QB-17)
+            Self::EdenEx => "eden_ex",
+            Self::EdenDemag => "eden_demag",
+            Self::EdenExt => "eden_ext",
+            Self::EdenAni => "eden_ani",
+            Self::EdenDmi => "eden_dmi",
+            Self::EdenTotal => "eden_total",
+            Self::DmDt => "dm_dt",
+            Self::TorqueStt => "torque_stt",
+            Self::TorqueSot => "torque_sot",
         }
     }
 
@@ -88,6 +117,16 @@ impl QuantityId {
         Self::ModeReal,
         Self::ModeImag,
         Self::ModePhase,
+        // Second wave (QB-17)
+        Self::EdenEx,
+        Self::EdenDemag,
+        Self::EdenExt,
+        Self::EdenAni,
+        Self::EdenDmi,
+        Self::EdenTotal,
+        Self::DmDt,
+        Self::TorqueStt,
+        Self::TorqueSot,
     ];
 }
 
@@ -140,6 +179,16 @@ pub fn normalize_quantity_id(requested: &str) -> Result<QuantityId, QuantityIdEr
         "mode_real" => Ok(QuantityId::ModeReal),
         "mode_imag" => Ok(QuantityId::ModeImag),
         "mode_phase" => Ok(QuantityId::ModePhase),
+        // Second wave (QB-17)
+        "eden_ex" => Ok(QuantityId::EdenEx),
+        "eden_demag" => Ok(QuantityId::EdenDemag),
+        "eden_ext" => Ok(QuantityId::EdenExt),
+        "eden_ani" => Ok(QuantityId::EdenAni),
+        "eden_dmi" => Ok(QuantityId::EdenDmi),
+        "eden_total" => Ok(QuantityId::EdenTotal),
+        "dm_dt" => Ok(QuantityId::DmDt),
+        "torque_stt" => Ok(QuantityId::TorqueStt),
+        "torque_sot" => Ok(QuantityId::TorqueSot),
         other => Err(QuantityIdError {
             requested: other.to_string(),
         }),

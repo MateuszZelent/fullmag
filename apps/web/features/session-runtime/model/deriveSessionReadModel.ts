@@ -52,7 +52,7 @@ export interface NormalizedSessionState {
  * Normalize the raw SSE/bootstrap state from useCurrentLiveStream
  * into a structured, typed read-model.
  */
-export function normalizeSessionState(
+export function deriveSessionReadModel(
   state: Record<string, unknown> | null,
   connection: "connecting" | "connected" | "disconnected",
 ): NormalizedSessionState {

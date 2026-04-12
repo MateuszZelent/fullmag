@@ -1101,6 +1101,8 @@ export interface SessionState {
   preview_config: PreviewConfig | null;
   preview: PreviewState | null;
   command_status: CommandStatus | null;
+  /** V2 canonical step representation (Q16/Q17). Present when live_state has a latest step. */
+  step_update_v2?: StepUpdateV2 | null;
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
@@ -1161,4 +1163,62 @@ export type RuntimeCurrentLiveEvent =
 export interface PreviewBinaryPayload {
   payloadId: number;
   vectorFieldValues: Float64Array;
+}
+
+/* ── StepUpdateV2 canonical types (Q16/Q17) ── */
+
+/** Solver-internal telemetry for one integration step. */
+export interface StepDiagnostics {
+  step: number;
+  time: number;
+  dt: number;
+  wall_time_ns: number;
+  exchange_wall_time_ns?: number;
+  demag_wall_time_ns?: number;
+  rhs_wall_time_ns?: number;
+  extra_energy_wall_time_ns?: number;
+  snapshot_wall_time_ns?: number;
+  error_estimate?: number | null;
+  dt_suggested?: number | null;
+  rejected_attempts?: number;
+  rhs_evals?: number;
+  demag_solves?: number;
+  fsal_reused?: boolean;
+}
+
+/** Per-step physical scalar observations. */
+export interface GlobalQuantityRow {
+  step: number;
+  time: number;
+  mx: number;
+  my: number;
+  mz: number;
+  e_ex: number;
+  e_demag: number;
+  e_ext: number;
+  e_ani: number;
+  e_dmi: number;
+  e_total: number;
+  max_dm_dt: number;
+  max_h_eff: number;
+  max_h_demag: number;
+  per_object_scalars?: Record<string, Record<string, number>>;
+}
+
+/** A single live spatial quantity frame. */
+export interface LiveQuantityFrame {
+  quantity_id: string;
+  unit: string;
+  grid: [number, number, number];
+  n_comp: number;
+  values: number[];
+  active_mask?: boolean[] | null;
+}
+
+/** V2 step update — cleanly separates diagnostics, scalars, and spatial frames. */
+export interface StepUpdateV2 {
+  diagnostics: StepDiagnostics;
+  scalars: GlobalQuantityRow;
+  frames: LiveQuantityFrame[];
+  finished: boolean;
 }

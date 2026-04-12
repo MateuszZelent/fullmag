@@ -14,6 +14,7 @@ import {
   type GpuTelemetryResponse,
 } from "../../../lib/liveApiClient";
 import { useCurrentLiveStream } from "../../../lib/useSessionStream";
+import { useSessionRuntimeBridge } from "../../../features/session-runtime/hooks/useSessionRuntimeBridge";
 import { coreTabIdForViewMode, useWorkspaceStore } from "../../../lib/workspace/workspace-store";
 import { useBuilderAutoSync } from "./hooks/useBuilderAutoSync";
 import { useDomainLayout } from "./hooks/useDomainLayout";
@@ -167,6 +168,9 @@ import type {
 /* ── Provider ── */
 export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const { state, connection, error } = useCurrentLiveStream();
+
+  // F-P1: sync live stream into the session-runtime Zustand store
+  useSessionRuntimeBridge(state, connection, error);
 
   /* ── Local UI state ── */
   const workspaceMode = useWorkspaceStore((s) => s.currentStage);

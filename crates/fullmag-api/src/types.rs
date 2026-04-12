@@ -251,11 +251,71 @@ pub(crate) struct StepUpdateView {
     pub grid: [u32; 3],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_mesh: Option<FemMeshPayload>,
+    /// **Deprecated (Q16):** Spatial data now flows through `latest_fields`.
+    /// Retained for backwards-compatible imports / load_state only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub magnetization: Option<Vec<f64>>,
+    /// **Deprecated (Q17):** Never serialized to the frontend
+    /// (`#[serde(skip_serializing)]`). Internal-only cache for preview
+    /// rebuild; will be removed once preview pipeline is fully quantities-based.
     #[serde(skip_serializing)]
     pub preview_field: Option<LivePreviewField>,
     pub finished: bool,
+}
+
+impl StepUpdateView {
+    /// Convert to the canonical V2 wire format.
+    ///
+    /// Maps the flat scalar fields to `GlobalQuantityRow` and wraps any
+    /// magnetization/preview data as `LiveQuantityFrame`s so the frontend
+    /// can consume a single unified representation.
+    pub(crate) fn to_step_update_v2(&self) -> fullmag_quantities::StepUpdateV2 {
+        use fullmag_quantities::{
+            GlobalQuantityRow, LiveQuantityFrame, StepDiagnostics, StepUpdateV2,
+        };
+
+        let diagnostics = StepDiagnostics {
+            step: self.step,
+            time: self.time,
+            dt: self.dt,
+            wall_time_ns: self.wall_time_ns,
+            ..Default::default()
+        };
+
+        let scalars = GlobalQuantityRow {
+            step: self.step,
+            time: self.time,
+            e_ex: self.e_ex,
+            e_demag: self.e_demag,
+            e_ext: self.e_ext,
+            e_ani: self.e_ani,
+            e_dmi: self.e_dmi,
+            e_total: self.e_total,
+            max_dm_dt: self.max_dm_dt,
+            max_h_eff: self.max_h_eff,
+            max_h_demag: self.max_h_demag,
+            ..Default::default()
+        };
+
+        let mut frames = Vec::new();
+        if let Some(ref mag) = self.magnetization {
+            frames.push(LiveQuantityFrame {
+                quantity_id: "m".to_string(),
+                unit: String::new(),
+                grid: self.grid,
+                n_comp: 3,
+                values: mag.clone(),
+                active_mask: None,
+            });
+        }
+
+        StepUpdateV2 {
+            diagnostics,
+            scalars,
+            frames,
+            finished: self.finished,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -317,6 +377,10 @@ pub(crate) struct SessionStateEventView<'a> {
     pub preview_config: &'a CurrentPreviewConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<PreviewState>,
+    /// V2 canonical step representation (Q16/Q17).
+    /// Present when `live_state` contains a latest step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step_update_v2: Option<fullmag_quantities::StepUpdateV2>,
 }
 
 #[derive(Debug, Serialize)]
@@ -338,6 +402,8 @@ pub(crate) struct SessionStateResponseView<'a> {
     pub preview_config: &'a CurrentPreviewConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<&'a PreviewState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step_update_v2: Option<fullmag_quantities::StepUpdateV2>,
 }
 
 #[derive(Debug, Serialize, Clone)]
