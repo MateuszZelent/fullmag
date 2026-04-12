@@ -30,6 +30,14 @@ pub(crate) fn select_observables<'a>(
         QuantityId::HExt => Ok(observables.external_field.as_slice()),
         QuantityId::HEff => Ok(observables.effective_field.as_slice()),
         QuantityId::M => Ok(observables.magnetization.as_slice()),
+        // PH-02: extended vector observables
+        QuantityId::HAni => Ok(observables.anisotropy_field.as_slice()),
+        QuantityId::HDmi => Ok(observables.dmi_field.as_slice()),
+        QuantityId::HMel => Ok(observables.magnetoelastic_field.as_slice()),
+        QuantityId::HAniCubic => Ok(observables.cubic_anisotropy_field.as_slice()),
+        QuantityId::HDmiBulk => Ok(observables.bulk_dmi_field.as_slice()),
+        QuantityId::HOe => Ok(observables.oersted_field.as_slice()),
+        QuantityId::HTherm => Ok(observables.thermal_field.as_slice()),
         other => Err(crate::RunError {
             message: format!(
                 "preview quantity '{}' is not available in this execution path",

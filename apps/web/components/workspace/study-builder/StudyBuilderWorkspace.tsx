@@ -1,28 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ScriptBuilderStageState, StudyPipelineDocumentState } from "@/lib/session/types";
 import type {
   MaterializedStageMapEntry,
   StudyPipelineDocument,
   StudyPipelineNode,
-  StudyPrimitiveStageKind,
 } from "@/lib/study-builder/types";
 import { migrateFlatStagesToStudyPipeline } from "@/lib/study-builder/migrate";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import { buildExecutionMapStatus } from "@/lib/study-builder/execution-map";
+import { findNodeById } from "@/lib/study-builder/operations";
 import {
-  appendNode,
-  createMacroNode,
-  createPrimitiveNode,
-  deleteNode,
-  duplicateNode,
-  findNodeById,
-  insertNodeNear,
-  patchNode,
-  patchNodeConfig,
-  toggleNodeEnabled,
-} from "@/lib/study-builder/operations";
+  applyPipelineCommand,
+  type StudyPipelineCommand,
+} from "@/features/study-authoring/commands/pipelineCommands";
 import StageBuilderRibbon from "./StageBuilderRibbon";
 import PipelineCanvas from "./PipelineCanvas";
 import StageInspector from "./StageInspector";
@@ -117,50 +109,46 @@ export default function StudyBuilderWorkspace({
     [effectiveSelectedNodeId, materialized.diagnostics],
   );
 
-  const commit = (next: StudyPipelineDocument) => {
-    setDocument(next);
-    const materialized = materializeStudyPipeline(next);
-    onChangeStages(materialized.stages);
-    onChangePipeline(next);
-  };
-
-  const placePrimitive = (
-    kind: StudyPrimitiveStageKind,
-    placement: "append" | "before" | "after",
-  ) => {
-    if (!selectedNodeId || placement === "append") {
-      commit(appendNode(document, createPrimitiveNode(kind)));
-      return;
-    }
-    commit(insertNodeNear(document, selectedNodeId, placement, createPrimitiveNode(kind)));
-  };
-
-  const placeMacro = (
-    kind:
-      | "hysteresis_loop"
-      | "field_sweep_relax"
-      | "field_sweep_relax_snapshot"
-      | "relax_run"
-      | "relax_eigenmodes"
-      | "parameter_sweep",
-    placement: "append" | "before" | "after",
-  ) => {
-    if (!selectedNodeId || placement === "append") {
-      commit(appendNode(document, createMacroNode(kind)));
-      return;
-    }
-    commit(insertNodeNear(document, selectedNodeId, placement, createMacroNode(kind)));
-  };
+  const dispatch = useCallback(
+    (cmd: StudyPipelineCommand) => {
+      setDocument((prev) => {
+        const next = applyPipelineCommand(prev, cmd);
+        const mat = materializeStudyPipeline(next);
+        onChangeStages(mat.stages);
+        onChangePipeline(next);
+        return next;
+      });
+    },
+    [onChangeStages, onChangePipeline],
+  );
 
   return (
     <div className="flex flex-col gap-3">
       <StageBuilderRibbon
-        onAddPrimitive={placePrimitive}
-        onAddMacro={placeMacro}
+        onAddPrimitive={(kind, placement) => {
+          dispatch({
+            type: "stage.add-primitive",
+            kind,
+            ...(placement !== "append" && selectedNodeId
+              ? { anchorId: selectedNodeId, position: placement }
+              : {}),
+          });
+        }}
+        onAddMacro={(kind, placement) => {
+          dispatch({
+            type: "stage.add-macro",
+            kind,
+            ...(placement !== "append" && selectedNodeId
+              ? { anchorId: selectedNodeId, position: placement }
+              : {}),
+          });
+        }}
         selectedNodeId={selectedNodeId}
-        onDuplicateSelected={() => (selectedNodeId ? commit(duplicateNode(document, selectedNodeId)) : null)}
+        onDuplicateSelected={() =>
+          selectedNodeId ? dispatch({ type: "stage.duplicate", nodeId: selectedNodeId }) : null
+        }
         onToggleSelectedEnabled={() =>
-          selectedNodeId ? commit(toggleNodeEnabled(document, selectedNodeId)) : null
+          selectedNodeId ? dispatch({ type: "stage.toggle-enabled", nodeId: selectedNodeId }) : null
         }
       />
       <div className="grid grid-cols-1 gap-3 2xl:grid-cols-[minmax(0,1.2fr)_minmax(24rem,0.9fr)]">
@@ -169,17 +157,13 @@ export default function StudyBuilderWorkspace({
             nodes={document.nodes}
             selectedNodeId={selectedNodeId}
             onSelectNode={setSelectedNodeId}
-            onMoveUp={(nodeId) => commit({ ...document, nodes: reorder(document.nodes, nodeId, -1) })}
-            onMoveDown={(nodeId) => commit({ ...document, nodes: reorder(document.nodes, nodeId, 1) })}
-            onDelete={(nodeId) => commit(deleteNode(document, nodeId))}
-            onDuplicate={(nodeId) => commit(duplicateNode(document, nodeId))}
-            onToggleEnabled={(nodeId) => commit(toggleNodeEnabled(document, nodeId))}
-            onInsertBeforeRun={(nodeId) =>
-              commit(insertNodeNear(document, nodeId, "before", createPrimitiveNode("run")))
-            }
-            onInsertAfterRun={(nodeId) =>
-              commit(insertNodeNear(document, nodeId, "after", createPrimitiveNode("run")))
-            }
+            onMoveUp={(nodeId) => dispatch({ type: "stage.reorder", nodeId, delta: -1 })}
+            onMoveDown={(nodeId) => dispatch({ type: "stage.reorder", nodeId, delta: 1 })}
+            onDelete={(nodeId) => dispatch({ type: "stage.delete", nodeId })}
+            onDuplicate={(nodeId) => dispatch({ type: "stage.duplicate", nodeId })}
+            onToggleEnabled={(nodeId) => dispatch({ type: "stage.toggle-enabled", nodeId })}
+            onInsertBeforeRun={(nodeId) => dispatch({ type: "stage.insert-before-run", nodeId })}
+            onInsertAfterRun={(nodeId) => dispatch({ type: "stage.insert-after-run", nodeId })}
           />
         </div>
         <div className="flex flex-col gap-3">
@@ -187,19 +171,19 @@ export default function StudyBuilderWorkspace({
             node={selectedNode}
             onRename={(value) => {
               if (!selectedNodeId) return;
-              commit(patchNode(document, selectedNodeId, { label: value }));
+              dispatch({ type: "stage.rename", nodeId: selectedNodeId, label: value });
             }}
             onToggleEnabled={() => {
               if (!selectedNodeId) return;
-              commit(toggleNodeEnabled(document, selectedNodeId));
+              dispatch({ type: "stage.toggle-enabled", nodeId: selectedNodeId });
             }}
             onPatchConfig={(patch) => {
               if (!selectedNodeId) return;
-              commit(patchNodeConfig(document, selectedNodeId, patch));
+              dispatch({ type: "stage.patch-config", nodeId: selectedNodeId, patch });
             }}
             onPatchNotes={(value) => {
               if (!selectedNodeId) return;
-              commit(patchNode(document, selectedNodeId, { notes: value }));
+              dispatch({ type: "stage.patch-notes", nodeId: selectedNodeId, notes: value });
             }}
             compiledStages={selectedCompiledStages}
             diagnostics={selectedDiagnostics}
