@@ -21,6 +21,18 @@ extern double reduce_exchange_energy_fp64(Context &ctx);
 
 /* ── Exchange field kernel ── */
 
+// Periodic-aware neighbor index: wraps or clamps depending on PBC flag.
+__device__ __forceinline__ int pbc_neighbor(int coord, int dim, int stride, int idx, int delta, bool periodic) {
+    int nc = coord + delta;
+    if (periodic) {
+        nc = ((nc % dim) + dim) % dim; // mod with sign fix
+        return idx + (nc - coord) * stride;
+    } else {
+        if (nc < 0 || nc >= dim) return idx; // clamp = Neumann
+        return idx + delta * stride;
+    }
+}
+
 __global__ void exchange_field_fp64_kernel(
     const double * __restrict__ mx,
     const double * __restrict__ my,
@@ -37,7 +49,8 @@ __global__ void exchange_field_fp64_kernel(
     int max_regions,
     double inv_dx2, double inv_dy2, double inv_dz2,
     double prefactor,
-    double inv_mu0_ms)
+    double inv_mu0_ms,
+    bool periodic_x, bool periodic_y, bool periodic_z)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = nx * ny * nz;
@@ -58,13 +71,14 @@ __global__ void exchange_field_fp64_kernel(
 
     uint32_t center_region = has_region_mask ? region_mask[idx] : 0u;
 
-    // Clamped-neighbor indices (Neumann BC) with inactive neighbors treated as free surfaces.
-    int xm = (x > 0)      ? idx - 1        : idx;
-    int xp = (x < nx - 1) ? idx + 1        : idx;
-    int ym = (y > 0)      ? idx - nx       : idx;
-    int yp = (y < ny - 1) ? idx + nx       : idx;
-    int zm = (z > 0)      ? idx - nx * ny  : idx;
-    int zp = (z < nz - 1) ? idx + nx * ny  : idx;
+    // Periodic-aware neighbor indices (wraps at boundaries if PBC enabled,
+    // otherwise clamped-neighbor Neumann BC).
+    int xm = pbc_neighbor(x, nx, 1, idx, -1, periodic_x);
+    int xp = pbc_neighbor(x, nx, 1, idx, +1, periodic_x);
+    int ym = pbc_neighbor(y, ny, nx, idx, -1, periodic_y);
+    int yp = pbc_neighbor(y, ny, nx, idx, +1, periodic_y);
+    int zm = pbc_neighbor(z, nz, nx * ny, idx, -1, periodic_z);
+    int zp = pbc_neighbor(z, nz, nx * ny, idx, +1, periodic_z);
 
     if (has_active_mask) {
         if (active_mask[xm] == 0) xm = idx;
@@ -251,7 +265,8 @@ void launch_exchange_field_fp64(Context &ctx) {
         FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
         inv_dx2, inv_dy2, inv_dz2,
         prefactor,
-        inv_mu0_ms);
+        inv_mu0_ms,
+        ctx.periodic_x, ctx.periodic_y, ctx.periodic_z);
 }
 
 double launch_exchange_energy_fp64(Context &ctx) {

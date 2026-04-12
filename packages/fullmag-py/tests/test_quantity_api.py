@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import unittest
+from unittest.mock import patch
+
+import fullmag as fm
+import fullmag.world as flat_world
+from fullmag.runtime.simulation import Result, StepStats
+
+
+def _step(
+    *,
+    step: int,
+    time: float,
+    e_total: float,
+    mx: float = 0.0,
+    my: float = 0.0,
+    mz: float = 0.0,
+    per_object_scalars: dict[str, dict[str, float]] | None = None,
+) -> StepStats:
+    return StepStats(
+        step=step,
+        time=time,
+        dt=1e-12,
+        e_ex=0.1,
+        e_demag=0.2,
+        e_ext=0.3,
+        e_total=e_total,
+        max_dm_dt=1.0,
+        max_h_eff=2.0,
+        wall_time_ns=1,
+        mx=mx,
+        my=my,
+        mz=mz,
+        per_object_scalars=per_object_scalars or {},
+    )
+
+
+def _result(*steps: StepStats) -> Result:
+    return Result(
+        status="completed",
+        backend=fm.BackendTarget.FDM,
+        mode=fm.ExecutionMode.STRICT,
+        precision=fm.ExecutionPrecision.DOUBLE,
+        steps=list(steps),
+        final_magnetization=[[1.0, 0.0, 0.0]],
+        output_dir="run_output",
+    )
+
+
+class QuantityApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        fm.reset()
+
+    def _prepare_single_magnet(self) -> None:
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(size=(20e-9, 10e-9, 5e-9), name="body"), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.01
+        body.m = fm.uniform(1.0, 0.0, 0.0)
+
+    def test_result_series_and_last_support_global_and_region_scalars(self) -> None:
+        result = _result(
+            _step(
+                step=1,
+                time=1e-12,
+                e_total=5.0,
+                mx=0.8,
+                per_object_scalars={"free": {"e_total": 2.0, "mx": 0.3}},
+            ),
+            _step(
+                step=2,
+                time=2e-12,
+                e_total=3.0,
+                mx=0.6,
+                per_object_scalars={"free": {"e_total": 1.5, "mx": 0.2}},
+            ),
+        )
+
+        self.assertEqual(result.series("E_total"), [5.0, 3.0])
+        self.assertEqual(result.series("mx"), [0.8, 0.6])
+        self.assertEqual(result.series("E_total", region="free"), [2.0, 1.5])
+        self.assertEqual(result.last("E_total"), 3.0)
+        self.assertEqual(result.last("mx", region="free"), 0.2)
+
+    def test_quantity_handles_support_print_and_if_comparisons(self) -> None:
+        flat_world._record_result(_result(_step(step=1, time=1e-12, e_total=1.25, mx=0.4, my=0.5, mz=0.6)))
+
+        self.assertAlmostEqual(float(fm.E_total), 1.25)
+        self.assertTrue(fm.E_total < 2.0)
+        self.assertFalse(fm.E_total > 2.0)
+        self.assertEqual(fm.m.average(), (0.4, 0.5, 0.6))
+        self.assertAlmostEqual(float(fm.m.comp("x")), 0.4)
+        self.assertIn("E_total=", repr(fm.E_total))
+
+    def test_region_quantity_view_reads_per_object_scalars(self) -> None:
+        flat_world._record_result(
+            _result(
+                _step(
+                    step=1,
+                    time=1e-12,
+                    e_total=4.0,
+                    per_object_scalars={"free": {"e_total": 1.0, "mx": 0.25}},
+                )
+            )
+        )
+
+        self.assertAlmostEqual(float(fm.E_total.region("free")), 1.0)
+        self.assertAlmostEqual(float(fm.mx.region("free")), 0.25)
+
+    def test_run_while_requires_explicit_guard(self) -> None:
+        with self.assertRaisesRegex(ValueError, "max_time or max_steps"):
+            fm.run_while(True, chunk_time=1e-12)
+
+    def test_run_while_evaluates_quantity_condition_chunk_by_chunk(self) -> None:
+        self._prepare_single_magnet()
+
+        energies = [5.0, 3.0, 1.0]
+        calls: list[float] = []
+
+        def fake_run(until: float):
+            calls.append(until)
+            energy = energies[min(len(calls) - 1, len(energies) - 1)]
+            result = _result(_step(step=len(calls), time=float(len(calls)) * until, e_total=energy))
+            flat_world._record_result(result)
+            return result
+
+        with patch("fullmag.world.run", side_effect=fake_run):
+            result = fm.RunWhile(
+                fm.E_total > 2.0,
+                chunk_time=5e-12,
+                max_time=5e-9,
+            )
+
+        self.assertEqual(len(calls), 3)
+        self.assertAlmostEqual(result.last("E_total"), 1.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

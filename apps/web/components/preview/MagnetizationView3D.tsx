@@ -1173,6 +1173,7 @@ function MagnetizationView3DInner({
                 previewProxy={activeTexturePreviewProxy}
                 showPreviewProxy
                 syncPivotWithTranslation
+                swapYZ
                 onLiveChange={onTextureTransformChange}
                 visible
                 onCommit={onTextureTransformCommit}

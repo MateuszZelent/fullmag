@@ -54,11 +54,8 @@ free = study.geometry(
 free.Ms = 700e3
 free.Aex = 1.2e-11
 free.alpha = 0.01
-free.m = (
-    fm.load_magnetization(RELAXED_STATE_ZARR, format="zarr")
-    if USE_SAVED_RELAXED_STATE
-    else fm.texture.vortex(circulation=+1, core_polarity=+1)
-)
+free.m = fm.uniform(1, 0, 0)
+
 
 # ── 3. Mesh ──────────────────────────────────────────────
 study.object_mesh_defaults(
@@ -73,7 +70,7 @@ study.object_mesh_defaults(
     per_element_quality=True,
 )
 free.mesh(
-    hmax=12e-9,
+    hmax=6e-9,
     order=1,
     algorithm_2d=1,
     algorithm_3d=1,
@@ -107,7 +104,7 @@ stt = fm.SlonczewskiSTT(
 # ── 6. Oersted field from the STNO pillar ────────────────
 oersted = fm.OerstedCylinder(
     current=5e-3,        # 5 mA DC current
-    radius=50e-9,        # same as free layer
+    radius=100e-9,        # same as free layer
     center=(0.0, 0.0, 0.0),
     axis=(0.0, 0.0, 1.0),
     # Use sinusoidal modulation for AC drive (optional):
@@ -126,14 +123,14 @@ study.tableautosave(10e-12)
 # ── Run stages (uncomment for execution) ─────────────────
 # Relaxation
 # if not USE_SAVED_RELAXED_STATE:
-#     relax_result = study.relax(
-#         tol=1e-5,
-#         max_steps=100_000,
-#         algorithm="llg_overdamped",
-#     )
-#     if hasattr(relax_result, "save_state"):
-#         relax_result.save_state(RELAXED_STATE_ZARR, format="zarr")
-#         relax_result.save_state(RELAXED_STATE_H5, format="h5")
+# relax_result = study.relax(
+#     tol=4e3,
+#     max_steps=1000,
+#     algorithm="llg_overdamped",
+# )
+    # if hasattr(relax_result, "save_state"):
+    #     relax_result.save_state(RELAXED_STATE_ZARR, format="zarr")
+    #     relax_result.save_state(RELAXED_STATE_H5, format="h5")
 
 # Time evolution (100 ns STNO gyration)
 # study.run(100e-9)

@@ -34,7 +34,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from fullmag._progress import emit_progress
 from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive
@@ -637,6 +637,8 @@ class _WorldState:
     _outputs: list = field(default_factory=list)
     _current_modules: list[AntennaFieldSource] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
+    _last_result: Any | None = None
+    _last_step: Any | None = None
 
     # Problem name
     _name: str = "fullmag_sim"
@@ -665,6 +667,425 @@ _captured_stages: list[CapturedStage] = []
 _MU_0 = 4.0e-7 * math.pi
 _MU_B = 9.274_010_078_3e-24
 _HBAR = 1.054_571_817e-34
+
+
+_SCALAR_QUANTITY_ATTRS: Mapping[str, str] = {
+    "E_ex": "e_ex",
+    "E_demag": "e_demag",
+    "E_ext": "e_ext",
+    "E_ani": "e_ani",
+    "E_dmi": "e_dmi",
+    "E_total": "e_total",
+    "mx": "mx",
+    "my": "my",
+    "mz": "mz",
+    "max_dm_dt": "max_dm_dt",
+    "max_h_eff": "max_h_eff",
+    "max_h_demag": "max_h_demag",
+}
+_VECTOR_QUANTITIES = {
+    "m",
+    "H_ex",
+    "H_demag",
+    "H_ext",
+    "H_eff",
+    "B_exch",
+    "B_demag",
+    "B_ext",
+    "B_eff",
+}
+_VECTOR_COMPONENTS = {"x": 0, "y": 1, "z": 2, "0": 0, "1": 1, "2": 2}
+_B_ALIAS_TO_H = {
+    "B_exch": "H_ex",
+    "B_demag": "H_demag",
+    "B_ext": "H_ext",
+    "B_eff": "H_eff",
+}
+
+
+def _normalize_quantity_name(quantity: str) -> str:
+    key = str(quantity).strip()
+    lowered = key.lower()
+    for candidate in _SCALAR_QUANTITY_ATTRS:
+        if candidate.lower() == lowered:
+            return candidate
+    for candidate in _VECTOR_QUANTITIES:
+        if candidate.lower() == lowered:
+            return candidate
+    raise ValueError(f"Unsupported quantity {quantity!r}")
+
+
+def _latest_result():
+    if _state._last_result is None:
+        raise RuntimeError("No simulation result available yet. Run fm.run() or fm.relax() first.")
+    return _state._last_result
+
+
+def _latest_step():
+    if _state._last_step is None:
+        raise RuntimeError("No step statistics available yet. Run fm.run() or fm.relax() first.")
+    return _state._last_step
+
+
+def _resolve_region_key(region: str | int) -> str:
+    if isinstance(region, int):
+        if region < 0:
+            raise ValueError("region index must be non-negative")
+        if region < len(_state._magnets):
+            return _state._magnets[region]._name
+        return str(region)
+    if not isinstance(region, str) or not region.strip():
+        raise ValueError("region must be a non-empty string or non-negative integer")
+    return region
+
+
+def _safe_step_value(step: object, attr: str, default: float = float("nan")) -> float:
+    value = getattr(step, attr, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_scalar_quantity_value(quantity_name: str, *, region: str | int | None = None) -> float:
+    attr = _SCALAR_QUANTITY_ATTRS[quantity_name]
+    if region is None:
+        return _safe_step_value(_latest_step(), attr)
+    region_key = _resolve_region_key(region)
+    step = _latest_step()
+    per_object = getattr(step, "per_object_scalars", None)
+    if not isinstance(per_object, Mapping):
+        raise RuntimeError(
+            f"Quantity {quantity_name} for region={region_key!r} is not available in this backend/result."
+        )
+    region_map = per_object.get(region_key)
+    if not isinstance(region_map, Mapping):
+        available = ", ".join(sorted(str(name) for name in per_object.keys()))
+        hint = f" Available regions: {available}." if available else ""
+        raise RuntimeError(f"Region {region_key!r} is not available in this result.{hint}")
+    if attr in region_map:
+        return float(region_map[attr])
+    if quantity_name in region_map:
+        return float(region_map[quantity_name])
+    raise RuntimeError(f"Region {region_key!r} does not provide quantity {quantity_name!r}.")
+
+
+def _coerce_vector_component_index(component: str | int) -> int:
+    key = str(component).lower().strip()
+    if key not in _VECTOR_COMPONENTS:
+        raise ValueError("component must be one of 'x', 'y', 'z', 0, 1, 2")
+    return _VECTOR_COMPONENTS[key]
+
+
+def _vector_average_from_last_step(quantity_name: str) -> tuple[float, float, float]:
+    if quantity_name in _B_ALIAS_TO_H:
+        h_avg = _vector_average_from_last_step(_B_ALIAS_TO_H[quantity_name])
+        return (_MU_0 * h_avg[0], _MU_0 * h_avg[1], _MU_0 * h_avg[2])
+    if quantity_name == "m":
+        step = _latest_step()
+        return (
+            _safe_step_value(step, "mx"),
+            _safe_step_value(step, "my"),
+            _safe_step_value(step, "mz"),
+        )
+    raise RuntimeError(
+        f"{quantity_name}.average() is not available yet. Field-vector averages are not emitted by the runner."
+    )
+
+
+def _vector_get_from_last_result(quantity_name: str) -> object:
+    if quantity_name in _B_ALIAS_TO_H:
+        h_values = _vector_get_from_last_result(_B_ALIAS_TO_H[quantity_name])
+        converted: list[list[float]] = []
+        for vec in h_values:
+            converted.append([
+                _MU_0 * float(vec[0]),
+                _MU_0 * float(vec[1]),
+                _MU_0 * float(vec[2]),
+            ])
+        return converted
+    result = _latest_result()
+    if quantity_name == "m":
+        final_m = getattr(result, "final_magnetization", None)
+        if final_m is None:
+            raise RuntimeError("Latest result does not contain final_magnetization.")
+        return final_m
+    raise RuntimeError(
+        f"{quantity_name}.get() is not available yet. Field snapshots are not present in runtime Result."
+    )
+
+
+def _record_result(result: object) -> None:
+    _state._last_result = result
+    steps = getattr(result, "steps", None)
+    if steps:
+        _state._last_step = steps[-1]
+    else:
+        _state._last_step = None
+
+
+def _set_magnetization_continuation_from_result(result: object) -> None:
+    final_m = getattr(result, "final_magnetization", None)
+    if final_m is None:
+        raise RuntimeError("run_while continuation requires final_magnetization in the runtime Result.")
+    if len(_state._magnets) != 1:
+        raise RuntimeError("run_while currently supports continuation only for scripts with exactly one magnet.")
+    from fullmag.init import SampledMagnetization
+
+    _state._magnets[0].m = SampledMagnetization(final_m)
+
+
+class QuantityCondition:
+    """Lazy boolean expression over runtime quantities."""
+
+    def __init__(self, left: object, op: str, right: object) -> None:
+        self._left = left
+        self._op = op
+        self._right = right
+
+    def evaluate(self) -> bool:
+        left = _resolve_condition_operand(self._left)
+        right = _resolve_condition_operand(self._right)
+        if self._op == "<":
+            return left < right
+        if self._op == "<=":
+            return left <= right
+        if self._op == ">":
+            return left > right
+        if self._op == ">=":
+            return left >= right
+        if self._op == "==":
+            return left == right
+        if self._op == "!=":
+            return left != right
+        raise ValueError(f"Unsupported condition operator: {self._op}")
+
+    def __bool__(self) -> bool:
+        return self.evaluate()
+
+    def __repr__(self) -> str:
+        return f"QuantityCondition({self._left!r} {self._op} {self._right!r})"
+
+
+def _resolve_condition_operand(value: object) -> float:
+    if isinstance(value, QuantityHandle):
+        return float(value)
+    if isinstance(value, QuantityRegionView):
+        return float(value)
+    if isinstance(value, QuantityComponentHandle):
+        return float(value)
+    return float(value)
+
+
+class _ComparableQuantityMixin:
+    def _condition(self, op: str, other: object) -> QuantityCondition:
+        return QuantityCondition(self, op, other)
+
+    def __lt__(self, other: object) -> QuantityCondition:
+        return self._condition("<", other)
+
+    def __le__(self, other: object) -> QuantityCondition:
+        return self._condition("<=", other)
+
+    def __gt__(self, other: object) -> QuantityCondition:
+        return self._condition(">", other)
+
+    def __ge__(self, other: object) -> QuantityCondition:
+        return self._condition(">=", other)
+
+    def __eq__(self, other: object) -> QuantityCondition:  # type: ignore[override]
+        return self._condition("==", other)
+
+    def __ne__(self, other: object) -> QuantityCondition:  # type: ignore[override]
+        return self._condition("!=", other)
+
+
+class QuantityHandle(_ComparableQuantityMixin):
+    """MuMax-style runtime quantity handle (scalar or vector)."""
+
+    def __init__(
+        self,
+        quantity_name: str,
+        *,
+        kind: str,
+        region: str | int | None = None,
+        component: str | int | None = None,
+    ) -> None:
+        normalized_name = _normalize_quantity_name(quantity_name)
+        if kind not in {"scalar", "vector"}:
+            raise ValueError("quantity kind must be 'scalar' or 'vector'")
+        self._name = normalized_name
+        self._kind = kind
+        self._region = region
+        self._component = component
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def get(self) -> object:
+        if self._kind == "scalar":
+            return _coerce_scalar_quantity_value(self._name, region=self._region)
+        if self._component is not None:
+            idx = _coerce_vector_component_index(self._component)
+            vector = self.average()
+            return float(vector[idx])
+        return _vector_get_from_last_result(self._name)
+
+    def Get(self) -> object:
+        return self.get()
+
+    def average(self) -> tuple[float, float, float]:
+        if self._kind != "vector":
+            raise TypeError(f"{self._name}.average() is only valid for vector quantities.")
+        vector = _vector_average_from_last_step(self._name)
+        if self._component is not None:
+            idx = _coerce_vector_component_index(self._component)
+            return (float(vector[idx]), 0.0, 0.0)
+        return vector
+
+    def Average(self) -> tuple[float, float, float]:
+        return self.average()
+
+    def region(self, name_or_index: str | int) -> "QuantityRegionView":
+        return QuantityRegionView(self, name_or_index)
+
+    def Region(self, name_or_index: str | int) -> "QuantityRegionView":
+        return self.region(name_or_index)
+
+    def comp(self, component: str | int) -> "QuantityComponentHandle":
+        return QuantityComponentHandle(self, component)
+
+    def Comp(self, component: str | int) -> "QuantityComponentHandle":
+        return self.comp(component)
+
+    def __float__(self) -> float:
+        value = self.get()
+        if isinstance(value, (tuple, list)):
+            raise TypeError(f"{self._name} is vector-valued. Use .average(), .comp(), or .get().")
+        return float(value)
+
+    def __repr__(self) -> str:
+        try:
+            if self._kind == "scalar":
+                value = self.get()
+                return f"{self._name}={float(value):.6e}"
+            if self._component is not None:
+                value = self.get()
+                return f"{self._name}[{self._component}]={float(value):.6e}"
+            avg = self.average()
+            return (
+                f"{self._name}.avg=({avg[0]:.6e}, {avg[1]:.6e}, {avg[2]:.6e})"
+            )
+        except Exception as exc:
+            return f"{self._name}(<unavailable: {exc}>)"
+
+    __str__ = __repr__
+
+
+class QuantityRegionView(_ComparableQuantityMixin):
+    def __init__(self, handle: QuantityHandle, region: str | int) -> None:
+        self._handle = QuantityHandle(
+            handle.name,
+            kind=handle._kind,
+            region=region,
+            component=handle._component,
+        )
+        self._region = region
+
+    def get(self) -> object:
+        return self._handle.get()
+
+    def Get(self) -> object:
+        return self.get()
+
+    def average(self) -> tuple[float, float, float]:
+        return self._handle.average()
+
+    def Average(self) -> tuple[float, float, float]:
+        return self.average()
+
+    def comp(self, component: str | int) -> "QuantityComponentHandle":
+        return QuantityComponentHandle(self._handle, component)
+
+    def Comp(self, component: str | int) -> "QuantityComponentHandle":
+        return self.comp(component)
+
+    def __float__(self) -> float:
+        return float(self._handle)
+
+    def __repr__(self) -> str:
+        return f"{self._handle.name}.region({self._region!r}) -> {self.get()!r}"
+
+    __str__ = __repr__
+
+
+class QuantityComponentHandle(_ComparableQuantityMixin):
+    def __init__(self, handle: QuantityHandle, component: str | int) -> None:
+        self._handle = QuantityHandle(
+            handle.name,
+            kind=handle._kind,
+            region=handle._region,
+            component=component,
+        )
+        self._component = component
+
+    def get(self) -> float:
+        value = self._handle.get()
+        return float(value)
+
+    def Get(self) -> float:
+        return self.get()
+
+    def __float__(self) -> float:
+        return self.get()
+
+    def __repr__(self) -> str:
+        return f"{self._handle.name}.comp({self._component!r})={self.get():.6e}"
+
+    __str__ = __repr__
+
+
+@dataclass(frozen=True, slots=True)
+class RunWhileConfig:
+    chunk_time: float
+    max_time: float | None = None
+    max_steps: int | None = None
+    relax: bool = False
+
+    def __post_init__(self) -> None:
+        require_positive(self.chunk_time, "chunk_time")
+        if self.max_time is None and self.max_steps is None:
+            raise ValueError("RunWhile requires max_time or max_steps as a safety guard.")
+        if self.max_time is not None:
+            require_positive(self.max_time, "max_time")
+        if self.max_steps is not None and self.max_steps <= 0:
+            raise ValueError("max_steps must be a positive integer")
+
+
+E_ex = QuantityHandle("E_ex", kind="scalar")
+E_demag = QuantityHandle("E_demag", kind="scalar")
+E_ext = QuantityHandle("E_ext", kind="scalar")
+E_ani = QuantityHandle("E_ani", kind="scalar")
+E_dmi = QuantityHandle("E_dmi", kind="scalar")
+E_total = QuantityHandle("E_total", kind="scalar")
+mx = QuantityHandle("mx", kind="scalar")
+my = QuantityHandle("my", kind="scalar")
+mz = QuantityHandle("mz", kind="scalar")
+max_dm_dt = QuantityHandle("max_dm_dt", kind="scalar")
+max_h_eff = QuantityHandle("max_h_eff", kind="scalar")
+max_h_demag = QuantityHandle("max_h_demag", kind="scalar")
+
+m = QuantityHandle("m", kind="vector")
+H_ex = QuantityHandle("H_ex", kind="vector")
+H_demag = QuantityHandle("H_demag", kind="vector")
+H_ext = QuantityHandle("H_ext", kind="vector")
+H_eff = QuantityHandle("H_eff", kind="vector")
+
+B_exch = QuantityHandle("B_exch", kind="vector")
+B_demag = QuantityHandle("B_demag", kind="vector")
+B_ext = QuantityHandle("B_ext", kind="vector")
+B_eff = QuantityHandle("B_eff", kind="vector")
 
 
 def _gamma_from_g_factor(g_factor: float) -> float:
@@ -1103,6 +1524,44 @@ class StudyBuilder:
 
     def run(self, until: float) -> Any:
         return run(until)
+
+    def run_while(
+        self,
+        condition: QuantityCondition | Callable[[], bool] | bool,
+        *,
+        chunk_time: float,
+        max_time: float | None = None,
+        max_steps: int | None = None,
+        relax: bool = False,
+        **kwargs: object,
+    ) -> Any:
+        return run_while(
+            condition,
+            chunk_time=chunk_time,
+            max_time=max_time,
+            max_steps=max_steps,
+            relax=relax,
+            **kwargs,
+        )
+
+    def RunWhile(
+        self,
+        condition: QuantityCondition | Callable[[], bool] | bool,
+        *,
+        chunk_time: float,
+        max_time: float | None = None,
+        max_steps: int | None = None,
+        relax: bool = False,
+        **kwargs: object,
+    ) -> Any:
+        return self.run_while(
+            condition,
+            chunk_time=chunk_time,
+            max_time=max_time,
+            max_steps=max_steps,
+            relax=relax,
+            **kwargs,
+        )
 
     def relax(
         self,
@@ -2396,7 +2855,106 @@ def run(until: float) -> Any:
             )
         )
         return problem
-    return Simulation(problem).run(until=until)
+    result = Simulation(problem).run(until=until)
+    _record_result(result)
+    return result
+
+
+def _evaluate_runwhile_condition(condition: QuantityCondition | Callable[[], bool] | bool) -> bool:
+    if isinstance(condition, QuantityCondition):
+        return condition.evaluate()
+    if callable(condition):
+        return bool(condition())
+    return bool(condition)
+
+
+def run_while(
+    condition: QuantityCondition | Callable[[], bool] | bool,
+    *,
+    chunk_time: float,
+    max_time: float | None = None,
+    max_steps: int | None = None,
+    relax: bool = False,
+    **kwargs: object,
+) -> Any:
+    """Run in chunks while a condition is true, with explicit safety guards.
+
+    Notes
+    -----
+    * `chunk_time` is in seconds of simulation time.
+    * At least one guard (`max_time` or `max_steps`) is required.
+    * `max_steps` guards the accumulated solver steps across all chunks.
+    """
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise TypeError(f"Unsupported run_while keyword arguments: {unsupported}")
+    cfg = RunWhileConfig(
+        chunk_time=float(chunk_time),
+        max_time=max_time,
+        max_steps=max_steps,
+        relax=relax,
+    )
+    if cfg.relax:
+        raise NotImplementedError("run_while(..., relax=True) is not implemented yet.")
+
+    if _capture_enabled:
+        until = cfg.max_time if cfg.max_time is not None else cfg.chunk_time * float(cfg.max_steps)
+        return run(until)
+
+    total_time = 0.0
+    total_solver_steps = 0
+    last_result: Any | None = None
+    needs_warmup = _state._last_step is None and isinstance(condition, QuantityCondition)
+
+    while True:
+        if cfg.max_steps is not None and total_solver_steps >= cfg.max_steps:
+            break
+        if cfg.max_time is not None and total_time >= cfg.max_time:
+            break
+        if not needs_warmup and not _evaluate_runwhile_condition(condition):
+            break
+
+        chunk = cfg.chunk_time
+        if cfg.max_time is not None:
+            chunk = min(chunk, cfg.max_time - total_time)
+            if chunk <= 0.0:
+                break
+
+        last_result = run(chunk)
+        _set_magnetization_continuation_from_result(last_result)
+
+        step_count = len(getattr(last_result, "steps", ()) or ())
+        total_solver_steps += int(step_count)
+        total_time += float(chunk)
+        needs_warmup = False
+
+        if getattr(last_result, "status", "completed") != "completed":
+            break
+
+    if last_result is not None:
+        return last_result
+    if _state._last_result is not None:
+        return _state._last_result
+    raise RuntimeError("run_while executed zero chunks and no prior result exists.")
+
+
+def RunWhile(
+    condition: QuantityCondition | Callable[[], bool] | bool,
+    *,
+    chunk_time: float,
+    max_time: float | None = None,
+    max_steps: int | None = None,
+    relax: bool = False,
+    **kwargs: object,
+) -> Any:
+    return run_while(
+        condition,
+        chunk_time=chunk_time,
+        max_time=max_time,
+        max_steps=max_steps,
+        relax=relax,
+        **kwargs,
+    )
 
 
 def relax(
@@ -2467,7 +3025,9 @@ def relax(
         until_seconds = (initial_timestep or 1e-13) * max_steps
     else:
         until_seconds = 1e-13 * max_steps
-    return Simulation(problem).run(until=until_seconds)
+    result = Simulation(problem).run(until=until_seconds)
+    _record_result(result)
+    return result
 
 
 def eigenmodes(
@@ -2533,4 +3093,6 @@ def eigenmodes(
         )
         return problem
 
-    return Simulation(problem).run()
+    result = Simulation(problem).run()
+    _record_result(result)
+    return result

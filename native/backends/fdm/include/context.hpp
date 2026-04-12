@@ -177,6 +177,11 @@ struct Context {
     double *exchange_lut = nullptr;  // device-side, MAX_EXCHANGE_REGIONS × MAX_EXCHANGE_REGIONS
     bool has_exchange_lut = false;
 
+    // Periodicity: per-axis PBC flags for exchange wrapping
+    bool periodic_x = false;
+    bool periodic_y = false;
+    bool periodic_z = false;
+
     // Boundary correction (T0 / T1)
     uint8_t boundary_tier = 0;     // 0=none, 1=volume, 2=full
     double  phi_floor = 0.05;

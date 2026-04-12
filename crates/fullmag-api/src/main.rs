@@ -11,7 +11,7 @@ use axum::{
 };
 use base64::Engine;
 use fullmag_authoring::{MagnetizationAsset, SceneDocument, ScriptBuilderInitialState};
-use fullmag_ir::{TextureMappingIR, TextureTransform3DIR};
+use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
 use fullmag_plan::{generate_random_unit_vectors, sample_preset_texture, TextureSamplePoint};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -50,6 +50,22 @@ use quantities::*;
 use script::*;
 use session::*;
 use types::*;
+
+fn parse_texture_projection_mode(value: &str) -> TextureProjectionMode {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "object_local" => TextureProjectionMode::ObjectLocal,
+        "planar_xy" => TextureProjectionMode::PlanarXy,
+        "planar_xz" => TextureProjectionMode::PlanarXz,
+        "planar_yz" => TextureProjectionMode::PlanarYz,
+        other => {
+            eprintln!(
+                "[fullmag-api][mag-texture] unknown projection {:?}, falling back to object_local",
+                other
+            );
+            TextureProjectionMode::ObjectLocal
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -2135,7 +2151,7 @@ fn apply_live_scene_magnetization_asset(
                 .unwrap_or_default();
             let mapping = TextureMappingIR {
                 space: asset.mapping.space.clone(),
-                projection: asset.mapping.projection.clone(),
+                projection: parse_texture_projection_mode(&asset.mapping.projection),
                 clamp_mode: asset.mapping.clamp_mode.clone(),
             };
             let texture_transform = TextureTransform3DIR {

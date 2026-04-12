@@ -36,10 +36,7 @@ pub(crate) fn quantity_unit(quantity: &str) -> &'static str {
 }
 
 pub(crate) fn quantity_spatial_domain(quantity: &str) -> &'static str {
-    match quantity {
-        "m" => "magnetic_only",
-        _ => "full_domain",
-    }
+    fullmag_runner::quantities::quantity_spatial_domain(quantity)
 }
 
 pub(crate) fn current_vector_field(
@@ -66,7 +63,7 @@ pub(crate) fn current_vector_field(
 }
 
 pub(crate) fn mesh_preview_active_mask(mesh: &FemMeshPayload, quantity: &str) -> Option<Vec<bool>> {
-    if quantity != "m" {
+    if quantity_spatial_domain(quantity) != "magnetic_only" {
         return None;
     }
     if mesh.element_markers.len() == mesh.elements.len() && !mesh.elements.is_empty() {
@@ -165,6 +162,11 @@ mod tests {
     fn quantity_spatial_domain_marks_magnetization_as_magnetic_only() {
         assert_eq!(quantity_spatial_domain("m"), "magnetic_only");
         assert_eq!(quantity_spatial_domain("H_demag"), "full_domain");
+        assert_eq!(quantity_spatial_domain("H_eff"), "full_domain");
+        assert_eq!(quantity_spatial_domain("H_ext"), "full_domain");
+        assert_eq!(quantity_spatial_domain("H_ex"), "magnetic_only");
+        assert_eq!(quantity_spatial_domain("H_ani"), "magnetic_only");
+        assert_eq!(quantity_spatial_domain("H_dmi"), "magnetic_only");
     }
 
     #[test]

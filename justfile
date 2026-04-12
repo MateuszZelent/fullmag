@@ -159,6 +159,16 @@ run-nanoflower-headless:
     just build fullmag
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag examples/nanoflower_fem.py --headless --json
 
+run-stdprob1-fem:
+    just ensure-python
+    just build fullmag
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag tests/stdprob1_hysteresis_fem.py
+
+run-stdprob1-fem-headless:
+    just ensure-python
+    just build fullmag
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag tests/stdprob1_hysteresis_fem.py --headless --json
+
 fem-gpu-headless script:
     docker compose --profile fem-gpu run --rm fem-gpu bash -lc '\
       set -euo pipefail; \

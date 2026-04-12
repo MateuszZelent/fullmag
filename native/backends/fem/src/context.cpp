@@ -774,13 +774,23 @@ int context_copy_field_f64(
             source = &ctx.h_ex_xyz;
             break;
         case FULLMAG_FEM_OBSERVABLE_H_DEMAG:
-            source = &ctx.h_demag_xyz;
+            // Prefer full-domain visual version (includes airbox stray field)
+            // when available; fall back to LLG-zeroed version.
+            source = (!ctx.h_demag_visual_xyz.empty() &&
+                      ctx.h_demag_visual_xyz.size() == static_cast<size_t>(expected_len))
+                         ? &ctx.h_demag_visual_xyz
+                         : &ctx.h_demag_xyz;
             break;
         case FULLMAG_FEM_OBSERVABLE_H_EXT:
             source = &ctx.h_ext_xyz;
             break;
         case FULLMAG_FEM_OBSERVABLE_H_EFF:
-            source = &ctx.h_eff_xyz;
+            // Prefer full-domain visual version (includes airbox stray field)
+            // when available; fall back to LLG-zeroed version.
+            source = (!ctx.h_eff_visual_xyz.empty() &&
+                      ctx.h_eff_visual_xyz.size() == static_cast<size_t>(expected_len))
+                         ? &ctx.h_eff_visual_xyz
+                         : &ctx.h_eff_xyz;
             break;
         case FULLMAG_FEM_OBSERVABLE_H_ANI:
             source = &ctx.h_ani_xyz;

@@ -17,6 +17,10 @@ Vec3 = tuple[float, float, float]
 Quat = tuple[float, float, float, float]
 
 
+def _drop_none_params(params: Mapping[str, object | None]) -> dict[str, object]:
+    return {key: value for key, value in params.items() if value is not None}
+
+
 def _vec3(value: Sequence[float], name: str) -> Vec3:
     if len(value) != 3:
         raise ValueError(f"{name} must have 3 components")
@@ -196,10 +200,23 @@ class texture:
     """Factory namespace for analytic magnetic texture presets."""
 
     @staticmethod
-    def uniform(direction: Sequence[float] = (1.0, 0.0, 0.0)) -> PresetTexture:
+    def uniform(
+        direction_or_x: Sequence[float] | float = (1.0, 0.0, 0.0),
+        y: float | None = None,
+        z: float | None = None,
+    ) -> PresetTexture:
+        if isinstance(direction_or_x, (list, tuple)):
+            direction = list(_vec3(direction_or_x, "direction"))
+        elif y is not None and z is not None:
+            direction = [float(direction_or_x), float(y), float(z)]
+        else:
+            raise TypeError(
+                "texture.uniform() requires 3 components: "
+                "texture.uniform(x, y, z) or texture.uniform((x, y, z))"
+            )
         return PresetTexture(
             preset_kind="uniform",
-            params={"direction": list(_vec3(direction, "direction"))},
+            params={"direction": direction},
             preview_proxy="none",
         )
 
@@ -221,12 +238,14 @@ class texture:
     ) -> PresetTexture:
         return PresetTexture(
             preset_kind="vortex",
-            params={
-                "circulation": int(circulation),
-                "core_polarity": int(core_polarity),
-                "core_radius": core_radius,
-                "plane": plane,
-            },
+            params=_drop_none_params(
+                {
+                    "circulation": int(circulation),
+                    "core_polarity": int(core_polarity),
+                    "core_radius": core_radius,
+                    "plane": plane,
+                }
+            ),
             preview_proxy="disc",
         )
 
@@ -240,12 +259,14 @@ class texture:
     ) -> PresetTexture:
         return PresetTexture(
             preset_kind="antivortex",
-            params={
-                "circulation": int(circulation),
-                "core_polarity": int(core_polarity),
-                "core_radius": core_radius,
-                "plane": plane,
-            },
+            params=_drop_none_params(
+                {
+                    "circulation": int(circulation),
+                    "core_polarity": int(core_polarity),
+                    "core_radius": core_radius,
+                    "plane": plane,
+                }
+            ),
             preview_proxy="disc",
         )
 

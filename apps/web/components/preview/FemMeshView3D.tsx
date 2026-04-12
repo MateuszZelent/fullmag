@@ -280,6 +280,7 @@ function FemMeshView3DInner({
   const [qualityProfile, setQualityProfile] = useState<ViewportQualityProfileId>("interactive");
   const [interactionActive, setInteractionActive] = useState(false);
   const [textureGizmoDragging, setTextureGizmoDragging] = useState(false);
+  const [sampledArrowCount, setSampledArrowCount] = useState<number | undefined>(undefined);
   const [captureActive, setCaptureActive] = useState(false);
   const [captureOverlayHidden, setCaptureOverlayHidden] = useState(false);
   
@@ -505,6 +506,7 @@ function FemMeshView3DInner({
     baseArrowDensity,
     effectiveArrowDensity,
     qualityPerFace,
+    sampledArrowCount,
     quantityOptions,
     selectedObjectId: selectedObjectId ?? null,
     selectedEntityId,
@@ -966,6 +968,7 @@ function FemMeshView3DInner({
             showSelectionHighlight={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSelectionHighlight}
             showAntennaOverlays={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showAntennaOverlays}
             showSceneAxes={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSceneAxes}
+            onArrowSampledCount={setSampledArrowCount}
           />
           </>
         ) : null}

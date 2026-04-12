@@ -42,6 +42,8 @@ interface UseFemToolbarModelArgs {
   effectiveArrowDensity: number;
   qualityPerFace?: number[] | null;
   fieldLabel?: string;
+  /** Final sampled arrow count reported back from FemArrows (after density filtering). */
+  sampledArrowCount?: number;
   quantityOptions?: Array<{
     id: string;
     shortLabel: string;
@@ -96,6 +98,7 @@ export function useFemToolbarModel({
   baseArrowDensity,
   effectiveArrowDensity,
   qualityPerFace,
+  sampledArrowCount,
   quantityOptions = [],
   selectedObjectId = null,
   selectedEntityId = null,
@@ -274,13 +277,22 @@ export function useFemToolbarModel({
 
   // Compute directly (no useMemo) because FRONTEND_DIAGNOSTIC_FLAGS is a
   // mutable singleton that cannot participate in React dependency arrays.
-  const arrowRenderState: ArrowRenderState = computeArrowRenderState({
+  const baseArrowRenderState: ArrowRenderState = computeArrowRenderState({
     requested: showArrows && !FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceHideArrows,
     layerEnabled: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showArrowLayer,
     missingMagneticMask,
     visibleNodeCount: visibleArrowNodeCount,
     hasFieldData: Boolean(meshData.fieldData),
   });
+
+  // Refine: if base state says visible but FemArrows reports zero sampled
+  // nodes, override to no_sampled_nodes so the toolbar shows the correct reason.
+  const arrowRenderState: ArrowRenderState =
+    baseArrowRenderState.visible &&
+    sampledArrowCount != null &&
+    sampledArrowCount === 0
+      ? { ...baseArrowRenderState, visible: false, reason: "no_sampled_nodes" }
+      : baseArrowRenderState;
 
   const effectiveShowArrows = arrowRenderState.visible;
 
@@ -293,6 +305,8 @@ export function useFemToolbarModel({
         return "No magnetic field data available for vector display";
       case "no_visible_nodes":
         return "No visible nodes match current vector domain filter";
+      case "no_sampled_nodes":
+        return "Density sampling produced zero arrows — increase arrow density";
       default:
         return null;
     }

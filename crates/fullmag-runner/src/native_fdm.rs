@@ -468,6 +468,18 @@ impl NativeFdmBackend {
                 .map_or(0, |bg| bg.demag_corr_stencil_size),
             initial_magnetization_xyz: m_flat.as_ptr(),
             initial_magnetization_len: m_flat.len() as u64,
+            periodic_x: plan
+                .periodicity
+                .as_ref()
+                .map_or(0, |p| if p.is_periodic(0) { 1 } else { 0 }),
+            periodic_y: plan
+                .periodicity
+                .as_ref()
+                .map_or(0, |p| if p.is_periodic(1) { 1 } else { 0 }),
+            periodic_z: plan
+                .periodicity
+                .as_ref()
+                .map_or(0, |p| if p.is_periodic(2) { 1 } else { 0 }),
             adaptive_max_error: adaptive.map_or(0.0, |cfg| cfg.atol),
             adaptive_dt_min: adaptive.map_or(0.0, |cfg| cfg.dt_min),
             adaptive_dt_max: adaptive.and_then(|cfg| cfg.dt_max).unwrap_or(0.0),

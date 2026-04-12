@@ -294,7 +294,13 @@ export const ViewportBar = memo(function ViewportBar() {
               {spatialPreview.spatial_kind === "mesh" && ctx.effectiveViewMode === "2D" && (
                 <>
                   <span className="text-[0.68rem] text-muted-foreground">Plane</span>
-                  <Select value={ctx.plane} onValueChange={(val) => ctx.setPlane(val as any)}>
+                  <Select
+                    value={ctx.meshClipAxis === "x" ? "yz" : ctx.meshClipAxis === "y" ? "xz" : "xy"}
+                    onValueChange={(val) => {
+                      ctx.setPlane(val as any);
+                      ctx.setMeshClipAxis(val === "yz" ? "x" : val === "xz" ? "y" : "z");
+                    }}
+                  >
                     <SelectTrigger className="h-8 min-w-[78px] bg-background/45 border-border/35 text-[0.72rem]">
                       <SelectValue />
                     </SelectTrigger>
@@ -304,17 +310,19 @@ export const ViewportBar = memo(function ViewportBar() {
                       <SelectItem value="yz">YZ</SelectItem>
                     </SelectContent>
                   </Select>
-                  <span className="text-[0.68rem] text-muted-foreground">Slice</span>
-                  <Select value={String(ctx.sliceIndex)} onValueChange={(val) => ctx.setSliceIndex(Number(val))}>
-                    <SelectTrigger className="h-8 min-w-[72px] bg-background/45 border-border/35 text-[0.72rem]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Array.from({ length: ctx.maxSliceCount }, (_, i) => (
-                        <SelectItem key={i} value={String(i)}>{i + 1}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <span className="text-[0.68rem] text-muted-foreground">Clip</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={0.1}
+                    value={ctx.meshClipPos}
+                    onChange={(event) => ctx.setMeshClipPos(Number(event.target.value))}
+                    className="h-8 w-28 accent-primary"
+                  />
+                  <span className="min-w-[3.5rem] text-right text-[0.68rem] text-muted-foreground">
+                    {ctx.meshClipPos.toFixed(1)}%
+                  </span>
                 </>
               )}
             </>

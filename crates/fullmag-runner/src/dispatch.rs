@@ -1064,8 +1064,12 @@ fn snapshot_native_fem_preview(
     plan: &FemPlanIR,
     request: &LivePreviewRequest,
 ) -> Result<crate::LivePreviewField, RunError> {
-    let backend = NativeFemBackend::create(plan)?;
-    backend.copy_live_preview_field(request, plan.mesh.nodes.len())
+    let mut backend = NativeFemBackend::create(plan)?;
+    // Compute effective fields (exchange, demag, H_eff, …) so that
+    // copy_live_preview_field finds populated vectors for every observable.
+    let node_count = plan.mesh.nodes.len();
+    let _ = backend.snapshot_step_stats(node_count)?;
+    backend.copy_live_preview_field(request, node_count)
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1074,7 +1078,10 @@ fn snapshot_native_fem_vector_fields(
     quantities: &[&str],
     request: &LivePreviewRequest,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
-    let backend = NativeFemBackend::create(plan)?;
+    let mut backend = NativeFemBackend::create(plan)?;
+    // Compute effective fields so that non-magnetization observables are available.
+    let node_count = plan.mesh.nodes.len();
+    let _ = backend.snapshot_step_stats(node_count)?;
     let mut cached = Vec::new();
     let mut seen = std::collections::HashSet::new();
 

@@ -10,7 +10,7 @@ use fullmag_engine::fem::{FemLlgProblem, FemLlgState, MeshTopology};
 use fullmag_engine::{
     AdaptiveStepConfig, EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator,
 };
-use fullmag_ir::{ExecutionPrecision, FemPlanIR, IntegratorChoice, OutputIR};
+use fullmag_ir::{ExecutionPrecision, FemObjectSegmentIR, FemPlanIR, IntegratorChoice, OutputIR};
 
 use crate::antenna_fields::{
     combined_antenna_field_at_time, compute_per_unit_antenna_fields, has_time_varying_antenna,
@@ -25,6 +25,7 @@ use crate::quantities::normalized_quantity_name;
 use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
+    set_object_average_m, single_object_scalars, weighted_object_scalars,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -386,6 +387,7 @@ fn execute_reference_fem_impl(
             &problem,
             &state,
             &ant,
+            &plan.object_segments,
             0,
             0.0,
             0,
@@ -398,6 +400,7 @@ fn execute_reference_fem_impl(
             &problem,
             &state,
             &ant,
+            &plan.object_segments,
             0,
             0.0,
             0,
@@ -420,8 +423,14 @@ fn execute_reference_fem_impl(
         let ant = antenna_field_at(&problem, state.magnetization().len());
         observe_state(&problem, &state, &ant)?
     };
-    let mut current_stats =
-        make_step_stats(step_count, state.time_seconds, 0.0, 0, &current_observables);
+    let mut current_stats = make_step_stats(
+        step_count,
+        state.time_seconds,
+        0.0,
+        0,
+        &current_observables,
+        &plan.object_segments,
+    );
 
     while state.time_seconds < until_seconds {
         if let Some(live) = live.as_mut() {
@@ -529,6 +538,7 @@ fn execute_reference_fem_impl(
                 &problem,
                 &state,
                 &ant,
+                &plan.object_segments,
                 step_count,
                 dt_step,
                 wall_elapsed,
@@ -683,6 +693,7 @@ fn execute_reference_fem_impl(
         &problem,
         &state,
         &final_ant,
+        &plan.object_segments,
         step_count,
         dt,
         default_scalar_trace,

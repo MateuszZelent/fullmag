@@ -123,6 +123,8 @@ pub struct StepStats {
     pub demag_solves: u32,
     #[serde(default)]
     pub fsal_reused: bool,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
 }
 
 impl Default for StepStats {
@@ -155,6 +157,7 @@ impl Default for StepStats {
             rhs_evals: 0,
             demag_solves: 0,
             fsal_reused: false,
+            per_object_scalars: HashMap::new(),
         }
     }
 }
@@ -703,6 +706,7 @@ pub(crate) struct StateObservables {
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
     pub max_h_demag: f64,
+    pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
 }
 
 #[cfg(test)]

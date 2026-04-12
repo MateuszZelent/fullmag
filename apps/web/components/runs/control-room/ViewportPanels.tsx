@@ -603,10 +603,19 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         quantityId={ctx.selectedQuantity}
         component={ctx.effectiveVectorComponent}
         plane={ctx.plane}
-        sliceIndex={ctx.sliceIndex}
-        sliceCount={ctx.maxSliceCount}
+        meshParts={ctx.meshParts}
+        meshEntityViewState={ctx.meshEntityViewState}
+        airSegmentVisible={ctx.airMeshVisible}
+        objectViewMode={ctx.objectViewMode}
+        visibleObjectIds={visibleObjectIds}
+        vectorDomainFilter={ctx.femVectorDomainFilter}
+        clipAxis={ctx.meshClipAxis}
+        clipPos={ctx.meshClipPos}
         antennaOverlays={ctx.antennaOverlays}
         selectedAntennaId={selectedAntennaName}
+        onPlaneChange={ctx.setPlane}
+        onClipAxisChange={ctx.setMeshClipAxis}
+        onClipPosChange={ctx.setMeshClipPos}
       />
     );
   } else if (

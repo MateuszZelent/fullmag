@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from fullmag._core import run_problem_json
 from fullmag.init import save_magnetization
@@ -23,6 +23,9 @@ class StepStats:
     max_dm_dt: float
     max_h_eff: float
     wall_time_ns: int
+    mx: float = 0.0
+    my: float = 0.0
+    mz: float = 0.0
     e_ani: float = 0.0
     e_dmi: float = 0.0
     max_h_demag: float = 0.0
@@ -37,6 +40,7 @@ class StepStats:
     rhs_evals: int = 0
     demag_solves: int = 0
     fsal_reused: bool = False
+    per_object_scalars: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +69,16 @@ class Result:
             format=format,
             dataset=dataset,
         )
+
+    def series(self, quantity: str, region: str | int | None = None) -> list[float]:
+        canonical = _normalize_scalar_quantity_name(quantity)
+        return [_step_scalar(step, canonical, region=region) for step in self.steps]
+
+    def last(self, quantity: str, region: str | int | None = None) -> float:
+        if not self.steps:
+            raise ValueError("result does not contain any step statistics")
+        canonical = _normalize_scalar_quantity_name(quantity)
+        return _step_scalar(self.steps[-1], canonical, region=region)
 
 
 @dataclass(slots=True)
@@ -165,35 +179,41 @@ def result_from_run_payload(
     output_dir: str | None,
 ) -> Result:
     """Convert a native runner payload into a public runtime Result."""
-    step_stats = [
-        StepStats(
-            step=s["step"],
-            time=s["time"],
-            dt=s["dt"],
-            e_ex=s["e_ex"],
-            e_demag=s.get("e_demag", 0.0),
-            e_ext=s.get("e_ext", 0.0),
-            e_total=s.get("e_total", s["e_ex"]),
-            max_dm_dt=s["max_dm_dt"],
-            max_h_eff=s["max_h_eff"],
-            wall_time_ns=s["wall_time_ns"],
-            e_ani=s.get("e_ani", 0.0),
-            e_dmi=s.get("e_dmi", 0.0),
-            max_h_demag=s.get("max_h_demag", 0.0),
-            exchange_wall_time_ns=s.get("exchange_wall_time_ns", 0),
-            demag_wall_time_ns=s.get("demag_wall_time_ns", 0),
-            rhs_wall_time_ns=s.get("rhs_wall_time_ns", 0),
-            extra_energy_wall_time_ns=s.get("extra_energy_wall_time_ns", 0),
-            snapshot_wall_time_ns=s.get("snapshot_wall_time_ns", 0),
-            error_estimate=s.get("error_estimate"),
-            dt_suggested=s.get("dt_suggested"),
-            rejected_attempts=s.get("rejected_attempts", 0),
-            rhs_evals=s.get("rhs_evals", 0),
-            demag_solves=s.get("demag_solves", 0),
-            fsal_reused=s.get("fsal_reused", False),
+    step_stats = []
+    for s in run_result.get("steps", []):
+        per_object_raw = s.get("per_object_scalars", s.get("per_object", {}))
+        step_stats.append(
+            StepStats(
+                step=s["step"],
+                time=s["time"],
+                dt=s["dt"],
+                e_ex=s["e_ex"],
+                e_demag=s.get("e_demag", 0.0),
+                e_ext=s.get("e_ext", 0.0),
+                e_total=s.get("e_total", s["e_ex"]),
+                max_dm_dt=s["max_dm_dt"],
+                max_h_eff=s["max_h_eff"],
+                wall_time_ns=s["wall_time_ns"],
+                mx=s.get("mx", 0.0),
+                my=s.get("my", 0.0),
+                mz=s.get("mz", 0.0),
+                e_ani=s.get("e_ani", 0.0),
+                e_dmi=s.get("e_dmi", 0.0),
+                max_h_demag=s.get("max_h_demag", 0.0),
+                exchange_wall_time_ns=s.get("exchange_wall_time_ns", 0),
+                demag_wall_time_ns=s.get("demag_wall_time_ns", 0),
+                rhs_wall_time_ns=s.get("rhs_wall_time_ns", 0),
+                extra_energy_wall_time_ns=s.get("extra_energy_wall_time_ns", 0),
+                snapshot_wall_time_ns=s.get("snapshot_wall_time_ns", 0),
+                error_estimate=s.get("error_estimate"),
+                dt_suggested=s.get("dt_suggested"),
+                rejected_attempts=s.get("rejected_attempts", 0),
+                rhs_evals=s.get("rhs_evals", 0),
+                demag_solves=s.get("demag_solves", 0),
+                fsal_reused=s.get("fsal_reused", False),
+                per_object_scalars=_coerce_per_object_scalars(per_object_raw),
+            )
         )
-        for s in run_result.get("steps", [])
-    ]
 
     return Result(
         status=run_result.get("status", "completed"),
@@ -204,3 +224,57 @@ def result_from_run_payload(
         final_magnetization=run_result.get("final_magnetization"),
         output_dir=output_dir,
     )
+
+
+_SCALAR_QUANTITY_ALIASES: Mapping[str, str] = {
+    "e_ex": "e_ex",
+    "e_demag": "e_demag",
+    "e_ext": "e_ext",
+    "e_ani": "e_ani",
+    "e_dmi": "e_dmi",
+    "e_total": "e_total",
+    "mx": "mx",
+    "my": "my",
+    "mz": "mz",
+    "max_dm_dt": "max_dm_dt",
+    "max_h_eff": "max_h_eff",
+    "max_h_demag": "max_h_demag",
+}
+
+
+def _normalize_scalar_quantity_name(quantity: str) -> str:
+    key = quantity.strip().lower()
+    if key not in _SCALAR_QUANTITY_ALIASES:
+        raise ValueError(f"unsupported scalar quantity {quantity!r}")
+    return _SCALAR_QUANTITY_ALIASES[key]
+
+
+def _step_scalar(step: StepStats, quantity: str, *, region: str | int | None = None) -> float:
+    if region is None:
+        return float(getattr(step, quantity))
+    region_key = str(region)
+    region_map = step.per_object_scalars.get(region_key)
+    if region_map is None:
+        available = ", ".join(sorted(step.per_object_scalars))
+        hint = f" Available regions: {available}." if available else ""
+        raise ValueError(f"region {region!r} is not available in this result.{hint}")
+    if quantity not in region_map:
+        raise ValueError(f"quantity {quantity!r} is not available for region {region!r}")
+    return float(region_map[quantity])
+
+
+def _coerce_per_object_scalars(raw: object) -> dict[str, dict[str, float]]:
+    if not isinstance(raw, Mapping):
+        return {}
+    normalized: dict[str, dict[str, float]] = {}
+    for region, values in raw.items():
+        if not isinstance(values, Mapping):
+            continue
+        region_key = str(region)
+        normalized[region_key] = {}
+        for quantity, value in values.items():
+            try:
+                normalized[region_key][str(quantity)] = float(value)
+            except (TypeError, ValueError):
+                continue
+    return normalized

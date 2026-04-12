@@ -941,8 +941,9 @@ impl NativeFemBackend {
                 })
             }
         };
-        let active_mask = matches!(normalize_quantity_id(&request.quantity)?, QuantityId::M)
-            .then(|| self.magnetic_node_mask.clone());
+        let active_mask =
+            (crate::quantities::quantity_spatial_domain(&request.quantity) == "magnetic_only")
+                .then(|| self.magnetic_node_mask.clone());
         Ok(build_mesh_preview_field_with_active_mask(
             request,
             &values,

@@ -1,10 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FemMeshData } from "./FemMeshView3D";
-import { DIVERGING_PALETTE, POSITIVE_PALETTE } from "../../lib/colorPalettes";
+import type { FemMeshData, FemVectorDomainFilter } from "./FemMeshView3D";
+import { DIVERGING_PALETTE, POSITIVE_PALETTE, SEQUENTIAL_BLUE_PALETTE } from "../../lib/colorPalettes";
 import type { AntennaOverlay } from "../runs/control-room/shared";
 import { ViewportOverlayLayout } from "./ViewportOverlayLayout";
+import type { FemMeshPart, MeshEntityViewStateMap } from "../../lib/session/types";
+import type { ObjectViewMode } from "../runs/control-room/shared";
+import {
+  buildSliceVisibilityState,
+  clipAxisToPlane,
+  getSmartColorScale,
+  normalizedClipToWorld,
+  planeToClipAxis,
+} from "./fem/femSliceUtils";
+import {
+  axisIndices,
+  collectSegments,
+  project,
+  type Point2,
+  type Point3,
+} from "./fem/femSliceGeometry";
 
 type SlicePlane = "xy" | "xz" | "yz";
 type VectorComponent = "x" | "y" | "z" | "magnitude";
@@ -15,27 +31,19 @@ interface Props {
   quantityId?: string;
   component: VectorComponent;
   plane: SlicePlane;
-  sliceIndex: number;
-  sliceCount?: number;
+  meshParts?: FemMeshPart[];
+  meshEntityViewState?: MeshEntityViewStateMap;
+  airSegmentVisible?: boolean;
+  objectViewMode?: ObjectViewMode;
+  visibleObjectIds?: string[];
+  vectorDomainFilter?: FemVectorDomainFilter;
+  clipAxis?: "x" | "y" | "z";
+  clipPos?: number;
   antennaOverlays?: AntennaOverlay[];
   selectedAntennaId?: string | null;
   onPlaneChange?: (plane: SlicePlane) => void;
-  onSliceIndexChange?: (index: number) => void;
-}
-
-type Point3 = [number, number, number];
-type Point2 = [number, number];
-
-interface Segment2D {
-  a: Point2;
-  b: Point2;
-  va: number;
-  vb: number;
-}
-
-interface Polygon2D {
-  points: Point2[];
-  value: number;
+  onClipAxisChange?: (axis: "x" | "y" | "z") => void;
+  onClipPosChange?: (value: number) => void;
 }
 
 interface AntennaRect2D {
@@ -49,10 +57,14 @@ const BG = "#1e1e2e"; /* Catppuccin Base */
 const BORDER = "#313244"; /* Catppuccin Surface0 */
 const TEXT = "#a6adc8"; /* Catppuccin Subtext0 */
 const TEXT_STRONG = "#cdd6f4"; /* Catppuccin Text */
-const GRID = "rgba(108, 112, 134, 0.08)"; /* Catppuccin Overlay0 */
+const GRID = "rgba(108, 112, 134, 0.055)"; /* Catppuccin Overlay0 */
 const EMPTY = "rgba(205, 214, 244, 0.08)"; /* Catppuccin Text */
+const PANEL = "rgba(24, 24, 37, 0.88)";
+const PANEL_SOFT = "rgba(30, 30, 46, 0.76)";
+const ACCENT_LINE = "rgba(137, 180, 250, 0.4)";
 const DIVERGING = DIVERGING_PALETTE as unknown as string[];
 const POSITIVE = POSITIVE_PALETTE as unknown as string[];
+const NEGATIVE = SEQUENTIAL_BLUE_PALETTE as unknown as string[];
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -60,50 +72,6 @@ function clamp(v: number, lo: number, hi: number): number {
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
-}
-
-function lerpPoint(a: Point3, b: Point3, t: number): Point3 {
-  return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
-}
-
-function nodeScalar(meshData: FemMeshData, nodeIndex: number, component: VectorComponent): number {
-  const fld = meshData.fieldData;
-  if (!fld) {
-    return 0;
-  }
-  const fx = fld.x[nodeIndex] ?? 0;
-  const fy = fld.y[nodeIndex] ?? 0;
-  const fz = fld.z[nodeIndex] ?? 0;
-  switch (component) {
-    case "x":
-      return fx;
-    case "y":
-      return fy;
-    case "z":
-      return fz;
-    case "magnitude":
-      return Math.sqrt(fx * fx + fy * fy + fz * fz);
-  }
-}
-
-function axisIndices(plane: SlicePlane): { normal: 0 | 1 | 2; u: 0 | 1 | 2; v: 0 | 1 | 2 } {
-  switch (plane) {
-    case "xy":
-      return { normal: 2, u: 0, v: 1 };
-    case "xz":
-      return { normal: 1, u: 0, v: 2 };
-    case "yz":
-      return { normal: 0, u: 1, v: 2 };
-  }
-}
-
-function project(point: Point3, plane: SlicePlane): Point2 {
-  const { u, v } = axisIndices(plane);
-  return [point[u], point[v]];
-}
-
-function axisLabel(index: 0 | 1 | 2): string {
-  return index === 0 ? "x" : index === 1 ? "y" : "z";
 }
 
 function paletteColor(t: number, palette: string[]): string {
@@ -132,389 +100,19 @@ function colorForValue(value: number, min: number, max: number, quantityId: stri
   if (isMagnetization && min === 0 && max === 1) {
     return paletteColor(value, POSITIVE);
   }
-  const palette = min < 0 && max > 0 ? DIVERGING : POSITIVE;
+  const palette = min < 0 && max > 0 ? DIVERGING : max <= 0 ? NEGATIVE : POSITIVE;
   const t = max > min ? (value - min) / (max - min) : 0.5;
   return paletteColor(t, palette);
 }
 
-function uniquePoints(points: { point: Point3; value: number }[], epsilon: number) {
-  const out: { point: Point3; value: number }[] = [];
-  for (const candidate of points) {
-    const exists = out.some(
-      (entry) =>
-        Math.abs(entry.point[0] - candidate.point[0]) <= epsilon &&
-        Math.abs(entry.point[1] - candidate.point[1]) <= epsilon &&
-        Math.abs(entry.point[2] - candidate.point[2]) <= epsilon,
-    );
-    if (!exists) {
-      out.push(candidate);
-    }
+function colorForDomain(partId: string | null): string {
+  if (!partId) return "rgba(108, 112, 134, 0.18)";
+  let hash = 0;
+  for (let i = 0; i < partId.length; i += 1) {
+    hash = (hash * 31 + partId.charCodeAt(i)) >>> 0;
   }
-  return out;
-}
-
-function collectBoundarySegments(
-  meshData: FemMeshData,
-  plane: SlicePlane,
-  component: VectorComponent,
-  sliceIndex: number,
-  sliceCount: number,
-) {
-  const flatNodes = meshData.nodes;
-  const flatFaces = meshData.boundaryFaces;
-  const numNodes = flatNodes.length / 3;
-  const numFaces = flatFaces.length / 3;
-
-  const { normal, u, v } = axisIndices(plane);
-
-  let minN = Number.POSITIVE_INFINITY;
-  let maxN = Number.NEGATIVE_INFINITY;
-  let uMin = Number.POSITIVE_INFINITY;
-  let uMax = Number.NEGATIVE_INFINITY;
-  let vMin = Number.POSITIVE_INFINITY;
-  let vMax = Number.NEGATIVE_INFINITY;
-
-  for (let i = 0; i < numNodes; i++) {
-    const pn = flatNodes[i * 3 + normal];
-    const pu = flatNodes[i * 3 + u];
-    const pv = flatNodes[i * 3 + v];
-    if (pn < minN) minN = pn;
-    if (pn > maxN) maxN = pn;
-    if (pu < uMin) uMin = pu;
-    if (pu > uMax) uMax = pu;
-    if (pv < vMin) vMin = pv;
-    if (pv > vMax) vMax = pv;
-  }
-
-  const planeCoord =
-    sliceCount <= 1 || Math.abs(maxN - minN) <= 1e-18
-      ? minN
-      : lerp(minN, maxN, clamp(sliceIndex, 0, sliceCount - 1) / (sliceCount - 1));
-  const epsilon = Math.max(((maxN - minN) / Math.max(sliceCount - 1, 1)) * 0.25, 1e-15);
-
-  const segments: Segment2D[] = [];
-  let valueMin = Number.POSITIVE_INFINITY;
-  let valueMax = Number.NEGATIVE_INFINITY;
-
-  const addSegment = (pa: Point3, pb: Point3, va: number, vb: number) => {
-    valueMin = Math.min(valueMin, va, vb);
-    valueMax = Math.max(valueMax, va, vb);
-    segments.push({
-      a: project(pa, plane),
-      b: project(pb, plane),
-      va,
-      vb,
-    });
-  };
-
-  const edges = [
-    [0, 1],
-    [1, 2],
-    [2, 0],
-  ] as const;
-
-  for (let f = 0; f < numFaces; f++) {
-    const ia = flatFaces[f * 3];
-    const ib = flatFaces[f * 3 + 1];
-    const ic = flatFaces[f * 3 + 2];
-
-    const p: [Point3, Point3, Point3] = [
-      [flatNodes[ia * 3], flatNodes[ia * 3 + 1], flatNodes[ia * 3 + 2]],
-      [flatNodes[ib * 3], flatNodes[ib * 3 + 1], flatNodes[ib * 3 + 2]],
-      [flatNodes[ic * 3], flatNodes[ic * 3 + 1], flatNodes[ic * 3 + 2]],
-    ];
-
-    const values = [
-      nodeScalar(meshData, ia, component),
-      nodeScalar(meshData, ib, component),
-      nodeScalar(meshData, ic, component),
-    ] as const;
-
-    const signed = [
-      p[0][normal] - planeCoord,
-      p[1][normal] - planeCoord,
-      p[2][normal] - planeCoord,
-    ] as const;
-
-    const near = [
-      Math.abs(signed[0]) <= epsilon,
-      Math.abs(signed[1]) <= epsilon,
-      Math.abs(signed[2]) <= epsilon,
-    ] as const;
-
-    if (near[0] && near[1] && near[2]) {
-      addSegment(p[0], p[1], values[0], values[1]);
-      addSegment(p[1], p[2], values[1], values[2]);
-      addSegment(p[2], p[0], values[2], values[0]);
-      continue;
-    }
-
-    const intersections: { point: Point3; value: number }[] = [];
-
-    for (const [a, b] of edges) {
-      const da = signed[a];
-      const db = signed[b];
-      const va = values[a];
-      const vb = values[b];
-
-      if (Math.abs(da) <= epsilon && Math.abs(db) <= epsilon) {
-        continue;
-      }
-      if (Math.abs(da) <= epsilon) {
-        intersections.push({ point: p[a], value: va });
-        continue;
-      }
-      if (Math.abs(db) <= epsilon) {
-        intersections.push({ point: p[b], value: vb });
-        continue;
-      }
-      if (da * db < 0) {
-        const t = da / (da - db);
-        intersections.push({
-          point: lerpPoint(p[a], p[b], t),
-          value: lerp(va, vb, t),
-        });
-      }
-    }
-
-    const unique = uniquePoints(intersections, epsilon);
-    if (unique.length === 2) {
-      addSegment(unique[0].point, unique[1].point, unique[0].value, unique[1].value);
-    } else if (unique.length === 3) {
-      unique.sort((lhs, rhs) => lhs.point[u] - rhs.point[u] || lhs.point[v] - rhs.point[v]);
-      addSegment(unique[0].point, unique[1].point, unique[0].value, unique[1].value);
-      addSegment(unique[1].point, unique[2].point, unique[1].value, unique[2].value);
-    }
-  }
-
-  if (!Number.isFinite(valueMin)) {
-    valueMin = 0;
-    valueMax = 0;
-  }
-
-  const hasFieldData = !!meshData.fieldData;
-  const effectiveRange =
-    component === "magnitude"
-      ? { min: 0, max: Math.max(1, valueMax) }
-      : valueMin < 0 && valueMax > 0
-        ? {
-            min: -Math.max(Math.abs(valueMin), Math.abs(valueMax)),
-            max: Math.max(Math.abs(valueMin), Math.abs(valueMax)),
-          }
-        : { min: valueMin, max: valueMax };
-
-  return {
-    planeCoord,
-    normalLabel: axisLabel(normal),
-    uLabel: axisLabel(u),
-    vLabel: axisLabel(v),
-    bounds: { uMin, uMax, vMin, vMax },
-    segments,
-    polygons: [] as Polygon2D[],
-    valueRange: hasFieldData ? effectiveRange : effectiveRange,
-  };
-}
-
-function sortIntersectionLoop(
-  points: { point: Point3; value: number }[],
-  plane: SlicePlane,
-) {
-  if (points.length <= 2) {
-    return points;
-  }
-  const projected = points.map((entry) => ({
-    ...entry,
-    uv: project(entry.point, plane),
-  }));
-  const centerU = projected.reduce((sum, entry) => sum + entry.uv[0], 0) / projected.length;
-  const centerV = projected.reduce((sum, entry) => sum + entry.uv[1], 0) / projected.length;
-  projected.sort(
-    (left, right) =>
-      Math.atan2(left.uv[1] - centerV, left.uv[0] - centerU) -
-      Math.atan2(right.uv[1] - centerV, right.uv[0] - centerU),
-  );
-  return projected.map(({ point, value }) => ({ point, value }));
-}
-
-function collectTetraSegments(
-  meshData: FemMeshData,
-  plane: SlicePlane,
-  component: VectorComponent,
-  sliceIndex: number,
-  sliceCount: number,
-) {
-  const flatNodes = meshData.nodes;
-  const flatElements = meshData.elements;
-  const numNodes = flatNodes.length / 3;
-  const numElements = flatElements.length / 4;
-
-  const { normal, u, v } = axisIndices(plane);
-
-  let minN = Number.POSITIVE_INFINITY;
-  let maxN = Number.NEGATIVE_INFINITY;
-  let uMin = Number.POSITIVE_INFINITY;
-  let uMax = Number.NEGATIVE_INFINITY;
-  let vMin = Number.POSITIVE_INFINITY;
-  let vMax = Number.NEGATIVE_INFINITY;
-
-  for (let i = 0; i < numNodes; i++) {
-    const pn = flatNodes[i * 3 + normal];
-    const pu = flatNodes[i * 3 + u];
-    const pv = flatNodes[i * 3 + v];
-    if (pn < minN) minN = pn;
-    if (pn > maxN) maxN = pn;
-    if (pu < uMin) uMin = pu;
-    if (pu > uMax) uMax = pu;
-    if (pv < vMin) vMin = pv;
-    if (pv > vMax) vMax = pv;
-  }
-
-  const planeCoord =
-    sliceCount <= 1 || Math.abs(maxN - minN) <= 1e-18
-      ? minN
-      : lerp(minN, maxN, clamp(sliceIndex, 0, sliceCount - 1) / (sliceCount - 1));
-  const epsilon = Math.max(((maxN - minN) / Math.max(sliceCount - 1, 1)) * 0.25, 1e-15);
-
-  const polygons: Polygon2D[] = [];
-  let valueMin = Number.POSITIVE_INFINITY;
-  let valueMax = Number.NEGATIVE_INFINITY;
-
-  const edges = [
-    [0, 1],
-    [0, 2],
-    [0, 3],
-    [1, 2],
-    [1, 3],
-    [2, 3],
-  ] as const;
-
-  for (let elementIndex = 0; elementIndex < numElements; elementIndex++) {
-    const ids = [
-      flatElements[elementIndex * 4],
-      flatElements[elementIndex * 4 + 1],
-      flatElements[elementIndex * 4 + 2],
-      flatElements[elementIndex * 4 + 3],
-    ] as const;
-
-    const points = ids.map(
-      (nodeIndex) =>
-        [
-          flatNodes[nodeIndex * 3],
-          flatNodes[nodeIndex * 3 + 1],
-          flatNodes[nodeIndex * 3 + 2],
-        ] as Point3,
-    ) as [Point3, Point3, Point3, Point3];
-
-    const values = ids.map((nodeIndex) => nodeScalar(meshData, nodeIndex, component)) as [
-      number,
-      number,
-      number,
-      number,
-    ];
-
-    const signed = points.map((point) => point[normal] - planeCoord) as [
-      number,
-      number,
-      number,
-      number,
-    ];
-
-    const intersections: { point: Point3; value: number }[] = [];
-
-    for (const [a, b] of edges) {
-      const da = signed[a];
-      const db = signed[b];
-      const va = values[a];
-      const vb = values[b];
-
-      if (Math.abs(da) <= epsilon && Math.abs(db) <= epsilon) {
-        intersections.push({ point: points[a], value: va });
-        intersections.push({ point: points[b], value: vb });
-        continue;
-      }
-      if (Math.abs(da) <= epsilon) {
-        intersections.push({ point: points[a], value: va });
-        continue;
-      }
-      if (Math.abs(db) <= epsilon) {
-        intersections.push({ point: points[b], value: vb });
-        continue;
-      }
-      if (da * db > 0) {
-        continue;
-      }
-
-      const t = da / (da - db);
-      intersections.push({
-        point: lerpPoint(points[a], points[b], t),
-        value: lerp(va, vb, t),
-      });
-    }
-
-    const unique = sortIntersectionLoop(uniquePoints(intersections, epsilon), plane);
-    if (unique.length < 3) {
-      continue;
-    }
-
-    let avgValue = 0;
-    const pts: Point2[] = [];
-    let minVal = unique[0].value, maxVal = unique[0].value;
-    for (const v of unique) {
-      avgValue += v.value;
-      pts.push(project(v.point, plane));
-      if (v.value < minVal) minVal = v.value;
-      if (v.value > maxVal) maxVal = v.value;
-    }
-    avgValue /= unique.length;
-
-    valueMin = Math.min(valueMin, minVal);
-    valueMax = Math.max(valueMax, maxVal);
-
-    polygons.push({
-      points: pts,
-      value: avgValue,
-    });
-  }
-
-  if (!Number.isFinite(valueMin)) {
-    valueMin = 0;
-    valueMax = 0;
-  }
-
-  const hasFieldData = !!meshData.fieldData;
-  const effectiveRange =
-    component === "magnitude"
-      ? { min: 0, max: Math.max(1, valueMax) }
-      : valueMin < 0 && valueMax > 0
-        ? {
-            min: -Math.max(Math.abs(valueMin), Math.abs(valueMax)),
-            max: Math.max(Math.abs(valueMin), Math.abs(valueMax)),
-          }
-        : { min: valueMin, max: valueMax };
-
-  return {
-    planeCoord,
-    normalLabel: axisLabel(normal),
-    uLabel: axisLabel(u),
-    vLabel: axisLabel(v),
-    bounds: { uMin, uMax, vMin, vMax },
-    segments: [] as Segment2D[],
-    polygons,
-    valueRange: hasFieldData ? effectiveRange : effectiveRange,
-  };
-}
-
-function collectSegments(
-  meshData: FemMeshData,
-  plane: SlicePlane,
-  component: VectorComponent,
-  sliceIndex: number,
-  sliceCount: number,
-) {
-  if (meshData.elements.length >= 4) {
-    return collectTetraSegments(meshData, plane, component, sliceIndex, sliceCount);
-  }
-  return collectBoundarySegments(meshData, plane, component, sliceIndex, sliceCount);
+  const hue = hash % 360;
+  return `hsla(${hue} 55% 62% / 0.34)`;
 }
 
 function collectAntennaRects(
@@ -571,8 +169,10 @@ interface SliceRenderFrame {
   width: number;
   height: number;
   margin: { left: number; right: number; top: number; bottom: number };
-  innerW: number;
-  innerH: number;
+  plotRect: { x: number; y: number; width: number; height: number };
+  colorbarRect: { x: number; y: number; width: number; height: number } | null;
+  plotWidth: number;
+  plotHeight: number;
   scale: number;
   ox: number;
   oy: number;
@@ -627,9 +227,17 @@ function sampleSliceProbe(
   canvasX: number,
   canvasY: number,
 ): SliceProbe | null {
-  const { ox, oy, scale, innerH, bounds } = frame;
+  const { ox, oy, scale, plotHeight, plotRect, bounds } = frame;
+  if (
+    canvasX < plotRect.x ||
+    canvasX > plotRect.x + plotRect.width ||
+    canvasY < plotRect.y ||
+    canvasY > plotRect.y + plotRect.height
+  ) {
+    return null;
+  }
   const u = (canvasX - ox) / scale + bounds.uMin;
-  const v = (oy + innerH - canvasY) / scale + bounds.vMin;
+  const v = (oy + plotHeight - canvasY) / scale + bounds.vMin;
   if (
     !Number.isFinite(u) ||
     !Number.isFinite(v) ||
@@ -674,36 +282,156 @@ function formatProbeValue(value: number | null): string {
   return value.toFixed(4);
 }
 
+function formatMetricLength(value: number): string {
+  const abs = Math.abs(value);
+  if (abs === 0) {
+    return "0 m";
+  }
+  if (abs >= 1) {
+    return `${value.toFixed(abs >= 10 ? 2 : 3)} m`;
+  }
+  if (abs >= 1e-3) {
+    return `${(value * 1e3).toFixed(abs >= 1e-2 ? 2 : 3)} mm`;
+  }
+  if (abs >= 1e-6) {
+    return `${(value * 1e6).toFixed(abs >= 1e-5 ? 2 : 3)} um`;
+  }
+  if (abs >= 1e-9) {
+    return `${(value * 1e9).toFixed(abs >= 1e-8 ? 2 : 3)} nm`;
+  }
+  return `${value.toExponential(2)} m`;
+}
+
+function buildNiceTicks(min: number, max: number, targetCount = 5): number[] {
+  const span = max - min;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || span <= 0) {
+    return [min];
+  }
+
+  const roughStep = span / Math.max(targetCount - 1, 1);
+  const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)));
+  const normalized = roughStep / magnitude;
+  const niceUnit = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  const step = niceUnit * magnitude;
+  const start = Math.ceil(min / step) * step;
+  const ticks: number[] = [];
+
+  for (let value = start; value <= max + step * 0.5; value += step) {
+    ticks.push(Number(value.toPrecision(12)));
+  }
+
+  if (ticks.length === 0) {
+    return [min, max];
+  }
+  if (Math.abs(ticks[0] - min) > step * 0.35) {
+    ticks.unshift(min);
+  }
+  if (Math.abs(ticks[ticks.length - 1] - max) > step * 0.35) {
+    ticks.push(max);
+  }
+
+  return ticks;
+}
+
 export default function FemMeshSlice2D({
   meshData,
   quantityLabel,
   quantityId,
   component,
   plane,
-  sliceIndex,
-  sliceCount = 25,
+  meshParts = [],
+  meshEntityViewState = {},
+  airSegmentVisible = true,
+  objectViewMode = "context",
+  visibleObjectIds = [],
+  vectorDomainFilter = "auto",
+  clipAxis,
+  clipPos = 50,
   antennaOverlays = [],
   selectedAntennaId,
   onPlaneChange,
-  onSliceIndexChange,
+  onClipAxisChange,
+  onClipPosChange,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameRef = useRef<SliceRenderFrame | null>(null);
   const [canvasSize, setCanvasSize] = useState<[number, number]>([0, 0]);
   const [hoverProbe, setHoverProbe] = useState<SliceProbe | null>(null);
   const [pinnedProbe, setPinnedProbe] = useState<SliceProbe | null>(null);
+  const controlsVisible = Boolean(onPlaneChange || onClipPosChange);
+
+  const effectivePlane = clipAxis ? clipAxisToPlane(clipAxis) : plane;
+  const { normal } = axisIndices(effectivePlane);
+  const normalBounds = useMemo(() => {
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < meshData.nNodes; i += 1) {
+      const value = meshData.nodes[i * 3 + normal];
+      if (value < min) min = value;
+      if (value > max) max = value;
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      return { min: 0, max: 0 };
+    }
+    return { min, max };
+  }, [meshData.nNodes, meshData.nodes, normal]);
+
+  const planeCoord = useMemo(
+    () => normalizedClipToWorld(normalBounds.min, normalBounds.max, clipPos),
+    [clipPos, normalBounds.max, normalBounds.min],
+  );
+
+  const visibilityState = useMemo(
+    () =>
+      buildSliceVisibilityState({
+        meshData,
+        meshParts,
+        meshEntityViewState,
+        airSegmentVisible,
+        objectViewMode,
+        visibleObjectIds,
+        vectorDomainFilter:
+          vectorDomainFilter === "auto"
+            ? meshData.quantityDomain === "full_domain"
+              ? "full_domain"
+              : "magnetic_only"
+            : vectorDomainFilter,
+      }),
+    [
+      airSegmentVisible,
+      meshData,
+      meshData.quantityDomain,
+      meshEntityViewState,
+      meshParts,
+      objectViewMode,
+      vectorDomainFilter,
+      visibleObjectIds,
+    ],
+  );
 
   const slice = useMemo(
-    () => collectSegments(meshData, plane, component, sliceIndex, sliceCount),
-    [meshData, plane, component, sliceIndex, sliceCount],
+    () =>
+      collectSegments(
+        meshData,
+        effectivePlane,
+        component,
+        planeCoord,
+        visibilityState,
+        objectViewMode === "isolate" ? "visible-intersection" : "visible-context",
+      ),
+    [meshData, effectivePlane, component, planeCoord, visibilityState, objectViewMode],
+  );
+  const colorScale = useMemo(
+    () => getSmartColorScale(slice.valueRange.min, slice.valueRange.max, quantityId, component),
+    [component, quantityId, slice.valueRange.max, slice.valueRange.min],
   );
   const antennaRects = useMemo(
-    () => collectAntennaRects(antennaOverlays, plane, slice.planeCoord, selectedAntennaId),
-    [antennaOverlays, plane, selectedAntennaId, slice.planeCoord],
+    () => collectAntennaRects(antennaOverlays, effectivePlane, slice.planeCoord, selectedAntennaId),
+    [antennaOverlays, effectivePlane, selectedAntennaId, slice.planeCoord],
   );
 
   // Sync probe state with slice parameters during render (React 19 recommended pattern for resets)
-  const sliceParamsKey = `${component}:${plane}:${quantityId}:${slice.planeCoord}:${sliceIndex}:${sliceCount}`;
+  const sliceParamsKey = `${component}:${effectivePlane}:${quantityId}:${slice.planeCoord}:${clipPos}`;
   const [prevSliceParamsKey, setPrevSliceParamsKey] = useState(sliceParamsKey);
   if (sliceParamsKey !== prevSliceParamsKey) {
     setPrevSliceParamsKey(sliceParamsKey);
@@ -747,21 +475,42 @@ export default function FemMeshSlice2D({
     ctx.fillStyle = BG;
     ctx.fillRect(0, 0, width, height);
 
-    const margin = { left: 64, right: 22, top: 28, bottom: 54 };
+    const compactWidth = width < 720;
+    const tightWidth = width < 560;
+    const compactHeight = height < 420;
+    const showColorbarPanel = !!meshData.fieldData && !tightWidth;
+    const topMetaInset = compactWidth ? 34 : 44;
+    const bottomSafeInset = controlsVisible ? (compactWidth ? 82 : 92) : compactHeight ? 20 : 28;
+    const margin = {
+      left: tightWidth ? 52 : compactWidth ? 62 : 74,
+      right: compactWidth ? 18 : 26,
+      top: (compactWidth ? 16 : 24) + topMetaInset,
+      bottom: (compactWidth ? 56 : 68) + bottomSafeInset,
+    };
+    const colorbarW = showColorbarPanel ? 10 : 0;
+    const colorbarGap = showColorbarPanel ? (compactWidth ? 10 : 16) : 0;
+    const colorbarLabelW = showColorbarPanel ? (compactWidth ? 44 : 54) : 0;
+    const reservedRight = colorbarW + colorbarGap + colorbarLabelW;
     const innerW = width - margin.left - margin.right;
     const innerH = height - margin.top - margin.bottom;
+    const plotWidth = Math.max(innerW - reservedRight, 80);
+    const plotHeight = innerH;
     const { uMin, uMax, vMin, vMax } = slice.bounds;
     const du = Math.max(uMax - uMin, 1e-18);
     const dv = Math.max(vMax - vMin, 1e-18);
-    const scale = Math.min(innerW / du, innerH / dv);
-    const ox = margin.left + (innerW - du * scale) * 0.5;
-    const oy = margin.top + (innerH - dv * scale) * 0.5;
+    const scale = Math.min(plotWidth / du, plotHeight / dv);
+    const ox = margin.left + (plotWidth - du * scale) * 0.5;
+    const oy = margin.top + (plotHeight - dv * scale) * 0.5;
     frameRef.current = {
       width,
       height,
       margin,
-      innerW,
-      innerH,
+      plotRect: { x: margin.left, y: margin.top, width: plotWidth, height: plotHeight },
+      colorbarRect: meshData.fieldData
+        ? { x: margin.left + plotWidth + colorbarGap, y: margin.top + 18, width: colorbarW, height: Math.max(plotHeight - 34, 120) }
+        : null,
+      plotWidth,
+      plotHeight,
       scale,
       ox,
       oy,
@@ -770,27 +519,46 @@ export default function FemMeshSlice2D({
 
     const map = ([u, v]: Point2): Point2 => [
       ox + (u - uMin) * scale,
-      oy + innerH - (v - vMin) * scale,
+      oy + plotHeight - (v - vMin) * scale,
     ];
+
+    const headerPanelHeight = compactWidth ? 36 : 44;
+    ctx.fillStyle = PANEL;
+    ctx.fillRect(12, 12, width - 24, headerPanelHeight);
+    ctx.strokeStyle = BORDER;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(12.5, 12.5, width - 25, headerPanelHeight - 1);
+
+    ctx.fillStyle = "rgba(17, 17, 27, 0.7)";
+    ctx.fillRect(margin.left, margin.top, plotWidth, plotHeight);
 
     ctx.strokeStyle = BORDER;
     ctx.lineWidth = 1;
-    ctx.strokeRect(margin.left, margin.top, innerW, innerH);
+    ctx.strokeRect(margin.left, margin.top, plotWidth, plotHeight);
+
+    const xTicks = buildNiceTicks(uMin, uMax, tightWidth ? 4 : compactWidth ? 5 : 6);
+    const yTicks = buildNiceTicks(vMin, vMax, compactHeight ? 4 : compactWidth ? 5 : 6);
+    const xMajorTickEvery = Math.max(1, Math.floor(xTicks.length / 4));
+    const yMajorTickEvery = Math.max(1, Math.floor(yTicks.length / 4));
 
     ctx.strokeStyle = GRID;
     ctx.lineWidth = 1;
-    for (let index = 1; index < 5; index += 1) {
-      const x = margin.left + (innerW * index) / 5;
-      const y = margin.top + (innerH * index) / 5;
+    xTicks.forEach((tick, index) => {
+      const x = ox + (tick - uMin) * scale;
+      ctx.strokeStyle = index % xMajorTickEvery === 0 ? "rgba(108, 112, 134, 0.08)" : GRID;
       ctx.beginPath();
       ctx.moveTo(x, margin.top);
-      ctx.lineTo(x, margin.top + innerH);
+      ctx.lineTo(x, margin.top + plotHeight);
       ctx.stroke();
+    });
+    yTicks.forEach((tick, index) => {
+      const y = oy + plotHeight - (tick - vMin) * scale;
+      ctx.strokeStyle = index % yMajorTickEvery === 0 ? "rgba(108, 112, 134, 0.08)" : GRID;
       ctx.beginPath();
       ctx.moveTo(margin.left, y);
-      ctx.lineTo(margin.left + innerW, y);
+      ctx.lineTo(margin.left + plotWidth, y);
       ctx.stroke();
-    }
+    });
 
     if (slice.segments.length === 0 && slice.polygons.length === 0) {
       ctx.fillStyle = EMPTY;
@@ -805,7 +573,7 @@ export default function FemMeshSlice2D({
         height / 2 + 18,
       );
     } else {
-      const { min, max } = slice.valueRange;
+      const { min, max } = colorScale;
       const hasField = !!meshData.fieldData;
 
       // Draw volume polygons
@@ -813,7 +581,7 @@ export default function FemMeshSlice2D({
         if (poly.points.length < 3) continue;
         ctx.fillStyle = hasField
           ? colorForValue(poly.value, min, max, quantityId)
-          : "rgba(108, 112, 134, 0.18)";
+          : colorForDomain(poly.partId);
         ctx.beginPath();
         const first = map(poly.points[0]);
         ctx.moveTo(first[0], first[1]);
@@ -866,55 +634,113 @@ export default function FemMeshSlice2D({
     }
 
     ctx.fillStyle = TEXT;
-    ctx.font = "12px IBM Plex Sans, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(`${slice.uLabel} axis`, margin.left, height - 18);
+    ctx.font = tightWidth ? "10px IBM Plex Mono, monospace" : "11px IBM Plex Mono, monospace";
+    ctx.textAlign = "center";
+    xTicks.forEach((tick, index) => {
+      if (index % xMajorTickEvery !== 0 && index !== xTicks.length - 1 && index !== 0) {
+        return;
+      }
+      const x = ox + (tick - uMin) * scale;
+      ctx.strokeStyle = TEXT;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, margin.top + plotHeight);
+      ctx.lineTo(x, margin.top + plotHeight + 6);
+      ctx.stroke();
+      ctx.fillText(formatMetricLength(tick), x, margin.top + plotHeight + (compactWidth ? 16 : 20));
+    });
+    ctx.textAlign = "right";
+    yTicks.forEach((tick, index) => {
+      if (index % yMajorTickEvery !== 0 && index !== yTicks.length - 1 && index !== 0) {
+        return;
+      }
+      const y = oy + plotHeight - (tick - vMin) * scale;
+      ctx.beginPath();
+      ctx.moveTo(margin.left - 6, y);
+      ctx.lineTo(margin.left, y);
+      ctx.stroke();
+      ctx.fillText(formatMetricLength(tick), margin.left - (compactWidth ? 8 : 10), y + 4);
+    });
+
+    ctx.fillStyle = TEXT;
+    ctx.font = compactWidth ? "11px IBM Plex Sans, sans-serif" : "12px IBM Plex Sans, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(`${slice.uLabel} axis`, margin.left + plotWidth * 0.5, height - (compactWidth ? 14 : 18));
     ctx.save();
-    ctx.translate(18, margin.top + innerH / 2);
+    ctx.translate(tightWidth ? 16 : 24, margin.top + plotHeight / 2);
     ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center";
     ctx.fillText(`${slice.vLabel} axis`, 0, 0);
     ctx.restore();
 
-    ctx.fillStyle = TEXT_STRONG;
-    ctx.font = "600 12px IBM Plex Mono, monospace";
-    ctx.textAlign = "right";
     const elementCount = slice.segments.length + slice.polygons.length;
-    const fieldLabel = meshData.fieldData
+    const plotFieldLabel = meshData.fieldData
       ? `${quantityLabel}.${component}`
       : "mesh";
-    ctx.fillText(
-      `${fieldLabel} | ${slice.normalLabel}=${slice.planeCoord.toExponential(3)} m | ${elementCount} elements`,
-      width - 16,
-      18,
-    );
-
-    const colorbarX = width - 44;
-    const colorbarY = margin.top + 18;
-    const colorbarH = Math.max(innerH - 34, 120);
-    const colorbarW = 10;
-    const gradient = ctx.createLinearGradient(0, colorbarY + colorbarH, 0, colorbarY);
-    const palette = slice.valueRange.min < 0 && slice.valueRange.max > 0 ? DIVERGING : POSITIVE;
-    palette.forEach((stop, index) => {
-      gradient.addColorStop(index / Math.max(palette.length - 1, 1), stop);
-    });
-    ctx.fillStyle = gradient;
-    ctx.fillRect(colorbarX, colorbarY, colorbarW, colorbarH);
-    ctx.strokeStyle = BORDER;
-    ctx.strokeRect(colorbarX, colorbarY, colorbarW, colorbarH);
-    ctx.fillStyle = TEXT;
-    ctx.font = "11px IBM Plex Mono, monospace";
+    ctx.fillStyle = TEXT_STRONG;
+    ctx.font = compactWidth ? "600 11px IBM Plex Mono, monospace" : "600 13px IBM Plex Mono, monospace";
     ctx.textAlign = "left";
-    ctx.fillText(formatProbeValue(slice.valueRange.max), colorbarX - 4, colorbarY + 4);
-    ctx.fillText(
-      formatProbeValue(slice.valueRange.min),
-      colorbarX - 4,
-      colorbarY + colorbarH,
-    );
-    ctx.fillText(quantityLabel, colorbarX - 4, colorbarY - 10);
+    ctx.fillText(plotFieldLabel, 24, compactWidth ? 26 : 30);
+    ctx.fillStyle = TEXT;
+    ctx.font = compactWidth ? "10px IBM Plex Mono, monospace" : "11px IBM Plex Mono, monospace";
+    ctx.fillText(`plane ${slice.normalLabel} = ${formatMetricLength(slice.planeCoord)}`, 24, compactWidth ? 40 : 46);
+    if (!tightWidth) {
+      ctx.fillText(`${objectViewMode} view`, compactWidth ? 220 : 308, compactWidth ? 40 : 46);
+    }
+
+    ctx.fillStyle = TEXT_STRONG;
+    ctx.font = compactWidth ? "600 10px IBM Plex Mono, monospace" : "600 12px IBM Plex Mono, monospace";
+    ctx.textAlign = "right";
+    ctx.fillText(tightWidth ? `${elementCount} el.` : `${elementCount} elements`, width - 16, compactWidth ? 24 : 18);
+
+    if (showColorbarPanel && frameRef.current.colorbarRect) {
+      const { x: colorbarX, y: colorbarY, width: colorbarWidth, height: colorbarH } = frameRef.current.colorbarRect;
+      ctx.fillStyle = PANEL_SOFT;
+      ctx.fillRect(colorbarX - 12, colorbarY - 24, colorbarWidth + (compactWidth ? 62 : 78), colorbarH + 36);
+      ctx.strokeStyle = BORDER;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(colorbarX - 11.5, colorbarY - 23.5, colorbarWidth + (compactWidth ? 61 : 77), colorbarH + 35);
+      const gradient = ctx.createLinearGradient(0, colorbarY + colorbarH, 0, colorbarY);
+      const palette =
+        colorScale.mode === "diverging"
+          ? DIVERGING
+          : colorScale.mode === "negative"
+            ? NEGATIVE
+            : POSITIVE;
+      palette.forEach((stop, index) => {
+        gradient.addColorStop(index / Math.max(palette.length - 1, 1), stop);
+      });
+      ctx.fillStyle = gradient;
+      ctx.fillRect(colorbarX, colorbarY, colorbarWidth, colorbarH);
+      ctx.strokeStyle = ACCENT_LINE;
+      ctx.strokeRect(colorbarX, colorbarY, colorbarWidth, colorbarH);
+      ctx.fillStyle = TEXT;
+      ctx.font = compactWidth ? "10px IBM Plex Mono, monospace" : "11px IBM Plex Mono, monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(quantityLabel, colorbarX - 2, colorbarY - 10);
+      const colorTicks = buildNiceTicks(colorScale.min, colorScale.max, compactHeight ? 4 : 5);
+      for (const tick of colorTicks) {
+        const ratio =
+          colorScale.max > colorScale.min
+            ? (tick - colorScale.min) / (colorScale.max - colorScale.min)
+            : 0.5;
+        const y = colorbarY + colorbarH - ratio * colorbarH;
+        ctx.beginPath();
+        ctx.moveTo(colorbarX + colorbarWidth, y);
+        ctx.lineTo(colorbarX + colorbarWidth + (compactWidth ? 4 : 6), y);
+        ctx.stroke();
+        ctx.fillText(formatProbeValue(tick), colorbarX + colorbarWidth + (compactWidth ? 8 : 10), y + 4);
+      }
+    } else {
+      ctx.fillStyle = TEXT;
+      ctx.font = compactWidth ? "10px IBM Plex Mono, monospace" : "11px IBM Plex Mono, monospace";
+      ctx.textAlign = "right";
+      ctx.fillText("Domain-colored slice", width - 16, margin.top - 12);
+    }
 
     const scaleTargetPx = 96;
     const niceUnits = [1, 2, 5];
-    const worldPerPx = Math.max(du / Math.max(innerW, 1), 1e-18);
+    const worldPerPx = Math.max(du / Math.max(plotWidth, 1), 1e-18);
     const rawBarWorld = worldPerPx * scaleTargetPx;
     const magnitude = Math.pow(10, Math.floor(Math.log10(rawBarWorld)));
     const scaleWorld =
@@ -923,7 +749,9 @@ export default function FemMeshSlice2D({
         .find((candidate) => candidate >= rawBarWorld) ?? magnitude * 10;
     const scalePx = scaleWorld / worldPerPx;
     const scaleX = margin.left + 18;
-    const scaleY = height - 20;
+    const scaleY = height - (compactWidth ? 22 : 26);
+    ctx.fillStyle = PANEL_SOFT;
+    ctx.fillRect(scaleX - 12, scaleY - 22, scalePx + 24, 30);
     ctx.strokeStyle = TEXT_STRONG;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -937,19 +765,20 @@ export default function FemMeshSlice2D({
     ctx.lineTo(scaleX + scalePx, scaleY + 5);
     ctx.stroke();
     ctx.fillStyle = TEXT;
-    ctx.font = "11px IBM Plex Mono, monospace";
+    ctx.font = compactWidth ? "10px IBM Plex Mono, monospace" : "11px IBM Plex Mono, monospace";
     ctx.textAlign = "center";
-    ctx.fillText(`${scaleWorld.toExponential(2)} m`, scaleX + scalePx * 0.5, scaleY - 8);
+    ctx.fillText(formatMetricLength(scaleWorld), scaleX + scalePx * 0.5, scaleY - 8);
   }, [
     antennaRects,
     canvasSize,
     component,
+    colorScale,
+    controlsVisible,
+    effectivePlane,
     meshData.fieldData,
-    plane,
     quantityId,
     quantityLabel,
     slice,
-    sliceCount,
   ]);
 
   const updateProbeFromPointer = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1012,7 +841,7 @@ export default function FemMeshSlice2D({
           </ViewportOverlayLayout.TopRight>
         )}
 
-        {(onPlaneChange || onSliceIndexChange) && (
+        {(onPlaneChange || onClipPosChange) && (
           <ViewportOverlayLayout.BottomCenter>
             <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/40 bg-card/60 backdrop-blur-md px-4 py-2 shadow-sm pointer-events-auto">
               {onPlaneChange && (
@@ -1022,8 +851,11 @@ export default function FemMeshSlice2D({
                     {(["xy", "xz", "yz"] as const).map((p) => (
                       <button
                         key={p}
-                        className={`px-2 py-1 text-xs font-mono transition-colors ${plane === p ? "bg-primary/20 text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-                        onClick={() => onPlaneChange(p)}
+                        className={`px-2 py-1 text-xs font-mono transition-colors ${effectivePlane === p ? "bg-primary/20 text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                        onClick={() => {
+                          onPlaneChange(p);
+                          onClipAxisChange?.(planeToClipAxis(p));
+                        }}
                       >
                         {p.toUpperCase()}
                       </button>
@@ -1031,15 +863,19 @@ export default function FemMeshSlice2D({
                   </div>
                 </div>
               )}
-              {onSliceIndexChange && (
+              {onClipPosChange && (
                 <div className="flex items-center gap-3">
-                  <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground w-12 text-right">
-                    Id {sliceIndex + 1}/{sliceCount}
+                  <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground w-24 text-right">
+                    {slice.normalLabel} {slice.planeCoord.toExponential(2)} m
                   </span>
                   <input
-                    type="range" min={0} max={sliceCount - 1} step={1} value={sliceIndex}
-                    onChange={(e) => onSliceIndexChange(Number(e.target.value))}
-                    className="w-32 h-[3px] accent-primary"
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={0.1}
+                    value={clipPos}
+                    onChange={(e) => onClipPosChange(Number(e.target.value))}
+                    className="w-40 h-[3px] accent-primary"
                   />
                 </div>
               )}

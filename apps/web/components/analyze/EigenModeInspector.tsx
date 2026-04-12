@@ -250,10 +250,10 @@ export default function EigenModeInspector({
             quantityId={fieldView === "phase" ? "phase" : "mode"}
             component={sliceComponent}
             plane={slicePlane}
-            sliceIndex={sliceIndex}
-            sliceCount={25}
+            clipAxis={slicePlane === "yz" ? "x" : slicePlane === "xz" ? "y" : "z"}
+            clipPos={(sliceIndex / 24) * 100}
             onPlaneChange={setSlicePlane}
-            onSliceIndexChange={setSliceIndex}
+            onClipPosChange={(value) => setSliceIndex(Math.max(0, Math.min(24, Math.round((value / 100) * 24))))}
           />
         </div>
       </div>

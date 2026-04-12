@@ -25,6 +25,8 @@ interface FemArrowsProps {
   activeNodeMask?: Uint8Array | boolean[] | null;
   boundaryFaceIndices?: number[] | null;
   lengthMode?: ArrowLengthMode;
+  /** Reports the final sampled node count after density filtering. */
+  onSampledCount?: (count: number) => void;
 }
 
 /* ── Arrow template geometry — only depends on maxDim ───────────────── */
@@ -199,6 +201,7 @@ export function FemArrows({
   activeNodeMask,
   boundaryFaceIndices,
   lengthMode = "magnitude",
+  onSampledCount,
 }: FemArrowsProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const { invalidate } = useThree();
@@ -298,6 +301,11 @@ export function FemArrows({
     meshData.quantityDomain,
     visible,
   ]);
+
+  // Report sampled count to parent for ArrowRenderState refinement.
+  useEffect(() => {
+    onSampledCount?.(sampledNodes.length);
+  }, [sampledNodes.length, onSampledCount]);
 
   const { count, positions, quaternions, scales, colors } = useMemo(() => {
     const emptyRet = {

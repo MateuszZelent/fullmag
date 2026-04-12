@@ -229,6 +229,256 @@ __global__ void exchange_energy_blocks_kernel(
     }
 }
 
+/*
+ * T0 exchange energy kernel — face-link weighted.
+ *
+ * Uses the same discretization as exchange_t0_fp64.cu field kernel:
+ *   E_pair = A_ij × f_d × V_eff_i × |m_j - m_i|² / Δd²
+ * where f_d is the face_link fraction for the given direction.
+ */
+template <typename Scalar>
+__global__ void exchange_energy_t0_blocks_kernel(
+    const Scalar *mx,
+    const Scalar *my,
+    const Scalar *mz,
+    const uint8_t *active_mask,
+    const uint32_t *region_mask,
+    const double *exchange_lut,
+    const double *volume_fraction,
+    const double *face_xp,
+    const double *face_xm,
+    const double *face_yp,
+    const double *face_ym,
+    const double *face_zp,
+    const double *face_zm,
+    double *block_out,
+    int nx,
+    int ny,
+    int nz,
+    int has_active_mask,
+    int has_region_mask,
+    int max_regions,
+    double A_uniform,
+    double cell_volume,
+    double phi_floor,
+    double inv_dx2,
+    double inv_dy2,
+    double inv_dz2)
+{
+    __shared__ double shared[REDUCTION_BLOCK_SIZE];
+    uint64_t total = static_cast<uint64_t>(nx) * ny * nz;
+    uint64_t idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
+
+    double energy = 0.0;
+    for (; idx < total; idx += stride) {
+        if (has_active_mask && active_mask[idx] == 0) continue;
+
+        const double phi_i = volume_fraction[idx];
+        if (phi_i <= 0.0) continue;
+        const double phi_eff = (phi_i > phi_floor) ? phi_i : phi_floor;
+        const double v_eff = phi_eff * cell_volume;
+
+        uint32_t center_region = has_region_mask ? region_mask[idx] : 0u;
+        int z = static_cast<int>(idx / (static_cast<uint64_t>(ny) * nx));
+        int rem = static_cast<int>(idx - static_cast<uint64_t>(z) * ny * nx);
+        int y = rem / nx;
+        int x = rem - y * nx;
+
+        double cx = to_f64(mx[idx]);
+        double cy = to_f64(my[idx]);
+        double cz = to_f64(mz[idx]);
+
+        // +x neighbor
+        if (x + 1 < nx) {
+            const double f = face_xp[idx];
+            if (f > 0.0) {
+                uint64_t ni = idx + 1;
+                if (!has_active_mask || active_mask[ni] != 0) {
+                    double A_ij = has_region_mask
+                        ? exchange_lut[center_region * max_regions + region_mask[ni]]
+                        : A_uniform;
+                    double dmx = to_f64(mx[ni]) - cx;
+                    double dmy = to_f64(my[ni]) - cy;
+                    double dmz = to_f64(mz[ni]) - cz;
+                    energy += A_ij * f * v_eff * (dmx*dmx + dmy*dmy + dmz*dmz) * inv_dx2;
+                }
+            }
+        }
+        // +y neighbor
+        if (y + 1 < ny) {
+            const double f = face_yp[idx];
+            if (f > 0.0) {
+                uint64_t ni = idx + nx;
+                if (!has_active_mask || active_mask[ni] != 0) {
+                    double A_ij = has_region_mask
+                        ? exchange_lut[center_region * max_regions + region_mask[ni]]
+                        : A_uniform;
+                    double dmx = to_f64(mx[ni]) - cx;
+                    double dmy = to_f64(my[ni]) - cy;
+                    double dmz = to_f64(mz[ni]) - cz;
+                    energy += A_ij * f * v_eff * (dmx*dmx + dmy*dmy + dmz*dmz) * inv_dy2;
+                }
+            }
+        }
+        // +z neighbor
+        if (z + 1 < nz) {
+            const double f = face_zp[idx];
+            if (f > 0.0) {
+                uint64_t ni = idx + static_cast<uint64_t>(nx) * ny;
+                if (!has_active_mask || active_mask[ni] != 0) {
+                    double A_ij = has_region_mask
+                        ? exchange_lut[center_region * max_regions + region_mask[ni]]
+                        : A_uniform;
+                    double dmx = to_f64(mx[ni]) - cx;
+                    double dmy = to_f64(my[ni]) - cy;
+                    double dmz = to_f64(mz[ni]) - cz;
+                    energy += A_ij * f * v_eff * (dmx*dmx + dmy*dmy + dmz*dmz) * inv_dz2;
+                }
+            }
+        }
+    }
+
+    shared[threadIdx.x] = energy;
+    __syncthreads();
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset) shared[threadIdx.x] += shared[threadIdx.x + offset];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) block_out[blockIdx.x] = shared[0];
+}
+
+/*
+ * T1 exchange energy kernel — delta-corrected (ECB/García stencil).
+ *
+ * Uses the same discretization as exchange_t1_fp64.cu field kernel:
+ *   E_pair = A_ij × V_eff_i × 2 × |m_j - m_i|² / [Δd × (Δd + δ_opp)]
+ * where δ_opp is the intersection distance toward the opposite boundary.
+ */
+template <typename Scalar>
+__global__ void exchange_energy_t1_blocks_kernel(
+    const Scalar *mx,
+    const Scalar *my,
+    const Scalar *mz,
+    const uint8_t *active_mask,
+    const uint32_t *region_mask,
+    const double *exchange_lut,
+    const double *volume_fraction,
+    const double *d_delta_xp,
+    const double *d_delta_xm,
+    const double *d_delta_yp,
+    const double *d_delta_ym,
+    const double *d_delta_zp,
+    const double *d_delta_zm,
+    double *block_out,
+    int nx,
+    int ny,
+    int nz,
+    int has_active_mask,
+    int has_region_mask,
+    int max_regions,
+    double A_uniform,
+    double cell_volume,
+    double dx,
+    double dy,
+    double dz,
+    double delta_min,
+    double phi_floor)
+{
+    __shared__ double shared[REDUCTION_BLOCK_SIZE];
+    uint64_t total = static_cast<uint64_t>(nx) * ny * nz;
+    uint64_t idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
+
+    double energy = 0.0;
+    for (; idx < total; idx += stride) {
+        if (has_active_mask && active_mask[idx] == 0) continue;
+
+        const double phi_i = volume_fraction[idx];
+        if (phi_i <= 0.0) continue;
+        const double phi_eff = (phi_i > phi_floor) ? phi_i : phi_floor;
+        const double v_eff = phi_eff * cell_volume;
+
+        uint32_t center_region = has_region_mask ? region_mask[idx] : 0u;
+        int z = static_cast<int>(idx / (static_cast<uint64_t>(ny) * nx));
+        int rem = static_cast<int>(idx - static_cast<uint64_t>(z) * ny * nx);
+        int y = rem / nx;
+        int x = rem - y * nx;
+
+        double cx = to_f64(mx[idx]);
+        double cy = to_f64(my[idx]);
+        double cz = to_f64(mz[idx]);
+
+        // ── X axis ──
+        const double dxm = fmax(d_delta_xm[idx], delta_min);
+        const double dxp = fmax(d_delta_xp[idx], delta_min);
+
+        // +x neighbor: denominator = dx × (dx + δ_xm)  [opposite side delta]
+        if (x + 1 < nx && dxp > 0.0) {
+            uint64_t ni = idx + 1;
+            const double mn_x = to_f64(mx[ni]), mn_y = to_f64(my[ni]), mn_z = to_f64(mz[ni]);
+            if (mn_x != 0.0 || mn_y != 0.0 || mn_z != 0.0) {
+                if (!has_active_mask || active_mask[ni] != 0) {
+                    double A_ij = has_region_mask
+                        ? exchange_lut[center_region * max_regions + region_mask[ni]]
+                        : A_uniform;
+                    double denom = dx * (dx + dxm);
+                    double dmx = mn_x - cx, dmy = mn_y - cy, dmz = mn_z - cz;
+                    energy += A_ij * v_eff * 2.0 / denom * (dmx*dmx + dmy*dmy + dmz*dmz);
+                }
+            }
+        }
+
+        // ── Y axis ──
+        const double dym = fmax(d_delta_ym[idx], delta_min);
+        const double dyp = fmax(d_delta_yp[idx], delta_min);
+
+        if (y + 1 < ny && dyp > 0.0) {
+            uint64_t ni = idx + nx;
+            const double mn_x = to_f64(mx[ni]), mn_y = to_f64(my[ni]), mn_z = to_f64(mz[ni]);
+            if (mn_x != 0.0 || mn_y != 0.0 || mn_z != 0.0) {
+                if (!has_active_mask || active_mask[ni] != 0) {
+                    double A_ij = has_region_mask
+                        ? exchange_lut[center_region * max_regions + region_mask[ni]]
+                        : A_uniform;
+                    double denom = dy * (dy + dym);
+                    double dmx = mn_x - cx, dmy = mn_y - cy, dmz = mn_z - cz;
+                    energy += A_ij * v_eff * 2.0 / denom * (dmx*dmx + dmy*dmy + dmz*dmz);
+                }
+            }
+        }
+
+        // ── Z axis (3D only) ──
+        if (nz > 1) {
+            const double dzm = fmax(d_delta_zm[idx], delta_min);
+            const double dzp = fmax(d_delta_zp[idx], delta_min);
+
+            if (z + 1 < nz && dzp > 0.0) {
+                uint64_t ni = idx + static_cast<uint64_t>(nx) * ny;
+                const double mn_x = to_f64(mx[ni]), mn_y = to_f64(my[ni]), mn_z = to_f64(mz[ni]);
+                if (mn_x != 0.0 || mn_y != 0.0 || mn_z != 0.0) {
+                    if (!has_active_mask || active_mask[ni] != 0) {
+                        double A_ij = has_region_mask
+                            ? exchange_lut[center_region * max_regions + region_mask[ni]]
+                            : A_uniform;
+                        double denom = dz * (dz + dzm);
+                        double dmx = mn_x - cx, dmy = mn_y - cy, dmz = mn_z - cz;
+                        energy += A_ij * v_eff * 2.0 / denom * (dmx*dmx + dmy*dmy + dmz*dmz);
+                    }
+                }
+            }
+        }
+    }
+
+    shared[threadIdx.x] = energy;
+    __syncthreads();
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset) shared[threadIdx.x] += shared[threadIdx.x + offset];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) block_out[blockIdx.x] = shared[0];
+}
+
 template <typename Scalar>
 __global__ void demag_energy_blocks_kernel(
     const Scalar *mx,
@@ -416,60 +666,97 @@ double reduce_max_norm_fp32(Context &ctx, const void *vx, const void *vy, const 
     return std::sqrt(max_norm_sq);
 }
 
-double reduce_exchange_energy_fp64(Context &ctx) {
+// Helper: dispatch exchange energy reduction to the correct kernel tier.
+template <typename Scalar>
+static double reduce_exchange_energy_dispatch(Context &ctx) {
     uint64_t blocks = launch_grid_for(ctx.cell_count);
     double cell_volume = ctx.dx * ctx.dy * ctx.dz;
-    int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
-    exchange_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
-        static_cast<const double *>(ctx.m.x),
-        static_cast<const double *>(ctx.m.y),
-        static_cast<const double *>(ctx.m.z),
-        ctx.active_mask,
-        ctx.region_mask,
-        ctx.exchange_lut,
-        ctx.volume_fraction,
-        ctx.reduction_scratch,
-        static_cast<int>(ctx.nx),
-        static_cast<int>(ctx.ny),
-        static_cast<int>(ctx.nz),
-        ctx.has_active_mask ? 1 : 0,
-        ctx.has_region_mask ? 1 : 0,
-        has_vf,
-        FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
-        ctx.A * cell_volume,
-        cell_volume,
-        1.0 / (ctx.dx * ctx.dx),
-        1.0 / (ctx.dy * ctx.dy),
-        1.0 / (ctx.dz * ctx.dz));
+
+    if (ctx.boundary_tier >= 2 && ctx.delta_xp != nullptr) {
+        // T1 (full boundary correction) — delta-corrected energy
+        exchange_energy_t1_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
+            static_cast<const Scalar *>(ctx.m.x),
+            static_cast<const Scalar *>(ctx.m.y),
+            static_cast<const Scalar *>(ctx.m.z),
+            ctx.active_mask,
+            ctx.region_mask,
+            ctx.exchange_lut,
+            ctx.volume_fraction,
+            ctx.delta_xp, ctx.delta_xm,
+            ctx.delta_yp, ctx.delta_ym,
+            ctx.delta_zp, ctx.delta_zm,
+            ctx.reduction_scratch,
+            static_cast<int>(ctx.nx),
+            static_cast<int>(ctx.ny),
+            static_cast<int>(ctx.nz),
+            ctx.has_active_mask ? 1 : 0,
+            ctx.has_region_mask ? 1 : 0,
+            FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
+            ctx.A,
+            cell_volume,
+            ctx.dx, ctx.dy, ctx.dz,
+            ctx.delta_min,
+            ctx.phi_floor);
+    } else if (ctx.boundary_tier >= 1 && ctx.face_link_xp != nullptr) {
+        // T0 (volume boundary correction) — face-link weighted energy
+        exchange_energy_t0_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
+            static_cast<const Scalar *>(ctx.m.x),
+            static_cast<const Scalar *>(ctx.m.y),
+            static_cast<const Scalar *>(ctx.m.z),
+            ctx.active_mask,
+            ctx.region_mask,
+            ctx.exchange_lut,
+            ctx.volume_fraction,
+            ctx.face_link_xp, ctx.face_link_xm,
+            ctx.face_link_yp, ctx.face_link_ym,
+            ctx.face_link_zp, ctx.face_link_zm,
+            ctx.reduction_scratch,
+            static_cast<int>(ctx.nx),
+            static_cast<int>(ctx.ny),
+            static_cast<int>(ctx.nz),
+            ctx.has_active_mask ? 1 : 0,
+            ctx.has_region_mask ? 1 : 0,
+            FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
+            ctx.A,
+            cell_volume,
+            ctx.phi_floor,
+            1.0 / (ctx.dx * ctx.dx),
+            1.0 / (ctx.dy * ctx.dy),
+            1.0 / (ctx.dz * ctx.dz));
+    } else {
+        // Legacy (no boundary correction)
+        int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
+        exchange_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
+            static_cast<const Scalar *>(ctx.m.x),
+            static_cast<const Scalar *>(ctx.m.y),
+            static_cast<const Scalar *>(ctx.m.z),
+            ctx.active_mask,
+            ctx.region_mask,
+            ctx.exchange_lut,
+            ctx.volume_fraction,
+            ctx.reduction_scratch,
+            static_cast<int>(ctx.nx),
+            static_cast<int>(ctx.ny),
+            static_cast<int>(ctx.nz),
+            ctx.has_active_mask ? 1 : 0,
+            ctx.has_region_mask ? 1 : 0,
+            has_vf,
+            FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
+            ctx.A * cell_volume,
+            cell_volume,
+            1.0 / (ctx.dx * ctx.dx),
+            1.0 / (ctx.dy * ctx.dy),
+            1.0 / (ctx.dz * ctx.dz));
+    }
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);
 }
 
+double reduce_exchange_energy_fp64(Context &ctx) {
+    return reduce_exchange_energy_dispatch<double>(ctx);
+}
+
 double reduce_exchange_energy_fp32(Context &ctx) {
-    uint64_t blocks = launch_grid_for(ctx.cell_count);
-    double cell_volume = ctx.dx * ctx.dy * ctx.dz;
-    int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
-    exchange_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
-        static_cast<const float *>(ctx.m.x),
-        static_cast<const float *>(ctx.m.y),
-        static_cast<const float *>(ctx.m.z),
-        ctx.active_mask,
-        ctx.region_mask,
-        ctx.exchange_lut,
-        ctx.volume_fraction,
-        ctx.reduction_scratch,
-        static_cast<int>(ctx.nx),
-        static_cast<int>(ctx.ny),
-        static_cast<int>(ctx.nz),
-        ctx.has_active_mask ? 1 : 0,
-        ctx.has_region_mask ? 1 : 0,
-        has_vf,
-        FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
-        ctx.A * cell_volume,
-        cell_volume,
-        1.0 / (ctx.dx * ctx.dx),
-        1.0 / (ctx.dy * ctx.dy),
-        1.0 / (ctx.dz * ctx.dz));
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return reduce_exchange_energy_dispatch<float>(ctx);
 }
 
 double reduce_demag_energy_fp64(Context &ctx) {

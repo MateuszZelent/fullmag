@@ -238,7 +238,6 @@ export default function StandaloneFemSceneDiagnosticViewport() {
             enableGeometryNormals={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryNormals}
             enableGeometryVertexColors={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryVertexColors}
             enableGeometryPointerInteractions={false}
-            showArrowLayer={false}
             showSelectionHighlight={false}
             showAntennaOverlays={false}
             showSceneAxes={false}

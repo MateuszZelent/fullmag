@@ -262,7 +262,8 @@ pub(crate) fn build_grid_preview_field_from_flat_plan(
 }
 
 pub(crate) fn mesh_quantity_active_mask(quantity: &str, mesh: &MeshIR) -> Option<Vec<bool>> {
-    if !matches!(normalize_quantity_id(quantity), Ok(QuantityId::M)) {
+    let domain = quantity_spatial_domain(quantity);
+    if domain != "magnetic_only" {
         return None;
     }
     let magnetic_element_mask = magnetic_element_mask_from_markers(&mesh.element_markers);

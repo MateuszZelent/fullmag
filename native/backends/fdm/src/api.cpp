@@ -477,6 +477,11 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         }
     }
 
+    // Periodic boundary conditions (per-axis exchange wrapping)
+    ctx->periodic_x = plan->periodic_x != 0;
+    ctx->periodic_y = plan->periodic_y != 0;
+    ctx->periodic_z = plan->periodic_z != 0;
+
     if (ctx->has_uniaxial_anisotropy) {
         if (!context_upload_anisotropy_fields(*ctx, plan->ku1_field, plan->ku2_field, ctx->cell_count)) {
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);

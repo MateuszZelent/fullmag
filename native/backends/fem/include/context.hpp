@@ -179,6 +179,14 @@ struct Context {
     std::vector<double> h_bulk_dmi_xyz;   // Per-node bulk DMI field (AOS-3)
     std::vector<double> h_eff_xyz;
 
+    // Full-domain H_demag for visualization (includes airbox nodes).
+    // h_demag_xyz is zeroed on non-magnetic nodes for LLG/energy,
+    // but this copy preserves the Poisson-recovered field everywhere.
+    std::vector<double> h_demag_visual_xyz;
+    // Full-domain H_eff for visualization (includes airbox contribution
+    // from H_demag and H_ext).
+    std::vector<double> h_eff_visual_xyz;
+
     // ── Oersted field (cylindrical conductor) ──
     bool has_oersted_cylinder = false;
     double oersted_current = 0.0;

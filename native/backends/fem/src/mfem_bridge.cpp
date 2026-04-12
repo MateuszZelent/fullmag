@@ -1895,6 +1895,19 @@ bool compute_effective_fields_for_magnetization_impl(
         }
     }
 
+    // Build full-domain H_eff for visualization: replace zeroed h_demag
+    // with the Poisson-recovered full-domain version so that airbox nodes
+    // carry the correct stray-field contribution.
+    if (!ctx.h_demag_visual_xyz.empty() &&
+        ctx.h_demag_visual_xyz.size() == h_eff_xyz.size()) {
+        ctx.h_eff_visual_xyz = h_eff_xyz;
+        for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
+            ctx.h_eff_visual_xyz[i] += ctx.h_demag_visual_xyz[i] - h_demag_xyz[i];
+        }
+    } else {
+        ctx.h_eff_visual_xyz.clear();
+    }
+
     if (exchange_energy != nullptr) {
         *exchange_energy = exchange;
     }
@@ -2432,7 +2445,10 @@ bool recover_demag_field(
         }
     }
 
-    // Zero out non-magnetic nodes
+    // Preserve full-domain H_demag for visualization before zeroing airbox.
+    ctx.h_demag_visual_xyz = h_demag_xyz;
+
+    // Zero out non-magnetic nodes (required for LLG and energy computation)
     zero_non_magnetic_nodes_aos(h_demag_xyz, ctx.magnetic_node_mask);
 
     // Demag energy: E_d = -μ₀/2 · M_s · Σᵢ (m·h_d)ᵢ · M_Lᵢ

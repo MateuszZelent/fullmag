@@ -24,6 +24,7 @@ use crate::relaxation::{
 };
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
+    single_object_scalars,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -950,6 +951,7 @@ pub(crate) fn observe_state(
         max_dm_dt: observables.max_rhs_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
         max_h_demag: observables.max_demag_field_amplitude,
+        per_object_scalars: std::collections::HashMap::new(),
     })
 }
 
@@ -975,6 +977,11 @@ fn make_step_stats(
         ..StepStats::default()
     };
     apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    stats.per_object_scalars = if observables.per_object_scalars.is_empty() {
+        single_object_scalars("free", &stats)
+    } else {
+        observables.per_object_scalars.clone()
+    };
     stats
 }
 

@@ -357,6 +357,17 @@ pub fn quantity_unit(id: &str) -> &'static str {
 pub fn quantity_spatial_domain(id: &str) -> &'static str {
     match normalize_quantity_id(id) {
         Ok(QuantityId::M) => "magnetic_only",
+        // Exchange, anisotropy, DMI, magnetoelastic, thermal noise are
+        // intrinsically defined only inside the ferromagnet.
+        Ok(QuantityId::HEx) => "magnetic_only",
+        Ok(QuantityId::HAni) => "magnetic_only",
+        Ok(QuantityId::HAniCubic) => "magnetic_only",
+        Ok(QuantityId::HDmi) => "magnetic_only",
+        Ok(QuantityId::HDmiBulk) => "magnetic_only",
+        Ok(QuantityId::HMel) => "magnetic_only",
+        Ok(QuantityId::HTherm) => "magnetic_only",
+        // Demag stray field, external/antenna field, Oersted field, and
+        // the resulting effective field physically extend into the airbox.
         Ok(_) => "full_domain",
         Err(_) => "full_domain",
     }

@@ -189,6 +189,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   showSelectionHighlight = true,
   showAntennaOverlays = true,
   showSceneAxes = true,
+  onArrowSampledCount,
 }: {
   meshData: FemMeshData;
   hasMeshParts: boolean;
@@ -250,6 +251,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   showSelectionHighlight?: boolean;
   showAntennaOverlays?: boolean;
   showSceneAxes?: boolean;
+  onArrowSampledCount?: (count: number) => void;
 }) {
   return (
     <>
@@ -382,6 +384,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
         visible={effectiveShowArrows}
         activeNodeMask={arrowActiveNodeMask}
         boundaryFaceIndices={arrowBoundaryFaceIndices}
+        onSampledCount={onArrowSampledCount}
       />
       {showSelectionHighlight ? (
         <FemHighlightView meshData={meshData} selectedFaces={selectedFaces} center={dynamicGeomCenter} />

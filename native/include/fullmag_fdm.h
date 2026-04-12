@@ -261,6 +261,11 @@ typedef struct {
     const double              *initial_magnetization_xyz;
     uint64_t                   initial_magnetization_len; /* = 3 * cell_count */
 
+    /* Periodic boundary conditions per axis (exchange wrapping) */
+    int                        periodic_x;
+    int                        periodic_y;
+    int                        periodic_z;
+
     /* Adaptive step configuration (DP45 and RK23) */
     double                     adaptive_max_error;   /* 0 → use default 1e-5 */
     double                     adaptive_dt_min;      /* 0 → use default 1e-18 */

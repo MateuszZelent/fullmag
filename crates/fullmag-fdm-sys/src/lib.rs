@@ -209,6 +209,10 @@ pub struct fullmag_fdm_plan_desc {
     // Initial magnetization
     pub initial_magnetization_xyz: *const f64,
     pub initial_magnetization_len: u64,
+    // Periodic boundary conditions per axis (exchange wrapping)
+    pub periodic_x: i32,
+    pub periodic_y: i32,
+    pub periodic_z: i32,
     // Adaptive step configuration (DP45 only)
     pub adaptive_max_error: f64,
     pub adaptive_dt_min: f64,

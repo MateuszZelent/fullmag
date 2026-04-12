@@ -124,6 +124,22 @@ class TestJsonRoundTrip:
         assert "preset_params" in ir
         assert "params" not in ir
 
+    def test_uniform_texture_accepts_three_scalar_components(self):
+        preset = texture.uniform(1, 0, 0)
+        ir = preset.to_ir()
+        assert ir["preset_kind"] == "uniform"
+        assert ir["preset_params"]["direction"] == [1.0, 0.0, 0.0]
+
+    def test_vortex_omits_none_core_radius_in_ir(self):
+        preset = texture.vortex()
+        ir = preset.to_ir()
+        assert "core_radius" not in ir["preset_params"]
+
+    def test_antivortex_omits_none_core_radius_in_ir(self):
+        preset = texture.antivortex()
+        ir = preset.to_ir()
+        assert "core_radius" not in ir["preset_params"]
+
 
 # ---------------------------------------------------------------------------
 # 8.2  Inverse transform correctness

@@ -134,6 +134,7 @@ def generate_box_mesh(
 ) -> MeshData:
     resolved = airbox or (AirboxOptions(padding_factor=air_padding) if air_padding > 0 else None)
     opts = options or MeshOptions()
+    SCALE = 1e6  # m → µm for better OCC robustness on thin nano-scale films
     emit_progress("Gmsh: generating box geometry")
     gmsh = _import_gmsh()
     gmsh.initialize()
@@ -141,7 +142,7 @@ def generate_box_mesh(
     try:
         _configure_gmsh_threads(gmsh)
         gmsh.model.add("fullmag_box")
-        sx, sy, sz = size
+        sx, sy, sz = [dim * SCALE for dim in size]
         gmsh.model.occ.addBox(-sx / 2.0, -sy / 2.0, -sz / 2.0, sx, sy, sz)
         gmsh.model.occ.synchronize()
         has_airbox = resolved is not None
@@ -149,12 +150,19 @@ def generate_box_mesh(
         if has_airbox:
             emit_progress("Gmsh: adding airbox domain")
             airbox_field = _add_airbox_and_fragment(
-                gmsh, [(3, 1)], resolved, hmax,
+                gmsh, [(3, 1)], resolved, hmax * SCALE,
             )
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
-        _apply_mesh_options(gmsh, hmax, order, opts, preexisting_field_ids=airbox_field_ids)
+        _apply_mesh_options(
+            gmsh,
+            hmax * SCALE,
+            order,
+            opts,
+            hscale=SCALE,
+            preexisting_field_ids=airbox_field_ids,
+        )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
         _apply_post_mesh_options(gmsh, opts)
@@ -163,7 +171,15 @@ def generate_box_mesh(
         emit_progress(
             f"Gmsh: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements, {mesh.n_boundary_faces} boundary faces"
         )
-        return mesh
+        return MeshData(
+            nodes=mesh.nodes / SCALE,
+            elements=mesh.elements,
+            element_markers=mesh.element_markers,
+            boundary_faces=mesh.boundary_faces,
+            boundary_markers=mesh.boundary_markers,
+            quality=mesh.quality,
+            per_domain_quality=mesh.per_domain_quality,
+        )
     finally:  # pragma: no branch
         gmsh.finalize()
 
@@ -816,6 +832,5 @@ def generate_shared_domain_mesh_from_components(
         )
     finally:
         gmsh.finalize()
-
 
 
