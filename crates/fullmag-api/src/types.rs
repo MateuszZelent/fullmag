@@ -481,6 +481,10 @@ impl LatestFields {
     pub(crate) fn extend(&mut self, incoming: Self) {
         self.0.extend(incoming.0);
     }
+
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.0.iter()
+    }
 }
 
 impl CachedPreviewFields {

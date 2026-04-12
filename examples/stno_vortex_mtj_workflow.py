@@ -11,7 +11,7 @@ study = fm.study("stno_vortex_mtj_workflow")
 # Engine
 study.engine("fem")
 study.device("cpu", precision="double")
-study.universe(mode="auto", size=(2.5e-07, 2.5e-07, 6e-08), center=(0, 0, 0), padding=(0, 0, 0), airbox_hmax=2e-07)
+study.universe(mode="auto", size=(2.5e-07, 2.5e-07, 6e-08), center=(0, 0, 0), padding=(0, 0, 0), airbox_hmax=15e-07)
 study.interactive(True)
 
 # Geometry & Material
@@ -29,7 +29,7 @@ study.demag(realization="poisson_robin")
 
 # Mesh
 study.object_mesh_defaults(algorithm_2d=8, algorithm_3d=1, size_factor=1, size_from_curvature=3, smoothing_steps=1, optimize_iterations=1, narrow_regions=1, compute_quality=True, per_element_quality=True)
-body.mesh(hmax=5e-09, order=1, algorithm_2d=8, algorithm_3d=1, size_from_curvature=1, narrow_regions=1, compute_quality=True, per_element_quality=True)
+body.mesh(hmax=4e-09, order=1, algorithm_2d=8, algorithm_3d=1, size_from_curvature=1, narrow_regions=1, compute_quality=True, per_element_quality=True)
 study.build_domain_mesh()
 
 # Solver

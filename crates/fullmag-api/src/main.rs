@@ -36,6 +36,7 @@ use fullmag_runner::{
 mod artifacts;
 mod assets;
 mod error;
+mod field_store;
 mod preview;
 mod quantities;
 mod script;
@@ -45,6 +46,7 @@ mod types;
 use artifacts::*;
 use assets::*;
 use error::ApiError;
+use field_store::*;
 use preview::*;
 use quantities::*;
 use script::*;
@@ -159,6 +161,15 @@ async fn main() {
         .route(
             "/v1/live/current/preview/refresh",
             post(refresh_current_preview),
+        )
+        // ── Data-plane field store (read-only, no command queue) ───────
+        .route(
+            "/v1/live/current/fields/catalog",
+            get(get_live_field_catalog),
+        )
+        .route(
+            "/v1/live/current/fields/:quantity/vector",
+            get(get_live_field_vector),
         )
         .route(
             "/v1/live/current/commands",

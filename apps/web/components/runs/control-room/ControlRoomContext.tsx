@@ -1367,6 +1367,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     updatePreview,
   });
 
+  // Set of quantity IDs whose field buffers are already cached locally.
+  // Used by requestPreviewQuantity to skip the control-plane POST.
+  const cachedFieldQuantities = useMemo<ReadonlySet<string>>(() => {
+    const frames = state?.latest_fields?.frames;
+    if (!frames) return new Set<string>();
+    return new Set(Object.keys(frames));
+  }, [state?.latest_fields?.frames]);
+
   const {
     handleCompute,
     openFemMeshWorkspace,
@@ -1424,6 +1432,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     resultWorkspaceEntries,
     optimisticDisplaySelection,
     displaySelection,
+    cachedFieldQuantities,
     setViewMode,
     setFemDockTab,
     setMeshRenderMode,

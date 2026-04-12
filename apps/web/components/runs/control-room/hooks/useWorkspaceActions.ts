@@ -77,6 +77,8 @@ export interface UseWorkspaceActionsParams {
   resultWorkspaceEntries: ResultWorkspaceEntry[];
   optimisticDisplaySelection: DisplaySelection | null;
   displaySelection: CurrentDisplaySelection | null;
+  /** Quantity IDs that are already cached locally in fieldMap (data-plane). */
+  cachedFieldQuantities: ReadonlySet<string>;
   // state setters
   setViewMode: Dispatch<SetStateAction<ViewportMode>>;
   setFemDockTab: Dispatch<SetStateAction<FemDockTab>>;
@@ -181,6 +183,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     resultWorkspaceEntries,
     optimisticDisplaySelection,
     displaySelection,
+    cachedFieldQuantities,
     setViewMode,
     setFemDockTab,
     setMeshRenderMode,
@@ -662,10 +665,17 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       if (isFemBackend && effectiveViewMode === "Mesh") setViewMode("3D");
       setSelectedQuantity(nextQuantity);
     });
+    // Data-plane fast path: if the field buffer is already cached locally,
+    // skip the control-plane POST entirely — just set local state.
+    if (cachedFieldQuantities.has(nextQuantity)) {
+      return;
+    }
+    // Fallback: ask the backend to compute/publish the field via the
+    // preview command queue (control-plane path).
     if (previewControlsActive) {
       void updatePreview("/quantity", { quantity: nextQuantity });
     }
-  }, [effectiveViewMode, isFemBackend, previewControlsActive, updatePreview]);
+  }, [cachedFieldQuantities, effectiveViewMode, isFemBackend, previewControlsActive, updatePreview]);
 
   /* ── openResultWorkspaceEntry ── */
   const openResultWorkspaceEntry = useCallback(

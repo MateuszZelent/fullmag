@@ -54,6 +54,32 @@ export interface HostCapabilityMatrix {
   engines: HostEngineEntry[];
 }
 
+// ── Data-plane field store types ──────────────────────────────────────
+
+export interface LiveFieldCatalogEntry {
+  quantity_id: string;
+  kind: string;
+  unit: string;
+  spatial_domain: string;
+  n_comp: number;
+  source: string;
+  available: boolean;
+  element_count: number;
+  grid?: [number, number, number] | null;
+  stats?: { min: number; max: number; mean: number } | null;
+}
+
+export interface LiveFieldVectorResponse {
+  quantity_id: string;
+  unit: string;
+  n_comp: number;
+  element_count: number;
+  grid?: [number, number, number] | null;
+  values: number[];
+  active_mask?: boolean[] | null;
+  source: string;
+}
+
 export class ApiHttpError extends Error {
   status: number;
 
@@ -193,6 +219,18 @@ export function currentLiveApiClient() {
       return requestJson<GpuTelemetryResponse>(`${baseUrl}/v1/live/current/gpu/telemetry`, {
         cache: "no-store",
       });
+    },
+    // ── Data-plane field store (read-only, no command queue) ──────────
+    getFieldCatalog() {
+      return requestJson<LiveFieldCatalogEntry[]>(`${baseUrl}/v1/live/current/fields/catalog`, {
+        cache: "no-store",
+      });
+    },
+    getFieldVector(quantityId: string) {
+      return requestJson<LiveFieldVectorResponse>(
+        `${baseUrl}/v1/live/current/fields/${encodeURIComponent(quantityId)}/vector`,
+        { cache: "no-store" },
+      );
     },
   };
 }

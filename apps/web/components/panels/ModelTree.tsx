@@ -431,7 +431,9 @@ function TreeNode({
             "flex-1 flex items-center gap-1 pr-2 rounded-md transition-all duration-150 overflow-hidden relative min-w-0",
             isActive
               ? "bg-primary/8 text-primary border border-primary/15"
-              : "hover:bg-muted/25 text-foreground/90 hover:text-foreground border border-transparent"
+              : node.status === "active"
+                ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-[0_0_10px_rgba(16,185,129,0.1)]"
+                : "hover:bg-muted/25 text-foreground/90 hover:text-foreground border border-transparent"
           )}
         >
           {/* Active indicator bar */}
@@ -1353,8 +1355,10 @@ export function buildFullmagModelTree(opts: {
           id: "study-stages",
           label: "Stages",
           icon: "🧩",
-          badge: authoringStageCount > 0 ? `${authoringStageCount}` : "empty",
-          status: authoringStageCount > 0 ? "ready" : "pending",
+          badge: opts.activeStudyStageIndex != null 
+            ? `executing ${opts.activeStudyStageIndex + 1}/${authoringStageCount}` 
+            : authoringStageCount > 0 ? `${authoringStageCount}` : "empty",
+          status: opts.activeStudyStageIndex != null ? "active" : authoringStageCount > 0 ? "ready" : "pending",
           defaultOpen: true,
           children:
             authoringStageChildren.length > 0
