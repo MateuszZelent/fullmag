@@ -53,7 +53,7 @@ export type FemViewportStoreAction =
   | { type: "setHoveredFaceIndex"; value: number | null }
   | { type: "resetSelection" };
 
-const INITIAL_STATE: FemViewportStoreState = {
+export const INITIAL_FEM_VIEWPORT_STORE_STATE: FemViewportStoreState = {
   view: {
     renderMode: "surface",
     opacity: 100,
@@ -100,7 +100,10 @@ const INITIAL_STATE: FemViewportStoreState = {
   },
 };
 
-function reducer(state: FemViewportStoreState, action: FemViewportStoreAction): FemViewportStoreState {
+export function femViewportStoreReducer(
+  state: FemViewportStoreState,
+  action: FemViewportStoreAction,
+): FemViewportStoreState {
   switch (action.type) {
     case "setRenderMode":
       return { ...state, view: { ...state.view, renderMode: action.value } };
@@ -176,36 +179,36 @@ function reducer(state: FemViewportStoreState, action: FemViewportStoreAction): 
 export function useFemViewportStore(initial?: Partial<FemViewportStoreState>) {
   const hydrated = useMemo<FemViewportStoreState>(() => {
     if (!initial) {
-      return INITIAL_STATE;
+      return INITIAL_FEM_VIEWPORT_STORE_STATE;
     }
     return {
       view: {
-        ...INITIAL_STATE.view,
+        ...INITIAL_FEM_VIEWPORT_STORE_STATE.view,
         ...(initial.view ?? {}),
         clip: {
-          ...INITIAL_STATE.view.clip,
+          ...INITIAL_FEM_VIEWPORT_STORE_STATE.view.clip,
           ...(initial.view?.clip ?? {}),
         },
       },
       panels: {
-        ...INITIAL_STATE.panels,
+        ...INITIAL_FEM_VIEWPORT_STORE_STATE.panels,
         ...(initial.panels ?? {}),
       },
       runtime: {
-        ...INITIAL_STATE.runtime,
+        ...INITIAL_FEM_VIEWPORT_STORE_STATE.runtime,
         ...(initial.runtime ?? {}),
       },
       toolbar: {
-        ...INITIAL_STATE.toolbar,
+        ...INITIAL_FEM_VIEWPORT_STORE_STATE.toolbar,
         ...(initial.toolbar ?? {}),
       },
       selection: {
-        ...INITIAL_STATE.selection,
+        ...INITIAL_FEM_VIEWPORT_STORE_STATE.selection,
         ...(initial.selection ?? {}),
       },
     };
   }, [initial]);
 
-  const [state, dispatch] = useReducer(reducer, hydrated);
+  const [state, dispatch] = useReducer(femViewportStoreReducer, hydrated);
   return { state, dispatch };
 }

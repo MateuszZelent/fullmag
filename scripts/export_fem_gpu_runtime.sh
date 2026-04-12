@@ -10,14 +10,19 @@ cd "${REPO_ROOT}"
 
 docker compose --profile fem-gpu run --rm -T fem-gpu bash -lc '
 set -euo pipefail
+echo "[export_fem_gpu_runtime] preparing runtime bundle directories"
 mkdir -p .fullmag/runtimes/fem-gpu-host/bin .fullmag/runtimes/fem-gpu-host/lib
 rm -rf .fullmag/runtimes/fem-gpu-host/openmpi
 mkdir -p .fullmag/runtimes/fem-gpu-host/openmpi/bin
+echo "[export_fem_gpu_runtime] cleaning stale FDM demag build cache"
 cargo +nightly clean -p fullmag-fdm-demag >/dev/null 2>&1 || true
+echo "[export_fem_gpu_runtime] building fullmag-cli with cuda fem-gpu release features"
 FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -p fullmag-cli --features "cuda fem-gpu" --release >/tmp/fullmag-build.log
+echo "[export_fem_gpu_runtime] copying launcher binary"
 cp -f target/release/fullmag .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin
 FEM_LIB=$(dirname "$(find target/release/build -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" | head -n1)")
 FDM_LIB=$(dirname "$(find target/release/build -path "*fullmag-fdm-sys*/out/native-build/backends/fdm/libfullmag_fdm.so.0" | head -n1)")
+echo "[export_fem_gpu_runtime] bundling FEM and FDM native libraries"
 cp -a "$FEM_LIB"/libfullmag_fem.so* .fullmag/runtimes/fem-gpu-host/lib/
 cp -a "$FDM_LIB"/libfullmag_fdm.so* .fullmag/runtimes/fem-gpu-host/lib/
 cp -a /opt/fullmag-deps/lib/* .fullmag/runtimes/fem-gpu-host/lib/
@@ -40,6 +45,7 @@ for lib_glob in \
   done
 done
 shopt -u nullglob
+echo "[export_fem_gpu_runtime] bundling OpenMPI/PMIx runtime components"
 if [ -x /usr/bin/orted ]; then
   cp -a /usr/bin/orted .fullmag/runtimes/fem-gpu-host/openmpi/bin/
 fi
@@ -63,6 +69,7 @@ if [ -d /usr/share/openmpi ]; then
   cp -a /usr/share/openmpi \
     .fullmag/runtimes/fem-gpu-host/openmpi/share/
 fi
+echo "[export_fem_gpu_runtime] container-side export complete"
 '
 
 cat > "${RUNTIME_ROOT}/bin/fullmag-fem-gpu" <<'EOF'

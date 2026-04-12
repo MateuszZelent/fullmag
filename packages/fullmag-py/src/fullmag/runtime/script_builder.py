@@ -1221,7 +1221,8 @@ def _render_stages(
         return []
     solver_override = _normalize_mapping(overrides.get("solver"))
     stage_overrides = overrides.get("stages")
-    lines = ["# Run"]
+    is_study_surface = surface == "study"
+    lines = ["# Stages" if is_study_surface else "# Run"]
     previous_dynamics_signature: dict[str, object] | None = None
     for index, stage in enumerate(stages):
         dynamics_signature = stage.problem.study.dynamics.to_ir()
@@ -1291,7 +1292,10 @@ def _render_stages(
                     pass
             elif study.k_vector is not None:
                 call_parts.append(f"k_vector={study.k_vector!r}")
-            lines.append(f"{_surface_call(surface, 'eigenmodes')}({', '.join(call_parts)})")
+            if is_study_surface:
+                lines.append(f"study.stages.add_eigenmodes({', '.join(call_parts)})")
+            else:
+                lines.append(f"{_surface_call(surface, 'eigenmodes')}({', '.join(call_parts)})")
             continue
         if isinstance(study, Relaxation):
             relax_override = _normalize_mapping(solver_override.get("relax"))
@@ -1330,7 +1334,10 @@ def _render_stages(
             ]
             if energy_tolerance is not None:
                 call_parts.append(f"energy_tolerance={_py_number(energy_tolerance)}")
-            lines.append(f"{_surface_call(surface, 'relax')}({', '.join(call_parts)})")
+            if is_study_surface:
+                lines.append(f"study.stages.add_relax({', '.join(call_parts)})")
+            else:
+                lines.append(f"{_surface_call(surface, 'relax')}({', '.join(call_parts)})")
             continue
 
         until_seconds = _override_number(
@@ -1342,7 +1349,10 @@ def _render_stages(
             raise ValueError(
                 "canonical rewrite requires DEFAULT_UNTIL for time-evolution scripts"
             )
-        lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
+        if is_study_surface:
+            lines.append(f"study.stages.add_run({_py_number(until_seconds)})")
+        else:
+            lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
     return lines
 
 

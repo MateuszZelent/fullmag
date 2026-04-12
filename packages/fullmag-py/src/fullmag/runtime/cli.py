@@ -63,7 +63,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             mode=args.mode,
             precision=args.precision,
         )
-        if loaded.stages:
+        if loaded.stages and loaded.auto_execute_stages:
             aggregate_payload: dict[str, object] = {
                 "status": "completed",
                 "steps": [],
@@ -134,6 +134,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             until_seconds = _resolve_until_seconds(loaded.problem.study, loaded.default_until_seconds)
             if until_seconds is None:
+                if loaded.stages and not loaded.auto_execute_stages:
+                    print(
+                        "fullmag run failed: script declares study stages but does not auto-execute them. "
+                        "Use the interactive UI and click Compute, or use imperative fm.run()/fm.relax().",
+                        file=sys.stderr,
+                    )
+                    return 2
                 print(
                     "fullmag run failed: no stop time provided. Define DEFAULT_UNTIL in the script "
                     "for time-evolution runs.",

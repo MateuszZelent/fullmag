@@ -647,6 +647,7 @@ class _WorldState:
     _geometry_asset_cache: dict[str, dict[str, object] | None] = field(default_factory=dict)
     _default_mesh_spec: _MeshSpecState = field(default_factory=_MeshSpecState)
     _script_source_root: Path | None = None
+    _declared_stages: list[object] = field(default_factory=list)
 
 
 # Module-level singleton
@@ -660,6 +661,34 @@ class CapturedStage:
     problem: Problem
     entrypoint_kind: str
     default_until_seconds: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RelaxStageSpec:
+    tol: float = 1e-6
+    max_steps: int = 50_000
+    algorithm: str = "llg_overdamped"
+    energy_tolerance: float | None = None
+    relax_alpha: float | None = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class RunStageSpec:
+    until: float
+
+
+@dataclass(frozen=True, slots=True)
+class EigenmodesStageSpec:
+    count: int = 10
+    target: str = "lowest"
+    target_frequency: float | None = None
+    include_demag: bool = True
+    equilibrium_source: str = "relax"
+    equilibrium_artifact: str | None = None
+    normalization: str = "unit_l2"
+    damping_policy: str = "ignore"
+    k_vector: tuple[float, float, float] | None = None
+    bc: str | dict[str, object] = "free"
 
 
 _captured_stages: list[CapturedStage] = []
@@ -846,6 +875,115 @@ def _set_magnetization_continuation_from_result(result: object) -> None:
     from fullmag.init import SampledMagnetization
 
     _state._magnets[0].m = SampledMagnetization(final_m)
+
+
+def relax_stage(
+    *,
+    tol: float = 1e-6,
+    max_steps: int = 50_000,
+    algorithm: str = "llg_overdamped",
+    energy_tolerance: float | None = None,
+    relax_alpha: float | None = 1.0,
+) -> RelaxStageSpec:
+    return RelaxStageSpec(
+        tol=tol,
+        max_steps=max_steps,
+        algorithm=algorithm,
+        energy_tolerance=energy_tolerance,
+        relax_alpha=relax_alpha,
+    )
+
+
+def run_stage(until: float) -> RunStageSpec:
+    if until <= 0.0:
+        raise ValueError("run_stage(until) requires a positive stop time")
+    return RunStageSpec(until=until)
+
+
+def eigenmodes_stage(
+    *,
+    count: int = 10,
+    target: str = "lowest",
+    target_frequency: float | None = None,
+    include_demag: bool = True,
+    equilibrium_source: str = "relax",
+    equilibrium_artifact: str | None = None,
+    normalization: str = "unit_l2",
+    damping_policy: str = "ignore",
+    k_vector: tuple[float, float, float] | None = None,
+    bc: str | dict[str, object] = "free",
+) -> EigenmodesStageSpec:
+    return EigenmodesStageSpec(
+        count=count,
+        target=target,
+        target_frequency=target_frequency,
+        include_demag=include_demag,
+        equilibrium_source=equilibrium_source,
+        equilibrium_artifact=equilibrium_artifact,
+        normalization=normalization,
+        damping_policy=damping_policy,
+        k_vector=k_vector,
+        bc=bc,
+    )
+
+
+def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
+    problem = _build_problem(
+        study_kind="relaxation",
+        relax_algorithm=spec.algorithm,
+        relax_torque_tolerance=spec.tol,
+        relax_energy_tolerance=spec.energy_tolerance,
+        relax_max_steps=spec.max_steps,
+    )
+    if spec.relax_alpha is None:
+        return problem
+
+    import dataclasses
+
+    new_magnets = [
+        dataclasses.replace(
+            magnet,
+            material=dataclasses.replace(magnet.material, alpha=spec.relax_alpha),
+        )
+        for magnet in problem.magnets
+    ]
+    return dataclasses.replace(problem, magnets=new_magnets)
+
+
+def _capture_stage(stage_spec: object) -> CapturedStage:
+    if isinstance(stage_spec, RelaxStageSpec):
+        return CapturedStage(
+            problem=_relax_problem_from_spec(stage_spec),
+            entrypoint_kind="flat_relax",
+            default_until_seconds=None,
+        )
+    if isinstance(stage_spec, RunStageSpec):
+        return CapturedStage(
+            problem=_build_problem(),
+            entrypoint_kind="flat_run",
+            default_until_seconds=stage_spec.until,
+        )
+    if isinstance(stage_spec, EigenmodesStageSpec):
+        return CapturedStage(
+            problem=_build_problem(
+                study_kind="eigenmodes",
+                eigen_count=stage_spec.count,
+                eigen_target=stage_spec.target,
+                eigen_target_frequency=stage_spec.target_frequency,
+                eigen_include_demag=stage_spec.include_demag,
+                eigen_equilibrium_source=stage_spec.equilibrium_source,
+                eigen_equilibrium_artifact=stage_spec.equilibrium_artifact,
+                eigen_normalization=stage_spec.normalization,
+                eigen_damping_policy=stage_spec.damping_policy,
+                eigen_k_vector=stage_spec.k_vector,
+                eigen_spin_wave_bc=stage_spec.bc,
+            ),
+            entrypoint_kind="flat_eigenmodes",
+            default_until_seconds=None,
+        )
+    raise TypeError(
+        "study.stages.add_stage(...) expects fm.relax_stage(...), fm.run_stage(...), or fm.eigenmodes_stage(...)"
+    )
 
 
 class QuantityCondition:
@@ -1223,6 +1361,72 @@ def capture_workspace_problem() -> Problem | None:
         _state._interactive = previous_interactive
 
 
+def capture_declared_stages() -> list[CapturedStage]:
+    if not _capture_enabled:
+        return []
+    return [_capture_stage(stage_spec) for stage_spec in _state._declared_stages]
+
+
+class StudyStagesBuilder:
+    """Declarative stage authoring facade for the flat study builder."""
+
+    def add_stage(self, stage_spec: object) -> "StudyStagesBuilder":
+        _capture_stage(stage_spec)
+        _state._declared_stages.append(stage_spec)
+        return self
+
+    def add_relax(
+        self,
+        *,
+        tol: float = 1e-6,
+        max_steps: int = 50_000,
+        algorithm: str = "llg_overdamped",
+        energy_tolerance: float | None = None,
+        relax_alpha: float | None = 1.0,
+    ) -> "StudyStagesBuilder":
+        return self.add_stage(
+            relax_stage(
+                tol=tol,
+                max_steps=max_steps,
+                algorithm=algorithm,
+                energy_tolerance=energy_tolerance,
+                relax_alpha=relax_alpha,
+            )
+        )
+
+    def add_run(self, until: float) -> "StudyStagesBuilder":
+        return self.add_stage(run_stage(until))
+
+    def add_eigenmodes(
+        self,
+        *,
+        count: int = 10,
+        target: str = "lowest",
+        target_frequency: float | None = None,
+        include_demag: bool = True,
+        equilibrium_source: str = "relax",
+        equilibrium_artifact: str | None = None,
+        normalization: str = "unit_l2",
+        damping_policy: str = "ignore",
+        k_vector: tuple[float, float, float] | None = None,
+        bc: str | dict[str, object] = "free",
+    ) -> "StudyStagesBuilder":
+        return self.add_stage(
+            eigenmodes_stage(
+                count=count,
+                target=target,
+                target_frequency=target_frequency,
+                include_demag=include_demag,
+                equilibrium_source=equilibrium_source,
+                equilibrium_artifact=equilibrium_artifact,
+                normalization=normalization,
+                damping_policy=damping_policy,
+                k_vector=k_vector,
+                bc=bc,
+            )
+        )
+
+
 def _configure_study_universe(
     *,
     mode: str | None = None,
@@ -1248,6 +1452,7 @@ class StudyBuilder:
 
     def __init__(self, problem_name: str | None = None) -> None:
         _state._api_surface = "study"
+        self.stages = StudyStagesBuilder()
         if problem_name is not None:
             name(problem_name)
 

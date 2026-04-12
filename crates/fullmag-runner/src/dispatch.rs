@@ -26,7 +26,7 @@ use crate::fem_eigen;
 use crate::fem_reference;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::interactive_runtime::{
-    cached_preview_quantities_for, display_is_global_scalar, display_refresh_due,
+    display_is_global_scalar, display_refresh_due,
 };
 #[cfg(feature = "cuda")]
 use crate::multilayer_cuda;

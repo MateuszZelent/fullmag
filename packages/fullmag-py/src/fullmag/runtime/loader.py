@@ -49,6 +49,7 @@ class LoadedProblem:
     default_until_seconds: float | None = None
     stages: tuple[LoadedStage, ...] = ()
     workspace_problem: Problem | None = None
+    auto_execute_stages: bool = False
 
     def study_pipeline_document(self) -> dict[str, object] | None:
         from fullmag.runtime.script_builder import export_study_pipeline_document
@@ -117,6 +118,7 @@ def load_problem_from_script(
         spec.loader.exec_module(module)
         script_source = source_path.read_text(encoding="utf-8")
         workspace_problem = world.capture_workspace_problem()
+        declared_stages = world.capture_declared_stages()
         captured_stages = world.finish_script_capture()
         if captured_stages:
             loaded_stages = tuple(
@@ -136,6 +138,27 @@ def load_problem_from_script(
                 default_until_seconds=final_stage.default_until_seconds,
                 stages=loaded_stages,
                 workspace_problem=workspace_problem,
+                auto_execute_stages=True,
+            )
+
+        if declared_stages and workspace_problem is not None:
+            loaded_stages = tuple(
+                LoadedStage(
+                    problem=stage.problem,
+                    entrypoint_kind=stage.entrypoint_kind,
+                    default_until_seconds=stage.default_until_seconds,
+                )
+                for stage in declared_stages
+            )
+            return LoadedProblem(
+                problem=workspace_problem,
+                source_path=source_path,
+                script_source=script_source,
+                entrypoint_kind="flat_workspace",
+                default_until_seconds=None,
+                stages=loaded_stages,
+                workspace_problem=workspace_problem,
+                auto_execute_stages=False,
             )
 
         if workspace_problem is not None:

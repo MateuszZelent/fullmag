@@ -106,8 +106,15 @@ install-cli install-cli-dev install-cli-static:
 	build_log=".fullmag/local/install-cli-build.log"; \
 	managed_log=".fullmag/local/install-cli-managed-fem-gpu.log"; \
 	managed_runtime_bin=".fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin"; \
+	managed_export_timeout="$${FULLMAG_MANAGED_FEM_GPU_EXPORT_TIMEOUT_SEC:-1800}"; \
+	cpu_only="$${FULLMAG_BUILD_CPU_ONLY:-0}"; \
 	build_mode="cpu"; \
-	if [ -n "$$nvcc_bin" ] && [ -n "$$cmake_bin" ]; then \
+	if [ "$$cpu_only" = "1" ]; then \
+		echo "FULLMAG_BUILD_CPU_ONLY=1 forces CPU-only launcher build; skipping CUDA and managed FEM GPU export."; \
+		echo "Installing Rust launcher without CUDA support..."; \
+		CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-cli --release; \
+		CARGO_TARGET_DIR=.fullmag/target cargo +nightly build -p fullmag-api --release; \
+	elif [ -n "$$nvcc_bin" ] && [ -n "$$cmake_bin" ]; then \
 		echo "Installing Rust launcher with CUDA support..."; \
 		if [ "$${FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT:-0}" = "1" ]; then \
 			echo "FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 disables managed FEM GPU export; building a CUDA-only launcher without the 'fem-gpu' feature."; \
@@ -133,12 +140,24 @@ install-cli install-cli-dev install-cli-static:
 					fi; \
 					if [ ! -x "$$managed_runtime_bin" ] || [ "./scripts/export_fem_gpu_runtime.sh" -nt "$$managed_runtime_bin" ] || [ -n "$$managed_runtime_stale" ]; then \
 						echo "Exporting managed FEM GPU host runtime bundle..."; \
-						if ./scripts/export_fem_gpu_runtime.sh >"$$managed_log" 2>&1; then \
-							echo "Managed FEM GPU host runtime exported successfully."; \
-							managed_runtime_ready="1"; \
+						if command -v timeout >/dev/null 2>&1; then \
+							if timeout "$$managed_export_timeout" ./scripts/export_fem_gpu_runtime.sh >"$$managed_log" 2>&1; then \
+								echo "Managed FEM GPU host runtime exported successfully."; \
+								managed_runtime_ready="1"; \
+							else \
+								echo "Managed FEM GPU host runtime export failed; staying on local CUDA-only launcher."; \
+								echo "If this was a timeout/hang, set FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 or FULLMAG_BUILD_CPU_ONLY=1."; \
+								echo "Managed runtime log: $(PWD)/.fullmag/local/install-cli-managed-fem-gpu.log"; \
+							fi; \
 						else \
-							echo "Managed FEM GPU host runtime export failed; staying on local CUDA-only launcher."; \
-							echo "Managed runtime log: $(PWD)/.fullmag/local/install-cli-managed-fem-gpu.log"; \
+							if ./scripts/export_fem_gpu_runtime.sh >"$$managed_log" 2>&1; then \
+								echo "Managed FEM GPU host runtime exported successfully."; \
+								managed_runtime_ready="1"; \
+							else \
+								echo "Managed FEM GPU host runtime export failed; staying on local CUDA-only launcher."; \
+								echo "If this was a timeout/hang, set FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 or FULLMAG_BUILD_CPU_ONLY=1."; \
+								echo "Managed runtime log: $(PWD)/.fullmag/local/install-cli-managed-fem-gpu.log"; \
+							fi; \
 						fi; \
 					else \
 						echo "Reusing managed FEM GPU host runtime bundle."; \

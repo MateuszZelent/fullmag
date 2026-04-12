@@ -12,6 +12,7 @@ import {
   Video,
   Camera,
   Layers,
+  SlidersHorizontal,
 } from "lucide-react";
 import { ViewportToolbar3D } from "../ViewportToolbar3D";
 import { ViewportToolGroup, ViewportToolSeparator } from "../ViewportToolGroup";
@@ -440,9 +441,10 @@ export function FemViewportToolbar({
         />
         <ViewportPopoverTrigger preferredHorizontal="left">
           <ViewportIconAction
-            icon={<Scissors size={14} />}
+            icon={<SlidersHorizontal size={14} />}
             active={openPopover === "clip"}
-            showCaret
+            showCaret={!compact}
+            className={compact ? "px-1.5" : undefined}
             onClick={() => {
               onOpenPopoverChange(openPopover === "clip" ? null : "clip");
             }}
@@ -501,9 +503,10 @@ export function FemViewportToolbar({
         />
         <ViewportPopoverTrigger preferredHorizontal="left">
           <ViewportIconAction
-            icon={<ArrowUpRight size={14} />}
+            icon={<SlidersHorizontal size={14} />}
             active={openPopover === "vectors"}
-            showCaret
+            showCaret={!compact}
+            className={compact ? "px-1.5" : undefined}
             onClick={() => {
               onOpenPopoverChange(openPopover === "vectors" ? null : "vectors");
             }}
@@ -511,6 +514,29 @@ export function FemViewportToolbar({
           />
           {openPopover === "vectors" && (
             <ViewportPopoverPanel anchorRef={{ current: null }} title="Vectors">
+              <ViewportPopoverRow label="Visible">
+                <div className="flex gap-1">
+                  <button
+                    className={POPOVER_OPTION_CLASSNAME}
+                    data-active={arrowsVisible}
+                    onClick={() => onArrowsVisibleChange(true)}
+                  >
+                    Show
+                  </button>
+                  <button
+                    className={POPOVER_OPTION_CLASSNAME}
+                    data-active={!arrowsVisible}
+                    onClick={() => onArrowsVisibleChange(false)}
+                  >
+                    Hide
+                  </button>
+                </div>
+              </ViewportPopoverRow>
+              {arrowsRequested && arrowsBlockReason ? (
+                <div className="rounded border border-warning/25 bg-warning/10 px-2 py-1.5 text-[0.62rem] text-warning-foreground/90">
+                  {arrowsBlockReason}
+                </div>
+              ) : null}
               <ViewportPopoverRow label="Density">
                 <input
                   type="range"

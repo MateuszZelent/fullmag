@@ -1,10 +1,10 @@
 use crate::{
-    validate_scene_document, MagnetizationAsset, MagnetizationMapping, SceneCurrentModulesState,
+    validate_scene_document, MagnetizationAsset, SceneCurrentModulesState,
     SceneDocument, SceneDocumentValidationError, SceneEditorState, SceneGeometry,
     SceneMaterialAsset, SceneMetadata, SceneObject, SceneOutputsState, SceneStudyState,
     ScriptBuilderGeometryEntry, ScriptBuilderMagneticInteractionEntry,
     ScriptBuilderMagneticInteractionKind, ScriptBuilderMagnetizationState,
-    ScriptBuilderPerGeometryMeshState, ScriptBuilderState, TextureTransform3D, Transform3D,
+    ScriptBuilderPerGeometryMeshState, ScriptBuilderState, Transform3D,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -701,33 +701,6 @@ fn script_builder_magnetization_from_asset(
         preset_params: asset.preset_params.clone(),
         preset_version: asset.preset_version,
         ui_label: asset.ui_label.clone(),
-    }
-}
-
-pub fn magnetization_asset_for_preset(
-    name: &str,
-    preset_kind: &str,
-    preset_params: serde_json::Value,
-    mapping: MagnetizationMapping,
-    texture_transform: TextureTransform3D,
-    ui_label: Option<String>,
-) -> MagnetizationAsset {
-    MagnetizationAsset {
-        id: magnetization_id_for_geometry(name),
-        name: format!("{} magnetization", name),
-        kind: "preset_texture".to_string(),
-        value: None,
-        seed: None,
-        source_path: None,
-        source_format: None,
-        dataset: None,
-        sample_index: None,
-        mapping,
-        texture_transform,
-        preset_kind: Some(preset_kind.to_string()),
-        preset_params: Some(preset_params),
-        preset_version: Some(1),
-        ui_label,
     }
 }
 

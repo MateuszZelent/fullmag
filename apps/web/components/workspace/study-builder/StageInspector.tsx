@@ -3,6 +3,9 @@
 import type { InputHTMLAttributes, ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, Settings2 } from "lucide-react";
 import { humanizeToken } from "@/components/panels/settings/helpers";
+import { INTEGRATOR_PROFILES, RELAXATION_PROFILES } from "@/components/panels/settings/profiles";
+import SelectField from "@/components/ui/SelectField";
+import TextField from "@/components/ui/TextField";
 import type { ScriptBuilderStageState } from "@/lib/session/types";
 import {
   humanizeStudyPipelineNodeKind,
@@ -61,6 +64,72 @@ function Checkbox({
       {label}
     </label>
   );
+}
+
+const INTEGRATOR_OPTIONS = Object.entries(INTEGRATOR_PROFILES).map(([value, profile]) => ({
+  value,
+  label: profile.label,
+}));
+
+const RELAX_ALGORITHM_OPTIONS = Object.entries(RELAXATION_PROFILES).map(([value, profile]) => ({
+  value,
+  label: profile.label,
+}));
+
+const EIGEN_TARGET_OPTIONS = [
+  { value: "lowest", label: "Lowest" },
+  { value: "nearest", label: "Nearest" },
+];
+
+const EIGEN_EQUILIBRIUM_SOURCE_OPTIONS = [
+  { value: "relax", label: "Relaxed initial state" },
+  { value: "provided", label: "Provided initial state" },
+  { value: "artifact", label: "State artifact" },
+];
+
+const EIGEN_NORMALIZATION_OPTIONS = [
+  { value: "unit_l2", label: "Unit L2" },
+  { value: "unit_max_amplitude", label: "Unit max amplitude" },
+];
+
+const EIGEN_DAMPING_POLICY_OPTIONS = [
+  { value: "ignore", label: "Ignore damping" },
+  { value: "include", label: "Include damping" },
+];
+
+const EIGEN_SPIN_WAVE_BC_OPTIONS = [
+  { value: "free", label: "Free" },
+  { value: "pinned", label: "Pinned" },
+  { value: "periodic", label: "Periodic" },
+  { value: "floquet", label: "Floquet" },
+  { value: "surface_anisotropy", label: "Surface anisotropy" },
+];
+
+interface EigenBcCarrier {
+  eigen_spin_wave_bc?: unknown;
+  eigen_spin_wave_bc_config?: unknown;
+}
+
+function eigenBcConfig(stage: EigenBcCarrier): Record<string, unknown> {
+  const config: Record<string, unknown> =
+    stage.eigen_spin_wave_bc_config && typeof stage.eigen_spin_wave_bc_config === "object"
+      ? { ...stage.eigen_spin_wave_bc_config }
+      : {};
+  if (typeof config.kind !== "string" || !config.kind) {
+    config.kind = stage.eigen_spin_wave_bc || "free";
+  }
+  return config;
+}
+
+function patchEigenBcConfig(
+  stage: EigenBcCarrier,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const next = { ...eigenBcConfig(stage), ...patch };
+  return {
+    eigen_spin_wave_bc: String(next.kind ?? stage.eigen_spin_wave_bc ?? "free"),
+    eigen_spin_wave_bc_config: next,
+  };
 }
 
 interface StageInspectorProps {
@@ -143,111 +212,129 @@ export default function StageInspector({
               <Input value={humanizeToken(node.stage_kind)} readOnly />
             </Field>
             <Field label="Entrypoint">
-              <Input
-                value={String(node.payload.entrypoint_kind ?? node.stage_kind)}
-                onChange={(event) => onPatchConfig({ entrypoint_kind: event.target.value })}
-              />
+              <Input value={String(node.payload.entrypoint_kind ?? node.stage_kind)} readOnly />
             </Field>
 
             {(node.stage_kind === "relax" || node.stage_kind === "run") && (
-              <Field label="Integrator">
-                <Input
+              <div className="md:col-span-2">
+                <SelectField
+                  label="Integrator"
                   value={String(node.payload.integrator ?? "rk45")}
-                  onChange={(event) => onPatchConfig({ integrator: event.target.value })}
+                  options={INTEGRATOR_OPTIONS}
+                  onchange={(value) => onPatchConfig({ integrator: value })}
                 />
-              </Field>
+              </div>
             )}
 
             {node.stage_kind === "run" ? (
               <>
-                <Field label="Run until [s]">
-                  <Input
-                    value={String(node.payload.until_seconds ?? "")}
-                    onChange={(event) => onPatchConfig({ until_seconds: event.target.value })}
-                  />
-                </Field>
-                <Field label="Fixed dt [s]">
-                  <Input
-                    value={String(node.payload.fixed_timestep ?? "")}
-                    onChange={(event) => onPatchConfig({ fixed_timestep: event.target.value })}
-                  />
-                </Field>
+                <TextField
+                  label="Run until [s]"
+                  value={String(node.payload.until_seconds ?? "")}
+                  onchange={(event) => onPatchConfig({ until_seconds: event.target.value })}
+                  mono
+                />
+                <TextField
+                  label="Fixed dt [s]"
+                  value={String(node.payload.fixed_timestep ?? "")}
+                  onchange={(event) => onPatchConfig({ fixed_timestep: event.target.value })}
+                  mono
+                />
               </>
             ) : null}
 
             {node.stage_kind === "relax" ? (
               <>
-                <Field label="Relax algorithm">
-                  <Input
+                <div className="md:col-span-2">
+                  <SelectField
+                    label="Relax algorithm"
                     value={String(node.payload.relax_algorithm ?? "llg_overdamped")}
-                    onChange={(event) => onPatchConfig({ relax_algorithm: event.target.value })}
+                    options={RELAX_ALGORITHM_OPTIONS}
+                    onchange={(value) => onPatchConfig({ relax_algorithm: value })}
                   />
-                </Field>
-                <Field label="Torque tolerance">
-                  <Input
-                    value={String(node.payload.torque_tolerance ?? "1e-6")}
-                    onChange={(event) => onPatchConfig({ torque_tolerance: event.target.value })}
-                  />
-                </Field>
-                <Field label="Energy tolerance">
-                  <Input
-                    value={String(node.payload.energy_tolerance ?? "")}
-                    onChange={(event) => onPatchConfig({ energy_tolerance: event.target.value })}
-                  />
-                </Field>
-                <Field label="Max steps">
-                  <Input
-                    value={String(node.payload.max_steps ?? "5000")}
-                    onChange={(event) => onPatchConfig({ max_steps: event.target.value })}
-                  />
-                </Field>
+                </div>
+                <TextField
+                  label="Torque tolerance"
+                  value={String(node.payload.torque_tolerance ?? "1e-6")}
+                  onchange={(event) => onPatchConfig({ torque_tolerance: event.target.value })}
+                  mono
+                />
+                <TextField
+                  label="Energy tolerance"
+                  value={String(node.payload.energy_tolerance ?? "")}
+                  onchange={(event) => onPatchConfig({ energy_tolerance: event.target.value })}
+                  mono
+                />
+                <TextField
+                  label="Max steps"
+                  value={String(node.payload.max_steps ?? "5000")}
+                  onchange={(event) => onPatchConfig({ max_steps: event.target.value })}
+                  mono
+                />
+                <TextField
+                  label="Fixed dt [s]"
+                  value={String(node.payload.fixed_timestep ?? "")}
+                  onchange={(event) => onPatchConfig({ fixed_timestep: event.target.value })}
+                  mono
+                />
               </>
             ) : null}
 
             {node.stage_kind === "eigenmodes" ? (
               <>
-                <Field label="Mode count">
-                  <Input
-                    value={String(node.payload.eigen_count ?? "10")}
-                    onChange={(event) => onPatchConfig({ eigen_count: event.target.value })}
-                  />
-                </Field>
-                <Field label="Target">
-                  <Input
-                    value={String(node.payload.eigen_target ?? "lowest")}
-                    onChange={(event) => onPatchConfig({ eigen_target: event.target.value })}
-                  />
-                </Field>
-                <Field label="Equilibrium source">
-                  <Input
-                    value={String(node.payload.eigen_equilibrium_source ?? "relax")}
-                    onChange={(event) => onPatchConfig({ eigen_equilibrium_source: event.target.value })}
-                  />
-                </Field>
-                <Field label="Normalization">
-                  <Input
-                    value={String(node.payload.eigen_normalization ?? "unit_l2")}
-                    onChange={(event) => onPatchConfig({ eigen_normalization: event.target.value })}
-                  />
-                </Field>
-                <Field label="Target frequency">
-                  <Input
-                    value={String(node.payload.eigen_target_frequency ?? "")}
-                    onChange={(event) => onPatchConfig({ eigen_target_frequency: event.target.value })}
-                  />
-                </Field>
-                <Field label="k-vector">
-                  <Input
-                    value={String(node.payload.eigen_k_vector ?? "")}
-                    onChange={(event) => onPatchConfig({ eigen_k_vector: event.target.value })}
-                  />
-                </Field>
-                <Field label="Spin-wave BC">
-                  <Input
-                    value={String(node.payload.eigen_spin_wave_bc ?? "free")}
-                    onChange={(event) => onPatchConfig({ eigen_spin_wave_bc: event.target.value })}
-                  />
-                </Field>
+                <TextField
+                  label="Mode count"
+                  value={String(node.payload.eigen_count ?? "10")}
+                  onchange={(event) => onPatchConfig({ eigen_count: event.target.value })}
+                  mono
+                />
+                <SelectField
+                  label="Target"
+                  value={String(node.payload.eigen_target ?? "lowest")}
+                  options={EIGEN_TARGET_OPTIONS}
+                  onchange={(value) => onPatchConfig({ eigen_target: value })}
+                />
+                <SelectField
+                  label="Equilibrium source"
+                  value={String(node.payload.eigen_equilibrium_source ?? "relax")}
+                  options={EIGEN_EQUILIBRIUM_SOURCE_OPTIONS}
+                  onchange={(value) => onPatchConfig({ eigen_equilibrium_source: value })}
+                />
+                <SelectField
+                  label="Normalization"
+                  value={String(node.payload.eigen_normalization ?? "unit_l2")}
+                  options={EIGEN_NORMALIZATION_OPTIONS}
+                  onchange={(value) => onPatchConfig({ eigen_normalization: value })}
+                />
+                <SelectField
+                  label="Damping policy"
+                  value={String(node.payload.eigen_damping_policy ?? "ignore")}
+                  options={EIGEN_DAMPING_POLICY_OPTIONS}
+                  onchange={(value) => onPatchConfig({ eigen_damping_policy: value })}
+                />
+                <TextField
+                  label="Target frequency"
+                  value={String(node.payload.eigen_target_frequency ?? "")}
+                  onchange={(event) => onPatchConfig({ eigen_target_frequency: event.target.value })}
+                  mono
+                />
+                <TextField
+                  label="k-vector"
+                  value={String(node.payload.eigen_k_vector ?? "")}
+                  onchange={(event) => onPatchConfig({ eigen_k_vector: event.target.value })}
+                  mono
+                />
+                <SelectField
+                  label="Spin-wave BC"
+                  value={String(node.payload.eigen_spin_wave_bc ?? "free")}
+                  options={EIGEN_SPIN_WAVE_BC_OPTIONS}
+                  onchange={(value) =>
+                    onPatchConfig({
+                      eigen_spin_wave_bc: value,
+                      ...patchEigenBcConfig(node.payload as EigenBcCarrier, { kind: value }),
+                    })
+                  }
+                />
                 <div className="md:col-span-2">
                   <Checkbox
                     label="Include demag in eigenproblem"

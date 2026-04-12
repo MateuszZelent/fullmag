@@ -120,23 +120,19 @@ study.solver(max_error=1e-6, integrator="rk45", g=2.115)
 # ── 9. Outputs ───────────────────────────────────────────
 study.tableautosave(10e-12)
 
-# ── Run stages (uncomment for execution) ─────────────────
-# Relaxation
+# ── Stage authoring (uncomment to declare pipeline) ──────
 # if not USE_SAVED_RELAXED_STATE:
-# relax_result = study.relax(
-#     tol=4e3,
-#     max_steps=1000,
-#     algorithm="llg_overdamped",
-# )
-    # if hasattr(relax_result, "save_state"):
-    #     relax_result.save_state(RELAXED_STATE_ZARR, format="zarr")
-    #     relax_result.save_state(RELAXED_STATE_H5, format="h5")
+#     study.stages.add_relax(
+#         tol=4e3,
+#         max_steps=1000,
+#         algorithm="llg_overdamped",
+#     )
 
 # Time evolution (100 ns STNO gyration)
-# study.run(100e-9)
+# study.stages.add_run(100e-9)
 
 # Eigenmodes (optional diagnostics)
-# study.eigenmodes(
+# study.stages.add_eigenmodes(
 #     count=20,
 #     target="lowest",
 #     include_demag=True,

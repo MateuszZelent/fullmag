@@ -49,6 +49,16 @@ interface UseFemViewportCommandsArgs {
   setInternalPartExplorerOpen: Dispatch<SetStateAction<boolean>>;
 }
 
+type PopoverId =
+  | "quantity"
+  | "color"
+  | "clip"
+  | "display"
+  | "vectors"
+  | "camera"
+  | "panels"
+  | null;
+
 export interface FemViewportCommands {
   applyToolbarRenderMode: (next: RenderMode) => void;
   applyToolbarOpacity: (next: number) => void;
@@ -65,6 +75,109 @@ export interface FemViewportCommands {
   setShrinkFactor: (next: number) => void;
   toggleLegend: () => void;
   togglePartExplorer: () => void;
+}
+
+interface RenderModeCommandArgs {
+  hasMeshParts: boolean;
+  toolbarStylePartIds: string[];
+  selectionScope: ViewportSelectionScope;
+  onMeshPartViewStatePatch?: (
+    partIds: string[],
+    patch: Partial<MeshEntityViewState>,
+  ) => void;
+  onRenderModeChange?: (value: RenderMode) => void;
+  setInternalRenderMode: Dispatch<SetStateAction<RenderMode>>;
+  setOpenPopover: Dispatch<SetStateAction<PopoverId>>;
+}
+
+interface OpacityCommandArgs {
+  hasMeshParts: boolean;
+  toolbarStylePartIds: string[];
+  onMeshPartViewStatePatch?: (
+    partIds: string[],
+    patch: Partial<MeshEntityViewState>,
+  ) => void;
+  onOpacityChange?: (value: number) => void;
+  setInternalOpacity: Dispatch<SetStateAction<number>>;
+}
+
+interface ColorFieldCommandArgs {
+  hasMeshParts: boolean;
+  toolbarColorPartIds: string[];
+  selectionScope: ViewportSelectionScope;
+  onMeshPartViewStatePatch?: (
+    partIds: string[],
+    patch: Partial<MeshEntityViewState>,
+  ) => void;
+  setField: Dispatch<SetStateAction<FemColorField>>;
+}
+
+interface ClipEnabledCommandArgs {
+  onClipEnabledChange?: (value: boolean) => void;
+  setInternalClipEnabled: Dispatch<SetStateAction<boolean>>;
+}
+
+export function applyToolbarRenderModeCommand(
+  args: RenderModeCommandArgs,
+  next: RenderMode,
+): void {
+  if (args.hasMeshParts && args.toolbarStylePartIds.length > 0 && args.onMeshPartViewStatePatch) {
+    args.onMeshPartViewStatePatch(args.toolbarStylePartIds, { renderMode: next });
+    if (args.selectionScope.kind === "universe") {
+      args.onRenderModeChange?.(next);
+    }
+  } else if (args.onRenderModeChange) {
+    args.onRenderModeChange(next);
+  } else {
+    args.setInternalRenderMode(next);
+  }
+  args.setOpenPopover(null);
+}
+
+export function applyToolbarOpacityCommand(
+  args: OpacityCommandArgs,
+  next: number,
+): void {
+  if (args.hasMeshParts && args.toolbarStylePartIds.length > 0 && args.onMeshPartViewStatePatch) {
+    args.onMeshPartViewStatePatch(args.toolbarStylePartIds, { opacity: next });
+    return;
+  }
+  if (args.onOpacityChange) {
+    args.onOpacityChange(next);
+    return;
+  }
+  args.setInternalOpacity(next);
+}
+
+export function applyToolbarColorFieldCommand(
+  args: ColorFieldCommandArgs,
+  next: FemColorField,
+): void {
+  if (args.hasMeshParts && args.toolbarColorPartIds.length > 0 && args.onMeshPartViewStatePatch) {
+    args.onMeshPartViewStatePatch(args.toolbarColorPartIds, { colorField: next });
+    if (args.selectionScope.kind === "universe") {
+      args.setField(next);
+    }
+    return;
+  }
+  args.setField(next);
+}
+
+export function setClipEnabledCommand(
+  args: ClipEnabledCommandArgs,
+  next: boolean,
+): void {
+  if (args.onClipEnabledChange) {
+    args.onClipEnabledChange(next);
+    return;
+  }
+  args.setInternalClipEnabled(next);
+}
+
+export function toggleClipCommand(
+  args: ClipEnabledCommandArgs & { clipEnabled: boolean },
+): void {
+  setClipEnabledCommand(args, !args.clipEnabled);
 }
 
 export function useFemViewportCommands({
@@ -101,17 +214,15 @@ export function useFemViewportCommands({
   setInternalPartExplorerOpen,
 }: UseFemViewportCommandsArgs): FemViewportCommands {
   const applyToolbarRenderMode = useCallback((next: RenderMode) => {
-    if (hasMeshParts && toolbarStylePartIds.length > 0 && onMeshPartViewStatePatch) {
-      onMeshPartViewStatePatch(toolbarStylePartIds, { renderMode: next });
-      if (selectionScope.kind === "universe") {
-        onRenderModeChange?.(next);
-      }
-    } else if (onRenderModeChange) {
-      onRenderModeChange(next);
-    } else {
-      setInternalRenderMode(next);
-    }
-    setOpenPopover(null);
+    applyToolbarRenderModeCommand({
+      hasMeshParts,
+      toolbarStylePartIds,
+      selectionScope,
+      onMeshPartViewStatePatch,
+      onRenderModeChange,
+      setInternalRenderMode,
+      setOpenPopover,
+    }, next);
   }, [
     hasMeshParts,
     onMeshPartViewStatePatch,
@@ -123,15 +234,13 @@ export function useFemViewportCommands({
   ]);
 
   const applyToolbarOpacity = useCallback((next: number) => {
-    if (hasMeshParts && toolbarStylePartIds.length > 0 && onMeshPartViewStatePatch) {
-      onMeshPartViewStatePatch(toolbarStylePartIds, { opacity: next });
-      return;
-    }
-    if (onOpacityChange) {
-      onOpacityChange(next);
-      return;
-    }
-    setInternalOpacity(next);
+    applyToolbarOpacityCommand({
+      hasMeshParts,
+      toolbarStylePartIds,
+      onMeshPartViewStatePatch,
+      onOpacityChange,
+      setInternalOpacity,
+    }, next);
   }, [
     hasMeshParts,
     onMeshPartViewStatePatch,
@@ -141,14 +250,13 @@ export function useFemViewportCommands({
   ]);
 
   const applyToolbarColorField = useCallback((next: FemColorField) => {
-    if (hasMeshParts && toolbarColorPartIds.length > 0 && onMeshPartViewStatePatch) {
-      onMeshPartViewStatePatch(toolbarColorPartIds, { colorField: next });
-      if (selectionScope.kind === "universe") {
-        setField(next);
-      }
-      return;
-    }
-    setField(next);
+    applyToolbarColorFieldCommand({
+      hasMeshParts,
+      toolbarColorPartIds,
+      selectionScope,
+      onMeshPartViewStatePatch,
+      setField,
+    }, next);
   }, [
     hasMeshParts,
     onMeshPartViewStatePatch,
@@ -164,16 +272,19 @@ export function useFemViewportCommands({
   }, [field, setField]);
 
   const setClipEnabled = useCallback((next: boolean) => {
-    if (onClipEnabledChange) {
-      onClipEnabledChange(next);
-      return;
-    }
-    setInternalClipEnabled(next);
+    setClipEnabledCommand({
+      onClipEnabledChange,
+      setInternalClipEnabled,
+    }, next);
   }, [onClipEnabledChange, setInternalClipEnabled]);
 
   const toggleClip = useCallback(() => {
-    setClipEnabled(!clipEnabled);
-  }, [clipEnabled, setClipEnabled]);
+    toggleClipCommand({
+      clipEnabled,
+      onClipEnabledChange,
+      setInternalClipEnabled,
+    });
+  }, [clipEnabled, onClipEnabledChange, setInternalClipEnabled]);
 
   const setClipAxis = useCallback((next: ClipAxis) => {
     if (onClipAxisChange) {

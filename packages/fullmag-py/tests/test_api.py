@@ -1939,6 +1939,40 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(draft["study_pipeline"]["nodes"][1]["stage_kind"], "run")
         self.assertEqual(draft["study_pipeline"]["nodes"][1]["payload"]["until_seconds"], "4e-12")
 
+    def test_study_builder_stage_authoring_captures_without_execution(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_authoring")
+        study.engine("fem")
+        study.device("cpu", precision="double")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        study.save("m", every=1e-12)
+        study.stages.add_stage(fm.relax_stage(max_steps=25, tol=1e-5, algorithm="llg_overdamped"))
+        study.stages.add_run(4e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_study_stage_authoring.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        self.assertEqual(loaded.entrypoint_kind, "flat_workspace")
+        self.assertFalse(loaded.auto_execute_stages)
+        self.assertEqual(len(loaded.stages), 2)
+        self.assertEqual(loaded.stages[0].entrypoint_kind, "flat_relax")
+        self.assertEqual(loaded.stages[0].problem.study.to_ir()["kind"], "relaxation")
+        self.assertEqual(loaded.stages[1].entrypoint_kind, "flat_run")
+        self.assertEqual(loaded.stages[1].default_until_seconds, 4e-12)
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn("study.stages.add_relax(tol=1e-05, max_steps=25, algorithm=\"llg_overdamped\")", rewritten)
+        self.assertIn("study.stages.add_run(4e-12)", rewritten)
+
     def test_builder_draft_uses_final_flat_problem_materials_for_stage_sequences(self) -> None:
         script = """
         import fullmag as fm

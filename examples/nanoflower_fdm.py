@@ -56,11 +56,11 @@ study.solver(max_error=1e-6, integrator="rk45", g=2.115)
 # study.save("m", every=1e-13)
 study.tableautosave(1e-13)
 
-# ── Run ─────────────────────────────────────────────────────
+# ── Stages ──────────────────────────────────────────────────
 study.wait_for_solve(True)
-study.relax(
+study.stages.add_relax(
     tol=1e-6,                       # torque tolerance (max_dm_dt)
     max_steps=100_000,               # limit kroków
     algorithm="llg_overdamped",     # algorytm relaksacji
 )
-study.run(1e-9)
+study.stages.add_run(1e-9)
