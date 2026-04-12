@@ -92,11 +92,11 @@ pub(crate) fn weighted_object_scalars(
             .map(|values| values.get(key).copied().unwrap_or(0.0))
             .sum::<f64>();
         let correction = target - current_sum;
-        if correction.abs() > 0.0
-            && let Some(first_values) = out.get_mut(first_name)
-        {
-            let entry = first_values.entry(key.to_string()).or_insert(0.0);
-            *entry += correction;
+        if correction.abs() > 0.0 {
+            if let Some(first_values) = out.get_mut(first_name) {
+                let entry = first_values.entry(key.to_string()).or_insert(0.0);
+                *entry += correction;
+            }
         }
     }
 

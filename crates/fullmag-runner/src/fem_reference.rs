@@ -514,12 +514,12 @@ fn execute_reference_fem_impl(
             let field_due_now = field_schedules
                 .iter()
                 .any(|schedule| is_due(state.time_seconds, schedule.next_time));
-            let display_selection = live.as_ref().and_then(|handle| handle.display_selection.map(|get| get()));
+            let display_selection = live
+                .as_ref()
+                .and_then(|handle| handle.display_selection.map(|get| get()));
             let preview_due = display_selection
                 .as_ref()
-                .map(|selection| {
-                    display_refresh_due(last_preview_revision, selection, step_count)
-                })
+                .map(|selection| display_refresh_due(last_preview_revision, selection, step_count))
                 .unwrap_or(false);
             let preview_targets_global_scalar = display_selection
                 .as_ref()
@@ -726,6 +726,7 @@ fn record_due_outputs(
     problem: &FemLlgProblem,
     state: &FemLlgState,
     antenna_field: &[[f64; 3]],
+    object_segments: &[FemObjectSegmentIR],
     step: u64,
     solver_dt: f64,
     wall_time_ns: u64,
@@ -765,6 +766,7 @@ fn record_due_outputs(
             solver_dt,
             wall_time_ns,
             &observables,
+            object_segments,
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -791,6 +793,7 @@ fn record_scalar_snapshot(
     problem: &FemLlgProblem,
     state: &FemLlgState,
     antenna_field: &[[f64; 3]],
+    object_segments: &[FemObjectSegmentIR],
     step: u64,
     solver_dt: f64,
     wall_time_ns: u64,
@@ -804,6 +807,7 @@ fn record_scalar_snapshot(
         solver_dt,
         wall_time_ns,
         &observables,
+        object_segments,
     );
     artifacts.record_scalar(&stats)?;
     steps.push(stats);
@@ -814,6 +818,7 @@ fn record_final_outputs(
     problem: &FemLlgProblem,
     state: &FemLlgState,
     antenna_field: &[[f64; 3]],
+    object_segments: &[FemObjectSegmentIR],
     step: u64,
     solver_dt: f64,
     default_scalar_trace: bool,
@@ -845,7 +850,14 @@ fn record_final_outputs(
 
     let observables = observe_state(problem, state, antenna_field)?;
     if need_scalar {
-        let stats = make_step_stats(step, state.time_seconds, solver_dt, 0, &observables);
+        let stats = make_step_stats(
+            step,
+            state.time_seconds,
+            solver_dt,
+            0,
+            &observables,
+            object_segments,
+        );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
     }
@@ -884,6 +896,7 @@ pub(crate) fn observe_state(
         max_dm_dt: observables.max_rhs_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
         max_h_demag: observables.max_demag_field_amplitude,
+        per_object_scalars: std::collections::HashMap::new(),
     })
 }
 
@@ -893,6 +906,7 @@ fn make_step_stats(
     solver_dt: f64,
     wall_time_ns: u64,
     observables: &StateObservables,
+    object_segments: &[FemObjectSegmentIR],
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -909,7 +923,43 @@ fn make_step_stats(
         ..StepStats::default()
     };
     apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    stats.per_object_scalars =
+        fem_per_object_scalars(object_segments, &observables.magnetization, &stats);
     stats
+}
+
+fn fem_per_object_scalars(
+    object_segments: &[FemObjectSegmentIR],
+    magnetization: &[[f64; 3]],
+    stats: &StepStats,
+) -> std::collections::HashMap<String, std::collections::HashMap<String, f64>> {
+    if object_segments.is_empty() {
+        return single_object_scalars("free", stats);
+    }
+
+    let mut weights_by_object: std::collections::HashMap<String, f64> =
+        std::collections::HashMap::new();
+    for segment in object_segments {
+        let weight = f64::from(segment.node_count.max(1));
+        *weights_by_object
+            .entry(segment.object_id.clone())
+            .or_insert(0.0) += weight;
+    }
+    let weights = weights_by_object.into_iter().collect::<Vec<_>>();
+    let mut per_object = weighted_object_scalars(stats, &weights);
+    for segment in object_segments {
+        set_object_average_m(
+            &mut per_object,
+            &segment.object_id,
+            magnetization,
+            segment.node_start as usize,
+            segment.node_count as usize,
+        );
+    }
+    if per_object.is_empty() {
+        return single_object_scalars("free", stats);
+    }
+    per_object
 }
 
 fn select_field_values(

@@ -23,8 +23,8 @@ SUMMARY_CSV = SCRIPT_DIR / "stdprob1_fem_summary.csv"
 CURRENT_STATE_ZARR = SCRIPT_DIR / "_stdprob1_fem_current_state.zarr.zip"
 
 # ── Geometry ─────────────────────────────────────────────────────────────
-SIZE_X = 1_000e-9
-SIZE_Y = 2_000e-9
+SIZE_X = 1000e-9
+SIZE_Y = 2000e-9
 SIZE_Z = 20e-9
 HMAX = 20e-9
 

@@ -453,6 +453,10 @@ fn observe_multilayer(
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
+    let mut per_object_scalars: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, f64>,
+    > = std::collections::HashMap::new();
 
     for (index, context) in contexts.iter().enumerate() {
         let state = &states[index];
@@ -490,36 +494,66 @@ fn observe_multilayer(
 
         let layer_cell_volume = context.problem.cell_size.volume();
         let layer_ms = context.problem.material.saturation_magnetisation;
-        exchange_energy += context
-            .problem
-            .exchange_energy(state)
-            .map_err(|error| RunError {
-                message: format!(
-                    "exchange energy for magnet '{}': {}",
-                    context.magnet_name, error
-                ),
-            })?;
-        demag_energy += state
+        let local_exchange_energy =
+            context
+                .problem
+                .exchange_energy(state)
+                .map_err(|error| RunError {
+                    message: format!(
+                        "exchange energy for magnet '{}': {}",
+                        context.magnet_name, error
+                    ),
+                })?;
+        let local_demag_energy = state
             .magnetization()
             .iter()
             .zip(local_demag.iter())
             .map(|(m, h)| -0.5 * MU0 * layer_ms * dot(*m, *h) * layer_cell_volume)
             .sum::<f64>();
-        external_energy += state
+        let local_external_energy = state
             .magnetization()
             .iter()
             .zip(local_external.iter())
             .map(|(m, h)| -MU0 * layer_ms * dot(*m, *h) * layer_cell_volume)
             .sum::<f64>();
+        exchange_energy += local_exchange_energy;
+        demag_energy += local_demag_energy;
+        external_energy += local_external_energy;
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&local_effective));
         max_h_demag = max_h_demag.max(max_norm(&local_demag));
+
+        let [mx, my, mz] =
+            crate::scalar_metrics::average_magnetization_components(state.magnetization());
+        per_object_scalars.insert(
+            context.magnet_name.clone(),
+            std::collections::HashMap::from([
+                ("e_ex".to_string(), local_exchange_energy),
+                ("e_demag".to_string(), local_demag_energy),
+                ("e_ext".to_string(), local_external_energy),
+                (
+                    "e_total".to_string(),
+                    local_exchange_energy + local_demag_energy + local_external_energy,
+                ),
+                ("mx".to_string(), mx),
+                ("my".to_string(), my),
+                ("mz".to_string(), mz),
+            ]),
+        );
 
         magnetization.extend_from_slice(state.magnetization());
         exchange_field.extend(local_exchange);
         demag_field.extend(local_demag);
         external_field.extend(local_external);
         effective_field.extend(local_effective);
+    }
+
+    for values in per_object_scalars.values_mut() {
+        values.insert("max_dm_dt".to_string(), max_dm_dt);
+        values.insert("max_h_eff".to_string(), max_h_eff);
+        values.insert("max_h_demag".to_string(), max_h_demag);
+        values.entry("e_ani".to_string()).or_insert(0.0);
+        values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
     Ok(StateObservables {
@@ -536,6 +570,7 @@ fn observe_multilayer(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
+        per_object_scalars,
     })
 }
 
@@ -812,6 +847,7 @@ fn make_step_stats(
         ..StepStats::default()
     };
     apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    stats.per_object_scalars = observables.per_object_scalars.clone();
     stats
 }
 

@@ -58,6 +58,7 @@ struct LayerStateSingle {
 
 #[derive(Debug, Clone)]
 struct NativeStackedLayer {
+    magnet_name: String,
     native_grid: [usize; 3],
     offset: [usize; 3],
 }
@@ -834,6 +835,7 @@ fn build_native_stacked_cuda_plan(
         }
 
         layers.push(NativeStackedLayer {
+            magnet_name: layer.magnet_name.clone(),
             native_grid,
             offset,
         });
@@ -1282,6 +1284,10 @@ fn observe_multilayer_cuda(
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
+    let mut per_object_scalars: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, f64>,
+    > = std::collections::HashMap::new();
 
     for ((index, context), gpu) in contexts.iter().enumerate().zip(gpu_contexts.iter_mut()) {
         let state = &states[index];
@@ -1316,36 +1322,66 @@ fn observe_multilayer_cuda(
 
         let layer_cell_volume = context.problem.cell_size.volume();
         let layer_ms = context.problem.material.saturation_magnetisation;
-        exchange_energy += context
-            .problem
-            .exchange_energy(state)
-            .map_err(|error| RunError {
-                message: format!(
-                    "exchange energy for magnet '{}': {}",
-                    context.magnet_name, error
-                ),
-            })?;
-        demag_energy += state
+        let local_exchange_energy =
+            context
+                .problem
+                .exchange_energy(state)
+                .map_err(|error| RunError {
+                    message: format!(
+                        "exchange energy for magnet '{}': {}",
+                        context.magnet_name, error
+                    ),
+                })?;
+        let local_demag_energy = state
             .magnetization()
             .iter()
             .zip(local_demag.iter())
             .map(|(m, h)| -0.5 * MU0 * layer_ms * dot(*m, *h) * layer_cell_volume)
             .sum::<f64>();
-        external_energy += state
+        let local_external_energy = state
             .magnetization()
             .iter()
             .zip(local_external.iter())
             .map(|(m, h)| -MU0 * layer_ms * dot(*m, *h) * layer_cell_volume)
             .sum::<f64>();
+        exchange_energy += local_exchange_energy;
+        demag_energy += local_demag_energy;
+        external_energy += local_external_energy;
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&local_effective));
         max_h_demag = max_h_demag.max(max_norm(&local_demag));
+
+        let [mx, my, mz] =
+            crate::scalar_metrics::average_magnetization_components(state.magnetization());
+        per_object_scalars.insert(
+            context.magnet_name.clone(),
+            std::collections::HashMap::from([
+                ("e_ex".to_string(), local_exchange_energy),
+                ("e_demag".to_string(), local_demag_energy),
+                ("e_ext".to_string(), local_external_energy),
+                (
+                    "e_total".to_string(),
+                    local_exchange_energy + local_demag_energy + local_external_energy,
+                ),
+                ("mx".to_string(), mx),
+                ("my".to_string(), my),
+                ("mz".to_string(), mz),
+            ]),
+        );
 
         magnetization.extend_from_slice(state.magnetization());
         exchange_field.extend(local_exchange);
         demag_field.extend(local_demag);
         external_field.extend(local_external);
         effective_field.extend(local_effective);
+    }
+
+    for values in per_object_scalars.values_mut() {
+        values.insert("max_dm_dt".to_string(), max_dm_dt);
+        values.insert("max_h_eff".to_string(), max_h_eff);
+        values.insert("max_h_demag".to_string(), max_h_demag);
+        values.entry("e_ani".to_string()).or_insert(0.0);
+        values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
     Ok(StateObservables {
@@ -1362,6 +1398,7 @@ fn observe_multilayer_cuda(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
+        per_object_scalars,
     })
 }
 
@@ -1543,6 +1580,10 @@ fn observe_multilayer_cuda_single(
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
+    let mut per_object_scalars: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, f64>,
+    > = std::collections::HashMap::new();
 
     for ((index, context), gpu) in contexts.iter().enumerate().zip(gpu_contexts.iter_mut()) {
         let state = &states[index];
@@ -1568,30 +1609,60 @@ fn observe_multilayer_cuda_single(
 
         let layer_cell_volume = context.problem.cell_size.volume();
         let layer_ms = context.problem.material.saturation_magnetisation;
-        exchange_energy += field_energy_from_vectors_f32(
+        let local_exchange_energy = field_energy_from_vectors_f32(
             &state.magnetization,
             &local_exchange,
             -0.5 * MU0 * layer_ms * layer_cell_volume,
         );
-        demag_energy += field_energy_from_vectors_f32(
+        let local_demag_energy = field_energy_from_vectors_f32(
             &state.magnetization,
             &local_demag,
             -0.5 * MU0 * layer_ms * layer_cell_volume,
         );
-        external_energy += field_energy_from_vectors_f32(
+        let local_external_energy = field_energy_from_vectors_f32(
             &state.magnetization,
             &local_external,
             -MU0 * layer_ms * layer_cell_volume,
         );
+        exchange_energy += local_exchange_energy;
+        demag_energy += local_demag_energy;
+        external_energy += local_external_energy;
         max_dm_dt = max_dm_dt.max(max_norm_f32(&rhs));
         max_h_eff = max_h_eff.max(max_norm_f32(&local_effective));
         max_h_demag = max_h_demag.max(max_norm_f32(&local_demag));
+
+        let [mx, my, mz] = crate::scalar_metrics::average_magnetization_components(
+            &to_f64_vectors(&state.magnetization),
+        );
+        per_object_scalars.insert(
+            context.magnet_name.clone(),
+            std::collections::HashMap::from([
+                ("e_ex".to_string(), local_exchange_energy),
+                ("e_demag".to_string(), local_demag_energy),
+                ("e_ext".to_string(), local_external_energy),
+                (
+                    "e_total".to_string(),
+                    local_exchange_energy + local_demag_energy + local_external_energy,
+                ),
+                ("mx".to_string(), mx),
+                ("my".to_string(), my),
+                ("mz".to_string(), mz),
+            ]),
+        );
 
         magnetization.extend(to_f64_vectors(&state.magnetization));
         exchange_field.extend(to_f64_vectors(&local_exchange));
         demag_field.extend(to_f64_vectors(&local_demag));
         external_field.extend(to_f64_vectors(&local_external));
         effective_field.extend(to_f64_vectors(&local_effective));
+    }
+
+    for values in per_object_scalars.values_mut() {
+        values.insert("max_dm_dt".to_string(), max_dm_dt);
+        values.insert("max_h_eff".to_string(), max_h_eff);
+        values.insert("max_h_demag".to_string(), max_h_demag);
+        values.entry("e_ani".to_string()).or_insert(0.0);
+        values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
     Ok(StateObservables {
@@ -1608,6 +1679,7 @@ fn observe_multilayer_cuda_single(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
+        per_object_scalars,
     })
 }
 
@@ -1812,6 +1884,93 @@ fn observe_native_stacked_cuda(
     } else {
         0.0
     };
+    let global_grid = [
+        native.global_grid[0] as usize,
+        native.global_grid[1] as usize,
+        native.global_grid[2] as usize,
+    ];
+    let mut per_object_scalars: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, f64>,
+    > = std::collections::HashMap::new();
+    let local_energy_factor = -0.5 * MU0 * ms * cell_volume;
+    for layer in &native.layers {
+        let mut local_exchange_energy = 0.0;
+        let mut local_demag_energy = 0.0;
+        let mut local_external_energy = 0.0;
+        let mut mx_sum = 0.0;
+        let mut my_sum = 0.0;
+        let mut mz_sum = 0.0;
+        let mut active_count = 0usize;
+        for z in 0..layer.native_grid[2] {
+            for y in 0..layer.native_grid[1] {
+                for x in 0..layer.native_grid[0] {
+                    let gx = layer.offset[0] + x;
+                    let gy = layer.offset[1] + y;
+                    let gz = layer.offset[2] + z;
+                    let global_index =
+                        gz * global_grid[1] * global_grid[0] + gy * global_grid[0] + gx;
+                    if active_mask.is_some_and(|mask| !mask[global_index]) {
+                        continue;
+                    }
+                    let m = magnetization_full[global_index];
+                    mx_sum += m[0];
+                    my_sum += m[1];
+                    mz_sum += m[2];
+                    active_count += 1;
+                    if native.combined_plan.enable_exchange {
+                        local_exchange_energy +=
+                            local_energy_factor * dot(m, exchange_full[global_index]);
+                    }
+                    if native.combined_plan.enable_demag {
+                        local_demag_energy +=
+                            local_energy_factor * dot(m, demag_full[global_index]);
+                    }
+                    if native.combined_plan.external_field.is_some() {
+                        local_external_energy +=
+                            local_energy_factor * dot(m, external_full[global_index]);
+                    }
+                }
+            }
+        }
+        let inv = if active_count > 0 {
+            1.0 / active_count as f64
+        } else {
+            0.0
+        };
+        per_object_scalars.insert(
+            layer.magnet_name.clone(),
+            std::collections::HashMap::from([
+                ("e_ex".to_string(), local_exchange_energy),
+                ("e_demag".to_string(), local_demag_energy),
+                ("e_ext".to_string(), local_external_energy),
+                (
+                    "e_total".to_string(),
+                    local_exchange_energy + local_demag_energy + local_external_energy,
+                ),
+                ("mx".to_string(), mx_sum * inv),
+                ("my".to_string(), my_sum * inv),
+                ("mz".to_string(), mz_sum * inv),
+            ]),
+        );
+    }
+    let max_dm_dt = max_rhs_norm_from_full(
+        &magnetization_full,
+        &effective_full,
+        active_mask,
+        native.combined_plan.material.damping,
+        native.combined_plan.gyromagnetic_ratio,
+        !llg_overdamped_uses_pure_damping(native.combined_plan.relaxation.as_ref()),
+    );
+    let max_h_eff = max_norm_from_full(&effective_full, active_mask);
+    let max_h_demag = max_norm_from_full(&demag_full, active_mask);
+    for values in per_object_scalars.values_mut() {
+        values.insert("max_dm_dt".to_string(), max_dm_dt);
+        values.insert("max_h_eff".to_string(), max_h_eff);
+        values.insert("max_h_demag".to_string(), max_h_demag);
+        values.entry("e_ani".to_string()).or_insert(0.0);
+        values.entry("e_dmi".to_string()).or_insert(0.0);
+    }
 
     Ok(StateObservables {
         magnetization: extract_native_stacked_field(&magnetization_full, native),
@@ -1824,16 +1983,10 @@ fn observe_native_stacked_cuda(
         demag_energy,
         external_energy,
         total_energy: exchange_energy + demag_energy + external_energy,
-        max_dm_dt: max_rhs_norm_from_full(
-            &magnetization_full,
-            &effective_full,
-            active_mask,
-            native.combined_plan.material.damping,
-            native.combined_plan.gyromagnetic_ratio,
-            !llg_overdamped_uses_pure_damping(native.combined_plan.relaxation.as_ref()),
-        ),
-        max_h_eff: max_norm_from_full(&effective_full, active_mask),
-        max_h_demag: max_norm_from_full(&demag_full, active_mask),
+        max_dm_dt,
+        max_h_eff,
+        max_h_demag,
+        per_object_scalars,
     })
 }
 
@@ -2052,6 +2205,7 @@ fn make_step_stats(
         ..StepStats::default()
     };
     apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    stats.per_object_scalars = observables.per_object_scalars.clone();
     stats
 }
 

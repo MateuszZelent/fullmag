@@ -42,6 +42,10 @@ use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::relaxation_converged;
 use crate::runtime_registry::RuntimeRegistry;
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+use crate::scalar_metrics::single_object_scalars;
+#[cfg(feature = "fem-gpu")]
+use crate::scalar_metrics::weighted_object_scalars;
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
@@ -143,6 +147,35 @@ fn runtime_log_once(level: &str, message: &str) {
         // If the lock is poisoned, keep logging instead of muting diagnostics.
         Err(_) => eprintln!("{level}: {message}"),
     }
+}
+
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+fn ensure_single_object_scalars(stats: &mut StepStats, object_id: &str) {
+    if stats.per_object_scalars.is_empty() {
+        stats.per_object_scalars = single_object_scalars(object_id, stats);
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn ensure_fem_object_scalars(stats: &mut StepStats, plan: &FemPlanIR) {
+    if !stats.per_object_scalars.is_empty() {
+        return;
+    }
+    if plan.object_segments.is_empty() {
+        stats.per_object_scalars = single_object_scalars("free", stats);
+        return;
+    }
+    let mut weights: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for segment in &plan.object_segments {
+        let weight = f64::from(segment.node_count.max(1));
+        *weights.entry(segment.object_id.clone()).or_insert(0.0) += weight;
+    }
+    let weighted = weighted_object_scalars(stats, &weights.into_iter().collect::<Vec<_>>());
+    stats.per_object_scalars = if weighted.is_empty() {
+        single_object_scalars("free", stats)
+    } else {
+        weighted
+    };
 }
 
 fn runtime_warn_once(message: &str) {
@@ -1837,6 +1870,7 @@ fn execute_cuda_fdm(
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
+    ensure_single_object_scalars(&mut current_stats, "free");
     while current_time < until_seconds {
         if let Some(live) = live.as_mut() {
             if let Some(display_selection) = live.display_selection.map(|get| get()) {
@@ -1880,9 +1914,10 @@ fn execute_cuda_fdm(
         let interrupt_requested = live
             .as_ref()
             .and_then(|consumer| consumer.interrupt_requested);
-        let Some(stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
+        let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
             continue;
         };
+        ensure_single_object_scalars(&mut stats, "free");
         current_time = stats.time;
         latest_stats = Some(stats.clone());
         current_stats = stats.clone();
@@ -2114,6 +2149,7 @@ fn execute_native_fem(
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
     let mut current_stats = backend.snapshot_step_stats(node_count)?;
+    ensure_fem_object_scalars(&mut current_stats, plan);
 
     let direct_minimization_relax = plan.relaxation.as_ref().filter(|control| {
         matches!(
@@ -2198,6 +2234,7 @@ fn execute_native_fem(
                         }
                         backend.upload_magnetization(&m_trial)?;
                         trial_stats = backend.snapshot_step_stats(node_count)?;
+                        ensure_fem_object_scalars(&mut trial_stats, plan);
                         let e_trial = trial_stats.e_total;
                         if e_trial <= energy - c_armijo * trial_lambda * g_norm_sq
                             || backtracks >= max_backtrack
@@ -2274,6 +2311,7 @@ fn execute_native_fem(
                         }
                         backend.upload_magnetization(&m_trial)?;
                         trial_stats = backend.snapshot_step_stats(node_count)?;
+                        ensure_fem_object_scalars(&mut trial_stats, plan);
                         let e_trial = trial_stats.e_total;
                         if e_trial <= energy + c_armijo * trial_lambda * p_dot_g
                             || backtracks >= max_backtrack_ncg
@@ -2336,6 +2374,7 @@ fn execute_native_fem(
                 .iter()
                 .map(|h| (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt())
                 .fold(0.0, f64::max);
+            ensure_fem_object_scalars(&mut accepted_stats, plan);
 
             artifacts.record_scalar(&accepted_stats)?;
             steps.push(accepted_stats.clone());
@@ -2396,9 +2435,10 @@ fn execute_native_fem(
             let interrupt_requested = live
                 .as_ref()
                 .and_then(|consumer| consumer.interrupt_requested);
-            let Some(stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
+            let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
                 continue;
             };
+            ensure_fem_object_scalars(&mut stats, plan);
             current_time = stats.time;
             latest_stats = Some(stats.clone());
             current_stats = stats.clone();
@@ -2478,7 +2518,7 @@ fn execute_native_fem(
         }
     }
 
-    let final_stats = latest_stats.unwrap_or(StepStats {
+    let mut final_stats = latest_stats.unwrap_or(StepStats {
         step: 0,
         time: 0.0,
         dt: 0.0,
@@ -2493,6 +2533,7 @@ fn execute_native_fem(
         wall_time_ns: 0,
         ..StepStats::default()
     });
+    ensure_fem_object_scalars(&mut final_stats, plan);
 
     for schedule in &mut field_schedules {
         let values = match schedule.name.as_str() {

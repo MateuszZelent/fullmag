@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import EmptyState from "@/components/ui/EmptyState";
-import FemMeshSlice2D from "@/components/preview/FemMeshSlice2D";
+import FemMeshSlice2D from "@/components/preview/FemMeshSlice2DPlotly";
 import FemMeshView3D from "@/components/preview/FemMeshView3D";
 import { ViewportOverlayLayout } from "@/components/preview/ViewportOverlayLayout";
 

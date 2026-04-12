@@ -3516,6 +3516,7 @@ fn make_step_stats(
         ..StepStats::default()
     };
     crate::scalar_metrics::apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    stats.per_object_scalars = observables.per_object_scalars.clone();
     stats
 }
 

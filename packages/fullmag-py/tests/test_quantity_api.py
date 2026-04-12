@@ -137,6 +137,39 @@ class QuantityApiTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertAlmostEqual(result.last("E_total"), 1.0)
 
+    def test_run_while_relax_mode_uses_chunked_relaxation(self) -> None:
+        self._prepare_single_magnet()
+
+        energies = [4.0, 2.0, 0.5]
+        step_limits: list[int] = []
+
+        def fake_relax(
+            *,
+            tol: float = 1e-6,
+            max_steps: int = 50_000,
+            algorithm: str = "llg_overdamped",
+            energy_tolerance: float | None = None,
+            relax_alpha: float | None = 1.0,
+        ):
+            del tol, algorithm, energy_tolerance, relax_alpha
+            step_limits.append(max_steps)
+            energy = energies[min(len(step_limits) - 1, len(energies) - 1)]
+            result = _result(_step(step=len(step_limits), time=1e-12, e_total=energy))
+            flat_world._record_result(result)
+            return result
+
+        with patch("fullmag.world.relax", side_effect=fake_relax):
+            result = fm.RunWhile(
+                fm.E_total > 1.0,
+                chunk_time=2e-12,
+                max_steps=100,
+                relax=True,
+            )
+
+        self.assertGreaterEqual(len(step_limits), 2)
+        self.assertTrue(all(limit > 0 for limit in step_limits))
+        self.assertAlmostEqual(result.last("E_total"), 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()

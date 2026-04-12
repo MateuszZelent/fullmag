@@ -102,8 +102,8 @@ function axisLabel(index: 0 | 1 | 2): string {
   return index === 0 ? "x" : index === 1 ? "y" : "z";
 }
 
-function uniquePoints(points: { point: Point3; value: number }[], epsilon: number) {
-  const out: { point: Point3; value: number }[] = [];
+function uniquePoints<T extends { point: Point3; value: number }>(points: T[], epsilon: number): T[] {
+  const out: T[] = [];
   for (const candidate of points) {
     const exists = out.some(
       (entry) =>
@@ -116,7 +116,7 @@ function uniquePoints(points: { point: Point3; value: number }[], epsilon: numbe
   return out;
 }
 
-function sortIntersectionLoop(points: { point: Point3; value: number }[], plane: SlicePlane) {
+function sortIntersectionLoop<T extends { point: Point3; value: number }>(points: T[], plane: SlicePlane): T[] {
   if (points.length <= 2) return points;
   const projected = points.map((entry) => ({ ...entry, uv: project(entry.point, plane) }));
   const centerU = projected.reduce((sum, entry) => sum + entry.uv[0], 0) / projected.length;
@@ -126,7 +126,7 @@ function sortIntersectionLoop(points: { point: Point3; value: number }[], plane:
       Math.atan2(left.uv[1] - centerV, left.uv[0] - centerU) -
       Math.atan2(right.uv[1] - centerV, right.uv[0] - centerU),
   );
-  return projected.map(({ point, value }) => ({ point, value }));
+  return projected.map(({ uv: _uv, ...entry }) => entry as unknown as T);
 }
 
 function finalizeRange(

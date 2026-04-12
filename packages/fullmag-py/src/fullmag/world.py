@@ -2885,19 +2885,40 @@ def run_while(
     * At least one guard (`max_time` or `max_steps`) is required.
     * `max_steps` guards the accumulated solver steps across all chunks.
     """
+    relax_kwargs: dict[str, object] = {}
+    relax_fn = globals()["relax"]
     if kwargs:
-        unsupported = ", ".join(sorted(kwargs))
-        raise TypeError(f"Unsupported run_while keyword arguments: {unsupported}")
+        if relax:
+            allowed = {"tol", "algorithm", "energy_tolerance", "relax_alpha"}
+            unsupported = sorted(set(kwargs) - allowed)
+            if unsupported:
+                names = ", ".join(unsupported)
+                raise TypeError(f"Unsupported run_while keyword arguments: {names}")
+            relax_kwargs = {key: kwargs[key] for key in allowed if key in kwargs}
+        else:
+            unsupported = ", ".join(sorted(kwargs))
+            raise TypeError(f"Unsupported run_while keyword arguments: {unsupported}")
     cfg = RunWhileConfig(
         chunk_time=float(chunk_time),
         max_time=max_time,
         max_steps=max_steps,
         relax=relax,
     )
-    if cfg.relax:
-        raise NotImplementedError("run_while(..., relax=True) is not implemented yet.")
 
     if _capture_enabled:
+        if cfg.relax:
+            initial_dt = _safe_step_value(_state._last_step, "dt", 1e-13)
+            dt_ref = initial_dt if initial_dt > 0.0 else 1e-13
+            chunk_steps = max(1, int(math.ceil(cfg.chunk_time / dt_ref)))
+            if cfg.max_steps is not None:
+                chunk_steps = min(chunk_steps, cfg.max_steps)
+            return relax_fn(
+                tol=float(relax_kwargs.get("tol", 1e-6)),
+                max_steps=chunk_steps,
+                algorithm=str(relax_kwargs.get("algorithm", "llg_overdamped")),
+                energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
+                relax_alpha=relax_kwargs.get("relax_alpha", 1.0),  # type: ignore[arg-type]
+            )
         until = cfg.max_time if cfg.max_time is not None else cfg.chunk_time * float(cfg.max_steps)
         return run(until)
 
@@ -2920,12 +2941,37 @@ def run_while(
             if chunk <= 0.0:
                 break
 
-        last_result = run(chunk)
+        if cfg.relax:
+            dt_ref = _safe_step_value(_state._last_step, "dt", 1e-13)
+            if not math.isfinite(dt_ref) or dt_ref <= 0.0:
+                dt_ref = 1e-13
+            chunk_steps = max(1, int(math.ceil(chunk / dt_ref)))
+            if cfg.max_steps is not None:
+                remaining = cfg.max_steps - total_solver_steps
+                if remaining <= 0:
+                    break
+                chunk_steps = min(chunk_steps, remaining)
+            last_result = relax_fn(
+                tol=float(relax_kwargs.get("tol", 1e-6)),
+                max_steps=chunk_steps,
+                algorithm=str(relax_kwargs.get("algorithm", "llg_overdamped")),
+                energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
+                relax_alpha=relax_kwargs.get("relax_alpha", 1.0),  # type: ignore[arg-type]
+            )
+        else:
+            last_result = run(chunk)
         _set_magnetization_continuation_from_result(last_result)
 
         step_count = len(getattr(last_result, "steps", ()) or ())
-        total_solver_steps += int(step_count)
-        total_time += float(chunk)
+        total_solver_steps += max(1, int(step_count))
+        if step_count > 0:
+            dt_used = _safe_step_value(_latest_step(), "dt", 0.0)
+            if math.isfinite(dt_used) and dt_used > 0.0:
+                total_time += float(step_count) * dt_used
+            else:
+                total_time += float(chunk)
+        else:
+            total_time += float(chunk)
         needs_warmup = False
 
         if getattr(last_result, "status", "completed") != "completed":

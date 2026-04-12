@@ -14,6 +14,8 @@ use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_ac
 #[cfg(feature = "fem-gpu")]
 use crate::quantities::{normalize_quantity_id, QuantityId};
 #[cfg(feature = "fem-gpu")]
+use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
+#[cfg(feature = "fem-gpu")]
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError, StepStats};
 
 #[cfg(feature = "fem-gpu")]
@@ -116,6 +118,7 @@ pub(crate) fn gpu_availability() -> GpuAvailability {
 pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
     magnetic_node_mask: Vec<bool>,
+    object_weights: Vec<(String, f64)>,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -623,6 +626,22 @@ impl NativeFemBackend {
             handle,
             magnetic_node_mask: mesh_quantity_active_mask("m", &plan.mesh)
                 .unwrap_or_else(|| vec![true; plan.mesh.nodes.len()]),
+            object_weights: if plan.object_segments.is_empty() {
+                vec![("free".to_string(), 1.0)]
+            } else {
+                let mut weights: std::collections::HashMap<String, f64> =
+                    std::collections::HashMap::new();
+                for segment in &plan.object_segments {
+                    let weight = f64::from(segment.node_count.max(1));
+                    *weights.entry(segment.object_id.clone()).or_insert(0.0) += weight;
+                }
+                let collected = weights.into_iter().collect::<Vec<_>>();
+                if collected.is_empty() {
+                    vec![("free".to_string(), 1.0)]
+                } else {
+                    collected
+                }
+            },
         })
     }
 
@@ -684,7 +703,7 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU step failed"));
         }
 
-        Ok(Some(StepStats {
+        let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
             dt: stats.dt_seconds,
@@ -718,7 +737,14 @@ impl NativeFemBackend {
             fsal_reused: stats.fsal_reused != 0,
             demag_solves: stats.demag_linear_iterations,
             ..StepStats::default()
-        }))
+        };
+        step_stats.per_object_scalars =
+            if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
+                single_object_scalars("free", &step_stats)
+            } else {
+                weighted_object_scalars(&step_stats, &self.object_weights)
+            };
+        Ok(Some(step_stats))
     }
 
     #[allow(dead_code)]
@@ -832,6 +858,12 @@ impl NativeFemBackend {
             ..StepStats::default()
         };
         crate::scalar_metrics::apply_average_m_to_step_stats(&mut step_stats, &magnetization);
+        step_stats.per_object_scalars =
+            if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
+                single_object_scalars("free", &step_stats)
+            } else {
+                weighted_object_scalars(&step_stats, &self.object_weights)
+            };
         Ok(step_stats)
     }
 
@@ -941,9 +973,9 @@ impl NativeFemBackend {
                 })
             }
         };
-        let active_mask =
-            (crate::quantities::quantity_spatial_domain(&request.quantity) == "magnetic_only")
-                .then(|| self.magnetic_node_mask.clone());
+        let active_mask = (crate::quantities::quantity_spatial_domain(&request.quantity)
+            == "magnetic_only")
+            .then(|| self.magnetic_node_mask.clone());
         Ok(build_mesh_preview_field_with_active_mask(
             request,
             &values,

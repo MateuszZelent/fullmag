@@ -12,7 +12,7 @@ import MagnetizationSlice2D from "../../preview/MagnetizationSlice2D";
 import MagnetizationView3D from "../../preview/MagnetizationView3D";
 import FemMeshView3D from "../../preview/FemMeshView3D";
 import { ViewportErrorBoundary } from "../../preview/ViewportErrorBoundary";
-import FemMeshSlice2D from "../../preview/FemMeshSlice2D";
+import FemMeshSlice2D from "../../preview/FemMeshSlice2DPlotly";
 import PreviewScalarField2D from "../../preview/PreviewScalarField2D";
 import BoundsPreview3D from "../../preview/BoundsPreview3D";
 import EmptyState from "../../ui/EmptyState";
@@ -613,9 +613,13 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         clipPos={ctx.meshClipPos}
         antennaOverlays={ctx.antennaOverlays}
         selectedAntennaId={selectedAntennaName}
+        showArrows={ctx.meshShowArrows}
+        previewMaxPoints={ctx.requestedPreviewMaxPoints}
         onPlaneChange={ctx.setPlane}
         onClipAxisChange={ctx.setMeshClipAxis}
         onClipPosChange={ctx.setMeshClipPos}
+        onShowArrowsChange={ctx.setMeshShowArrows}
+        onPreviewMaxPointsChange={handlePreviewMaxPointsChange}
       />
     );
   } else if (

@@ -20,6 +20,8 @@ use crate::quantities::normalized_quantity_name;
 #[cfg(feature = "cuda")]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
+use crate::scalar_metrics::single_object_scalars;
+#[cfg(feature = "cuda")]
 use crate::types::StepStats;
 #[cfg(feature = "cuda")]
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError};
@@ -557,7 +559,7 @@ impl NativeFdmBackend {
             return Err(self.last_error_or("step failed"));
         }
 
-        Ok(Some(StepStats {
+        let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
             dt: stats.dt_seconds,
@@ -576,7 +578,9 @@ impl NativeFdmBackend {
                 None
             },
             ..StepStats::default()
-        }))
+        };
+        step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
+        Ok(Some(step_stats))
     }
 
     /// Execute one time step.
@@ -927,6 +931,7 @@ impl NativeFdmBackend {
             ..StepStats::default()
         };
         crate::scalar_metrics::apply_average_m_to_step_stats(&mut step_stats, &magnetization);
+        step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(step_stats)
     }
 
