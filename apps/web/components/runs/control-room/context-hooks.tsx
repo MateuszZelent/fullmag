@@ -97,6 +97,8 @@ export interface TransportContextValue {
   effectiveEEx: number;
   effectiveEDemag: number;
   effectiveEExt: number;
+  effectiveEAni: number;
+  effectiveEDmi: number;
   effectiveETotal: number;
   elapsed: number;
   stepsPerSec: number;

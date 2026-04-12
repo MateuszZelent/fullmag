@@ -558,6 +558,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const effectiveEEx = liveIsStale ? (run?.final_e_ex ?? 0) : (liveState?.e_ex ?? run?.final_e_ex ?? 0);
   const effectiveEDemag = liveIsStale ? (run?.final_e_demag ?? 0) : (liveState?.e_demag ?? run?.final_e_demag ?? 0);
   const effectiveEExt = liveIsStale ? (run?.final_e_ext ?? 0) : (liveState?.e_ext ?? run?.final_e_ext ?? 0);
+  const effectiveEAni = liveIsStale ? (run?.final_e_ani ?? 0) : (liveState?.e_ani ?? run?.final_e_ani ?? 0);
+  const effectiveEDmi = liveIsStale ? (run?.final_e_dmi ?? 0) : (liveState?.e_dmi ?? run?.final_e_dmi ?? 0);
   const effectiveETotal = liveIsStale ? (run?.final_e_total ?? 0) : (liveState?.e_total ?? run?.final_e_total ?? 0);
   const effectiveDmDt = liveIsStale ? 0 : (liveState?.max_dm_dt ?? 0);
   const effectiveHEff = liveIsStale ? 0 : (liveState?.max_h_eff ?? 0);
@@ -569,11 +571,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     return {
       ...liveState,
       step: effectiveStep, time: effectiveTime, dt: effectiveDt,
-      e_ex: effectiveEEx, e_demag: effectiveEDemag, e_ext: effectiveEExt, e_total: effectiveETotal,
+      e_ex: effectiveEEx, e_demag: effectiveEDemag, e_ext: effectiveEExt, e_ani: effectiveEAni, e_dmi: effectiveEDmi, e_total: effectiveETotal,
       max_dm_dt: effectiveDmDt, max_h_eff: effectiveHEff, max_h_demag: effectiveHDemag,
     };
   }, [liveState, liveIsStale, effectiveStep, effectiveTime, effectiveDt,
-      effectiveEEx, effectiveEDemag, effectiveEExt, effectiveETotal,
+      effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
       effectiveDmDt, effectiveHEff, effectiveHDemag]);
 
   /* Status bar */
@@ -1649,14 +1651,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
 
   const transportValue = useMemo<TransportContextValue>(() => ({
     effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveHEff, effectiveHDemag,
-    effectiveEEx, effectiveEDemag, effectiveEExt, effectiveETotal,
+    effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
     elapsed, stepsPerSec,
     liveState, effectiveLiveState, scalarRows,
     dmDtSpark, dtSpark, eTotalSpark,
     preview, selectedVectors, fieldStats, hasSolverTelemetry,
   }), [
     effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveHEff, effectiveHDemag,
-    effectiveEEx, effectiveEDemag, effectiveEExt, effectiveETotal,
+    effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
     elapsed, stepsPerSec,
     liveState, effectiveLiveState, scalarRows,
     dmDtSpark, dtSpark, eTotalSpark,

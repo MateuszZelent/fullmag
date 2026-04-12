@@ -23,6 +23,16 @@ export default function EnergyPanel() {
       (row) => row.e_ext,
       ctx.hasSolverTelemetry ? ctx.effectiveEExt : null,
     ),
+    eAni: buildSparkSeries(
+      ctx.scalarRows,
+      (row) => row.e_ani,
+      ctx.hasSolverTelemetry ? ctx.effectiveEAni : null,
+    ),
+    eDmi: buildSparkSeries(
+      ctx.scalarRows,
+      (row) => row.e_dmi,
+      ctx.hasSolverTelemetry ? ctx.effectiveEDmi : null,
+    ),
     eTotal: buildSparkSeries(
       ctx.scalarRows,
       (row) => row.e_total,
@@ -34,6 +44,8 @@ export default function EnergyPanel() {
     ctx.effectiveEEx,
     ctx.effectiveEDemag,
     ctx.effectiveEExt,
+    ctx.effectiveEAni,
+    ctx.effectiveEDmi,
     ctx.effectiveETotal,
   ]);
 
@@ -58,6 +70,18 @@ export default function EnergyPanel() {
             value={fmtExpOrDash(ctx.effectiveEExt, ctx.hasSolverTelemetry)}
             sparkData={sparkSeries.eExt}
             sparkColor="var(--chart-emerald)"
+          />
+          <MetricField
+            label="E_ani"
+            value={fmtExpOrDash(ctx.effectiveEAni, ctx.hasSolverTelemetry)}
+            sparkData={sparkSeries.eAni}
+            sparkColor="var(--chart-rose)"
+          />
+          <MetricField
+            label="E_dmi"
+            value={fmtExpOrDash(ctx.effectiveEDmi, ctx.hasSolverTelemetry)}
+            sparkData={sparkSeries.eDmi}
+            sparkColor="var(--chart-fuchsia)"
           />
           <MetricField
             label="E_total"

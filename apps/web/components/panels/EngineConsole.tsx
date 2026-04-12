@@ -368,6 +368,18 @@ export default function EngineConsole({
                 {fmtSI(liveState?.e_ext ?? run?.final_e_ext ?? 0, "J")}
               </span>
             </div>
+            <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-rose-500">
+              <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">E_ani</span>
+              <span className="font-mono text-sm font-semibold text-foreground">
+                {fmtSI(liveState?.e_ani ?? run?.final_e_ani ?? 0, "J")}
+              </span>
+            </div>
+            <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-fuchsia-500">
+              <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">E_dmi</span>
+              <span className="font-mono text-sm font-semibold text-foreground">
+                {fmtSI(liveState?.e_dmi ?? run?.final_e_dmi ?? 0, "J")}
+              </span>
+            </div>
             <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-indigo-500">
               <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">E_total</span>
               <span className="font-mono text-sm font-semibold text-foreground">

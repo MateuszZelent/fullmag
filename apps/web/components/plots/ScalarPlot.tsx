@@ -30,13 +30,15 @@ const COLUMN_LABELS: Record<string, string> = {
   e_ex: "E_exchange (J)",
   e_demag: "E_demag (J)",
   e_ext: "E_external (J)",
+  e_ani: "E_anisotropy (J)",
+  e_dmi: "E_DMI (J)",
   e_total: "E_total (J)",
   max_dm_dt: "max dm/dt (rad/s)",
   max_h_eff: "max |H_eff| (A/m)",
   max_h_demag: "max |H_demag| (A/m)",
 };
 
-const DEFAULT_Y_COLUMNS = ["e_ex", "e_demag", "e_ext", "e_total"];
+const DEFAULT_Y_COLUMNS = ["e_ex", "e_demag", "e_ext", "e_ani", "e_dmi", "e_total"];
 
 function isMagnetizationAverageColumn(col: string): boolean {
   return col === "mx" || col === "my" || col === "mz";
