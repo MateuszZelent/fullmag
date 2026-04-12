@@ -21,11 +21,66 @@ pub enum QuantityId {
     EEx,
     EDemag,
     EExt,
+    EAni,
+    EDmi,
     ETotal,
     ModeAmplitude,
     ModeReal,
     ModeImag,
     ModePhase,
+}
+
+/// Where the quantity is located on the mesh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityLocation {
+    /// Per-node (vertex) value.
+    Node,
+    /// Per-cell (element) value.
+    Cell,
+    /// Single global scalar (not spatially distributed).
+    Global,
+}
+
+impl QuantityLocation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Node => "node",
+            Self::Cell => "cell",
+            Self::Global => "global",
+        }
+    }
+}
+
+/// Spatial domain that a quantity physically occupies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityDomain {
+    /// Defined only on magnetic elements/nodes.
+    MagneticOnly,
+    /// Defined on the entire computational domain including airbox.
+    FullDomain,
+}
+
+impl QuantityDomain {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MagneticOnly => "magnetic_only",
+            Self::FullDomain => "full_domain",
+        }
+    }
+}
+
+/// Hint for how the UI should normalize visual representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NormalizationHint {
+    /// Already normalised to [-1, 1] (e.g. reduced magnetization).
+    UnitVector,
+    /// Normalize by the max absolute value in the dataset.
+    MaxAbs,
+    /// No normalization — show raw values.
+    None,
 }
 
 impl QuantityId {
@@ -47,6 +102,8 @@ impl QuantityId {
             Self::EEx => "E_ex",
             Self::EDemag => "E_demag",
             Self::EExt => "E_ext",
+            Self::EAni => "E_ani",
+            Self::EDmi => "E_dmi",
             Self::ETotal => "E_total",
             Self::ModeAmplitude => "mode_amplitude",
             Self::ModeReal => "mode_real",
@@ -105,9 +162,26 @@ pub struct QuantitySpec {
     pub quick_access_label: Option<&'static str>,
     pub scalar_metric_key: Option<&'static str>,
     pub ui_exposed: bool,
+    // --- PH-01: extended contract fields ---
+    /// Number of components (3 for vector, 1 for scalar).
+    pub n_comp: u8,
+    /// Where the quantity lives on the mesh.
+    pub location: QuantityLocation,
+    /// Physical region the quantity occupies.
+    pub domain: QuantityDomain,
+    /// UI normalization strategy.
+    pub normalization_hint: NormalizationHint,
+    /// Whether the quantity supports 2-D preview slicing.
+    pub supports_preview_2d: bool,
+    /// Whether the quantity supports 3-D preview rendering.
+    pub supports_preview_3d: bool,
+    /// Whether the quantity can appear in time-series history charts.
+    pub supports_history: bool,
+    /// Whether the quantity can be exported to VTK / HDF5.
+    pub supports_export: bool,
 }
 
-const QUANTITY_SPECS: [QuantitySpec; 21] = [
+const QUANTITY_SPECS: [QuantitySpec; 23] = [
     QuantitySpec {
         id: QuantityId::M,
         label: "Magnetization",
@@ -117,6 +191,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("M"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::UnitVector,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::HEx,
@@ -127,6 +209,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_ex"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::HDemag,
@@ -137,6 +227,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_demag"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::HExt,
@@ -147,6 +245,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_ext"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::HAnt,
@@ -157,6 +263,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_ant"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::HEff,
@@ -167,6 +281,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_eff"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::HAni,
@@ -177,6 +299,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_ani"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::HDmi,
@@ -187,6 +317,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_dmi"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::HMel,
@@ -197,6 +335,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_mel"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     // FND-010 fix: add F-12 observable quantity specs
     QuantitySpec {
@@ -208,6 +354,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_ani_cubic"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::HDmiBulk,
@@ -218,6 +372,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_dmi_bulk"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::HOe,
@@ -228,6 +390,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_oe"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::HTherm,
@@ -238,6 +408,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: Some("H_therm"),
         scalar_metric_key: None,
         ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::EEx,
@@ -248,6 +426,15 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: None,
         scalar_metric_key: Some("e_ex"),
         ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Global,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: true,
+        supports_export: true,
+    },
     },
     QuantitySpec {
         id: QuantityId::EDemag,
@@ -258,6 +445,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: None,
         scalar_metric_key: Some("e_demag"),
         ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Global,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: true,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::EExt,
@@ -268,6 +463,50 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: None,
         scalar_metric_key: Some("e_ext"),
         ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Global,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::None,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: true,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::EAni,
+        label: "Anisotropy Energy",
+        kind: QuantityKind::GlobalScalar,
+        unit: "J",
+        interactive_preview: false,
+        quick_access_label: None,
+        scalar_metric_key: Some("e_ani"),
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Global,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: true,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::EDmi,
+        label: "DMI Energy",
+        kind: QuantityKind::GlobalScalar,
+        unit: "J",
+        interactive_preview: false,
+        quick_access_label: None,
+        scalar_metric_key: Some("e_dmi"),
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Global,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: true,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::ETotal,
@@ -278,6 +517,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: None,
         scalar_metric_key: Some("e_total"),
         ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Global,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::None,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: true,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::ModeAmplitude,
@@ -288,6 +535,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: None,
         scalar_metric_key: None,
         ui_exposed: false,
+        n_comp: 1,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::ModeReal,
@@ -298,6 +553,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: None,
         scalar_metric_key: None,
         ui_exposed: false,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::ModeImag,
@@ -308,6 +571,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: None,
         scalar_metric_key: None,
         ui_exposed: false,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: false,
+        supports_export: true,
     },
     QuantitySpec {
         id: QuantityId::ModePhase,
@@ -318,6 +589,14 @@ const QUANTITY_SPECS: [QuantitySpec; 21] = [
         quick_access_label: None,
         scalar_metric_key: None,
         ui_exposed: false,
+        n_comp: 1,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: false,
+        supports_export: true,
     },
 ];
 
@@ -355,22 +634,9 @@ pub fn quantity_unit(id: &str) -> &'static str {
 }
 
 pub fn quantity_spatial_domain(id: &str) -> &'static str {
-    match normalize_quantity_id(id) {
-        Ok(QuantityId::M) => "magnetic_only",
-        // Exchange, anisotropy, DMI, magnetoelastic, thermal noise are
-        // intrinsically defined only inside the ferromagnet.
-        Ok(QuantityId::HEx) => "magnetic_only",
-        Ok(QuantityId::HAni) => "magnetic_only",
-        Ok(QuantityId::HAniCubic) => "magnetic_only",
-        Ok(QuantityId::HDmi) => "magnetic_only",
-        Ok(QuantityId::HDmiBulk) => "magnetic_only",
-        Ok(QuantityId::HMel) => "magnetic_only",
-        Ok(QuantityId::HTherm) => "magnetic_only",
-        // Demag stray field, external/antenna field, Oersted field, and
-        // the resulting effective field physically extend into the airbox.
-        Ok(_) => "full_domain",
-        Err(_) => "full_domain",
-    }
+    quantity_spec(id)
+        .map(|spec| spec.domain.as_str())
+        .unwrap_or(QuantityDomain::FullDomain.as_str())
 }
 
 pub fn normalize_quantity_id(requested: &str) -> Result<QuantityId, RunError> {
@@ -391,6 +657,8 @@ pub fn normalize_quantity_id(requested: &str) -> Result<QuantityId, RunError> {
         "E_ex" => Ok(QuantityId::EEx),
         "E_demag" => Ok(QuantityId::EDemag),
         "E_ext" => Ok(QuantityId::EExt),
+        "E_ani" => Ok(QuantityId::EAni),
+        "E_dmi" => Ok(QuantityId::EDmi),
         "E_total" => Ok(QuantityId::ETotal),
         "mode_amplitude" => Ok(QuantityId::ModeAmplitude),
         "mode_real" => Ok(QuantityId::ModeReal),
@@ -424,6 +692,8 @@ pub fn global_scalar_value(id: &str, stats: &StepStats) -> Option<f64> {
         "e_ex" => Some(stats.e_ex),
         "e_demag" => Some(stats.e_demag),
         "e_ext" => Some(stats.e_ext),
+        "e_ani" => Some(stats.e_ani),
+        "e_dmi" => Some(stats.e_dmi),
         "e_total" => Some(stats.e_total),
         _ => None,
     }

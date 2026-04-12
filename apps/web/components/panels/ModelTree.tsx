@@ -24,6 +24,7 @@ import {
   buildPipelineStudyStageNodeId,
 } from "@/lib/study-builder/node-context";
 import { parseVisualizationPresetNodeId } from "../runs/control-room/visualizationPresets";
+import TreeNodeIcon from "@/features/iconography/TreeNodeIcon";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
 
@@ -409,7 +410,7 @@ function TreeNode({
               "flex h-4 w-4 shrink-0 items-center justify-center text-[0.72rem]",
               isActive ? "opacity-100" : "opacity-55 group-hover:opacity-75"
             )}>
-              {node.icon}
+              <TreeNodeIcon icon={node.icon} size={14} />
             </span>
           )}
 
@@ -831,7 +832,7 @@ export function buildFullmagModelTree(opts: {
     studyChildren.push({
       id: "universe",
       label: "Universe",
-      icon: "⬚",
+      icon: "box",
       badge: universeMode ?? "derived",
       status: "ready",
       defaultOpen: true,
@@ -856,7 +857,7 @@ export function buildFullmagModelTree(opts: {
     studyChildren.push({
       id: "mesh",
       label: "Study Domain Mesh",
-      icon: "◫",
+      icon: "grid-3x3",
       badge: opts.meshElements
         ? `${opts.meshElements.toLocaleString()} el`
         : opts.meshNodes
@@ -865,10 +866,10 @@ export function buildFullmagModelTree(opts: {
       status: opts.meshStatus ?? "pending",
       defaultOpen: false,
       children: [
-        { id: "mesh-view", label: "Inspector", icon: "👁" },
-        { id: "mesh-size", label: "Size", icon: "📏" },
-        { id: "mesh-quality", label: "Quality", icon: "📊" },
-        { id: "mesh-pipeline", label: "Pipeline", icon: "🧭" },
+        { id: "mesh-view", label: "Inspector", icon: "eye" },
+        { id: "mesh-size", label: "Size", icon: "ruler" },
+        { id: "mesh-quality", label: "Quality", icon: "gauge" },
+        { id: "mesh-pipeline", label: "Pipeline", icon: "workflow" },
       ],
     });
   }
@@ -876,7 +877,7 @@ export function buildFullmagModelTree(opts: {
   studyChildren.push({
     id: "objects",
     label: "Objects",
-    icon: "📦",
+    icon: "package",
     badge: `${objects.length}`,
     status: objects.length > 0 ? "ready" : "pending",
     defaultOpen: true,
@@ -1226,7 +1227,7 @@ export function buildFullmagModelTree(opts: {
     {
       id: "physics",
       label: "Physics",
-      icon: "⚛",
+      icon: "zap",
       status: "ready",
       defaultOpen: false,
       onClick: opts.onPhysicsClick,
@@ -1235,7 +1236,7 @@ export function buildFullmagModelTree(opts: {
     {
       id: "study",
       label: "Study",
-      icon: "▶",
+      icon: "play",
       badge: authoringStageCount > 0 ? `${authoringStageCount} stages` : (opts.backend ?? "—"),
       status: opts.solverStatus ?? "pending",
       defaultOpen: true,
@@ -1307,7 +1308,7 @@ export function buildFullmagModelTree(opts: {
           {
             id: "results",
             label: "Outputs",
-            icon: "📈",
+            icon: "bar-chart-3",
             status: (opts.scalarRowCount && opts.scalarRowCount > 0 ? "ready" : "pending") as NodeStatus,
             badge: opts.scalarRowCount ? `${opts.scalarRowCount} pts` : undefined,
             defaultOpen: false,
@@ -1392,7 +1393,7 @@ export function buildFullmagModelTree(opts: {
     {
       id: "visualization-root",
       label: "Visualization",
-      icon: "👁",
+      icon: "paintbrush",
       badge: `${visualizationProjectPresets.length + visualizationLocalPresets.length}`,
       status: "ready",
       defaultOpen: false,

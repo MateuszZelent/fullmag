@@ -1,5 +1,17 @@
 import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
 import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
+import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
+
+export type ResultAnalysisKind =
+  | "spectrum"
+  | "dispersion"
+  | "modes"
+  | "time-traces"
+  | "vortex-frequency"
+  | "vortex-trajectory"
+  | "vortex-orbit"
+  | "quantity"
+  | "table";
 
 export interface RibbonCommandContext {
   viewMode?: string;
@@ -54,6 +66,15 @@ export interface RibbonCommandContext {
     objectId: string,
     kind: ScriptBuilderMagneticInteractionKind,
   ) => void;
+  onAssignMagnetizationPreset?: (
+    objectId: string,
+    kind: MagneticPresetKind,
+  ) => void;
+  onSetTextureTransformMode?: (
+    objectId: string,
+    mode: "translate" | "rotate" | "scale",
+  ) => void;
+  onAddResultAnalysis?: (kind: ResultAnalysisKind) => void;
 }
 
 export type RibbonCommand =
@@ -100,7 +121,18 @@ export type RibbonCommand =
       id: "object.add-interaction";
       objectId: string;
       kind: ScriptBuilderMagneticInteractionKind;
-    };
+    }
+  | {
+      id: "object.assign-magnetization-preset";
+      objectId: string;
+      kind: MagneticPresetKind;
+    }
+  | {
+      id: "object.set-texture-transform-mode";
+      objectId: string;
+      mode: "translate" | "rotate" | "scale";
+    }
+  | { id: "results.add-analysis"; kind: ResultAnalysisKind };
 
 export function canExecuteRibbonCommand(
   ctx: RibbonCommandContext,
@@ -159,6 +191,12 @@ export function canExecuteRibbonCommand(
       return typeof ctx.onStudyToggleSelectedEnabled === "function";
     case "object.add-interaction":
       return Boolean(command.objectId) && typeof ctx.onObjectAddInteraction === "function";
+    case "object.assign-magnetization-preset":
+      return Boolean(command.objectId) && typeof ctx.onAssignMagnetizationPreset === "function";
+    case "object.set-texture-transform-mode":
+      return Boolean(command.objectId) && typeof ctx.onSetTextureTransformMode === "function";
+    case "results.add-analysis":
+      return typeof ctx.onAddResultAnalysis === "function";
   }
 }
 
@@ -243,6 +281,15 @@ export function executeRibbonCommand(
       return;
     case "object.add-interaction":
       ctx.onObjectAddInteraction?.(command.objectId, command.kind);
+      return;
+    case "object.assign-magnetization-preset":
+      ctx.onAssignMagnetizationPreset?.(command.objectId, command.kind);
+      return;
+    case "object.set-texture-transform-mode":
+      ctx.onSetTextureTransformMode?.(command.objectId, command.mode);
+      return;
+    case "results.add-analysis":
+      ctx.onAddResultAnalysis?.(command.kind);
       return;
   }
 }

@@ -110,3 +110,40 @@ export {
   getTransportMetrics,
   resetTransportMetrics,
 } from "./session-runtime/transport/transportMetrics";
+
+/* Layer G: Model Builder (Canonical Document Model + Inspector Registry) */
+export type {
+  NodeKind,
+  NodeDomain as BuilderNodeDomain,
+  NodeScope,
+  NodeHandle,
+  SourceOfTruth,
+  FullmagWorkspaceDocument,
+} from "./model-builder";
+export {
+  resolveNodeHandle,
+  isNodeKindInDomain,
+  nodeKindTopDomain,
+  inspectorForNodeKind,
+  hasComposite,
+  PanelKey,
+} from "./model-builder";
+
+/* Layer G: Iconography (Registry-based icon system) */
+export {
+  iconForNodeKind,
+  iconForNodeId,
+  TreeNodeIcon,
+  type IconToken,
+  type IconRegistryEntry,
+} from "./iconography";
+
+/* Layer G: Shell (Ribbon Registry) */
+export {
+  registerRibbonContribution,
+  resolveRibbonGroups,
+  resolveContextualGroups,
+  suggestedTabForDomain,
+  type RibbonContribution,
+  type RibbonBuildContext,
+} from "./shell";

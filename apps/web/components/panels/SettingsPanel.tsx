@@ -22,8 +22,15 @@ import StateIoPanel from "./settings/StateIoPanel";
 import VisualizationPresetPanel from "./settings/VisualizationPresetPanel";
 import { CORE_UI_CAPABILITIES } from "@/lib/workspace/capability-contract";
 import { summarizeCapabilityCoverage } from "@/lib/workspace/capability-audit";
-import { parseStudyNodeContext } from "@/lib/study-builder/node-context";
-import { isVisualizationTreeNode } from "../runs/control-room/visualizationPresets";
+// Legacy imports removed — routing is now handled by inspectorRegistry
+// import { parseStudyNodeContext } from "@/lib/study-builder/node-context";
+// import { isVisualizationTreeNode } from "../runs/control-room/visualizationPresets";
+import { resolveNodeHandle } from "@/features/model-builder/registry/nodeHandleResolver";
+import {
+  inspectorForNodeKind,
+  PanelKey,
+  type InspectorContext,
+} from "@/features/model-builder/registry/inspectorRegistry";
 
 /* ── Main SettingsPanel ── */
 interface SettingsPanelProps {
@@ -127,7 +134,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   const viewport = useViewport();
   const cmd = useCommand();
   const model = useModel();
-  const studyNodeContext = parseStudyNodeContext(nodeId);
+  // studyNodeContext removed — routing now via inspectorRegistry
   const capabilitySummary = summarizeCapabilityCoverage();
   const showSolverTelemetrySection = false;
   const showEnergySection = false;
@@ -196,115 +203,79 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   };
 
   const renderNodeContent = () => {
-    if (nodeId === "session") return <SessionInfoPanel />;
-    if (nodeId === "script-builder") return <ScriptBuilderInfoPanel />;
-    if (isVisualizationTreeNode(nodeId)) return <VisualizationPresetPanel nodeId={nodeId} />;
-    if (studyNodeContext) return <StudyPanel nodeId={nodeId} />;
-    if (
-      nodeId === "universe-mesh" ||
-      nodeId === "universe-mesh-view" ||
-      nodeId === "universe-mesh-pipeline" ||
-      nodeId === "universe-mesh-algorithm"
-    ) {
-      return (
-        <>
-          <MeshPanel />
-          <MeshSettingsPanel
-            options={model.meshOptions}
-            onChange={model.setMeshOptions}
-            quality={model.meshQualityData}
-            nodeCount={model.effectiveFemMesh?.nodes.length}
-            disabled={model.meshGenerating || !(cmd.awaitingCommand || cmd.isWaitingForCompute)}
-            waitMode={cmd.isWaitingForCompute}
-          />
-        </>
-      );
-    }
-    if (nodeId === "universe-mesh-size" || nodeId === "universe-mesh-quality") {
-      return (
-        <>
+    // ── Registry-based dispatch ──
+    // Resolve the semantic handle for this nodeId, then look up the
+    // inspector descriptor.  Composite panels (e.g. MeshSettingsPanel)
+    // are appended automatically.
+    const handle = resolveNodeHandle(nodeId);
+    const descriptor = inspectorForNodeKind(handle);
+    const inspectorCtx: InspectorContext = {
+      nodeId,
+      nodeHandle: handle,
+      selectedObjectId: model.selectedObjectId,
+      selectedObjectNodeId,
+      selectedObjectMeshNodeId,
+    };
+    const panelProps = descriptor.props(inspectorCtx);
+
+    // Shared mesh‐settings props (reused by composite panels)
+    const meshSettingsProps = {
+      options: model.meshOptions,
+      onChange: model.setMeshOptions,
+      quality: model.meshQualityData,
+      nodeCount: model.effectiveFemMesh?.nodes.length,
+      disabled: model.meshGenerating || !(cmd.awaitingCommand || cmd.isWaitingForCompute),
+      waitMode: cmd.isWaitingForCompute,
+    };
+
+    // Panel lookup by panelKey — keeps imports in one place
+    const renderPrimary = () => {
+      switch (descriptor.panelKey) {
+        case PanelKey.SESSION:         return <SessionInfoPanel />;
+        case PanelKey.SCRIPT_BUILDER:  return <ScriptBuilderInfoPanel />;
+        case PanelKey.VIS_PRESET:      return <VisualizationPresetPanel nodeId={panelProps.nodeId as string} />;
+        case PanelKey.STUDY:           return <StudyPanel nodeId={panelProps.nodeId as string} />;
+        case PanelKey.UNIVERSE:        return <UniversePanel />;
+        case PanelKey.ANTENNA:         return <AntennaPanel nodeId={panelProps.nodeId as string} />;
+        case PanelKey.PHYSICS:         return <PhysicsPanel />;
+        case PanelKey.RESULTS:         return <ResultsPanel />;
+        case PanelKey.ENERGY:          return <EnergyPanel />;
+        case PanelKey.STATE_IO:        return <StateIoPanel />;
+        case PanelKey.MATERIAL:        return <MaterialPanel nodeId={panelProps.nodeId as string} />;
+        case PanelKey.MATERIAL_MAG:    return <MaterialPanel nodeId={panelProps.nodeId as string} view="magnetization" />;
+        case PanelKey.OBJECT_MESH:     return <ObjectMeshPanel nodeId={panelProps.nodeId as string} />;
+        case PanelKey.REGION:          return <RegionPanel nodeId={panelProps.nodeId as string} />;
+        case PanelKey.MESH:            return <MeshPanel />;
+        case PanelKey.MESH_INFO:       return null; // info banner only, composite does the work
+        case PanelKey.OBJ_GEO_MESH:
+          return (
+            <>
+              <GeometryPanel nodeId={panelProps.nodeId as string} />
+              <ObjectMeshPanel nodeId={panelProps.meshNodeId as string | undefined} />
+            </>
+          );
+        case PanelKey.GEOMETRY:
+        default:
+          return <GeometryPanel nodeId={panelProps.nodeId as string | undefined} />;
+      }
+    };
+
+    // Composite: mesh-settings panel appended when the descriptor says so
+    const hasComposite = descriptor.compositeKeys?.includes(PanelKey.MESH_SETTINGS);
+
+    return (
+      <>
+        {descriptor.infoBanner && (
           <SidebarSection title="Object Mesh Defaults" defaultOpen={true}>
             <div className="rounded-lg border border-border/35 bg-background/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
-              These settings define shared object defaults for the next study-domain remesh. They do not create a third standalone mesh, and airbox sizing is still configured separately under Universe → Airbox.
+              {descriptor.infoBanner}
             </div>
           </SidebarSection>
-          <MeshSettingsPanel
-            options={model.meshOptions}
-            onChange={model.setMeshOptions}
-            quality={model.meshQualityData}
-            nodeCount={model.effectiveFemMesh?.nodes.length}
-            disabled={model.meshGenerating || !(cmd.awaitingCommand || cmd.isWaitingForCompute)}
-            waitMode={cmd.isWaitingForCompute}
-          />
-        </>
-      );
-    }
-    if (nodeId === "universe" || nodeId.startsWith("universe-")) return <UniversePanel />;
-    if (nodeId === "mesh-size" || nodeId === "mesh-algorithm" || nodeId === "mesh-quality") {
-      return (
-        <>
-          <SidebarSection title="Object Mesh Defaults" defaultOpen={true}>
-            <div className="rounded-lg border border-border/35 bg-background/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
-              These controls set shared object defaults for the final study-domain remesh. Use Universe → Airbox for air-region sizing and object nodes for local overrides.
-            </div>
-          </SidebarSection>
-          <MeshSettingsPanel
-            options={model.meshOptions}
-            onChange={model.setMeshOptions}
-            quality={model.meshQualityData}
-            nodeCount={model.effectiveFemMesh?.nodes.length}
-            disabled={model.meshGenerating || !(cmd.awaitingCommand || cmd.isWaitingForCompute)}
-            waitMode={cmd.isWaitingForCompute}
-          />
-        </>
-      );
-    }
-    if (nodeId === "mesh" || nodeId.startsWith("mesh-")) {
-      return (
-        <>
-          <MeshPanel />
-          <MeshSettingsPanel
-            options={model.meshOptions}
-            onChange={model.setMeshOptions}
-            quality={model.meshQualityData}
-            nodeCount={model.effectiveFemMesh?.nodes.length}
-            disabled={model.meshGenerating || !(cmd.awaitingCommand || cmd.isWaitingForCompute)}
-            waitMode={cmd.isWaitingForCompute}
-          />
-        </>
-      );
-    }
-    if (nodeId === "antennas" || nodeId.startsWith("ant-")) return <AntennaPanel nodeId={nodeId} />;
-    if (nodeId === "physics" || nodeId.startsWith("phys-")) {
-      return <PhysicsPanel />;
-    }
-    if (nodeId === "results" || nodeId === "res-fields") return <ResultsPanel />;
-    if (nodeId === "res-energy") return <EnergyPanel />;
-    if (nodeId === "res-state-io" || nodeId === "res-export") return <StateIoPanel />;
-    if (nodeId === "initial-state") return <StateIoPanel />;
-    if (nodeId === "objects") return <GeometryPanel />;
-    if (nodeId.startsWith("physobj-")) return <MaterialPanel nodeId={nodeId} />;
-    if (nodeId.startsWith("mag-")) return <MaterialPanel nodeId={nodeId} view="magnetization" />;
-    if (
-      nodeId.startsWith("reg-") &&
-      (nodeId.endsWith("-texture") || nodeId.endsWith("-texture-transform"))
-    ) {
-      return <MaterialPanel nodeId={nodeId} view="magnetization" />;
-    }
-    if (nodeId.startsWith("geo-") && nodeId.includes("-mesh")) {
-      return <ObjectMeshPanel nodeId={nodeId} />;
-    }
-    if (nodeId.startsWith("reg-")) return <RegionPanel nodeId={nodeId} />;
-    if (nodeId.startsWith("obj-")) {
-      return (
-        <>
-          <GeometryPanel nodeId={selectedObjectNodeId} />
-          <ObjectMeshPanel nodeId={selectedObjectMeshNodeId} />
-        </>
-      );
-    }
-    if (nodeId === "materials" || nodeId.startsWith("mat-")) return <MaterialPanel nodeId={nodeId} />;
-    return <GeometryPanel nodeId={nodeId} />;
+        )}
+        {renderPrimary()}
+        {hasComposite && <MeshSettingsPanel {...meshSettingsProps} />}
+      </>
+    );
   };
 
   return (
