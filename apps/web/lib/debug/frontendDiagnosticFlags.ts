@@ -4,6 +4,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
   workspace: {
     // "off" -> normal WorkspaceShell (no standalone diagnostic viewport)
     standaloneDiagnosticViewportMode: "off",
+    enableGraphV2: false,
   },
   session: {
     enableLiveBootstrapFetch: true,

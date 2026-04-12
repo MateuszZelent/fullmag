@@ -62,6 +62,8 @@ import {
   StudyRightInspector,
   AnalyzeRightInspector,
 } from "../workspace/modes/WorkspaceModeInspectors";
+import { useAnalyzeStore } from "@/features/analyze";
+import { useWorkspaceGraphBridge } from "@/features/workspace-graph";
 import type { WorkspaceMode } from "./control-room/context-hooks";
 import SettingsDialog from "../workspace/overlays/SettingsDialog";
 import PhysicsDocsDrawer from "../workspace/overlays/PhysicsDocsDrawer";
@@ -220,6 +222,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const setRightInspectorOpen = useWorkspaceStore((state) => state.setRightInspectorOpen);
   const setActiveCoreTab = useWorkspaceStore((state) => state.setActiveCoreTab);
   const setActiveContextualTab = useWorkspaceStore((state) => state.setActiveContextualTab);
+  const workspaceTabsByStage = useWorkspaceStore((state) => state.workspaceTabsByStage);
+  const activeWorkspaceTabByStage = useWorkspaceStore((state) => state.activeWorkspaceTabByStage);
+  const currentStage = useWorkspaceStore((state) => state.currentStage);
+  const analyzeResultsWorkspace = useAnalyzeStore((state) => state.resultsWorkspace);
   const [viewportSize, setViewportSize] = useState({ width: 1920, height: 1080 });
 
   useEffect(() => {
@@ -282,6 +288,23 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     () => (ctx.studyPipeline as StudyPipelineDocument | null) ?? migrateFlatStagesToStudyPipeline(ctx.studyStages),
     [ctx.studyPipeline, ctx.studyStages],
   );
+  useWorkspaceGraphBridge({
+    projectLabel: workspaceTitle,
+    workspaceMode: currentStage,
+    workspaceTabs: workspaceTabsByStage,
+    activeWorkspaceTabByStage,
+    selectedNodeId: ctx.selectedSidebarNodeId,
+    studyPipeline: authoringStudyDocument,
+    resultsWorkspace: analyzeResultsWorkspace,
+    quantities: ctx.quantities,
+    scalarRows: ctx.scalarRows,
+    requestedPreviewQuantity: ctx.requestedPreviewQuantity,
+    requestedPreviewComponent: ctx.requestedPreviewComponent,
+    plane: ctx.plane,
+    sliceIndex: ctx.sliceIndex,
+    viewMode: ctx.effectiveViewMode,
+    renderMode: ctx.meshRenderMode,
+  });
   useKeyboardShortcuts();
 
   const maybePreviewAntennaField = useCallback(() => {

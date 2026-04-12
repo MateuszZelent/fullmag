@@ -65,12 +65,28 @@ export function resultIconToken(kind: ResultNodeKind): string {
 
 const BUILT_IN: ResultTemplateEntry[] = [
   {
+    kind: "solution",
+    label: "Solution",
+    description: "Register a solution revision or imported solve result for lineage-aware results.",
+    iconToken: "results.overview",
+    category: "data",
+    requiresDataset: false,
+  },
+  {
     kind: "dataset",
     label: "Dataset",
     description: "Import solution outputs from a completed study run.",
     iconToken: "results.dataset",
     category: "data",
     requiresDataset: false,
+  },
+  {
+    kind: "derived_value",
+    label: "Derived Value",
+    description: "Create a quantity-driven scalar or summary metric bound to a dataset.",
+    iconToken: "results.derived_scalars",
+    category: "visualization",
+    requiresDataset: true,
   },
   {
     kind: "plot_group",

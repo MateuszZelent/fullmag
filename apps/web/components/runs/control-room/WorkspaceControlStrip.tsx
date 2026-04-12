@@ -14,6 +14,7 @@ import {
   Pause,
   Play,
   Shapes,
+  SkipForward,
   Square,
   Target,
   Zap,
@@ -231,6 +232,20 @@ const WorkspaceControlStrip = memo(function WorkspaceControlStrip() {
                 >
                   <Square size={13} fill="currentColor" />
                   Stop
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[0.68rem] font-bold uppercase tracking-[0.16em] transition-colors",
+                    ctx.canSkipCommand
+                      ? "border-violet-500/25 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20"
+                      : "border-border/50 bg-background/40 text-muted-foreground/50",
+                  )}
+                  onClick={() => ctx.handleSimulationAction("skip")}
+                  disabled={!ctx.canSkipCommand}
+                >
+                  <SkipForward size={13} />
+                  Skip
                 </button>
               </div>
             </div>

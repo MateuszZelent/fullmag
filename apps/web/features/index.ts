@@ -125,6 +125,27 @@ export {
   type NotificationLevel,
 } from "./notifications";
 
+/* Layer H: Workspace Graph */
+export {
+  useWorkspaceGraphStore,
+  createWorkspaceGraphSnapshot,
+  useWorkspaceGraphBridge,
+  EMPTY_WORKSPACE_GRAPH,
+  selectWorkspaceGraph,
+  selectGraphResultsWorkspace,
+  selectGraphViewportDocuments,
+  selectGraphActiveViewportDocument,
+} from "./workspace-graph";
+export type {
+  WorkspaceGraphState,
+  WorkspaceGraphPatch,
+  ViewportDocumentState,
+  DatasetNodeRef,
+  SolutionNode as WorkspaceGraphSolutionNode,
+  DerivedValueNodeRef,
+  QuantityFrameViewModel,
+} from "./workspace-graph";
+
 /* Transport Metrics */
 export {
   getTransportMetrics,

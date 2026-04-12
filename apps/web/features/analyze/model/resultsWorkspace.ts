@@ -9,7 +9,9 @@
 // ── Result node kind discriminator ───────────────────────────
 
 export type ResultNodeKind =
+  | "solution"
   | "dataset"
+  | "derived_value"
   | "plot_group"
   | "table"
   | "analysis"
@@ -25,12 +27,27 @@ export interface ResultNodeBase {
   createdAt: number;
 }
 
+export interface ResultLineage {
+  sourceStudyId: string | null;
+  sourceSolutionId: string | null;
+  sourceDatasetId?: string | null;
+}
+
+export interface SolutionNode extends ResultNodeBase {
+  nodeKind: "solution";
+  lineage: ResultLineage;
+  solutionKind: "live" | "time_dependent" | "frequency_domain" | "eigenfrequency" | "artifact";
+  revision: number | null;
+  status: "idle" | "available" | "pending" | "stale";
+}
+
 /** A dataset is a collection of solution outputs from a study run. */
 export interface DatasetNode extends ResultNodeBase {
   nodeKind: "dataset";
   /** Which study/solution produced this dataset. */
   sourceStudyId: string | null;
   sourceSolutionId: string | null;
+  lineage?: ResultLineage;
   /** Number of time-samples / field frames recorded. */
   sampleCount: number;
   /** Whether final-state snapshot is available. */
@@ -40,6 +57,15 @@ export interface DatasetNode extends ResultNodeBase {
   eigenModeCount: number;
   /** Whether dispersion data is present. */
   hasDispersion: boolean;
+}
+
+export interface DerivedValueNode extends ResultNodeBase {
+  nodeKind: "derived_value";
+  quantityId: string;
+  sourceDatasetId: string | null;
+  sourceSolutionId: string | null;
+  latestValue: number | null;
+  unit: string | null;
 }
 
 /** A group of related plots, typically from one dataset. */
@@ -126,7 +152,9 @@ export interface ReportSectionEntry {
 // ── Union type ───────────────────────────────────────────────
 
 export type ResultNode =
+  | SolutionNode
   | DatasetNode
+  | DerivedValueNode
   | PlotGroupNode
   | TableNode
   | AnalysisWorkspaceNode
@@ -136,7 +164,9 @@ export type ResultNode =
 // ── Top-level workspace state ────────────────────────────────
 
 export interface ResultsWorkspaceState {
+  solutions: SolutionNode[];
   datasets: DatasetNode[];
+  derivedValues: DerivedValueNode[];
   plotGroups: PlotGroupNode[];
   tables: TableNode[];
   analyses: AnalysisWorkspaceNode[];
@@ -146,7 +176,9 @@ export interface ResultsWorkspaceState {
 }
 
 export const EMPTY_RESULTS_WORKSPACE: ResultsWorkspaceState = {
+  solutions: [],
   datasets: [],
+  derivedValues: [],
   plotGroups: [],
   tables: [],
   analyses: [],
@@ -162,7 +194,9 @@ export function findResultNode(
   nodeId: string,
 ): ResultNode | undefined {
   const all: ResultNode[] = [
+    ...state.solutions,
     ...state.datasets,
+    ...state.derivedValues,
     ...state.plotGroups,
     ...state.tables,
     ...state.analyses,
@@ -175,7 +209,9 @@ export function findResultNode(
 /** List all result nodes ordered by creation time. */
 export function allResultNodes(state: ResultsWorkspaceState): ResultNode[] {
   return [
+    ...state.solutions,
     ...state.datasets,
+    ...state.derivedValues,
     ...state.plotGroups,
     ...state.tables,
     ...state.analyses,

@@ -21,6 +21,7 @@ export interface RibbonCommandContext {
   canRelax?: boolean;
   canPause?: boolean;
   canStop?: boolean;
+  canSkip?: boolean;
   runAction?: string;
   canSyncScriptBuilder?: boolean;
   scriptSyncBusy?: boolean;
@@ -83,7 +84,7 @@ export type RibbonCommand =
   | { id: "visualization.create-preset" }
   | { id: "viewport.toggle-sidebar" }
   | { id: "viewport.focus-selected-object" }
-  | { id: "solver.control"; action: "relax" | "run" | "pause" | "stop" }
+  | { id: "solver.control"; action: "relax" | "run" | "pause" | "stop" | "skip" }
   | { id: "preview.select-quantity"; quantityId: string }
   | { id: "export.results" }
   | { id: "export.state" }
@@ -154,6 +155,7 @@ export function canExecuteRibbonCommand(
       if (command.action === "run") return Boolean(ctx.canRun);
       if (command.action === "relax") return Boolean(ctx.canRelax);
       if (command.action === "pause") return Boolean(ctx.canPause);
+      if (command.action === "skip") return Boolean(ctx.canSkip);
       return Boolean(ctx.canStop);
     case "preview.select-quantity":
       return typeof ctx.onQuickPreviewSelect === "function";

@@ -7,7 +7,9 @@
 
 import type {
   ResultsWorkspaceState,
+  SolutionNode,
   DatasetNode,
+  DerivedValueNode,
   PlotGroupNode,
   TableNode,
   AnalysisWorkspaceNode,
@@ -24,10 +26,17 @@ import { EMPTY_RESULTS_WORKSPACE } from "../model/resultsWorkspace";
 // ── Command types ────────────────────────────────────────────
 
 export type ResultsCommand =
+  // Solution
+  | { type: "solution.add"; solution: SolutionNode }
+  | { type: "solution.remove"; solutionId: string }
   // Dataset
   | { type: "dataset.add"; dataset: DatasetNode }
   | { type: "dataset.remove"; datasetId: string }
   | { type: "dataset.rename"; datasetId: string; label: string }
+  // Derived value
+  | { type: "derived-value.add"; derivedValue: DerivedValueNode }
+  | { type: "derived-value.remove"; derivedValueId: string }
+  | { type: "derived-value.rename"; derivedValueId: string; label: string }
   // Plot group
   | { type: "plot-group.add"; plotGroup: PlotGroupNode }
   | { type: "plot-group.remove"; plotGroupId: string }
@@ -112,6 +121,12 @@ export function applyResultsCommand(
   command: ResultsCommand,
 ): ResultsWorkspaceState {
   switch (command.type) {
+    // ── Solution ──
+    case "solution.add":
+      return { ...state, solutions: [...state.solutions, command.solution] };
+    case "solution.remove":
+      return { ...state, solutions: removeFrom(state.solutions, command.solutionId) };
+
     // ── Dataset ──
     case "dataset.add":
       return { ...state, datasets: [...state.datasets, command.dataset] };
@@ -122,6 +137,23 @@ export function applyResultsCommand(
         ...state,
         datasets: updateIn(state.datasets, command.datasetId, (d) => ({
           ...d,
+          label: command.label,
+        })),
+      };
+
+    // ── Derived value ──
+    case "derived-value.add":
+      return { ...state, derivedValues: [...state.derivedValues, command.derivedValue] };
+    case "derived-value.remove":
+      return {
+        ...state,
+        derivedValues: removeFrom(state.derivedValues, command.derivedValueId),
+      };
+    case "derived-value.rename":
+      return {
+        ...state,
+        derivedValues: updateIn(state.derivedValues, command.derivedValueId, (entry) => ({
+          ...entry,
           label: command.label,
         })),
       };
@@ -274,7 +306,9 @@ export function applyResultsCommand(
     case "result.toggle-pin": {
       return {
         ...state,
+        solutions: togglePinIn(state.solutions, command.nodeId),
         datasets: togglePinIn(state.datasets, command.nodeId),
+        derivedValues: togglePinIn(state.derivedValues, command.nodeId),
         plotGroups: togglePinIn(state.plotGroups, command.nodeId),
         tables: togglePinIn(state.tables, command.nodeId),
         analyses: togglePinIn(state.analyses, command.nodeId),

@@ -227,6 +227,7 @@ export interface CommandContextValue {
   canRelaxCommand: boolean;
   canPauseCommand: boolean;
   canStopCommand: boolean;
+  canSkipCommand: boolean;
   primaryRunAction: string;
   primaryRunLabel: string;
   interactiveEnabled: boolean;

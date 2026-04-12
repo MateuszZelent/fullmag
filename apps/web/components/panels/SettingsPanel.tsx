@@ -21,16 +21,14 @@ import SolverTelemetryPanel from "./settings/SolverTelemetryPanel";
 import EnergyPanel from "./settings/EnergyPanel";
 import StateIoPanel from "./settings/StateIoPanel";
 import VisualizationPresetPanel from "./settings/VisualizationPresetPanel";
+import InspectorRegistryHost from "./InspectorRegistryHost";
 import { CORE_UI_CAPABILITIES } from "@/lib/workspace/capability-contract";
 import { summarizeCapabilityCoverage } from "@/lib/workspace/capability-audit";
 // Legacy imports removed — routing is now handled by inspectorRegistry
 // import { parseStudyNodeContext } from "@/lib/study-builder/node-context";
 // import { isVisualizationTreeNode } from "../runs/control-room/visualizationPresets";
-import { resolveNodeHandle } from "@/features/model-builder/registry/nodeHandleResolver";
 import {
-  inspectorForNodeKind,
   PanelKey,
-  type InspectorContext,
 } from "@/features/model-builder/registry/inspectorRegistry";
 
 /* ── Main SettingsPanel ── */
@@ -204,21 +202,6 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   };
 
   const renderNodeContent = () => {
-    // ── Registry-based dispatch ──
-    // Resolve the semantic handle for this nodeId, then look up the
-    // inspector descriptor.  Composite panels (e.g. MeshSettingsPanel)
-    // are appended automatically.
-    const handle = resolveNodeHandle(nodeId);
-    const descriptor = inspectorForNodeKind(handle);
-    const inspectorCtx: InspectorContext = {
-      nodeId,
-      nodeHandle: handle,
-      selectedObjectId: model.selectedObjectId,
-      selectedObjectNodeId,
-      selectedObjectMeshNodeId,
-    };
-    const panelProps = descriptor.props(inspectorCtx);
-
     // Shared mesh‐settings props (reused by composite panels)
     const meshSettingsProps = {
       options: model.meshOptions,
@@ -229,54 +212,63 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
       waitMode: cmd.isWaitingForCompute,
     };
 
-    // Panel lookup by panelKey — keeps imports in one place
-    const renderPrimary = () => {
-      switch (descriptor.panelKey) {
-        case PanelKey.SESSION:         return <SessionInfoPanel />;
-        case PanelKey.SCRIPT_BUILDER:  return <ScriptBuilderInfoPanel />;
-        case PanelKey.VIS_PRESET:      return <VisualizationPresetPanel nodeId={panelProps.nodeId as string} />;
-        case PanelKey.STUDY:           return <StudyPanel nodeId={panelProps.nodeId as string} />;
-        case PanelKey.UNIVERSE:        return <UniversePanel />;
-        case PanelKey.ANTENNA:         return <AntennaPanel nodeId={panelProps.nodeId as string} />;
-        case PanelKey.PHYSICS:         return <PhysicsPanel />;
-        case PanelKey.RESULTS:         return <ResultsPanel />;
-        case PanelKey.PREVIEW_CONTROLS: return <PreviewControlsPanel />;
-        case PanelKey.ENERGY:          return <EnergyPanel />;
-        case PanelKey.STATE_IO:        return <StateIoPanel />;
-        case PanelKey.MATERIAL:        return <MaterialPanel nodeId={panelProps.nodeId as string} />;
-        case PanelKey.MATERIAL_MAG:    return <MaterialPanel nodeId={panelProps.nodeId as string} view="magnetization" />;
-        case PanelKey.OBJECT_MESH:     return <ObjectMeshPanel nodeId={panelProps.nodeId as string} />;
-        case PanelKey.REGION:          return <RegionPanel nodeId={panelProps.nodeId as string} />;
-        case PanelKey.MESH:            return <MeshPanel />;
-        case PanelKey.MESH_INFO:       return null; // info banner only, composite does the work
-        case PanelKey.OBJ_GEO_MESH:
+    return (
+      <InspectorRegistryHost
+        nodeId={nodeId}
+        selectedObjectId={model.selectedObjectId}
+        selectedObjectNodeId={selectedObjectNodeId}
+        selectedObjectMeshNodeId={selectedObjectMeshNodeId}
+      >
+        {({ descriptor, panelProps }) => {
+          const renderPrimary = () => {
+            switch (descriptor.panelKey) {
+              case PanelKey.SESSION:         return <SessionInfoPanel />;
+              case PanelKey.SCRIPT_BUILDER:  return <ScriptBuilderInfoPanel />;
+              case PanelKey.VIS_PRESET:      return <VisualizationPresetPanel nodeId={panelProps.nodeId as string} />;
+              case PanelKey.STUDY:           return <StudyPanel nodeId={panelProps.nodeId as string} />;
+              case PanelKey.UNIVERSE:        return <UniversePanel />;
+              case PanelKey.ANTENNA:         return <AntennaPanel nodeId={panelProps.nodeId as string} />;
+              case PanelKey.PHYSICS:         return <PhysicsPanel />;
+              case PanelKey.RESULTS:         return <ResultsPanel />;
+              case PanelKey.PREVIEW_CONTROLS: return <PreviewControlsPanel />;
+              case PanelKey.ENERGY:          return <EnergyPanel />;
+              case PanelKey.STATE_IO:        return <StateIoPanel />;
+              case PanelKey.MATERIAL:        return <MaterialPanel nodeId={panelProps.nodeId as string} />;
+              case PanelKey.MATERIAL_MAG:    return <MaterialPanel nodeId={panelProps.nodeId as string} view="magnetization" />;
+              case PanelKey.OBJECT_MESH:     return <ObjectMeshPanel nodeId={panelProps.nodeId as string} />;
+              case PanelKey.REGION:          return <RegionPanel nodeId={panelProps.nodeId as string} />;
+              case PanelKey.MESH:            return <MeshPanel />;
+              case PanelKey.MESH_INFO:       return null;
+              case PanelKey.OBJ_GEO_MESH:
+                return (
+                  <>
+                    <GeometryPanel nodeId={panelProps.nodeId as string} />
+                    <ObjectMeshPanel nodeId={panelProps.meshNodeId as string | undefined} />
+                  </>
+                );
+              case PanelKey.GEOMETRY:
+              default:
+                return <GeometryPanel nodeId={panelProps.nodeId as string | undefined} />;
+            }
+          };
+
+          const hasComposite = descriptor.compositeKeys?.includes(PanelKey.MESH_SETTINGS);
+
           return (
             <>
-              <GeometryPanel nodeId={panelProps.nodeId as string} />
-              <ObjectMeshPanel nodeId={panelProps.meshNodeId as string | undefined} />
+              {descriptor.infoBanner && (
+                <SidebarSection title="Object Mesh Defaults" defaultOpen={true}>
+                  <div className="rounded-lg border border-border/35 bg-background/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+                    {descriptor.infoBanner}
+                  </div>
+                </SidebarSection>
+              )}
+              {renderPrimary()}
+              {hasComposite && <MeshSettingsPanel {...meshSettingsProps} />}
             </>
           );
-        case PanelKey.GEOMETRY:
-        default:
-          return <GeometryPanel nodeId={panelProps.nodeId as string | undefined} />;
-      }
-    };
-
-    // Composite: mesh-settings panel appended when the descriptor says so
-    const hasComposite = descriptor.compositeKeys?.includes(PanelKey.MESH_SETTINGS);
-
-    return (
-      <>
-        {descriptor.infoBanner && (
-          <SidebarSection title="Object Mesh Defaults" defaultOpen={true}>
-            <div className="rounded-lg border border-border/35 bg-background/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
-              {descriptor.infoBanner}
-            </div>
-          </SidebarSection>
-        )}
-        {renderPrimary()}
-        {hasComposite && <MeshSettingsPanel {...meshSettingsProps} />}
-      </>
+        }}
+      </InspectorRegistryHost>
     );
   };
 
