@@ -83,6 +83,16 @@ pub enum NormalizationHint {
     None,
 }
 
+impl NormalizationHint {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnitVector => "unit_vector",
+            Self::MaxAbs => "max_abs",
+            Self::None => "none",
+        }
+    }
+}
+
 impl QuantityId {
     pub const fn as_str(self) -> &'static str {
         match self {

@@ -149,6 +149,10 @@ pub(crate) struct RunManifest {
     pub final_e_ex: Option<f64>,
     pub final_e_demag: Option<f64>,
     pub final_e_ext: Option<f64>,
+    #[serde(default)]
+    pub final_e_ani: Option<f64>,
+    #[serde(default)]
+    pub final_e_dmi: Option<f64>,
     pub final_e_total: Option<f64>,
     pub artifact_dir: String,
 }
@@ -202,6 +206,10 @@ pub(crate) struct ScalarRow {
     pub e_ex: f64,
     pub e_demag: f64,
     pub e_ext: f64,
+    #[serde(default)]
+    pub e_ani: f64,
+    #[serde(default)]
+    pub e_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
@@ -230,6 +238,10 @@ pub(crate) struct StepUpdateView {
     pub e_ex: f64,
     pub e_demag: f64,
     pub e_ext: f64,
+    #[serde(default)]
+    pub e_ani: f64,
+    #[serde(default)]
+    pub e_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
@@ -341,6 +353,14 @@ pub(crate) struct QuantityDescriptor {
     pub quick_access_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scalar_metric_key: Option<String>,
+    // PH-01: extended contract fields
+    pub n_comp: u8,
+    pub domain: String,
+    pub normalization_hint: String,
+    pub supports_preview_2d: bool,
+    pub supports_preview_3d: bool,
+    pub supports_history: bool,
+    pub supports_export: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]

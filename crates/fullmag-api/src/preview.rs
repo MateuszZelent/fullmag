@@ -13,6 +13,8 @@ pub(crate) fn live_step_metric_value(step: &StepUpdateView, metric_key: &str) ->
         "e_ex" => Some(step.e_ex),
         "e_demag" => Some(step.e_demag),
         "e_ext" => Some(step.e_ext),
+        "e_ani" => Some(step.e_ani),
+        "e_dmi" => Some(step.e_dmi),
         "e_total" => Some(step.e_total),
         _ => None,
     }

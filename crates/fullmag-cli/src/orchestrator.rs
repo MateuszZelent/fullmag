@@ -4407,6 +4407,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             e_ex: step.e_ex,
             e_demag: step.e_demag,
             e_ext: step.e_ext,
+            e_ani: step.e_ani,
+            e_dmi: step.e_dmi,
             e_total: step.e_total,
             max_dm_dt: step.max_dm_dt,
             max_h_eff: step.max_h_eff,

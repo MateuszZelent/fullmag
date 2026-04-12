@@ -3351,6 +3351,8 @@ fn scalar_row_metric_value(row: &ScalarRow, metric_key: &str) -> Option<f64> {
         "e_ex" => Some(row.e_ex),
         "e_demag" => Some(row.e_demag),
         "e_ext" => Some(row.e_ext),
+        "e_ani" => Some(row.e_ani),
+        "e_dmi" => Some(row.e_dmi),
         "e_total" => Some(row.e_total),
         _ => None,
     }

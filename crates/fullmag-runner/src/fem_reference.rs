@@ -924,6 +924,8 @@ fn make_step_stats(
         e_ex: observables.exchange_energy,
         e_demag: observables.demag_energy,
         e_ext: observables.external_energy,
+        e_ani: observables.anisotropy_energy,
+        e_dmi: observables.dmi_energy,
         e_total: observables.total_energy,
         max_dm_dt: observables.max_dm_dt,
         max_h_eff: observables.max_h_eff,

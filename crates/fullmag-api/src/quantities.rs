@@ -13,7 +13,7 @@ pub(crate) fn build_quantities(
     run: Option<&RunManifest>,
     metadata: Option<&Value>,
     scalar_rows: &[ScalarRow],
-    field_location: &str,
+    _field_location: &str,
 ) -> Vec<QuantityDescriptor> {
     let dynamic_supported = metadata
         .and_then(|value| value.get("capabilities"))
@@ -69,16 +69,18 @@ pub(crate) fn build_quantities(
                 label: spec.label.to_string(),
                 kind: spec.kind.as_api_kind().to_string(),
                 unit: spec.unit.to_string(),
-                location: match spec.kind {
-                    QuantityKind::GlobalScalar => "global".to_string(),
-                    QuantityKind::VectorField | QuantityKind::SpatialScalar => {
-                        field_location.to_string()
-                    }
-                },
+                location: spec.location.as_str().to_string(),
                 available,
                 interactive_preview,
                 quick_access_label: spec.quick_access_label.map(str::to_string),
                 scalar_metric_key: spec.scalar_metric_key.map(str::to_string),
+                n_comp: spec.n_comp,
+                domain: spec.domain.as_str().to_string(),
+                normalization_hint: spec.normalization_hint.as_str().to_string(),
+                supports_preview_2d: spec.supports_preview_2d,
+                supports_preview_3d: spec.supports_preview_3d,
+                supports_history: spec.supports_history,
+                supports_export: spec.supports_export,
             }
         })
         .collect()
@@ -92,6 +94,8 @@ pub(crate) fn run_manifest_scalar_value(
         "e_ex" => run.and_then(|manifest| manifest.final_e_ex),
         "e_demag" => run.and_then(|manifest| manifest.final_e_demag),
         "e_ext" => run.and_then(|manifest| manifest.final_e_ext),
+        "e_ani" => run.and_then(|manifest| manifest.final_e_ani),
+        "e_dmi" => run.and_then(|manifest| manifest.final_e_dmi),
         "e_total" => run.and_then(|manifest| manifest.final_e_total),
         _ => None,
     }

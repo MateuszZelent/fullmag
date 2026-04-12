@@ -312,6 +312,8 @@ pub(crate) fn scalar_row_from_stats(stats: &fullmag_runner::StepStats) -> Curren
         e_ex: stats.e_ex,
         e_demag: stats.e_demag,
         e_ext: stats.e_ext,
+        e_ani: stats.e_ani,
+        e_dmi: stats.e_dmi,
         e_total: stats.e_total,
         max_dm_dt: stats.max_dm_dt,
         max_h_eff: stats.max_h_eff,

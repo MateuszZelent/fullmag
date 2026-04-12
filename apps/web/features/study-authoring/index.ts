@@ -7,3 +7,14 @@ export { draftSignature, draftsEqual } from "./adapters/draftToSceneDocument";
 export { draftToModelTree } from "./adapters/draftToModelTree";
 export type { ModelTreeNode } from "./adapters/draftToModelTree";
 export * from "./commands/index";
+export { applyPipelineCommand } from "./commands/pipelineCommands";
+export type { StudyPipelineCommand } from "./commands/pipelineCommands";
+export {
+  registerStageTemplate,
+  getStageTemplate,
+  getAllStageTemplates,
+  getStageTemplatesByCategory,
+  stageLabel,
+  stageIconToken,
+} from "./registry/stageTemplateRegistry";
+export type { StageTemplateEntry, StageCategory } from "./registry/stageTemplateRegistry";

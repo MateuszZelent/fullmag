@@ -96,6 +96,8 @@ pub(crate) fn live_state_manifest_from_update(
             e_ex: update.stats.e_ex,
             e_demag: update.stats.e_demag,
             e_ext: update.stats.e_ext,
+            e_ani: update.stats.e_ani,
+            e_dmi: update.stats.e_dmi,
             e_total: update.stats.e_total,
             max_dm_dt: update.stats.max_dm_dt,
             max_h_eff: update.stats.max_h_eff,
@@ -129,6 +131,8 @@ pub(crate) fn running_run_manifest_from_update(
         final_e_ex: Some(update.stats.e_ex),
         final_e_demag: Some(update.stats.e_demag),
         final_e_ext: Some(update.stats.e_ext),
+        final_e_ani: Some(update.stats.e_ani),
+        final_e_dmi: Some(update.stats.e_dmi),
         final_e_total: Some(update.stats.e_total),
         artifact_dir: artifact_dir.display().to_string(),
     }
