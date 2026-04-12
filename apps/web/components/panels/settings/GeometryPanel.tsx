@@ -93,6 +93,45 @@ function readTranslation(object: SceneObject): [number, number, number] {
   return [Number(raw[0]) || 0, Number(raw[1]) || 0, Number(raw[2]) || 0];
 }
 
+function readRotationQuat(object: SceneObject): [number, number, number, number] {
+  const raw = object.transform.rotation_quat ?? [0, 0, 0, 1];
+  return [Number(raw[0]) || 0, Number(raw[1]) || 0, Number(raw[2]) || 0, Number(raw[3]) || 1];
+}
+
+/** Convert quaternion [x, y, z, w] → Euler angles [rx, ry, rz] in degrees (XYZ intrinsic). */
+function quatToEulerDeg(q: [number, number, number, number]): [number, number, number] {
+  const [x, y, z, w] = q;
+  // Roll (X)
+  const sinr_cosp = 2 * (w * x + y * z);
+  const cosr_cosp = 1 - 2 * (x * x + y * y);
+  const rx = Math.atan2(sinr_cosp, cosr_cosp);
+  // Pitch (Y) — clamp to avoid NaN at poles
+  const sinp = 2 * (w * y - z * x);
+  const ry = Math.abs(sinp) >= 1 ? Math.sign(sinp) * (Math.PI / 2) : Math.asin(sinp);
+  // Yaw (Z)
+  const siny_cosp = 2 * (w * z + x * y);
+  const cosy_cosp = 1 - 2 * (y * y + z * z);
+  const rz = Math.atan2(siny_cosp, cosy_cosp);
+
+  const toDeg = 180 / Math.PI;
+  return [rx * toDeg, ry * toDeg, rz * toDeg];
+}
+
+/** Convert Euler angles [rx, ry, rz] in degrees → quaternion [x, y, z, w] (XYZ intrinsic). */
+function eulerDegToQuat(euler: [number, number, number]): [number, number, number, number] {
+  const toRad = Math.PI / 180;
+  const [rx, ry, rz] = [euler[0] * toRad, euler[1] * toRad, euler[2] * toRad];
+  const cx = Math.cos(rx / 2), sx = Math.sin(rx / 2);
+  const cy = Math.cos(ry / 2), sy = Math.sin(ry / 2);
+  const cz = Math.cos(rz / 2), sz = Math.sin(rz / 2);
+  return [
+    sx * cy * cz + cx * sy * sz,
+    cx * sy * cz - sx * cy * sz,
+    cx * cy * sz + sx * sy * cz,
+    cx * cy * cz - sx * sy * sz,
+  ];
+}
+
 function buildProjectedGeometryEntry(
   object: SceneObject,
   material?: SceneMaterialAsset,
@@ -364,6 +403,26 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
     });
   };
 
+  const handleRotation = (idx: number, valStr: string) => {
+    const val = parseFloat(valStr);
+    if (isNaN(val)) return;
+    startTransition(() => {
+      updateObject((object) => {
+        const currentQuat = readRotationQuat(object);
+        const euler = quatToEulerDeg(currentQuat);
+        euler[idx] = val;
+        const newQuat = eulerDegToQuat(euler);
+        return {
+          ...object,
+          transform: {
+            ...object.transform,
+            rotation_quat: newQuat,
+          },
+        };
+      });
+    });
+  };
+
   const assignGeometryPreset = (presetKind: GeometryPresetKind) => {
     setGeometryPresetLibraryOpen(false);
     updateObject((object) => {
@@ -429,6 +488,8 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
 
   const p = geo.geometry_params;
   const translation = readTranslation(sceneObject);
+  const rotationQuat = readRotationQuat(sceneObject);
+  const rotationEuler = quatToEulerDeg(rotationQuat);
   const size = Array.isArray(p.size) ? p.size : [20e-9, 20e-9, 10e-9];
   const scale = p.scale;
   const regionName = sceneObject.region_name?.trim() || sceneObject.name;
@@ -564,9 +625,9 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
           <CompactInputGrid
             label="Rotation"
             fields={[
-              { label: "R_x", value: "0.00", disabled: true },
-              { label: "R_y", value: "0.00", disabled: true },
-              { label: "R_z", value: "0.00", disabled: true },
+              { label: "R_x", value: rotationEuler[0].toFixed(2), onChange: (v) => handleRotation(0, v) },
+              { label: "R_y", value: rotationEuler[1].toFixed(2), onChange: (v) => handleRotation(1, v) },
+              { label: "R_z", value: rotationEuler[2].toFixed(2), onChange: (v) => handleRotation(2, v) },
             ]}
           />
           {Array.isArray(scale) ? (

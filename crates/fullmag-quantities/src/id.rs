@@ -112,9 +112,12 @@ impl std::fmt::Display for QuantityIdError {
 impl std::error::Error for QuantityIdError {}
 
 /// Parse a string into a canonical `QuantityId`.
+///
+/// Accepts the canonical wire-format strings plus common aliases
+/// (e.g. `"M"` → `QuantityId::M`).
 pub fn normalize_quantity_id(requested: &str) -> Result<QuantityId, QuantityIdError> {
     match requested {
-        "m" => Ok(QuantityId::M),
+        "m" | "M" => Ok(QuantityId::M),
         "H_ex" => Ok(QuantityId::HEx),
         "H_demag" => Ok(QuantityId::HDemag),
         "H_ext" => Ok(QuantityId::HExt),

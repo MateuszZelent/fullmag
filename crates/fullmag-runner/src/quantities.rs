@@ -43,13 +43,6 @@ pub fn normalized_quantity_name(requested: &str) -> Result<&'static str, RunErro
 }
 
 pub fn global_scalar_value(id: &str, stats: &StepStats) -> Option<f64> {
-    match quantity_spec(id)?.scalar_metric_key? {
-        "e_ex" => Some(stats.e_ex),
-        "e_demag" => Some(stats.e_demag),
-        "e_ext" => Some(stats.e_ext),
-        "e_ani" => Some(stats.e_ani),
-        "e_dmi" => Some(stats.e_dmi),
-        "e_total" => Some(stats.e_total),
-        _ => None,
-    }
+    let row = stats.to_quantity_row();
+    fullmag_quantities::eval_global_scalar(id, &row)
 }

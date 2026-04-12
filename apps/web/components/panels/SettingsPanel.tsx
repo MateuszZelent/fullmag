@@ -15,6 +15,7 @@ import PhysicsPanel from "./settings/PhysicsPanel";
 import RegionPanel from "./settings/RegionPanel";
 import StudyPanel from "./settings/StudyPanel";
 import UniversePanel from "./settings/UniversePanel";
+import PreviewControlsPanel from "./settings/PreviewControlsPanel";
 import ResultsPanel from "./settings/ResultsPanel";
 import SolverTelemetryPanel from "./settings/SolverTelemetryPanel";
 import EnergyPanel from "./settings/EnergyPanel";
@@ -239,6 +240,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
         case PanelKey.ANTENNA:         return <AntennaPanel nodeId={panelProps.nodeId as string} />;
         case PanelKey.PHYSICS:         return <PhysicsPanel />;
         case PanelKey.RESULTS:         return <ResultsPanel />;
+        case PanelKey.PREVIEW_CONTROLS: return <PreviewControlsPanel />;
         case PanelKey.ENERGY:          return <EnergyPanel />;
         case PanelKey.STATE_IO:        return <StateIoPanel />;
         case PanelKey.MATERIAL:        return <MaterialPanel nodeId={panelProps.nodeId as string} />;

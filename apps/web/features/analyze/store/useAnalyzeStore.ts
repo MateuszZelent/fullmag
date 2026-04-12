@@ -12,6 +12,8 @@ import type {
   AnalyzeQueryState,
   AnalyzeQueryKey,
 } from "../model/analyzeTypes";
+import type { ResultsWorkspaceState } from "../model/resultsWorkspace";
+import { EMPTY_RESULTS_WORKSPACE } from "../model/resultsWorkspace";
 
 export interface AnalyzeStoreState {
   /* ── Selection ── */
@@ -19,6 +21,9 @@ export interface AnalyzeStoreState {
 
   /* ── Query cache (keyed by JSON of AnalyzeQueryKey) ── */
   queries: Record<string, AnalyzeQueryState>;
+
+  /* ── Results workspace ── */
+  resultsWorkspace: ResultsWorkspaceState;
 
   /* ── Actions ── */
   setDomain: (domain: AnalyzeDomain) => void;
@@ -34,6 +39,8 @@ export interface AnalyzeStoreState {
   setQuery: (key: AnalyzeQueryKey, state: Partial<AnalyzeQueryState>) => void;
   /** Invalidate all cached queries. */
   invalidateAll: () => void;
+  /** Replace the results workspace state (used by the results panel). */
+  setResultsWorkspace: (workspace: ResultsWorkspaceState) => void;
 }
 
 const DEFAULT_SELECTION: AnalyzeSelectionState = {
@@ -53,6 +60,7 @@ function queryKeyString(key: AnalyzeQueryKey): string {
 export const useAnalyzeStore = create<AnalyzeStoreState>((set) => ({
   selection: { ...DEFAULT_SELECTION },
   queries: {},
+  resultsWorkspace: { ...EMPTY_RESULTS_WORKSPACE },
 
   setDomain: (domain) =>
     set((s) => ({
@@ -90,4 +98,6 @@ export const useAnalyzeStore = create<AnalyzeStoreState>((set) => ({
     }),
 
   invalidateAll: () => set({ queries: {} }),
+
+  setResultsWorkspace: (resultsWorkspace) => set({ resultsWorkspace }),
 }));

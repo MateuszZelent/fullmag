@@ -70,6 +70,7 @@ export const PanelKey = {
   ANTENNA:             "antenna",
   PHYSICS:             "physics",
   RESULTS:             "results",
+  PREVIEW_CONTROLS:    "preview-controls",
   ENERGY:              "energy",
   STATE_IO:            "state-io",
   GEOMETRY:            "geometry",

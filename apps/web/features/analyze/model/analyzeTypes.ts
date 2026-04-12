@@ -8,7 +8,7 @@ export type {
   AnalyzeSelectionState,
   AnalyzeTab,
   AnalyzeDomain,
-} from "../../../components/runs/control-room/analyzeSelection";
+} from "@/components/runs/control-room/analyzeSelection";
 
 /* ── Query descriptors ── */
 

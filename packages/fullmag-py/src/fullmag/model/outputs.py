@@ -21,6 +21,13 @@ _KNOWN_SCALARS = {
     "max_h_eff",
     "max_dm_dt",
     "max_h_demag",
+    # Per-object scalar aliases
+    "e_ex",
+    "e_demag",
+    "e_ext",
+    "e_ani",
+    "e_dmi",
+    "e_total",
 }
 
 
@@ -55,8 +62,10 @@ class SaveScalar:
 
 
 _KNOWN_FIELDS = {
-    "m", "H_demag", "H_eff", "H_ex", "H_ext", "H_ant",
-    "H_ani", "H_dmi", "H_mel", "H_ani_cubic", "H_dmi_bulk", "H_oe", "H_therm",
+    "m",
+    "H_ex", "H_demag", "H_ext", "H_ant", "H_eff",
+    "H_ani", "H_dmi", "H_mel", "H_ani_cubic", "H_dmi_bulk",
+    "H_oe", "H_therm",
 }
 _COMPONENTS = {"x", "y", "z"}
 
@@ -242,13 +251,18 @@ class SaveEigenDiagnostics:
         }
 
 
-# Canonical quantity IDs (must match fullmag-quantities Rust crate).
+# Canonical quantity IDs — must match fullmag-quantities Rust crate (id.rs).
+# Use lowercase "m" to match the backend canonical wire format.
 _KNOWN_QUANTITY_IDS = {
-    "M", "H_ex", "H_demag", "H_ext", "H_ant", "H_eff",
+    "m", "H_ex", "H_demag", "H_ext", "H_ant", "H_eff",
     "H_ani", "H_dmi", "H_mel", "H_ani_cubic", "H_dmi_bulk", "H_oe", "H_therm",
     "E_ex", "E_demag", "E_ext", "E_ani", "E_dmi", "E_total",
     "mode_amplitude", "mode_real", "mode_imag", "mode_phase",
 }
+
+
+# Backward-compatible aliases (e.g. "M" → "m").
+_QUANTITY_ID_ALIASES: dict[str, str] = {"M": "m"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,7 +272,8 @@ class SaveQuantity:
     Parameters
     ----------
     quantity_id : str
-        Canonical quantity ID (e.g. ``"M"``, ``"H_ex"``, ``"E_ex"``).
+        Canonical quantity ID (e.g. ``"m"``, ``"H_ex"``, ``"E_ex"``).
+        Legacy uppercase ``"M"`` is accepted and normalized to ``"m"``.
     every : float
         Save interval in seconds.
     reduction : str | None
@@ -272,9 +287,9 @@ class SaveQuantity:
     component: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "quantity_id", require_non_empty(self.quantity_id, "quantity_id")
-        )
+        raw = require_non_empty(self.quantity_id, "quantity_id")
+        normalized = _QUANTITY_ID_ALIASES.get(raw, raw)
+        object.__setattr__(self, "quantity_id", normalized)
         if self.quantity_id not in _KNOWN_QUANTITY_IDS:
             raise ValueError(f"unsupported quantity_id '{self.quantity_id}'")
         require_positive(self.every, "every")

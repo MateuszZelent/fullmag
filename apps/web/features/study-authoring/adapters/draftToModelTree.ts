@@ -31,7 +31,7 @@ export function draftToModelTree(draft: SceneDocument | null): ModelTreeNode[] {
     parentId: null,
     children: draft.objects.map((o) => o.id),
     objectId: null,
-    icon: "🌐",
+    icon: "box",
     isLeaf: false,
   });
 
@@ -44,7 +44,7 @@ export function draftToModelTree(draft: SceneDocument | null): ModelTreeNode[] {
       parentId: "universe",
       children: [`${object.id}:material`, `${object.id}:magnetization`],
       objectId: object.id,
-      icon: "📦",
+      icon: "cube",
       isLeaf: false,
     });
 
@@ -57,7 +57,7 @@ export function draftToModelTree(draft: SceneDocument | null): ModelTreeNode[] {
       parentId: object.id,
       children: [],
       objectId: object.id,
-      icon: "🎨",
+      icon: "atom",
       isLeaf: true,
     });
 
@@ -70,7 +70,7 @@ export function draftToModelTree(draft: SceneDocument | null): ModelTreeNode[] {
       parentId: object.id,
       children: [],
       objectId: object.id,
-      icon: "🧲",
+      icon: "compass",
       isLeaf: true,
     });
   }

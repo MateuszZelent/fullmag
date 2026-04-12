@@ -1439,10 +1439,15 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   }, [requestedPreviewQuantity]);
 
   const fieldMap = useMemo<Record<string, Float64Array | null>>(
-    () => ({
-      ...(state?.latest_fields.fields ?? {}),
-      m: liveState?.magnetization ?? state?.latest_fields.fields.m ?? null,
-    }),
+    () => {
+      const fields = { ...(state?.latest_fields.fields ?? {}) };
+      // Backward-compat: legacy liveState.magnetization serves as fallback
+      // for "m" until the backend fully unifies transport (Q16).
+      if (!fields.m && liveState?.magnetization) {
+        fields.m = liveState.magnetization;
+      }
+      return fields;
+    },
     [liveState?.magnetization, state?.latest_fields.fields],
   );
   const renderPreviewMatchesActiveQuantity = renderPreview?.quantity === activeQuantityId;

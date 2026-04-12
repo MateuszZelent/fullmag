@@ -235,6 +235,61 @@ pub struct StepUpdate {
     pub finished: bool,
 }
 
+impl StepUpdate {
+    /// Convert to the canonical V2 transport format.
+    ///
+    /// Extracts diagnostics and scalar row from `StepStats`, and wraps
+    /// the optional magnetization + preview fields as `LiveQuantityFrame`s.
+    pub fn to_v2(&self) -> fullmag_quantities::StepUpdateV2 {
+        let mut frames = Vec::new();
+
+        // Magnetization → LiveQuantityFrame
+        if let Some(ref mag) = self.magnetization {
+            frames.push(fullmag_quantities::LiveQuantityFrame {
+                quantity_id: "m".to_string(),
+                unit: "".to_string(),
+                grid: self.grid,
+                n_comp: 3,
+                values: mag.clone(),
+                active_mask: None,
+            });
+        }
+
+        // Active preview field → LiveQuantityFrame
+        if let Some(ref pf) = self.preview_field {
+            frames.push(fullmag_quantities::LiveQuantityFrame {
+                quantity_id: pf.quantity.clone(),
+                unit: pf.unit.clone(),
+                grid: pf.preview_grid,
+                n_comp: 3,
+                values: pf.vector_field_values.clone(),
+                active_mask: pf.active_mask.clone(),
+            });
+        }
+
+        // Cached preview fields → LiveQuantityFrame each
+        if let Some(ref cached) = self.cached_preview_fields {
+            for cf in cached {
+                frames.push(fullmag_quantities::LiveQuantityFrame {
+                    quantity_id: cf.quantity.clone(),
+                    unit: cf.unit.clone(),
+                    grid: cf.preview_grid,
+                    n_comp: 3,
+                    values: cf.vector_field_values.clone(),
+                    active_mask: cf.active_mask.clone(),
+                });
+            }
+        }
+
+        fullmag_quantities::StepUpdateV2 {
+            diagnostics: self.stats.to_diagnostics(),
+            scalars: self.stats.to_quantity_row(),
+            frames,
+            finished: self.finished,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LivePreviewRequest {
     #[serde(default)]

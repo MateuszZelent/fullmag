@@ -17,6 +17,7 @@ mod fem;
 mod geometry;
 mod magnetization_textures;
 mod mesh;
+pub mod quantities;
 mod util;
 mod validate;
 
@@ -24,6 +25,10 @@ pub mod boundary_geometry;
 
 pub use error::PlanError;
 pub use magnetization_textures::{sample_preset_texture, TextureSamplePoint};
+pub use quantities::{
+    default_capability_matrix, validate_quantity_requests, BackendFamily, CapabilityMatrix,
+    QuantityCapability,
+};
 pub use util::generate_random_unit_vectors;
 
 /// Plans a `ProblemIR` into an `ExecutionPlanIR`.

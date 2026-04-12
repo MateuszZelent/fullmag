@@ -5,7 +5,13 @@
  * analogous to `parseStudyNodeContext` for study nodes.
  * This provides the bridge between legacy tree-node IDs and the
  * first-class ResultsWorkspaceState model.
+ *
+ * When possible, delegates to `resolveNodeHandle` from the model-builder
+ * registry to resolve by NodeKind before falling back to legacy res-* prefixes.
  */
+
+import { resolveNodeHandle, isNodeKindInDomain } from "@/features/model-builder/registry/nodeHandleResolver";
+import type { NodeKind } from "@/features/model-builder/types";
 
 // ── Context types ────────────────────────────────────────────
 
@@ -117,6 +123,11 @@ export function parseResultNodeContext(
 
 /** Check whether a node ID belongs to the results domain. */
 export function isResultNodeId(nodeId: string | null | undefined): boolean {
+  if (!nodeId) return false;
+  // Prefer registry-based check
+  const handle = resolveNodeHandle(nodeId);
+  if (isNodeKindInDomain(handle.nodeKind, "results")) return true;
+  // Legacy fallback
   return parseResultNodeContext(nodeId) !== null;
 }
 

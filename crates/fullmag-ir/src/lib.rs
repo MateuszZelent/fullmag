@@ -3,7 +3,11 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub mod eigen_contract;
+pub mod quantities;
 pub use eigen_contract::*;
+pub use quantities::{
+    field_to_quantity_output, scalar_to_quantity_output, OutputSinkIR, QuantityOutputIR,
+};
 
 pub const IR_VERSION: &str = "0.2.0";
 

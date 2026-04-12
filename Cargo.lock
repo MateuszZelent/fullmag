@@ -1190,6 +1190,7 @@ dependencies = [
 name = "fullmag-ir"
 version = "0.1.0"
 dependencies = [
+ "fullmag-quantities",
  "serde",
  "serde_json",
 ]
@@ -1200,6 +1201,7 @@ version = "0.1.0"
 dependencies = [
  "fullmag-fdm-demag",
  "fullmag-ir",
+ "fullmag-quantities",
  "serde",
  "serde_json",
 ]

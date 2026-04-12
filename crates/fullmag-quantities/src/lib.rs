@@ -18,7 +18,9 @@ pub mod catalog;
 pub mod descriptor;
 pub mod eval;
 pub mod id;
+pub mod provider;
 pub mod reduction;
+pub mod registry;
 pub mod schema_version;
 pub mod step_data;
 pub mod transport;
@@ -35,7 +37,16 @@ pub use step_data::{GlobalQuantityRow, StepDiagnostics};
 pub use eval::{eval_global_scalar, reduce_scalars, reduce_vector_field, QuantityValue};
 pub use transport::{
     build_wire_catalog, LiveQuantityFrame, QuantityCatalogResponse,
-    QuantityDescriptorWire, QuantityPreviewRequest, StepUpdateV2,
+    QuantityDescriptorLive, QuantityDescriptorWire, QuantityPreviewRequest, StepUpdateV2,
+};
+
+// Provider trait and registry (QB-05)
+pub use provider::{
+    EmptyFieldAccess, NamedFieldAccess, QuantityEvalContext, QuantityProvider,
+};
+pub use registry::{
+    register_standard_providers, GlobalScalarProvider, QuantityRegistry,
+    VectorFieldProvider,
 };
 
 /// Shape / kind of a quantity (determines renderer and transport).

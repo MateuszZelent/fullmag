@@ -136,3 +136,33 @@ impl QuantityCatalogResponse {
         }
     }
 }
+
+/// Extended wire descriptor with runtime availability — used by the API
+/// to inject session-specific state into the canonical wire descriptor.
+///
+/// This replaces the ad-hoc `QuantityDescriptor` that lived in the API crate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantityDescriptorLive {
+    /// All static metadata from the catalog.
+    #[serde(flatten)]
+    pub wire: QuantityDescriptorWire,
+    /// Whether the quantity currently has data available in this session.
+    pub available: bool,
+    /// Whether interactive (live) preview is available for this quantity.
+    pub interactive_preview_available: bool,
+}
+
+impl QuantityDescriptorLive {
+    /// Build from a wire descriptor and runtime availability flags.
+    pub fn from_wire(
+        wire: QuantityDescriptorWire,
+        available: bool,
+        interactive_preview_available: bool,
+    ) -> Self {
+        Self {
+            wire,
+            available,
+            interactive_preview_available,
+        }
+    }
+}
