@@ -726,9 +726,10 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     ctx.demag_transfer_cell_size = plan.demag_transfer_cell_size;
 
     // FND-013: read consistent-mass flag from plan.
-    ctx.use_consistent_mass = (plan.use_consistent_mass != 0);
+    // ctx.use_consistent_mass = (plan.use_consistent_mass != 0);
 
 #if FULLMAG_HAS_MFEM_STACK
+    ctx.use_consistent_mass = (plan.use_consistent_mass != 0);
     if (!context_initialize_mfem(ctx, error)) {
         return false;
     }

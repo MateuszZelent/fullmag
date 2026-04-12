@@ -1719,6 +1719,23 @@ bool compute_demag_for_magnetization(
         h_demag_xyz[base + 2] = sampled[2];
     }
 
+    // Save full-domain H_demag for visualization.
+    // The main h_demag_xyz only has values at magnetic nodes (airbox is zero
+    // because non-magnetic nodes were skipped above).  For the visual buffer
+    // we re-sample the transfer grid at every node so that the frontend can
+    // display the stray field in the airbox.
+    ctx.h_demag_visual_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
+    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
+        const Vec3 sampled_vis = sample_cell_centered_vector_field(
+            ctx.transfer_grid.demag_xyz,
+            ctx.transfer_grid.desc,
+            node_coords(ctx, node));
+        const size_t base_vis = static_cast<size_t>(node) * 3u;
+        ctx.h_demag_visual_xyz[base_vis + 0] = sampled_vis[0];
+        ctx.h_demag_visual_xyz[base_vis + 1] = sampled_vis[1];
+        ctx.h_demag_visual_xyz[base_vis + 2] = sampled_vis[2];
+    }
+
     demag_energy = 0.0;
     for (size_t node = 0; node < ctx.mfem_lumped_mass.size(); ++node) {
         if (allow_interrupt &&

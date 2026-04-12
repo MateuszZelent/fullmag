@@ -25,7 +25,9 @@ use crate::cpu_reference;
 use crate::fem_eigen;
 use crate::fem_reference;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
+use crate::interactive_runtime::{
+    cached_preview_quantities_for, display_is_global_scalar, display_refresh_due,
+};
 #[cfg(feature = "cuda")]
 use crate::multilayer_cuda;
 use crate::multilayer_reference;
@@ -2053,6 +2055,38 @@ fn execute_cuda_fdm(
     })
 }
 
+/// Build cached preview fields for all non-active FEM quantities.
+///
+/// This mirrors the cached-preview logic in `CudaInteractiveFdmPreviewRuntime`
+/// so that switching display-quantity in the frontend finds data in the cache
+/// immediately.
+#[cfg(feature = "fem-gpu")]
+fn build_fem_cached_preview_fields(
+    backend: &NativeFemBackend,
+    display_selection: &crate::types::DisplaySelectionState,
+    node_count: usize,
+) -> Option<Vec<crate::LivePreviewField>> {
+    let quantities = cached_preview_quantities_for(display_selection);
+    if quantities.is_empty() {
+        return None;
+    }
+    let base_request = display_selection.preview_request();
+    let mut cached = Vec::new();
+    for quantity in quantities {
+        let mut req = base_request.clone();
+        req.quantity = quantity.to_string();
+        match backend.copy_live_preview_field(&req, node_count) {
+            Ok(field) => cached.push(field),
+            Err(_) => { /* quantity not computed yet — skip */ }
+        }
+    }
+    if cached.is_empty() {
+        None
+    } else {
+        Some(cached)
+    }
+}
+
 #[cfg(feature = "fem-gpu")]
 fn execute_native_fem(
     plan: &FemPlanIR,
@@ -2192,13 +2226,22 @@ fn execute_native_fem(
                     } else {
                         None
                     };
+                    let cached_preview_fields = if preview_due {
+                        build_fem_cached_preview_fields(
+                            &backend,
+                            &display_selection,
+                            node_count,
+                        )
+                    } else {
+                        None
+                    };
                     let action = (live.on_step)(StepUpdate {
                         stats: current_stats.clone(),
                         grid: live.grid,
                         fem_mesh: Some(crate::types::FemMeshPayload::from(plan)),
                         magnetization: None,
                         preview_field,
-                        cached_preview_fields: None,
+                        cached_preview_fields,
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         finished: false,
                     });
@@ -2410,6 +2453,15 @@ fn execute_native_fem(
                     } else {
                         None
                     };
+                    let cached_preview_fields = if preview_due {
+                        build_fem_cached_preview_fields(
+                            &backend,
+                            &display_selection,
+                            node_count,
+                        )
+                    } else {
+                        None
+                    };
                     let action = (live.on_step)(StepUpdate {
                         stats: current_stats.clone(),
                         grid: live.grid,
@@ -2417,7 +2469,7 @@ fn execute_native_fem(
                             .then_some(crate::types::FemMeshPayload::from(plan)),
                         magnetization: None,
                         preview_field,
-                        cached_preview_fields: None,
+                        cached_preview_fields,
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         finished: false,
                     });
@@ -2467,13 +2519,20 @@ fn execute_native_fem(
                 } else {
                     None
                 };
+                let cached_preview_fields = if preview_due {
+                    display_selection.as_ref().and_then(|sel| {
+                        build_fem_cached_preview_fields(&backend, sel, node_count)
+                    })
+                } else {
+                    None
+                };
                 let action = (live.on_step)(StepUpdate {
                     stats: stats.clone(),
                     grid: live.grid,
                     fem_mesh: Some(crate::types::FemMeshPayload::from(plan)),
                     magnetization,
                     preview_field,
-                    cached_preview_fields: None,
+                    cached_preview_fields,
                     scalar_row_due: preview_due && preview_targets_global_scalar,
                     finished: false,
                 });

@@ -5,6 +5,7 @@ import copy
 import io
 import json
 import os
+import importlib.util
 import struct
 import textwrap
 import unittest
@@ -1294,6 +1295,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(assets[0]["cell_size"], [5e-9, 5e-9, 5e-9])
         self.assertLess(sum(assets[0]["active_mask"]), len(assets[0]["active_mask"]))
 
+    @unittest.skipIf(importlib.util.find_spec("trimesh") is None, "trimesh is not installed")
     def test_imported_geometry_problem_exports_fdm_grid_asset(self) -> None:
         geometry = fm.ImportedGeometry(source="examples/nanoflower.stl", name="flower")
         material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
@@ -1327,6 +1329,7 @@ class ProblemApiTests(unittest.TestCase):
             "examples/nanoflower.stl",
         )
 
+    @unittest.skipIf(importlib.util.find_spec("trimesh") is None, "trimesh is not installed")
     def test_imported_nanoflower_problem_preserves_xyz_axis_order_in_fdm_grid_asset(self) -> None:
         geometry = fm.ImportedGeometry(source="examples/nanoflower.stl", name="flower", units="nm")
         material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
@@ -1710,6 +1713,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(loaded.problem.name, "from_problem")
         self.assertEqual(loaded.entrypoint_kind, "problem")
 
+    @unittest.skipIf(importlib.util.find_spec("trimesh") is None, "trimesh is not installed")
     def test_script_relative_imported_geometry_is_resolved_for_ir_and_assets(self) -> None:
         script = """
         import fullmag as fm
@@ -1763,6 +1767,7 @@ class ProblemApiTests(unittest.TestCase):
             "flower",
         )
 
+    @unittest.skipIf(importlib.util.find_spec("trimesh") is None, "trimesh is not installed")
     def test_script_rewrite_preserves_imported_geometry_surface_volume(self) -> None:
         script = """
         import fullmag as fm
