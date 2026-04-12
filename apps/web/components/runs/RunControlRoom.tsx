@@ -44,6 +44,7 @@ import {
   fmtSIOrDash,
   fmtStepValue,
   materializationProgressFromMessage,
+  resolveStudyStageExecutionState,
 } from "./control-room/shared";
 import { parseAnalyzeTreeNode } from "./control-room/analyzeSelection";
 import { parseResultNodeContext } from "@/features/analyze/model/resultNodeContext";
@@ -52,6 +53,7 @@ import BackendErrorNotice from "./control-room/BackendErrorNotice";
 import MeshBuildModal from "./control-room/MeshBuildModal";
 import {
   buildMeshBuildStages,
+  deriveMeshBuildRuntimeState,
   deriveEffectiveMeshTargets,
   deriveMeshBuildProgressValue,
   meshBuildIntentForNode,
@@ -624,6 +626,16 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       ctx.workspaceStatus,
     ],
   );
+  const meshBuildRuntime = useMemo(
+    () =>
+      deriveMeshBuildRuntimeState({
+        meshWorkspace: ctx.meshWorkspace,
+        commandStatus: ctx.commandStatus,
+        meshGenerating: ctx.meshGenerating,
+        scriptSyncBusy: ctx.scriptSyncBusy,
+      }),
+    [ctx.commandStatus, ctx.meshGenerating, ctx.meshWorkspace, ctx.scriptSyncBusy],
+  );
   const meshBuildProgress = useMemo(
     () =>
       deriveMeshBuildProgressValue(
@@ -670,7 +682,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         value: progress,
       };
     }
-    if (meshPhases.length > 0 && (ctx.meshGenerating || ctx.scriptSyncBusy)) {
+    if (meshPhases.length > 0 && meshBuildRuntime.generating) {
       const activeIndex = meshPhases.findIndex((phase) => phase.status === "active");
       const completed = doneMeshPhases + (activeIndex >= 0 ? 0.5 : 0);
       return {
@@ -688,17 +700,19 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     };
   }, [
     ctx.activity.detail,
-    ctx.meshGenerating,
     ctx.meshWorkspace?.mesh_pipeline_status,
-    ctx.scriptSyncBusy,
     ctx.workspaceStatus,
+    meshBuildRuntime.generating,
   ]);
   const footerStage = useMemo(() => {
     const stages = ctx.studyStages ?? [];
-    const total = stages.length;
-    const activityStage = ctx.activity.label.match(/stage\s+(\d+)\/(\d+)/i);
-    const current = activityStage ? Number(activityStage[1]) : (ctx.workspaceStatus === "completed" || ctx.workspaceStatus === "awaiting_command") && total > 0 ? total : 0;
-    const declaredTotal = activityStage ? Number(activityStage[2]) : total;
+    const resolved = resolveStudyStageExecutionState({
+      stageExecution: ctx.stageExecution,
+      totalStages: stages.length,
+      workspaceStatus: ctx.workspaceStatus,
+      activityLabel: ctx.activity.label,
+    });
+    const declaredTotal = resolved.declaredTotal;
     if (declaredTotal <= 0) {
       return {
         label: "Study stages",
@@ -707,21 +721,31 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         value: undefined,
       };
     }
-    const completedStages = Math.max(0, current - (ctx.workspaceStatus === "running" ? 1 : 0));
+    const completedStages = resolved.completedStageIndexes.length;
+    const activeStageNumber =
+      resolved.activeStageIndex != null ? resolved.activeStageIndex + 1 : completedStages;
     const inFlightWeight =
-      ctx.workspaceStatus === "running"
+      resolved.activeStageIndex != null && ctx.workspaceStatus === "running"
         ? 0.5
         : ctx.workspaceStatus === "completed" || ctx.workspaceStatus === "awaiting_command"
           ? 0
           : 0;
     const progress = Math.min(100, ((completedStages + inFlightWeight) / declaredTotal) * 100);
+    const activeStageKind =
+      resolved.activeStageKind ??
+      (resolved.activeStageIndex != null
+        ? stages[resolved.activeStageIndex]?.kind ?? null
+        : null);
     return {
-      label: `Study stages ${Math.max(current, completedStages)}/${declaredTotal}`,
-      detail: activityStage ? ctx.activity.label : stages[Math.max(0, current - 1)]?.kind ?? "Waiting for first scripted stage",
+      label: `Study stages ${Math.max(activeStageNumber, completedStages)}/${declaredTotal}`,
+      detail:
+        resolved.activeStageIndex != null
+          ? `Running ${activeStageKind ?? "stage"}`
+          : activeStageKind ?? stages[Math.max(0, completedStages - 1)]?.kind ?? "Waiting for first scripted stage",
       mode: "determinate" as const,
       value: ctx.workspaceStatus === "completed" || ctx.workspaceStatus === "awaiting_command" ? 100 : progress,
     };
-  }, [ctx.activity.label, ctx.studyStages, ctx.workspaceStatus]);
+  }, [ctx.activity.label, ctx.stageExecution, ctx.studyStages, ctx.workspaceStatus]);
 
   const ensureMeshBuildModal = useCallback((intent: ReturnType<typeof meshBuildIntentForNode>) => {
     setMeshBuildError(null);
@@ -929,11 +953,11 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 
   const handleCloseMeshBuildDialog = useCallback(() => {
     setMeshBuildDialogOpen(false);
-    if (!ctx.meshGenerating && !ctx.scriptSyncBusy) {
+    if (!meshBuildRuntime.generating) {
       setMeshBuildError(null);
       setMeshBuildOpenedAt(null);
     }
-  }, [ctx.meshGenerating, ctx.scriptSyncBusy]);
+  }, [meshBuildRuntime.generating]);
 
   const handleStageChange = useCallback((stage: WorkspaceMode) => {
     ctx.setWorkspaceMode(stage);
@@ -1304,14 +1328,14 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 
       <MeshBuildModal
         open={meshBuildDialogOpen}
-        generating={ctx.meshGenerating || ctx.scriptSyncBusy}
+        generating={meshBuildRuntime.generating}
         intent={meshBuildIntent}
         stages={meshBuildStages}
         progressValue={meshBuildProgress}
         engineLog={ctx.engineLog}
         meshWorkspace={ctx.meshWorkspace}
         effectiveTargets={effectiveMeshTargets}
-        errorMessage={meshBuildError}
+        errorMessage={meshBuildError ?? meshBuildRuntime.errorMessage}
         errorDetails={meshBuildBackendError}
         onBackground={handleBackgroundMeshBuild}
         onClose={handleCloseMeshBuildDialog}

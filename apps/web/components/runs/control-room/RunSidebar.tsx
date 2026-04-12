@@ -14,9 +14,9 @@ import { useCommand, useModel, useTransport, useViewport } from "./ControlRoomCo
 import { parseAnalyzeTreeNode } from "./analyzeSelection";
 import {
   findTreeNodeById,
-  parseStageExecutionMessage,
   previewQuantityForTreeNode,
   resolveAntennaNodeName,
+  resolveStudyStageExecutionState,
   resolveSelectedObjectId,
 } from "./shared";
 import {
@@ -325,37 +325,13 @@ export default function RunSidebar() {
   }, [graphResultsWorkspace]);
 
   const stageExecutionState = useMemo(() => {
-    const parsed = parseStageExecutionMessage(cmd.activity.label ?? null);
-    const totalStages = model.studyStages.length;
-    const completed = new Set<number>();
-    let activeStageIndex: number | null = null;
-
-    if (parsed && Number.isFinite(parsed.current) && parsed.current > 0) {
-      activeStageIndex = Math.max(0, parsed.current - 1);
-      for (let index = 0; index < activeStageIndex; index += 1) {
-        completed.add(index);
-      }
-      if (
-        (cmd.workspaceStatus === "completed" || cmd.workspaceStatus === "awaiting_command") &&
-        activeStageIndex < totalStages
-      ) {
-        completed.add(activeStageIndex);
-        activeStageIndex = null;
-      }
-    } else if (
-      totalStages > 0 &&
-      (cmd.workspaceStatus === "completed" || cmd.workspaceStatus === "awaiting_command")
-    ) {
-      for (let index = 0; index < totalStages; index += 1) {
-        completed.add(index);
-      }
-    }
-
-    return {
-      activeStageIndex,
-      completedStageIndexes: Array.from(completed).sort((a, b) => a - b),
-    };
-  }, [cmd.activity.label, cmd.workspaceStatus, model.studyStages.length]);
+    return resolveStudyStageExecutionState({
+      stageExecution: cmd.stageExecution,
+      totalStages: model.studyStages.length,
+      workspaceStatus: cmd.workspaceStatus,
+      activityLabel: cmd.activity.label ?? null,
+    });
+  }, [cmd.activity.label, cmd.stageExecution, cmd.workspaceStatus, model.studyStages.length]);
 
   const pipelineStageIndexesByNodeId = useMemo(() => {
     const document =

@@ -193,6 +193,9 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
   if (!merged.command_status && prev.command_status) {
     merged.command_status = prev.command_status;
   }
+  if (!merged.stage_execution && prev.stage_execution) {
+    merged.stage_execution = prev.stage_execution;
+  }
 
   return merged;
 }

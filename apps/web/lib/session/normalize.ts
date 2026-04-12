@@ -1606,6 +1606,28 @@ function normalizeMeshWorkspace(raw: any): MeshWorkspaceState | null {
   };
 }
 
+function normalizeStageExecutionState(raw: any) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  return {
+    total_stages: Number(raw.total_stages ?? 0),
+    completed_stage_indexes: Array.isArray(raw.completed_stage_indexes)
+      ? raw.completed_stage_indexes
+          .map((value: unknown) => Number(value ?? -1))
+          .filter((value: number) => Number.isFinite(value) && value >= 0)
+      : [],
+    active_stage_index:
+      typeof raw.active_stage_index === "number" && Number.isFinite(raw.active_stage_index)
+        ? Math.max(0, Math.trunc(raw.active_stage_index))
+        : null,
+    active_stage_kind:
+      typeof raw.active_stage_kind === "string" ? raw.active_stage_kind : null,
+    runtime_state:
+      typeof raw.runtime_state === "string" ? raw.runtime_state : "idle",
+  };
+}
+
 function normalizeMeshBuildIntent(raw: unknown): import("./types").MeshBuildIntent | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
@@ -1731,6 +1753,7 @@ export function normalizeSessionState(
       raw.capabilities && typeof raw.capabilities === "object" ? raw.capabilities : null,
     metadata: raw.metadata ?? null,
     mesh_workspace: normalizeMeshWorkspace(raw.mesh_workspace),
+    stage_execution: normalizeStageExecutionState(raw.stage_execution),
     scene_document: sceneDocument,
     script_builder: scriptBuilder,
     model_builder_graph: modelBuilderGraph,

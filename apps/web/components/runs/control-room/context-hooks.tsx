@@ -45,6 +45,7 @@ import type {
   ScriptBuilderCurrentModuleEntry,
   ScriptBuilderExcitationAnalysisEntry,
   ScriptBuilderGeometryEntry,
+  StageExecutionState,
   ScriptBuilderUniverseState,
   StudyPipelineDocumentState,
 } from "../../../lib/session/types";
@@ -219,6 +220,7 @@ export interface CommandContextValue {
   activity: ActivityInfo;
   sessionFooter: SessionFooterData;
   runtimeStatus: RuntimeStatusState | null;
+  stageExecution: StageExecutionState | null;
   runtimeCanAcceptCommands: boolean;
   commandStatus: CommandStatus | null;
   activeCommandKind: string | null;

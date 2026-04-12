@@ -25,6 +25,7 @@ import {
   type ViewportMode,
 } from "../shared";
 import {
+  deriveMeshBuildRuntimeState,
   deriveMeshWorkspacePreset,
   type MeshWorkspacePresetId,
 } from "../meshWorkspace";
@@ -65,6 +66,7 @@ export interface UseFemMeshDerivedParams {
   meshGenerating: boolean;
   commandStatus: any;
   meshSummary: any;
+  meshWorkspace: any;
   selectedSidebarNodeId: string | null;
   selectedObjectId: string | null;
   airMeshVisible: boolean;
@@ -162,6 +164,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
     meshGenerating,
     commandStatus,
     meshSummary,
+    meshWorkspace,
     selectedSidebarNodeId,
     selectedObjectId,
     airMeshVisible,
@@ -515,6 +518,39 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
   // Effect: clear meshGenerating on topology change
   useEffect(() => {
     if (!meshGenerating) return;
+    const meshBuildRuntime = deriveMeshBuildRuntimeState({
+      meshWorkspace,
+      commandStatus,
+      meshGenerating,
+      scriptSyncBusy: false,
+    });
+    if (meshBuildRuntime.status === "failure") {
+      meshGenTopologyRef.current = null;
+      meshGenGenerationRef.current = null;
+      pendingMeshConfigSignatureRef.current = null;
+      setMeshGenerating(false);
+      return;
+    }
+    if (meshBuildRuntime.hasStructuredSuccess) {
+      const nodeCount =
+        meshSummary?.node_count
+        ?? (effectiveFemMesh ? effectiveFemMesh.nodes.length : 0);
+      const elementCount =
+        meshSummary?.element_count
+        ?? (effectiveFemMesh ? effectiveFemMesh.elements.length : 0);
+      appendFrontendTrace(
+        "success",
+        `RX: REMESH confirmed by backend — ${nodeCount.toLocaleString()} nodes · ${elementCount.toLocaleString()} tetrahedra`,
+      );
+      setLastBuiltMeshConfigSignature(
+        pendingMeshConfigSignatureRef.current ?? meshConfigSignatureRef.current,
+      );
+      meshGenTopologyRef.current = null;
+      meshGenGenerationRef.current = null;
+      pendingMeshConfigSignatureRef.current = null;
+      setMeshGenerating(false);
+      return;
+    }
     const currentGenerationId =
       effectiveFemMesh?.generation_id ?? meshSummary?.generation_id ?? null;
     const generationChanged =
@@ -544,23 +580,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
       pendingMeshConfigSignatureRef.current = null;
       setMeshGenerating(false);
     }
-  }, [appendFrontendTrace, effectiveFemMesh, femTopologyKey, meshGenerating, meshSummary]);
-
-  // Effect: clear meshGenerating on rejection
-  useEffect(() => {
-    if (!meshGenerating) return;
-    // Backend rejected or completed the remesh with an error → stop spinner
-    if (
-      commandStatus?.command_kind === "remesh" &&
-      (commandStatus.state === "rejected" ||
-        (commandStatus.completion_state != null && commandStatus.completion_state !== "ok"))
-    ) {
-      meshGenTopologyRef.current = null;
-      meshGenGenerationRef.current = null;
-      pendingMeshConfigSignatureRef.current = null;
-      setMeshGenerating(false);
-    }
-  }, [meshGenerating, commandStatus]);
+  }, [appendFrontendTrace, commandStatus, effectiveFemMesh, femTopologyKey, meshGenerating, meshSummary, meshWorkspace]);
 
   // -------------------------------------------------------------------------
   // Memos: color field, workspace, config

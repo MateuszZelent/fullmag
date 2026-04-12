@@ -3,6 +3,7 @@ import { parseOptionalFiniteNumberText, normalizeVisualizationPresetRef } from "
 import { commandKindLabel, sameDisplaySelection } from "../components/runs/control-room/helpers";
 import {
   deriveMeshWorkspacePreset,
+  deriveMeshBuildRuntimeState,
   isMeshNodeId,
   estimateDenseSolverRamGb,
   deriveMeshBuildProgressValue,
@@ -10,6 +11,7 @@ import {
 import {
   materializationProgressFromMessage,
   parseStageExecutionMessage,
+  resolveStudyStageExecutionState,
   asVec3,
   combineBounds,
 } from "../components/runs/control-room/shared";
@@ -221,6 +223,87 @@ describe("estimateDenseSolverRamGb", () => {
   });
 });
 
+describe("deriveMeshBuildRuntimeState", () => {
+  it("treats active_build as the canonical running signal", () => {
+    expect(
+      deriveMeshBuildRuntimeState({
+        meshWorkspace: {
+          mesh_summary: null,
+          mesh_quality_summary: null,
+          mesh_pipeline_status: [],
+          mesh_capabilities: null,
+          mesh_adaptivity_state: null,
+          mesh_history: [],
+          active_build: { mode: "selected", target: { kind: "study_domain" } },
+          effective_airbox_target: null,
+          effective_per_object_targets: null,
+          last_build_summary: null,
+          last_build_error: null,
+        },
+        commandStatus: null,
+        meshGenerating: false,
+        scriptSyncBusy: false,
+      }).status,
+    ).toBe("running");
+  });
+
+  it("treats remesh completion plus build summary as success", () => {
+    expect(
+      deriveMeshBuildRuntimeState({
+        meshWorkspace: {
+          mesh_summary: null,
+          mesh_quality_summary: null,
+          mesh_pipeline_status: [],
+          mesh_capabilities: null,
+          mesh_adaptivity_state: null,
+          mesh_history: [],
+          active_build: null,
+          effective_airbox_target: null,
+          effective_per_object_targets: null,
+          last_build_summary: { kind: "mesh_build_summary" },
+          last_build_error: null,
+        },
+        commandStatus: {
+          command_kind: "remesh",
+          state: "completed",
+          completion_state: "ok",
+          reason: null,
+        },
+        meshGenerating: false,
+        scriptSyncBusy: false,
+      }).status,
+    ).toBe("success");
+  });
+
+  it("surfaces rejection and backend error as failure", () => {
+    const runtime = deriveMeshBuildRuntimeState({
+      meshWorkspace: {
+        mesh_summary: null,
+        mesh_quality_summary: null,
+        mesh_pipeline_status: [],
+        mesh_capabilities: null,
+        mesh_adaptivity_state: null,
+        mesh_history: [],
+        active_build: null,
+        effective_airbox_target: null,
+        effective_per_object_targets: null,
+        last_build_summary: null,
+        last_build_error: "mesh failed",
+      },
+      commandStatus: {
+        command_kind: "remesh",
+        state: "rejected",
+        completion_state: null,
+        reason: "backend rejected",
+      },
+      meshGenerating: true,
+      scriptSyncBusy: false,
+    });
+    expect(runtime.status).toBe("failure");
+    expect(runtime.errorMessage).toBe("backend rejected");
+  });
+});
+
 describe("deriveMeshBuildProgressValue", () => {
   it("uses fallbackValue when provided", () => {
     expect(deriveMeshBuildProgressValue([], 50)).toBe(50);
@@ -248,6 +331,65 @@ describe("deriveMeshBuildProgressValue", () => {
       { id: "ready" as const, label: "", status: "done" as const, detail: null },
     ];
     expect(deriveMeshBuildProgressValue(stages, undefined)).toBe(100);
+  });
+});
+
+describe("resolveStudyStageExecutionState", () => {
+  it("prefers typed stage execution contract over activity parsing", () => {
+    expect(
+      resolveStudyStageExecutionState({
+        stageExecution: {
+          total_stages: 3,
+          completed_stage_indexes: [0],
+          active_stage_index: 1,
+          active_stage_kind: "relax",
+          runtime_state: "running",
+        },
+        totalStages: 3,
+        workspaceStatus: "running",
+        activityLabel: "executing stage 3/3 (wrong)",
+      }),
+    ).toMatchObject({
+      declaredTotal: 3,
+      activeStageIndex: 1,
+      completedStageIndexes: [0],
+      activeStageKind: "relax",
+      source: "contract",
+    });
+  });
+
+  it("falls back to activity parsing when typed metadata is missing", () => {
+    expect(
+      resolveStudyStageExecutionState({
+        stageExecution: null,
+        totalStages: 2,
+        workspaceStatus: "running",
+        activityLabel: "executing stage 1/2 (relax)",
+      }),
+    ).toMatchObject({
+      declaredTotal: 2,
+      activeStageIndex: 0,
+      completedStageIndexes: [],
+      activeStageKind: "relax",
+      source: "fallback",
+    });
+  });
+
+  it("marks all stages completed when backend contract reports no active stage", () => {
+    expect(
+      resolveStudyStageExecutionState({
+        stageExecution: {
+          total_stages: 2,
+          completed_stage_indexes: [0, 1],
+          active_stage_index: null,
+          active_stage_kind: null,
+          runtime_state: "awaiting_command",
+        },
+        totalStages: 2,
+        workspaceStatus: "awaiting_command",
+        activityLabel: null,
+      }).completedStageIndexes,
+    ).toEqual([0, 1]);
   });
 });
 

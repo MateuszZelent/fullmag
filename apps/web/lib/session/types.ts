@@ -408,6 +408,14 @@ export interface CommandStatus {
   mesh_reason?: string | null;
 }
 
+export interface StageExecutionState {
+  total_stages: number;
+  completed_stage_indexes: number[];
+  active_stage_index: number | null;
+  active_stage_kind: string | null;
+  runtime_state: string;
+}
+
 export interface ScriptBuilderSolverState {
   integrator: string;
   fixed_timestep: string;
@@ -1106,6 +1114,7 @@ export interface SessionState {
   capabilities?: BackendCapabilities | null;
   metadata: SessionMetadata | null;
   mesh_workspace: MeshWorkspaceState | null;
+  stage_execution: StageExecutionState | null;
   scene_document: SceneDocument | null;
   script_builder: ScriptBuilderState | null;
   model_builder_graph: ModelBuilderGraphV2 | null;

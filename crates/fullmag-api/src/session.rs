@@ -96,6 +96,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLivePublishRequest) -> Ses
         capabilities: None,
         metadata: None,
         mesh_workspace: None,
+        stage_execution: None,
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
@@ -145,6 +146,9 @@ pub(crate) fn apply_current_live_publish(
     }
     if let Some(mesh_workspace) = req.mesh_workspace {
         current.mesh_workspace = Some(mesh_workspace);
+    }
+    if let Some(stage_execution) = req.stage_execution {
+        current.stage_execution = Some(stage_execution);
     }
     if let Some(run) = req.run {
         current.session.run_id = run.run_id.clone();

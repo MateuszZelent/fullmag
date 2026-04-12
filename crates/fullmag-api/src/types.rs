@@ -334,6 +334,8 @@ pub(crate) struct SessionStateResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_workspace: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_execution: Option<StageExecutionState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_document: Option<SceneDocument>,
     pub scalar_rows: Vec<ScalarRow>,
     pub engine_log: Vec<EngineLogEntry>,
@@ -399,6 +401,7 @@ pub(crate) struct SessionStateEventView<'a> {
     pub capabilities: Option<&'a BackendCapabilities>,
     pub metadata: Option<&'a Value>,
     pub mesh_workspace: Option<&'a Value>,
+    pub stage_execution: Option<&'a StageExecutionState>,
     pub scene_document: Option<&'a SceneDocument>,
     pub scalar_rows: &'a [ScalarRow],
     pub engine_log: &'a [EngineLogEntry],
@@ -424,6 +427,7 @@ pub(crate) struct SessionStateResponseView<'a> {
     pub runtime_status: &'a RuntimeStatusView,
     pub metadata: Option<&'a Value>,
     pub mesh_workspace: Option<&'a Value>,
+    pub stage_execution: Option<&'a StageExecutionState>,
     pub scene_document: Option<&'a SceneDocument>,
     pub scalar_rows: &'a [ScalarRow],
     pub engine_log: &'a [EngineLogEntry],
@@ -768,6 +772,8 @@ pub(crate) struct CurrentLivePublishRequest {
     #[serde(default)]
     pub mesh_workspace: Option<Value>,
     #[serde(default)]
+    pub stage_execution: Option<StageExecutionState>,
+    #[serde(default)]
     pub run: Option<RunManifest>,
     #[serde(default)]
     pub live_state: Option<LiveState>,
@@ -787,6 +793,18 @@ pub(crate) struct CurrentLivePublishRequest {
     /// are also accepted for backwards compatibility.
     #[serde(default)]
     pub fem_mesh: Option<FemMeshPayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StageExecutionState {
+    pub total_stages: usize,
+    #[serde(default)]
+    pub completed_stage_indexes: Vec<usize>,
+    #[serde(default)]
+    pub active_stage_index: Option<usize>,
+    #[serde(default)]
+    pub active_stage_kind: Option<String>,
+    pub runtime_state: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1009,6 +1027,7 @@ mod tests {
             },
             metadata: None,
             mesh_workspace: None,
+            stage_execution: None,
             scene_document: Some(scene_document),
             scalar_rows: Vec::new(),
             engine_log: Vec::new(),
@@ -1030,6 +1049,7 @@ mod tests {
             runtime_status: &response.runtime_status,
             metadata: response.metadata.as_ref(),
             mesh_workspace: response.mesh_workspace.as_ref(),
+            stage_execution: response.stage_execution.as_ref(),
             scene_document: response.scene_document.as_ref(),
             scalar_rows: &response.scalar_rows,
             engine_log: &response.engine_log,

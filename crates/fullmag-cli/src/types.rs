@@ -366,6 +366,18 @@ pub(crate) struct CurrentLiveScalarRow {
     pub max_h_demag: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub(crate) struct CurrentLiveStageExecutionState {
+    pub total_stages: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completed_stage_indexes: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_stage_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_stage_kind: Option<String>,
+    pub runtime_state: String,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub(crate) struct CurrentLivePublishPayload {
     pub session: Option<SessionManifest>,
@@ -380,6 +392,8 @@ pub(crate) struct CurrentLivePublishPayload {
     pub engine_log: Option<Vec<EngineLogEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_workspace: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_execution: Option<CurrentLiveStageExecutionState>,
     /// Typed runtime status for the frontend typed protocol.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_status: Option<fullmag_runner::RuntimeStatus>,
@@ -458,6 +472,8 @@ pub(crate) struct CurrentLivePublishRequest<'a> {
     pub engine_log: Option<&'a [EngineLogEntry]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_workspace: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_execution: Option<&'a CurrentLiveStageExecutionState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_mesh: Option<&'a fullmag_runner::FemMeshPayload>,
 }

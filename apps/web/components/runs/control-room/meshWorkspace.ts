@@ -73,6 +73,13 @@ export interface EffectiveMeshTarget {
   algorithm3d: number | null;
 }
 
+export interface MeshBuildRuntimeState {
+  status: "idle" | "running" | "success" | "failure";
+  generating: boolean;
+  errorMessage: string | null;
+  hasStructuredSuccess: boolean;
+}
+
 export const MESH_WORKSPACE_PRESETS: MeshWorkspacePreset[] = [
   {
     id: "inspect-surface",
@@ -233,7 +240,7 @@ export function meshBuildIntentForNode(args: {
     return {
       mode,
       targetNodeId: nodeId ?? null,
-      targetLabel: hasSharedAirboxDomain ? "study domain mesh" : "FEM mesh",
+      targetLabel: "shared study-domain mesh",
       title: "Build All",
       contextLabel: null,
       buildIntent: { mode: "all", target: { kind: "study_domain" } },
@@ -246,16 +253,18 @@ export function meshBuildIntentForNode(args: {
   let contextLabel: string | null = null;
   if (buildIntent.target.kind === "object_mesh") {
     contextLabel =
-      resolveObjectNameFromNodeId(nodeId ?? undefined, sceneDocument?.objects ?? [])
-      ?? buildIntent.target.object_id
-      ?? "selected object";
+      `object override · ${
+        resolveObjectNameFromNodeId(nodeId ?? undefined, sceneDocument?.objects ?? [])
+        ?? buildIntent.target.object_id
+        ?? "selected object"
+      }`;
   } else if (buildIntent.target.kind === "airbox") {
-    contextLabel = "airbox";
+    contextLabel = "airbox sizing / shared-domain envelope";
   }
   return {
     mode,
     targetNodeId: nodeId ?? (hasSharedAirboxDomain ? "mesh" : "universe-mesh"),
-    targetLabel: hasSharedAirboxDomain ? "study domain mesh" : "FEM mesh",
+    targetLabel: "shared study-domain mesh",
     title: "Build Selected",
     contextLabel,
     buildIntent,
@@ -284,6 +293,72 @@ export function buildMeshConfigurationSignature(
       object_mesh: object.object_mesh ?? object.mesh_override,
     })),
   });
+}
+
+export function deriveMeshBuildRuntimeState(args: {
+  meshWorkspace: MeshWorkspaceState | null;
+  commandStatus: {
+    command_kind?: string | null;
+    state?: string | null;
+    completion_state?: string | null;
+    reason?: string | null;
+  } | null;
+  meshGenerating: boolean;
+  scriptSyncBusy: boolean;
+}): MeshBuildRuntimeState {
+  const { meshWorkspace, commandStatus, meshGenerating, scriptSyncBusy } = args;
+  const remeshCommand = commandStatus?.command_kind === "remesh" ? commandStatus : null;
+  const commandRejected =
+    remeshCommand?.state === "rejected"
+      ? remeshCommand.reason ?? "Mesh build command was rejected"
+      : null;
+  const commandFailed =
+    remeshCommand?.state === "completed" &&
+    remeshCommand.completion_state != null &&
+    remeshCommand.completion_state !== "ok"
+      ? remeshCommand.completion_state
+      : null;
+  const workspaceFailed = meshWorkspace?.last_build_error ?? null;
+  const failureMessage = commandRejected ?? commandFailed ?? workspaceFailed;
+  if (failureMessage) {
+    return {
+      status: "failure",
+      generating: false,
+      errorMessage: failureMessage,
+      hasStructuredSuccess: false,
+    };
+  }
+
+  const activeBuild = meshWorkspace?.active_build ?? null;
+  if (scriptSyncBusy || meshGenerating || activeBuild != null) {
+    return {
+      status: "running",
+      generating: true,
+      errorMessage: null,
+      hasStructuredSuccess: false,
+    };
+  }
+
+  const structuredSuccess =
+    remeshCommand?.state === "completed" &&
+    remeshCommand.completion_state === "ok" &&
+    activeBuild == null &&
+    meshWorkspace?.last_build_summary != null;
+  if (structuredSuccess) {
+    return {
+      status: "success",
+      generating: false,
+      errorMessage: null,
+      hasStructuredSuccess: true,
+    };
+  }
+
+  return {
+    status: "idle",
+    generating: false,
+    errorMessage: null,
+    hasStructuredSuccess: false,
+  };
 }
 
 function stageStatus(

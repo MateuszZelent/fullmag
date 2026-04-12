@@ -10,6 +10,7 @@ import type {
   ModelBuilderGraphV2,
   SceneDocument,
   ScriptBuilderGeometryEntry,
+  StageExecutionState,
 } from "../../../lib/session/types";
 import type { TreeNodeData } from "../../panels/ModelTree";
 
@@ -147,6 +148,77 @@ export function parseStageExecutionMessage(
     current: Number(match[1]),
     total: Number(match[2]),
     kind: match[3],
+  };
+}
+
+export function resolveStudyStageExecutionState(args: {
+  stageExecution: StageExecutionState | null | undefined;
+  totalStages: number;
+  workspaceStatus: string;
+  activityLabel?: string | null;
+}) {
+  const { stageExecution, totalStages, workspaceStatus, activityLabel = null } = args;
+  const declaredTotal = Math.max(
+    0,
+    stageExecution?.total_stages && stageExecution.total_stages > 0
+      ? stageExecution.total_stages
+      : totalStages,
+  );
+
+  if (stageExecution && declaredTotal > 0) {
+    const completed = Array.from(
+      new Set(
+        stageExecution.completed_stage_indexes.filter(
+          (value) => Number.isFinite(value) && value >= 0 && value < declaredTotal,
+        ),
+      ),
+    ).sort((lhs, rhs) => lhs - rhs);
+    const activeStageIndex =
+      stageExecution.active_stage_index != null &&
+      stageExecution.active_stage_index >= 0 &&
+      stageExecution.active_stage_index < declaredTotal
+        ? stageExecution.active_stage_index
+        : null;
+    return {
+      declaredTotal,
+      activeStageIndex,
+      completedStageIndexes: completed,
+      activeStageKind: stageExecution.active_stage_kind,
+      runtimeState: stageExecution.runtime_state,
+      source: "contract" as const,
+    };
+  }
+
+  const parsed = parseStageExecutionMessage(activityLabel);
+  const completed = new Set<number>();
+  let activeStageIndex: number | null = null;
+  if (parsed && Number.isFinite(parsed.current) && parsed.current > 0) {
+    activeStageIndex = Math.max(0, parsed.current - 1);
+    for (let index = 0; index < activeStageIndex; index += 1) {
+      completed.add(index);
+    }
+    if (
+      (workspaceStatus === "completed" || workspaceStatus === "awaiting_command") &&
+      activeStageIndex < declaredTotal
+    ) {
+      completed.add(activeStageIndex);
+      activeStageIndex = null;
+    }
+  } else if (
+    declaredTotal > 0 &&
+    (workspaceStatus === "completed" || workspaceStatus === "awaiting_command")
+  ) {
+    for (let index = 0; index < declaredTotal; index += 1) {
+      completed.add(index);
+    }
+  }
+  return {
+    declaredTotal,
+    activeStageIndex,
+    completedStageIndexes: Array.from(completed).sort((lhs, rhs) => lhs - rhs),
+    activeStageKind: parsed?.kind ?? null,
+    runtimeState: workspaceStatus,
+    source: "fallback" as const,
   };
 }
 

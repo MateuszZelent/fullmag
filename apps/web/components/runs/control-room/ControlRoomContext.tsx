@@ -404,6 +404,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   );
   const runtimeStatus = state?.runtime_status ?? null;
   const commandStatus = state?.command_status ?? null;
+  const stageExecution = state?.stage_execution ?? null;
   const scalarRows = state?.scalar_rows ?? EMPTY_SCALAR_ROWS;
   const engineLog = state?.engine_log ?? EMPTY_ENGINE_LOG;
   const quantities = state?.quantities ?? EMPTY_QUANTITIES;
@@ -1621,6 +1622,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshGenerating,
     commandStatus,
     meshSummary,
+    meshWorkspace,
     selectedSidebarNodeId,
     selectedObjectId,
     airMeshVisible,
@@ -1718,7 +1720,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     connection, error, session, run, metadata, engineLog: mergedEngineLog, quantities, artifacts: artifactsArr,
     workspaceStatus, isWaitingForCompute, solverNotStartedMessage, isFemBackend, runtimeEngineLabel,
     runtimeEngineGpuLabel, runtimeEngineGpuDevice,
-    activity, sessionFooter, runtimeStatus, runtimeCanAcceptCommands,
+    activity, sessionFooter, runtimeStatus, stageExecution, runtimeCanAcceptCommands,
     commandStatus, activeCommandKind, activeCommandState,
     canRunCommand, canRelaxCommand, canPauseCommand, canStopCommand, canSkipCommand: false, primaryRunAction, primaryRunLabel,
     interactiveEnabled, interactiveControlsEnabled, awaitingCommand, commandBusy, commandMessage,
@@ -1730,7 +1732,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     connection, error, session, run, metadata, mergedEngineLog, quantities, artifactsArr,
     workspaceStatus, isWaitingForCompute, solverNotStartedMessage, isFemBackend, runtimeEngineLabel,
     runtimeEngineGpuLabel, runtimeEngineGpuDevice,
-    activity, sessionFooter, runtimeStatus, runtimeCanAcceptCommands,
+    activity, sessionFooter, runtimeStatus, stageExecution, runtimeCanAcceptCommands,
     commandStatus, activeCommandKind, activeCommandState,
     canRunCommand, canRelaxCommand, canPauseCommand, canStopCommand, primaryRunAction, primaryRunLabel,
     interactiveEnabled, interactiveControlsEnabled, awaitingCommand, commandBusy, commandMessage,

@@ -638,6 +638,39 @@ fn overlay_mesh_workspace(
     );
 }
 
+fn stage_execution_completed_indexes(active_stage_1based: usize) -> Vec<usize> {
+    (0..active_stage_1based.saturating_sub(1)).collect()
+}
+
+fn active_sequence_stage_execution(
+    total_stages: usize,
+    active_stage_1based: usize,
+    active_stage_kind: &str,
+    runtime_state: &str,
+) -> CurrentLiveStageExecutionState {
+    CurrentLiveStageExecutionState {
+        total_stages,
+        completed_stage_indexes: stage_execution_completed_indexes(active_stage_1based),
+        active_stage_index: Some(active_stage_1based.saturating_sub(1)),
+        active_stage_kind: Some(active_stage_kind.to_string()),
+        runtime_state: runtime_state.to_string(),
+    }
+}
+
+fn completed_sequence_stage_execution(
+    total_stages: usize,
+    completed_stage_count: usize,
+    runtime_state: &str,
+) -> CurrentLiveStageExecutionState {
+    CurrentLiveStageExecutionState {
+        total_stages,
+        completed_stage_indexes: (0..completed_stage_count.min(total_stages)).collect(),
+        active_stage_index: None,
+        active_stage_kind: None,
+        runtime_state: runtime_state.to_string(),
+    }
+}
+
 #[derive(Debug, Clone)]
 struct AdaptiveMeshSettings {
     enabled: bool,
@@ -2208,6 +2241,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             live_state: bootstrap_live_state_manifest.clone(),
             metadata: None,
             mesh_workspace: None,
+            stage_execution: None,
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
@@ -2331,6 +2365,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 },
                 metadata: None,
                 mesh_workspace: None,
+                stage_execution: None,
                 latest_scalar_row: None,
                 latest_fields: CurrentLiveLatestFields::default(),
                 preview_fields: CurrentLivePreviewFieldCache::default(),
@@ -2463,6 +2498,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             current_mesh_quality.as_ref(),
             &current_mesh_history,
         ),
+        stage_execution: None,
         latest_scalar_row: None,
         latest_fields: CurrentLiveLatestFields::default(),
         preview_fields: CurrentLivePreviewFieldCache::default(),
@@ -3898,6 +3934,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     current_mesh_quality.as_ref(),
                     &current_mesh_history,
                 );
+                state.stage_execution = active_sequence
+                    .as_ref()
+                    .map(|(_, current, total)| {
+                        active_sequence_stage_execution(
+                            *total,
+                            *current,
+                            &stage.entrypoint_kind,
+                            "running",
+                        )
+                    });
                 state.live_state = live_state_manifest_from_update(&stage_initial_update);
                 clear_cached_preview_fields(state);
             });
@@ -4101,6 +4147,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 Ok(result) => result,
                 Err(error) => {
                     let failed_ready_at_unix_ms = unix_time_millis().unwrap_or(awaiting_at_unix_ms);
+                    let failed_stage_execution = active_sequence
+                        .as_ref()
+                        .map(|(_, current, total)| CurrentLiveStageExecutionState {
+                            total_stages: *total,
+                            completed_stage_indexes: stage_execution_completed_indexes(*current),
+                            active_stage_index: Some(current.saturating_sub(1)),
+                            active_stage_kind: Some(stage.entrypoint_kind.clone()),
+                            runtime_state: "failed".to_string(),
+                        });
+                    if active_sequence.is_some() {
+                        live_workspace.push_log(
+                            "warning",
+                            "Execution sequence halted on failed stage",
+                        );
+                        active_sequence = None;
+                    }
                     live_workspace.update(|state| {
                         state.session = ctx.build_session(
                             "awaiting_command",
@@ -4113,6 +4175,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             "awaiting_command",
                             Some(false),
                         );
+                        state.stage_execution = failed_stage_execution.clone();
                     });
                     interactive_runtime_host.enter_awaiting_command(
                         continuation_magnetization.clone(),
@@ -4158,6 +4221,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         );
                         state.run = ctx.build_run("paused", &aggregated_steps);
                         set_live_state_status(&mut state.live_state, "paused", Some(false));
+                        state.stage_execution = active_sequence
+                            .as_ref()
+                            .map(|(_, current, total)| {
+                                active_sequence_stage_execution(
+                                    *total,
+                                    *current,
+                                    &stage.entrypoint_kind,
+                                    "paused",
+                                )
+                            });
                     });
                     interactive_runtime_host
                         .enter_paused(continuation_magnetization.clone(), &live_workspace);
@@ -4246,7 +4319,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     crate::interactive_runtime_host::InteractiveStageInterrupt::Break => {
                         paused_stage = None;
                         // Abort active sequence if any
-                        if active_sequence.take().is_some() {
+                        let aborted_sequence = active_sequence.take();
+                        if aborted_sequence.is_some() {
                             live_workspace.push_log(
                                 "warning",
                                 "Execution sequence aborted by user",
@@ -4263,6 +4337,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 &mut state.live_state,
                                 "awaiting_command",
                                 Some(false),
+                            );
+                            state.stage_execution = aborted_sequence.as_ref().map(
+                                |(_, current, total)| {
+                                    completed_sequence_stage_execution(
+                                        *total,
+                                        current.saturating_sub(1),
+                                        "awaiting_command",
+                                    )
+                                },
                             );
                         });
                         interactive_runtime_host.enter_awaiting_command(
@@ -4315,6 +4398,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     &format!("seq_{}", session_id),
                                     *current,
                                 );
+                                live_workspace.update(|state| {
+                                    state.stage_execution = Some(active_sequence_stage_execution(
+                                        total,
+                                        *current,
+                                        &stage_label,
+                                        "running",
+                                    ));
+                                });
                                 interactive_runtime_host.push_command_front(synthetic_cmd);
                                 paused_stage = None;
                                 continue;
@@ -4337,6 +4428,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 "awaiting_command",
                                 Some(false),
                             );
+                            state.stage_execution = None;
                         });
                         interactive_runtime_host.enter_awaiting_command(
                             continuation_magnetization.clone(),
@@ -4457,12 +4549,27 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &format!("seq_{}", session_id),
                         *current,
                     );
+                    live_workspace.update(|state| {
+                        state.stage_execution = Some(active_sequence_stage_execution(
+                            total,
+                            *current,
+                            &stage_label,
+                            "running",
+                        ));
+                    });
                     interactive_runtime_host.push_command_front(synthetic_cmd);
                     // Keep running status — don't enter_awaiting_command
                     paused_stage = None;
                     continue;
                 } else {
                     live_workspace.push_log("success", format!("Execution sequence completed ({} stages)", total));
+                    live_workspace.update(|state| {
+                        state.stage_execution = Some(completed_sequence_stage_execution(
+                            total,
+                            total,
+                            "awaiting_command",
+                        ));
+                    });
                     active_sequence = None;
                 }
             }
@@ -4475,6 +4582,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 );
                 state.run = ctx.build_run("awaiting_command", &aggregated_steps);
                 set_live_state_status(&mut state.live_state, "awaiting_command", Some(false));
+                if state.stage_execution.is_none() {
+                    state.stage_execution = None;
+                }
             });
             interactive_runtime_host
                 .enter_awaiting_command(continuation_magnetization.clone(), &live_workspace);
@@ -4662,6 +4772,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
             live_state: bootstrap_live_state_manifest,
             metadata: None,
             mesh_workspace: None,
+            stage_execution: None,
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),

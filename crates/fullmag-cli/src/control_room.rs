@@ -524,6 +524,7 @@ pub(crate) fn publish_current_live_state(
             session_status: payload.session_status.as_deref(),
             metadata: payload.metadata.as_ref(),
             mesh_workspace: payload.mesh_workspace.as_ref(),
+            stage_execution: payload.stage_execution.as_ref(),
             run: payload.run.as_ref(),
             live_state: payload.live_state.as_ref(),
             latest_scalar_row: payload.latest_scalar_row.as_ref(),
