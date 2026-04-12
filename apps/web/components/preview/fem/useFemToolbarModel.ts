@@ -140,6 +140,9 @@ export function useFemToolbarModel({
     if (!hasMeshParts) {
       return [] as string[];
     }
+    if (meshData.quantityDomain === "full_domain") {
+      return visibleLayers.map((layer) => layer.part.id);
+    }
     const magneticIds = visibleLayers
       .filter(
         (layer) =>
@@ -153,7 +156,7 @@ export function useFemToolbarModel({
       .filter((layer) => toolbarStylePartIdSet.has(layer.part.id) && layer.part.role !== "air")
       .map((layer) => layer.part.id);
     return nonAirIds.length > 0 ? nonAirIds : toolbarStylePartIds;
-  }, [hasMeshParts, toolbarStylePartIdSet, toolbarStylePartIds, visibleLayers]);
+  }, [hasMeshParts, meshData.quantityDomain, toolbarStylePartIdSet, toolbarStylePartIds, visibleLayers]);
 
   const toolbarRenderMode = useMemo(() => {
     if (!hasMeshParts || toolbarStylePartIds.length === 0) {
@@ -354,6 +357,7 @@ export function useFemToolbarModel({
     if (!meshData.fieldData || meshData.nNodes === 0) {
       return null;
     }
+    const fieldNComp = meshData.fieldNComp ?? 3;
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
     let sum = 0;
@@ -362,7 +366,9 @@ export function useFemToolbarModel({
       const y = meshData.fieldData.y[index] ?? 0;
       const z = meshData.fieldData.z[index] ?? 0;
       const value =
-        legendField === "x"
+        fieldNComp <= 1
+          ? x
+          : legendField === "x"
           ? x
           : legendField === "y"
             ? y

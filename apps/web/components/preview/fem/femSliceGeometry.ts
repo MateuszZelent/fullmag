@@ -61,9 +61,19 @@ function lerpPoint(a: Point3, b: Point3, t: number): Point3 {
 function nodeScalar(meshData: FemMeshData, nodeIndex: number, component: VectorComponent): number {
   const fld = meshData.fieldData;
   if (!fld) return 0;
+  const nComp = meshData.fieldNComp ?? 3;
   const fx = fld.x[nodeIndex] ?? 0;
   const fy = fld.y[nodeIndex] ?? 0;
   const fz = fld.z[nodeIndex] ?? 0;
+  if (nComp <= 1) {
+    switch (component) {
+      case "x":
+      case "y":
+      case "z":
+      case "magnitude":
+        return fx;
+    }
+  }
   switch (component) {
     case "x":
       return fx;
@@ -79,6 +89,9 @@ function nodeScalar(meshData: FemMeshData, nodeIndex: number, component: VectorC
 function nodeVector(meshData: FemMeshData, nodeIndex: number): Point3 {
   const fld = meshData.fieldData;
   if (!fld) return [0, 0, 0];
+  if ((meshData.fieldNComp ?? 3) <= 1) {
+    return [0, 0, 0];
+  }
   return [fld.x[nodeIndex] ?? 0, fld.y[nodeIndex] ?? 0, fld.z[nodeIndex] ?? 0];
 }
 

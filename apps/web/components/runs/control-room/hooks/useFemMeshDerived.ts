@@ -57,6 +57,8 @@ export interface UseFemMeshDerivedParams {
   focusedEntityId: string | null;
   scriptBuilderGeometries: ScriptBuilderGeometryEntry[] | null;
   selectedVectors: Float64Array | number[] | null;
+  selectedFieldNComp: number;
+  selectedFieldDomain: "magnetic_only" | "full_domain" | "surface_only" | null;
   activeMask: boolean[] | null;
   spatialPreview: any;
   meshShowArrows: boolean;
@@ -155,6 +157,8 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
     focusedEntityId,
     scriptBuilderGeometries,
     selectedVectors,
+    selectedFieldNComp,
+    selectedFieldDomain,
     activeMask,
     spatialPreview,
     meshShowArrows,
@@ -294,8 +298,19 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
 
   // Field data: updated on every solver tick when selectedVectors changes.
   const femFieldData = useMemo<FemMeshData["fieldData"] | undefined>(() => {
-    if (!femMeshBase || !selectedVectors || selectedVectors.length < femMeshBase.nNodes * 3) return undefined;
+    if (!femMeshBase || !selectedVectors) return undefined;
     const nNodes = femMeshBase.nNodes;
+    if (selectedFieldNComp <= 1) {
+      if (selectedVectors.length < nNodes) return undefined;
+      const x = new Float64Array(nNodes);
+      const y = new Float64Array(nNodes);
+      const z = new Float64Array(nNodes);
+      for (let i = 0; i < nNodes; i++) {
+        x[i] = selectedVectors[i] ?? 0;
+      }
+      return { x, y, z };
+    }
+    if (selectedVectors.length < femMeshBase.nNodes * 3) return undefined;
     const x = new Float64Array(nNodes);
     const y = new Float64Array(nNodes);
     const z = new Float64Array(nNodes);
@@ -305,7 +320,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
       z[i] = selectedVectors[i * 3 + 2] ?? 0;
     }
     return { x, y, z };
-  }, [femMeshBase, selectedVectors]);
+  }, [femMeshBase, selectedFieldNComp, selectedVectors]);
 
   // Combined: new object only when topology OR field data changes
   const femMeshData = useMemo<FemMeshData | null>(() => {
@@ -313,13 +328,14 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
     return {
       ...femMeshBase,
       fieldData: femFieldData,
+      fieldNComp: selectedFieldNComp,
       activeMask:
         activeMask && activeMask.length === femMeshBase.nNodes
           ? activeMask
           : null,
-      quantityDomain: spatialPreview?.quantity_domain ?? "full_domain",
+      quantityDomain: selectedFieldDomain ?? spatialPreview?.quantity_domain ?? "full_domain",
     };
-  }, [activeMask, femFieldData, femMeshBase, spatialPreview?.quantity_domain]);
+  }, [activeMask, femFieldData, femMeshBase, selectedFieldDomain, selectedFieldNComp, spatialPreview?.quantity_domain]);
   useEffect(() => {
     femMeshDataRef.current = femMeshData;
   }, [femMeshData, femMeshDataRef]);

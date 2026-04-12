@@ -31,7 +31,7 @@ import type {
   VisualizationPresetRef,
 } from "@/lib/session/types";
 import type { SolverSettingsState } from "@/components/panels/SolverSettingsPanel";
-import type { MeshOptionsState } from "@/components/panels/MeshSettingsPanel";
+import type { MeshOptionsState } from "@/lib/mesh/options";
 import type { DraftSyncStatus, DraftValidationError } from "../model/sceneDraft.types";
 
 interface AuthoringStoreState {

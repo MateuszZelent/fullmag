@@ -164,7 +164,7 @@ function resolveStageStatus(
     activeStageIndex != null &&
     stageIndexes.some((stageIndex) => stageIndex === activeStageIndex)
   ) {
-    return "error";
+    return "active";
   }
   if (
     stageIndexes.length > 0 &&

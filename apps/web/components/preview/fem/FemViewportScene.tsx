@@ -6,9 +6,11 @@ import { PivotControls } from "@react-three/drei";
 import { FemGeometry } from "../r3f/FemGeometry";
 import { FemArrows } from "../r3f/FemArrows";
 import { FemHighlightView } from "../r3f/FemHighlightView";
+import { getSharedVertexColors } from "../r3f/femVertexColors";
 import SceneAxes3D from "../r3f/SceneAxes3D";
 import type { AntennaOverlay } from "../../runs/control-room/shared";
 import type {
+  ArrowSamplingMode,
   FemArrowColorMode,
   ClipAxis,
   FemColorField,
@@ -158,6 +160,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   arrowAlpha,
   arrowLengthScale,
   arrowThickness,
+  arrowSamplingMode,
   arrowActiveNodeMask,
   arrowBoundaryFaceIndices,
   selectedFaces,
@@ -220,6 +223,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   arrowAlpha: number;
   arrowLengthScale: number;
   arrowThickness: number;
+  arrowSamplingMode: ArrowSamplingMode;
   arrowActiveNodeMask: Uint8Array | boolean[] | null;
   arrowBoundaryFaceIndices: number[] | null;
   selectedFaces: number[];
@@ -251,8 +255,32 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   showSelectionHighlight?: boolean;
   showAntennaOverlays?: boolean;
   showSceneAxes?: boolean;
-  onArrowSampledCount?: (count: number) => void;
+  onArrowSampledCount?: (count: number | undefined) => void;
 }) {
+  const sharedVertexColorsByField = React.useMemo(() => {
+    const fields = new Set<FemColorField>();
+    if (hasMeshParts) {
+      for (const layer of visibleLayers) {
+        fields.add(layer.viewState.colorField);
+      }
+    } else {
+      fields.add(meshData.quantityDomain === "full_domain" ? field : "none");
+      fields.add(magneticVisibilityMode === "ghost" ? "none" : field);
+    }
+    const next = new Map<FemColorField, Float32Array>();
+    for (const colorField of fields) {
+      next.set(
+        colorField,
+        getSharedVertexColors({
+          meshData,
+          field: colorField,
+          qualityPerFace,
+        }),
+      );
+    }
+    return next;
+  }, [field, hasMeshParts, magneticVisibilityMode, meshData, qualityPerFace, visibleLayers]);
+
   return (
     <>
       {showSceneGeometry && showPerPartGeometry && hasMeshParts
@@ -268,6 +296,11 @@ export const FemViewportScene = React.memo(function FemViewportScene({
               key={layer.part.id}
               meshData={meshData}
               field={layer.viewState.colorField}
+              sharedBaseVertexColors={
+                layer.viewState.colorField === "none" && layer.meshColor
+                  ? null
+                  : sharedVertexColorsByField.get(layer.viewState.colorField) ?? null
+              }
               renderMode={layer.viewState.renderMode}
               opacity={layer.viewState.opacity}
               customBoundaryFaces={layer.surfaceFaces}
@@ -305,6 +338,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
         <FemGeometry
           meshData={meshData}
           field={meshData.quantityDomain === "full_domain" ? field : "none"}
+          sharedBaseVertexColors={sharedVertexColorsByField.get(meshData.quantityDomain === "full_domain" ? field : "none") ?? null}
           renderMode={renderMode}
           opacity={airSegmentOpacity}
           displayBoundaryFaceIndices={airBoundaryFaceIndices}
@@ -337,6 +371,11 @@ export const FemViewportScene = React.memo(function FemViewportScene({
         <FemGeometry
           meshData={meshData}
           field={magneticVisibilityMode === "ghost" ? "none" : field}
+          sharedBaseVertexColors={
+            magneticVisibilityMode === "ghost"
+              ? null
+              : sharedVertexColorsByField.get(field) ?? null
+          }
           renderMode={renderMode}
           opacity={magneticVisibilityMode === "ghost" ? Math.min(effectiveOpacity, 22) : effectiveOpacity}
           uniformColor={magneticVisibilityMode === "ghost" ? "#94a3b8" : undefined}
@@ -379,6 +418,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
         alpha={arrowAlpha}
         lengthScale={arrowLengthScale}
         thickness={arrowThickness}
+        samplingMode={arrowSamplingMode}
         center={dynamicGeomCenter}
         maxDim={dynamicMaxDim}
         visible={effectiveShowArrows}

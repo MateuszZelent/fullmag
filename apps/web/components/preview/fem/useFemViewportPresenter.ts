@@ -3,7 +3,7 @@ import { computeFaceAspectRatios } from "../r3f/colorUtils";
 import { useFemOverlayItems } from "./useFemOverlayItems";
 import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles";
 import type { ViewportOverlayDescriptor } from "../ViewportOverlayManager";
-import type { FemColorField, FemMeshData, RenderMode, ClipAxis, FemArrowColorMode, FemVectorDomainFilter, FemFerromagnetVisibilityMode } from "./femMeshTypes";
+import type { ArrowSamplingMode, FemColorField, FemMeshData, RenderMode, ClipAxis, FemArrowColorMode, FemVectorDomainFilter, FemFerromagnetVisibilityMode } from "./femMeshTypes";
 import type { FemMeshPart } from "../../../lib/session/types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
@@ -33,6 +33,7 @@ interface UseFemViewportPresenterArgs {
   arrowAlpha: number;
   arrowLengthScale: number;
   arrowThickness: number;
+  arrowSamplingMode: ArrowSamplingMode;
   showArrowsRequested: boolean;
   effectiveShowArrows: boolean;
   arrowsBlockReason: string | null;
@@ -88,6 +89,7 @@ interface UseFemViewportPresenterArgs {
   setInternalArrowAlpha: (v: number) => void;
   setInternalArrowLengthScale: (v: number) => void;
   setInternalArrowThickness: (v: number) => void;
+  setInternalArrowSamplingMode: (v: ArrowSamplingMode) => void;
   setInternalPartExplorerOpen: (fn: (prev: boolean) => boolean) => void;
   setLabeledMode: (v: boolean) => void;
   setOpenPopover: (id: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "panels" | null) => void;
@@ -174,6 +176,7 @@ export function useFemViewportPresenter(args: UseFemViewportPresenterArgs): {
     arrowAlpha: args.arrowAlpha,
     arrowLengthScale: args.arrowLengthScale,
     arrowThickness: args.arrowThickness,
+    arrowSamplingMode: args.arrowSamplingMode,
     showArrows: args.showArrowsRequested,
     effectiveShowArrows: args.effectiveShowArrows,
     arrowsBlockReason: args.arrowsBlockReason,
@@ -234,6 +237,7 @@ export function useFemViewportPresenter(args: UseFemViewportPresenterArgs): {
     setInternalArrowAlpha: args.setInternalArrowAlpha,
     setInternalArrowLengthScale: args.setInternalArrowLengthScale,
     setInternalArrowThickness: args.setInternalArrowThickness,
+    setInternalArrowSamplingMode: args.setInternalArrowSamplingMode,
     setInternalClipEnabled: args.setClipEnabled,
     setInternalClipAxis: args.setClipAxis,
     setInternalClipPos: args.setClipPos,

@@ -11,7 +11,7 @@ study = fm.study("stno_vortex_mtj_workflow")
 # Engine
 study.engine("fem")
 study.device("cpu", precision="double")
-study.universe(mode="auto", size=(1.5e-07, 1.5e-07, 2e-08), center=(0, 0, 0), padding=(0, 0, 0), airbox_hmax=2e-07)
+study.universe(mode="auto", size=(2.5e-07, 2.5e-07, 6e-08), center=(0, 0, 0), padding=(0, 0, 0), airbox_hmax=2e-07)
 study.interactive(True)
 
 # Geometry & Material

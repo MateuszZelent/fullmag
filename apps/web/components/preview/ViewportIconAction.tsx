@@ -18,7 +18,7 @@ export const ViewportIconAction = forwardRef<HTMLButtonElement, ViewportIconActi
         className={cn(
           "relative flex items-center justify-center gap-1.5 appearance-none border h-7 px-2 rounded-sm cursor-pointer transition-colors outline-none focus-visible:ring-1 focus-visible:ring-primary/50",
           "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-          active && "border-primary/45 bg-primary/18 text-primary shadow-sm hover:bg-primary/22 hover:text-primary",
+          active && "border-primary/55 bg-primary/18 text-primary shadow-[0_0_0_1px_rgba(96,165,250,0.18),0_0_18px_rgba(59,130,246,0.14)] hover:bg-primary/24 hover:text-primary",
           className
         )}
         {...props}

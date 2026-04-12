@@ -4,18 +4,16 @@ import type { PrimitiveStageNode, StudyPipelineDocument } from "./types";
 function inferPrimitiveKind(stage: ScriptBuilderStageState): PrimitiveStageNode["stage_kind"] {
   const entrypoint = String(stage.entrypoint_kind ?? "").toLowerCase();
   const kind = String(stage.kind ?? "").toLowerCase();
-  if (entrypoint === "relax" || kind.includes("relax")) return "relax";
-  if (entrypoint === "eigenmodes" || kind.includes("eigen")) return "eigenmodes";
-  if (entrypoint === "run" || kind.includes("run")) return "run";
+  if (entrypoint.includes("relax") || kind.includes("relax")) return "relax";
+  if (entrypoint.includes("eigen") || kind.includes("eigen")) return "eigenmodes";
+  if (entrypoint.includes("run") || kind.includes("run")) return "run";
   return "run";
 }
 
 function importedStageLabel(stage: ScriptBuilderStageState, index: number): string {
-  const originalKind = String(stage.kind ?? "").trim();
-  if (originalKind.length > 0 && originalKind !== inferPrimitiveKind(stage)) {
-    return `Imported ${index + 1} · ${originalKind}`;
-  }
-  return `Imported Stage ${index + 1}`;
+  const kind = inferPrimitiveKind(stage);
+  const title = kind.charAt(0).toUpperCase() + kind.slice(1);
+  return `Stage ${index + 1} - ${title}`;
 }
 
 function primitiveNodeFromStage(stage: ScriptBuilderStageState, index: number): PrimitiveStageNode {

@@ -1373,6 +1373,8 @@ class StudyStagesBuilder:
     def add_stage(self, stage_spec: object) -> "StudyStagesBuilder":
         _capture_stage(stage_spec)
         _state._declared_stages.append(stage_spec)
+        if _state._interactive:
+            _state._wait_for_solve = True
         return self
 
     def add_relax(

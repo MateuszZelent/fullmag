@@ -20,8 +20,8 @@ import { buildSceneDocumentFromScriptBuilder } from "../../../lib/session/sceneD
 import { asVec3 } from "./shared";
 import { DEFAULT_SOLVER_SETTINGS } from "../../panels/SolverSettingsPanel";
 import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
-import { DEFAULT_MESH_OPTIONS } from "../../panels/MeshSettingsPanel";
-import type { MeshOptionsState } from "../../panels/MeshSettingsPanel";
+import { DEFAULT_MESH_OPTIONS } from "@/lib/mesh/options";
+import type { MeshOptionsState } from "@/lib/mesh/options";
 import type { BackendErrorInfo, SolverPlanSummary } from "./types";
 
 /* ── Record / typing helpers ── */

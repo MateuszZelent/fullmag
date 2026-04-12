@@ -42,6 +42,7 @@ export type {
   MeshSelectionSnapshot,
   FemColorField,
   FemArrowColorMode,
+  ArrowSamplingMode,
   RenderMode,
   ClipAxis,
   FemVectorDomainFilter,
@@ -52,6 +53,7 @@ import type {
   MeshSelectionSnapshot,
   FemColorField,
   FemArrowColorMode,
+  ArrowSamplingMode,
   RenderMode,
   ClipAxis,
   FemVectorDomainFilter,
@@ -258,6 +260,7 @@ function FemMeshView3DInner({
     arrowAlpha,
     arrowLengthScale,
     arrowThickness,
+    arrowSamplingMode,
     vectorDomainFilter,
     ferromagnetVisibilityMode,
     resolvedPreviewMaxPoints,
@@ -280,6 +283,7 @@ function FemMeshView3DInner({
     setInternalArrowAlpha,
     setInternalArrowLengthScale,
     setInternalArrowThickness,
+    setInternalArrowSamplingMode,
     setInternalClipEnabled,
     setInternalClipAxis,
     setInternalClipPos,
@@ -554,6 +558,7 @@ function FemMeshView3DInner({
     arrowAlpha,
     arrowLengthScale,
     arrowThickness,
+    arrowSamplingMode,
     showArrowsRequested,
     effectiveShowArrows,
     arrowsBlockReason,
@@ -604,6 +609,7 @@ function FemMeshView3DInner({
     setInternalArrowAlpha,
     setInternalArrowLengthScale,
     setInternalArrowThickness,
+    setInternalArrowSamplingMode,
     setInternalPartExplorerOpen,
     setLabeledMode,
     setOpenPopover,
@@ -702,6 +708,7 @@ function FemMeshView3DInner({
             arrowAlpha={arrowAlpha}
             arrowLengthScale={arrowLengthScale}
             arrowThickness={arrowThickness}
+            arrowSamplingMode={arrowSamplingMode}
             arrowActiveNodeMask={arrowActiveNodeMask}
             arrowBoundaryFaceIndices={arrowBoundaryFaceIndices}
             selectedFaces={selectedFaces}

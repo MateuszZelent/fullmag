@@ -295,17 +295,32 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   ]);
   const femQuantityOptions = useMemo(
     () =>
-      ctx.previewQuantityOptions.map((option) => ({
-        id: option.value,
-        shortLabel: option.label,
-        label: option.label,
-        available: !option.disabled,
-      })),
-    [ctx.previewQuantityOptions],
+      ctx.previewQuantityOptions.map((option) => {
+        const qty = ctx.quantities.find((q) => q.id === option.value);
+        return {
+          id: option.value,
+          shortLabel: qty?.quick_access_label ?? option.value,
+          label: option.label,
+          available: !option.disabled,
+        };
+      }),
+    [ctx.previewQuantityOptions, ctx.quantities],
   );
   const handlePreviewMaxPointsChange = useCallback(
     (nextMaxPoints: number) => void updatePreview("/maxPoints", { maxPoints: nextMaxPoints }),
     [updatePreview],
+  );
+  const handleFemSliceComponentChange = useCallback(
+    (nextComponent: "x" | "y" | "z" | "magnitude") => {
+      if (ctx.previewControlsActive) {
+        void updatePreview("/component", {
+          component: nextComponent === "magnitude" ? "3D" : nextComponent,
+        });
+        return;
+      }
+      ctx.setComponent(nextComponent);
+    },
+    [ctx, updatePreview],
   );
   const hasExactScopeSegment = useMemo(
     () => {
@@ -331,6 +346,55 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       selectedFemObjectId &&
       !hasExactScopeSegment,
   );
+
+  const originalUnit = ctx.quantityDescriptor?.unit;
+  const isAmField = originalUnit === "A/m";
+  const displayUnit = isAmField ? "T" : originalUnit;
+  const scaleFactor = isAmField ? 4 * Math.PI * 1e-7 : 1.0;
+
+  const scaledGlobalScalarPreview = useMemo(() => {
+    if (!globalScalarPreview || scaleFactor === 1.0) return globalScalarPreview;
+    return {
+      ...globalScalarPreview,
+      value: globalScalarPreview.value * scaleFactor,
+      unit: "T",
+    };
+  }, [globalScalarPreview, scaleFactor]);
+
+  const scaledSpatialPreview = useMemo(() => {
+    if (!spatialPreview || spatialPreview.spatial_kind !== "grid" || spatialPreview.type !== "2D" || scaleFactor === 1.0) return spatialPreview;
+    return {
+      ...spatialPreview,
+      unit: "T",
+      min: spatialPreview.min * scaleFactor,
+      max: spatialPreview.max * scaleFactor,
+      scalar_field: spatialPreview.scalar_field.map(([x, y, v]) => [x, y, v * scaleFactor] as [number, number, number]),
+    };
+  }, [spatialPreview, scaleFactor]);
+
+  const scaledVectors = useMemo(() => {
+    if (!ctx.selectedVectors || scaleFactor === 1.0) return ctx.selectedVectors;
+    const arr = new Float64Array(ctx.selectedVectors.length);
+    for (let i = 0; i < arr.length; i++) {
+      arr[i] = ctx.selectedVectors[i] * scaleFactor;
+    }
+    return arr;
+  }, [ctx.selectedVectors, scaleFactor]);
+
+  const scaledFemMeshData = useMemo(() => {
+    if (!ctx.femMeshData || scaleFactor === 1.0 || !ctx.femMeshData.fieldData) return ctx.femMeshData;
+    const fld = ctx.femMeshData.fieldData;
+    return {
+      ...ctx.femMeshData,
+      fieldData: {
+        ...fld,
+        x: fld.x ? Float64Array.from(fld.x, (v) => v * scaleFactor) as unknown as ArrayLike<number> : null,
+        y: fld.y ? Float64Array.from(fld.y, (v) => v * scaleFactor) as unknown as ArrayLike<number> : null,
+        z: fld.z ? Float64Array.from(fld.z, (v) => v * scaleFactor) as unknown as ArrayLike<number> : null,
+      },
+    } as typeof ctx.femMeshData;
+  }, [ctx.femMeshData, scaleFactor]);
+
 
   /* ── Determine which viewport is active ── */
   const isFdm3DActive =
@@ -416,16 +480,16 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
               Global Scalar
             </p>
             <h3 className="text-base font-semibold text-foreground">
-              {ctx.quantityDescriptor?.label ?? globalScalarPreview.quantity}
+              {ctx.quantityDescriptor?.label ?? scaledGlobalScalarPreview!.quantity}
             </h3>
           </div>
           <div className="font-mono text-lg font-medium tracking-tight text-foreground">
-            {fmtExp(globalScalarPreview.value)}
+            {fmtExp(scaledGlobalScalarPreview!.value)}
           </div>
           <div className="flex flex-wrap gap-3 text-[0.72rem] text-muted-foreground">
-            <span>{globalScalarPreview.unit}</span>
-            <span>step {globalScalarPreview.source_step.toLocaleString()}</span>
-            <span>{fmtSI(globalScalarPreview.source_time, "s")}</span>
+            <span>{scaledGlobalScalarPreview!.unit}</span>
+            <span>step {scaledGlobalScalarPreview!.source_step.toLocaleString()}</span>
+            <span>{fmtSI(scaledGlobalScalarPreview!.source_time, "s")}</span>
           </div>
         </div>
       </div>
@@ -446,21 +510,21 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       </div>
     );
   } else if (
-    spatialPreview &&
-    spatialPreview.spatial_kind === "grid" &&
-    spatialPreview.type === "2D" &&
-    spatialPreview.scalar_field.length > 0 &&
+    scaledSpatialPreview &&
+    scaledSpatialPreview.spatial_kind === "grid" &&
+    scaledSpatialPreview.type === "2D" &&
+    scaledSpatialPreview.scalar_field.length > 0 &&
     FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableGridScalar2D
   ) {
     conditionalContent = (
       <PreviewScalarField2D
-        data={spatialPreview.scalar_field}
-        grid={spatialPreview.preview_grid}
-        quantityLabel={ctx.quantityDescriptor?.label ?? spatialPreview.quantity}
-        quantityUnit={spatialPreview.unit}
-        component={spatialPreview.component}
-        min={spatialPreview.min}
-        max={spatialPreview.max}
+        data={scaledSpatialPreview.scalar_field}
+        grid={scaledSpatialPreview.preview_grid}
+        quantityLabel={ctx.quantityDescriptor?.label ?? scaledSpatialPreview.quantity}
+        quantityUnit={scaledSpatialPreview.unit}
+        component={scaledSpatialPreview.component}
+        min={scaledSpatialPreview.min}
+        max={scaledSpatialPreview.max}
         axisExtent={
           ctx.worldExtent
             ? {
@@ -491,7 +555,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       <ViewportErrorBoundary label="FEM Mesh Viewport">
       <FemMeshView3D
         topologyKey={ctx.femTopologyKey ?? undefined}
-        meshData={ctx.femMeshData}
+        meshData={scaledFemMeshData!}
         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
         quantityId={ctx.requestedPreviewQuantity}
         quantityOptions={femQuantityOptions}
@@ -555,7 +619,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       <ViewportErrorBoundary label="FEM 3D Viewport">
       <FemMeshView3D
         topologyKey={ctx.femTopologyKey ?? undefined}
-        meshData={ctx.femMeshData}
+        meshData={scaledFemMeshData!}
         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
         fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
         quantityId={ctx.requestedPreviewQuantity}
@@ -631,9 +695,11 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   ) {
     conditionalContent = (
       <FemMeshSlice2D
-        meshData={ctx.femMeshData}
+        meshData={scaledFemMeshData!}
         quantityLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
-        quantityId={ctx.selectedQuantity}
+        quantityId={ctx.requestedPreviewQuantity}
+        quantityUnit={ctx.quantityDescriptor?.unit ?? undefined}
+        quantityOptions={femQuantityOptions}
         component={ctx.effectiveVectorComponent}
         plane={ctx.plane}
         meshParts={ctx.meshParts}
@@ -648,6 +714,8 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         selectedAntennaId={selectedAntennaName}
         showArrows={ctx.meshShowArrows}
         previewMaxPoints={ctx.requestedPreviewMaxPoints}
+        onQuantityChange={ctx.requestPreviewQuantity}
+        onComponentChange={handleFemSliceComponentChange}
         onPlaneChange={ctx.setPlane}
         onClipAxisChange={ctx.setMeshClipAxis}
         onClipPosChange={ctx.setMeshClipPos}
@@ -663,9 +731,9 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     conditionalContent = (
       <MagnetizationSlice2D
         grid={ctx.previewGrid}
-        vectors={ctx.selectedVectors}
-        quantityLabel={ctx.quantityDescriptor?.label ?? spatialPreview?.quantity ?? ctx.selectedQuantity}
-        quantityId={spatialPreview?.quantity ?? ctx.selectedQuantity}
+        vectors={scaledVectors}
+        quantityLabel={ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity}
+        quantityId={scaledSpatialPreview?.quantity ?? ctx.selectedQuantity}
         component={ctx.component}
         plane={ctx.plane}
         sliceIndex={ctx.sliceIndex}
@@ -768,8 +836,8 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                     <ViewportErrorBoundary label="Hosted FDM 3D Viewport">
                       <VectorFieldView3D
                         grid={ctx.previewGrid}
-                        vectors={ctx.selectedVectors}
-                        fieldLabel={ctx.quantityDescriptor?.label ?? spatialPreview?.quantity ?? ctx.selectedQuantity}
+                        vectors={scaledVectors}
+                        fieldLabel={ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity}
                         geometryMode={false}
                         activeMask={ctx.activeMask}
                         worldExtent={ctx.worldExtent}
@@ -802,7 +870,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                     <ViewportErrorBoundary label="Hosted FEM Mesh Viewport">
                       <FemMeshView3D
                         topologyKey={ctx.femTopologyKey ?? undefined}
-                        meshData={ctx.femMeshData}
+                        meshData={scaledFemMeshData!}
                         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
                         quantityId={ctx.requestedPreviewQuantity}
                         quantityOptions={femQuantityOptions}
@@ -865,7 +933,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                     <ViewportErrorBoundary label="Hosted FEM 3D Viewport">
                       <FemMeshView3D
                         topologyKey={ctx.femTopologyKey ?? undefined}
-                        meshData={ctx.femMeshData}
+                        meshData={scaledFemMeshData!}
                         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
                         fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
                         quantityId={ctx.requestedPreviewQuantity}
@@ -935,11 +1003,13 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                     </ViewportErrorBoundary>
                   );
                 case "MagnetizationSlice2D":
-                  return ctx.femMeshData ? (
+                  return scaledFemMeshData ? (
                     <FemMeshSlice2D
-                      meshData={ctx.femMeshData}
+                      meshData={scaledFemMeshData}
                       quantityLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
                       quantityId={ctx.selectedQuantity}
+                      quantityUnit={ctx.quantityDescriptor?.unit ?? undefined}
+                      quantityOptions={femQuantityOptions}
                       component={ctx.effectiveVectorComponent}
                       plane={ctx.plane}
                       meshParts={ctx.meshParts}
@@ -954,6 +1024,8 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                       selectedAntennaId={selectedAntennaName}
                       showArrows={ctx.meshShowArrows}
                       previewMaxPoints={ctx.requestedPreviewMaxPoints}
+                      onQuantityChange={ctx.requestPreviewQuantity}
+                      onComponentChange={handleFemSliceComponentChange}
                       onPlaneChange={ctx.setPlane}
                       onClipAxisChange={ctx.setMeshClipAxis}
                       onClipPosChange={ctx.setMeshClipPos}
@@ -963,9 +1035,9 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                   ) : (
                     <MagnetizationSlice2D
                       grid={ctx.previewGrid}
-                      vectors={ctx.selectedVectors}
-                      quantityLabel={ctx.quantityDescriptor?.label ?? spatialPreview?.quantity ?? ctx.selectedQuantity}
-                      quantityId={spatialPreview?.quantity ?? ctx.selectedQuantity}
+                      vectors={scaledVectors}
+                      quantityLabel={ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity}
+                      quantityId={scaledSpatialPreview?.quantity ?? ctx.selectedQuantity}
                       component={ctx.component}
                       plane={ctx.plane}
                       sliceIndex={ctx.sliceIndex}
@@ -1006,9 +1078,6 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       ) : null}
       {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showFemSelectionBadges && ctx.isFemBackend ? (
         <div className="viewportOverlay absolute right-4 top-14 z-50 flex items-center gap-2">
-          <div className="pointer-events-auto rounded-full border border-border/40 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
-            {ctx.visibleMeshPartIds.length}/{ctx.meshParts.length || 0} parts visible
-          </div>
           {ctx.selectedMeshPart || selectedFemObjectId ? (
             <div className="pointer-events-auto flex overflow-hidden rounded-full border border-border/40 bg-background/85 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
               <button

@@ -210,6 +210,7 @@ export default function StandaloneFemSceneDiagnosticViewport() {
             dynamicMaxDim={meshFrame.maxDim}
             effectiveShowArrows={false}
             arrowField="none"
+            arrowSamplingMode="auto"
             arrowDensity={0}
             arrowColorMode="monochrome"
             arrowMonoColor="#4f8cff"

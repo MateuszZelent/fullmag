@@ -300,7 +300,7 @@ def _study_pipeline_stage_label(
     original_kind = str(stage_draft.get("kind") or "").strip()
     if original_kind and original_kind.lower() != stage_kind:
         return f"Imported {index + 1} · {original_kind}"
-    return f"Imported Stage {index + 1}"
+    return ""
 
 
 def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:

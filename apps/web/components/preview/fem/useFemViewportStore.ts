@@ -9,6 +9,7 @@ import type {
   FemViewportStoreState,
 } from "./FemViewportTypes";
 import type {
+  ArrowSamplingMode,
   ClipAxis,
   FemArrowColorMode,
   FemColorField,
@@ -26,6 +27,7 @@ export type FemViewportStoreAction =
   | { type: "setArrowAlpha"; value: number }
   | { type: "setArrowLengthScale"; value: number }
   | { type: "setArrowThickness"; value: number }
+  | { type: "setArrowSamplingMode"; value: ArrowSamplingMode }
   | { type: "setVectorDomainFilter"; value: FemVectorDomainFilter }
   | { type: "setFerromagnetVisibilityMode"; value: FemFerromagnetVisibilityMode }
   | { type: "setPreviewMaxPoints"; value: number }
@@ -62,6 +64,7 @@ export const INITIAL_FEM_VIEWPORT_STORE_STATE: FemViewportStoreState = {
     arrowAlpha: 1,
     arrowLengthScale: 1,
     arrowThickness: 1,
+    arrowSamplingMode: "auto",
     vectorDomainFilter: "auto",
     ferromagnetVisibilityMode: "hide",
     previewMaxPoints: PREVIEW_MAX_POINTS_DEFAULT,
@@ -119,6 +122,8 @@ export function femViewportStoreReducer(
       return { ...state, view: { ...state.view, arrowLengthScale: action.value } };
     case "setArrowThickness":
       return { ...state, view: { ...state.view, arrowThickness: action.value } };
+    case "setArrowSamplingMode":
+      return { ...state, view: { ...state.view, arrowSamplingMode: action.value } };
     case "setVectorDomainFilter":
       return { ...state, view: { ...state.view, vectorDomainFilter: action.value } };
     case "setFerromagnetVisibilityMode":

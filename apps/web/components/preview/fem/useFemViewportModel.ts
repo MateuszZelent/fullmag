@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react";
 import { PREVIEW_MAX_POINTS_DEFAULT } from "./vectorDensityBudget";
 import { SUPPORTED_ARROW_COLOR_FIELDS } from "./femGeometryUtils";
 import type {
+  ArrowSamplingMode,
   ClipAxis,
   FemArrowColorMode,
   FemColorField,
@@ -50,6 +51,7 @@ export interface FemViewportModel {
   arrowAlpha: number;
   arrowLengthScale: number;
   arrowThickness: number;
+  arrowSamplingMode: ArrowSamplingMode;
   vectorDomainFilter: FemVectorDomainFilter;
   ferromagnetVisibilityMode: FemFerromagnetVisibilityMode;
   resolvedPreviewMaxPoints: number;
@@ -72,6 +74,7 @@ export interface FemViewportModel {
   setInternalArrowAlpha: React.Dispatch<React.SetStateAction<number>>;
   setInternalArrowLengthScale: React.Dispatch<React.SetStateAction<number>>;
   setInternalArrowThickness: React.Dispatch<React.SetStateAction<number>>;
+  setInternalArrowSamplingMode: React.Dispatch<React.SetStateAction<ArrowSamplingMode>>;
   setInternalClipEnabled: React.Dispatch<React.SetStateAction<boolean>>;
   setInternalClipAxis: React.Dispatch<React.SetStateAction<ClipAxis>>;
   setInternalClipPos: React.Dispatch<React.SetStateAction<number>>;
@@ -127,6 +130,7 @@ export function useFemViewportModel({
       arrowAlpha: 1,
       arrowLengthScale: 1,
       arrowThickness: 1,
+      arrowSamplingMode: "auto",
       vectorDomainFilter: "auto",
       ferromagnetVisibilityMode: "hide",
       previewMaxPoints: PREVIEW_MAX_POINTS_DEFAULT,
@@ -173,6 +177,7 @@ export function useFemViewportModel({
   const arrowAlpha = controlledArrowAlpha ?? state.view.arrowAlpha;
   const arrowLengthScale = controlledArrowLengthScale ?? state.view.arrowLengthScale;
   const arrowThickness = controlledArrowThickness ?? state.view.arrowThickness;
+  const arrowSamplingMode = state.view.arrowSamplingMode;
   const vectorDomainFilter = controlledVectorDomainFilter ?? state.view.vectorDomainFilter;
   const ferromagnetVisibilityMode =
     controlledFerromagnetVisibilityMode ?? state.view.ferromagnetVisibilityMode;
@@ -235,6 +240,11 @@ export function useFemViewportModel({
     (prev, next) => (typeof next === "function" ? next(prev) : next),
     (value) => dispatch({ type: "setArrowThickness", value }),
     () => state.view.arrowThickness,
+  );
+  const setInternalArrowSamplingMode = makeSetter<ArrowSamplingMode>(
+    (prev, next) => (typeof next === "function" ? next(prev) : next),
+    (value) => dispatch({ type: "setArrowSamplingMode", value }),
+    () => state.view.arrowSamplingMode,
   );
   const setInternalClipEnabled = makeSetter<boolean>(
     (prev, next) => (typeof next === "function" ? next(prev) : next),
@@ -374,6 +384,7 @@ export function useFemViewportModel({
     arrowAlpha,
     arrowLengthScale,
     arrowThickness,
+    arrowSamplingMode,
     vectorDomainFilter,
     ferromagnetVisibilityMode,
     resolvedPreviewMaxPoints,
@@ -396,6 +407,7 @@ export function useFemViewportModel({
     setInternalArrowAlpha,
     setInternalArrowLengthScale,
     setInternalArrowThickness,
+    setInternalArrowSamplingMode,
     setInternalClipEnabled,
     setInternalClipAxis,
     setInternalClipPos,

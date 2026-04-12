@@ -15,7 +15,7 @@ import {
 } from "../../../lib/liveApiClient";
 import { useCurrentLiveStream } from "../../../lib/useSessionStream";
 import { useSessionRuntimeBridge } from "../../../features/session-runtime/hooks/useSessionRuntimeBridge";
-import { coreTabIdForViewMode, useWorkspaceStore } from "../../../lib/workspace/workspace-store";
+import { useWorkspaceStore } from "../../../lib/workspace/workspace-store";
 import { useBuilderAutoSync } from "./hooks/useBuilderAutoSync";
 import { useDomainLayout } from "./hooks/useDomainLayout";
 import { useFemMeshDerived } from "./hooks/useFemMeshDerived";
@@ -76,8 +76,8 @@ import {
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { DEFAULT_SOLVER_SETTINGS } from "../../panels/SolverSettingsPanel";
 import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
-import { DEFAULT_MESH_OPTIONS } from "../../panels/MeshSettingsPanel";
-import type { MeshOptionsState, MeshQualityData } from "../../panels/MeshSettingsPanel";
+import { DEFAULT_MESH_OPTIONS } from "@/lib/mesh/options";
+import type { MeshOptionsState, MeshQualityData } from "@/lib/mesh/options";
 import type {
   ClipAxis,
   FemMeshData,
@@ -249,7 +249,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [optimisticDisplaySelection, setOptimisticDisplaySelection] =
     useState<DisplaySelection | null>(null);
   const [meshOptionsState, setMeshOptionsState] = useState<MeshOptionsState>(DEFAULT_MESH_OPTIONS);
-  const [meshQualityData] = useState<MeshQualityData | null>(null);
   const [meshGenerating, setMeshGenerating] = useState(false);
   const [lastBuiltMeshConfigSignature, setLastBuiltMeshConfigSignature] = useState<string | null>(null);
   const [frontendTraceLog, setFrontendTraceLog] = useState<EngineLogEntry[]>([]);
@@ -278,6 +277,33 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     selectedFaceIndices: [],
     primaryFaceIndex: null,
   });
+
+  const activeWorkspaceTab = useMemo(
+    () => workspaceTabs.find((tab) => tab.id === activeWorkspaceTabId) ?? null,
+    [activeWorkspaceTabId, workspaceTabs],
+  );
+
+  useEffect(() => {
+    if (!activeWorkspaceTab) return;
+    const payloadMode = activeWorkspaceTab.payload?.viewMode;
+    const inferredMode: ViewportMode | null =
+      payloadMode === "3D" || payloadMode === "2D" || payloadMode === "Mesh" || payloadMode === "Analyze"
+        ? payloadMode
+        : activeWorkspaceTab.id === "core:3d"
+          ? "3D"
+          : activeWorkspaceTab.id === "core:2d"
+            ? "2D"
+            : activeWorkspaceTab.id === "core:mesh"
+              ? "Mesh"
+              : activeWorkspaceTab.id === "core:analyze"
+                ? "Analyze"
+                : null;
+    if (!inferredMode || inferredMode === viewMode) return;
+    if (inferredMode === "2D") {
+      setComponent((prev) => (prev === "magnitude" ? "x" : prev));
+    }
+    setViewMode(inferredMode);
+  }, [activeWorkspaceTab, viewMode]);
 
   /* ── Derived from SSE state ── */
   const session = state?.session ?? null;
@@ -410,6 +436,27 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const quantities = state?.quantities ?? EMPTY_QUANTITIES;
   const artifactsArr = state?.artifacts ?? EMPTY_ARTIFACTS;
   const meshWorkspace = (state?.mesh_workspace as MeshWorkspaceState | null) ?? null;
+  // Derive quality data from the session-carried summary (P1-1 fix).
+  const meshQualityData = useMemo<MeshQualityData | null>(() => {
+    const s = meshWorkspace?.mesh_quality_summary;
+    if (!s) return null;
+    return {
+      nElements: s.n_elements,
+      sicnMin: s.sicn_min,
+      sicnMax: s.sicn_max,
+      sicnMean: s.sicn_mean,
+      sicnP5: s.sicn_p5,
+      sicnHistogram: [],
+      gammaMin: s.gamma_min,
+      gammaMean: s.gamma_mean,
+      gammaHistogram: [],
+      volumeMin: 0,
+      volumeMax: 0,
+      volumeMean: 0,
+      volumeStd: 0,
+      avgQuality: s.avg_quality,
+    };
+  }, [meshWorkspace?.mesh_quality_summary]);
   const runtimeEngine = (metadata?.runtime_engine as Record<string, unknown> | undefined) ?? undefined;
   const runtimeEngineLabel = typeof runtimeEngine?.engine_label === "string" ? runtimeEngine.engine_label : null;
   const runtimeEngineAccelerator =
@@ -1115,15 +1162,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   /* Preview derived — keep the user's explicit viewport mode stable.
    * A transient preview payload should not silently downgrade 3D to 2D. */
   const effectiveViewMode = viewMode;
-  useEffect(() => {
-    activateWorkspaceTab(
-      workspaceMode,
-      coreTabIdForViewMode(
-        effectiveViewMode === "Analyze" ? "Analyze" : effectiveViewMode,
-      ),
-    );
-  }, [activateWorkspaceTab, effectiveViewMode, workspaceMode]);
-
   const requestedDisplaySelection = useMemo<DisplaySelection>(() => {
     if (optimisticDisplaySelection) {
       return optimisticDisplaySelection;
@@ -1449,17 +1487,24 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     if (requestedPreviewQuantity) setSelectedQuantity(requestedPreviewQuantity);
   }, [requestedPreviewQuantity]);
 
+  const latestFieldFrames = state?.latest_fields.frames ?? {};
   const fieldMap = useMemo<Record<string, Float64Array | null>>(
-    () => {
-      return Object.fromEntries(
-        Object.entries(state?.latest_fields.frames ?? {}).map(([quantityId, frame]) => [
+    () =>
+      Object.fromEntries(
+        Object.entries(latestFieldFrames).map(([quantityId, frame]) => [
           quantityId,
           frame.values,
         ]),
-      ) as Record<string, Float64Array | null>;
-    },
-    [state?.latest_fields.frames],
+      ) as Record<string, Float64Array | null>,
+    [latestFieldFrames],
   );
+  const selectedFieldFrame = activeQuantityId ? latestFieldFrames[activeQuantityId] ?? null : null;
+  const selectedFieldNComp =
+    selectedFieldFrame?.n_comp
+    ?? (activeQuantityId ? quantityDescriptorById.get(activeQuantityId)?.n_comp ?? 3 : 3);
+  const selectedFieldDomain =
+    (selectedFieldFrame?.domain as "magnetic_only" | "full_domain" | "surface_only" | null | undefined)
+    ?? null;
   const renderPreviewMatchesActiveQuantity = renderPreview?.quantity === activeQuantityId;
 
   const selectedVectors = useMemo(() => {
@@ -1613,6 +1658,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     focusedEntityId,
     scriptBuilderGeometries,
     selectedVectors,
+    selectedFieldNComp,
+    selectedFieldDomain,
     activeMask,
     spatialPreview,
     meshShowArrows,

@@ -155,9 +155,7 @@ export function applyToolbarColorFieldCommand(
 ): void {
   if (args.hasMeshParts && args.toolbarColorPartIds.length > 0 && args.onMeshPartViewStatePatch) {
     args.onMeshPartViewStatePatch(args.toolbarColorPartIds, { colorField: next });
-    if (args.selectionScope.kind === "universe") {
-      args.setField(next);
-    }
+    args.setField(next);
     return;
   }
   args.setField(next);

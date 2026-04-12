@@ -8,7 +8,7 @@ import type {
   SceneDocument,
 } from "../../../lib/session/types";
 import { resolveMeshBuildIntentFromNodeId } from "../../../lib/session/modelBuilderGraph";
-import type { MeshQualityData, MeshOptionsState } from "../../panels/MeshSettingsPanel";
+import type { MeshQualityData, MeshOptionsState } from "@/lib/mesh/options";
 import type { RenderMode } from "../../preview/FemMeshView3D";
 import type { FemDockTab, ViewportMode } from "./shared";
 import { type LucideIcon, Grid3x3, Box, Scissors, Activity, Zap } from "lucide-react";

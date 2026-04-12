@@ -20,6 +20,7 @@ import { FieldLegend } from "../field/FieldLegend";
 import HslSphere from "../HslSphere";
 import ViewCube from "../ViewCube";
 import type {
+  ArrowSamplingMode,
   FemColorField,
   FemArrowColorMode,
   RenderMode,
@@ -55,6 +56,7 @@ export interface UseFemOverlayItemsArgs {
   arrowAlpha: number;
   arrowLengthScale: number;
   arrowThickness: number;
+  arrowSamplingMode: ArrowSamplingMode;
   showArrows: boolean;
   effectiveShowArrows: boolean;
   arrowsBlockReason: string | null;
@@ -138,6 +140,7 @@ export interface UseFemOverlayItemsArgs {
   setInternalArrowAlpha: (v: number) => void;
   setInternalArrowLengthScale: (v: number) => void;
   setInternalArrowThickness: (v: number) => void;
+  setInternalArrowSamplingMode: (v: ArrowSamplingMode) => void;
   setInternalClipEnabled: (v: boolean) => void;
   setInternalClipAxis: (v: ClipAxis) => void;
   setInternalClipPos: (v: number) => void;
@@ -202,6 +205,7 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
             arrowAlpha={args.arrowAlpha}
             arrowLengthScale={args.arrowLengthScale}
             arrowThickness={args.arrowThickness}
+            arrowSamplingMode={args.arrowSamplingMode}
             projection={args.cameraProjection}
             navigation={args.navigationMode}
             qualityProfile={args.qualityProfile}
@@ -263,6 +267,9 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
               } else {
                 args.setInternalArrowThickness(next);
               }
+            }}
+            onArrowSamplingModeChange={(next) => {
+              args.setInternalArrowSamplingMode(next);
             }}
             onProjectionChange={args.setCameraProjection}
             onNavigationChange={args.setNavigationMode}

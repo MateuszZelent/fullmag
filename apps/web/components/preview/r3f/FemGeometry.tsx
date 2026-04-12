@@ -2,8 +2,8 @@ import React, { memo, useMemo, useEffect, useRef, useCallback } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import { FemMeshData, FemColorField, RenderMode } from "../FemMeshView3D";
-import { computeFaceAspectRatios, qualityColor, sicnQualityColor, divergingColor, magnitudeColor } from "./colorUtils";
-import { applyMagnetizationHsl } from "../magnetizationColor";
+import { computeFaceAspectRatios } from "./colorUtils";
+import { computeVertexColors, getSharedVertexColors } from "./femVertexColors";
 import { RENDER_POLICIES_V2 } from "../shared/renderPolicyV2";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
@@ -20,6 +20,7 @@ interface FemGeometryProps {
   displayBoundaryFaceIndices?: number[] | null;
   displayElementIndices?: number[] | null;
   qualityPerFace?: number[] | null;
+  sharedBaseVertexColors?: Float32Array | null;
   shrinkFactor?: number;
   clipEnabled?: boolean;
   clipAxis?: "x" | "y" | "z";
@@ -94,116 +95,6 @@ function collectElementNodeIndices(
 }
 
 /* ── Helper: compute vertex colors from field data ─────────────────── */
-function computeVertexColors(
-  nNodes: number,
-  field: FemColorField,
-  fieldData: FemMeshData["fieldData"] | undefined,
-  nodes: ArrayLike<number>,
-  boundaryFaces: ArrayLike<number>,
-  qualityPerFace?: number[] | null,
-): Float32Array {
-  const colors = new Float32Array(nNodes * 3);
-  const _c = new THREE.Color();
-  const nFaces = boundaryFaces.length / 3;
-
-  if (field === "quality") {
-    const faceARs = computeFaceAspectRatios(nodes, boundaryFaces);
-    const vertexAR = new Float32Array(nNodes);
-    const vertexCount = new Uint16Array(nNodes);
-    for (let f = 0; f < nFaces; f++) {
-      const ar = faceARs[f];
-      for (let v = 0; v < 3; v++) {
-        const vi = boundaryFaces[f * 3 + v];
-        vertexAR[vi] += ar;
-        vertexCount[vi]++;
-      }
-    }
-    for (let i = 0; i < nNodes; i++) {
-      const avg = vertexCount[i] > 0 ? vertexAR[i] / vertexCount[i] : 1;
-      qualityColor(avg, _c);
-      colors[i * 3] = _c.r; colors[i * 3 + 1] = _c.g; colors[i * 3 + 2] = _c.b;
-    }
-  } else if (field === "sicn" && qualityPerFace && qualityPerFace.length === nFaces) {
-    const vertexSICN = new Float32Array(nNodes);
-    const vertexCount = new Uint16Array(nNodes);
-    for (let f = 0; f < nFaces; f++) {
-      const val = qualityPerFace[f];
-      for (let v = 0; v < 3; v++) {
-        const vi = boundaryFaces[f * 3 + v];
-        vertexSICN[vi] += val;
-        vertexCount[vi]++;
-      }
-    }
-    for (let i = 0; i < nNodes; i++) {
-      const avg = vertexCount[i] > 0 ? vertexSICN[i] / vertexCount[i] : 0;
-      sicnQualityColor(avg, _c);
-      colors[i * 3] = _c.r; colors[i * 3 + 1] = _c.g; colors[i * 3 + 2] = _c.b;
-    }
-  } else if (field === "sicn") {
-    // Fallback to aspect ratio
-    const faceARs = computeFaceAspectRatios(nodes, boundaryFaces);
-    const vertexAR = new Float32Array(nNodes);
-    const vertexCount = new Uint16Array(nNodes);
-    for (let f = 0; f < nFaces; f++) {
-      for (let v = 0; v < 3; v++) {
-        const vi = boundaryFaces[f * 3 + v];
-        vertexAR[vi] += faceARs[f];
-        vertexCount[vi]++;
-      }
-    }
-    for (let i = 0; i < nNodes; i++) {
-      const avg = vertexCount[i] > 0 ? vertexAR[i] / vertexCount[i] : 1;
-      qualityColor(avg, _c);
-      colors[i * 3] = _c.r; colors[i * 3 + 1] = _c.g; colors[i * 3 + 2] = _c.b;
-    }
-  } else {
-    const fld = fieldData;
-    let scaleX = 1, scaleY = 1, scaleZ = 1, scaleMagnitude = 1;
-    if (fld) {
-      let maxAbsX = 0, maxAbsY = 0, maxAbsZ = 0, maxMag = 0;
-      for (let i = 0; i < nNodes; i += 1) {
-        const fx = fld.x[i] ?? 0, fy = fld.y[i] ?? 0, fz = fld.z[i] ?? 0;
-        maxAbsX = Math.max(maxAbsX, Math.abs(fx));
-        maxAbsY = Math.max(maxAbsY, Math.abs(fy));
-        maxAbsZ = Math.max(maxAbsZ, Math.abs(fz));
-        maxMag = Math.max(maxMag, Math.sqrt(fx * fx + fy * fy + fz * fz));
-      }
-      scaleX = maxAbsX > 1e-12 ? maxAbsX : 1;
-      scaleY = maxAbsY > 1e-12 ? maxAbsY : 1;
-      scaleZ = maxAbsZ > 1e-12 ? maxAbsZ : 1;
-      scaleMagnitude = maxMag > 1e-12 ? maxMag : 1;
-    }
-    for (let i = 0; i < nNodes; i++) {
-      if (!fld || field === "none") {
-        _c.setHSL(0, 0, 0.6);
-      } else {
-        const fx = fld.x[i] ?? 0, fy = fld.y[i] ?? 0, fz = fld.z[i] ?? 0;
-        switch (field) {
-          case "orientation": applyMagnetizationHsl(fx, fy, fz, _c); break;
-          case "x": divergingColor(fx / scaleX, _c); break;
-          case "y": divergingColor(fy / scaleY, _c); break;
-          case "z": divergingColor(fz / scaleZ, _c); break;
-          case "magnitude": magnitudeColor(Math.sqrt(fx * fx + fy * fy + fz * fz) / scaleMagnitude, _c); break;
-        }
-      }
-      colors[i * 3] = _c.r; colors[i * 3 + 1] = _c.g; colors[i * 3 + 2] = _c.b;
-    }
-  }
-  return colors;
-}
-
-const BASE_VERTEX_COLOR_CACHE = new WeakMap<object, Map<string, Float32Array>>();
-
-function getBaseVertexColorCache(meshData: FemMeshData): Map<string, Float32Array> {
-  const cacheKey = meshData as unknown as object;
-  let cache = BASE_VERTEX_COLOR_CACHE.get(cacheKey);
-  if (!cache) {
-    cache = new Map<string, Float32Array>();
-    BASE_VERTEX_COLOR_CACHE.set(cacheKey, cache);
-  }
-  return cache;
-}
-
 export const FemGeometry = memo(function FemGeometry({
   meshData,
   field,
@@ -216,6 +107,7 @@ export const FemGeometry = memo(function FemGeometry({
   displayBoundaryFaceIndices,
   displayElementIndices,
   qualityPerFace,
+  sharedBaseVertexColors = null,
   shrinkFactor,
   clipEnabled,
   clipAxis,
@@ -250,7 +142,6 @@ export const FemGeometry = memo(function FemGeometry({
   const centerX = globalCenter?.x ?? null;
   const centerY = globalCenter?.y ?? null;
   const centerZ = globalCenter?.z ?? null;
-  const baseVertexColorCache = useMemo(() => getBaseVertexColorCache(meshData), [meshData]);
   const hasFieldColormap = field !== "none";
   const resolvedEdgeColor = useMemo(
     () => (hasFieldColormap ? "#d1d5db" : edgeColor ?? uniformColor ?? "#dbeafe"),
@@ -267,17 +158,20 @@ export const FemGeometry = memo(function FemGeometry({
   }, [uniformColor, usesNeutralSelectionHighlight]);
 
   // ── Topology memo: only rebuilds when mesh structure changes ─────
+  // Aux geometries (edges, tetra, points) are split into separate memos
+  // so that renderMode switches don't trigger this heavy path.
   const {
     geometry,
-    edgesGeometry,
-    tetraEdgesGeometry,
-    pointsGeometry,
     center,
     maxDim,
     geoSize,
     vertexMap,
-    pointsVertexMap,
     displayedToOriginalFace,
+    _positions,
+    _activeElementOffsets,
+    _doShrink,
+    _preferredFaceIndices,
+    _resolvedBoundaryFaces,
   } = useMemo(() => {
     const perfEnabled = FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryPerfLogging;
     const totalStart = perfEnabled ? performance.now() : 0;
@@ -295,8 +189,6 @@ export const FemGeometry = memo(function FemGeometry({
         durationMs: performance.now() - start,
         timestampMs: performance.now(),
         meta: {
-          renderMode,
-          field,
           nNodes,
           nElements,
           ...extra,
@@ -327,15 +219,16 @@ export const FemGeometry = memo(function FemGeometry({
       mark("post-inputs");
       return {
         geometry: new THREE.BufferGeometry(),
-        edgesGeometry: null,
-        tetraEdgesGeometry: null,
-        pointsGeometry: null,
         center: new THREE.Vector3(),
         maxDim: 0,
         geoSize: new THREE.Vector3(),
         vertexMap: null,
-        pointsVertexMap: null,
         displayedToOriginalFace: null,
+        _positions: new Float32Array(0),
+        _activeElementOffsets: [] as number[],
+        _doShrink: false,
+        _preferredFaceIndices: null as number[] | null,
+        _resolvedBoundaryFaces: new Uint32Array(0),
       };
     }
     mark("post-inputs");
@@ -417,9 +310,7 @@ export const FemGeometry = memo(function FemGeometry({
     let finalIndices: Uint32Array | null = null;
     let finalPositions: Float32Array = positions;
     let vMap: Int32Array | null = null;
-    let pointVMap: Int32Array | null = null;
     let faceIndexMap: Int32Array | null = null;
-    const tetraEdgePairs: number[] = [];
 
     const getAxisIdx = () => clipAxis === "y" ? 1 : clipAxis === "z" ? 2 : 0;
     const clipAxisSize = clipAxis === "y" ? size.y : clipAxis === "z" ? size.z : size.x;
@@ -583,80 +474,6 @@ export const FemGeometry = memo(function FemGeometry({
     }
     mark("post-geometry");
 
-    // Only build wireframe edges when the render mode needs them
-    const needsEdges = renderMode === "surface+edges" || renderMode === "wireframe";
-    const edgesGeom = needsEdges ? new THREE.WireframeGeometry(geom) : null;
-
-    if (renderMode === "wireframe" && elements.length >= 4) {
-      const seenEdges = new Set<number>();
-      const registerEdge = (a: number, b: number) => {
-        const lo = Math.min(a, b);
-        const hi = Math.max(a, b);
-        const key = lo * nNodes + hi;
-        if (seenEdges.has(key)) return;
-        seenEdges.add(key);
-        tetraEdgePairs.push(lo, hi);
-      };
-      for (const elementOffset of activeElementOffsets) {
-        const a = elements[elementOffset];
-        const b = elements[elementOffset + 1];
-        const cIdx = elements[elementOffset + 2];
-        const d = elements[elementOffset + 3];
-        registerEdge(a, b);
-        registerEdge(a, cIdx);
-        registerEdge(a, d);
-        registerEdge(b, cIdx);
-        registerEdge(b, d);
-        registerEdge(cIdx, d);
-      }
-    }
-    mark("post-wireframe");
-
-    let tetraWireGeom: THREE.BufferGeometry | null = null;
-    if (tetraEdgePairs.length > 0 && !doShrink) {
-      tetraWireGeom = new THREE.BufferGeometry();
-      tetraWireGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      tetraWireGeom.setIndex(new THREE.BufferAttribute(new Uint32Array(tetraEdgePairs), 1));
-    }
-
-    let ptsGeom: THREE.BufferGeometry | null = null;
-    if (renderMode === "points") {
-      const pointNodeIndices =
-        customBoundaryFaces && customBoundaryFaces.length > 0
-          ? collectFaceNodeIndices(
-              boundaryFaces,
-              (() => {
-                const faceCount = Math.floor(boundaryFaces.length / 3);
-                const allFaceIndices = new Array<number>(faceCount);
-                for (let index = 0; index < faceCount; index += 1) {
-                  allFaceIndices[index] = index;
-                }
-                return allFaceIndices;
-              })(),
-            )
-          : activeElementOffsets.length > 0
-          ? collectElementNodeIndices(elements, nElements, activeElementOffsets)
-          : preferredFaceIndices
-            ? collectFaceNodeIndices(boundaryFaces, preferredFaceIndices)
-            : Array.from({ length: nNodes }, (_, index) => index);
-      const pointPositions = new Float32Array(pointNodeIndices.length * 3);
-      pointVMap = new Int32Array(pointNodeIndices.length);
-      for (let i = 0; i < pointNodeIndices.length; i += 1) {
-        const nodeIndex = pointNodeIndices[i];
-        pointVMap[i] = nodeIndex;
-        const base = nodeIndex * 3;
-        pointPositions[i * 3] = positions[base];
-        pointPositions[i * 3 + 1] = positions[base + 1];
-        pointPositions[i * 3 + 2] = positions[base + 2];
-      }
-      ptsGeom = new THREE.BufferGeometry();
-      ptsGeom.setAttribute("position", new THREE.BufferAttribute(pointPositions, 3));
-      if (enableGeometryVertexColors) {
-        ptsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointPositions.length), 3));
-      }
-    }
-    mark("post-points");
-
     if (perfEnabled) {
       const phases: Array<[string, string]> = [
         ["inputs", "post-inputs"],
@@ -665,8 +482,6 @@ export const FemGeometry = memo(function FemGeometry({
         ["selection", "post-selection"],
         ["topology", "post-topology"],
         ["geometry", "post-geometry"],
-        ["wireframePrep", "post-wireframe"],
-        ["pointsPrep", "post-points"],
       ];
       let prev = marks.start ?? totalStart;
       for (const [phase, endKey] of phases) {
@@ -678,8 +493,6 @@ export const FemGeometry = memo(function FemGeometry({
             durationMs: end - prev,
             timestampMs: end,
             meta: {
-              renderMode,
-              field,
               nNodes,
               nElements,
               compacted: Boolean(vMap),
@@ -692,15 +505,11 @@ export const FemGeometry = memo(function FemGeometry({
       sample("topologyTotal", totalStart, {
         compacted: Boolean(vMap),
         clipped: Boolean(clipEnabled),
-        points: Boolean(ptsGeom),
       });
     }
 
     return {
       geometry: geom,
-      edgesGeometry: edgesGeom,
-      tetraEdgesGeometry: tetraWireGeom,
-      pointsGeometry: ptsGeom,
       center:
         centerX == null || centerY == null || centerZ == null
           ? new THREE.Vector3(cX, cY, cZ)
@@ -708,8 +517,12 @@ export const FemGeometry = memo(function FemGeometry({
       maxDim: ms,
       geoSize: size,
       vertexMap: vMap,
-      pointsVertexMap: pointVMap,
       displayedToOriginalFace: faceIndexMap,
+      _positions: positions,
+      _activeElementOffsets: activeElementOffsets,
+      _doShrink: doShrink,
+      _preferredFaceIndices: preferredFaceIndices,
+      _resolvedBoundaryFaces: boundaryFaces,
     };
   }, [
     meshBoundaryFaces,
@@ -729,9 +542,90 @@ export const FemGeometry = memo(function FemGeometry({
     enableGeometryCompaction,
     enableGeometryNormals,
     enableGeometryVertexColors,
-    renderMode,
     shrinkFactor,
   ]);
+
+  // ── Edges geometry memo: only rebuilds when surface geometry or renderMode changes ──
+  const edgesGeometry = useMemo(() => {
+    const needsEdges = renderMode === "surface+edges" || renderMode === "wireframe";
+    if (!needsEdges || !geometry) return null;
+    return new THREE.WireframeGeometry(geometry);
+  }, [geometry, renderMode]);
+
+  // ── Tetra edges geometry memo ─────────────────────────────────────
+  const tetraEdgesGeometry = useMemo(() => {
+    if (renderMode !== "wireframe") return null;
+    if (_doShrink || elements.length < 4 || !_positions) return null;
+    const seenEdges = new Set<number>();
+    const tetraEdgePairs: number[] = [];
+    const registerEdge = (a: number, b: number) => {
+      const lo = Math.min(a, b);
+      const hi = Math.max(a, b);
+      const key = lo * nNodes + hi;
+      if (seenEdges.has(key)) return;
+      seenEdges.add(key);
+      tetraEdgePairs.push(lo, hi);
+    };
+    for (const elementOffset of _activeElementOffsets) {
+      const a = elements[elementOffset];
+      const b = elements[elementOffset + 1];
+      const cIdx = elements[elementOffset + 2];
+      const d = elements[elementOffset + 3];
+      registerEdge(a, b);
+      registerEdge(a, cIdx);
+      registerEdge(a, d);
+      registerEdge(b, cIdx);
+      registerEdge(b, d);
+      registerEdge(cIdx, d);
+    }
+    if (tetraEdgePairs.length === 0) return null;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(_positions, 3));
+    geom.setIndex(new THREE.BufferAttribute(new Uint32Array(tetraEdgePairs), 1));
+    return geom;
+  }, [renderMode, _doShrink, elements, nNodes, _positions, _activeElementOffsets]);
+
+  // ── Points geometry memo ──────────────────────────────────────────
+  const { pointsGeometry, pointsVertexMap } = useMemo(() => {
+    if (renderMode !== "points" || !_positions) {
+      return { pointsGeometry: null as THREE.BufferGeometry | null, pointsVertexMap: null as Int32Array | null };
+    }
+    const boundaryFaces = _resolvedBoundaryFaces;
+    const pointNodeIndices =
+      customBoundaryFaces && customBoundaryFaces.length > 0
+        ? collectFaceNodeIndices(
+            boundaryFaces,
+            (() => {
+              const faceCount = Math.floor(boundaryFaces.length / 3);
+              const allFaceIndices = new Array<number>(faceCount);
+              for (let index = 0; index < faceCount; index += 1) {
+                allFaceIndices[index] = index;
+              }
+              return allFaceIndices;
+            })(),
+          )
+        : _activeElementOffsets.length > 0
+        ? collectElementNodeIndices(elements, nElements, _activeElementOffsets)
+        : _preferredFaceIndices
+          ? collectFaceNodeIndices(boundaryFaces, _preferredFaceIndices)
+          : Array.from({ length: nNodes }, (_, index) => index);
+    const pointPositions = new Float32Array(pointNodeIndices.length * 3);
+    const pointVMap = new Int32Array(pointNodeIndices.length);
+    for (let i = 0; i < pointNodeIndices.length; i += 1) {
+      const nodeIndex = pointNodeIndices[i];
+      pointVMap[i] = nodeIndex;
+      const base = nodeIndex * 3;
+      pointPositions[i * 3] = _positions[base];
+      pointPositions[i * 3 + 1] = _positions[base + 1];
+      pointPositions[i * 3 + 2] = _positions[base + 2];
+    }
+    const ptsGeom = new THREE.BufferGeometry();
+    ptsGeom.setAttribute("position", new THREE.BufferAttribute(pointPositions, 3));
+    if (enableGeometryVertexColors) {
+      ptsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointPositions.length), 3));
+    }
+    return { pointsGeometry: ptsGeom, pointsVertexMap: pointVMap };
+  }, [renderMode, _positions, _resolvedBoundaryFaces, customBoundaryFaces, _activeElementOffsets, elements, nElements, nNodes, _preferredFaceIndices, enableGeometryVertexColors]);
 
   // Invalidate the R3F frame when topology geometry rebuilds
   useEffect(() => {
@@ -751,7 +645,6 @@ export const FemGeometry = memo(function FemGeometry({
         durationMs: performance.now() - start,
         timestampMs: performance.now(),
         meta: {
-          renderMode,
           field,
           nNodes,
           nElements,
@@ -760,51 +653,25 @@ export const FemGeometry = memo(function FemGeometry({
       });
     };
     const baseColorStart = perfEnabled ? performance.now() : 0;
-    let baseColors: Float32Array;
-    const cacheableField = field !== "quality" && field !== "sicn";
-    if (cacheableField) {
-      const cacheKey =
-        field === "none"
-          ? (uniformColor ? `none:uniform:${uniformColor}` : "none:default")
-          : `field:${field}`;
-      const cached = baseVertexColorCache.get(cacheKey);
-      if (cached && cached.length === nNodes * 3) {
-        baseColors = cached;
-      } else {
-        baseColors =
-          field === "none" && uniformColor
-            ? (() => {
-                const tint = new THREE.Color(uniformColor);
-                const colors = new Float32Array(nNodes * 3);
-                for (let index = 0; index < nNodes; index += 1) {
-                  colors[index * 3] = tint.r;
-                  colors[index * 3 + 1] = tint.g;
-                  colors[index * 3 + 2] = tint.b;
-                }
-                return colors;
-              })()
-            : computeVertexColors(
-                nNodes,
-                field,
-                fieldData,
-                nodes,
-                meshBoundaryFaces,
-                qualityPerFace,
-              );
-        baseVertexColorCache.set(cacheKey, baseColors);
-      }
-    } else {
-      baseColors = computeVertexColors(
-        nNodes,
-        field,
-        fieldData,
-        nodes,
-        customBoundaryFaces
-          ? flattenBoundaryFaces(customBoundaryFaces)
-          : meshBoundaryFaces,
-        qualityPerFace,
-      );
-    }
+    const baseColors: Float32Array =
+      sharedBaseVertexColors && sharedBaseVertexColors.length === nNodes * 3
+        ? sharedBaseVertexColors
+        : customBoundaryFaces
+          ? computeVertexColors(
+              nNodes,
+              field,
+              fieldData,
+              meshData.fieldNComp ?? 3,
+              nodes,
+              flattenBoundaryFaces(customBoundaryFaces),
+              qualityPerFace,
+            )
+          : getSharedVertexColors({
+              meshData,
+              field,
+              uniformColor,
+              qualityPerFace,
+            });
     mark("colorBaseCompute", baseColorStart);
     
     // Sub-select or map colors
@@ -846,7 +713,6 @@ export const FemGeometry = memo(function FemGeometry({
     invalidate();
     mark("colorTotal", totalStart);
   }, [
-    baseVertexColorCache,
     customBoundaryFaces,
     field,
     fieldData,
@@ -859,7 +725,7 @@ export const FemGeometry = memo(function FemGeometry({
     pointsGeometry,
     pointsVertexMap,
     qualityPerFace,
-    renderMode,
+    sharedBaseVertexColors,
     uniformColor,
     vertexMap,
     enableGeometryVertexColors,

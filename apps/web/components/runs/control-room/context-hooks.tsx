@@ -50,7 +50,7 @@ import type {
   StudyPipelineDocumentState,
 } from "../../../lib/session/types";
 import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
-import type { MeshOptionsState, MeshQualityData } from "../../panels/MeshSettingsPanel";
+import type { MeshOptionsState, MeshQualityData } from "@/lib/mesh/options";
 import type {
   ClipAxis,
   FemColorField,

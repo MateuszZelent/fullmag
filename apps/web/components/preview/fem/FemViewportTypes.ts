@@ -1,4 +1,5 @@
 import type {
+  ArrowSamplingMode,
   FemArrowColorMode,
   FemColorField,
   FemFerromagnetVisibilityMode,
@@ -43,6 +44,7 @@ export interface FemViewportViewState {
   arrowAlpha: number;
   arrowLengthScale: number;
   arrowThickness: number;
+  arrowSamplingMode: ArrowSamplingMode;
   vectorDomainFilter: FemVectorDomainFilter;
   ferromagnetVisibilityMode: FemFerromagnetVisibilityMode;
   previewMaxPoints: number;

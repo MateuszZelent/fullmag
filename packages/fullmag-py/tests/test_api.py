@@ -1051,7 +1051,7 @@ class ProblemApiTests(unittest.TestCase):
                 "nodes": [
                     {
                         "id": "stage_1_eigenmodes",
-                        "label": "Imported Stage 1",
+                        "label": "",
                         "enabled": True,
                         "source": "script_imported",
                         "node_kind": "primitive",

@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useEffect, useLayoutEffect } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
-import { FemMeshData, FemColorField, FemArrowColorMode } from "../FemMeshView3D";
+import { FemMeshData, FemColorField, FemArrowColorMode, ArrowSamplingMode } from "../FemMeshView3D";
 import { divergingColor, magnitudeColor } from "./colorUtils";
 import { applyMagnetizationHsl } from "../magnetizationColor";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
@@ -25,8 +25,9 @@ interface FemArrowsProps {
   activeNodeMask?: Uint8Array | boolean[] | null;
   boundaryFaceIndices?: number[] | null;
   lengthMode?: ArrowLengthMode;
+  samplingMode?: ArrowSamplingMode;
   /** Reports the final sampled node count after density filtering. */
-  onSampledCount?: (count: number) => void;
+  onSampledCount?: (count: number | undefined) => void;
 }
 
 /* ── Arrow template geometry — only depends on maxDim ───────────────── */
@@ -79,7 +80,7 @@ function useArrowTemplate(maxDim: number) {
   }, [maxDim]);
 }
 
-/* ── Sample boundary nodes adaptively ───────────────────────────────── */
+/* ── Sample candidate nodes adaptively ─────────────────────────────── */
 function sampleCandidateNodes(
   nodes: number[], 
   candidateNodes: readonly number[],
@@ -201,6 +202,7 @@ export function FemArrows({
   activeNodeMask,
   boundaryFaceIndices,
   lengthMode = "magnitude",
+  samplingMode = "auto",
   onSampledCount,
 }: FemArrowsProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
@@ -270,12 +272,31 @@ export function FemArrows({
     return Array.from(unique);
   }, [boundaryFaceIndices, meshData.boundaryFaces]);
 
-  const filteredBoundaryCandidateNodes = useMemo(() => {
-    if (!effectiveNodeMask) {
-      return boundaryCandidateNodes;
+  const volumeCandidateNodes = useMemo(() => {
+    const allNodes = new Array<number>(meshData.nNodes);
+    for (let nodeIndex = 0; nodeIndex < meshData.nNodes; nodeIndex += 1) {
+      allNodes[nodeIndex] = nodeIndex;
     }
-    return boundaryCandidateNodes.filter((nodeIndex) => isNodeActive(effectiveNodeMask, nodeIndex));
-  }, [boundaryCandidateNodes, effectiveNodeMask]);
+    return allNodes;
+  }, [meshData.nNodes]);
+
+  const useVolumeCandidates =
+    samplingMode === "volume"
+      ? true
+      : samplingMode === "surface"
+        ? false
+        : (
+            meshData.quantityDomain === "full_domain" ||
+            meshData.quantityDomain === "surface_only"
+          );
+
+  const filteredCandidateNodes = useMemo(() => {
+    const source = useVolumeCandidates ? volumeCandidateNodes : boundaryCandidateNodes;
+    if (!effectiveNodeMask) {
+      return source;
+    }
+    return source.filter((nodeIndex) => isNodeActive(effectiveNodeMask, nodeIndex));
+  }, [boundaryCandidateNodes, effectiveNodeMask, useVolumeCandidates, volumeCandidateNodes]);
 
   const sampledNodes = useMemo(() => {
     if (!visible) return [] as number[];
@@ -283,27 +304,43 @@ export function FemArrows({
     if (meshData.quantityDomain === "magnetic_only" && !effectiveNodeMask) {
       return [] as number[];
     }
-    const candidates = effectiveNodeMask
-      ? filteredBoundaryCandidateNodes
-      : filteredBoundaryCandidateNodes.length > 0
-        ? filteredBoundaryCandidateNodes
-        : boundaryCandidateNodes;
-    return sampleCandidateNodes(meshData.nodes, candidates, arrowDensity);
+    const primaryCandidates = effectiveNodeMask
+      ? filteredCandidateNodes
+      : filteredCandidateNodes.length > 0
+        ? filteredCandidateNodes
+        : useVolumeCandidates
+          ? volumeCandidateNodes
+          : boundaryCandidateNodes;
+    const sampledPrimary = sampleCandidateNodes(meshData.nodes, primaryCandidates, arrowDensity);
+    if (sampledPrimary.length > 0 || !useVolumeCandidates) {
+      return sampledPrimary;
+    }
+    const boundaryFallbackCandidates = effectiveNodeMask
+      ? boundaryCandidateNodes.filter((nodeIndex) => isNodeActive(effectiveNodeMask, nodeIndex))
+      : boundaryCandidateNodes;
+    return sampleCandidateNodes(meshData.nodes, boundaryFallbackCandidates, arrowDensity);
   }, [
     arrowDensity,
     boundaryCandidateNodes,
     effectiveNodeMask,
-    filteredBoundaryCandidateNodes,
+    filteredCandidateNodes,
     meshData.fieldData,
     meshData.nodes,
+    meshData.nNodes,
     meshData.quantityDomain,
+    useVolumeCandidates,
     visible,
+    volumeCandidateNodes,
   ]);
 
   // Report sampled count to parent for ArrowRenderState refinement.
   useEffect(() => {
+    if (!visible || !meshData.fieldData) {
+      onSampledCount?.(undefined);
+      return;
+    }
     onSampledCount?.(sampledNodes.length);
-  }, [sampledNodes.length, onSampledCount]);
+  }, [meshData.fieldData, onSampledCount, sampledNodes.length, visible]);
 
   const { count, positions, quaternions, scales, colors } = useMemo(() => {
     const emptyRet = {
@@ -519,7 +556,7 @@ export function FemArrows({
     ) {
       console.debug("[FemArrows] zero sampled nodes", {
         boundaryCandidateCount: boundaryCandidateNodes.length,
-        filteredCandidateCount: filteredBoundaryCandidateNodes.length,
+        filteredCandidateCount: filteredCandidateNodes.length,
         hasFieldData: Boolean(meshData.fieldData),
         quantityDomain: meshData.quantityDomain,
         maskKind: maskKind(effectiveNodeMask),

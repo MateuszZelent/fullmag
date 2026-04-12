@@ -25,7 +25,7 @@ import type {
   VisualizationPresetRef,
 } from "@/lib/session/types";
 import type { SolverSettingsState } from "@/components/panels/SolverSettingsPanel";
-import type { MeshOptionsState } from "@/components/panels/MeshSettingsPanel";
+import type { MeshOptionsState } from "@/lib/mesh/options";
 
 /** Sync state machine: explicit states for draft → backend flow */
 export type DraftSyncStatus =

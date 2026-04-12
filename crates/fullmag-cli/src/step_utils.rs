@@ -1889,7 +1889,7 @@ mod tests {
                 nodes: vec![
                     StudyPipelineNode::Primitive {
                         id: "stage_1_run".to_string(),
-                        label: "Imported Stage 1".to_string(),
+                        label: "".to_string(),
                         enabled: true,
                         notes: None,
                         source: Some("script_imported".to_string()),
@@ -1905,7 +1905,7 @@ mod tests {
                     },
                     StudyPipelineNode::Primitive {
                         id: "stage_2_relax".to_string(),
-                        label: "Imported Stage 2".to_string(),
+                        label: "".to_string(),
                         enabled: true,
                         notes: None,
                         source: Some("script_imported".to_string()),
@@ -1953,7 +1953,7 @@ mod tests {
                 version: "study_pipeline.v1".to_string(),
                 nodes: vec![StudyPipelineNode::Primitive {
                     id: "stage_1_run".to_string(),
-                    label: "Imported Stage 1".to_string(),
+                    label: "".to_string(),
                     enabled: true,
                     notes: None,
                     source: Some("script_imported".to_string()),

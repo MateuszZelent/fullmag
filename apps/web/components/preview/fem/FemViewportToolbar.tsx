@@ -18,7 +18,7 @@ import { ViewportToolbar3D } from "../ViewportToolbar3D";
 import { ViewportToolGroup, ViewportToolSeparator } from "../ViewportToolGroup";
 import { ViewportIconAction } from "../ViewportIconAction";
 import { ViewportPopoverPanel, ViewportPopoverRow, ViewportPopoverTrigger } from "../ViewportPopoverPanel";
-import type { FemArrowColorMode, FemColorField, RenderMode, ClipAxis } from "../FemMeshView3D";
+import type { ArrowSamplingMode, FemArrowColorMode, FemColorField, RenderMode, ClipAxis } from "../FemMeshView3D";
 import type { FemViewportNavigation, FemViewportProjection } from "./FemViewportTypes";
 import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles";
 import {
@@ -35,6 +35,7 @@ export interface FemViewportToolbarProps {
   arrowAlpha: number;
   arrowLengthScale: number;
   arrowThickness: number;
+  arrowSamplingMode: ArrowSamplingMode;
   projection: FemViewportProjection;
   navigation: FemViewportNavigation;
   qualityProfile: ViewportQualityProfileId;
@@ -67,6 +68,7 @@ export interface FemViewportToolbarProps {
   onArrowAlphaChange: (value: number) => void;
   onArrowLengthScaleChange: (value: number) => void;
   onArrowThicknessChange: (value: number) => void;
+  onArrowSamplingModeChange: (value: ArrowSamplingMode) => void;
   onProjectionChange: (value: FemViewportProjection) => void;
   onNavigationChange: (value: FemViewportNavigation) => void;
   onQualityProfileChange: (value: ViewportQualityProfileId) => void;
@@ -150,6 +152,7 @@ export function FemViewportToolbar({
   arrowAlpha,
   arrowLengthScale,
   arrowThickness,
+  arrowSamplingMode,
   projection,
   navigation,
   qualityProfile,
@@ -182,6 +185,7 @@ export function FemViewportToolbar({
   onArrowAlphaChange,
   onArrowLengthScaleChange,
   onArrowThicknessChange,
+  onArrowSamplingModeChange,
   onProjectionChange,
   onNavigationChange,
   onQualityProfileChange,
@@ -241,17 +245,6 @@ export function FemViewportToolbar({
     <ViewportToolbar3D
       compact={compact}
     >
-      {toolbarScopeLabel ? (
-        <>
-          <ViewportToolGroup label="Scope" compact={compact}>
-            <div className="flex h-7 items-center rounded-sm border border-cyan-400/25 bg-cyan-500/12 px-2 text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200">
-              {toolbarScopeLabel}
-            </div>
-          </ViewportToolGroup>
-          {!compact ? <ViewportToolSeparator /> : null}
-        </>
-      ) : null}
-
       {/* ── Results ── */}
       <ViewportToolGroup label="Results" compact={compact}>
         {availableQuantities.length > 0 && (
@@ -496,15 +489,30 @@ export function FemViewportToolbar({
         <ViewportIconAction
           icon={<ArrowUpRight size={14} />}
           active={arrowsVisible}
+          label={compact ? undefined : arrowsVisible ? "Vec On" : "Vec Off"}
           onClick={() => {
             onArrowsVisibleChange(!arrowsVisible);
           }}
           title="Toggle Vectors"
         />
+        <ViewportIconAction
+          active={arrowsVisible}
+          onClick={() => onArrowsVisibleChange(true)}
+          label={compact ? "On" : "Show"}
+          title="Show Vectors"
+          className="px-2.5"
+        />
+        <ViewportIconAction
+          active={!arrowsVisible}
+          onClick={() => onArrowsVisibleChange(false)}
+          label={compact ? "Off" : "Hide"}
+          title="Hide Vectors"
+          className="px-2.5"
+        />
         <ViewportPopoverTrigger preferredHorizontal="left">
           <ViewportIconAction
             icon={<SlidersHorizontal size={14} />}
-            active={openPopover === "vectors"}
+            active={openPopover === "vectors" || arrowsVisible}
             showCaret={!compact}
             className={compact ? "px-1.5" : undefined}
             onClick={() => {
@@ -583,6 +591,31 @@ export function FemViewportToolbar({
                     }
                   >
                     Airbox
+                  </button>
+                </div>
+              </ViewportPopoverRow>
+              <ViewportPopoverRow label="Sampling">
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    className={POPOVER_OPTION_CLASSNAME}
+                    data-active={arrowSamplingMode === "auto"}
+                    onClick={() => onArrowSamplingModeChange("auto")}
+                  >
+                    Auto
+                  </button>
+                  <button
+                    className={POPOVER_OPTION_CLASSNAME}
+                    data-active={arrowSamplingMode === "surface"}
+                    onClick={() => onArrowSamplingModeChange("surface")}
+                  >
+                    Surface
+                  </button>
+                  <button
+                    className={POPOVER_OPTION_CLASSNAME}
+                    data-active={arrowSamplingMode === "volume"}
+                    onClick={() => onArrowSamplingModeChange("volume")}
+                  >
+                    Volume
                   </button>
                 </div>
               </ViewportPopoverRow>
