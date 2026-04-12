@@ -143,6 +143,7 @@ export interface UseWorkspaceActionsReturn {
   canRelaxCommand: boolean;
   canPauseCommand: boolean;
   canStopCommand: boolean;
+  canSkipCommand: boolean;
   primaryRunAction: string;
   primaryRunLabel: string;
   requestPreviewQuantity: (nextQuantity: string) => void;
@@ -380,6 +381,10 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
 
     if (action === "stop") {
       void enqueueCommand({ kind: "stop" });
+    }
+
+    if (action === "skip") {
+      void enqueueCommand({ kind: "skip" });
     }
   }, [
     enqueueCommand,
@@ -641,6 +646,11 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     (isWaitingForCompute || workspaceStatus === "running" || workspaceStatus === "paused") &&
     runtimeCanAcceptCommands &&
     !commandBusy;
+  const canSkipCommand =
+    interactiveEnabled &&
+    workspaceStatus === "running" &&
+    runtimeCanAcceptCommands &&
+    !commandBusy;
   const primaryRunAction =
     isWaitingForCompute ? "compute" : workspaceStatus === "paused" ? "resume" : "run";
   const primaryRunLabel =
@@ -837,6 +847,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     canRelaxCommand,
     canPauseCommand,
     canStopCommand,
+    canSkipCommand,
     primaryRunAction,
     primaryRunLabel,
     requestPreviewQuantity,

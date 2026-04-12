@@ -30,6 +30,8 @@ pub(super) enum InteractiveStageInterrupt {
     Pause,
     Break,
     Close,
+    /// Skip the current stage in a sequence and advance to the next.
+    Skip,
 }
 
 impl CurrentLiveDisplaySelectionHandle {
@@ -124,6 +126,15 @@ impl CurrentLiveDisplaySelectionHandle {
         state.queue.pop_front()
     }
 
+    /// Push a synthetic command to the front of the queue (used by sequence runner).
+    pub(super) fn push_command_front(&self, command: SessionCommand) {
+        let (lock, cvar) = &*self.shared;
+        if let Ok(mut state) = lock.lock() {
+            state.queue.push_front(command);
+            cvar.notify_one();
+        }
+    }
+
     fn set_running_interrupt(&self, interrupt: InteractiveStageInterrupt) {
         if let Ok(mut slot) = self.running_interrupt.lock() {
             *slot = Some(interrupt);
@@ -188,6 +199,13 @@ impl CurrentLiveDisplaySelectionHandle {
                     eprintln!(
                         "interactive: received '{}' command — cancelling stage",
                         command.kind
+                    );
+                    return Some(fullmag_runner::StepAction::Stop);
+                }
+                Some(fullmag_runner::LiveControlCommand::SkipStage) => {
+                    self.set_running_interrupt(InteractiveStageInterrupt::Skip);
+                    eprintln!(
+                        "interactive: received 'skip' command — skipping current stage",
                     );
                     return Some(fullmag_runner::StepAction::Stop);
                 }
@@ -276,6 +294,11 @@ impl InteractiveRuntimeHost {
 
     pub(super) fn wait_next_command(&self, timeout: Duration) -> Option<SessionCommand> {
         self.control.wait_next_command(timeout)
+    }
+
+    /// Push a synthetic command to the front of the internal queue.
+    pub(super) fn push_command_front(&self, command: SessionCommand) {
+        self.control.push_command_front(command);
     }
 
     pub(super) fn mark_running(&self) {

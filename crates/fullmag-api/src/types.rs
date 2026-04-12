@@ -752,6 +752,8 @@ pub(crate) struct SessionCommandRequest {
     pub state_dataset: Option<String>,
     #[serde(default)]
     pub state_sample_index: Option<i64>,
+    #[serde(default)]
+    pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -836,6 +838,8 @@ pub(crate) struct SessionCommand {
     pub display_selection: Option<CurrentDisplaySelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_config: Option<CurrentPreviewConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
 }
 
 #[derive(Debug, Serialize)]

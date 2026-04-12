@@ -1714,6 +1714,76 @@ pub(crate) fn supports_dynamic_live_preview(backend_plan: &BackendPlanIR) -> boo
     matches!(backend_plan, BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_))
 }
 
+/// Convert a [`SequenceStage`] into a [`SessionCommand`] suitable for
+/// `build_interactive_command_stage`.
+pub(crate) fn sequence_stage_to_session_command(
+    stage: &fullmag_runner::SequenceStage,
+    sequence_id: &str,
+    stage_index: usize,
+) -> crate::types::SessionCommand {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    match stage {
+        fullmag_runner::SequenceStage::Run { until_seconds, max_steps } => {
+            crate::types::SessionCommand {
+                seq: 0,
+                command_id: format!("{}_stage_{}", sequence_id, stage_index),
+                kind: "run".to_string(),
+                created_at_unix_ms: now_ms,
+                until_seconds: Some(*until_seconds),
+                max_steps: *max_steps,
+                torque_tolerance: None,
+                energy_tolerance: None,
+                integrator: None,
+                fixed_timestep: None,
+                relax_algorithm: None,
+                relax_alpha: None,
+                mesh_options: None,
+                mesh_target: None,
+                mesh_reason: None,
+                state_path: None,
+                state_format: None,
+                state_dataset: None,
+                state_sample_index: None,
+                display_selection: None,
+                preview_config: None,
+                stages: None,
+            }
+        }
+        fullmag_runner::SequenceStage::Relax {
+            until_seconds,
+            max_steps,
+            torque_tolerance,
+            energy_tolerance,
+        } => crate::types::SessionCommand {
+            seq: 0,
+            command_id: format!("{}_stage_{}", sequence_id, stage_index),
+            kind: "relax".to_string(),
+            created_at_unix_ms: now_ms,
+            until_seconds: *until_seconds,
+            max_steps: *max_steps,
+            torque_tolerance: *torque_tolerance,
+            energy_tolerance: *energy_tolerance,
+            integrator: None,
+            fixed_timestep: None,
+            relax_algorithm: None,
+            relax_alpha: None,
+            mesh_options: None,
+            mesh_target: None,
+            mesh_reason: None,
+            state_path: None,
+            state_format: None,
+            state_dataset: None,
+            state_sample_index: None,
+            display_selection: None,
+            preview_config: None,
+            stages: None,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

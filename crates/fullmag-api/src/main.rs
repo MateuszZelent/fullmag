@@ -665,6 +665,7 @@ fn build_preview_control_command(
         state_sample_index: None,
         display_selection: Some(display_selection.clone()),
         preview_config: Some(preview_config),
+        stages: None,
     }
 }
 
@@ -1286,6 +1287,8 @@ fn build_session_command(req: SessionCommandRequest) -> Result<SessionCommand, A
             | "solve"
             | "compute"
             | "load_state"
+            | "run_sequence"
+            | "skip"
     ) {
         return Err(ApiError::bad_request(format!(
             "unsupported command kind '{}'",
@@ -1312,6 +1315,14 @@ fn build_session_command(req: SessionCommandRequest) -> Result<SessionCommand, A
         return Err(ApiError::bad_request(
             "load_state command requires state_path",
         ));
+    }
+    if kind == "run_sequence" {
+        let stages = req.stages.as_ref();
+        if stages.map_or(true, |s| s.is_empty()) {
+            return Err(ApiError::bad_request(
+                "run_sequence command requires at least one stage",
+            ));
+        }
     }
     if kind == "remesh" && req.mesh_target.is_none() {
         return Err(ApiError::bad_request("remesh command requires mesh_target"));
@@ -1349,6 +1360,7 @@ fn build_session_command(req: SessionCommandRequest) -> Result<SessionCommand, A
         state_sample_index: req.state_sample_index,
         display_selection: None,
         preview_config: None,
+        stages: req.stages,
     })
 }
 
@@ -1697,6 +1709,7 @@ async fn import_magnetization_state_for_current_workspace(
                     state_sample_index: req.sample_index.or(loaded.sample_index),
                     display_selection: None,
                     preview_config: None,
+                    stages: None,
                 },
             )
             .await,

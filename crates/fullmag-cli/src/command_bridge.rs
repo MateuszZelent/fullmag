@@ -20,6 +20,7 @@ pub(crate) fn classify_command(command: &SessionCommand) -> Option<LiveControlCo
         command.torque_tolerance,
         command.energy_tolerance,
         command.display_selection.as_ref(),
+        command.stages.clone(),
     )
 }
 
@@ -42,5 +43,6 @@ pub(crate) fn is_interrupt_command(typed: &LiveControlCommand) -> bool {
             | LiveControlCommand::Pause
             | LiveControlCommand::Break
             | LiveControlCommand::Close
+            | LiveControlCommand::SkipStage
     )
 }

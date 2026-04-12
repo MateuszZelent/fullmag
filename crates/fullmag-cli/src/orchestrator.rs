@@ -3568,6 +3568,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
         let mut interactive_stage_index = stage_count;
         let mut paused_stage: Option<PausedInteractiveStage> = None;
+        // ── Sequence runner state ──
+        // When a `run_sequence` command is active, this holds the remaining stages.
+        // Each completed/skipped stage pops from the front. Break aborts the whole sequence.
+        let mut active_sequence: Option<(Vec<fullmag_runner::SequenceStage>, usize, usize)> = None; // (remaining_stages, current_1based, total)
         loop {
             let Some(command) =
                 interactive_runtime_host.wait_next_command(Duration::from_millis(250))
@@ -3633,7 +3637,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 break;
             }
 
-            let (command, command_kind_label) =
+            let (command, resume_label_hint) =
                 if matches!(typed_cmd, Some(fullmag_runner::LiveControlCommand::Resume)) {
                     let Some(paused) = paused_stage.take() else {
                         live_workspace.push_log(
@@ -3646,10 +3650,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         "system",
                         format!("Resuming paused interactive {} stage", paused.source_kind),
                     );
-                    (paused.command, format!("resume ({})", paused.source_kind))
+                    (paused.command, Some(format!("resume ({})", paused.source_kind)))
                 } else {
-                    let kind = command.kind.clone();
-                    (command, kind)
+                    (command, None)
                 };
 
             if command.kind == "load_state" {
@@ -3704,6 +3707,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     typed_cmd,
                     Some(fullmag_runner::LiveControlCommand::Run { .. })
                         | Some(fullmag_runner::LiveControlCommand::Relax { .. })
+                        | Some(fullmag_runner::LiveControlCommand::RunSequence { .. })
                 )
             {
                 paused_stage = None;
@@ -3744,6 +3748,72 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     .enter_awaiting_command(continuation_magnetization.clone(), &live_workspace);
                 continue;
             }
+
+            // ── Handle run_sequence: set up sequence state and convert first stage ──
+            if command.kind == "run_sequence" {
+                if let Some(stages) = command.stages.clone() {
+                    if stages.is_empty() {
+                        live_workspace.push_log("warning", "run_sequence received with empty stages list");
+                        continue;
+                    }
+                    let total = stages.len();
+                    live_workspace.push_log(
+                        "system",
+                        format!("Starting execution sequence with {} stage(s)", total),
+                    );
+                    active_sequence = Some((stages, 1, total));
+                } else {
+                    live_workspace.push_log("error", "run_sequence command is missing stages payload");
+                    continue;
+                }
+            }
+
+            // ── Handle skip_stage when idle (no running segment) ──
+            if matches!(typed_cmd, Some(fullmag_runner::LiveControlCommand::SkipStage)) {
+                if let Some((ref mut remaining, ref mut current, total)) = active_sequence {
+                    if !remaining.is_empty() {
+                        let skipped_label = remaining[0].label();
+                        remaining.remove(0);
+                        live_workspace.push_log(
+                            "system",
+                            format!(
+                                "Skipped stage {}/{} ({}) while idle",
+                                current, total, skipped_label,
+                            ),
+                        );
+                        *current += 1;
+                    }
+                    if remaining.is_empty() {
+                        live_workspace.push_log("success", "Execution sequence completed (all stages skipped)");
+                        active_sequence = None;
+                        continue;
+                    }
+                } else {
+                    live_workspace.push_log("warning", "Skip requested but no active sequence");
+                    continue;
+                }
+            }
+
+            // ── If an active sequence has pending stages, pop the next one as the command ──
+            let (command, command_kind_label) = if let Some((ref mut remaining, current, total)) = active_sequence {
+                if !remaining.is_empty() && command.kind == "run_sequence" {
+                    let stage_def = remaining.remove(0);
+                    let stage_label = stage_def.label().to_string();
+                    let synthetic_cmd = sequence_stage_to_session_command(
+                        &stage_def,
+                        &command.command_id,
+                        current,
+                    );
+                    let label = format!("sequence {}/{}: {}", current, total, stage_label);
+                    (synthetic_cmd, label)
+                } else {
+                    let kind = resume_label_hint.unwrap_or_else(|| command.kind.clone());
+                    (command, kind)
+                }
+            } else {
+                let kind = resume_label_hint.unwrap_or_else(|| command.kind.clone());
+                (command, kind)
+            };
 
             let Some(mut stage) =
                 (match build_interactive_command_stage(&interactive_template_ir, &command) {
@@ -4175,6 +4245,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
                     crate::interactive_runtime_host::InteractiveStageInterrupt::Break => {
                         paused_stage = None;
+                        // Abort active sequence if any
+                        if active_sequence.take().is_some() {
+                            live_workspace.push_log(
+                                "warning",
+                                "Execution sequence aborted by user",
+                            );
+                        }
                         live_workspace.update(|state| {
                             state.session = ctx.build_session(
                                 "awaiting_command",
@@ -4214,6 +4291,58 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             ),
                         );
                         break;
+                    }
+                    crate::interactive_runtime_host::InteractiveStageInterrupt::Skip => {
+                        // Skip = interrupt current stage but continue sequence
+                        live_workspace.push_log(
+                            "system",
+                            format!(
+                                "Interactive command {} skipped — advancing to next stage",
+                                command_kind_label,
+                            ),
+                        );
+                        if let Some((ref mut remaining, ref mut current, total)) = active_sequence {
+                            *current += 1;
+                            if !remaining.is_empty() {
+                                let next_stage = remaining.remove(0);
+                                let stage_label = next_stage.label().to_string();
+                                live_workspace.push_log(
+                                    "system",
+                                    format!("Sequence: advancing to stage {}/{} ({})", current, total, stage_label),
+                                );
+                                let synthetic_cmd = sequence_stage_to_session_command(
+                                    &next_stage,
+                                    &format!("seq_{}", session_id),
+                                    *current,
+                                );
+                                interactive_runtime_host.push_command_front(synthetic_cmd);
+                                paused_stage = None;
+                                continue;
+                            } else {
+                                live_workspace.push_log("success", format!("Execution sequence completed ({} stages)", total));
+                                active_sequence = None;
+                            }
+                        }
+                        // No more stages or no sequence → awaiting_command
+                        paused_stage = None;
+                        live_workspace.update(|state| {
+                            state.session = ctx.build_session(
+                                "awaiting_command",
+                                &plan_summary_json(&current_plan_summary),
+                                cancelled_at_unix_ms,
+                            );
+                            state.run = ctx.build_run("awaiting_command", &aggregated_steps);
+                            set_live_state_status(
+                                &mut state.live_state,
+                                "awaiting_command",
+                                Some(false),
+                            );
+                        });
+                        interactive_runtime_host.enter_awaiting_command(
+                            continuation_magnetization.clone(),
+                            &live_workspace,
+                        );
+                        continue;
                     }
                 }
             }
@@ -4307,6 +4436,37 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             interactive_stage_index += 1;
 
             let ready_at_unix_ms = unix_time_millis()?;
+            live_workspace.push_log(
+                "success",
+                format!("Interactive command {} completed", command_kind_label),
+            );
+
+            // ── Sequence continuation: if there are more stages, advance ──
+            if let Some((ref mut remaining, ref mut current, total)) = active_sequence {
+                *current += 1;
+                if !remaining.is_empty() {
+                    let next_stage = remaining.remove(0);
+                    let stage_label = next_stage.label().to_string();
+                    live_workspace.push_log(
+                        "system",
+                        format!("Sequence: advancing to stage {}/{} ({})", current, total, stage_label),
+                    );
+                    // Push synthetic command to internal queue front so the loop picks it up next
+                    let synthetic_cmd = sequence_stage_to_session_command(
+                        &next_stage,
+                        &format!("seq_{}", session_id),
+                        *current,
+                    );
+                    interactive_runtime_host.push_command_front(synthetic_cmd);
+                    // Keep running status — don't enter_awaiting_command
+                    paused_stage = None;
+                    continue;
+                } else {
+                    live_workspace.push_log("success", format!("Execution sequence completed ({} stages)", total));
+                    active_sequence = None;
+                }
+            }
+
             live_workspace.update(|state| {
                 state.session = ctx.build_session(
                     "awaiting_command",
@@ -4319,10 +4479,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             interactive_runtime_host
                 .enter_awaiting_command(continuation_magnetization.clone(), &live_workspace);
             paused_stage = None;
-            live_workspace.push_log(
-                "success",
-                format!("Interactive command {} completed", command_kind_label),
-            );
         }
         interactive_runtime_host.mark_closed();
         live_workspace.update(|state| {
