@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createWorkspaceGraphSnapshot } from "../../model/createWorkspaceGraphSnapshot";
 import { useWorkspaceGraphStore } from "../useWorkspaceGraphStore";
 import type { ResultsWorkspaceState } from "@/features/analyze/model/resultsWorkspace";
+import { activeDatasetIdForResultNode, resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
 import type { StudyPipelineDocument } from "@/lib/study-builder/types";
 import type { QuantityDescriptor } from "@/lib/useSessionStream";
 
@@ -197,5 +198,68 @@ describe("workspace graph store", () => {
     expect(snapshot.selection.activeNodeId).toBe("res-dataset-ds-1");
     expect(snapshot.viewportDocuments["viewport:study:core:2d"]?.plane).toBe("xz");
     expect(snapshot.viewportDocuments["viewport:study:core:2d"]?.selectedDatasetId).toBe("ds-1");
+  });
+
+  it("preserves active viewport dataset selection when rebuilding the snapshot", () => {
+    const firstSnapshot = createWorkspaceGraphSnapshot({
+      projectLabel: "Micromagnetic Workspace",
+      workspaceMode: "study",
+      workspaceTabs: { build: [], study: [], analyze: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      selectedNodeId: "results",
+      studyPipeline,
+      resultsWorkspace,
+      quantities,
+      scalarRows: [],
+      requestedPreviewQuantity: "m",
+      requestedPreviewComponent: "x",
+      plane: "xy",
+      sliceIndex: 1,
+      viewMode: "3D",
+      renderMode: "surface",
+    });
+
+    const rebuilt = createWorkspaceGraphSnapshot(
+      {
+        projectLabel: "Micromagnetic Workspace",
+        workspaceMode: "study",
+        workspaceTabs: { build: [], study: [], analyze: [] },
+        activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+        selectedNodeId: resultNodeToTreeNodeId("dataset", "ds-1"),
+        studyPipeline,
+        resultsWorkspace: {
+          ...resultsWorkspace,
+          activeResultNodeId: "ds-1",
+        },
+        quantities,
+        scalarRows: [],
+        requestedPreviewQuantity: "m",
+        requestedPreviewComponent: "x",
+        plane: "xz",
+        sliceIndex: 4,
+        viewMode: "2D",
+        renderMode: "wireframe",
+      },
+      {
+        ...firstSnapshot,
+        viewportDocuments: {
+          ...firstSnapshot.viewportDocuments,
+          "viewport:study:core:3d": {
+            ...firstSnapshot.viewportDocuments["viewport:study:core:3d"]!,
+            selectedDatasetId: "ds-1",
+            selectedResultNodeId: "ds-1",
+          },
+        },
+      },
+    );
+
+    expect(rebuilt.viewportDocuments["viewport:study:core:3d"]?.selectedDatasetId).toBe("ds-1");
+    expect(rebuilt.selection.activeResultNodeId).toBe("ds-1");
+  });
+
+  it("maps active datasets from typed result nodes", () => {
+    expect(resultNodeToTreeNodeId("plot_group", "pg-1")).toBe("res-plot-group-pg-1");
+    expect(activeDatasetIdForResultNode(resultsWorkspace, "dv-1")).toBe("ds-1");
+    expect(activeDatasetIdForResultNode(resultsWorkspace, null)).toBe("ds-1");
   });
 });

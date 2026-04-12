@@ -69,6 +69,7 @@ export interface UseFemOverlayItemsArgs {
   clipEnabled: boolean;
   clipAxis: ClipAxis;
   clipPos: number;
+  clipFlip: boolean;
 
   // Parts & mesh
   hasMeshParts: boolean;
@@ -139,6 +140,7 @@ export interface UseFemOverlayItemsArgs {
   setInternalClipEnabled: (v: boolean) => void;
   setInternalClipAxis: (v: ClipAxis) => void;
   setInternalClipPos: (v: number) => void;
+  setInternalClipFlip: (v: boolean) => void;
   setInternalShowArrows: (v: boolean) => void;
   setInternalVectorDomainFilter: (v: FemVectorDomainFilter) => void;
   setInternalFerromagnetVisibilityMode: (v: FemFerromagnetVisibilityMode) => void;
@@ -190,6 +192,7 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
             clipEnabled={args.clipEnabled}
             clipAxis={args.clipAxis}
             clipPos={args.clipPos}
+            clipFlip={args.clipFlip}
             arrowsVisible={args.showArrows}
             arrowDensity={args.baseArrowDensity}
             effectiveArrowDensity={args.effectiveArrowDensity}
@@ -268,6 +271,9 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
               } else {
                 args.setInternalClipPos(v);
               }
+            }}
+            onClipFlipChange={(v) => {
+              args.setInternalClipFlip(v);
             }}
             onArrowsVisibleChange={(v) => {
               if (args.onShowArrowsChange) {

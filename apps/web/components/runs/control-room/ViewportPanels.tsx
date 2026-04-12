@@ -18,6 +18,7 @@ import PreviewScalarField2D from "../../preview/PreviewScalarField2D";
 import BoundsPreview3D from "../../preview/BoundsPreview3D";
 import EmptyState from "../../ui/EmptyState";
 import AnalyzeViewport from "./AnalyzeViewport";
+import ResultNodeViewport from "./ResultNodeViewport";
 
 import {
   fmtExp,
@@ -55,9 +56,15 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const setRightInspectorOpen = useWorkspaceStore((state) => state.setRightInspectorOpen);
   const rightInspectorTab = useWorkspaceStore((state) => state.rightInspectorTab);
   const setRightInspectorTab = useWorkspaceStore((state) => state.setRightInspectorTab);
-  const graphActiveResultNodeId = useWorkspaceGraphStore(
-    (state) => state.snapshot.selection.activeResultNodeId,
+  const graphActiveViewportDocument = useWorkspaceGraphStore((state) => {
+    const id = state.snapshot.selection.activeViewportDocumentId;
+    return id ? state.snapshot.viewportDocuments[id] ?? null : null;
+  });
+  const graphActiveResultNodeId = useWorkspaceGraphStore((state) =>
+    state.snapshot.selection.activeResultNodeId,
   );
+  const graphViewportResultNodeId =
+    graphActiveViewportDocument?.selectedResultNodeId ?? graphActiveResultNodeId;
   const effectiveViewMode = ctx.effectiveViewMode;
   const femMeshData = ctx.femMeshData;
   const visibleSubmeshSnapshot = ctx.visibleSubmeshSnapshot;
@@ -300,7 +307,6 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     (nextMaxPoints: number) => void updatePreview("/maxPoints", { maxPoints: nextMaxPoints }),
     [updatePreview],
   );
-  const viewportGraphV2Enabled = FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableGraphV2;
   const hasExactScopeSegment = useMemo(
     () => {
       if (!selectedFemObjectId) {
@@ -695,7 +701,6 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   }
 
   const graphHostedContent =
-    viewportGraphV2Enabled &&
     !minimalViewportSelectionPath &&
     !globalScalarPreview &&
     !(spatialPreview &&
@@ -710,7 +715,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
               viewportMode: effectiveViewMode,
               hasSessionData: Boolean(ctx.selectedVectors?.length || ctx.preview),
               hasFemMesh: Boolean(ctx.femMeshData),
-              selectedResultNodeId: graphActiveResultNodeId,
+              selectedResultNodeId: graphViewportResultNodeId,
               discretization: ctx.isFemBackend ? "fem" : "fdm",
             }}
             selection={{
@@ -963,6 +968,12 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                   );
                 case "AnalyzeViewport":
                   return <AnalyzeViewport />;
+                case "ResultChartViewport":
+                  return <ResultNodeViewport mode="chart" />;
+                case "ResultTableViewport":
+                  return <ResultNodeViewport mode="table" />;
+                case "ResultReportViewport":
+                  return <ResultNodeViewport mode="report" />;
                 default:
                   return null;
               }

@@ -9,7 +9,7 @@ export function useWorkspaceGraphBridge(input: WorkspaceGraphBridgeInput): void 
   const applySnapshot = useWorkspaceGraphStore((state) => state.applySnapshot);
 
   useEffect(() => {
-    applySnapshot(createWorkspaceGraphSnapshot(input));
+    applySnapshot(createWorkspaceGraphSnapshot(input, useWorkspaceGraphStore.getState().snapshot));
   }, [
     applySnapshot,
     input.activeWorkspaceTabByStage,
@@ -29,4 +29,3 @@ export function useWorkspaceGraphBridge(input: WorkspaceGraphBridgeInput): void 
     input.workspaceTabs,
   ]);
 }
-

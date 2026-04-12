@@ -231,6 +231,7 @@ const ICON_REGISTRY: Record<NodeKind, IconRegistryEntry> = {
   "results.energy":                        { token: "zap",              label: "Energy" },
   "results.state_io":                      { token: "save",             label: "State I/O" },
   "results.export":                        { token: "save",             label: "Export" },
+  "results.solution":                      { token: "layers",           label: "Solution" },
   "results.dataset":                       { token: "database",         label: "Dataset" },
   "results.analysis":                      { token: "brain",            label: "Analysis" },
   "results.analysis.pinned":               { token: "pin",              label: "Pinned Analysis" },

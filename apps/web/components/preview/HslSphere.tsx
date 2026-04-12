@@ -49,15 +49,16 @@ const LABEL_DIST = 1.18;
 
 /* ── Axis label component ─────────────────────────────────── */
 
-function AxisLabel({ text, color, position }: {
+function AxisLabel({ text, color, position, fontSize = 0.28 }: {
   text: string;
   color: string;
   position: [number, number, number];
+  fontSize?: number;
 }) {
   return (
     <Billboard position={position}>
       <Text
-        fontSize={0.28}
+        fontSize={fontSize}
         color={color}
         anchorX="center"
         anchorY="middle"
@@ -247,16 +248,20 @@ function HslSphereScene({
       <mesh geometry={sphereGeo} material={sphereMat} />
 
       {/* Axis labels — visual XYZ reference for the active viewport convention */}
-      {!compact ? (
-        <>
-          <AxisLabel text={`+${axisLabels.screenX.text}`} color={axisLabels.screenX.color} position={[LABEL_DIST, 0, 0]} />
-          <AxisLabel text={`-${axisLabels.screenX.text}`} color={axisLabels.screenX.color} position={[-LABEL_DIST, 0, 0]} />
-          <AxisLabel text={`+${axisLabels.screenY.text}`} color={axisLabels.screenY.color} position={[0, LABEL_DIST, 0]} />
-          <AxisLabel text={`-${axisLabels.screenY.text}`} color={axisLabels.screenY.color} position={[0, -LABEL_DIST, 0]} />
-          <AxisLabel text={`+${axisLabels.depth.text}`} color={axisLabels.depth.color} position={[0, 0, LABEL_DIST]} />
-          <AxisLabel text={`-${axisLabels.depth.text}`} color={axisLabels.depth.color} position={[0, 0, -LABEL_DIST]} />
-        </>
-      ) : null}
+      {(() => {
+        const fs = compact ? 0.20 : 0.28;
+        const ld = compact ? 1.08 : LABEL_DIST;
+        return (
+          <>
+            <AxisLabel text={`+${axisLabels.screenX.text}`} color={axisLabels.screenX.color} position={[ld, 0, 0]} fontSize={fs} />
+            <AxisLabel text={`-${axisLabels.screenX.text}`} color={axisLabels.screenX.color} position={[-ld, 0, 0]} fontSize={fs} />
+            <AxisLabel text={`+${axisLabels.screenY.text}`} color={axisLabels.screenY.color} position={[0, ld, 0]} fontSize={fs} />
+            <AxisLabel text={`-${axisLabels.screenY.text}`} color={axisLabels.screenY.color} position={[0, -ld, 0]} fontSize={fs} />
+            <AxisLabel text={`+${axisLabels.depth.text}`} color={axisLabels.depth.color} position={[0, 0, ld]} fontSize={fs} />
+            <AxisLabel text={`-${axisLabels.depth.text}`} color={axisLabels.depth.color} position={[0, 0, -ld]} fontSize={fs} />
+          </>
+        );
+      })()}
 
       {/* Thin axis lines through sphere */}
       <Line

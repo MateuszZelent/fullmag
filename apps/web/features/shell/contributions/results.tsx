@@ -8,7 +8,6 @@ import {
 } from "lucide-react";
 import { registerRibbonContribution } from "../registry/ribbonRegistry";
 import type { RibbonBuildContext, RibbonGroup, RibbonAction } from "../registry/ribbonRegistry";
-import { buildViewGroup } from "./view-group";
 
 function buildResultsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   const quickPreviewActions: RibbonAction[] = (
@@ -119,6 +118,12 @@ function buildResultsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           action: () => ctx.run({ id: "capture.viewport" }),
           iconColor: "text-violet-400",
         },
+      ],
+    },
+    {
+      id: "results-export",
+      title: "Export",
+      actions: [
         {
           id: "exportvtk",
           icon: <Download size={20} />,
@@ -300,7 +305,6 @@ function buildResultsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         },
       ],
     },
-    buildViewGroup(ctx),
   ];
 }
 

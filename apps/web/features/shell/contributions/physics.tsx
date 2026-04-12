@@ -3,15 +3,54 @@
  */
 
 import {
-  Magnet, Cog, Sparkles, Binary, RadioTower, Zap, FlaskConical,
+  Magnet, Cog, Sparkles, Binary, RadioTower, Zap, FlaskConical, Plus,
 } from "lucide-react";
 import { registerRibbonContribution } from "../registry/ribbonRegistry";
-import type { RibbonBuildContext, RibbonGroup } from "../registry/ribbonRegistry";
-import { buildViewGroup } from "./view-group";
+import type { RibbonBuildContext, RibbonGroup, RibbonMenuItem } from "../registry/ribbonRegistry";
 
 function buildPhysicsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   const objectId = ctx.selectedObjectId;
   const hasObject = Boolean(objectId);
+  const antennaMenuItems: RibbonMenuItem[] = [
+    {
+      id: "manage-antennas",
+      label: "Manage RF Sources",
+      icon: <Cog size={14} />,
+      description: "Open antenna placement and drive settings",
+      action: () => ctx.run({ id: "navigation.select-node", nodeId: "antennas" }),
+    },
+    {
+      id: "add-microstrip",
+      label: "Add Microstrip",
+      icon: <Plus size={14} />,
+      description: "Single strip conductor over the magnetic guide",
+      disabled: !ctx.can({ id: "antenna.add", kind: "MicrostripAntenna" }),
+      action: () => ctx.run({ id: "antenna.add", kind: "MicrostripAntenna" }),
+    },
+    {
+      id: "add-cpw",
+      label: "Add CPW",
+      icon: <Plus size={14} />,
+      description: "Signal strip with symmetric return grounds",
+      disabled: !ctx.can({ id: "antenna.add", kind: "CPWAntenna" }),
+      action: () => ctx.run({ id: "antenna.add", kind: "CPWAntenna" }),
+    },
+  ];
+
+  if ((ctx.antennaSources?.length ?? 0) > 0) {
+    antennaMenuItems.push({ id: "sep-existing", label: "", separator: true });
+    for (const antenna of ctx.antennaSources ?? []) {
+      antennaMenuItems.push({
+        id: `ant-${antenna.name}`,
+        label: antenna.name,
+        icon: <RadioTower size={14} />,
+        description: `${antenna.kind} · ${(antenna.currentA * 1e3).toFixed(2)} mA`,
+        active: ctx.selectedAntennaName === antenna.name,
+        action: () =>
+          ctx.run({ id: "navigation.select-node", nodeId: `ant-${antenna.name}` }),
+      });
+    }
+  }
   return [
     {
       id: "physics-core",
@@ -119,7 +158,23 @@ function buildPhysicsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         },
       ],
     },
-    buildViewGroup(ctx),
+    {
+      id: "physics-rf",
+      title: "RF / Antennas",
+      actions: [
+        {
+          id: "physics-antennas",
+          icon: <RadioTower size={20} />,
+          label: "RF Sources",
+          tooltip: "Manage microwave excitation sources and antenna geometry",
+          active:
+            ctx.selectedNodeId === "antennas" ||
+            Boolean(ctx.selectedAntennaName),
+          iconColor: "text-cyan-400",
+          menuItems: antennaMenuItems,
+        },
+      ],
+    },
   ];
 }
 

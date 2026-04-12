@@ -19,13 +19,17 @@ export type ResultNodeContext =
   | { kind: "results-root" }
   | { kind: "results-overview" }
   | { kind: "results-datasets" }
+  | { kind: "results-solutions" }
+  | { kind: "results-solution"; solutionId: string }
   | { kind: "results-dataset"; datasetId: string }
   | { kind: "results-dataset-solution"; datasetId: string; solutionId: string }
   | { kind: "results-fields" }
   | { kind: "results-field-quantity"; quantityId: string }
+  | { kind: "results-derived-value"; derivedValueId: string }
   | { kind: "results-derived-scalars" }
   | { kind: "results-state-io" }
   | { kind: "results-export" }
+  | { kind: "results-export-node"; exportId: string }
   | { kind: "results-analyses" }
   | { kind: "results-analysis"; analysisId: string }
   | { kind: "results-eigenmodes" }
@@ -55,6 +59,10 @@ export function parseResultNodeContext(
   if (nodeId === "res-overview") return { kind: "results-overview" };
 
   // Datasets
+  if (nodeId === "res-solutions") return { kind: "results-solutions" };
+  if (nodeId.startsWith("res-solution-")) {
+    return { kind: "results-solution", solutionId: nodeId.replace("res-solution-", "") };
+  }
   if (nodeId === "res-datasets") return { kind: "results-datasets" };
   const datasetMatch = nodeId.match(/^res-dataset-solution-(.+)$/);
   if (datasetMatch) {
@@ -70,11 +78,17 @@ export function parseResultNodeContext(
   if (nodeId.startsWith("res-qty-")) {
     return { kind: "results-field-quantity", quantityId: decodeURIComponent(nodeId.replace("res-qty-", "")) };
   }
+  if (nodeId.startsWith("res-derived-value-")) {
+    return { kind: "results-derived-value", derivedValueId: nodeId.replace("res-derived-value-", "") };
+  }
   if (nodeId === "res-energy") return { kind: "results-derived-scalars" };
 
   // State I/O & Export
   if (nodeId === "res-state-io") return { kind: "results-state-io" };
   if (nodeId === "res-export") return { kind: "results-export" };
+  if (nodeId.startsWith("res-export-")) {
+    return { kind: "results-export-node", exportId: nodeId.replace("res-export-", "") };
+  }
 
   // Analyses
   if (nodeId === "res-analyses") return { kind: "results-analyses" };
@@ -136,14 +150,18 @@ export function resultContextToNodeKind(ctx: ResultNodeContext): string {
   switch (ctx.kind) {
     case "results-root": return "results.root";
     case "results-overview": return "results.root";
+    case "results-solutions": return "results.solution";
+    case "results-solution": return "results.solution";
     case "results-datasets": return "results.dataset";
     case "results-dataset": return "results.dataset";
     case "results-dataset-solution": return "results.dataset";
     case "results-fields": return "results.fields";
     case "results-field-quantity": return "results.field_quantity";
+    case "results-derived-value": return "results.derived_scalars";
     case "results-derived-scalars": return "results.derived_scalars";
     case "results-state-io": return "results.state_io";
     case "results-export": return "results.export";
+    case "results-export-node": return "results.export";
     case "results-analyses": return "results.analysis";
     case "results-analysis": return "results.analysis";
     case "results-eigenmodes": return "results.eigenmodes";

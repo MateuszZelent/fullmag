@@ -7,6 +7,7 @@ import {
   BarChart3,
   Box,
   Columns2,
+  Cpu,
   Eye,
   Grid3X3,
   Magnet,
@@ -23,6 +24,51 @@ import { cn } from "@/lib/utils";
 import { fmtExp, fmtSI } from "./shared";
 import { useTransport, useViewport, useCommand, useModel } from "./context-hooks";
 import { MESH_WORKSPACE_PRESETS } from "./meshWorkspace";
+import { appendNode, createPrimitiveNode, insertNodeNear } from "@/lib/study-builder/operations";
+import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
+import { migrateFlatStagesToStudyPipeline } from "@/lib/study-builder/migrate";
+import { buildPipelineStudyStageNodeId, parseStudyNodeContext } from "@/lib/study-builder/node-context";
+import type { StudyPipelineDocument, StudyPrimitiveStageKind } from "@/lib/study-builder/types";
+
+function syncStudyCompatibilityState(
+  ctx: ReturnType<typeof useTransport> &
+    ReturnType<typeof useViewport> &
+    ReturnType<typeof useCommand> &
+    ReturnType<typeof useModel>,
+  stages: ReturnType<typeof materializeStudyPipeline>["stages"],
+): void {
+  const firstRun = stages.find((stage) => stage.kind === "run");
+  const firstRelax = stages.find((stage) => stage.kind === "relax");
+  if (firstRun?.until_seconds) {
+    ctx.setRunUntilInput(firstRun.until_seconds);
+  }
+  if (firstRelax) {
+    ctx.setSolverSettings((current) => ({
+      ...current,
+      integrator: firstRelax.integrator || current.integrator,
+      fixedTimestep: firstRelax.fixed_timestep || current.fixedTimestep,
+      relaxAlgorithm: firstRelax.relax_algorithm || current.relaxAlgorithm,
+      torqueTolerance: firstRelax.torque_tolerance || current.torqueTolerance,
+      energyTolerance: firstRelax.energy_tolerance || current.energyTolerance,
+      maxRelaxSteps: firstRelax.max_steps || current.maxRelaxSteps,
+    }));
+  }
+}
+
+function resolveStudyAnchorNodeId(
+  document: StudyPipelineDocument,
+  selectedNodeId: string | null,
+): string | null {
+  const studyNode = parseStudyNodeContext(selectedNodeId);
+  if (studyNode?.kind !== "study-stage") {
+    return null;
+  }
+  if (studyNode.source === "pipeline") {
+    return studyNode.stageKey;
+  }
+  const flatIndex = Number(studyNode.stageKey);
+  return Number.isFinite(flatIndex) ? document.nodes[flatIndex]?.id ?? null : null;
+}
 
 function quantityIcon(quantityId: string, label: string) {
   const lowerId = quantityId.toLowerCase();
@@ -82,6 +128,23 @@ const WorkspaceControlStrip = memo(function WorkspaceControlStrip() {
     ctx.workspaceStatus === "running"
       ? `Step ${ctx.effectiveStep.toLocaleString()} · ${fmtSI(ctx.effectiveTime, "s")}`
       : ctx.activity.detail ?? null;
+  const authoringStudyDocument = (
+    ctx.studyPipeline as StudyPipelineDocument | null
+  ) ?? migrateFlatStagesToStudyPipeline(ctx.studyStages);
+
+  const appendStudyStage = (kind: StudyPrimitiveStageKind) => {
+    const nextNode = createPrimitiveNode(kind);
+    const anchorId = resolveStudyAnchorNodeId(authoringStudyDocument, ctx.selectedSidebarNodeId);
+    const nextDocument = anchorId
+      ? insertNodeNear(authoringStudyDocument, anchorId, "after", nextNode)
+      : appendNode(authoringStudyDocument, nextNode);
+    const compiled = materializeStudyPipeline(nextDocument);
+    ctx.setStudyPipeline(nextDocument);
+    ctx.setStudyStages(compiled.stages);
+    syncStudyCompatibilityState(ctx, compiled.stages);
+    ctx.setWorkspaceMode("study");
+    ctx.setSelectedSidebarNodeId(buildPipelineStudyStageNodeId(nextNode.id));
+  };
 
   const viewModes = [
     { id: "3D", label: "3D", icon: <Box size={14} /> },
@@ -181,29 +244,37 @@ const WorkspaceControlStrip = memo(function WorkspaceControlStrip() {
                   type="button"
                   className={cn(
                     "inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[0.68rem] font-bold uppercase tracking-[0.16em] transition-colors",
-                    ctx.canRelaxCommand
-                      ? "border-amber-500/25 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
-                      : "border-border/50 bg-background/40 text-muted-foreground/50",
+                    "border-amber-500/25 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20",
                   )}
-                  onClick={() => ctx.handleSimulationAction("relax")}
-                  disabled={!ctx.canRelaxCommand}
+                  onClick={() => appendStudyStage("relax")}
                 >
                   <Target size={13} />
-                  Relax
+                  Add Relax
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[0.68rem] font-bold uppercase tracking-[0.16em] transition-colors",
+                    "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20",
+                  )}
+                  onClick={() => appendStudyStage("run")}
+                >
+                  <Play size={13} />
+                  Add Run
                 </button>
                 <button
                   type="button"
                   className={cn(
                     "inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[0.68rem] font-bold uppercase tracking-[0.16em] transition-colors",
                     ctx.canRunCommand
-                      ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                      ? "border-sky-500/25 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20"
                       : "border-border/50 bg-background/40 text-muted-foreground/50",
                   )}
                   onClick={() => ctx.handleSimulationAction(ctx.primaryRunAction)}
                   disabled={!ctx.canRunCommand}
                 >
-                  <Play size={13} fill="currentColor" />
-                  {ctx.primaryRunLabel}
+                  <Cpu size={13} />
+                  Compute
                 </button>
                 <button
                   type="button"

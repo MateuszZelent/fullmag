@@ -210,8 +210,8 @@ export function FemArrows({
   const material = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
-        color: monoColor,
-        vertexColors: colorMode !== "monochrome",
+        color: 0xffffff,
+        vertexColors: true,
         transparent: glyphPolicy.transparent || clampedAlpha < 0.999,
         opacity: clampedAlpha,
         depthWrite: glyphPolicy.depthWrite,
@@ -221,12 +221,10 @@ export function FemArrows({
       }),
     [
       clampedAlpha,
-      colorMode,
       glyphPolicy.depthTest,
       glyphPolicy.depthWrite,
       glyphPolicy.side,
       glyphPolicy.transparent,
-      monoColor,
     ],
   );
 

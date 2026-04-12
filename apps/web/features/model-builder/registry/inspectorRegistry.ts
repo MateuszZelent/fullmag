@@ -276,6 +276,7 @@ const RULES: RegistryRule[] = [
   },
   {
     kinds: [
+      "results.solution",
       "results.dataset",
       "results.analysis",
       "results.analysis.pinned",

@@ -141,19 +141,54 @@ function summarizeStage(stage: ScriptBuilderStageState): string {
 function buildStageDetailChildren(
   baseId: string,
   detailIds: Array<{ id: string; label: string; icon: string }>,
+  status: NodeStatus = "ready",
 ): TreeNodeData[] {
   return detailIds.map((detail) => ({
     id: `${baseId}/${detail.id}`,
     label: detail.label,
     icon: detail.icon,
-    status: "ready",
+    status,
   }));
+}
+
+function resolveStageStatus(
+  stageIndexes: number[],
+  enabled: boolean,
+  activeStageIndex: number | null,
+  completedStageIndexes: ReadonlySet<number>,
+): NodeStatus {
+  if (!enabled) {
+    return "pending";
+  }
+  if (
+    activeStageIndex != null &&
+    stageIndexes.some((stageIndex) => stageIndex === activeStageIndex)
+  ) {
+    return "error";
+  }
+  if (
+    stageIndexes.length > 0 &&
+    stageIndexes.every((stageIndex) => completedStageIndexes.has(stageIndex))
+  ) {
+    return "ready";
+  }
+  return "pending";
 }
 
 function buildStudyPipelineTreeNodes(
   nodes: StudyPipelineNodeState[],
+  stageIndexesByNodeId: ReadonlyMap<string, number[]>,
+  activeStageIndex: number | null,
+  completedStageIndexes: ReadonlySet<number>,
 ): TreeNodeData[] {
   return nodes.map((node, index) => {
+    const stageIndexes = stageIndexesByNodeId.get(node.id) ?? [];
+    const nodeStatus = resolveStageStatus(
+      stageIndexes,
+      node.enabled,
+      activeStageIndex,
+      completedStageIndexes,
+    );
     if (node.node_kind === "group") {
       const baseId = buildPipelineStudyStageNodeId(node.id);
       return {
@@ -161,9 +196,14 @@ function buildStudyPipelineTreeNodes(
         label: node.label || `Group ${index + 1}`,
         icon: "🧩",
         badge: `${node.children.length} nodes`,
-        status: node.enabled ? "ready" : "pending",
+        status: nodeStatus,
         defaultOpen: !node.collapsed,
-        children: buildStudyPipelineTreeNodes(node.children),
+        children: buildStudyPipelineTreeNodes(
+          node.children,
+          stageIndexesByNodeId,
+          activeStageIndex,
+          completedStageIndexes,
+        ),
       };
     }
     if (node.node_kind === "macro") {
@@ -179,17 +219,17 @@ function buildStudyPipelineTreeNodes(
               { id: "settle", label: "Settle Stage", icon: "🧲" },
               { id: "outputs", label: "Outputs", icon: "💾" },
               { id: "materialized", label: "Materialized Preview", icon: "🧱" },
-            ])
+            ], nodeStatus)
           : buildStageDetailChildren(baseId, [
               { id: "overview", label: "Overview", icon: "🧾" },
               { id: "materialized", label: "Materialized Preview", icon: "🧱" },
-            ]);
+            ], nodeStatus);
       return {
         id: baseId,
         label: `Stage ${index + 1} · ${node.label || humanizeStudyPipelineNodeStateKind(node)}`,
         icon: "⚗",
         badge: summarizeStudyPipelineNodeState(node),
-        status: node.enabled ? "ready" : "pending",
+        status: nodeStatus,
         children: macroChildren,
       };
     }
@@ -205,14 +245,14 @@ function buildStudyPipelineTreeNodes(
             { id: "solver", label: "Solver", icon: "⚙" },
             { id: "time-range", label: "Time Range", icon: "⏱" },
             { id: "outputs", label: "Outputs", icon: "💾" },
-          ])
+          ], nodeStatus)
         : node.stage_kind === "relax"
           ? buildStageDetailChildren(baseId, [
               { id: "overview", label: "Overview", icon: "🧾" },
               { id: "solver", label: "Solver", icon: "⚙" },
               { id: "stop-criteria", label: "Stop Criteria", icon: "🎯" },
               { id: "outputs", label: "Outputs", icon: "💾" },
-            ])
+            ], nodeStatus)
           : node.stage_kind === "eigenmodes"
             ? buildStageDetailChildren(baseId, [
                 { id: "overview", label: "Overview", icon: "🧾" },
@@ -220,10 +260,10 @@ function buildStudyPipelineTreeNodes(
                 { id: "equilibrium", label: "Equilibrium", icon: "🧲" },
                 { id: "operator", label: "Operator & Spectrum", icon: "〰" },
                 { id: "outputs", label: "Outputs", icon: "💾" },
-              ])
+              ], nodeStatus)
             : buildStageDetailChildren(baseId, [
                 { id: "overview", label: "Overview", icon: "🧾" },
-              ]);
+              ], nodeStatus);
     return {
       id: baseId,
       label: `Stage ${index + 1} · ${node.label || studyStageDisplayName(node.stage_kind)}`,
@@ -232,15 +272,25 @@ function buildStudyPipelineTreeNodes(
         importedKind !== node.stage_kind
           ? `${studyStageDisplayName(node.stage_kind)} <- ${studyStageDisplayName(importedKind)}`
           : summarizeStudyPipelineNodeState(node),
-      status: node.enabled ? "ready" : "pending",
+      status: nodeStatus,
       children: detailChildren,
     };
   });
 }
 
-function buildFlatStudyStageTreeNodes(stages: ScriptBuilderStageState[]): TreeNodeData[] {
+function buildFlatStudyStageTreeNodes(
+  stages: ScriptBuilderStageState[],
+  activeStageIndex: number | null,
+  completedStageIndexes: ReadonlySet<number>,
+): TreeNodeData[] {
   return stages.map((stage, index) => {
     const baseId = buildFlatStudyStageNodeId(index);
+    const stageStatus = resolveStageStatus(
+      [index],
+      true,
+      activeStageIndex,
+      completedStageIndexes,
+    );
     const detailChildren =
       stage.kind === "run"
         ? buildStageDetailChildren(baseId, [
@@ -248,14 +298,14 @@ function buildFlatStudyStageTreeNodes(stages: ScriptBuilderStageState[]): TreeNo
             { id: "solver", label: "Solver", icon: "⚙" },
             { id: "time-range", label: "Time Range", icon: "⏱" },
             { id: "outputs", label: "Outputs", icon: "💾" },
-          ])
+          ], stageStatus)
         : stage.kind === "relax"
           ? buildStageDetailChildren(baseId, [
               { id: "overview", label: "Overview", icon: "🧾" },
               { id: "solver", label: "Solver", icon: "⚙" },
               { id: "stop-criteria", label: "Stop Criteria", icon: "🎯" },
               { id: "outputs", label: "Outputs", icon: "💾" },
-            ])
+            ], stageStatus)
           : stage.kind === "eigenmodes"
             ? buildStageDetailChildren(baseId, [
                 { id: "overview", label: "Overview", icon: "🧾" },
@@ -263,16 +313,16 @@ function buildFlatStudyStageTreeNodes(stages: ScriptBuilderStageState[]): TreeNo
                 { id: "equilibrium", label: "Equilibrium", icon: "🧲" },
                 { id: "operator", label: "Operator & Spectrum", icon: "〰" },
                 { id: "outputs", label: "Outputs", icon: "💾" },
-              ])
+              ], stageStatus)
             : buildStageDetailChildren(baseId, [
                 { id: "overview", label: "Overview", icon: "🧾" },
-              ]);
+              ], stageStatus);
     return {
       id: baseId,
       label: `Stage ${index + 1} · ${studyStageDisplayName(stage.kind)}`,
       icon: "▶",
       badge: summarizeStage(stage) || studyStageDisplayName(stage.entrypoint_kind),
-      status: "ready",
+      status: stageStatus,
       children: detailChildren,
     };
   });
@@ -669,6 +719,9 @@ export function buildFullmagModelTree(opts: {
   visualizationProjectPresets?: VisualizationPreset[];
   visualizationLocalPresets?: VisualizationPreset[];
   activeVisualizationPresetRef?: VisualizationPresetRef | null;
+  activeStudyStageIndex?: number | null;
+  completedStudyStageIndexes?: number[];
+  pipelineStageIndexesByNodeId?: Record<string, number[]>;
 }): TreeNodeData[] {
   const graph = opts.graph ?? null;
   const sceneDocument = opts.sceneDocument ?? null;
@@ -755,6 +808,11 @@ export function buildFullmagModelTree(opts: {
   const activeVisualizationPresetRef = opts.activeVisualizationPresetRef ?? null;
   const studyStages = graph?.study.stages ?? [];
   const studyPipeline = graph?.study.study_pipeline ?? null;
+  const activeStudyStageIndex = opts.activeStudyStageIndex ?? null;
+  const completedStudyStageIndexes = new Set(opts.completedStudyStageIndexes ?? []);
+  const pipelineStageIndexesByNodeId = new Map(
+    Object.entries(opts.pipelineStageIndexesByNodeId ?? {}),
+  );
   const showResultsSection = opts.showResultsSection ?? true;
   const resultFieldQuantities = opts.resultsFieldQuantities ?? [];
   const resultScalarQuantities = opts.resultsScalarQuantities ?? [];
@@ -915,8 +973,17 @@ export function buildFullmagModelTree(opts: {
 
   const authoringStageChildren =
     studyPipeline && studyPipeline.nodes.length > 0
-      ? buildStudyPipelineTreeNodes(studyPipeline.nodes)
-      : buildFlatStudyStageTreeNodes(studyStages);
+      ? buildStudyPipelineTreeNodes(
+          studyPipeline.nodes,
+          pipelineStageIndexesByNodeId,
+          activeStudyStageIndex,
+          completedStudyStageIndexes,
+        )
+      : buildFlatStudyStageTreeNodes(
+          studyStages,
+          activeStudyStageIndex,
+          completedStudyStageIndexes,
+        );
   const authoringStageCount = studyPipeline?.nodes.length ?? studyStages.length;
   const hasRunStage = studyStages.some((stage) => stage.kind === "run");
   const hasRelaxStage = studyStages.some((stage) => stage.kind === "relax");
@@ -1090,7 +1157,7 @@ export function buildFullmagModelTree(opts: {
                       badge: `${pinnedResultWorkspaces.length}`,
                       status: "ready" as const,
                       children: pinnedResultWorkspaces.map((entry) => ({
-                        id: `res-analysis-${entry.id}`,
+                        id: entry.id.startsWith("res-") ? entry.id : `res-analysis-${entry.id}`,
                         label: entry.label,
                         icon: entry.icon ?? "🧩",
                         badge: entry.badge ?? undefined,
@@ -1108,7 +1175,7 @@ export function buildFullmagModelTree(opts: {
                       badge: `${autoResultWorkspaces.length}`,
                       status: "ready" as const,
                       children: autoResultWorkspaces.map((entry) => ({
-                        id: `res-analysis-${entry.id}`,
+                        id: entry.id.startsWith("res-") ? entry.id : `res-analysis-${entry.id}`,
                         label: entry.label,
                         icon: entry.icon ?? "🧩",
                         badge: entry.badge ?? undefined,

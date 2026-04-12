@@ -10,12 +10,9 @@ import {
 import { applyResultsCommand, type ResultsCommand } from "@/features/analyze/commands/resultsCommands";
 import { ResultsAuthoringShell } from "@/features/analyze/views/ResultsAuthoringShell";
 import { useWorkspaceGraphStore } from "@/features/workspace-graph";
-import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { activeDatasetIdForResultNode, resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
 import { SidebarSection, InfoRow } from "./primitives";
 import { Button } from "../../ui/button";
-import PreviewControlsPanel from "./PreviewControlsPanel";
-
-const GRAPH_V2_ENABLED = FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableGraphV2;
 
 function nodeTone(active: boolean): string {
   return active
@@ -236,46 +233,90 @@ interface WorkspaceSectionProps {
 export default function ResultsPanel() {
   const analyzeStore = useAnalyzeStore();
   const graphWorkspace = useWorkspaceGraphStore((state) => state.snapshot.resultsWorkspace);
+  const graphSelection = useWorkspaceGraphStore((state) => state.snapshot.selection);
+  const graphViewportDocuments = useWorkspaceGraphStore((state) => state.snapshot.viewportDocuments);
   const applyGraphPatch = useWorkspaceGraphStore((state) => state.applyPatch);
   const [addResultOpen, setAddResultOpen] = useState(false);
 
-  const workspace: ResultsWorkspaceState =
-    GRAPH_V2_ENABLED
-      ? graphWorkspace ?? EMPTY_RESULTS_WORKSPACE
-      : analyzeStore.resultsWorkspace ?? EMPTY_RESULTS_WORKSPACE;
+  const workspace: ResultsWorkspaceState = graphWorkspace ?? EMPTY_RESULTS_WORKSPACE;
 
   const dispatch = useCallback(
     (cmd: ResultsCommand) => {
       const next = applyResultsCommand(workspace, cmd);
       analyzeStore.setResultsWorkspace(next);
-      if (GRAPH_V2_ENABLED) {
-        applyGraphPatch({
-          resultsWorkspace: next,
-          datasets: next.datasets.map((dataset) => ({
-            id: dataset.id,
-            label: dataset.label,
-            sourceStudyId: dataset.sourceStudyId,
-            sourceSolutionId: dataset.sourceSolutionId,
-            quantityIds: [],
-            scalarCount: 0,
-            sampleCount: dataset.sampleCount,
-            kind: dataset.hasFinalState ? "artifact" : "analysis",
-          })),
-          derivedValues: next.derivedValues.map((entry) => ({
-            id: entry.id,
-            label: entry.label,
-            quantityId: entry.quantityId,
-            sourceDatasetId: entry.sourceDatasetId,
-            latestValue: entry.latestValue,
-            unit: entry.unit,
-          })),
-          selection: {
-            activeResultNodeId: next.activeResultNodeId,
-          },
-        });
-      }
+      const activeResultNodeId = next.activeResultNodeId;
+      const activeDatasetId = activeDatasetIdForResultNode(next, activeResultNodeId);
+      const activeNodeId = (() => {
+        if (!activeResultNodeId) {
+          return graphSelection.activeNodeId ?? "results";
+        }
+        const activeNode =
+          next.solutions.find((entry) => entry.id === activeResultNodeId)
+          ?? next.datasets.find((entry) => entry.id === activeResultNodeId)
+          ?? next.derivedValues.find((entry) => entry.id === activeResultNodeId)
+          ?? next.plotGroups.find((entry) => entry.id === activeResultNodeId)
+          ?? next.tables.find((entry) => entry.id === activeResultNodeId)
+          ?? next.analyses.find((entry) => entry.id === activeResultNodeId)
+          ?? next.exports.find((entry) => entry.id === activeResultNodeId)
+          ?? next.reports.find((entry) => entry.id === activeResultNodeId);
+        return activeNode ? resultNodeToTreeNodeId(activeNode.nodeKind, activeNode.id) : "results";
+      })();
+      const activeViewportDocumentId = graphSelection.activeViewportDocumentId;
+      const activeViewportDocument =
+        activeViewportDocumentId != null ? graphViewportDocuments[activeViewportDocumentId] ?? null : null;
+      applyGraphPatch({
+        resultsWorkspace: next,
+        solutions: next.solutions.map((solution) => ({
+          id: solution.id,
+          label: solution.label,
+          sourceStudyId: solution.lineage.sourceStudyId,
+          revision: solution.revision,
+          kind: solution.solutionKind,
+          status: solution.status === "idle" ? "pending" : solution.status,
+        })),
+        datasets: next.datasets.map((dataset) => ({
+          id: dataset.id,
+          label: dataset.label,
+          sourceStudyId: dataset.sourceStudyId,
+          sourceSolutionId: dataset.sourceSolutionId,
+          quantityIds: [],
+          scalarCount: 0,
+          sampleCount: dataset.sampleCount,
+          kind: dataset.hasFinalState ? "artifact" : "analysis",
+        })),
+        derivedValues: next.derivedValues.map((entry) => ({
+          id: entry.id,
+          label: entry.label,
+          quantityId: entry.quantityId,
+          sourceDatasetId: entry.sourceDatasetId,
+          latestValue: entry.latestValue,
+          unit: entry.unit,
+        })),
+        selection: {
+          activeNodeId,
+          activeResultNodeId,
+        },
+        viewportDocuments:
+          activeViewportDocumentId && activeViewportDocument
+            ? {
+                [activeViewportDocumentId]: {
+                  ...activeViewportDocument,
+                  selectedDatasetId: activeDatasetId,
+                  selectedResultNodeId: activeResultNodeId,
+                },
+              }
+            : undefined,
+        updatedAt: Date.now(),
+      });
     },
-    [workspace, analyzeStore, applyGraphPatch],
+    [
+      workspace,
+      analyzeStore,
+      applyGraphPatch,
+      graphSelection.activeNodeId,
+      graphSelection.activeViewportDocumentId,
+      graphViewportDocuments,
+    ],
   );
 
   const handleAddResult = useCallback(
@@ -461,10 +502,6 @@ export default function ResultsPanel() {
       <TablesSection workspace={workspace} dispatch={dispatch} />
       <AnalysesSection workspace={workspace} dispatch={dispatch} />
       <OutputSection workspace={workspace} dispatch={dispatch} />
-
-      {/* ── Live Preview Controls (bridge from legacy) ── */}
-      <PreviewControlsPanel />
-
       {/* ── Add Result Dialog ── */}
       <ResultsAuthoringShell
         open={addResultOpen}

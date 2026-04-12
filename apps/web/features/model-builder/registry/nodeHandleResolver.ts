@@ -397,6 +397,14 @@ const PREFIX_RULES: PrefixRule[] = [
     entityFromSuffix: true,
   },
   {
+    prefix: "res-solution-",
+    nodeKind: "results.solution",
+    domain: "results",
+    scope: "readonly",
+    sourceOfTruth: "backend_live",
+    entityFromSuffix: true,
+  },
+  {
     prefix: "res-dataset-",
     nodeKind: "results.dataset",
     domain: "results",
@@ -437,6 +445,14 @@ const PREFIX_RULES: PrefixRule[] = [
     entityFromSuffix: true,
   },
   {
+    prefix: "res-derived-value-",
+    nodeKind: "results.derived_scalars",
+    domain: "results",
+    scope: "readonly",
+    sourceOfTruth: "backend_live",
+    entityFromSuffix: true,
+  },
+  {
     prefix: "res-plot-group-",
     nodeKind: "results.plot_group",
     domain: "results",
@@ -447,6 +463,14 @@ const PREFIX_RULES: PrefixRule[] = [
   {
     prefix: "res-table-",
     nodeKind: "results.table",
+    domain: "results",
+    scope: "readonly",
+    sourceOfTruth: "backend_live",
+    entityFromSuffix: true,
+  },
+  {
+    prefix: "res-export-",
+    nodeKind: "results.export",
     domain: "results",
     scope: "readonly",
     sourceOfTruth: "backend_live",

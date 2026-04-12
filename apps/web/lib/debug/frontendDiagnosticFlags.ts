@@ -4,7 +4,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
   workspace: {
     // "off" -> normal WorkspaceShell (no standalone diagnostic viewport)
     standaloneDiagnosticViewportMode: "off",
-    enableGraphV2: false,
+    enableGraphV2: true,
   },
   session: {
     enableLiveBootstrapFetch: true,
@@ -213,7 +213,9 @@ export function loadFrontendDiagnosticFlagsFromStorage(): FrontendDiagnosticFlag
     }
     const parsed = JSON.parse(raw) as unknown;
     const merged = mergeKnownShape(defaults, parsed);
-    return merged as FrontendDiagnosticFlags;
+    const flags = merged as FrontendDiagnosticFlags;
+    flags.workspace.enableGraphV2 = true;
+    return flags;
   } catch {
     return defaults;
   }

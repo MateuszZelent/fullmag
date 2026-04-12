@@ -46,6 +46,7 @@ import {
   materializationProgressFromMessage,
 } from "./control-room/shared";
 import { parseAnalyzeTreeNode } from "./control-room/analyzeSelection";
+import { parseResultNodeContext } from "@/features/analyze/model/resultNodeContext";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import BackendErrorNotice from "./control-room/BackendErrorNotice";
 import MeshBuildModal from "./control-room/MeshBuildModal";
@@ -331,6 +332,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       }
       return;
     }
+    const resultContext = parseResultNodeContext(nodeId);
     if (nodeId.startsWith("res-analysis-")) {
       ctx.setWorkspaceMode("analyze");
       setActiveCoreTab("Results");
@@ -340,6 +342,28 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         recordFrontendDebugEvent("run-control-room", "router_push_analyze_from_tree", {
           nodeId,
           source: "result_workspace",
+        });
+        router.push("/analyze");
+      }
+      return;
+    }
+    if (
+      resultContext?.kind === "results-solution" ||
+      resultContext?.kind === "results-dataset" ||
+      resultContext?.kind === "results-dataset-solution" ||
+      resultContext?.kind === "results-derived-value" ||
+      resultContext?.kind === "results-plot-group" ||
+      resultContext?.kind === "results-table" ||
+      resultContext?.kind === "results-export-node" ||
+      resultContext?.kind === "results-report"
+    ) {
+      ctx.setWorkspaceMode("analyze");
+      setActiveCoreTab("Results");
+      setActiveContextualTab(null);
+      if (pathname !== "/analyze") {
+        recordFrontendDebugEvent("run-control-room", "router_push_analyze_from_tree", {
+          nodeId,
+          source: "results_node",
         });
         router.push("/analyze");
       }

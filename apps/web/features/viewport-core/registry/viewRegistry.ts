@@ -39,6 +39,28 @@ export interface WorkspaceViewContext {
   discretization: "fdm" | "fem" | null;
 }
 
+function isChartResult(nodeId: string | null): boolean {
+  return Boolean(
+    nodeId &&
+      (nodeId.startsWith("res-plot-group-") ||
+        nodeId.startsWith("res-derived-value-")),
+  );
+}
+
+function isTableResult(nodeId: string | null): boolean {
+  return Boolean(nodeId && nodeId.startsWith("res-table-"));
+}
+
+function isReportResult(nodeId: string | null): boolean {
+  return Boolean(
+    nodeId &&
+      (nodeId.startsWith("res-report-") ||
+        nodeId.startsWith("res-export-") ||
+        nodeId.startsWith("res-dataset-") ||
+        nodeId.startsWith("res-solution-")),
+  );
+}
+
 // ── Registry entry ───────────────────────────────────────────
 
 export interface ViewRegistryEntry {
@@ -96,7 +118,35 @@ const ANALYZE_WORKSPACE: ViewRegistryEntry = {
   kind: "analyze",
   title: "Analyze",
   componentKey: "AnalyzeViewport",
-  canOpen: (ctx) => ctx.viewportMode === "Analyze",
+  canOpen: (ctx) =>
+    ctx.viewportMode === "Analyze" &&
+    !isChartResult(ctx.selectedResultNodeId) &&
+    !isTableResult(ctx.selectedResultNodeId) &&
+    !isReportResult(ctx.selectedResultNodeId),
+};
+
+const RESULT_CHART_VIEW: ViewRegistryEntry = {
+  id: "result-chart",
+  kind: "chart",
+  title: "Result Chart",
+  componentKey: "ResultChartViewport",
+  canOpen: (ctx) => ctx.viewportMode === "Analyze" && isChartResult(ctx.selectedResultNodeId),
+};
+
+const RESULT_TABLE_VIEW: ViewRegistryEntry = {
+  id: "result-table",
+  kind: "table",
+  title: "Result Table",
+  componentKey: "ResultTableViewport",
+  canOpen: (ctx) => ctx.viewportMode === "Analyze" && isTableResult(ctx.selectedResultNodeId),
+};
+
+const RESULT_REPORT_VIEW: ViewRegistryEntry = {
+  id: "result-report",
+  kind: "report",
+  title: "Result Summary",
+  componentKey: "ResultReportViewport",
+  canOpen: (ctx) => ctx.viewportMode === "Analyze" && isReportResult(ctx.selectedResultNodeId),
 };
 
 const EMPTY_VIEW: ViewRegistryEntry = {
@@ -110,6 +160,9 @@ const EMPTY_VIEW: ViewRegistryEntry = {
 // ── Registry array (ordered by priority, first match wins) ───
 
 export const VIEW_REGISTRY: readonly ViewRegistryEntry[] = [
+  RESULT_REPORT_VIEW,
+  RESULT_TABLE_VIEW,
+  RESULT_CHART_VIEW,
   VIEWPORT_3D_FEM,
   VIEWPORT_3D_FDM,
   VIEWPORT_2D,

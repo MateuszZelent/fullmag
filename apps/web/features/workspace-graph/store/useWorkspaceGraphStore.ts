@@ -65,6 +65,10 @@ export const useWorkspaceGraphStore = create<WorkspaceGraphStoreState>((set) => 
       snapshot: {
         ...state.snapshot,
         ...patch,
+        viewportDocuments: {
+          ...state.snapshot.viewportDocuments,
+          ...patch.viewportDocuments,
+        },
         selection: {
           ...state.snapshot.selection,
           ...patch.selection,
@@ -104,4 +108,3 @@ export const selectGraphActiveViewportDocument = (state: WorkspaceGraphStoreStat
   const docId = state.snapshot.selection.activeViewportDocumentId;
   return docId ? state.snapshot.viewportDocuments[docId] ?? null : null;
 };
-

@@ -8,7 +8,7 @@ import { fitCameraToBounds } from "../camera/cameraHelpers";
 import type { ClipAxis } from "../FemMeshView3D";
 
 /** Manage WebGL clipping planes for mesh cross-section view. */
-export function FemClipPlanes({ enabled, axis, posPercentage, geomSize }: { enabled: boolean; axis: ClipAxis; posPercentage: number; geomSize: [number, number, number] }) {
+export function FemClipPlanes({ enabled, axis, posPercentage, flip = false, geomSize }: { enabled: boolean; axis: ClipAxis; posPercentage: number; flip?: boolean; geomSize: [number, number, number] }) {
   const { gl } = useThree();
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   useEffect(() => {
@@ -26,9 +26,10 @@ export function FemClipPlanes({ enabled, axis, posPercentage, geomSize }: { enab
     }
     const axisSize = axis === "x" ? geomSize[0] : axis === "y" ? geomSize[1] : geomSize[2];
     const pos = ((posPercentage / 100) - 0.5) * axisSize;
-    const normal = new THREE.Vector3(axis === "x" ? -1 : 0, axis === "y" ? -1 : 0, axis === "z" ? -1 : 0);
-    renderer.clippingPlanes = [new THREE.Plane(normal, pos)];
-  }, [enabled, axis, posPercentage, geomSize]);
+    const sign = flip ? 1 : -1;
+    const normal = new THREE.Vector3(axis === "x" ? sign : 0, axis === "y" ? sign : 0, axis === "z" ? sign : 0);
+    renderer.clippingPlanes = [new THREE.Plane(normal, pos * sign)];
+  }, [enabled, axis, posPercentage, flip, geomSize]);
   return null;
 }
 

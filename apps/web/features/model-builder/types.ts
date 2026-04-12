@@ -109,6 +109,7 @@ export type NodeKind =
   | "results.energy"
   | "results.state_io"
   | "results.export"
+  | "results.solution"
   | "results.dataset"
   | "results.analysis"
   | "results.analysis.pinned"

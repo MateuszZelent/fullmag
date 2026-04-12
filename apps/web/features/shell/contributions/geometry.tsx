@@ -5,7 +5,6 @@
 import { Shapes, Box, FileText } from "lucide-react";
 import { registerRibbonContribution } from "../registry/ribbonRegistry";
 import type { RibbonBuildContext, RibbonGroup } from "../registry/ribbonRegistry";
-import { buildViewGroup } from "./view-group";
 
 function buildGeometryGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   return [
@@ -46,7 +45,6 @@ function buildGeometryGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         },
       ],
     },
-    buildViewGroup(ctx),
   ];
 }
 

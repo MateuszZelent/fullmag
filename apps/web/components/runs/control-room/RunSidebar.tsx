@@ -14,6 +14,7 @@ import { useCommand, useModel, useTransport, useViewport } from "./ControlRoomCo
 import { parseAnalyzeTreeNode } from "./analyzeSelection";
 import {
   findTreeNodeById,
+  parseStageExecutionMessage,
   previewQuantityForTreeNode,
   resolveAntennaNodeName,
   resolveSelectedObjectId,
@@ -33,6 +34,12 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { TreeNodeData } from "../../panels/ModelTree";
 import { useActiveStageLayout, useWorkspaceStore } from "@/lib/workspace/workspace-store";
+import { useWorkspaceGraphStore } from "@/features/workspace-graph";
+import { resultIconToken } from "@/features/analyze/registry/resultsTemplateRegistry";
+import { parseResultNodeContext } from "@/features/analyze/model/resultNodeContext";
+import { resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
+import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
+import type { StudyPipelineDocument } from "@/lib/study-builder/types";
 
 type TreeFilterScope = "all" | "objects" | "mesh" | "physics" | "results";
 
@@ -198,11 +205,22 @@ export default function RunSidebar() {
     const hasDispersion = hasEigenDispersionArtifact;
     const hasScalarRows = tp.scalarRows.length > 0;
     const hasRuntimeSteps = (cmd.run?.total_steps ?? 0) > 0;
+    const graphResults = useWorkspaceGraphStore.getState().snapshot.resultsWorkspace;
+    const graphHasResults =
+      graphResults.solutions.length > 0 ||
+      graphResults.datasets.length > 0 ||
+      graphResults.derivedValues.length > 0 ||
+      graphResults.plotGroups.length > 0 ||
+      graphResults.tables.length > 0 ||
+      graphResults.analyses.length > 0 ||
+      graphResults.exports.length > 0 ||
+      graphResults.reports.length > 0;
     return (
       hasEigen ||
       hasDispersion ||
       hasScalarRows ||
       hasRuntimeSteps ||
+      graphHasResults ||
       model.resultWorkspaceEntries.length > 0 ||
       resultQuantityTree.field.length > 0 ||
       resultQuantityTree.scalar.length > 0
@@ -217,30 +235,149 @@ export default function RunSidebar() {
     savedEigenModeIndices.length,
     tp.scalarRows.length,
   ]);
-  const resultWorkspaceEntriesForTree = useMemo(
-    () =>
-      [...model.resultWorkspaceEntries]
-        .sort((a, b) => {
-          const aIsAuto = !a.pinned;
-          const bIsAuto = !b.pinned;
-          if (aIsAuto !== bIsAuto) {
-            return aIsAuto ? 1 : -1;
-          }
-          return aIsAuto
-            ? a.createdAtUnixMs - b.createdAtUnixMs
-            : b.createdAtUnixMs - a.createdAtUnixMs;
-        })
-        .map((entry) => ({
-          id: entry.id,
-          label: entry.label,
-          icon: entry.icon,
-          badge: entry.badge,
-          status: model.activeResultWorkspaceId === entry.id ? ("active" as const) : ("ready" as const),
-          group: entry.pinned ? ("pinned" as const) : ("auto" as const),
-          createdAtUnixMs: entry.createdAtUnixMs,
-        })),
-    [model.activeResultWorkspaceId, model.resultWorkspaceEntries],
-  );
+  const graphResultsWorkspace = useWorkspaceGraphStore((state) => state.snapshot.resultsWorkspace);
+  const graphSelection = useWorkspaceGraphStore((state) => state.snapshot.selection);
+  const setGraphSelection = useWorkspaceGraphStore((state) => state.setSelection);
+  const graphEnabled = true;
+  const resultWorkspaceEntriesForTree = useMemo(() => {
+    const entries = [
+      ...graphResultsWorkspace.solutions.map((entry) => ({
+        id: resultNodeToTreeNodeId("solution", entry.id),
+        label: entry.label,
+        icon: resultIconToken("solution"),
+        badge: entry.solutionKind.replaceAll("_", " "),
+        status: graphResultsWorkspace.activeResultNodeId === entry.id ? ("active" as const) : ("ready" as const),
+        group: entry.pinned ? ("pinned" as const) : ("auto" as const),
+        createdAtUnixMs: entry.createdAt,
+      })),
+      ...graphResultsWorkspace.datasets.map((entry) => ({
+        id: resultNodeToTreeNodeId("dataset", entry.id),
+        label: entry.label,
+        icon: resultIconToken("dataset"),
+        badge: `${entry.sampleCount} samples`,
+        status: graphResultsWorkspace.activeResultNodeId === entry.id ? ("active" as const) : ("ready" as const),
+        group: entry.pinned ? ("pinned" as const) : ("auto" as const),
+        createdAtUnixMs: entry.createdAt,
+      })),
+      ...graphResultsWorkspace.derivedValues.map((entry) => ({
+        id: resultNodeToTreeNodeId("derived_value", entry.id),
+        label: entry.label,
+        icon: resultIconToken("derived_value"),
+        badge: entry.unit ?? null,
+        status: graphResultsWorkspace.activeResultNodeId === entry.id ? ("active" as const) : ("ready" as const),
+        group: entry.pinned ? ("pinned" as const) : ("auto" as const),
+        createdAtUnixMs: entry.createdAt,
+      })),
+      ...graphResultsWorkspace.plotGroups.map((entry) => ({
+        id: resultNodeToTreeNodeId("plot_group", entry.id),
+        label: entry.label,
+        icon: resultIconToken("plot_group"),
+        badge: `${entry.plots.length} plots`,
+        status: graphResultsWorkspace.activeResultNodeId === entry.id ? ("active" as const) : ("ready" as const),
+        group: entry.pinned ? ("pinned" as const) : ("auto" as const),
+        createdAtUnixMs: entry.createdAt,
+      })),
+      ...graphResultsWorkspace.tables.map((entry) => ({
+        id: resultNodeToTreeNodeId("table", entry.id),
+        label: entry.label,
+        icon: resultIconToken("table"),
+        badge: `${entry.columns.length} columns`,
+        status: graphResultsWorkspace.activeResultNodeId === entry.id ? ("active" as const) : ("ready" as const),
+        group: entry.pinned ? ("pinned" as const) : ("auto" as const),
+        createdAtUnixMs: entry.createdAt,
+      })),
+      ...graphResultsWorkspace.analyses.map((entry) => ({
+        id: resultNodeToTreeNodeId("analysis", entry.id),
+        label: entry.label,
+        icon: resultIconToken("analysis"),
+        badge: entry.analysisKind,
+        status: graphResultsWorkspace.activeResultNodeId === entry.id ? ("active" as const) : ("ready" as const),
+        group: entry.pinned ? ("pinned" as const) : ("auto" as const),
+        createdAtUnixMs: entry.createdAt,
+      })),
+      ...graphResultsWorkspace.exports.map((entry) => ({
+        id: resultNodeToTreeNodeId("export", entry.id),
+        label: entry.label,
+        icon: resultIconToken("export"),
+        badge: entry.format.toUpperCase(),
+        status: graphResultsWorkspace.activeResultNodeId === entry.id ? ("active" as const) : ("ready" as const),
+        group: entry.pinned ? ("pinned" as const) : ("auto" as const),
+        createdAtUnixMs: entry.createdAt,
+      })),
+      ...graphResultsWorkspace.reports.map((entry) => ({
+        id: resultNodeToTreeNodeId("report", entry.id),
+        label: entry.label,
+        icon: resultIconToken("report"),
+        badge: `${entry.sections.length} sections`,
+        status: graphResultsWorkspace.activeResultNodeId === entry.id ? ("active" as const) : ("ready" as const),
+        group: entry.pinned ? ("pinned" as const) : ("auto" as const),
+        createdAtUnixMs: entry.createdAt,
+      })),
+    ];
+    return entries.sort((a, b) => {
+      const aIsAuto = a.group !== "pinned";
+      const bIsAuto = b.group !== "pinned";
+      if (aIsAuto !== bIsAuto) {
+        return aIsAuto ? 1 : -1;
+      }
+      return aIsAuto ? a.createdAtUnixMs - b.createdAtUnixMs : b.createdAtUnixMs - a.createdAtUnixMs;
+    });
+  }, [graphResultsWorkspace]);
+
+  const stageExecutionState = useMemo(() => {
+    const parsed = parseStageExecutionMessage(cmd.activity.label ?? null);
+    const totalStages = model.studyStages.length;
+    const completed = new Set<number>();
+    let activeStageIndex: number | null = null;
+
+    if (parsed && Number.isFinite(parsed.current) && parsed.current > 0) {
+      activeStageIndex = Math.max(0, parsed.current - 1);
+      for (let index = 0; index < activeStageIndex; index += 1) {
+        completed.add(index);
+      }
+      if (
+        (cmd.workspaceStatus === "completed" || cmd.workspaceStatus === "awaiting_command") &&
+        activeStageIndex < totalStages
+      ) {
+        completed.add(activeStageIndex);
+        activeStageIndex = null;
+      }
+    } else if (
+      totalStages > 0 &&
+      (cmd.workspaceStatus === "completed" || cmd.workspaceStatus === "awaiting_command")
+    ) {
+      for (let index = 0; index < totalStages; index += 1) {
+        completed.add(index);
+      }
+    }
+
+    return {
+      activeStageIndex,
+      completedStageIndexes: Array.from(completed).sort((a, b) => a - b),
+    };
+  }, [cmd.activity.label, cmd.workspaceStatus, model.studyStages.length]);
+
+  const pipelineStageIndexesByNodeId = useMemo(() => {
+    const document =
+      model.studyPipeline ?? model.modelBuilderGraph?.study.study_pipeline ?? null;
+    if (!document) {
+      return {};
+    }
+    const materialized = materializeStudyPipeline(
+      document as unknown as StudyPipelineDocument,
+    );
+    const entries: Array<[string, number[]]> = [];
+    const collectEntries = (mapEntries: typeof materialized.map): void => {
+      for (const entry of mapEntries) {
+        entries.push([entry.nodeId, entry.stageIndexes]);
+        if (entry.childEntries?.length) {
+          collectEntries(entry.childEntries);
+        }
+      }
+    };
+    collectEntries(materialized.map);
+    return Object.fromEntries(entries);
+  }, [model.modelBuilderGraph?.study.study_pipeline, model.studyPipeline]);
 
   /* ── Build model tree nodes ── */
   const modelTreeNodes = useMemo(
@@ -296,6 +433,9 @@ export default function RunSidebar() {
         visualizationProjectPresets: model.visualizationProjectPresets,
         visualizationLocalPresets: model.visualizationLocalPresets,
         activeVisualizationPresetRef: model.activeVisualizationPresetRef,
+        activeStudyStageIndex: stageExecutionState.activeStageIndex,
+        completedStudyStageIndexes: stageExecutionState.completedStageIndexes,
+        pipelineStageIndexesByNodeId,
       }),
     [
       model.modelBuilderGraph, model.sceneDocument, model.effectiveFemMesh, tp.hasSolverTelemetry, cmd.isFemBackend, model.material,
@@ -306,6 +446,8 @@ export default function RunSidebar() {
       universeRole, hasResultsSection, resultQuantityTree.field, resultQuantityTree.scalar, resultWorkspaceEntriesForTree, eigenModeCount, eigenModeSummaries, hasEigenDispersionArtifact,
       launchIntent?.displayName, model.airPart?.element_count, model.airPart?.node_count,
       model.visualizationProjectPresets, model.visualizationLocalPresets, model.activeVisualizationPresetRef,
+      model.studyPipeline, model.studyStages.length, cmd.activity.label, cmd.workspaceStatus,
+      stageExecutionState.activeStageIndex, stageExecutionState.completedStageIndexes, pipelineStageIndexesByNodeId,
     ],
   );
 
@@ -342,7 +484,7 @@ export default function RunSidebar() {
   }, [activeStageLayout.leftDock, vp.effectiveViewMode, model.effectiveFemMesh?.domain_mesh_mode, model.femDockTab, cmd.interactiveControlsEnabled,
       cmd.isFemBackend, model.modelBuilderGraph, model.sceneDocument, vp.previewControlsActive]);
 
-  const activeNodeId = model.selectedSidebarNodeId ?? fallbackNodeId;
+  const activeNodeId = (graphEnabled ? graphSelection.activeNodeId : null) ?? model.selectedSidebarNodeId ?? fallbackNodeId;
   const activeNode = useMemo(
     () => findTreeNodeById(modelTreeNodes, activeNodeId),
     [activeNodeId, modelTreeNodes],
@@ -375,6 +517,47 @@ export default function RunSidebar() {
       : activeAntennaName ?? "Workspace"));
 
   const selectModelNode = useCallback((id: string) => {
+    if (graphEnabled) {
+      const resultContext = parseResultNodeContext(id);
+      let activeResultNodeId: string | null = null;
+      if (resultContext) {
+        switch (resultContext.kind) {
+          case "results-analysis":
+            activeResultNodeId = resultContext.analysisId;
+            break;
+          case "results-solution":
+            activeResultNodeId = resultContext.solutionId;
+            break;
+          case "results-dataset":
+            activeResultNodeId = resultContext.datasetId;
+            break;
+          case "results-dataset-solution":
+            activeResultNodeId = resultContext.solutionId;
+            break;
+          case "results-derived-value":
+            activeResultNodeId = resultContext.derivedValueId;
+            break;
+          case "results-plot-group":
+            activeResultNodeId = resultContext.plotGroupId;
+            break;
+          case "results-table":
+            activeResultNodeId = resultContext.tableId;
+            break;
+          case "results-export-node":
+            activeResultNodeId = resultContext.exportId;
+            break;
+          case "results-report":
+            activeResultNodeId = resultContext.reportId;
+            break;
+          default:
+            activeResultNodeId = null;
+        }
+      }
+      setGraphSelection({
+        activeNodeId: id,
+        activeResultNodeId,
+      });
+    }
     const visualizationPresetNode = parseVisualizationPresetNodeId(id);
     if (visualizationPresetNode) {
       model.setSelectedSidebarNodeId(id);
@@ -401,11 +584,25 @@ export default function RunSidebar() {
       model.openAnalyze(analyzeTarget);
       return;
     }
-    if (id.startsWith("res-analysis-")) {
+    const resultContext = parseResultNodeContext(id);
+    if (
+      resultContext &&
+      resultContext.kind !== "results-root" &&
+      resultContext.kind !== "results-overview" &&
+      resultContext.kind !== "results-fields" &&
+      resultContext.kind !== "results-field-quantity" &&
+      resultContext.kind !== "results-derived-scalars" &&
+      resultContext.kind !== "results-state-io" &&
+      resultContext.kind !== "results-export" &&
+      resultContext.kind !== "results-datasets" &&
+      resultContext.kind !== "results-solutions" &&
+      resultContext.kind !== "results-analyses"
+    ) {
       model.setSelectedSidebarNodeId(id);
       model.setSelectedObjectId(null);
       model.setSelectedEntityId(null);
       model.setFocusedEntityId(null);
+      vp.setWorkspaceMode("analyze");
       return;
     }
     const objectId = resolveSelectedObjectId(id, model.sceneDocument ?? model.modelBuilderGraph);
@@ -434,7 +631,7 @@ export default function RunSidebar() {
     }
     model.setSelectedEntityId(null);
     model.setFocusedEntityId(null);
-  }, [model, vp]);
+  }, [graphEnabled, model, setGraphSelection, vp]);
 
   /* ── Tree click handler ── */
   const handleTreeClick = useCallback((id: string) => {
@@ -444,6 +641,20 @@ export default function RunSidebar() {
     }
     if (id.startsWith("res-analysis-")) {
       model.openResultWorkspaceEntry(id.replace("res-analysis-", ""));
+      vp.setWorkspaceMode("analyze");
+      return;
+    }
+    const resultContext = parseResultNodeContext(id);
+    if (
+      resultContext?.kind === "results-solution" ||
+      resultContext?.kind === "results-dataset" ||
+      resultContext?.kind === "results-dataset-solution" ||
+      resultContext?.kind === "results-derived-value" ||
+      resultContext?.kind === "results-plot-group" ||
+      resultContext?.kind === "results-table" ||
+      resultContext?.kind === "results-export-node" ||
+      resultContext?.kind === "results-report"
+    ) {
       vp.setWorkspaceMode("analyze");
       return;
     }

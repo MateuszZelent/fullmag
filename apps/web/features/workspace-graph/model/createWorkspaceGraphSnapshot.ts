@@ -65,6 +65,7 @@ function inferSolutionKind(quantityId: string | null): "live" | "time_dependent"
 
 export function createWorkspaceGraphSnapshot(
   input: WorkspaceGraphBridgeInput,
+  previousSnapshot?: WorkspaceGraphState | null,
 ): WorkspaceGraphState {
   const studyNodes = input.studyPipeline ? collectStudyNodes(input.studyPipeline.nodes) : [];
   const quantityFrames = buildQuantityFrames(input.quantities);
@@ -74,6 +75,17 @@ export function createWorkspaceGraphSnapshot(
   const inferredStudyId = firstAvailableStudyNode(input.studyPipeline);
   const requestedQuantityId = input.requestedPreviewQuantity ?? quantityFrames.find((q) => q.available)?.quantityId ?? null;
   const liveSolutionId = "solution:live";
+  const existingViewportDocument = activeViewportDocumentId
+    ? previousSnapshot?.viewportDocuments[activeViewportDocumentId] ?? null
+    : null;
+  const selectedDatasetId =
+    existingViewportDocument?.selectedDatasetId ??
+    input.resultsWorkspace.datasets[0]?.id ??
+    "dataset:live";
+  const selectedResultNodeId =
+    input.resultsWorkspace.activeResultNodeId ??
+    existingViewportDocument?.selectedResultNodeId ??
+    null;
   return {
     version: "workspace_graph.v2",
     project: {
@@ -143,29 +155,30 @@ export function createWorkspaceGraphSnapshot(
     resultsWorkspace: input.resultsWorkspace,
     quantityFrames,
     viewportDocuments: {
+      ...(previousSnapshot?.viewportDocuments ?? {}),
       [activeViewportDocumentId ?? "viewport:default"]: {
         id: activeViewportDocumentId ?? "viewport:default",
         workspaceMode: input.workspaceMode,
         tabId: activeTabId,
         viewMode: input.viewMode,
-        quantityId: requestedQuantityId,
-        component: input.requestedPreviewComponent,
-        plane: input.plane,
-        sliceIndex: input.sliceIndex,
-        selectedDatasetId: inferredDatasetId,
-        selectedResultNodeId: input.resultsWorkspace.activeResultNodeId,
-        renderMode: input.renderMode,
+        quantityId: requestedQuantityId ?? existingViewportDocument?.quantityId ?? null,
+        component: input.requestedPreviewComponent ?? existingViewportDocument?.component ?? null,
+        plane: input.plane ?? existingViewportDocument?.plane ?? null,
+        sliceIndex: input.sliceIndex ?? existingViewportDocument?.sliceIndex ?? null,
+        selectedDatasetId,
+        selectedResultNodeId,
+        renderMode: input.renderMode ?? existingViewportDocument?.renderMode ?? null,
         overlayToggles: {
-          telemetryHudVisible: true,
-          previewNoticesVisible: true,
+          telemetryHudVisible: existingViewportDocument?.overlayToggles.telemetryHudVisible ?? true,
+          previewNoticesVisible: existingViewportDocument?.overlayToggles.previewNoticesVisible ?? true,
         },
       },
     },
     workspaceTabs: input.workspaceTabs,
     activeWorkspaceTabByStage: input.activeWorkspaceTabByStage,
     selection: {
-      activeNodeId: input.selectedNodeId,
-      activeResultNodeId: input.resultsWorkspace.activeResultNodeId,
+      activeNodeId: input.selectedNodeId ?? previousSnapshot?.selection.activeNodeId ?? null,
+      activeResultNodeId: selectedResultNodeId,
       activeViewportDocumentId,
     },
     scalarRows: input.scalarRows,

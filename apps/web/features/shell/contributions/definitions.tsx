@@ -5,7 +5,6 @@
 import { Binary, FunctionSquare, Ruler } from "lucide-react";
 import { registerRibbonContribution } from "../registry/ribbonRegistry";
 import type { RibbonBuildContext, RibbonGroup } from "../registry/ribbonRegistry";
-import { buildViewGroup } from "./view-group";
 
 function buildDefinitionsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   return [
@@ -42,7 +41,6 @@ function buildDefinitionsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         },
       ],
     },
-    buildViewGroup(ctx),
   ];
 }
 

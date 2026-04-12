@@ -5,11 +5,11 @@
 import {
   Cog, Columns2, ListChecks, Target, Play, Sparkles, Magnet,
   FunctionSquare, Layers3, Binary, Zap, Plus, RefreshCw, Download,
+  Pause, Square, SkipForward,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { registerRibbonContribution } from "../registry/ribbonRegistry";
 import type { RibbonBuildContext, RibbonGroup } from "../registry/ribbonRegistry";
-import { buildViewGroup } from "./view-group";
 
 function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   const studyNode = ctx.studyNodeContext;
@@ -122,13 +122,60 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
       ],
     },
     {
+      id: "study-compute",
+      title: "Compute",
+      actions: [
+        {
+          id: "study-compute-run",
+          icon: <Play size={20} fill="currentColor" />,
+          label: "Compute",
+          tooltip:
+            ctx.runLabel === "Resume"
+              ? "Resume the staged compute pipeline"
+              : "Materialize and execute the current study pipeline",
+          shortcut: "F5",
+          accent: true,
+          disabled: !ctx.can({ id: "solver.control", action: "run" }),
+          action: () => ctx.run({ id: "solver.control", action: "run" }),
+          iconColor: "text-emerald-400",
+        },
+        {
+          id: "study-compute-pause",
+          icon: <Pause size={20} fill="currentColor" />,
+          label: "Pause",
+          tooltip: "Pause study execution",
+          disabled: !ctx.can({ id: "solver.control", action: "pause" }),
+          action: () => ctx.run({ id: "solver.control", action: "pause" }),
+          iconColor: "text-amber-500",
+        },
+        {
+          id: "study-compute-stop",
+          icon: <Square size={20} fill="currentColor" />,
+          label: "Stop",
+          tooltip: "Stop study execution",
+          disabled: !ctx.can({ id: "solver.control", action: "stop" }),
+          action: () => ctx.run({ id: "solver.control", action: "stop" }),
+          iconColor: "text-rose-500",
+        },
+        {
+          id: "study-compute-skip",
+          icon: <SkipForward size={20} />,
+          label: "Skip",
+          tooltip: "Skip the active stage when supported by runtime",
+          disabled: !ctx.can({ id: "solver.control", action: "skip" }),
+          action: () => ctx.run({ id: "solver.control", action: "skip" }),
+          iconColor: "text-violet-400",
+        },
+      ],
+    },
+    {
       id: "study-add",
       title: "Add Stage",
       actions: [
         {
           id: "study-add-relax",
           icon: <Target size={20} />,
-          label: "Relax",
+          label: "Add Relax",
           tooltip: hasStageSelection
             ? "Insert Relax after the selected stage"
             : "Append Relax at the end of the stage sequence",
@@ -149,7 +196,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         {
           id: "study-add-run",
           icon: <Play size={20} />,
-          label: "Run",
+          label: "Add Run",
           tooltip: hasStageSelection
             ? "Insert Run after the selected stage"
             : "Append Run at the end of the stage sequence",
@@ -166,7 +213,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         {
           id: "study-add-eigen",
           icon: <Sparkles size={20} />,
-          label: "Eigensolve",
+          label: "Add Eigensolve",
           tooltip: hasStageSelection
             ? "Insert Eigensolve after the selected stage"
             : "Append Eigensolve at the end of the stage sequence",
@@ -385,7 +432,6 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         },
       ],
     },
-    buildViewGroup(ctx),
   ];
 }
 

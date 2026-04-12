@@ -41,6 +41,7 @@ export interface FemViewportToolbarProps {
   clipEnabled: boolean;
   clipAxis: ClipAxis;
   clipPos: number;
+  clipFlip: boolean;
   arrowsVisible: boolean;
   arrowDensity: number;
   effectiveArrowDensity?: number;
@@ -72,6 +73,7 @@ export interface FemViewportToolbarProps {
   onClipEnabledChange: (value: boolean) => void;
   onClipAxisChange: (value: ClipAxis) => void;
   onClipPosChange: (value: number) => void;
+  onClipFlipChange: (value: boolean) => void;
   onArrowsVisibleChange: (value: boolean) => void;
   onArrowDensityChange: (value: number) => void;
   onVectorDomainFilterChange: (
@@ -154,6 +156,7 @@ export function FemViewportToolbar({
   clipEnabled,
   clipAxis,
   clipPos,
+  clipFlip,
   arrowsVisible,
   arrowDensity,
   effectiveArrowDensity,
@@ -185,6 +188,7 @@ export function FemViewportToolbar({
   onClipEnabledChange,
   onClipAxisChange,
   onClipPosChange,
+  onClipFlipChange,
   onArrowsVisibleChange,
   onArrowDensityChange,
   onVectorDomainFilterChange,
@@ -208,13 +212,30 @@ export function FemViewportToolbar({
   toolbarScopeLabel = null,
   interactionSimplified = false,
 }: FemViewportToolbarProps) {
-  const activeSurfaceColorOpt = COLOR_OPTIONS.find((o) => o.value === surfaceColorField);
-  const activeArrowColorOpt =
-    ARROW_COLOR_OPTIONS.find((o) => o.value === arrowColorMode)
-    ?? ARROW_COLOR_OPTIONS[0];
   const effectiveDensity = effectiveArrowDensity ?? arrowDensity;
   const availableQuantities = quantityOptions.filter((o) => o.available);
   const activeQuantity = quantityOptions.find((o) => o.id === quantityId) ?? null;
+
+  // Dynamic labels based on active quantity (Fix #7)
+  const qSym = activeQuantity?.shortLabel ?? "m";
+  const dynamicColorOptions = COLOR_OPTIONS.map((o) => {
+    if (o.value === "x") return { ...o, label: `${qSym}_x`, fullLabel: `${qSym} X` };
+    if (o.value === "y") return { ...o, label: `${qSym}_y`, fullLabel: `${qSym} Y` };
+    if (o.value === "z") return { ...o, label: `${qSym}_z`, fullLabel: `${qSym} Z` };
+    if (o.value === "magnitude") return { ...o, label: `|${qSym}|`, fullLabel: `|${qSym}|` };
+    return o;
+  });
+  const dynamicArrowColorOptions = ARROW_COLOR_OPTIONS.map((o) => {
+    if (o.value === "x") return { ...o, label: `${qSym}_x`, fullLabel: `${qSym} X` };
+    if (o.value === "y") return { ...o, label: `${qSym}_y`, fullLabel: `${qSym} Y` };
+    if (o.value === "z") return { ...o, label: `${qSym}_z`, fullLabel: `${qSym} Z` };
+    if (o.value === "magnitude") return { ...o, label: `|${qSym}|`, fullLabel: `|${qSym}|` };
+    return o;
+  });
+  const activeSurfaceColorOpt = dynamicColorOptions.find((o) => o.value === surfaceColorField);
+  const activeArrowColorOpt =
+    dynamicArrowColorOptions.find((o) => o.value === arrowColorMode)
+    ?? dynamicArrowColorOptions[0];
 
   return (
     <ViewportToolbar3D
@@ -303,7 +324,7 @@ export function FemViewportToolbar({
               <div className="flex min-w-[260px] flex-col gap-3">
                 <ViewportPopoverRow label="Surface">
                   <div className="grid grid-cols-2 gap-1">
-                    {COLOR_OPTIONS.map((opt) => (
+                    {dynamicColorOptions.map((opt) => (
                       <ViewportIconAction
                         key={`surface-${opt.value}`}
                         active={surfaceColorField === opt.value}
@@ -311,14 +332,14 @@ export function FemViewportToolbar({
                           onSurfaceColorFieldChange(opt.value);
                         }}
                         label={opt.fullLabel}
-                        className="justify-start px-2 py-1.5"
+                        className={`justify-start px-2 py-1.5 ${surfaceColorField === opt.value ? "ring-1 ring-primary/60" : ""}`}
                       />
                     ))}
                   </div>
                 </ViewportPopoverRow>
                 <ViewportPopoverRow label="Arrows">
                   <div className="grid grid-cols-2 gap-1">
-                    {ARROW_COLOR_OPTIONS.map((opt) => (
+                    {dynamicArrowColorOptions.map((opt) => (
                       <ViewportIconAction
                         key={`arrows-${opt.value}`}
                         active={arrowColorMode === opt.value}
@@ -326,11 +347,26 @@ export function FemViewportToolbar({
                           onArrowColorModeChange(opt.value);
                         }}
                         label={opt.fullLabel}
-                        className="justify-start px-2 py-1.5"
+                        className={`justify-start px-2 py-1.5 ${arrowColorMode === opt.value ? "ring-1 ring-primary/60" : ""}`}
                       />
                     ))}
                   </div>
                 </ViewportPopoverRow>
+                {arrowColorMode === "monochrome" && (
+                  <ViewportPopoverRow label="Arrow Color">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={arrowMonoColor}
+                        onChange={(e) => onArrowMonoColorChange(e.target.value)}
+                        className="h-7 w-10 cursor-pointer rounded border border-border bg-transparent p-0.5"
+                      />
+                      <span className="text-[0.6rem] text-muted-foreground font-mono">
+                        {arrowMonoColor}
+                      </span>
+                    </div>
+                  </ViewportPopoverRow>
+                )}
               </div>
             </ViewportPopoverPanel>
           )}
@@ -428,6 +464,15 @@ export function FemViewportToolbar({
                   value={clipPos}
                   onChange={(event) => onClipPosChange(Number(event.target.value))}
                   className="flex-1 max-w-[180px]"
+                />
+              </ViewportPopoverRow>
+              <ViewportPopoverRow label="Direction">
+                <ViewportIconAction
+                  active={clipFlip}
+                  onClick={() => onClipFlipChange(!clipFlip)}
+                  label={clipFlip ? `+${clipAxis.toUpperCase()}` : `−${clipAxis.toUpperCase()}`}
+                  title="Flip clip plane direction"
+                  className="px-3"
                 />
               </ViewportPopoverRow>
             </ViewportPopoverPanel>

@@ -11,6 +11,9 @@ import VortexAnalyzeWorkbench from "@/components/analyze/VortexAnalyzeWorkbench"
 import type { VortexTimeSample } from "@/components/analyze/vortexTypes";
 import EmptyState from "@/components/ui/EmptyState";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useWorkspaceGraphStore } from "@/features/workspace-graph";
+import { findResultNode } from "@/features/analyze/model/resultsWorkspace";
+import { parseAnalyzeTreeNode } from "./analyzeSelection";
 
 import AnalyzeDiagnosticsPanel from "./AnalyzeDiagnosticsPanel";
 import AnalyzeRuntimeBadges from "./AnalyzeRuntimeBadges";
@@ -55,6 +58,12 @@ export default function AnalyzeViewport() {
   const model = useModel();
   const cmd = useCommand();
   const tp = useTransport();
+  const graphSelection = useWorkspaceGraphStore((state) => state.snapshot.selection);
+  const graphResultsWorkspace = useWorkspaceGraphStore((state) => state.snapshot.resultsWorkspace);
+  const graphActiveViewportDocument = useWorkspaceGraphStore((state) => {
+    const id = state.snapshot.selection.activeViewportDocumentId;
+    return id ? state.snapshot.viewportDocuments[id] ?? null : null;
+  });
 
   /* ── Vortex time-domain samples from scalar rows ── */
   const vortexSamples = useMemo<VortexTimeSample[]>(() => {
@@ -69,6 +78,72 @@ export default function AnalyzeViewport() {
 
   const hasVortexData = vortexSamples.length > 4;
   const analyzeDomain = model.analyzeSelection.domain ?? "eigenmodes";
+  const activeDatasetLabel = useMemo(() => {
+    const datasetId = graphActiveViewportDocument?.selectedDatasetId;
+    if (!datasetId) {
+      return null;
+    }
+    return (
+      graphResultsWorkspace.datasets.find((dataset) => dataset.id === datasetId)?.label
+      ?? datasetId
+    );
+  }, [graphActiveViewportDocument?.selectedDatasetId, graphResultsWorkspace.datasets]);
+
+  useEffect(() => {
+    const treeSelection = parseAnalyzeTreeNode(graphSelection.activeNodeId ?? "");
+    if (treeSelection) {
+      const nextDomain = treeSelection.domain ?? model.analyzeSelection.domain;
+      const nextTab = treeSelection.tab ?? model.analyzeSelection.tab;
+      if (
+        nextDomain !== model.analyzeSelection.domain
+        || nextTab !== model.analyzeSelection.tab
+        || (treeSelection.selectedModeIndex ?? null) !== model.analyzeSelection.selectedModeIndex
+        || (treeSelection.selectedChannel ?? null) !== model.analyzeSelection.selectedChannel
+      ) {
+        model.openAnalyze(treeSelection);
+      }
+      return;
+    }
+    const activeResultNode = graphSelection.activeResultNodeId
+      ? findResultNode(graphResultsWorkspace, graphSelection.activeResultNodeId)
+      : null;
+    if (!activeResultNode) {
+      return;
+    }
+    if (activeResultNode.nodeKind === "analysis") {
+      const next = {
+        domain: activeResultNode.analysisKind === "vortex" ? "vortex" : "eigenmodes",
+        tab:
+          activeResultNode.analysisKind === "vortex"
+            ? "vortex-trajectory"
+            : "spectrum",
+      } as const;
+      if (
+        next.domain !== model.analyzeSelection.domain
+        || next.tab !== model.analyzeSelection.tab
+      ) {
+        model.openAnalyze(next);
+      }
+      return;
+    }
+    if (activeResultNode.nodeKind === "plot_group" || activeResultNode.nodeKind === "table") {
+      if (
+        model.analyzeSelection.domain !== "eigenmodes"
+        || model.analyzeSelection.tab !== "spectrum"
+      ) {
+        model.openAnalyze({ domain: "eigenmodes", tab: "spectrum" });
+      }
+    }
+  }, [
+    graphResultsWorkspace,
+    graphSelection.activeNodeId,
+    graphSelection.activeResultNodeId,
+    model.analyzeSelection.domain,
+    model.analyzeSelection.selectedChannel,
+    model.analyzeSelection.selectedModeIndex,
+    model.analyzeSelection.tab,
+    model,
+  ]);
 
   const setSelectedModeIndex = useCallback(
     (index: number | null) =>
@@ -223,6 +298,11 @@ export default function AnalyzeViewport() {
             Analyze
           </span>
           <AnalyzeRuntimeBadges badges={diagnostics.badges} />
+          {activeDatasetLabel && (
+            <span className="rounded-sm border border-border/30 bg-muted/40 px-1.5 py-0.5 text-[0.62rem] font-bold tracking-widest text-muted-foreground">
+              dataset: {activeDatasetLabel}
+            </span>
+          )}
           {spectrum.solver_kind && (
             <span className="rounded-sm border border-sky-500/25 bg-sky-500/10 px-1.5 py-0.5 text-[0.62rem] font-bold uppercase tracking-widest text-sky-200">
               {spectrum.solver_kind}

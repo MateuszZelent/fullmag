@@ -269,6 +269,7 @@ function FemMeshView3DInner({
   const [internalClipEnabled, setInternalClipEnabled] = useState(false);
   const [internalClipAxis, setInternalClipAxis] = useState<ClipAxis>("x");
   const [internalClipPos, setInternalClipPos] = useState(50);
+  const [internalClipFlip, setInternalClipFlip] = useState(false);
   const [internalShowArrows, setInternalShowArrows] = useState(false);
   const [internalPreviewMaxPoints, setInternalPreviewMaxPoints] = useState(PREVIEW_MAX_POINTS_DEFAULT);
   const [internalShrinkFactor, setInternalShrinkFactor] = useState(1);
@@ -306,6 +307,7 @@ function FemMeshView3DInner({
   const clipEnabled = controlledClipEnabled ?? internalClipEnabled;
   const clipAxis = controlledClipAxis ?? internalClipAxis;
   const clipPos = controlledClipPos ?? internalClipPos;
+  const clipFlip = internalClipFlip;
   const showArrowsRequested = controlledShowArrowsRequested ?? internalShowArrows;
   const arrowColorMode = controlledArrowColorMode ?? internalArrowColorMode;
   const arrowMonoColor = controlledArrowMonoColor ?? internalArrowMonoColor;
@@ -539,6 +541,14 @@ function FemMeshView3DInner({
     );
   }, [colorField, controlledArrowColorMode]);
 
+  // Auto-show legend when a scalar color mode is active (field_x/y/z/magnitude).
+  useEffect(() => {
+    const scalarModes: string[] = ["x", "y", "z", "magnitude"];
+    if (scalarModes.includes(field) || scalarModes.includes(arrowColorMode)) {
+      setLegendOpen(() => true);
+    }
+  }, [field, arrowColorMode]);
+
   const {
     dynamicGeomCenter,
     dynamicGeomSize,
@@ -760,6 +770,7 @@ function FemMeshView3DInner({
     clipEnabled,
     clipAxis,
     clipPos,
+    clipFlip,
     hasMeshParts,
     meshParts,
     visibleLayersCount: visibleLayers.length,
@@ -811,6 +822,7 @@ function FemMeshView3DInner({
     setInternalClipEnabled,
     setInternalClipAxis,
     setInternalClipPos,
+    setInternalClipFlip,
     setInternalShowArrows,
     setInternalVectorDomainFilter,
     setInternalFerromagnetVisibilityMode,
@@ -867,7 +879,7 @@ function FemMeshView3DInner({
             <CameraAutoFit maxDim={dynamicMaxDim} generation={cameraFitGeneration} controlsRef={controlsRef} />
           ) : null}
           {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showClipPlanesHelper ? (
-            <FemClipPlanes enabled={clipEnabled} axis={clipAxis} posPercentage={clipPos} geomSize={dynamicGeomSize} />
+            <FemClipPlanes enabled={clipEnabled} axis={clipAxis} posPercentage={clipPos} flip={clipFlip} geomSize={dynamicGeomSize} />
           ) : null}
           <FemViewportScene
             meshData={meshData}
