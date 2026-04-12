@@ -259,7 +259,7 @@ const RULES: RegistryRule[] = [
 
   // ── Results ──
   {
-    kinds: ["results.root", "results.fields"],
+    kinds: ["results.root", "results.fields", "results.overview", "results.plot_group", "results.table", "results.report", "results.vortex"],
     panelKey: PanelKey.RESULTS,
     props: noProps,
   },

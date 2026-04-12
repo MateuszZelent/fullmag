@@ -3292,11 +3292,19 @@ fn resolve_preview_quantity(current: &SessionStateResponse, requested: &str) -> 
     }) {
         return Some(requested.to_string());
     }
-    current
+    // PH-00: explicit fallback with diagnostic log instead of silent first-available.
+    let fallback = current
         .quantities
         .iter()
         .find(|quantity| quantity.available && is_preview_compatible(&quantity.id))
-        .map(|quantity| quantity.id.clone())
+        .map(|quantity| quantity.id.clone());
+    if let Some(ref fb) = fallback {
+        eprintln!(
+            "[quantities] preview fallback: requested '{}' unavailable, using '{}'",
+            requested, fb
+        );
+    }
+    fallback
 }
 
 fn resolve_global_scalar_quantity(
@@ -3311,11 +3319,19 @@ fn resolve_global_scalar_quantity(
     }) {
         return Some(requested.to_string());
     }
-    current
+    // PH-00: explicit fallback with diagnostic log instead of silent first-available.
+    let fallback = current
         .quantities
         .iter()
         .find(|quantity| quantity.available && is_global_scalar(&quantity.id))
-        .map(|quantity| quantity.id.clone())
+        .map(|quantity| quantity.id.clone());
+    if let Some(ref fb) = fallback {
+        eprintln!(
+            "[quantities] global scalar fallback: requested '{}' unavailable, using '{}'",
+            requested, fb
+        );
+    }
+    fallback
 }
 
 fn current_preview_source(current: &SessionStateResponse) -> (u64, f64) {

@@ -270,6 +270,8 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             e_ex: 0.0,
             e_demag: 0.0,
             e_ext: 0.0,
+            e_ani: 0.0,
+            e_dmi: 0.0,
             e_total: 0.0,
             max_dm_dt: 0.0,
             max_h_eff: 0.0,

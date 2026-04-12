@@ -46,6 +46,8 @@ export interface RunManifest {
   final_e_ex: number | null;
   final_e_demag: number | null;
   final_e_ext: number | null;
+  final_e_ani: number | null;
+  final_e_dmi: number | null;
   final_e_total: number | null;
   artifact_dir: string;
 }
@@ -59,6 +61,8 @@ export interface LiveState {
   e_ex: number;
   e_demag: number;
   e_ext: number;
+  e_ani: number;
+  e_dmi: number;
   e_total: number;
   max_dm_dt: number;
   max_h_eff: number;
@@ -189,6 +193,8 @@ export interface ScalarRow {
   e_ex: number;
   e_demag: number;
   e_ext: number;
+  e_ani: number;
+  e_dmi: number;
   e_total: number;
   max_dm_dt: number;
   max_h_eff: number;
@@ -211,6 +217,13 @@ export interface QuantityDescriptor {
   interactive_preview: boolean;
   quick_access_label: string | null;
   scalar_metric_key: string | null;
+  n_comp: number;
+  domain: "magnetic_only" | "full_domain";
+  normalization_hint: "unit_vector" | "max_abs" | "none";
+  supports_preview_2d: boolean;
+  supports_preview_3d: boolean;
+  supports_history: boolean;
+  supports_export: boolean;
 }
 
 export interface BackendCapabilities {

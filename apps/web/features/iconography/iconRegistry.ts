@@ -241,6 +241,11 @@ const ICON_REGISTRY: Record<NodeKind, IconRegistryEntry> = {
   "results.eigen_dispersion":              { token: "audio-waveform",   label: "Eigen Dispersion" },
   "results.eigenmodes":                    { token: "audio-waveform",   label: "Eigenmodes" },
   "results.eigenmode":                     { token: "circle-dot",       label: "Eigenmode" },
+  "results.overview":                      { token: "compass",          label: "Overview" },
+  "results.plot_group":                    { token: "line-chart",       label: "Plot Group" },
+  "results.table":                         { token: "table-2",          label: "Table" },
+  "results.report":                        { token: "file-text",        label: "Report" },
+  "results.vortex":                        { token: "orbit",            label: "Vortex / STNO" },
 
   // Visualization
   "visualization.root":                    { token: "paintbrush",       label: "Visualization" },

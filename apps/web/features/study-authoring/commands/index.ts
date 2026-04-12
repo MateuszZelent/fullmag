@@ -7,7 +7,7 @@
  * The authoring store dispatches these commands and manages the draft lifecycle.
  */
 
-import type { SceneDocument, SceneObject, MagnetizationAsset, Transform3D, ScriptBuilderMaterialEntry, ScriptBuilderPerGeometryMeshEntry } from "@/lib/session/types";
+import type { SceneDocument, SceneObject, Transform3D, ScriptBuilderMaterialEntry, ScriptBuilderPerGeometryMeshEntry } from "@/lib/session/types";
 
 // ─── Add Node ───────────────────────────────────────────────────
 

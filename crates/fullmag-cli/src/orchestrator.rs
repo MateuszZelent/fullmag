@@ -1673,6 +1673,8 @@ pub(crate) fn run_manifest_from_steps(
         final_e_ex: steps.last().map(|step| step.e_ex),
         final_e_demag: steps.last().map(|step| step.e_demag),
         final_e_ext: steps.last().map(|step| step.e_ext),
+        final_e_ani: steps.last().map(|step| step.e_ani),
+        final_e_dmi: steps.last().map(|step| step.e_dmi),
         final_e_total: steps.last().map(|step| step.e_total),
         artifact_dir: artifact_dir.display().to_string(),
     }

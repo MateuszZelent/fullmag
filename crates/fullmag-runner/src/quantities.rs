@@ -445,7 +445,6 @@ const QUANTITY_SPECS: [QuantitySpec; 23] = [
         supports_history: true,
         supports_export: true,
     },
-    },
     QuantitySpec {
         id: QuantityId::EDemag,
         label: "Demagnetization Energy",

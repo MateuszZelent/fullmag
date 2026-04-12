@@ -119,6 +119,11 @@ export type NodeKind =
   | "results.eigen_dispersion"
   | "results.eigenmodes"
   | "results.eigenmode"
+  | "results.overview"
+  | "results.plot_group"
+  | "results.table"
+  | "results.report"
+  | "results.vortex"
   // Visualization
   | "visualization.root"
   | "visualization.preset.project"
