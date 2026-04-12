@@ -71,7 +71,6 @@ const TABS: { value: ConsoleTab; label: string }[] = [
   { value: "progress", label: "Progress" },
   { value: "live", label: "Live" },
   { value: "log", label: "Log" },
-  { value: "charts", label: "Charts" },
 ];
 
 export default function EngineConsole({

@@ -2,12 +2,13 @@ import { create } from "zustand";
 import type { LaunchIntent } from "./launch-intent";
 
 export type WorkspaceMode = "build" | "study" | "analyze";
-export type RightInspectorTab = "selected-submeshes" | "tools";
+export type RightInspectorTab = "selected-submeshes" | "tools" | "console";
 
 export type WorkspaceTabKind =
   | "viewport-3d"
   | "viewport-2d"
   | "viewport-mesh"
+  | "viewport-charts"
   | "analyze"
   | "result-spectrum"
   | "result-dispersion"
@@ -100,6 +101,16 @@ function defaultCoreTabs(): WorkspaceTab[] {
       pinned: true,
       keepAlive: false,
       payload: { viewMode: "Analyze", analyzeDomain: "eigenmodes", analyzeTab: "spectrum" },
+    },
+    {
+      id: "core:charts",
+      key: "core:charts",
+      kind: "viewport-charts",
+      title: "Charts",
+      closable: false,
+      pinned: true,
+      keepAlive: true,
+      payload: { viewMode: "Analyze" },
     },
   ];
 }
@@ -282,15 +293,44 @@ function updateStageLayout(
 
 const persistedDockingState = loadPersistedDockingState();
 
+function ensureCoreTabsForStage(tabs: WorkspaceTab[] | undefined): WorkspaceTab[] {
+  const incoming = Array.isArray(tabs) ? tabs : [];
+  const coreTabs = defaultCoreTabs();
+  const incomingById = new Map(incoming.map((tab) => [tab.id, tab]));
+  const merged: WorkspaceTab[] = coreTabs.map((core) => incomingById.get(core.id) ?? core);
+  const extra = incoming.filter((tab) => !coreTabs.some((core) => core.id === tab.id));
+  return [...merged, ...extra];
+}
+
 function mergedDockingStateFromDefaults(): PersistedDockingState {
+  const persistedTabs = persistedDockingState?.workspaceTabsByStage;
+  const workspaceTabsByStage: Record<WorkspaceMode, WorkspaceTab[]> = {
+    build: ensureCoreTabsForStage(persistedTabs?.build ?? DEFAULT_WORKSPACE_TABS.build),
+    study: ensureCoreTabsForStage(persistedTabs?.study ?? DEFAULT_WORKSPACE_TABS.study),
+    analyze: ensureCoreTabsForStage(persistedTabs?.analyze ?? DEFAULT_WORKSPACE_TABS.analyze),
+  };
+  const persistedActive: Partial<Record<WorkspaceMode, string | null>> =
+    persistedDockingState?.activeWorkspaceTabByStage ?? {};
+  const activeWorkspaceTabByStage: Record<WorkspaceMode, string | null> = {
+    build:
+      persistedActive.build &&
+      workspaceTabsByStage.build.some((tab) => tab.id === persistedActive.build)
+        ? persistedActive.build
+        : DEFAULT_ACTIVE_WORKSPACE_TAB.build,
+    study:
+      persistedActive.study &&
+      workspaceTabsByStage.study.some((tab) => tab.id === persistedActive.study)
+        ? persistedActive.study
+        : DEFAULT_ACTIVE_WORKSPACE_TAB.study,
+    analyze:
+      persistedActive.analyze &&
+      workspaceTabsByStage.analyze.some((tab) => tab.id === persistedActive.analyze)
+        ? persistedActive.analyze
+        : DEFAULT_ACTIVE_WORKSPACE_TAB.analyze,
+  };
   return {
-    workspaceTabsByStage: cloneTabsByStage(
-      persistedDockingState?.workspaceTabsByStage ?? DEFAULT_WORKSPACE_TABS,
-    ),
-    activeWorkspaceTabByStage: {
-      ...DEFAULT_ACTIVE_WORKSPACE_TAB,
-      ...(persistedDockingState?.activeWorkspaceTabByStage ?? {}),
-    },
+    workspaceTabsByStage,
+    activeWorkspaceTabByStage,
     dockLayoutByStage: {
       ...DEFAULT_DOCK_LAYOUTS,
       ...(persistedDockingState?.dockLayoutByStage ?? {}),

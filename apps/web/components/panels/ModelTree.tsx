@@ -581,6 +581,11 @@ export default function ModelTree({
     [ctxMenu?.nodeId],
   );
 
+  const contextStage = useMemo(
+    () => Boolean(ctxMenu?.nodeId?.startsWith("study-stage-node:")),
+    [ctxMenu?.nodeId],
+  );
+
   return (
     <div className={cn("flex flex-col gap-[1px] py-1 select-none", className)} role="tree">
       {nodes.map((node, idx) => (
@@ -624,6 +629,11 @@ export default function ModelTree({
               <button className="w-full text-left px-2 py-1.5 text-xs font-medium rounded-sm hover:bg-muted text-popover-foreground transition-colors" onClick={() => handleAction("duplicate")}>Duplicate</button>
               <button className="w-full text-left px-2 py-1.5 text-xs font-medium rounded-sm hover:bg-muted text-popover-foreground transition-colors" onClick={() => handleAction("toggle-pin")}>Pin / Unpin</button>
               <button className="w-full text-left px-2 py-1.5 text-xs font-medium rounded-sm hover:bg-muted text-popover-foreground transition-colors" onClick={() => handleAction("delete")}>Delete</button>
+            </>
+          ) : contextStage ? (
+            <>
+              <button className="w-full text-left px-2 py-1.5 text-xs font-medium rounded-sm hover:bg-muted text-popover-foreground transition-colors" onClick={() => handleAction("toggle-stage")}>Enable / Disable</button>
+              <button className="w-full text-left px-2 py-1.5 text-xs font-medium rounded-sm hover:bg-muted text-popover-foreground transition-colors" onClick={() => handleAction("delete-stage")}>Delete Stage</button>
             </>
           ) : (
             <button className="w-full text-left px-2 py-1.5 text-xs font-medium rounded-sm hover:bg-muted text-popover-foreground transition-colors" onClick={() => handleAction("focus")}>Focus in 3D</button>
@@ -1307,7 +1317,7 @@ export function buildFullmagModelTree(opts: {
       label: "Study",
       icon: "play",
       badge: authoringStageCount > 0 ? `${authoringStageCount} stages` : (opts.backend ?? "—"),
-      status: opts.solverStatus ?? "pending",
+      status: opts.solverStatus === "active" ? "ready" : (opts.solverStatus ?? "pending"),
       defaultOpen: true,
       onClick: opts.onSolverClick,
       children: [
@@ -1358,7 +1368,7 @@ export function buildFullmagModelTree(opts: {
           badge: opts.activeStudyStageIndex != null 
             ? `executing ${opts.activeStudyStageIndex + 1}/${authoringStageCount}` 
             : authoringStageCount > 0 ? `${authoringStageCount}` : "empty",
-          status: opts.activeStudyStageIndex != null ? "active" : authoringStageCount > 0 ? "ready" : "pending",
+          status: authoringStageCount > 0 ? "ready" : "pending",
           defaultOpen: true,
           children:
             authoringStageChildren.length > 0

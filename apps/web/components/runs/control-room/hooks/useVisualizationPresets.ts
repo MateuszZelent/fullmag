@@ -62,6 +62,9 @@ export interface UseVisualizationPresetsParams {
   sliceIndex: number;
   selectedQuantity: string;
 
+  /* Data-plane cache for fast-path quantity switching */
+  cachedFieldQuantities: ReadonlySet<string>;
+
   /* Preset data */
   projectVisualizationPresets: VisualizationPreset[];
   localVisualizationPresets: VisualizationPreset[];
@@ -135,6 +138,7 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
     plane,
     sliceIndex,
     selectedQuantity,
+    cachedFieldQuantities,
     projectVisualizationPresets,
     localVisualizationPresets,
     activeVisualizationPresetRef,
@@ -450,7 +454,8 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
         startTransition(() => {
           setSelectedQuantity(preset.quantity);
         });
-        if (previewControlsActive) {
+        // Data-plane fast path: skip control-plane POST if field is already cached.
+        if (!cachedFieldQuantities.has(preset.quantity) && previewControlsActive) {
           void updatePreview("/quantity", { quantity: preset.quantity });
         }
       }

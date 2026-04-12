@@ -7,6 +7,15 @@ import {
   interactivePreviewQuantities,
   quantitiesByShape,
 } from "../../lib/quantities/catalog";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 // ── Props ────────────────────────────────────────────────────────
 
@@ -64,22 +73,24 @@ export default function QuantityPicker({
   }, [candidates]);
 
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value as QuantityId)}
-      className={className}
-    >
-      {[...groups.entries()].map(([label, items]) => (
-        <optgroup key={label} label={label}>
-          {items.map((q) => (
-            <option key={q.id} value={q.id}>
-              {q.quickAccessLabel ?? q.label}
-              {q.unit && q.unit !== "dimensionless" ? ` (${q.unit})` : ""}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-    </select>
+    <Select value={value} onValueChange={(val) => onChange(val as QuantityId)}>
+      <SelectTrigger className={className}>
+        <SelectValue placeholder="Select quantity" />
+      </SelectTrigger>
+      <SelectContent>
+        {[...groups.entries()].map(([label, items]) => (
+          <SelectGroup key={label}>
+            <SelectLabel>{label}</SelectLabel>
+            {items.map((q) => (
+              <SelectItem key={q.id} value={q.id}>
+                {q.quickAccessLabel ?? q.label}
+                {q.unit && q.unit !== "dimensionless" ? ` (${q.unit})` : ""}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 

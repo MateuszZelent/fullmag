@@ -26,7 +26,6 @@ import {
 import {
   assignMagneticPreset,
 } from "../../lib/session/magnetizationAssetActions";
-import { DEFAULT_CONVERGENCE_THRESHOLD } from "../panels/SolverSettingsPanel";
 import {
   ControlRoomProvider,
 } from "./control-room/ControlRoomContext";
@@ -70,7 +69,6 @@ import { useWorkspaceGraphBridge } from "@/features/workspace-graph";
 import type { WorkspaceMode } from "./control-room/context-hooks";
 import SettingsDialog from "../workspace/overlays/SettingsDialog";
 import PhysicsDocsDrawer from "../workspace/overlays/PhysicsDocsDrawer";
-import BottomUtilityDock from "../workspace/shell/BottomUtilityDock";
 import WorkspaceDockingShell from "../workspace/docking/WorkspaceDockingShell";
 import { useActiveStageLayout, useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
@@ -255,11 +253,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }, [autoCollapseSidebar, setSidebarCollapsed, sidebarCollapsed]);
 
   const viewportPanelDefaultSize = compactVerticalLayout ? "90%" : PANEL_SIZES.viewportDefault;
-  const consolePanelDefaultSize = compactVerticalLayout ? "10%" : PANEL_SIZES.consoleDefault;
   const rightInspectorDefaultSize = compactHorizontalLayout ? "18%" : PANEL_SIZES.rightInspectorDefault;
   const rightInspectorMinSize = compactHorizontalLayout ? "10%" : PANEL_SIZES.rightInspectorMin;
   const rightInspectorMaxSize = compactHorizontalLayout ? "36%" : PANEL_SIZES.rightInspectorMax;
-  const layoutBucket = `${compactHorizontalLayout ? "compact" : "full"}-${compactVerticalLayout ? "short" : "tall"}`;
   const workspaceTitle = launchDisplayName(launchIntent) ?? ctx.session?.problem_name ?? "Local Live Workspace";
 
   useEffect(() => {
@@ -1198,56 +1194,19 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
             defaultSize={ctx.sidebarCollapsed ? "100%" : PANEL_SIZES.bodyMainDefault}
             minSize={PANEL_SIZES.bodyMainMin}
           >
-            <PanelGroup
-              key={layoutBucket}
-              orientation="vertical"
-              className="relative flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden"
-              resizeTargetMinimumSize={{ coarse: 40, fine: 10 }}
+            <Panel
+              id="workspace-viewport"
+              defaultSize={viewportPanelDefaultSize}
+              minSize={PANEL_SIZES.viewportMin}
             >
-              <Panel
-                id="workspace-viewport"
-                defaultSize={viewportPanelDefaultSize}
-                minSize={PANEL_SIZES.viewportMin}
-              >
-                  <div className="flex flex-row h-full min-h-0 min-w-0 overflow-hidden bg-background flex-1 relative">
-                    <div className="flex flex-col flex-1 min-w-0 min-h-0">
-                      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar ? <ViewportBar /> : null}
-                      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices ? previewNotices : null}
-                      <ViewportCanvasArea />
-                    </div>
-                  </div>
-              </Panel>
-
-              <PanelResizeHandle className="w-full h-1 bg-transparent cursor-ns-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:h-[2px] after:w-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
-
-              <Panel
-                id="workspace-console"
-                defaultSize={consolePanelDefaultSize}
-                minSize={PANEL_SIZES.consoleMin}
-                maxSize={PANEL_SIZES.consoleMax}
-                collapsible
-                collapsedSize="3%"
-              >
-                {FRONTEND_DIAGNOSTIC_FLAGS.shell.showBottomDock ? <BottomUtilityDock
-                  session={ctx.session ?? null}
-                  run={ctx.run ?? null}
-                  liveState={ctx.effectiveLiveState ?? null}
-                  scalarRows={ctx.scalarRows}
-                  engineLog={ctx.engineLog}
-                  artifacts={ctx.artifacts}
-                  quantities={ctx.quantities}
-                  connection={ctx.connection}
-                  error={ctx.error}
-                  convergenceThreshold={Number(ctx.solverSettings.torqueTolerance) || DEFAULT_CONVERGENCE_THRESHOLD}
-                  commandStatus={ctx.commandStatus}
-                  commandBusy={ctx.commandBusy}
-                  commandMessage={ctx.commandMessage}
-                  activity={ctx.activity}
-                  meshWorkspace={ctx.meshWorkspace}
-                  workspaceStatus={ctx.workspaceStatus}
-                /> : null}
-              </Panel>
-            </PanelGroup>
+              <div className="flex flex-row h-full min-h-0 min-w-0 overflow-hidden bg-background flex-1 relative">
+                <div className="flex flex-col flex-1 min-w-0 min-h-0">
+                  {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar ? <ViewportBar /> : null}
+                  {FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices ? previewNotices : null}
+                  <ViewportCanvasArea />
+                </div>
+              </div>
+            </Panel>
           </Panel>
 
           {/* ── Right inspector (mode-specific) ── */}

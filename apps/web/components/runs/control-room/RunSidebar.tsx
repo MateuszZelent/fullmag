@@ -852,6 +852,35 @@ export default function RunSidebar() {
         return;
       }
     }
+    if (action === "delete-stage" && nodeId.startsWith("study-stage-node:")) {
+      const match = nodeId.match(/^study-stage-node:(.+?)(?:\/|$)/);
+      if (match && model.studyPipeline) {
+        const stageId = match[1];
+        const accepted = window.confirm("Delete this stage from the pipeline?");
+        if (accepted) {
+          const nextDocument = { ...model.studyPipeline } as any;
+          nextDocument.nodes = nextDocument.nodes.filter((n: any) => n.id !== stageId);
+          model.setStudyPipeline(nextDocument);
+          const compiled = materializeStudyPipeline(nextDocument);
+          model.setStudyStages(compiled.stages);
+        }
+      }
+      return;
+    }
+    if (action === "toggle-stage" && nodeId.startsWith("study-stage-node:")) {
+      const match = nodeId.match(/^study-stage-node:(.+?)(?:\/|$)/);
+      if (match && model.studyPipeline) {
+        const stageId = match[1];
+        const nextDocument = { ...model.studyPipeline } as any;
+        nextDocument.nodes = nextDocument.nodes.map((n: any) =>
+          n.id === stageId ? { ...n, enabled: !n.enabled } : n,
+        );
+        model.setStudyPipeline(nextDocument);
+        const compiled = materializeStudyPipeline(nextDocument);
+        model.setStudyStages(compiled.stages);
+      }
+      return;
+    }
     if (action === "focus") {
       const objectId = resolveSelectedObjectId(
         nodeId,

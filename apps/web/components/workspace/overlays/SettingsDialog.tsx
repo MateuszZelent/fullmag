@@ -4,6 +4,15 @@ import { useState } from "react";
 import { X, Monitor, Cpu, Sliders, Keyboard, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { useRouter } from "next/navigation";
 
 interface SettingsSectionProps {
@@ -57,26 +66,41 @@ function AppearanceTab() {
     <div className="flex flex-col gap-5">
       <SettingsSection title="Theme">
         <SettingsRow label="Color theme" description="Choose the workspace color scheme">
-          <select className="text-[0.78rem] rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-foreground outline-none focus:ring-1 focus:ring-primary/40">
-            <option value="dark">Dark (default)</option>
-            <option value="darker">Darker</option>
-          </select>
+          <Select defaultValue="dark">
+            <SelectTrigger className="w-[160px] h-8 bg-muted/40 border-border/60 text-[0.78rem]">
+              <SelectValue placeholder="Theme" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="dark">Dark (default)</SelectItem>
+              <SelectItem value="darker">Darker</SelectItem>
+            </SelectContent>
+          </Select>
         </SettingsRow>
         <SettingsRow label="Accent color" description="Primary action and highlight color">
-          <select className="text-[0.78rem] rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-foreground outline-none focus:ring-1 focus:ring-primary/40">
-            <option value="blue">Blue</option>
-            <option value="violet">Violet</option>
-            <option value="emerald">Emerald</option>
-          </select>
+          <Select defaultValue="blue">
+            <SelectTrigger className="w-[160px] h-8 bg-muted/40 border-border/60 text-[0.78rem]">
+              <SelectValue placeholder="Accent" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="blue">Blue</SelectItem>
+              <SelectItem value="violet">Violet</SelectItem>
+              <SelectItem value="emerald">Emerald</SelectItem>
+            </SelectContent>
+          </Select>
         </SettingsRow>
       </SettingsSection>
       <SettingsSection title="Layout">
         <SettingsRow label="UI density" description="Controls spacing and panel sizes">
-          <select className="text-[0.78rem] rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-foreground outline-none focus:ring-1 focus:ring-primary/40">
-            <option value="compact">Compact</option>
-            <option value="default">Default</option>
-            <option value="comfortable">Comfortable</option>
-          </select>
+          <Select defaultValue="default">
+            <SelectTrigger className="w-[160px] h-8 bg-muted/40 border-border/60 text-[0.78rem]">
+              <SelectValue placeholder="Density" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="compact">Compact</SelectItem>
+              <SelectItem value="default">Default</SelectItem>
+              <SelectItem value="comfortable">Comfortable</SelectItem>
+            </SelectContent>
+          </Select>
         </SettingsRow>
       </SettingsSection>
     </div>
@@ -88,20 +112,19 @@ function RuntimeTab() {
     <div className="flex flex-col gap-5">
       <SettingsSection title="Backend connection">
         <SettingsRow label="API base URL" description="URL of the local Fullmag backend">
-          <input
-            type="text"
+          <Input
             defaultValue="http://localhost:8000"
-            className="text-[0.78rem] rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-foreground w-52 outline-none focus:ring-1 focus:ring-primary/40 font-mono"
+            className="w-52 h-8 bg-muted/40 border-border/60 text-[0.78rem] font-mono"
           />
         </SettingsRow>
         <SettingsRow label="Polling interval (ms)" description="Live state refresh rate">
-          <input
+          <Input
             type="number"
             defaultValue={250}
             min={50}
             max={5000}
             step={50}
-            className="text-[0.78rem] rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-foreground w-24 outline-none focus:ring-1 focus:ring-primary/40"
+            className="w-24 h-8 bg-muted/40 border-border/60 text-[0.78rem]"
           />
         </SettingsRow>
       </SettingsSection>
@@ -114,10 +137,10 @@ function ControlsTab() {
     <div className="flex flex-col gap-5">
       <SettingsSection title="3D viewport">
         <SettingsRow label="Mouse sensitivity" description="Orbit / pan speed multiplier">
-          <input type="range" min={0.1} max={3} step={0.1} defaultValue={1} className="w-28 accent-primary" />
+          <input type="range" min={0.1} max={3} step={0.1} defaultValue={1} className="w-28 accent-primary h-1 bg-muted/40 rounded-full appearance-none cursor-pointer" />
         </SettingsRow>
         <SettingsRow label="Invert Y axis" description="Flip vertical orbit direction">
-          <input type="checkbox" className="accent-primary h-4 w-4 rounded" />
+          <Switch />
         </SettingsRow>
       </SettingsSection>
     </div>

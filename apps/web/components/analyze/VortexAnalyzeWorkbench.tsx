@@ -5,6 +5,15 @@ import { Activity, BarChart3, CircleDot, Orbit } from "lucide-react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import EmptyState from "@/components/ui/EmptyState";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 
 import VortexTimeTracePlot from "./VortexTimeTracePlot";
 import VortexFrequencyPlot from "./VortexFrequencyPlot";
@@ -165,43 +174,45 @@ export default function VortexAnalyzeWorkbench({
 
         <TabsContent value="vortex-frequency" className="flex-1 min-h-0 flex flex-col gap-2 p-3">
           {/* Controls bar */}
-          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-            <label className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground mb-1">
+            <label className="flex items-center gap-1.5 h-8">
               Discard transient:
-              <input
+              <Input
                 type="number"
                 min={0}
                 step={0.1}
-                className="w-20 rounded border border-border/40 bg-muted/40 px-1.5 py-0.5 text-xs text-foreground"
+                className="w-20 h-7 text-xs bg-muted/40"
                 defaultValue={0}
                 onChange={handleDiscardChange}
               />
               <span className="text-muted-foreground/60">ns</span>
             </label>
-            <label className="flex items-center gap-1.5">
-              <input
-                type="checkbox"
+            <label className="flex items-center gap-1.5 h-8">
+              <Switch
                 checked={logScale}
-                onChange={(e) => setLogScale(e.target.checked)}
-                className="rounded"
+                onCheckedChange={setLogScale}
               />
               Log scale
             </label>
-            <select
+            <Select
               value={spectrumConfig.window}
-              onChange={(e) =>
+              onValueChange={(val) =>
                 setSpectrumConfig((prev) => ({
                   ...prev,
-                  window: e.target.value as VortexSpectrumConfig["window"],
+                  window: val as VortexSpectrumConfig["window"],
                 }))
               }
-              className="rounded border border-border/40 bg-muted/40 px-1.5 py-0.5 text-xs text-foreground"
             >
-              <option value="hann">Hann</option>
-              <option value="hamming">Hamming</option>
-              <option value="blackman">Blackman</option>
-              <option value="none">None</option>
-            </select>
+              <SelectTrigger className="w-32 h-7 text-xs bg-muted/40">
+                <SelectValue placeholder="Window" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="hann">Hann</SelectItem>
+                <SelectItem value="hamming">Hamming</SelectItem>
+                <SelectItem value="blackman">Blackman</SelectItem>
+                <SelectItem value="none">None</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex-1 min-h-0">
             <VortexFrequencyPlot

@@ -172,6 +172,10 @@ async fn main() {
             get(get_live_field_vector),
         )
         .route(
+            "/v1/live/current/fields/:quantity/meta",
+            get(get_live_field_meta),
+        )
+        .route(
             "/v1/live/current/commands",
             post(enqueue_current_live_command),
         )

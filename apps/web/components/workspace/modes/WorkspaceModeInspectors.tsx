@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo } from "react";
 
+import EngineConsole from "@/components/panels/EngineConsole";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
@@ -12,8 +13,11 @@ import {
   type MeshEntityViewState,
 } from "@/lib/session/types";
 import {
+  useCommand,
   useModel,
+  useTransport,
 } from "../../runs/control-room/context-hooks";
+import { DEFAULT_CONVERGENCE_THRESHOLD } from "../../panels/SolverSettingsPanel";
 import { FemPartExplorerPanel } from "../../preview/fem/FemPartExplorerPanel";
 import type { PartQualitySummary } from "../../preview/fem/FemPartExplorerPanel";
 
@@ -25,6 +29,8 @@ const ROLE_GROUPS: Array<{ role: FemMeshPart["role"]; label: string }> = [
 ];
 
 function WorkspaceRightToolbox() {
+  const transport = useTransport();
+  const command = useCommand();
   const model = useModel();
   const rightInspectorTab = useWorkspaceStore((state) => state.rightInspectorTab);
   const setRightInspectorTab = useWorkspaceStore((state) => state.setRightInspectorTab);
@@ -156,12 +162,15 @@ function WorkspaceRightToolbox() {
         onValueChange={(value) => setRightInspectorTab(value as RightInspectorTab)}
       >
         <div className="border-b border-border/30 px-3 py-2.5">
-          <TabsList className="grid h-8 w-full grid-cols-2">
+          <TabsList className="grid h-8 w-full grid-cols-3">
             <TabsTrigger value="selected-submeshes" className="text-[0.68rem] uppercase tracking-[0.08em]">
               Selected Submeshes
             </TabsTrigger>
             <TabsTrigger value="tools" className="text-[0.68rem] uppercase tracking-[0.08em]">
               Tools
+            </TabsTrigger>
+            <TabsTrigger value="console" className="text-[0.68rem] uppercase tracking-[0.08em]">
+              Console
             </TabsTrigger>
           </TabsList>
         </div>
@@ -206,6 +215,27 @@ function WorkspaceRightToolbox() {
             </div>
           </div>
         </TabsContent>
+
+        <TabsContent value="console" className="mt-0 flex min-h-0 flex-1 flex-col">
+          <EngineConsole
+            session={command.session ?? null}
+            run={command.run ?? null}
+            liveState={transport.effectiveLiveState ?? null}
+            scalarRows={transport.scalarRows}
+            engineLog={command.engineLog}
+            artifacts={command.artifacts}
+            quantities={command.quantities}
+            connection={command.connection}
+            error={command.error}
+            presentationMode="current"
+            convergenceThreshold={Number(model.solverSettings.torqueTolerance) || DEFAULT_CONVERGENCE_THRESHOLD}
+            commandStatus={command.commandStatus}
+            commandBusy={command.commandBusy}
+            commandMessage={command.commandMessage}
+            activity={command.activity}
+            meshWorkspace={model.meshWorkspace}
+          />
+        </TabsContent>
       </Tabs>
     </div>
   );
@@ -222,4 +252,3 @@ export function StudyRightInspector() {
 export function AnalyzeRightInspector() {
   return <WorkspaceRightToolbox />;
 }
-

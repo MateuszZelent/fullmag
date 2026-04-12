@@ -142,13 +142,23 @@ export function parseStageExecutionMessage(
   message: string | null,
 ): { current: number; total: number; kind: string } | null {
   if (!message) return null;
-  const match = message.match(/executing stage (\d+)\/(\d+) \(([^)]+)\)/i);
-  if (!match) return null;
-  return {
-    current: Number(match[1]),
-    total: Number(match[2]),
-    kind: match[3],
-  };
+  const matchOld = message.match(/executing stage (\d+)\/(\d+) \(([^)]+)\)/i);
+  if (matchOld) {
+    return {
+      current: Number(matchOld[1]),
+      total: Number(matchOld[2]),
+      kind: matchOld[3],
+    };
+  }
+  const matchNew = message.match(/solving\s+([^\s]+)\s*(?:—|-|–)\s*stage\s+(\d+)\/(\d+)/i);
+  if (matchNew) {
+    return {
+      current: Number(matchNew[2]),
+      total: Number(matchNew[3]),
+      kind: matchNew[1],
+    };
+  }
+  return null;
 }
 
 export function resolveStudyStageExecutionState(args: {

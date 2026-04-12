@@ -445,6 +445,13 @@ describe("parseStageExecutionMessage", () => {
       kind: "compute",
     });
   });
+  it("parses new format message", () => {
+    expect(parseStageExecutionMessage("Solving flat_relax — stage 1/1")).toEqual({
+      current: 1,
+      total: 1,
+      kind: "flat_relax",
+    });
+  });
 });
 
 describe("asVec3", () => {

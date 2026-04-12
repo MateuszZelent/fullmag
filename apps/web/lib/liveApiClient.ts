@@ -58,6 +58,7 @@ export interface HostCapabilityMatrix {
 
 export interface LiveFieldCatalogEntry {
   quantity_id: string;
+  label: string;
   kind: string;
   unit: string;
   spatial_domain: string;
@@ -66,7 +67,13 @@ export interface LiveFieldCatalogEntry {
   available: boolean;
   element_count: number;
   grid?: [number, number, number] | null;
-  stats?: { min: number; max: number; mean: number } | null;
+  stats?: {
+    min: number;
+    max: number;
+    mean: number;
+    component_min?: [number, number, number] | null;
+    component_max?: [number, number, number] | null;
+  } | null;
 }
 
 export interface LiveFieldVectorResponse {
@@ -229,6 +236,12 @@ export function currentLiveApiClient() {
     getFieldVector(quantityId: string) {
       return requestJson<LiveFieldVectorResponse>(
         `${baseUrl}/v1/live/current/fields/${encodeURIComponent(quantityId)}/vector`,
+        { cache: "no-store" },
+      );
+    },
+    getFieldMeta(quantityId: string) {
+      return requestJson<LiveFieldCatalogEntry>(
+        `${baseUrl}/v1/live/current/fields/${encodeURIComponent(quantityId)}/meta`,
         { cache: "no-store" },
       );
     },

@@ -10,8 +10,7 @@ import {
   type IJsonModel,
 } from "flexlayout-react";
 
-import { useCommand, useModel, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
-import { DEFAULT_CONVERGENCE_THRESHOLD } from "@/components/panels/SolverSettingsPanel";
+import { useCommand, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
 import RunSidebar from "@/components/runs/control-room/RunSidebar";
 import BottomUtilityDock from "@/components/workspace/shell/BottomUtilityDock";
 import EmptyState from "@/components/ui/EmptyState";
@@ -56,9 +55,8 @@ export default function WorkspaceDockingShell() {
   const stageLayout = useWorkspaceStore((state) => state.dockLayoutByStage[state.currentStage]);
   const setDockLayout = useWorkspaceStore((state) => state.setDockLayout);
 
-  const tp = useTransport();
   const cmd = useCommand();
-  const modelData = useModel();
+  const tp = useTransport();
 
   const [viewportWidth, setViewportWidth] = useState(1920);
   const responsivePreset = resolveDockResponsivePreset(viewportWidth);
@@ -124,25 +122,14 @@ export default function WorkspaceDockingShell() {
       if (component === "dock-bottom") {
         return (
           <BottomUtilityDock
-            session={cmd.session ?? null}
-            run={cmd.run ?? null}
-            liveState={tp.effectiveLiveState ?? null}
-            scalarRows={tp.scalarRows}
-            engineLog={cmd.engineLog}
-            artifacts={cmd.artifacts}
-            quantities={cmd.quantities}
-            connection={cmd.connection}
-            error={cmd.error}
-            convergenceThreshold={
-              Number(modelData.solverSettings.torqueTolerance) ||
-              DEFAULT_CONVERGENCE_THRESHOLD
-            }
-            commandStatus={cmd.commandStatus}
-            commandBusy={cmd.commandBusy}
-            commandMessage={cmd.commandMessage}
             activity={cmd.activity}
-            meshWorkspace={modelData.meshWorkspace}
             workspaceStatus={cmd.workspaceStatus}
+            effectiveStep={tp.effectiveStep}
+            effectiveTime={tp.effectiveTime}
+            effectiveDt={tp.effectiveDt}
+            effectiveDmDt={tp.effectiveDmDt}
+            stepsPerSec={tp.stepsPerSec}
+            hasSolverTelemetry={tp.hasSolverTelemetry}
           />
         );
       }
@@ -160,20 +147,13 @@ export default function WorkspaceDockingShell() {
     },
     [
       cmd.activity,
-      cmd.artifacts,
-      cmd.commandBusy,
-      cmd.commandMessage,
-      cmd.commandStatus,
-      cmd.connection,
-      cmd.engineLog,
-      cmd.error,
-      cmd.run,
-      cmd.session,
       cmd.workspaceStatus,
-      modelData.meshWorkspace,
-      modelData.solverSettings.torqueTolerance,
-      tp.effectiveLiveState,
-      tp.scalarRows,
+      tp.effectiveDmDt,
+      tp.effectiveDt,
+      tp.effectiveStep,
+      tp.effectiveTime,
+      tp.hasSolverTelemetry,
+      tp.stepsPerSec,
     ],
   );
 

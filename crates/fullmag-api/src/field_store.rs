@@ -21,6 +21,7 @@ use std::sync::Arc;
 #[derive(Debug, Serialize)]
 pub(crate) struct LiveFieldCatalogEntry {
     pub quantity_id: String,
+    pub label: String,
     pub kind: String,        // "vector_field" | "spatial_scalar" | "global_scalar"
     pub unit: String,
     pub spatial_domain: String, // "magnetic_only" | "full_domain"
@@ -39,6 +40,41 @@ pub(crate) struct FieldStats {
     pub min: f64,
     pub max: f64,
     pub mean: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component_min: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component_max: Option<[f64; 3]>,
+}
+
+fn compute_stats(values: &[f64], n_comp: usize) -> Option<FieldStats> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    let mut sum = 0.0_f64;
+    for &v in values {
+        if v < min { min = v; }
+        if v > max { max = v; }
+        sum += v;
+    }
+    let mean = sum / values.len() as f64;
+
+    let (component_min, component_max) = if n_comp == 3 && values.len() >= 3 {
+        let mut cmin = [f64::INFINITY; 3];
+        let mut cmax = [f64::NEG_INFINITY; 3];
+        for chunk in values.chunks_exact(3) {
+            for c in 0..3 {
+                if chunk[c] < cmin[c] { cmin[c] = chunk[c]; }
+                if chunk[c] > cmax[c] { cmax[c] = chunk[c]; }
+            }
+        }
+        (Some(cmin), Some(cmax))
+    } else {
+        (None, None)
+    };
+
+    Some(FieldStats { min, max, mean, component_min, component_max })
 }
 
 // ── Vector response ─────────────────────────────────────────────────────
@@ -86,6 +122,7 @@ pub(crate) async fn get_live_field_catalog(
     for (quantity_id, value) in snapshot.latest_fields.entries() {
         let spec = quantity_spec(quantity_id);
         let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
+        let label = spec.map(|s| s.label.to_string()).unwrap_or_else(|| quantity_id.to_string());
         let element_count = value
             .get("values")
             .and_then(|v| v.as_array())
@@ -106,8 +143,30 @@ pub(crate) async fn get_live_field_catalog(
                     None
                 }
             });
+
+        // Compute stats from raw values
+        let flat_values: Vec<f64> = value
+            .get("values")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .flat_map(|v| {
+                        if let Some(inner) = v.as_array() {
+                            inner.iter().filter_map(|c| c.as_f64()).collect::<Vec<_>>()
+                        } else if let Some(f) = v.as_f64() {
+                            vec![f]
+                        } else {
+                            vec![]
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let stats = compute_stats(&flat_values, n_comp);
+
         entries.push(LiveFieldCatalogEntry {
             quantity_id: quantity_id.to_string(),
+            label,
             kind: spec
                 .map(|s| s.shape.as_api_kind().to_string())
                 .unwrap_or_else(|| "vector_field".to_string()),
@@ -118,7 +177,7 @@ pub(crate) async fn get_live_field_catalog(
             available: true,
             element_count,
             grid,
-            stats: None,
+            stats,
         });
     }
 
@@ -130,13 +189,16 @@ pub(crate) async fn get_live_field_catalog(
         }
         let spec = quantity_spec(quantity_id);
         let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
+        let label = spec.map(|s| s.label.to_string()).unwrap_or_else(|| quantity_id.to_string());
         let element_count = if n_comp > 0 {
             field.vector_field_values.len() / n_comp
         } else {
             field.vector_field_values.len()
         };
+        let stats = compute_stats(&field.vector_field_values, n_comp);
         entries.push(LiveFieldCatalogEntry {
             quantity_id: quantity_id.to_string(),
+            label,
             kind: spec
                 .map(|s| s.shape.as_api_kind().to_string())
                 .unwrap_or_else(|| "vector_field".to_string()),
@@ -147,7 +209,7 @@ pub(crate) async fn get_live_field_catalog(
             available: true,
             element_count,
             grid: Some(field.preview_grid),
-            stats: None,
+            stats,
         });
     }
 
@@ -253,6 +315,117 @@ pub(crate) async fn get_live_field_vector(
             source: "preview_cache".to_string(),
         };
         return Ok(Json(resp).into_response());
+    }
+
+    Err(ApiError::not_found(&format!(
+        "field '{}' not available in memory",
+        quantity
+    )))
+}
+
+// ── Meta endpoint ──────────────────────────────────────────────────────
+
+/// `GET /v1/live/current/fields/:quantity/meta`
+///
+/// Returns catalog-level metadata + computed stats for a single field,
+/// without the heavy vector payload.  Useful for the frontend to check
+/// availability and stats without downloading the full buffer.
+pub(crate) async fn get_live_field_meta(
+    State(state): State<Arc<AppState>>,
+    AxumPath(quantity): AxumPath<String>,
+) -> Result<Json<LiveFieldCatalogEntry>, ApiError> {
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+
+    let spec = quantity_spec(&quantity);
+    let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
+    let label = spec
+        .map(|s| s.label.to_string())
+        .unwrap_or_else(|| quantity.clone());
+    let kind = spec
+        .map(|s| s.shape.as_api_kind().to_string())
+        .unwrap_or_else(|| "vector_field".to_string());
+    let unit = quantity_unit(&quantity).to_string();
+    let spatial_domain = quantity_spatial_domain(&quantity).to_string();
+
+    // Try latest_fields first
+    if let Some(raw) = snapshot.latest_fields.get(&quantity) {
+        let element_count = raw
+            .get("values")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let grid = raw
+            .get("layout")
+            .and_then(|l| l.get("grid_cells"))
+            .and_then(|g| g.as_array())
+            .and_then(|g| {
+                if g.len() == 3 {
+                    Some([
+                        g[0].as_u64().unwrap_or(0) as u32,
+                        g[1].as_u64().unwrap_or(0) as u32,
+                        g[2].as_u64().unwrap_or(0) as u32,
+                    ])
+                } else {
+                    None
+                }
+            });
+        let flat_values: Vec<f64> = raw
+            .get("values")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .flat_map(|v| {
+                        if let Some(inner) = v.as_array() {
+                            inner.iter().filter_map(|c| c.as_f64()).collect::<Vec<_>>()
+                        } else if let Some(f) = v.as_f64() {
+                            vec![f]
+                        } else {
+                            vec![]
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let stats = compute_stats(&flat_values, n_comp);
+        return Ok(Json(LiveFieldCatalogEntry {
+            quantity_id: quantity,
+            label,
+            kind,
+            unit,
+            spatial_domain,
+            n_comp,
+            source: "latest_fields".to_string(),
+            available: true,
+            element_count,
+            grid,
+            stats,
+        }));
+    }
+
+    // Fall back to preview_cache
+    if let Some(field) = snapshot.preview_cache.get(&quantity) {
+        let element_count = if n_comp > 0 {
+            field.vector_field_values.len() / n_comp
+        } else {
+            field.vector_field_values.len()
+        };
+        let stats = compute_stats(&field.vector_field_values, n_comp);
+        return Ok(Json(LiveFieldCatalogEntry {
+            quantity_id: quantity,
+            label,
+            kind,
+            unit: field.unit.clone(),
+            spatial_domain,
+            n_comp,
+            source: "preview_cache".to_string(),
+            available: true,
+            element_count,
+            grid: Some(field.preview_grid),
+            stats,
+        }));
     }
 
     Err(ApiError::not_found(&format!(

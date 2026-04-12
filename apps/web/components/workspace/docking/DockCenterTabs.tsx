@@ -5,6 +5,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { Pin, X } from "lucide-react";
 
 import AnalyzeViewport from "@/components/runs/control-room/AnalyzeViewport";
+import ChartsViewport from "@/components/runs/control-room/ChartsViewport";
 import { ViewportBar, ViewportCanvasArea } from "@/components/runs/control-room/ViewportPanels";
 import { useModel, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
 import EmptyState from "@/components/ui/EmptyState";
@@ -85,6 +86,10 @@ function applyWorkspaceTabSelection(
     api.handleViewModeChange("Mesh");
     return;
   }
+  if (tab.kind === "viewport-charts") {
+    api.setWorkspaceMode(stage);
+    return;
+  }
   if (tab.kind === "result-quantity") {
     api.setWorkspaceMode(stage);
     if (tab.payload?.quantityId) {
@@ -117,6 +122,7 @@ export default function DockCenterTabs() {
   const activateTab = useWorkspaceStore((state) => state.activateTab);
   const closeTab = useWorkspaceStore((state) => state.closeTab);
   const pinTab = useWorkspaceStore((state) => state.pinTab);
+  const openTab = useWorkspaceStore((state) => state.openTab);
 
   const vp = useViewport();
   const model = useModel();
@@ -132,6 +138,22 @@ export default function DockCenterTabs() {
       activateTab(currentStage, tabs[0]!.id);
     }
   }, [activateTab, activeTabId, currentStage, tabs]);
+
+  useEffect(() => {
+    if (tabs.some((tab) => tab.id === "core:charts")) {
+      return;
+    }
+    openTab(currentStage, {
+      id: "core:charts",
+      key: "core:charts",
+      kind: "viewport-charts",
+      title: "Charts",
+      closable: false,
+      pinned: true,
+      keepAlive: true,
+      payload: { viewMode: "Analyze" },
+    });
+  }, [currentStage, openTab, tabs]);
 
   useEffect(() => {
     if (!activeTab) {
@@ -154,7 +176,7 @@ export default function DockCenterTabs() {
       <div className="flex h-full items-center justify-center p-4">
         <EmptyState
           title="No workspace tabs"
-          description="Open 3D/2D/Mesh/Analyze tabs from the ribbon or results tree."
+          description="Open 3D/2D/Mesh/Analyze/Charts tabs from the ribbon or results tree."
           tone="info"
           compact
         />
@@ -162,9 +184,11 @@ export default function DockCenterTabs() {
     );
   }
 
+  const activeTabIsCharts = activeTab?.kind === "viewport-charts";
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
-      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar ? <ViewportBar /> : null}
+      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar && !activeTabIsCharts ? <ViewportBar /> : null}
 
       {previewNoticesVisible && (
         <>
@@ -250,7 +274,9 @@ export default function DockCenterTabs() {
               value={tab.id}
               className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
             >
-              {isAnalyzeLikeTab(tab) ? (
+              {tab.kind === "viewport-charts" ? (
+                <ChartsViewport />
+              ) : isAnalyzeLikeTab(tab) ? (
                 <AnalyzeViewport />
               ) : (
                 <ViewportCanvasArea />

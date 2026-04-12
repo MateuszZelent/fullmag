@@ -1245,10 +1245,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const displaySelectionPending = optimisticDisplaySelection != null;
   const previewBusy = previewPostInFlight || displaySelectionPending;
   const renderPreview = spatialPreview;
-  const activeQuantityId =
-    previewControlsActive
-      ? (previewIsStale ? requestedPreviewQuantity : (preview?.quantity ?? requestedPreviewQuantity))
-      : selectedQuantity;
+  // `activeQuantityId` is the single source of truth for "what quantity does
+  // the user want to see right now".  It is always derived from local
+  // `selectedQuantity` state — never from `preview?.quantity`.  The old path
+  // read from the backend preview response which introduced coupling between
+  // the data-plane (what to render) and the control-plane (what the backend
+  // last computed for the preview widget).
+  const activeQuantityId = selectedQuantity;
   const isMeshPreview = renderPreview?.spatial_kind === "mesh";
   const previewVectorComponent: VectorComponent =
     renderPreview?.component && renderPreview.component !== "3D"
@@ -1297,6 +1300,16 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   });
 
   /* Visualization presets — extracted to useVisualizationPresets hook */
+
+  // Set of quantity IDs whose field buffers are already cached locally.
+  // Used by requestPreviewQuantity and applyVisualizationPreset to skip
+  // the control-plane POST when the field is already in memory.
+  const cachedFieldQuantities = useMemo<ReadonlySet<string>>(() => {
+    const frames = state?.latest_fields?.frames;
+    if (!frames) return new Set<string>();
+    return new Set(Object.keys(frames));
+  }, [state?.latest_fields?.frames]);
+
   const {
     buildVisualizationPresetFromCurrent,
     createVisualizationPreset,
@@ -1333,6 +1346,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     plane,
     sliceIndex,
     selectedQuantity,
+    cachedFieldQuantities,
     projectVisualizationPresets,
     localVisualizationPresets,
     activeVisualizationPresetRef,
@@ -1366,14 +1380,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setFdmVisualizationSettings,
     updatePreview,
   });
-
-  // Set of quantity IDs whose field buffers are already cached locally.
-  // Used by requestPreviewQuantity to skip the control-plane POST.
-  const cachedFieldQuantities = useMemo<ReadonlySet<string>>(() => {
-    const frames = state?.latest_fields?.frames;
-    if (!frames) return new Set<string>();
-    return new Set(Object.keys(frames));
-  }, [state?.latest_fields?.frames]);
 
   const {
     handleCompute,
@@ -1563,6 +1569,16 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   }, [globalScalarPreview]);
   const selectedQuantityLabel = quantityDescriptor?.label ?? requestedPreviewQuantity;
   const selectedQuantityUnit = quantityDescriptor?.unit ?? null;
+  const activeQuantityEntryId = useMemo(() => {
+    if (!requestedPreviewQuantity) {
+      return null;
+    }
+    return (
+      resultWorkspaceEntries.find(
+        (entry) => entry.kind === "quantity" && entry.quantityId === requestedPreviewQuantity,
+      )?.id ?? null
+    );
+  }, [requestedPreviewQuantity, resultWorkspaceEntries]);
 
   useEffect(() => {
     if (!requestedPreviewQuantity) {
@@ -1585,16 +1601,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   ]);
 
   useEffect(() => {
-    if (!requestedPreviewQuantity) {
+    if (!requestedPreviewQuantity || activeResultWorkspaceId != null) {
       return;
     }
-    const activeQuantityEntry = resultWorkspaceEntries.find(
-      (entry) => entry.kind === "quantity" && entry.quantityId === requestedPreviewQuantity,
-    );
-    if (activeQuantityEntry && activeResultWorkspaceId !== activeQuantityEntry.id) {
-      setActiveResultWorkspaceId(activeQuantityEntry.id);
+    if (activeQuantityEntryId && activeResultWorkspaceId !== activeQuantityEntryId) {
+      setActiveResultWorkspaceId(activeQuantityEntryId);
     }
-  }, [activeResultWorkspaceId, requestedPreviewQuantity, resultWorkspaceEntries]);
+  }, [activeQuantityEntryId, activeResultWorkspaceId, requestedPreviewQuantity]);
 
   useEffect(() => {
     const hasSpectrumArtifact = artifactsArr.some(
