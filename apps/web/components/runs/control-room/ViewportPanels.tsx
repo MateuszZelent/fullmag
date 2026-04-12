@@ -359,6 +359,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
           <FemMeshView3D
             topologyKey={ctx.femTopologyKey ?? undefined}
             meshData={ctx.femMeshData}
+            selectedSidebarNodeId={ctx.selectedSidebarNodeId}
             colorField="none"
             toolbarMode={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showToolbar ? "visible" : "hidden"}
             renderMode={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe ? "wireframe" : ctx.meshRenderMode}
@@ -491,6 +492,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       <FemMeshView3D
         topologyKey={ctx.femTopologyKey ?? undefined}
         meshData={ctx.femMeshData}
+        selectedSidebarNodeId={ctx.selectedSidebarNodeId}
         quantityId={ctx.requestedPreviewQuantity}
         quantityOptions={femQuantityOptions}
         colorField="none"
@@ -554,6 +556,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       <FemMeshView3D
         topologyKey={ctx.femTopologyKey ?? undefined}
         meshData={ctx.femMeshData}
+        selectedSidebarNodeId={ctx.selectedSidebarNodeId}
         fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
         quantityId={ctx.requestedPreviewQuantity}
         quantityOptions={femQuantityOptions}
@@ -800,6 +803,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                       <FemMeshView3D
                         topologyKey={ctx.femTopologyKey ?? undefined}
                         meshData={ctx.femMeshData}
+                        selectedSidebarNodeId={ctx.selectedSidebarNodeId}
                         quantityId={ctx.requestedPreviewQuantity}
                         quantityOptions={femQuantityOptions}
                         colorField="none"
@@ -862,6 +866,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                       <FemMeshView3D
                         topologyKey={ctx.femTopologyKey ?? undefined}
                         meshData={ctx.femMeshData}
+                        selectedSidebarNodeId={ctx.selectedSidebarNodeId}
                         fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
                         quantityId={ctx.requestedPreviewQuantity}
                         quantityOptions={femQuantityOptions}

@@ -102,16 +102,15 @@ export default function ViewCube({
   }, [getCameraMatrix]);
 
   useEffect(() => {
-    let frameId: number | null = null;
-    const tick = () => {
-      syncTransform();
-      frameId = requestAnimationFrame(tick);
-    };
-    frameId = requestAnimationFrame(tick);
+    syncTransform();
+    const scene = sceneRef?.current;
+    const controls = scene?.controls as
+      | { addEventListener?: (type: string, listener: () => void) => void; removeEventListener?: (type: string, listener: () => void) => void }
+      | undefined;
+    const handleChange = () => syncTransform();
+    controls?.addEventListener?.("change", handleChange);
     return () => {
-      if (frameId !== null) {
-        cancelAnimationFrame(frameId);
-      }
+      controls?.removeEventListener?.("change", handleChange);
     };
   }, [sceneRef, syncTransform]);
 

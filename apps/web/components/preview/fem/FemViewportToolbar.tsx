@@ -17,7 +17,6 @@ import { ViewportToolbar3D } from "../ViewportToolbar3D";
 import { ViewportToolGroup, ViewportToolSeparator } from "../ViewportToolGroup";
 import { ViewportIconAction } from "../ViewportIconAction";
 import { ViewportPopoverPanel, ViewportPopoverRow, ViewportPopoverTrigger } from "../ViewportPopoverPanel";
-import { ViewportStatusChip } from "../ViewportStatusChips";
 import type { FemArrowColorMode, FemColorField, RenderMode, ClipAxis } from "../FemMeshView3D";
 import type { FemViewportNavigation, FemViewportProjection } from "./FemViewportTypes";
 import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles";
@@ -106,10 +105,10 @@ export interface FemViewportToolbarProps {
 }
 
 const RENDER_OPTIONS: { value: RenderMode; icon: React.ReactNode; label: string; title: string }[] = [
-  { value: "surface", icon: <Box size={14} />, label: "Surface", title: "Surface" },
-  { value: "surface+edges", icon: <Grid3X3 size={14} />, label: "S+E", title: "Surface + Edges" },
-  { value: "wireframe", icon: <Grid2X2 size={14} />, label: "Wire", title: "Wireframe" },
-  { value: "points", icon: <Grip size={14} />, label: "Pts", title: "Points" },
+  { value: "surface", icon: <Box size={14} />, label: "Shaded", title: "Shaded" },
+  { value: "surface+edges", icon: <Grid3X3 size={14} />, label: "Shaded + Edges", title: "Shaded + Edges" },
+  { value: "wireframe", icon: <Grid2X2 size={14} />, label: "Wireframe", title: "Wireframe" },
+  { value: "points", icon: <Grip size={14} />, label: "Nodes", title: "Nodes" },
 ];
 
 const COLOR_OPTIONS: { value: FemColorField; label: string; fullLabel: string }[] = [
@@ -241,69 +240,58 @@ export function FemViewportToolbar({
     <ViewportToolbar3D
       compact={compact}
     >
-      {/* ── Quantity selector (when simulation has multiple quantities) ── */}
-      {availableQuantities.length > 0 && (
+      {toolbarScopeLabel ? (
         <>
-          <ViewportToolGroup label="Quantity" compact={compact}>
-            <ViewportPopoverTrigger preferredHorizontal="left">
-              <ViewportIconAction
-                icon={<Layers size={14} />}
-                label={compact ? undefined : activeQuantity?.shortLabel ?? "Qty"}
-                showCaret
-                active={openPopover === "quantity"}
-                onClick={() => onOpenPopoverChange(openPopover === "quantity" ? null : "quantity")}
-                title="Preview Quantity"
-              />
-              {openPopover === "quantity" && (
-                <ViewportPopoverPanel anchorRef={{ current: null }} title="Quantity">
-                  <div className="grid grid-cols-2 gap-1 min-w-[220px]">
-                    {availableQuantities.map((opt) => (
-                      <ViewportIconAction
-                        key={opt.id}
-                        active={quantityId === opt.id}
-                        onClick={() => {
-                          onQuantityChange?.(opt.id);
-                          onOpenPopoverChange(null);
-                        }}
-                        label={opt.shortLabel}
-                        className="justify-start px-2 py-1.5"
-                      />
-                    ))}
-                  </div>
-                </ViewportPopoverPanel>
-              )}
-            </ViewportPopoverTrigger>
+          <ViewportToolGroup label="Scope" compact={compact}>
+            <div className="flex h-7 items-center rounded-sm border border-cyan-400/25 bg-cyan-500/12 px-2 text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200">
+              {toolbarScopeLabel}
+            </div>
           </ViewportToolGroup>
           {!compact ? <ViewportToolSeparator /> : null}
         </>
-      )}
+      ) : null}
 
-      {/* ── Render mode ── */}
-      <ViewportToolGroup label="Render" compact={compact}>
-        {RENDER_OPTIONS.map((opt) => (
-          <ViewportIconAction
-            key={opt.value}
-            icon={opt.icon}
-            active={renderMode === opt.value}
-            onClick={() => onRenderModeChange(opt.value)}
-            title={opt.title}
-          />
-        ))}
-      </ViewportToolGroup>
-
-      {!compact ? <ViewportToolSeparator /> : null}
-
-      {/* ── Color field ── */}
-      <ViewportToolGroup label="Color" compact={compact}>
+      {/* ── Results ── */}
+      <ViewportToolGroup label="Results" compact={compact}>
+        {availableQuantities.length > 0 && (
           <ViewportPopoverTrigger preferredHorizontal="left">
-              <ViewportIconAction
-                icon={<Palette size={14} />}
+            <ViewportIconAction
+              icon={<Layers size={14} />}
+              label={compact ? undefined : activeQuantity?.shortLabel ?? "Qty"}
+              showCaret
+              active={openPopover === "quantity"}
+              onClick={() => onOpenPopoverChange(openPopover === "quantity" ? null : "quantity")}
+              title="Preview Quantity"
+            />
+            {openPopover === "quantity" && (
+              <ViewportPopoverPanel anchorRef={{ current: null }} title="Quantity">
+                <div className="grid grid-cols-2 gap-1 min-w-[220px]">
+                  {availableQuantities.map((opt) => (
+                    <ViewportIconAction
+                      key={opt.id}
+                      active={quantityId === opt.id}
+                      onClick={() => {
+                        onQuantityChange?.(opt.id);
+                        onOpenPopoverChange(null);
+                      }}
+                      label={opt.shortLabel}
+                      className="justify-start px-2 py-1.5"
+                    />
+                  ))}
+                </div>
+              </ViewportPopoverPanel>
+            )}
+          </ViewportPopoverTrigger>
+        )}
+        <ViewportPopoverTrigger preferredHorizontal="left">
+          <ViewportIconAction
+            icon={<Palette size={14} />}
             label={
               labeledMode
                 ? `${activeSurfaceColorOpt?.fullLabel ?? "Surface"} / ${activeArrowColorOpt?.fullLabel ?? "Arrows"}`
                 : compact
                   ? undefined
-                : `${activeSurfaceColorOpt?.label ?? "Surf"} / ${activeArrowColorOpt?.label ?? "Arr"}`
+                  : `${activeSurfaceColorOpt?.label ?? "Surf"} / ${activeArrowColorOpt?.label ?? "Arr"}`
             }
             active={openPopover === "color"}
             showCaret
@@ -366,20 +354,99 @@ export function FemViewportToolbar({
 
       {!compact ? <ViewportToolSeparator /> : null}
 
-      {/* ── Tools group ── */}
-      <ViewportToolGroup compact={compact}>
-        {/* Clip */}
+      {/* ── Display ── */}
+      <ViewportToolGroup label="Display" compact={compact}>
+        {RENDER_OPTIONS.map((opt) => (
+          <ViewportIconAction
+            key={opt.value}
+            icon={opt.icon}
+            label={!compact ? opt.label : undefined}
+            active={renderMode === opt.value}
+            onClick={() => onRenderModeChange(opt.value)}
+            title={opt.title}
+          />
+        ))}
+        <ViewportPopoverTrigger preferredHorizontal="left">
+          <ViewportIconAction
+            icon={<Eye size={14} />}
+            showCaret
+            active={openPopover === "display"}
+            onClick={() => onOpenPopoverChange(openPopover === "display" ? null : "display")}
+            title="Display Options"
+          />
+          {openPopover === "display" && (
+            <ViewportPopoverPanel anchorRef={{ current: null }} title="Display">
+              <ViewportPopoverRow label="Opacity">
+                <input
+                  type="range"
+                  className="flex-1 h-[3px] accent-primary max-w-[120px]"
+                  min={10}
+                  max={100}
+                  value={opacity}
+                  onChange={(e) => onOpacityChange(Number(e.target.value))}
+                />
+              </ViewportPopoverRow>
+              {showShrink && (
+                <ViewportPopoverRow label="Shrink">
+                  <input
+                    type="range"
+                    className="flex-1 h-[3px] accent-primary max-w-[120px]"
+                    min={10}
+                    max={100}
+                    value={Math.round(shrinkFactor * 100)}
+                    onChange={(e) => onShrinkFactorChange(Number(e.target.value) / 100)}
+                  />
+                </ViewportPopoverRow>
+              )}
+              <ViewportPopoverRow label="Labels">
+                <button
+                  className="text-[0.65rem] font-semibold text-muted-foreground hover:text-foreground bg-transparent border border-border/30 rounded px-2 py-0.5"
+                  onClick={() => onLabeledModeChange(!labeledMode)}
+                >
+                  {labeledMode ? "Hide Labels" : "Show Labels"}
+                </button>
+              </ViewportPopoverRow>
+              <ViewportPopoverRow label="Profile">
+                <div className="flex flex-wrap gap-1">
+                  {QUALITY_PROFILES.map((p) => (
+                    <button
+                      key={p.value}
+                      className={POPOVER_OPTION_CLASSNAME}
+                      data-active={qualityProfile === p.value}
+                      onClick={() => onQualityProfileChange(p.value)}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </ViewportPopoverRow>
+            </ViewportPopoverPanel>
+          )}
+        </ViewportPopoverTrigger>
+      </ViewportToolGroup>
+
+      {!compact ? <ViewportToolSeparator /> : null}
+
+      {/* ── Section ── */}
+      <ViewportToolGroup label="Section" compact={compact}>
+        <ViewportIconAction
+          icon={<Scissors size={14} />}
+          active={clipEnabled}
+          onClick={() => {
+            const next = !clipEnabled;
+            onClipEnabledChange(next);
+          }}
+          title="Toggle Clip Plane"
+        />
         <ViewportPopoverTrigger preferredHorizontal="left">
           <ViewportIconAction
             icon={<Scissors size={14} />}
-            active={clipEnabled}
+            active={openPopover === "clip"}
             showCaret
             onClick={() => {
-              const next = !clipEnabled;
-              onClipEnabledChange(next);
-              onOpenPopoverChange(next ? "clip" : null);
+              onOpenPopoverChange(openPopover === "clip" ? null : "clip");
             }}
-            title="Clip Plane"
+            title="Clip Plane Settings"
           />
           {openPopover === "clip" && (
             <ViewportPopoverPanel anchorRef={{ current: null }} title="Clip Plane">
@@ -418,79 +485,31 @@ export function FemViewportToolbar({
             </ViewportPopoverPanel>
           )}
         </ViewportPopoverTrigger>
-        {/* Display options */}
-        <ViewportPopoverTrigger preferredHorizontal="left">
-          <ViewportIconAction
-            icon={<Eye size={14} />}
-            showCaret
-            active={openPopover === "display"}
-            onClick={() => onOpenPopoverChange(openPopover === "display" ? null : "display")}
-            title="Display Options"
-          />
-          {openPopover === "display" && (
-            <ViewportPopoverPanel anchorRef={{ current: null }} title="Display">
-              <ViewportPopoverRow label="Opacity">
-                <input
-                  type="range"
-                  className="flex-1 h-[3px] accent-primary max-w-[120px]"
-                  min={10}
-                  max={100}
-                  value={opacity}
-                  onChange={(e) => onOpacityChange(Number(e.target.value))}
-                />
-              </ViewportPopoverRow>
-              {showShrink && (
-                <ViewportPopoverRow label="Shrink">
-                  <input
-                    type="range"
-                  className="flex-1 h-[3px] accent-primary max-w-[120px]"
-                    min={10}
-                    max={100}
-                    value={Math.round(shrinkFactor * 100)}
-                    onChange={(e) => onShrinkFactorChange(Number(e.target.value) / 100)}
-                  />
-                </ViewportPopoverRow>
-              )}
-              <ViewportPopoverRow label="Labels">
-                <button
-                  className="text-[0.65rem] font-semibold text-muted-foreground hover:text-foreground bg-transparent border border-border/30 rounded px-2 py-0.5"
-                  onClick={() => onLabeledModeChange(!labeledMode)}
-                >
-                  {labeledMode ? "Hide Labels" : "Show Labels"}
-                </button>
-              </ViewportPopoverRow>
-              <ViewportPopoverRow label="Profile">
-                <div className="flex flex-wrap gap-1">
-                  {QUALITY_PROFILES.map((p) => (
-                    <button
-                      key={p.value}
-                      className={POPOVER_OPTION_CLASSNAME}
-                      data-active={qualityProfile === p.value}
-                      onClick={() => onQualityProfileChange(p.value)}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-              </ViewportPopoverRow>
-            </ViewportPopoverPanel>
-          )}
-        </ViewportPopoverTrigger>
+      </ViewportToolGroup>
 
-        {/* Arrows / Glyphs */}
+      {!compact ? <ViewportToolSeparator /> : null}
+
+      {/* ── Vectors ── */}
+      <ViewportToolGroup label="Vectors" compact={compact}>
+        <ViewportIconAction
+          icon={<ArrowUpRight size={14} />}
+          active={arrowsVisible}
+          onClick={() => {
+            onArrowsVisibleChange(!arrowsVisible);
+          }}
+          title="Toggle Vectors"
+        />
         <ViewportPopoverTrigger preferredHorizontal="left">
           <ViewportIconAction
             icon={<ArrowUpRight size={14} />}
-            active={arrowsVisible}
+            active={openPopover === "vectors"}
             showCaret
             onClick={() => {
-              const next = !arrowsVisible;
-              onArrowsVisibleChange(next);
-              onOpenPopoverChange(next ? "vectors" : null);
+              onOpenPopoverChange(openPopover === "vectors" ? null : "vectors");
             }}
-            title="Vectors"
+            title="Vector Settings"
           />
-          {openPopover === "vectors" && arrowsVisible && (
+          {openPopover === "vectors" && (
             <ViewportPopoverPanel anchorRef={{ current: null }} title="Vectors">
               <ViewportPopoverRow label="Density">
                 <input
@@ -611,8 +630,12 @@ export function FemViewportToolbar({
             </ViewportPopoverPanel>
           )}
         </ViewportPopoverTrigger>
+      </ViewportToolGroup>
 
-        {/* Camera */}
+      {!compact ? <ViewportToolSeparator /> : null}
+
+      {/* ── Camera ── */}
+      <ViewportToolGroup label="Camera" compact={compact}>
         <ViewportPopoverTrigger preferredHorizontal="left">
           <ViewportIconAction
             icon={<Video size={14} />}
@@ -674,7 +697,17 @@ export function FemViewportToolbar({
           )}
         </ViewportPopoverTrigger>
 
-        {/* Panels */}
+        <ViewportIconAction
+          icon={<Camera size={14} />}
+          onClick={onCapture}
+          title="Screenshot"
+        />
+      </ViewportToolGroup>
+
+      {!compact ? <ViewportToolSeparator /> : null}
+
+      {/* ── Panels ── */}
+      <ViewportToolGroup label="Panels" compact={compact}>
         <ViewportPopoverTrigger preferredHorizontal="left">
           <ViewportIconAction
             icon={<Layers size={14} />}
@@ -703,15 +736,6 @@ export function FemViewportToolbar({
             </ViewportPopoverPanel>
           )}
         </ViewportPopoverTrigger>
-
-        {!compact ? <ViewportToolSeparator /> : null}
-
-        {/* Screenshot */}
-        <ViewportIconAction
-          icon={<Camera size={14} />}
-          onClick={onCapture}
-          title="Screenshot"
-        />
       </ViewportToolGroup>
     </ViewportToolbar3D>
   );

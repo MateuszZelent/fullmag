@@ -729,7 +729,6 @@ export const FemGeometry = memo(function FemGeometry({
     enableGeometryCompaction,
     enableGeometryNormals,
     enableGeometryVertexColors,
-    field,
     renderMode,
     shrinkFactor,
   ]);

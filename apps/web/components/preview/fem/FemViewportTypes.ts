@@ -1,4 +1,11 @@
-import type { FemColorField, RenderMode, ClipAxis } from "../FemMeshView3D";
+import type {
+  FemArrowColorMode,
+  FemColorField,
+  FemFerromagnetVisibilityMode,
+  FemVectorDomainFilter,
+  RenderMode,
+  ClipAxis,
+} from "../FemMeshView3D";
 import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles";
 
 export type FemViewportProjection = "perspective" | "orthographic";
@@ -15,20 +22,56 @@ export interface FemViewportClipState {
   enabled: boolean;
   axis: ClipAxis;
   position: number;
+  flip: boolean;
 }
 
-export interface FemViewportToolbarState {
+export type FemViewportOverlayPopover =
+  | "quantity"
+  | "color"
+  | "clip"
+  | "display"
+  | "vectors"
+  | "camera"
+  | "panels"
+  | null;
+
+export interface FemViewportViewState {
   renderMode: RenderMode;
-  surfaceColorField: FemColorField;
-  arrowColorField: FemColorField;
+  opacity: number;
+  arrowColorMode: FemArrowColorMode;
+  arrowMonoColor: string;
+  arrowAlpha: number;
+  arrowLengthScale: number;
+  arrowThickness: number;
+  vectorDomainFilter: FemVectorDomainFilter;
+  ferromagnetVisibilityMode: FemFerromagnetVisibilityMode;
+  previewMaxPoints: number;
+  shrinkFactor: number;
   projection: FemViewportProjection;
   navigation: FemViewportNavigation;
   clip: FemViewportClipState;
   arrowsVisible: boolean;
   qualityProfile: ViewportQualityProfileId;
-  partExplorerOpen: boolean;
   legendOpen: boolean;
   labeledMode: boolean;
+  openPopover: FemViewportOverlayPopover;
+}
+
+export interface FemViewportPanelsState {
+  partExplorerOpen: boolean;
+}
+
+export interface FemViewportRuntimeState {
+  interactionActive: boolean;
+  textureGizmoDragging: boolean;
+  sampledArrowCount?: number;
+  captureActive: boolean;
+  captureOverlayHidden: boolean;
+}
+
+export interface FemViewportToolbarState {
+  surfaceColorField: FemColorField;
+  arrowColorField: FemArrowColorMode;
 }
 
 export interface FemViewportSelectionState {
@@ -37,6 +80,9 @@ export interface FemViewportSelectionState {
 }
 
 export interface FemViewportStoreState {
+  view: FemViewportViewState;
+  panels: FemViewportPanelsState;
+  runtime: FemViewportRuntimeState;
   toolbar: FemViewportToolbarState;
   selection: FemViewportSelectionState;
 }

@@ -91,25 +91,13 @@ function CameraSync({
   }, [camera, invalidate, mainCameraRef]);
 
   useEffect(() => {
-    let frameId: number | null = null;
-    const lastQuaternion = new THREE.Quaternion();
-    let initialized = false;
-    const tick = () => {
-      const main = mainCameraRef.current;
-      if (main) {
-        if (!initialized || !lastQuaternion.equals(main.camera.quaternion)) {
-          lastQuaternion.copy(main.camera.quaternion);
-          initialized = true;
-          syncCamera();
-        }
-      }
-      frameId = requestAnimationFrame(tick);
-    };
-    frameId = requestAnimationFrame(tick);
+    syncCamera();
+    const main = mainCameraRef.current;
+    const controls = main?.controls;
+    const handleChange = () => syncCamera();
+    controls?.addEventListener?.("change", handleChange);
     return () => {
-      if (frameId !== null) {
-        cancelAnimationFrame(frameId);
-      }
+      controls?.removeEventListener?.("change", handleChange);
     };
   }, [mainCameraRef, syncCamera]);
 

@@ -318,6 +318,23 @@ const RibbonActionTrigger = React.forwardRef<
 });
 RibbonActionTrigger.displayName = "RibbonActionTrigger";
 
+function ribbonGroupToneClass(tone: RibbonGroup["tone"] | undefined): string {
+  switch (tone) {
+    case "authoring":
+      return "border-emerald-400/20 bg-emerald-400/6";
+    case "compose":
+      return "border-violet-400/20 bg-violet-400/6";
+    case "compute":
+      return "border-primary/25 bg-primary/8";
+    case "selection":
+      return "border-amber-400/20 bg-amber-400/6";
+    case "sync":
+      return "border-cyan-400/20 bg-cyan-400/6";
+    default:
+      return "border-border/25 bg-transparent";
+  }
+}
+
 /* ── Component ──────────────────────────────────── */
 
 export default function RibbonBar(props: RibbonBarProps) {
@@ -488,7 +505,12 @@ export default function RibbonBar(props: RibbonBarProps) {
           {groups.filter((g) => g.actions.some((a) => !a.hidden)).map((group, gi) => (
             <div key={group.id} className="flex items-stretch shrink-0">
               {gi > 0 && <div className="w-px bg-border/40 mx-2 self-stretch my-3 shadow-[1px_0_0_hsla(0,0%,100%,0.02)]" />}
-              <div className="flex flex-col justify-between items-center px-1 shrink-0">
+              <div
+                className={cn(
+                  "flex min-h-[74px] flex-col justify-between items-center rounded-lg border px-2 py-1.5 shrink-0",
+                  ribbonGroupToneClass(group.tone),
+                )}
+              >
                 <div className="flex items-center gap-1">
                   {group.actions.filter((a) => !a.hidden).map((action) =>
                     action.menuItems && action.menuItems.length > 0 ? (
@@ -552,9 +574,16 @@ export default function RibbonBar(props: RibbonBarProps) {
                     ),
                   )}
                 </div>
-                <span className="text-[0.6rem] font-medium text-muted-foreground mt-1 pt-1 opacity-70 border-t border-border/20 w-full text-center">
-                  {group.title}
-                </span>
+                <div className="mt-1 w-full border-t border-border/20 pt-1 text-center">
+                  <span className="block text-[0.6rem] font-semibold text-muted-foreground opacity-85">
+                    {group.title}
+                  </span>
+                  {group.subtitle ? (
+                    <span className="block text-[0.54rem] font-medium text-muted-foreground/75">
+                      {group.subtitle}
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </div>
           ))}

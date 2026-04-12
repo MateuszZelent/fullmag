@@ -54,6 +54,8 @@ export interface RibbonAction {
 export interface RibbonGroup {
   id: string;
   title: string;
+  subtitle?: string;
+  tone?: "neutral" | "authoring" | "compose" | "compute" | "selection" | "sync";
   actions: RibbonAction[];
 }
 

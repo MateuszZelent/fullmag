@@ -20,6 +20,8 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "study-nav",
       title: "Study",
+      subtitle: "Navigate",
+      tone: "neutral",
       actions: [
         {
           id: "study-overview",
@@ -122,55 +124,10 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
       ],
     },
     {
-      id: "study-compute",
-      title: "Compute",
-      actions: [
-        {
-          id: "study-compute-run",
-          icon: <Play size={20} fill="currentColor" />,
-          label: "Compute",
-          tooltip:
-            ctx.runLabel === "Resume"
-              ? "Resume the staged compute pipeline"
-              : "Materialize and execute the current study pipeline",
-          shortcut: "F5",
-          accent: true,
-          disabled: !ctx.can({ id: "solver.control", action: "run" }),
-          action: () => ctx.run({ id: "solver.control", action: "run" }),
-          iconColor: "text-emerald-400",
-        },
-        {
-          id: "study-compute-pause",
-          icon: <Pause size={20} fill="currentColor" />,
-          label: "Pause",
-          tooltip: "Pause study execution",
-          disabled: !ctx.can({ id: "solver.control", action: "pause" }),
-          action: () => ctx.run({ id: "solver.control", action: "pause" }),
-          iconColor: "text-amber-500",
-        },
-        {
-          id: "study-compute-stop",
-          icon: <Square size={20} fill="currentColor" />,
-          label: "Stop",
-          tooltip: "Stop study execution",
-          disabled: !ctx.can({ id: "solver.control", action: "stop" }),
-          action: () => ctx.run({ id: "solver.control", action: "stop" }),
-          iconColor: "text-rose-500",
-        },
-        {
-          id: "study-compute-skip",
-          icon: <SkipForward size={20} />,
-          label: "Skip",
-          tooltip: "Skip the active stage when supported by runtime",
-          disabled: !ctx.can({ id: "solver.control", action: "skip" }),
-          action: () => ctx.run({ id: "solver.control", action: "skip" }),
-          iconColor: "text-violet-400",
-        },
-      ],
-    },
-    {
       id: "study-add",
       title: "Add Stage",
+      subtitle: hasStageSelection ? "Insert after selection" : "Append to pipeline",
+      tone: "authoring",
       actions: [
         {
           id: "study-add-relax",
@@ -179,7 +136,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: hasStageSelection
             ? "Insert Relax after the selected stage"
             : "Append Relax at the end of the stage sequence",
-          iconColor: "text-emerald-400",
+          iconColor: "text-amber-400",
           action: () =>
             ctx.run({
               id: "study.add-primitive",
@@ -194,7 +151,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: hasStageSelection
             ? "Insert Run after the selected stage"
             : "Append Run at the end of the stage sequence",
-          iconColor: "text-emerald-400",
+          iconColor: "text-cyan-400",
           action: () =>
             ctx.run({ id: "study.add-primitive", kind: "run", placement }),
         },
@@ -205,7 +162,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: hasStageSelection
             ? "Insert Eigensolve after the selected stage"
             : "Append Eigensolve at the end of the stage sequence",
-          iconColor: "text-emerald-400",
+          iconColor: "text-violet-400",
           action: () =>
             ctx.run({
               id: "study.add-primitive",
@@ -218,6 +175,8 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "study-composite",
       title: "Composite",
+      subtitle: "Reusable workflows",
+      tone: "compose",
       actions: [
         {
           id: "study-add-hysteresis",
@@ -327,8 +286,59 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
       ],
     },
     {
+      id: "study-compute",
+      title: "Compute",
+      subtitle: "Execute pipeline",
+      tone: "compute",
+      actions: [
+        {
+          id: "study-compute-run",
+          icon: <Play size={20} fill="currentColor" />,
+          label: "Compute",
+          tooltip:
+            ctx.runLabel === "Resume"
+              ? "Resume the staged compute pipeline"
+              : "Materialize and execute the current study pipeline",
+          shortcut: "F5",
+          accent: true,
+          disabled: !ctx.can({ id: "solver.control", action: "run" }),
+          action: () => ctx.run({ id: "solver.control", action: "run" }),
+          iconColor: "text-emerald-400",
+        },
+        {
+          id: "study-compute-pause",
+          icon: <Pause size={20} fill="currentColor" />,
+          label: "Pause",
+          tooltip: "Pause study execution",
+          disabled: !ctx.can({ id: "solver.control", action: "pause" }),
+          action: () => ctx.run({ id: "solver.control", action: "pause" }),
+          iconColor: "text-amber-500",
+        },
+        {
+          id: "study-compute-stop",
+          icon: <Square size={20} fill="currentColor" />,
+          label: "Stop",
+          tooltip: "Stop study execution",
+          disabled: !ctx.can({ id: "solver.control", action: "stop" }),
+          action: () => ctx.run({ id: "solver.control", action: "stop" }),
+          iconColor: "text-rose-500",
+        },
+        {
+          id: "study-compute-skip",
+          icon: <SkipForward size={20} />,
+          label: "Skip",
+          tooltip: "Skip the active stage when supported by runtime",
+          disabled: !ctx.can({ id: "solver.control", action: "skip" }),
+          action: () => ctx.run({ id: "solver.control", action: "skip" }),
+          iconColor: "text-violet-400",
+        },
+      ],
+    },
+    {
       id: "study-selection",
       title: "Selection",
+      subtitle: "Edit selected stage",
+      tone: "selection",
       actions: [
         {
           id: "study-duplicate",
@@ -361,6 +371,8 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "builder-sync",
       title: "Sync",
+      subtitle: "Rewrite script",
+      tone: "sync",
       actions: [
         {
           id: "builder-sync-script",

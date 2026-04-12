@@ -50,6 +50,7 @@ interface UseFemToolbarModelArgs {
     label?: string;
     available: boolean;
   }>;
+  selectedSidebarNodeId?: string | null;
   selectedObjectId?: string | null;
   selectedEntityId?: string | null;
 }
@@ -100,6 +101,7 @@ export function useFemToolbarModel({
   qualityPerFace,
   sampledArrowCount,
   quantityOptions = [],
+  selectedSidebarNodeId = null,
   selectedObjectId = null,
   selectedEntityId = null,
 }: UseFemToolbarModelArgs): FemToolbarModel {
@@ -107,12 +109,12 @@ export function useFemToolbarModel({
   const selectionScope = useMemo<ViewportSelectionScope>(
     () =>
       resolveViewportSelectionScope({
-        selectedSidebarNodeId: null, // not available inside viewport
+        selectedSidebarNodeId,
         selectedObjectId,
         selectedEntityId,
         meshParts,
       }),
-    [meshParts, selectedEntityId, selectedObjectId],
+    [meshParts, selectedEntityId, selectedObjectId, selectedSidebarNodeId],
   );
 
   // D-01 fix: Collect ALL selected layers for the toolbar scope,
@@ -278,7 +280,8 @@ export function useFemToolbarModel({
   // Compute directly (no useMemo) because FRONTEND_DIAGNOSTIC_FLAGS is a
   // mutable singleton that cannot participate in React dependency arrays.
   const baseArrowRenderState: ArrowRenderState = computeArrowRenderState({
-    requested: showArrows && !FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceHideArrows,
+    requested: showArrows,
+    forceHidden: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceHideArrows,
     layerEnabled: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showArrowLayer,
     missingMagneticMask,
     visibleNodeCount: visibleArrowNodeCount,
@@ -299,6 +302,8 @@ export function useFemToolbarModel({
   const arrowsBlockReason = useMemo<string | null>(() => {
     if (!showArrows) return null;
     switch (arrowRenderState.reason) {
+      case "forced_hidden":
+        return "Vectors are forcibly hidden by femViewport.forceHideArrows";
       case "layer_disabled":
         return "Arrow layer is disabled via diagnostic flags";
       case "missing_field":

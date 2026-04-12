@@ -149,7 +149,8 @@ export interface UseFemOverlayItemsArgs {
   setInternalPartExplorerOpen: (fn: (prev: boolean) => boolean) => void;
 
   setLabeledMode: (v: boolean) => void;
-  setLegendOpen: (fn: (prev: boolean) => boolean) => void;
+  toggleLegend: () => void;
+  togglePartExplorerInternal: () => void;
   setOpenPopover: (id: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "panels" | null) => void;
   setCameraProjection: (v: "perspective" | "orthographic") => void;
   setNavigationMode: (v: "trackball" | "cad") => void;
@@ -323,12 +324,12 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
               }
             }}
             onLabeledModeChange={args.setLabeledMode}
-            onToggleLegend={() => args.setLegendOpen((prev) => !prev)}
+            onToggleLegend={args.toggleLegend}
             onTogglePartExplorer={() => {
               if (args.onTogglePartExplorer) {
                 args.onTogglePartExplorer();
               } else {
-                args.setInternalPartExplorerOpen((prev) => !prev);
+                args.togglePartExplorerInternal();
               }
             }}
             onCameraPreset={args.setCameraPreset}

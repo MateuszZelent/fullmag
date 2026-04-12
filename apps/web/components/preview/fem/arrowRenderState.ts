@@ -9,6 +9,7 @@
 export type ArrowBlockReason =
   | null
   | "requested_off"
+  | "forced_hidden"
   | "layer_disabled"
   | "missing_field"
   | "no_visible_nodes"
@@ -54,12 +55,20 @@ export interface ArrowRenderDiagnostics {
  */
 export function computeArrowRenderState(input: {
   requested: boolean;
+  forceHidden?: boolean;
   layerEnabled: boolean;
   missingMagneticMask: boolean;
   visibleNodeCount: number;
   hasFieldData: boolean;
 }): ArrowRenderState {
-  const { requested, layerEnabled, missingMagneticMask, visibleNodeCount, hasFieldData } = input;
+  const {
+    requested,
+    forceHidden = false,
+    layerEnabled,
+    missingMagneticMask,
+    visibleNodeCount,
+    hasFieldData,
+  } = input;
 
   if (!requested) {
     return {
@@ -69,6 +78,17 @@ export function computeArrowRenderState(input: {
       visibleNodeCount,
       visible: false,
       reason: "requested_off",
+    };
+  }
+
+  if (forceHidden) {
+    return {
+      requested,
+      layerEnabled,
+      hasFieldData,
+      visibleNodeCount,
+      visible: false,
+      reason: "forced_hidden",
     };
   }
 

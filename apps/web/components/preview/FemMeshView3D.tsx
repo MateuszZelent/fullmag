@@ -1,13 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo, useCallback, memo } from "react";
-import { computeFaceAspectRatios } from "./r3f/colorUtils";
-import {
-  SUPPORTED_ARROW_COLOR_FIELDS,
-} from "./fem/femGeometryUtils";
-import { buildPartRenderDataCache } from "@/features/viewport-fem/model/femTopologyCache";
+import { useEffect, useRef, useState, memo } from "react";
 import { FemClipPlanes, CameraAutoFit } from "./fem/FemR3FHelpers";
-import { useFemVectorDomain } from "./fem/useFemVectorDomain";
+import { useFemViewportModel } from "./fem/useFemViewportModel";
+import { useFemViewportCommands } from "./fem/useFemViewportCommands";
+import { useFemViewportDerivedModel } from "./fem/useFemViewportDerivedModel";
+import { useFemViewportPresenter } from "./fem/useFemViewportPresenter";
 import type {
   FemLiveMeshObjectSegment,
   FemMeshPart,
@@ -15,7 +13,6 @@ import type {
   MeshEntityViewState,
   MeshEntityViewStateMap,
 } from "../../lib/session/types";
-import { defaultMeshEntityViewState } from "../../lib/session/types";
 import type {
   AntennaOverlay,
   BuilderObjectOverlay,
@@ -26,9 +23,6 @@ import type { VisibleSubmeshSnapshot } from "../runs/control-room/submeshSnapsho
 import { partMeshTint, partEdgeTint } from "./fem/femColorUtils";
 import { FemViewportScene } from "./fem/FemViewportScene";
 import { FemContextMenu, FemHoverTooltip } from "./fem/FemContextMenu";
-import {
-  PREVIEW_MAX_POINTS_DEFAULT,
-} from "./fem/vectorDensityBudget";
 import ScientificViewportShell from "./shared/ScientificViewportShell";
 import type { ViewportQualityProfileId } from "./shared/viewportQualityProfiles";
 import {
@@ -39,15 +33,10 @@ import TextureTransformGizmo, {
   type TexturePreviewProxy,
 } from "./TextureTransformGizmo";
 import type { TextureTransform3D } from "@/lib/textureTransform";
-import { useFemToolbarModel } from "./fem/useFemToolbarModel";
 import { useFemSceneGeometry } from "./fem/useFemSceneGeometry";
-import { useFemOverlayItems } from "./fem/useFemOverlayItems";
-import { RENDER_MODE_DISPLAY_PRESETS } from "./fem/renderModePresets";
-import { useFemSubmeshSnapshot } from "./fem/useFemSubmeshSnapshot";
 import { useFemFaceInteraction } from "./fem/useFemFaceInteraction";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
-import { buildVisibleLayers } from "@/features/viewport-fem/model/femRenderModel";
 export type {
   FemMeshData,
   MeshSelectionSnapshot,
@@ -57,7 +46,6 @@ export type {
   ClipAxis,
   FemVectorDomainFilter,
   FemFerromagnetVisibilityMode,
-  RenderLayer,
 } from "./fem/femMeshTypes";
 import type {
   FemMeshData,
@@ -68,12 +56,9 @@ import type {
   ClipAxis,
   FemVectorDomainFilter,
   FemFerromagnetVisibilityMode,
-  RenderLayer,
 } from "./fem/femMeshTypes";
 
 const STABLE_ORIGIN: [number, number, number] = [0, 0, 0];
-
-const AIR_OBJECT_SEGMENT_ID = "__air__";
 
 /* ── Opacity constants (extracted from hardcoded values) ── */
 const DIMMED_MIN_MAGNETIC = 14;
@@ -164,10 +149,8 @@ interface Props {
   partExplorerOpen?: boolean;
   onTogglePartExplorer?: () => void;
   onVisibleSubmeshSnapshotChange?: (snapshot: VisibleSubmeshSnapshot | null) => void;
+  selectedSidebarNodeId?: string | null;
 }
-
-type CameraProjection = "perspective" | "orthographic";
-type NavigationMode = "trackball" | "cad";
 
 /* ── Component ─────────────────────────────────────────────────────── */
 
@@ -241,6 +224,7 @@ function FemMeshView3DInner({
   partExplorerOpen: controlledPartExplorerOpen,
   onTogglePartExplorer,
   onVisibleSubmeshSnapshotChange,
+  selectedSidebarNodeId = null,
 }: Props) {
   if (FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging) {
     recordFrontendRender("FemMeshView3DInner", {
@@ -250,44 +234,10 @@ function FemMeshView3DInner({
       showPerPartGeometry: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showPerPartGeometry,
     });
   }
-  const [internalRenderMode, setInternalRenderMode] = useState<RenderMode>("surface");
   const [field, setField] = useState<FemColorField>(colorField);
-  const [internalArrowColorMode, setInternalArrowColorMode] = useState<FemArrowColorMode>(
-    SUPPORTED_ARROW_COLOR_FIELDS.has(colorField as FemArrowColorMode)
-      ? (colorField as FemArrowColorMode)
-      : "orientation",
-  );
-  const [internalArrowMonoColor, setInternalArrowMonoColor] = useState("#00c2ff");
-  const [internalArrowAlpha, setInternalArrowAlpha] = useState(1);
-  const [internalArrowLengthScale, setInternalArrowLengthScale] = useState(1);
-  const [internalArrowThickness, setInternalArrowThickness] = useState(1);
-  const [internalVectorDomainFilter, setInternalVectorDomainFilter] =
-    useState<FemVectorDomainFilter>("auto");
-  const [internalFerromagnetVisibilityMode, setInternalFerromagnetVisibilityMode] =
-    useState<FemFerromagnetVisibilityMode>("hide");
-  const [internalOpacity, setInternalOpacity] = useState(100);
-  const [internalClipEnabled, setInternalClipEnabled] = useState(false);
-  const [internalClipAxis, setInternalClipAxis] = useState<ClipAxis>("x");
-  const [internalClipPos, setInternalClipPos] = useState(50);
-  const [internalClipFlip, setInternalClipFlip] = useState(false);
-  const [internalShowArrows, setInternalShowArrows] = useState(false);
-  const [internalPreviewMaxPoints, setInternalPreviewMaxPoints] = useState(PREVIEW_MAX_POINTS_DEFAULT);
-  const [internalShrinkFactor, setInternalShrinkFactor] = useState(1);
-  const [cameraProjection, setCameraProjection] = useState<CameraProjection>("perspective");
-  const [navigationMode, setNavigationMode] = useState<NavigationMode>("trackball");
   const [internalPartExplorerOpen, setInternalPartExplorerOpen] = useState(true);
-  const [legendOpen, setLegendOpen] = useState(false);
-  const [labeledMode, setLabeledMode] = useState(false);
-  const [openPopover, setOpenPopover] = useState<"quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "panels" | null>(null);
-  const [qualityProfile, setQualityProfile] = useState<ViewportQualityProfileId>("interactive");
-  const [interactionActive, setInteractionActive] = useState(false);
-  const [textureGizmoDragging, setTextureGizmoDragging] = useState(false);
-  const [sampledArrowCount, setSampledArrowCount] = useState<number | undefined>(undefined);
-  const [captureActive, setCaptureActive] = useState(false);
-  const [captureOverlayHidden, setCaptureOverlayHidden] = useState(false);
 
   const partExplorerOpen = controlledPartExplorerOpen ?? internalPartExplorerOpen;
-  
 
   const [cameraFitGeneration, setCameraFitGeneration] = useState(0);
 
@@ -295,56 +245,80 @@ function FemMeshView3DInner({
   const viewCubeSceneRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const qualityProfileRef = useRef<ViewportQualityProfileId>("interactive");
-  const selectedObjectOverlay = useMemo(
-    () =>
-      selectedObjectId
-        ? objectOverlays.find((overlay) => overlay.id === selectedObjectId) ?? null
-        : null,
-    [objectOverlays, selectedObjectId],
-  );
-  const renderMode = controlledRenderMode ?? internalRenderMode;
-  const opacity = controlledOpacity ?? internalOpacity;
-  const clipEnabled = controlledClipEnabled ?? internalClipEnabled;
-  const clipAxis = controlledClipAxis ?? internalClipAxis;
-  const clipPos = controlledClipPos ?? internalClipPos;
-  const clipFlip = internalClipFlip;
-  const showArrowsRequested = controlledShowArrowsRequested ?? internalShowArrows;
-  const arrowColorMode = controlledArrowColorMode ?? internalArrowColorMode;
-  const arrowMonoColor = controlledArrowMonoColor ?? internalArrowMonoColor;
-  const arrowAlpha = controlledArrowAlpha ?? internalArrowAlpha;
-  const arrowLengthScale = controlledArrowLengthScale ?? internalArrowLengthScale;
-  const arrowThickness = controlledArrowThickness ?? internalArrowThickness;
-  const vectorDomainFilter = controlledVectorDomainFilter ?? internalVectorDomainFilter;
-  const ferromagnetVisibilityMode =
-    controlledFerromagnetVisibilityMode ?? internalFerromagnetVisibilityMode;
-  const resolvedPreviewMaxPoints = previewMaxPoints ?? internalPreviewMaxPoints;
-  const shrinkFactor = controlledShrinkFactor ?? internalShrinkFactor;
-  const updateSharedPreviewMaxPoints = useCallback((nextMaxPoints: number) => {
-    if (onPreviewMaxPointsChange) {
-      onPreviewMaxPointsChange(nextMaxPoints);
-      return;
-    }
-    setInternalPreviewMaxPoints(nextMaxPoints);
-  }, [onPreviewMaxPointsChange]);
-  const hasMeshParts = meshParts.length > 0;
-  const magneticSegments = useMemo(
-    () => objectSegments.filter((segment) => segment.object_id !== AIR_OBJECT_SEGMENT_ID),
-    [objectSegments],
-  );
-  const visibleMagneticIds = useMemo(() => {
-    if (visibleObjectIds && visibleObjectIds.length > 0) {
-      return new Set(visibleObjectIds);
-    }
-    return new Set(magneticSegments.map((segment) => segment.object_id));
-  }, [magneticSegments, visibleObjectIds]);
-  const airSegmentIds = useMemo(
-    () =>
-      airSegmentVisible
-        ? new Set([AIR_OBJECT_SEGMENT_ID])
-        : new Set<string>(),
-    [airSegmentVisible],
-  );
-  const supportsAirboxOnlyVectors = meshData.quantityDomain === "full_domain";
+  const {
+    renderMode,
+    opacity,
+    clipEnabled,
+    clipAxis,
+    clipPos,
+    clipFlip,
+    showArrowsRequested,
+    arrowColorMode,
+    arrowMonoColor,
+    arrowAlpha,
+    arrowLengthScale,
+    arrowThickness,
+    vectorDomainFilter,
+    ferromagnetVisibilityMode,
+    resolvedPreviewMaxPoints,
+    shrinkFactor,
+    cameraProjection,
+    navigationMode,
+    legendOpen,
+    labeledMode,
+    openPopover,
+    qualityProfile,
+    interactionActive,
+    captureActive,
+    captureOverlayHidden,
+    textureGizmoDragging,
+    sampledArrowCount,
+    setInternalRenderMode,
+    setInternalOpacity,
+    setInternalArrowColorMode,
+    setInternalArrowMonoColor,
+    setInternalArrowAlpha,
+    setInternalArrowLengthScale,
+    setInternalArrowThickness,
+    setInternalClipEnabled,
+    setInternalClipAxis,
+    setInternalClipPos,
+    setInternalClipFlip,
+    setInternalShowArrows,
+    setInternalVectorDomainFilter,
+    setInternalFerromagnetVisibilityMode,
+    setInternalShrinkFactor,
+    setCameraProjection,
+    setNavigationMode,
+    setLegendOpen,
+    setLabeledMode,
+    setOpenPopover,
+    setQualityProfile,
+    setInteractionActive,
+    setTextureGizmoDragging,
+    setSampledArrowCount,
+    setCaptureActive,
+    setCaptureOverlayHidden,
+    updateSharedPreviewMaxPoints,
+  } = useFemViewportModel({
+    colorField,
+    controlledRenderMode,
+    controlledOpacity,
+    controlledClipEnabled,
+    controlledClipAxis,
+    controlledClipPos,
+    controlledShowArrowsRequested,
+    controlledArrowColorMode,
+    controlledArrowMonoColor,
+    controlledArrowAlpha,
+    controlledArrowLengthScale,
+    controlledArrowThickness,
+    controlledVectorDomainFilter,
+    controlledFerromagnetVisibilityMode,
+    controlledShrinkFactor,
+    previewMaxPoints,
+    onPreviewMaxPointsChange,
+  });
   const wrapperFlags = FRONTEND_DIAGNOSTIC_FLAGS.femWrapper;
   const selectionOnlyInteractionMode =
     FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableSelectionOnlyInteractionMode;
@@ -357,73 +331,47 @@ function FemMeshView3DInner({
     FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryHoverInteractions;
   const geometryContextMenuEnabled =
     geometryPointerInteractionsEnabled && wrapperFlags.enableContextMenu;
-  const effectiveVectorDomainFilter: FemVectorDomainFilter =
-    vectorDomainFilter === "airbox_only" && !supportsAirboxOnlyVectors
-      ? "auto"
-      : vectorDomainFilter;
-  const partRenderDataById = useMemo(() => {
-    if (!wrapperFlags.enablePartDerivedModel) {
-      return new Map<string, { boundaryFaceIndices: number[] | null; elementIndices: number[] | null; nodeMask: Uint8Array | null; surfaceFaces: [number, number, number][] | null }>();
-    }
-    return buildPartRenderDataCache(
-      meshParts,
-      meshData.boundaryFaces.length,
-      meshData.nElements,
-      meshData.nNodes,
-    );
-  }, [meshData.boundaryFaces.length, meshData.nElements, meshData.nNodes, meshParts, wrapperFlags.enablePartDerivedModel]);
-  // P3 consolidation: Delegate to pure buildVisibleLayers from femRenderModel.ts
-  const visibleLayers = useMemo<RenderLayer[]>(() => {
-    if (!wrapperFlags.enablePartDerivedModel || !hasMeshParts) {
-      return [];
-    }
-    return buildVisibleLayers({
-      meshParts,
-      partRenderDataById,
-      meshEntityViewState,
-      objectViewMode,
-      vectorDomainFilter: effectiveVectorDomainFilter,
-      ferromagnetVisibilityMode,
-      selectedObjectId: selectedObjectId ?? null,
-      selectedEntityId,
-      focusedEntityId,
-      airSegmentVisible,
-    });
-  }, [
-    airSegmentVisible,
-    effectiveVectorDomainFilter,
-    ferromagnetVisibilityMode,
-    focusedEntityId,
+  const {
     hasMeshParts,
+    selectedObjectOverlay,
+    supportsAirboxOnlyVectors,
+    effectiveVectorDomainFilter,
+    visibleLayers,
+    missingMagneticMask,
+    missingExactScopeSegment,
+    vectorDomain,
+    toolbarModel,
+  } = useFemViewportDerivedModel({
+    meshData,
+    objectOverlays,
+    selectedObjectId: selectedObjectId ?? null,
+    visibleObjectIds,
+    objectSegments,
+    airSegmentVisible,
+    meshParts,
     meshEntityViewState,
-    meshParts,
     objectViewMode,
-    partRenderDataById,
+    vectorDomainFilter,
+    ferromagnetVisibilityMode,
     selectedEntityId,
-    selectedObjectId,
-    wrapperFlags.enablePartDerivedModel,
-  ]);
-  const { partQualityById } = useFemSubmeshSnapshot({
-    meshParts,
+    focusedEntityId,
     elementMarkers,
     perDomainQuality,
-    hasMeshParts,
-    visibleLayers,
-    selectedEntityId,
-    focusedEntityId,
     onVisibleSubmeshSnapshotChange,
+    resolvedPreviewMaxPoints,
+    captureActive,
+    interactionActive,
+    qualityProfile,
+    renderMode,
+    field,
+    opacity,
+    arrowColorMode,
+    showArrowsRequested,
+    qualityPerFace,
+    sampledArrowCount,
+    quantityOptions,
+    selectedSidebarNodeId,
   });
-  const missingMagneticMask =
-    meshData.quantityDomain === "magnetic_only" &&
-    (!meshData.activeMask || meshData.activeMask.length !== meshData.nNodes);
-  const missingExactScopeSegment =
-    Boolean(selectedObjectId) &&
-    meshData.nElements > 0 &&
-    (hasMeshParts
-      ? !meshParts.some(
-          (part) => part.role === "magnetic_object" && part.object_id === selectedObjectId,
-        )
-      : !magneticSegments.some((segment) => segment.object_id === selectedObjectId));
   const {
     magneticBoundaryFaceIndices,
     magneticElementIndices,
@@ -438,37 +386,7 @@ function FemMeshView3DInner({
     runtimeArrowDensity,
     shouldRenderMagneticGeometryResolved,
     shouldRenderAirGeometry,
-    visibleArrowNodeCount,
-  } = useFemVectorDomain({
-    enableVectorDerivedModel: wrapperFlags.enableVectorDerivedModel,
-    missingExactScopeSegment,
-    selectedObjectId,
-    magneticSegments,
-    meshData,
-    visibleMagneticIds,
-    objectSegments,
-    airSegmentIds,
-    hasMeshParts,
-    visibleLayers,
-    effectiveVectorDomainFilter,
-    ferromagnetVisibilityMode,
-    resolvedPreviewMaxPoints,
-    captureActive,
-    interactionActive,
-    qualityProfile,
-    renderMode,
-    airSegmentVisible,
-  });
-  const baseViewStateByPartId = useMemo(() => {
-    const next = new Map<string, MeshEntityViewState>();
-    if (!hasMeshParts) {
-      return next;
-    }
-    for (const part of meshParts) {
-      next.set(part.id, meshEntityViewState[part.id] ?? defaultMeshEntityViewState(part));
-    }
-    return next;
-  }, [hasMeshParts, meshEntityViewState, meshParts]);
+  } = vectorDomain;
   
   const topologySignature = topologyKey ?? `${meshData.nNodes}:${meshData.nElements}:${meshData.boundaryFaces.length}`;
   const {
@@ -489,7 +407,6 @@ function FemMeshView3DInner({
   });
   const {
     toolbarStylePartIds,
-    toolbarStylePartIdSet,
     toolbarColorPartIds,
     toolbarRenderMode,
     toolbarRenderModeMixed,
@@ -502,52 +419,65 @@ function FemMeshView3DInner({
     legendField,
     effectiveShowArrows,
     arrowsBlockReason,
-    arrowToolbarState,
     toolbarScopeLabel,
     fieldMagnitudeStats,
     selectionScope,
-  } = useFemToolbarModel({
-    hasMeshParts,
-    meshParts,
-    visibleLayers,
-    baseViewStateByPartId,
-    renderMode,
-    field,
-    opacity,
-    arrowColorMode,
-    showArrows: showArrowsRequested,
-    missingMagneticMask,
-    visibleArrowNodeCount,
-    meshData,
-    baseArrowDensity,
-    effectiveArrowDensity,
-    qualityPerFace,
-    sampledArrowCount,
-    quantityOptions,
-    selectedObjectId: selectedObjectId ?? null,
-    selectedEntityId,
-  });
+  } = toolbarModel;
   const effectiveOpacity = opacity;
 
-  useEffect(() => { setField(colorField); }, [colorField]);
-  useEffect(() => {
-    if (controlledArrowColorMode != null) {
-      return;
-    }
-    setInternalArrowColorMode(
-      SUPPORTED_ARROW_COLOR_FIELDS.has(colorField as FemArrowColorMode)
-        ? (colorField as FemArrowColorMode)
-        : "orientation",
-    );
-  }, [colorField, controlledArrowColorMode]);
+  const {
+    applyToolbarRenderMode,
+    applyToolbarOpacity,
+    applyToolbarColorField,
+    syncFieldFromProps,
+    setClipEnabled,
+    toggleClip,
+    setClipAxis,
+    setClipPos,
+    setClipFlip,
+    setArrowsVisible,
+    setVectorDomainFilter,
+    setFerromagnetVisibilityMode,
+    setShrinkFactor,
+    toggleLegend,
+    togglePartExplorer,
+  } = useFemViewportCommands({
+    hasMeshParts,
+    toolbarStylePartIds,
+    toolbarColorPartIds,
+    selectionScope,
+    onMeshPartViewStatePatch,
+    onRenderModeChange,
+    onOpacityChange,
+    onClipEnabledChange,
+    onClipAxisChange,
+    onClipPosChange,
+    onShowArrowsChange,
+    onVectorDomainFilterChange,
+    onFerromagnetVisibilityModeChange,
+    onShrinkFactorChange,
+    setInternalRenderMode,
+    setInternalOpacity,
+    setInternalClipEnabled,
+    setInternalClipAxis,
+    setInternalClipPos,
+    setInternalClipFlip,
+    setInternalShowArrows,
+    setInternalVectorDomainFilter,
+    setInternalFerromagnetVisibilityMode,
+    setInternalShrinkFactor,
+    field,
+    setField,
+    clipEnabled,
+    partExplorerOpen,
+    setOpenPopover,
+    setLegendOpen,
+    setInternalPartExplorerOpen,
+  });
 
-  // Auto-show legend when a scalar color mode is active (field_x/y/z/magnitude).
-  // Auto-hide when switching back to orientation / none.
   useEffect(() => {
-    const scalarModes: string[] = ["x", "y", "z", "magnitude"];
-    const isScalar = scalarModes.includes(field) || scalarModes.includes(arrowColorMode);
-    setLegendOpen(isScalar);
-  }, [field, arrowColorMode]);
+    syncFieldFromProps(colorField);
+  }, [colorField, syncFieldFromProps]);
 
   const {
     dynamicGeomCenter,
@@ -590,161 +520,26 @@ function FemMeshView3DInner({
     setCaptureActive,
     setQualityProfile,
   });
-
-  const faceAspectRatios = useMemo(
-    () => computeFaceAspectRatios(meshData.nodes, meshData.boundaryFaces),
-    [meshData.nodes, meshData.boundaryFaces],
-  );
-
-  const hoveredFaceInfo = useMemo(() => {
-    if (!wrapperFlags.enableHoverTooltip) {
-      return null;
-    }
-    if (!hoveredFace) return null;
-    const idx = hoveredFace.idx;
-    const ar = faceAspectRatios[idx] ?? 0;
-    return { faceIdx: idx, ar, sicn: qualityPerFace?.[idx] };
-  }, [faceAspectRatios, hoveredFace, qualityPerFace, wrapperFlags.enableHoverTooltip]);
-  const applyToolbarRenderMode = useCallback((next: RenderMode) => {
-    const preset = RENDER_MODE_DISPLAY_PRESETS[next];
-    const flags = FRONTEND_DIAGNOSTIC_FLAGS.femViewport;
-    const masterReset = flags.resetDisplayStateOnRenderModeChange;
-
-    if (hasMeshParts && toolbarStylePartIds.length > 0 && onMeshPartViewStatePatch) {
-      if (masterReset && flags.resetOpacityOnRenderModeChange) {
-        onMeshPartViewStatePatch(toolbarStylePartIds, {
-          renderMode: next,
-          opacity: preset.opacity,
-        });
-      } else {
-        onMeshPartViewStatePatch(toolbarStylePartIds, { renderMode: next });
-      }
-      // D-05 fix: Only sync global meshRenderMode when toolbar operates at
-      // universe scope. Use canonical selection scope instead of length
-      // heuristic to avoid false positives in isolate mode.
-      if (selectionScope.kind === "universe") {
-        onRenderModeChange?.(next);
-      }
-    } else {
-      if (onRenderModeChange) {
-        onRenderModeChange(next);
-      } else {
-        setInternalRenderMode(next);
-      }
-      if (masterReset && flags.resetOpacityOnRenderModeChange) {
-        if (onOpacityChange) {
-          onOpacityChange(preset.opacity);
-        } else {
-          setInternalOpacity(preset.opacity);
-        }
-      }
-    }
-
-    if (!masterReset) {
-      return;
-    }
-    // D-05 fix: Only reset global viewport settings (clip, arrows, domain, shrink, quality)
-    // when the toolbar operates at universe scope, not on a scoped selection.
-    if (selectionScope.kind !== "universe") {
-      return;
-    }
-    if (flags.resetClipOnRenderModeChange) {
-      if (onClipEnabledChange) {
-        onClipEnabledChange(preset.clipEnabled);
-      } else {
-        setInternalClipEnabled(preset.clipEnabled);
-      }
-      if (onClipAxisChange) {
-        onClipAxisChange(preset.clipAxis);
-      } else {
-        setInternalClipAxis(preset.clipAxis);
-      }
-      if (onClipPosChange) {
-        onClipPosChange(preset.clipPos);
-      } else {
-        setInternalClipPos(preset.clipPos);
-      }
-    }
-    if (flags.resetVectorDomainOnRenderModeChange) {
-      if (onVectorDomainFilterChange) {
-        onVectorDomainFilterChange(preset.vectorDomainFilter);
-      } else {
-        setInternalVectorDomainFilter(preset.vectorDomainFilter);
-      }
-      if (onFerromagnetVisibilityModeChange) {
-        onFerromagnetVisibilityModeChange(preset.ferromagnetVisibilityMode);
-      } else {
-        setInternalFerromagnetVisibilityMode(preset.ferromagnetVisibilityMode);
-      }
-    }
-    if (flags.resetShrinkOnRenderModeChange) {
-      if (onShrinkFactorChange) {
-        onShrinkFactorChange(preset.shrinkFactor);
-      } else {
-        setInternalShrinkFactor(preset.shrinkFactor);
-      }
-    }
-    if (flags.resetQualityOnRenderModeChange) {
-      setQualityProfile(preset.qualityProfile);
-      updateSharedPreviewMaxPoints(PREVIEW_MAX_POINTS_DEFAULT);
-    }
-    setOpenPopover(null);
-  }, [
-    hasMeshParts,
-    onClipAxisChange,
-    onClipEnabledChange,
-    onClipPosChange,
-    onFerromagnetVisibilityModeChange,
-    onMeshPartViewStatePatch,
-    onOpacityChange,
-    onRenderModeChange,
-    onShrinkFactorChange,
-    onVectorDomainFilterChange,
-    selectionScope,
-    toolbarStylePartIds,
-    updateSharedPreviewMaxPoints,
-  ]);
-  const applyToolbarOpacity = useCallback((next: number) => {
-    if (hasMeshParts && toolbarStylePartIds.length > 0 && onMeshPartViewStatePatch) {
-      onMeshPartViewStatePatch(toolbarStylePartIds, { opacity: next });
-      return;
-    }
-    if (onOpacityChange) {
-      onOpacityChange(next);
-    } else {
-      setInternalOpacity(next);
-    }
-  }, [hasMeshParts, onMeshPartViewStatePatch, onOpacityChange, toolbarStylePartIds]);
-  const applyToolbarColorField = useCallback((next: FemColorField) => {
-    if (hasMeshParts && toolbarColorPartIds.length > 0 && onMeshPartViewStatePatch) {
-      onMeshPartViewStatePatch(toolbarColorPartIds, { colorField: next });
-      // Only sync global field when toolbar operates at universe scope.
-      if (selectionScope.kind === "universe") {
-        setField(next);
-      }
-      return;
-    }
-    setField(next);
-  }, [hasMeshParts, onMeshPartViewStatePatch, selectionScope, toolbarColorPartIds]);
-  const effectiveShowOrientationLegend =
-    showOrientationLegend ||
-    legendField === "orientation" ||
-    arrowColorMode === "orientation";
-  useEffect(() => {
-    qualityProfileRef.current = qualityProfile;
-  }, [qualityProfile]);
-  useEffect(() => {
-    if (interactionActive) {
-      setHoveredFace(null);
-    }
-  }, [interactionActive, setHoveredFace]);
-  useEffect(() => {
-    if (activeTransformScope === "object" && textureGizmoDragging) {
-      setTextureGizmoDragging(false);
-    }
-  }, [activeTransformScope, textureGizmoDragging]);
-  const overlayItems = useFemOverlayItems({
-    enableOverlayItemsModel: wrapperFlags.enableOverlayItemsModel,
+  const {
+    overlayItems,
+    hoveredFaceInfo,
+    onPointerMissed,
+    handleContextInspectFace,
+    handleContextShowQuality,
+    handleContextToggleClip,
+    handleContextClearSelection,
+  } = useFemViewportPresenter({
+    wrapperFlags,
+    qualityProfileRef,
+    qualityProfile,
+    interactionActive,
+    setHoveredFace,
+    activeTransformScope,
+    textureGizmoDragging,
+    setTextureGizmoDragging,
+    meshData,
+    qualityPerFace,
+    hoveredFace,
     captureOverlayHidden,
     toolbarMode,
     toolbarRenderMode,
@@ -759,14 +554,13 @@ function FemMeshView3DInner({
     arrowAlpha,
     arrowLengthScale,
     arrowThickness,
-    showArrows: showArrowsRequested,
+    showArrowsRequested,
     effectiveShowArrows,
     arrowsBlockReason,
     baseArrowDensity,
     effectiveArrowDensity,
     cameraProjection,
     navigationMode,
-    qualityProfile,
     clipEnabled,
     clipAxis,
     clipPos,
@@ -774,7 +568,6 @@ function FemMeshView3DInner({
     hasMeshParts,
     meshParts,
     visibleLayersCount: visibleLayers.length,
-    meshData,
     missingMagneticMask,
     missingExactScopeSegment,
     selectedObjectId,
@@ -787,8 +580,7 @@ function FemMeshView3DInner({
     partExplorerOpen,
     openPopover,
     selectedFaces,
-    effectiveShowOrientationLegend,
-    interactionActive,
+    showOrientationLegend,
     arrowField,
     legendField,
     fieldLabel,
@@ -803,13 +595,6 @@ function FemMeshView3DInner({
     onArrowAlphaChange,
     onArrowLengthScaleChange,
     onArrowThicknessChange,
-    onClipEnabledChange,
-    onClipAxisChange,
-    onClipPosChange,
-    onShowArrowsChange,
-    onVectorDomainFilterChange,
-    onFerromagnetVisibilityModeChange,
-    onShrinkFactorChange,
     onQuantityChange,
     onTogglePartExplorer,
     onRefine,
@@ -819,26 +604,29 @@ function FemMeshView3DInner({
     setInternalArrowAlpha,
     setInternalArrowLengthScale,
     setInternalArrowThickness,
-    setInternalClipEnabled,
-    setInternalClipAxis,
-    setInternalClipPos,
-    setInternalClipFlip,
-    setInternalShowArrows,
-    setInternalVectorDomainFilter,
-    setInternalFerromagnetVisibilityMode,
-    setInternalShrinkFactor,
     setInternalPartExplorerOpen,
     setLabeledMode,
-    setLegendOpen,
     setOpenPopover,
     setCameraProjection,
     setNavigationMode,
     setQualityProfile,
     setCameraPreset,
     setSelectedFaces,
+    setCtxMenu,
     takeScreenshot,
     handleViewCubeRotate,
     viewCubeSceneRef,
+    setClipEnabled,
+    toggleClip,
+    setClipAxis,
+    setClipPos,
+    setClipFlip,
+    setArrowsVisible,
+    setVectorDomainFilter,
+    setFerromagnetVisibilityMode,
+    setShrinkFactor,
+    toggleLegend,
+    togglePartExplorer,
   });
   return (
     <div className="relative flex flex-1 w-[100%] h-[100%] min-w-0 min-h-0 bg-background overflow-hidden rounded-md fem-canvas-container">
@@ -851,7 +639,7 @@ function FemMeshView3DInner({
         navigation={navigationMode}
         qualityProfile={runtimeQualityProfile}
         renderPolicy={{
-          mode: "always",
+          mode: interactionActive || captureActive ? "always" : "demand",
           hidden: false,
           interactionActive,
         }}
@@ -862,7 +650,7 @@ function FemMeshView3DInner({
         onViewCubeRotate={handleViewCubeRotate}
         onResetView={() => setCameraPreset("reset")}
         renderDefaultGizmos={false}
-        onPointerMissed={geometryPointerInteractionsEnabled ? () => setSelectedFaces([]) : undefined}
+        onPointerMissed={geometryPointerInteractionsEnabled ? onPointerMissed : undefined}
         onCanvasContextMenu={(e) => e.preventDefault()}
         onCanvasCreated={({ gl }) => {
           canvasRef.current = gl.domElement;
@@ -870,7 +658,6 @@ function FemMeshView3DInner({
         diagnosticOverrides={{
           enableControls:
             selectionOnlyInteractionMode || textureGizmoDragging ? false : true,
-          forceFrameloopMode: "always",
         }}
       >
         {!missingExactScopeSegment ? (
@@ -985,27 +772,10 @@ function FemMeshView3DInner({
           ctxMenu={ctxMenu}
           clipEnabled={clipEnabled}
           selectedFacesCount={selectedFaces.length}
-          onInspectFace={(faceIdx) => {
-            setSelectedFaces([faceIdx]);
-            setCtxMenu(null);
-          }}
-          onShowQuality={() => {
-            applyToolbarColorField("quality");
-            setCtxMenu(null);
-          }}
-          onToggleClip={() => {
-            const next = !clipEnabled;
-            if (onClipEnabledChange) {
-              onClipEnabledChange(next);
-            } else {
-              setInternalClipEnabled(next);
-            }
-            setCtxMenu(null);
-          }}
-          onClearSelection={() => {
-            setSelectedFaces([]);
-            setCtxMenu(null);
-          }}
+          onInspectFace={handleContextInspectFace}
+          onShowQuality={handleContextShowQuality}
+          onToggleClip={handleContextToggleClip}
+          onClearSelection={handleContextClearSelection}
         />
       ) : null}
     </div>
