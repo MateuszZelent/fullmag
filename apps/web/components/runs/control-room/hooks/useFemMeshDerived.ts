@@ -426,8 +426,42 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
 
   // D-04 fix: Sync air visibility to per-part state ONLY as a command (not continuous sync).
   // Use a ref to track the previous airMeshVisible value so we only patch on intentional changes.
+  const forcedAirboxDefaultAppliedRef = useRef(false);
   const prevAirVisibleRef = useRef(airMeshVisible);
   const prevAirOpacityRef = useRef(airMeshOpacity);
+
+  useEffect(() => {
+    if (
+      forcedAirboxDefaultAppliedRef.current ||
+      !FRONTEND_DIAGNOSTIC_FLAGS.femViewport.airboxDisabledByDefault ||
+      airRelatedParts.length === 0
+    ) {
+      return;
+    }
+    forcedAirboxDefaultAppliedRef.current = true;
+    prevAirVisibleRef.current = false;
+    setMeshEntityViewState((prev) => {
+      let changed = false;
+      const next: MeshEntityViewStateMap = { ...prev };
+      for (const part of airRelatedParts) {
+        const current = next[part.id] ?? defaultMeshEntityViewState(part);
+        if (current.visible === false) {
+          if (!next[part.id]) {
+            next[part.id] = current;
+            changed = true;
+          }
+          continue;
+        }
+        next[part.id] = {
+          ...current,
+          visible: false,
+        };
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [airRelatedParts, setMeshEntityViewState]);
+
   useEffect(() => {
     if (airRelatedParts.length === 0) {
       return;

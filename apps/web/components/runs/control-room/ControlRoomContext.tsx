@@ -73,6 +73,7 @@ import {
 import {
   buildSceneDocumentFromScriptBuilder,
 } from "../../../lib/session/sceneDocument";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { DEFAULT_SOLVER_SETTINGS } from "../../panels/SolverSettingsPanel";
 import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
 import { DEFAULT_MESH_OPTIONS } from "../../panels/MeshSettingsPanel";
@@ -822,7 +823,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setFemFerromagnetVisibilityMode(
       hydratedScene.editor.ferromagnet_visibility_mode ?? "hide",
     );
-    setAirMeshVisible(hydratedScene.editor.air_mesh_visible ?? false);
+    setAirMeshVisible(
+      airboxDisabledByDefault
+        ? false
+        : (hydratedScene.editor.air_mesh_visible ?? false),
+    );
     setAirMeshOpacity(
       typeof hydratedScene.editor.air_mesh_opacity === "number" &&
         Number.isFinite(hydratedScene.editor.air_mesh_opacity)
@@ -1888,3 +1893,5 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     </TransportCtx.Provider>
   );
 }
+  const airboxDisabledByDefault =
+    FRONTEND_DIAGNOSTIC_FLAGS.femViewport.airboxDisabledByDefault;

@@ -28,9 +28,9 @@ function buildMeshGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: ctx.meshTargetLabel
             ? `Build ${ctx.meshTargetLabel}`
             : "Build the selected mesh target",
-          accent: true,
           disabled: !ctx.can({ id: "mesh.build-selected" }),
           action: () => ctx.run({ id: "mesh.build-selected" }),
+          iconColor: "text-emerald-400",
         },
         {
           id: "build-all",

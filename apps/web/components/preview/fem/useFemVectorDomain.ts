@@ -309,7 +309,13 @@ export function useFemVectorDomain({
     if (captureActive) {
       return "capture";
     }
-    return interactionActive ? "interactive-lite" : qualityProfile;
+    if (
+      interactionActive &&
+      !FRONTEND_DIAGNOSTIC_FLAGS.femViewport.disableSimplifiedMode
+    ) {
+      return "interactive-lite";
+    }
+    return qualityProfile;
   })();
 
   const runtimeRenderMode = useMemo<RenderMode>(() => {

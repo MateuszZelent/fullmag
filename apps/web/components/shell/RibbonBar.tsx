@@ -263,6 +263,7 @@ const RibbonActionTrigger = React.forwardRef<
   } & React.ButtonHTMLAttributes<HTMLButtonElement>
 >(({ action, previewPending, ...props }, ref) => {
   const propsOnClick = props.onClick;
+  const isPrimaryAction = action.accent && !action.disabled;
   const handleClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     propsOnClick?.(e);
     if (e.defaultPrevented) {
@@ -278,7 +279,7 @@ const RibbonActionTrigger = React.forwardRef<
         "flex min-h-[52px] min-w-[58px] flex-col items-center justify-center gap-1 rounded-md border p-1 transition-all",
         action.active
           ? "border-primary/20 bg-primary/10 text-primary shadow-inner"
-          : action.accent
+          : isPrimaryAction
             ? "border-transparent bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
             : "border-transparent text-foreground hover:border-border/50 hover:bg-muted/80",
         previewPending && action.active && "animate-pulse shadow-[0_0_0_1px_rgba(99,102,241,0.35)]",
@@ -291,7 +292,7 @@ const RibbonActionTrigger = React.forwardRef<
       <span
         className={cn(
           "flex flex-col items-center",
-          action.accent
+          isPrimaryAction
             ? "text-primary-foreground"
             : action.active
               ? "text-primary"
@@ -303,7 +304,7 @@ const RibbonActionTrigger = React.forwardRef<
       <span
         className={cn(
           "text-[0.62rem] font-medium leading-none text-center",
-          action.accent
+          isPrimaryAction
             ? "text-primary-foreground"
             : action.active
               ? "text-primary"

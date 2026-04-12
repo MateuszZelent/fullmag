@@ -1071,13 +1071,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         runtimeGpuLabel={ctx.runtimeEngineGpuLabel ?? undefined}
         status={ctx.workspaceStatus}
         connection={ctx.connection}
-        interactiveEnabled={ctx.interactiveEnabled}
-        canRun={ctx.canRunCommand}
-        canRelax={ctx.canRelaxCommand}
-        canPause={ctx.canPauseCommand}
-        canStop={ctx.canStopCommand}
-        runAction={ctx.primaryRunAction}
-        runLabel={ctx.primaryRunLabel}
         commandBusy={ctx.commandBusy}
         commandMessage={ctx.commandMessage}
         canSyncScriptBuilder={Boolean(ctx.sessionFooter.scriptPath)}
@@ -1086,7 +1079,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         workspaceMode={ctx.workspaceMode}
         resultsAvailable={hasResultsAvailable}
         onPerspectiveChange={handleStageChange}
-        onSimAction={ctx.handleSimulationAction}
       />
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showRibbonBar ? <RibbonBar
         workspaceMode={ctx.workspaceMode}

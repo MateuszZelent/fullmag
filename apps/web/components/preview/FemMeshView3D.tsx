@@ -542,11 +542,11 @@ function FemMeshView3DInner({
   }, [colorField, controlledArrowColorMode]);
 
   // Auto-show legend when a scalar color mode is active (field_x/y/z/magnitude).
+  // Auto-hide when switching back to orientation / none.
   useEffect(() => {
     const scalarModes: string[] = ["x", "y", "z", "magnitude"];
-    if (scalarModes.includes(field) || scalarModes.includes(arrowColorMode)) {
-      setLegendOpen(() => true);
-    }
+    const isScalar = scalarModes.includes(field) || scalarModes.includes(arrowColorMode);
+    setLegendOpen(isScalar);
   }, [field, arrowColorMode]);
 
   const {

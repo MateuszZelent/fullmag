@@ -14,6 +14,7 @@ import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { glyphBudgetToMaxPoints } from "./vectorDensityBudget";
 import { colorLegendLabel, colorLegendGradient } from "./femColorUtils";
 import { FemViewportToolbar } from "./FemViewportToolbar";
+import { FemViewportStatusBar } from "./FemViewportStatusBar";
 import { FemRefineToolbar, FemSelectionHUD } from "./FemSelectionHUD";
 import { FieldLegend } from "../field/FieldLegend";
 import HslSphere from "../HslSphere";
@@ -158,6 +159,20 @@ export interface UseFemOverlayItemsArgs {
   takeScreenshot: () => void;
   handleViewCubeRotate: (quaternion: import("three").Quaternion) => void;
   viewCubeSceneRef: MutableRefObject<any>;
+}
+
+/** Derive a short label for a color field / arrow color mode. */
+function colorModeLabel(mode: string, qSym: string): string {
+  if (mode === "orientation") return "Ori";
+  if (mode === "x") return `${qSym}_x`;
+  if (mode === "y") return `${qSym}_y`;
+  if (mode === "z") return `${qSym}_z`;
+  if (mode === "magnitude") return `|${qSym}|`;
+  if (mode === "quality") return "Qual";
+  if (mode === "sicn") return "SICN";
+  if (mode === "monochrome") return "Mono";
+  if (mode === "none") return "—";
+  return "—";
 }
 
 export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverlayDescriptor[] {
@@ -419,10 +434,40 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
         ),
       });
     }
+    {
+      const qSym =
+        (args.prominentQuantityOptions.find((o) => o.id === args.quantityId) ?? null)
+          ?.shortLabel ?? "m";
+      items.push({
+        id: "status-bar",
+        anchor: "bottom-center",
+        priority: 2,
+        render: () => (
+          <FemViewportStatusBar
+            surfaceLabel={colorModeLabel(args.toolbarColorField, qSym)}
+            arrowLabel={colorModeLabel(args.arrowColorMode, qSym)}
+            arrowDensity={args.baseArrowDensity}
+            effectiveDensity={args.effectiveArrowDensity}
+            renderModeMixed={args.toolbarRenderModeMixed}
+            opacityMixed={args.toolbarOpacityMixed}
+            colorFieldMixed={args.toolbarColorFieldMixed}
+            toolbarScopeLabel={args.toolbarScopeLabel}
+            arrowsRequested={args.showArrows}
+            arrowsVisible={args.effectiveShowArrows}
+            arrowsBlockReason={args.arrowsBlockReason}
+            interactionSimplified={args.interactionActive}
+            hasField={!args.missingMagneticMask}
+            fieldLabel={args.fieldLabel}
+            visiblePartsCount={args.hasMeshParts ? args.visibleLayersCount : undefined}
+            totalPartsCount={args.hasMeshParts ? args.meshParts.length : undefined}
+          />
+        ),
+      });
+    }
     if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSelectionHud) {
       items.push({
         id: "selection-hud",
-        anchor: "bottom-center",
+        anchor: "bottom-right",
         priority: 5,
         render: ({ variant }) => (
           <>

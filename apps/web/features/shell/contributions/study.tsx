@@ -179,13 +179,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: hasStageSelection
             ? "Insert Relax after the selected stage"
             : "Append Relax at the end of the stage sequence",
-          accent: true,
           iconColor: "text-emerald-400",
-          disabled: !ctx.can({
-            id: "study.add-primitive",
-            kind: "relax",
-            placement,
-          }),
           action: () =>
             ctx.run({
               id: "study.add-primitive",
@@ -200,13 +194,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: hasStageSelection
             ? "Insert Run after the selected stage"
             : "Append Run at the end of the stage sequence",
-          accent: true,
           iconColor: "text-emerald-400",
-          disabled: !ctx.can({
-            id: "study.add-primitive",
-            kind: "run",
-            placement,
-          }),
           action: () =>
             ctx.run({ id: "study.add-primitive", kind: "run", placement }),
         },
@@ -217,13 +205,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: hasStageSelection
             ? "Insert Eigensolve after the selected stage"
             : "Append Eigensolve at the end of the stage sequence",
-          accent: true,
           iconColor: "text-emerald-400",
-          disabled: !ctx.can({
-            id: "study.add-primitive",
-            kind: "eigenmodes",
-            placement,
-          }),
           action: () =>
             ctx.run({
               id: "study.add-primitive",
@@ -245,11 +227,6 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
             ? "Insert Hysteresis Loop after the selected stage"
             : "Append Hysteresis Loop at the end of the stage sequence",
           iconColor: "text-violet-400",
-          disabled: !ctx.can({
-            id: "study.add-macro",
-            kind: "hysteresis_loop",
-            placement,
-          }),
           action: () =>
             ctx.run({
               id: "study.add-macro",
@@ -265,11 +242,6 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
             ? "Insert Field Sweep + Relax after the selected stage"
             : "Append Field Sweep + Relax at the end of the stage sequence",
           iconColor: "text-violet-400",
-          disabled: !ctx.can({
-            id: "study.add-macro",
-            kind: "field_sweep_relax",
-            placement,
-          }),
           action: () =>
             ctx.run({
               id: "study.add-macro",
@@ -285,11 +257,6 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
             ? "Insert Field Sweep + Relax + Snapshot after the selected stage"
             : "Append Field Sweep + Relax + Snapshot at the end of the stage sequence",
           iconColor: "text-violet-400",
-          disabled: !ctx.can({
-            id: "study.add-macro",
-            kind: "field_sweep_relax_snapshot",
-            placement,
-          }),
           action: () =>
             ctx.run({
               id: "study.add-macro",
@@ -305,11 +272,6 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
             ? "Insert Relax -> Run after the selected stage"
             : "Append Relax -> Run at the end of the stage sequence",
           iconColor: "text-violet-400",
-          disabled: !ctx.can({
-            id: "study.add-macro",
-            kind: "relax_run",
-            placement,
-          }),
           action: () =>
             ctx.run({
               id: "study.add-macro",
@@ -325,11 +287,6 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
             ? "Insert Relax -> Eigensolve after the selected stage"
             : "Append Relax -> Eigensolve at the end of the stage sequence",
           iconColor: "text-violet-400",
-          disabled: !ctx.can({
-            id: "study.add-macro",
-            kind: "relax_eigenmodes",
-            placement,
-          }),
           action: () =>
             ctx.run({
               id: "study.add-macro",
@@ -345,11 +302,6 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
             ? "Insert Parameter Sweep after the selected stage"
             : "Append Parameter Sweep at the end of the stage sequence",
           iconColor: "text-violet-400",
-          disabled: !ctx.can({
-            id: "study.add-macro",
-            kind: "parameter_sweep",
-            placement,
-          }),
           action: () =>
             ctx.run({
               id: "study.add-macro",
@@ -365,11 +317,6 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
             ? "Insert current-density sweep + time evolution after the selected stage"
             : "Append current sweep to study",
           iconColor: "text-emerald-400",
-          disabled: !ctx.can({
-            id: "study.add-macro",
-            kind: "current_sweep_run",
-            placement,
-          }),
           action: () =>
             ctx.run({
               id: "study.add-macro",
@@ -426,9 +373,9 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           label: ctx.scriptSyncBusy ? "Syncing..." : "Sync Script",
           tooltip:
             "Rewrite the Python script from the current builder state",
-          accent: true,
           disabled: !ctx.can({ id: "script.sync" }),
           action: () => ctx.run({ id: "script.sync" }),
+          iconColor: "text-emerald-400",
         },
       ],
     },

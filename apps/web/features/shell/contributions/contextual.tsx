@@ -270,7 +270,7 @@ function buildMeshQualityGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: "Rebuild selected mesh target",
           disabled: !ctx.can({ id: "mesh.build-selected" }),
           action: () => ctx.run({ id: "mesh.build-selected" }),
-          accent: true,
+          iconColor: "text-emerald-400",
         },
       ],
     },

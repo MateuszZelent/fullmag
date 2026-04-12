@@ -10,6 +10,7 @@ import type { FemMeshPart, MeshEntityViewState, MeshEntityViewStateMap } from ".
 import { defaultMeshEntityViewState } from "../../../lib/session/types";
 import type { ViewportSelectionScope } from "./femViewportSelection";
 import { scopeTargetPartIds } from "./femViewportSelection";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
 /* ── Types ──────────────────────────────────────────────────────── */
 
@@ -31,7 +32,7 @@ export const VIEWPORT_DISPLAY_DEFAULTS: ViewportDisplayDefaults = {
   meshClipAxis: "x",
   meshClipPos: 50,
   meshShowArrows: true,
-  airMeshVisible: false,
+  airMeshVisible: !FRONTEND_DIAGNOSTIC_FLAGS.femViewport.airboxDisabledByDefault,
   airMeshOpacity: 28,
 };
 

@@ -163,11 +163,6 @@ export default function FrontendDiagnosticSettingsPage() {
         status="settings"
         connection="connected"
         workspaceMode="study"
-        interactiveEnabled={false}
-        canRun={false}
-        canRelax={false}
-        canPause={false}
-        canStop={false}
         canSyncScriptBuilder={false}
         scriptSyncBusy={false}
         resultsAvailable={true}

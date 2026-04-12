@@ -6,7 +6,6 @@ import {
   FileText, FolderOpen, Save, Download, LogOut,
   Undo2, Redo2, Settings,
   Box, Columns2, Grid3X3, PanelRight, Monitor,
-  Play, Pause, Square, Zap, Target,
   Terminal, LayoutGrid, BarChart3,
   BookOpen, Keyboard, Info,
 } from "lucide-react";
@@ -37,19 +36,11 @@ export interface TopHeaderProps {
   runtimeGpuLabel?: string;
   status: string;
   connection: "connecting" | "connected" | "disconnected";
-  interactiveEnabled?: boolean;
-  canRun?: boolean;
-  canRelax?: boolean;
-  canPause?: boolean;
-  canStop?: boolean;
-  runAction?: string;
-  runLabel?: string;
   commandBusy?: boolean;
   commandMessage?: string | null;
   viewMode?: string;
   onViewChange?: (mode: string) => void;
   onSidebarToggle?: () => void;
-  onSimAction?: (action: string) => void;
   onSaveSession?: () => void;
   onOpenSession?: () => void;
 }
@@ -98,17 +89,6 @@ function buildMenus(props: TopHeaderProps, cb: MenuCallbacks): MenuDef[] {
       ],
     },
     {
-      label: "Simulation",
-      items: [
-        { label: "Relax", icon: <Target size={14} />, disabled: !props.canRelax, action: () => props.onSimAction?.("relax") },
-        { label: props.runLabel ?? "Run", icon: <Play size={14} />, shortcut: "F5", disabled: !props.canRun, action: () => props.onSimAction?.(props.runAction ?? "run") },
-        { label: "Pause", icon: <Pause size={14} />, disabled: !props.canPause, action: () => props.onSimAction?.("pause") },
-        { label: "Stop", icon: <Square size={14} />, shortcut: "Shift+F5", disabled: !props.canStop, action: () => props.onSimAction?.("stop") },
-        { separator: true, label: "" },
-        { label: "Interactive Mode", icon: <Zap size={14} />, disabled: !props.interactiveEnabled },
-      ],
-    },
-    {
       label: "Tools",
       items: [
         { label: "Script Editor", icon: <Terminal size={14} /> },
@@ -144,16 +124,6 @@ export default function TopHeader(props: TopHeaderProps) {
   };
 
   const menus = buildMenus(props, menuCallbacks);
-  const controls = [
-    { id: "relax", label: "Relax", icon: <Target size={14} />, tone: "relax", enabled: props.canRelax },
-    { id: props.runAction ?? "run", label: props.runLabel ?? "Run", icon: <Play size={14} fill="currentColor" />, tone: "run", enabled: props.canRun },
-    { id: "pause", label: "Pause", icon: <Pause size={14} fill="currentColor" />, tone: "pause", enabled: props.canPause },
-    { id: "stop", label: "Stop", icon: <Square size={14} fill="currentColor" />, tone: "stop", enabled: props.canStop },
-  ] as const;
-
-  const controlsTitle = props.commandMessage
-    ?? (props.interactiveEnabled ? "Interactive simulation controls" : "Interactive controls are unavailable for this session");
-
   return (
     <div className="flex flex-col w-full shrink-0 border-b border-white/5 bg-background/70 backdrop-blur-xl z-[60] relative">
       {/* ── Row 1: logo + menus + status + controls ── */}
@@ -232,26 +202,11 @@ export default function TopHeader(props: TopHeaderProps) {
           </div>
         )}
 
-        <div className="flex items-center gap-0.5" title={controlsTitle}>
-          {controls.map((control) => (
-            <button
-              key={control.id}
-              type="button"
-              className={cn(
-                "flex items-center justify-center gap-1 rounded-md px-2 py-1 text-[0.68rem] font-semibold tracking-wide transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
-                control.tone === "run" ? "text-emerald-500 hover:bg-emerald-500/15" :
-                control.tone === "relax" ? "text-amber-500 hover:bg-amber-500/15" :
-                control.tone === "pause" ? "text-blue-500 hover:bg-blue-500/15" :
-                "text-rose-500 hover:bg-rose-500/15"
-              )}
-              disabled={!control.enabled}
-              onClick={() => props.onSimAction?.(control.id)}
-              title={control.label}
-            >
-              {control.icon}
-              <span className="hidden sm:inline-block">{control.label}</span>
-            </button>
-          ))}
+        <div
+          className="hidden rounded-md border border-border/40 bg-card/30 px-2 py-1 text-[0.62rem] font-medium tracking-wide text-muted-foreground lg:block"
+          title="Stage authoring and execution now live in the Study ribbon."
+        >
+          Compute in Study
         </div>
       </div>
       </div>

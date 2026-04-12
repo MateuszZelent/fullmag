@@ -86,6 +86,8 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     // false => max smoothness (no face picking on mouse)
     // true  => selection-only interaction mode (camera controls disabled, geometry picking enabled)
     enableSelectionOnlyInteractionMode: false,
+    // Temporary escape hatch while we stabilize the full 3D viewport path.
+    disableSimplifiedMode: true,
     // Granular preset-reset flags: when switching render mode, reset individual
     // display concerns using the per-mode preset value.
     // The old monolithic flag is kept as a master override for backward compat.
@@ -118,6 +120,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     showVolumeHiddenEdgesPass: true,
     showVolumeVisibleEdgesPass: true,
     showPointsPass: true,
+    airboxDisabledByDefault: true,
     enableGeometryCompaction: true,
     enableGeometryNormals: true,
     enableGeometryVertexColors: true,

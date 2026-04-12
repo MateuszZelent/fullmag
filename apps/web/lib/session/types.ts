@@ -1,6 +1,8 @@
 /* ── Session stream types ──
  * All interfaces and type aliases used by the session streaming pipeline. */
 
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+
 export interface SessionManifest {
   session_id: string;
   run_id: string;
@@ -169,8 +171,13 @@ export type MeshEntityViewStateMap = Record<string, MeshEntityViewState>;
 
 /** Single source of truth for default per-part view state. */
 export function defaultMeshEntityViewState(part: Pick<FemMeshPart, "role">): MeshEntityViewState {
+  const airboxDisabledByDefault =
+    FRONTEND_DIAGNOSTIC_FLAGS.femViewport.airboxDisabledByDefault;
   return {
-    visible: part.role !== "air" && part.role !== "outer_boundary",
+    visible:
+      part.role === "air"
+        ? !airboxDisabledByDefault
+        : part.role !== "outer_boundary",
     renderMode: part.role === "air" ? "wireframe" : "surface+edges",
     opacity:
       part.role === "air"

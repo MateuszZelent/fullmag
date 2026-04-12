@@ -12,6 +12,7 @@ import { create } from "zustand";
 import type { InteractionMode, ViewportHoverTarget } from "../interaction/interactionMode.types";
 import type { ViewportMode, VectorComponent, SlicePlane, FemDockTab, ViewportScope, ObjectViewMode } from "../../../components/runs/control-room/shared";
 import type { RenderMode, ClipAxis, FemColorField, FemArrowColorMode, FemVectorDomainFilter, FemFerromagnetVisibilityMode, MeshSelectionSnapshot } from "../../../components/preview/FemMeshView3D";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
 /* ── Camera Profile ── */
 export interface CameraProfile {
@@ -27,6 +28,9 @@ const DEFAULT_CAMERA: CameraProfile = {
   distance: 4,
   target: [0, 0, 0],
 };
+
+const AIRBOX_DISABLED_BY_DEFAULT =
+  FRONTEND_DIAGNOSTIC_FLAGS.femViewport.airboxDisabledByDefault;
 
 /* ── Store State ── */
 export interface ViewportCoreState {
@@ -180,7 +184,7 @@ const INITIAL_STATE: ViewportCoreState = {
   selectedObjectId: null,
   selectedEntityId: null,
   focusedEntityId: null,
-  airMeshVisible: true,
+  airMeshVisible: !AIRBOX_DISABLED_BY_DEFAULT,
   airMeshOpacity: 20,
   meshSelection: { selectedFaceIndices: [], primaryFaceIndex: null },
 };
