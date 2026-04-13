@@ -256,7 +256,9 @@ export default function ChartQuantitySelector({
               {X_AXIS_OPTIONS.map((opt) => (
                 <SelectItem key={opt.key} value={opt.key}>
                   {opt.label}
-                  {opt.unit ? ` (${opt.unit})` : ""}
+                  {opt.unit === "auto"
+                    ? " (auto)"
+                    : opt.unit ? ` (${opt.unit})` : ""}
                 </SelectItem>
               ))}
             </SelectContent>

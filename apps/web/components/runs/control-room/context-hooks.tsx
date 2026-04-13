@@ -93,6 +93,7 @@ export interface TransportContextValue {
   effectiveTime: number;
   effectiveDt: number;
   effectiveDmDt: number;
+  effectiveTorqueT: number;
   effectiveHEff: number;
   effectiveHDemag: number;
   effectiveEEx: number;

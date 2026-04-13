@@ -329,9 +329,11 @@ pub(crate) fn set_latest_scalar_row_if_due(
     state: &mut LocalLiveWorkspaceState,
     update: &fullmag_runner::StepUpdate,
 ) {
-    if update.scalar_row_due {
-        state.latest_scalar_row = Some(scalar_row_from_update(update));
-    }
+    // Always record the scalar row for live streaming whenever the orchestrator decides
+    // to publish a workspace update.  The `scalar_row_due` flag is an artifact-recorder
+    // concern (zarr on disk); for live telemetry we want every throttled live-update to
+    // carry a new chart point so the Charts panel populates continuously.
+    state.latest_scalar_row = Some(scalar_row_from_update(update));
 }
 
 pub(crate) fn clear_cached_preview_fields(state: &mut LocalLiveWorkspaceState) {

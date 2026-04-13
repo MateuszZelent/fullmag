@@ -109,6 +109,8 @@ pub(crate) fn default_current_live_state(req: &CurrentLivePublishRequest) -> Ses
         preview_config: CurrentPreviewConfig::default(),
         preview: None,
         builder_adapter: None,
+        scalar_rows_ws_cursor: 0,
+        quantities_ws_hash: 0,
     }
 }
 
@@ -171,7 +173,12 @@ pub(crate) fn apply_current_live_publish(
         current.fem_mesh = Some(fem_mesh);
     }
     if let Some(row) = req.latest_scalar_row {
+        let prev_len = current.scalar_rows.len();
         upsert_scalar_row(&mut current.scalar_rows, row);
+        // If a genuinely new row was appended, leave the ws_cursor untouched so
+        // the next broadcast will include it.  (Upsert of the same step is a
+        // no-op on length, so the cursor logic still handles it correctly.)
+        let _ = prev_len; // cursor is advanced by the broadcast path, not here
     }
     if let Some(latest_fields) = req.latest_fields {
         merge_latest_fields(&mut current.latest_fields, latest_fields);

@@ -3,19 +3,27 @@
 /**
  * ScalarPlot – Plotly.js line chart for time-series data.
  *
- * Drop-in replacement for the previous ECharts implementation.
- * Uses react-plotly.js with dynamic import to avoid SSR issues in Next.js.
+ * Performance-critical: during live simulation the upstream store pushes
+ * new `rows` on every WS tick (~60 Hz).  We throttle visual updates to
+ * ≤3 fps by tracking a `revision` counter that only bumps every
+ * THROTTLE_MS.  Plotly.react() is called only when `revision` changes,
+ * avoiding expensive full re-renders.
  *
- * Props: rows, xColumn, yColumns – same interface as the previous version.
+ * Automatic X-axis time scaling: raw time values (seconds) are normalised
+ * to the most readable SI prefix (ps, ns, µs, ms, s) based on the data
+ * range.
  */
 
-import { useMemo, memo } from "react";
+import { useMemo, useRef, useCallback, memo, useEffect, useState } from "react";
 import type { QuantityDescriptor, ScalarRow } from "../../lib/useSessionStream";
 import Plot from "./DynamicPlot";
 import { scalarSeriesList, type ScalarSeriesMeta } from "../../lib/quantities/scalars";
 import { normalizeUnitLabel } from "../../lib/format";
 
 // ─── Constants ──────────────────────────────────────────────────────
+
+/** Minimum interval (ms) between chart re-draws during live streaming. */
+const THROTTLE_MS = 350;
 
 const SERIES_COLORS = [
   "#60a5fa", "#34d399", "#f472b6", "#fbbf24",
@@ -31,15 +39,39 @@ function isMagnetizationAverageColumn(col: string): boolean {
 const accessor = (row: ScalarRow, key: string): number =>
   (row as unknown as Record<string, number>)[key] ?? 0;
 
+// ─── Time auto-scaling ───────────────────────────────────────────────
+
+interface TimeScale {
+  factor: number;
+  unit: string;
+  tickformat: string;
+}
+
+const TIME_SCALES: TimeScale[] = [
+  { factor: 1e12, unit: "ps",  tickformat: ".3g" },
+  { factor: 1e9,  unit: "ns",  tickformat: ".3g" },
+  { factor: 1e6,  unit: "µs",  tickformat: ".3g" },
+  { factor: 1e3,  unit: "ms",  tickformat: ".3g" },
+  { factor: 1,    unit: "s",   tickformat: ".4g" },
+];
+
+function chooseTimeScale(maxAbsSeconds: number): TimeScale {
+  if (maxAbsSeconds <= 0) return TIME_SCALES[1];
+  for (const scale of TIME_SCALES) {
+    if (maxAbsSeconds * scale.factor >= 0.09) return scale;
+  }
+  return TIME_SCALES[TIME_SCALES.length - 1];
+}
+
 // ─── Theme ──────────────────────────────────────────────────────────
 
 const THEME = {
   bg: "transparent",
   paper: "transparent",
-  text: "hsl(215, 20.2%, 65.1%)",      // muted-foreground
+  text: "hsl(215, 20.2%, 65.1%)",
   gridLine: "hsla(217.2, 32.6%, 17.5%, 0.35)",
-  hoverLabel: "hsl(222.2, 84%, 4.9%)",  // card bg
-  hoverText: "hsl(210, 40%, 98%)",       // foreground
+  hoverLabel: "hsl(222.2, 84%, 4.9%)",
+  hoverText: "hsl(210, 40%, 98%)",
   hoverBorder: "hsl(217.2, 32.6%, 17.5%)",
 } as const;
 
@@ -50,10 +82,52 @@ interface Props {
   quantities?: QuantityDescriptor[];
   xColumn?: string;
   yColumns?: string[];
-  /** Override per-series colors (index-aligned with yColumns). */
   seriesColors?: string[];
-  /** Optional chart title rendered by Plotly. */
   chartTitle?: string;
+}
+
+// ─── Throttle hook ──────────────────────────────────────────────────
+
+/**
+ * Accepts a fast-changing value and returns a throttled version that
+ * updates at most once every `intervalMs`.  This prevents Plotly from
+ * re-rendering on every WS tick.
+ */
+function useThrottledValue<T>(value: T, intervalMs: number): T {
+  const [throttled, setThrottled] = useState(value);
+  const lastUpdate = useRef(0);
+  const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const now = Date.now();
+    const elapsed = now - lastUpdate.current;
+
+    if (elapsed >= intervalMs) {
+      // Enough time passed — update immediately
+      lastUpdate.current = now;
+      setThrottled(value);
+      if (pending.current) {
+        clearTimeout(pending.current);
+        pending.current = null;
+      }
+    } else if (!pending.current) {
+      // Schedule a trailing update
+      pending.current = setTimeout(() => {
+        lastUpdate.current = Date.now();
+        setThrottled(value);
+        pending.current = null;
+      }, intervalMs - elapsed);
+    }
+
+    return () => {
+      if (pending.current) {
+        clearTimeout(pending.current);
+        pending.current = null;
+      }
+    };
+  }, [value, intervalMs]);
+
+  return throttled;
 }
 
 // ─── Component ──────────────────────────────────────────────────────
@@ -66,6 +140,19 @@ const ScalarPlot = memo(function ScalarPlot({
   seriesColors,
   chartTitle,
 }: Props) {
+  // ── Throttle rows to ≤3 fps ──
+  const throttledRows = useThrottledValue(rows, THROTTLE_MS);
+  const revision = useRef(0);
+  const prevRowCount = useRef(0);
+
+  // Bump revision only when the throttled snapshot actually changed
+  if (throttledRows.length !== prevRowCount.current) {
+    prevRowCount.current = throttledRows.length;
+    revision.current += 1;
+  }
+
+  const isTimeColumn = xColumn === "time";
+
   const xMeta = useMemo(
     () => scalarSeriesList([xColumn], quantities)[0] ?? { key: xColumn, label: xColumn, unit: "", kind: "diagnostic" as const },
     [quantities, xColumn],
@@ -77,15 +164,34 @@ const ScalarPlot = memo(function ScalarPlot({
   const magnetizationOnly =
     seriesMeta.length > 0 && seriesMeta.every((meta) => isMagnetizationAverageColumn(meta.key));
 
-  const xLabel = buildAxisLabel(xMeta);
+  // ── Auto-scale time axis ──────────────────────────────────────────
+  const timeScale = useMemo((): TimeScale | null => {
+    if (!isTimeColumn || throttledRows.length === 0) return null;
+    const maxT = throttledRows.reduce((max, r) => Math.max(max, Math.abs(accessor(r, "time"))), 0);
+    return chooseTimeScale(maxT);
+  }, [isTimeColumn, throttledRows]);
 
-  // Build Plotly traces (memoised on rows + column identity)
+  // X values: apply time factor when applicable
+  const xValues = useMemo(() => {
+    if (!timeScale) {
+      return throttledRows.map((r) => accessor(r, xColumn));
+    }
+    return throttledRows.map((r) => accessor(r, "time") * timeScale.factor);
+  }, [throttledRows, xColumn, timeScale]);
+
+  // Axis label
+  const xLabel = useMemo(() => {
+    if (timeScale) return `Time (${timeScale.unit})`;
+    return buildAxisLabel(xMeta);
+  }, [timeScale, xMeta]);
+
+  // Build Plotly traces
   const traces = useMemo(() => {
-    const mode = rows.length > 1 ? ("lines" as const) : ("markers" as const);
+    const mode = throttledRows.length > 1 ? ("lines" as const) : ("markers" as const);
 
     return seriesMeta.map((series, i) => ({
-      x: rows.map((r) => accessor(r, xColumn)),
-      y: rows.map((r) => accessor(r, series.key)),
+      x: xValues,
+      y: throttledRows.map((r) => accessor(r, series.key)),
       type: "scattergl" as const,
       mode,
       name: buildAxisLabel(series),
@@ -95,13 +201,13 @@ const ScalarPlot = memo(function ScalarPlot({
       },
       marker: {
         color: seriesColors?.[i] ?? SERIES_COLORS[i % SERIES_COLORS.length],
-        size: rows.length > 1 ? 0 : 7,
+        size: throttledRows.length > 1 ? 0 : 7,
       },
       hovertemplate: magnetizationOnly
         ? `%{y:.4f}<extra>${buildAxisLabel(series)}</extra>`
         : `%{y:.4e}<extra>${buildAxisLabel(series)}</extra>`,
     }));
-  }, [rows, xColumn, seriesMeta, magnetizationOnly]);
+  }, [xValues, throttledRows, seriesMeta, magnetizationOnly, seriesColors]);
 
   const layout = useMemo(
     (): Partial<Plotly.Layout> => ({
@@ -122,8 +228,10 @@ const ScalarPlot = memo(function ScalarPlot({
         gridcolor: THEME.gridLine,
         gridwidth: 1,
         zeroline: false,
-        exponentformat: "e",
-        tickformat: magnetizationOnly ? ".3f" : undefined,
+        exponentformat: timeScale ? "none" : "e",
+        tickformat: timeScale
+          ? timeScale.tickformat
+          : magnetizationOnly ? ".3f" : undefined,
       },
       yaxis: {
         title: {
@@ -150,8 +258,10 @@ const ScalarPlot = memo(function ScalarPlot({
         bgcolor: THEME.hoverLabel,
         bordercolor: THEME.hoverBorder,
         font: { color: THEME.hoverText, size: 12 },
+        namelength: -1,
       },
       dragmode: "zoom",
+      datarevision: revision.current,
       modebar: {
         bgcolor: "transparent",
         color: THEME.text,
@@ -159,7 +269,7 @@ const ScalarPlot = memo(function ScalarPlot({
         orientation: "v",
       },
     }),
-    [xLabel, magnetizationOnly, seriesMeta, chartTitle],
+    [xLabel, magnetizationOnly, seriesMeta, chartTitle, timeScale, revision.current],
   );
 
   const config = useMemo(
@@ -187,6 +297,7 @@ const ScalarPlot = memo(function ScalarPlot({
       data={traces}
       layout={layout}
       config={config}
+      revision={revision.current}
       useResizeHandler
       className="h-full w-full"
       style={{ width: "100%", height: "100%" }}

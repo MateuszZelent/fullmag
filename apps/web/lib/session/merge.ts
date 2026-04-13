@@ -173,13 +173,62 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
   }
 
   if (nextScalarStep < prevScalarStep) {
+    // Regression guard: backend resent an older step — keep accumulated history.
     merged.scalar_rows = prev.scalar_rows;
-  } else if (next.scalar_rows.length === prev.scalar_rows.length && nextScalarStep === prevScalarStep) {
+  } else if (
+    next.scalar_rows.length === 0 &&
+    (next.scalar_rows_total ?? 0) > 0 &&
+    prev.scalar_rows.length > 0
+  ) {
+    // Empty delta (no new rows in this broadcast) — keep accumulated history.
+    merged.scalar_rows = prev.scalar_rows;
+  } else if (next.scalar_rows.length > 0 && nextScalarStep > prevScalarStep) {
+    // Determine whether `next.scalar_rows` is a pure delta (all rows newer than prev tip)
+    // or a full snapshot that includes history overlapping with prev.
+    const firstNextStep = next.scalar_rows[0]?.step ?? -1;
+    const isPureDelta = firstNextStep > prevScalarStep;
+    if (isPureDelta) {
+      // All rows in next are genuinely new — append to accumulated history regardless
+      // of relative lengths (handles the case where delta is larger than current accumulation).
+      const prevStepSet = new Set(prev.scalar_rows.map((r) => r.step));
+      const genuinelyNew = next.scalar_rows.filter((r) => !prevStepSet.has(r.step));
+      merged.scalar_rows = genuinelyNew.length > 0
+        ? [...prev.scalar_rows, ...genuinelyNew]
+        : prev.scalar_rows;
+    }
+    // else: next starts at or before prevScalarStep → full snapshot; use next as-is
+    // (merged.scalar_rows is already set to next.scalar_rows from { ...next }).
+  } else if (nextScalarStep === prevScalarStep && next.scalar_rows.length < prev.scalar_rows.length) {
+    // Stale V2-injected row: step_update_v2.scalars carried the same step as the
+    // accumulated tip but with fewer rows than history — keep accumulated history.
+    merged.scalar_rows = prev.scalar_rows;
+  } else if (
+    next.scalar_rows.length === prev.scalar_rows.length &&
+    nextScalarStep === prevScalarStep
+  ) {
+    // Identical tip — prefer prev to avoid redundant re-renders.
     const prevLast = prev.scalar_rows[prev.scalar_rows.length - 1];
     const nextLast = next.scalar_rows[next.scalar_rows.length - 1];
     if (prevLast?.e_total === nextLast?.e_total && prevLast?.max_dm_dt === nextLast?.max_dm_dt) {
       merged.scalar_rows = prev.scalar_rows;
     }
+  }
+  // else: next has more rows than prev AND starts before prevScalarStep → full snapshot → use next as-is.
+
+  if (process.env.NODE_ENV !== "production") {
+    const v2Step = next.step_update_v2?.scalars?.step ?? null;
+    console.debug(
+      `[merge] prev=${prev.scalar_rows.length} next_raw=${next.scalar_rows.length}` +
+      ` total=${next.scalar_rows_total ?? "?"}` +
+      ` v2_step=${v2Step ?? "-"}` +
+      ` merged=${merged.scalar_rows.length}` +
+      ` prevTip=${prevScalarStep} nextTip=${nextScalarStep}`,
+    );
+  }
+
+  // Quantities are omitted from WS delta events when unchanged — keep the previous value.
+  if (merged.quantities.length === 0 && prev.quantities.length > 0) {
+    merged.quantities = prev.quantities;
   }
 
   const prevLogTs = lastLogTimestamp(prev.engine_log);

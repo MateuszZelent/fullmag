@@ -124,6 +124,7 @@ export interface RibbonBuildContext {
   canRelax: boolean;
   canPause: boolean;
   canStop: boolean;
+  canSkip: boolean;
   runAction: string;
   runLabel: string;
 

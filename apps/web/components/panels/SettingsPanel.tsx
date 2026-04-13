@@ -22,8 +22,6 @@ import EnergyPanel from "./settings/EnergyPanel";
 import StateIoPanel from "./settings/StateIoPanel";
 import VisualizationPresetPanel from "./settings/VisualizationPresetPanel";
 import InspectorRegistryHost from "./InspectorRegistryHost";
-import { CORE_UI_CAPABILITIES } from "@/lib/workspace/capability-contract";
-import { summarizeCapabilityCoverage } from "@/lib/workspace/capability-audit";
 // Legacy imports removed — routing is now handled by inspectorRegistry
 // import { parseStudyNodeContext } from "@/lib/study-builder/node-context";
 // import { isVisualizationTreeNode } from "../runs/control-room/visualizationPresets";
@@ -134,7 +132,6 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   const cmd = useCommand();
   const model = useModel();
   // studyNodeContext removed — routing now via inspectorRegistry
-  const capabilitySummary = summarizeCapabilityCoverage();
   const showSolverTelemetrySection = false;
   const showEnergySection = false;
   const selectedObjectNodeId = model.selectedObjectId ? `geo-${model.selectedObjectId}` : undefined;
@@ -355,23 +352,6 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
       ) : null}
 
       {/* ── Node-specific content (each sub-panel manages its own SidebarSections) ── */}
-      <SidebarSection title="Capability Coverage" icon="🧭" defaultOpen={false}>
-        <div className="grid gap-1">
-          <InfoRow label="Total" value={String(capabilitySummary.total)} />
-          <InfoRow label="Implemented" value={String(capabilitySummary.implemented)} />
-          <InfoRow label="Partial" value={String(capabilitySummary.partial)} />
-          <InfoRow label="Missing" value={String(capabilitySummary.missing)} />
-          <div className="mt-2 flex flex-col gap-1">
-            {CORE_UI_CAPABILITIES.map((item) => (
-              <div key={item.id} className="rounded border border-border/30 bg-background/30 px-2 py-1 text-[0.68rem]">
-                <span className="font-semibold">{item.id}</span>
-                <span className="ml-1 text-muted-foreground">[{item.status}]</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </SidebarSection>
-
       {renderNodeContent()}
 
       {/* ── Global sections ── */}

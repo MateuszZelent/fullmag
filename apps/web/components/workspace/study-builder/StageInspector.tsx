@@ -187,7 +187,7 @@ export default function StageInspector({
       </div>
 
       <Section title="Selection">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
           <Field label="Label">
             <Input value={node.label} onChange={(event) => onRename(event.target.value)} />
           </Field>
@@ -207,7 +207,7 @@ export default function StageInspector({
 
       {node.node_kind === "primitive" ? (
         <Section title="Stage Parameters">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             <Field label="Stage kind">
               <Input value={humanizeToken(node.stage_kind)} readOnly />
             </Field>
@@ -410,7 +410,7 @@ export default function StageInspector({
 
       {node.node_kind === "macro" ? (
         <Section title="Macro Parameters">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             {node.macro_kind === "field_sweep_relax" || node.macro_kind === "field_sweep_relax_snapshot" ? (
               <>
                 <Field label="Start [mT]">

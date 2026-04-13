@@ -654,7 +654,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     !commandBusy;
   const canSkipCommand =
     interactiveEnabled &&
-    workspaceStatus === "running" &&
+    (workspaceStatus === "running" || workspaceStatus === "paused") &&
     runtimeCanAcceptCommands &&
     !commandBusy;
   const primaryRunAction =

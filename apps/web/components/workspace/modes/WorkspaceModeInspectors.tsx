@@ -12,6 +12,8 @@ import {
   type FemMeshPart,
   type MeshEntityViewState,
 } from "@/lib/session/types";
+import { CORE_UI_CAPABILITIES } from "@/lib/workspace/capability-contract";
+import { summarizeCapabilityCoverage } from "@/lib/workspace/capability-audit";
 import {
   useCommand,
   useModel,
@@ -34,6 +36,7 @@ function WorkspaceRightToolbox() {
   const model = useModel();
   const rightInspectorTab = useWorkspaceStore((state) => state.rightInspectorTab);
   const setRightInspectorTab = useWorkspaceStore((state) => state.setRightInspectorTab);
+  const capabilitySummary = useMemo(() => summarizeCapabilityCoverage(), []);
 
   const snapshot = model.visibleSubmeshSnapshot;
   const meshParts = model.meshParts;
@@ -209,11 +212,44 @@ function WorkspaceRightToolbox() {
         </TabsContent>
 
         <TabsContent value="tools" className="mt-0 flex min-h-0 flex-1 flex-col">
-          <div className="flex flex-1 items-center justify-center px-4 text-center">
-            <div className="rounded-xl border border-border/25 bg-background/35 px-4 py-3 text-[0.75rem] text-muted-foreground">
-              Toolbox extensions coming soon.
+          <ScrollArea className="flex-1 px-3 py-3">
+            <div className="space-y-3">
+              <div className="rounded-xl border border-border/30 bg-background/35 p-3">
+                <div className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  Capability Coverage
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-[0.72rem]">
+                  <div className="rounded-md border border-border/30 bg-background/40 px-2.5 py-1.5">
+                    <div className="text-[0.6rem] uppercase tracking-widest text-muted-foreground">Total</div>
+                    <div className="font-mono text-foreground">{capabilitySummary.total}</div>
+                  </div>
+                  <div className="rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1.5">
+                    <div className="text-[0.6rem] uppercase tracking-widest text-emerald-300/80">Implemented</div>
+                    <div className="font-mono text-emerald-300">{capabilitySummary.implemented}</div>
+                  </div>
+                  <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5">
+                    <div className="text-[0.6rem] uppercase tracking-widest text-amber-300/80">Partial</div>
+                    <div className="font-mono text-amber-300">{capabilitySummary.partial}</div>
+                  </div>
+                  <div className="rounded-md border border-rose-500/25 bg-rose-500/10 px-2.5 py-1.5">
+                    <div className="text-[0.6rem] uppercase tracking-widest text-rose-300/80">Missing</div>
+                    <div className="font-mono text-rose-300">{capabilitySummary.missing}</div>
+                  </div>
+                </div>
+                <div className="mt-3 space-y-1.5">
+                  {CORE_UI_CAPABILITIES.map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-md border border-border/25 bg-background/30 px-2.5 py-1.5 text-[0.7rem]"
+                    >
+                      <span className="font-medium text-foreground">{item.id}</span>
+                      <span className="ml-1.5 text-muted-foreground">[{item.status}]</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
+          </ScrollArea>
         </TabsContent>
 
         <TabsContent value="console" className="mt-0 flex min-h-0 flex-1 flex-col">

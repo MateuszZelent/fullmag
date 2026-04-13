@@ -13,6 +13,7 @@ import {
 import { useCommand, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
 import RunSidebar from "@/components/runs/control-room/RunSidebar";
 import BottomUtilityDock from "@/components/workspace/shell/BottomUtilityDock";
+import ChartsDock from "@/components/workspace/docks/ChartsDock";
 import EmptyState from "@/components/ui/EmptyState";
 import {
   AnalyzeRightInspector,
@@ -121,20 +122,28 @@ export default function WorkspaceDockingShell() {
       }
       if (component === "dock-bottom") {
         return (
-          <BottomUtilityDock
-            activity={cmd.activity}
-            workspaceStatus={cmd.workspaceStatus}
-            effectiveStep={tp.effectiveStep}
-            effectiveTime={tp.effectiveTime}
-            effectiveDt={tp.effectiveDt}
-            effectiveDmDt={tp.effectiveDmDt}
-            effectiveHEff={tp.effectiveHEff}
-            stepsPerSec={tp.stepsPerSec}
-            elapsed={tp.elapsed}
-            hasSolverTelemetry={tp.hasSolverTelemetry}
-            eTotal={tp.effectiveETotal}
-            activityDetail={cmd.activity?.detail ?? null}
-          />
+          <div className="flex h-full divide-x divide-border/20 overflow-hidden">
+            <div className="flex-1 min-w-0 overflow-hidden">
+              <BottomUtilityDock
+                activity={cmd.activity}
+                workspaceStatus={cmd.workspaceStatus}
+                effectiveStep={tp.effectiveStep}
+                effectiveTime={tp.effectiveTime}
+                effectiveDt={tp.effectiveDt}
+                effectiveDmDt={tp.effectiveDmDt}
+                effectiveTorqueT={tp.effectiveTorqueT}
+                effectiveHEff={tp.effectiveHEff}
+                stepsPerSec={tp.stepsPerSec}
+                elapsed={tp.elapsed}
+                hasSolverTelemetry={tp.hasSolverTelemetry}
+                eTotal={tp.effectiveETotal}
+                activityDetail={cmd.activity?.detail ?? null}
+              />
+            </div>
+            <div className="w-52 shrink-0 overflow-hidden">
+              <ChartsDock />
+            </div>
+          </div>
         );
       }
 
@@ -157,6 +166,7 @@ export default function WorkspaceDockingShell() {
       tp.effectiveStep,
       tp.effectiveTime,
       tp.effectiveHEff,
+      tp.effectiveTorqueT,
       tp.effectiveETotal,
       tp.elapsed,
       tp.hasSolverTelemetry,

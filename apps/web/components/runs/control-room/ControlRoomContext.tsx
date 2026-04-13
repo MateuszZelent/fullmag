@@ -431,7 +431,17 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const runtimeStatus = state?.runtime_status ?? null;
   const commandStatus = state?.command_status ?? null;
   const stageExecution = state?.stage_execution ?? null;
-  const scalarRows = state?.scalar_rows ?? EMPTY_SCALAR_ROWS;
+  // Reference-stable scalarRows: only changes ref when length or last step differs.
+  // This prevents cascading useMemo invalidation on every WS tick.
+  const rawScalarRows = state?.scalar_rows ?? EMPTY_SCALAR_ROWS;
+  const stableScalarRowsRef = useRef(rawScalarRows);
+  const scalarRowsFingerprintRef = useRef("");
+  const scalarRowsFp = `${rawScalarRows.length}:${rawScalarRows.length > 0 ? rawScalarRows[rawScalarRows.length - 1]?.step ?? -1 : -1}`;
+  if (scalarRowsFp !== scalarRowsFingerprintRef.current) {
+    scalarRowsFingerprintRef.current = scalarRowsFp;
+    stableScalarRowsRef.current = rawScalarRows;
+  }
+  const scalarRows = stableScalarRowsRef.current;
   const engineLog = state?.engine_log ?? EMPTY_ENGINE_LOG;
   const quantities = state?.quantities ?? EMPTY_QUANTITIES;
   const artifactsArr = state?.artifacts ?? EMPTY_ARTIFACTS;
@@ -615,6 +625,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const effectiveEDmi = liveIsStale ? (run?.final_e_dmi ?? 0) : (liveState?.e_dmi ?? run?.final_e_dmi ?? 0);
   const effectiveETotal = liveIsStale ? (run?.final_e_total ?? 0) : (liveState?.e_total ?? run?.final_e_total ?? 0);
   const effectiveDmDt = liveIsStale ? 0 : (liveState?.max_dm_dt ?? 0);
+  const latestScalarTorqueT = scalarRows.length > 0 ? (scalarRows[scalarRows.length - 1]?.max_torque_T ?? 0) : 0;
+  const effectiveTorqueT = liveIsStale
+    ? latestScalarTorqueT
+    : (liveState?.max_torque_T ?? latestScalarTorqueT);
   const effectiveHEff = liveIsStale ? 0 : (liveState?.max_h_eff ?? 0);
   const effectiveHDemag = liveIsStale ? 0 : (liveState?.max_h_demag ?? 0);
 
@@ -625,11 +639,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       ...liveState,
       step: effectiveStep, time: effectiveTime, dt: effectiveDt,
       e_ex: effectiveEEx, e_demag: effectiveEDemag, e_ext: effectiveEExt, e_ani: effectiveEAni, e_dmi: effectiveEDmi, e_total: effectiveETotal,
-      max_dm_dt: effectiveDmDt, max_h_eff: effectiveHEff, max_h_demag: effectiveHDemag,
+      max_dm_dt: effectiveDmDt, max_torque_T: effectiveTorqueT, max_h_eff: effectiveHEff, max_h_demag: effectiveHDemag,
     };
   }, [liveState, liveIsStale, effectiveStep, effectiveTime, effectiveDt,
       effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
-      effectiveDmDt, effectiveHEff, effectiveHDemag]);
+      effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag]);
 
   /* Status bar */
   const elapsed = session
@@ -1735,14 +1749,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
    * ═══════════════════════════════════════════════════════════════ */
 
   const transportValue = useMemo<TransportContextValue>(() => ({
-    effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveHEff, effectiveHDemag,
+    effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag,
     effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
     elapsed, stepsPerSec,
     liveState, effectiveLiveState, scalarRows,
     dmDtSpark, dtSpark, eTotalSpark,
     preview, selectedVectors, fieldStats, hasSolverTelemetry,
   }), [
-    effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveHEff, effectiveHDemag,
+    effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag,
     effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
     elapsed, stepsPerSec,
     liveState, effectiveLiveState, scalarRows,
@@ -1791,7 +1805,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     runtimeEngineGpuLabel, runtimeEngineGpuDevice,
     activity, sessionFooter, runtimeStatus, stageExecution, runtimeCanAcceptCommands,
     commandStatus, activeCommandKind, activeCommandState,
-    canRunCommand, canRelaxCommand, canPauseCommand, canStopCommand, canSkipCommand: false, primaryRunAction, primaryRunLabel,
+    canRunCommand, canRelaxCommand, canPauseCommand, canStopCommand, canSkipCommand, primaryRunAction, primaryRunLabel,
     interactiveEnabled, interactiveControlsEnabled, awaitingCommand, commandBusy, commandMessage,
     latestBackendError,
     scriptSyncBusy, scriptSyncMessage, stateIoBusy, stateIoMessage, scriptInitialState, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, runUntilInput,
@@ -1803,7 +1817,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     runtimeEngineGpuLabel, runtimeEngineGpuDevice,
     activity, sessionFooter, runtimeStatus, stageExecution, runtimeCanAcceptCommands,
     commandStatus, activeCommandKind, activeCommandState,
-    canRunCommand, canRelaxCommand, canPauseCommand, canStopCommand, primaryRunAction, primaryRunLabel,
+    canRunCommand, canRelaxCommand, canPauseCommand, canStopCommand, canSkipCommand, primaryRunAction, primaryRunLabel,
     interactiveEnabled, interactiveControlsEnabled, awaitingCommand, commandBusy, commandMessage,
     latestBackendError,
     scriptSyncBusy, scriptSyncMessage, stateIoBusy, stateIoMessage, scriptInitialState, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, runUntilInput,

@@ -455,7 +455,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
         <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
           Configure the global Zeeman field inherited by authored stages and macros. Stage-level sweeps can override this baseline during execution.
         </div>
-        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="mt-3 grid grid-cols-1 gap-3 @[980px]:grid-cols-3">
           <TextField
             label="Bx [T]"
             value={externalField ? String(externalField[0]) : ""}
@@ -591,7 +591,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       }
       return (
         <SidebarSection title="Stage Solver" icon="⚙" defaultOpen={true}>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             <SelectField
               label="Integrator"
               value={String(node.payload.integrator ?? "rk45")}
@@ -622,7 +622,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       }
       return (
         <SidebarSection title="Time Range" icon="⏱" defaultOpen={true}>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             <TextField
               label="Run until [s]"
               value={String(node.payload.until_seconds ?? "")}
@@ -648,7 +648,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       }
       return (
         <SidebarSection title="Stop Criteria" icon="🎯" defaultOpen={true}>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             <SelectField
               label="Relax algorithm"
               value={String(node.payload.relax_algorithm ?? "llg_overdamped")}
@@ -688,7 +688,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       }
       return (
         <SidebarSection title="Equilibrium" icon="🧲" defaultOpen={true}>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             <SelectField
               label="Equilibrium source"
               value={String(node.payload.eigen_equilibrium_source ?? "relax")}
@@ -719,7 +719,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       }
       return (
         <SidebarSection title="Operator & Spectrum" icon="〰" defaultOpen={true}>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             <TextField
               label="Mode count"
               value={String(node.payload.eigen_count ?? "10")}
@@ -787,7 +787,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       }
       return (
         <SidebarSection title="Sweep Definition" icon="↕" defaultOpen={true}>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             {"quantity" in node.config ? (
               <SelectField
                 label="Quantity"
@@ -833,7 +833,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       }
       return (
         <SidebarSection title="Settle Stage" icon="🧲" defaultOpen={true}>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             <SelectField
               label="Per-point settle"
               value={node.config.relax_each !== false ? "relax" : "run"}

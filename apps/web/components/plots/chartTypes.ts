@@ -419,7 +419,7 @@ export interface XAxisOption {
 }
 
 export const X_AXIS_OPTIONS: readonly XAxisOption[] = [
-  { key: "time", label: "Time", unit: "s" },
+  { key: "time", label: "Time", unit: "auto" },
   { key: "step", label: "Step", unit: "" },
 ] as const;
 

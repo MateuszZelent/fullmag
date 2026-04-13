@@ -246,7 +246,7 @@ export default function MeshPanel() {
             </button>
           ))}
         </div>
-        <div className="grid gap-3 lg:grid-cols-2">
+        <div className="grid gap-3 @[900px]:grid-cols-2">
           <div className="grid gap-2 rounded-lg border border-border/30 bg-background/50 p-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground">Clip Plane</span>

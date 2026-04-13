@@ -1111,6 +1111,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         canRelax={ctx.canRelaxCommand}
         canPause={ctx.canPauseCommand}
         canStop={ctx.canStopCommand}
+        canSkip={ctx.canSkipCommand}
         runAction={ctx.primaryRunAction}
         runLabel={ctx.primaryRunLabel}
         onViewChange={ctx.handleViewModeChange}

@@ -55,6 +55,7 @@ interface RibbonBarProps {
   canRelax?: boolean;
   canPause?: boolean;
   canStop?: boolean;
+  canSkip?: boolean;
   runAction?: string;
   runLabel?: string;
   onViewChange?: (mode: string) => void;
@@ -194,10 +195,8 @@ function contextualTabsForSelection(p: RibbonBarProps): ContextualRibbonTab[] {
   ) {
     tabs.push({ id: "mesh-quality", label: "Mesh Quality" });
   }
-  if (nodeId.startsWith("res-") || nodeId === "results" || p.viewMode === "Analyze") {
-    tabs.push({ id: "plot", label: "Plot" });
-    tabs.push({ id: "table", label: "Table" });
-  }
+  // Plot/Table contextual tabs removed — charts and tables are accessed
+  // directly via the dock center tab bar, not via ribbon context tabs.
   return tabs;
 }
 
@@ -212,6 +211,7 @@ function buildContext(props: RibbonBarProps): RibbonBuildContext {
     canRelax: Boolean(props.canRelax),
     canPause: Boolean(props.canPause),
     canStop: Boolean(props.canStop),
+    canSkip: Boolean(props.canSkip),
     runAction: props.runAction ?? "run",
     runLabel: props.runLabel ?? "Run",
 
@@ -348,7 +348,9 @@ export default function RibbonBar(props: RibbonBarProps) {
   const defaultTab = defaultTabForMode(workspaceStage);
   const contextualTabs = useMemo(
     () => contextualTabsForSelection(props),
-    [props],
+    // Only the fields contextualTabsForSelection actually reads:
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.selectedNodeId, props.selectedObjectId, props.viewMode],
   );
   const activeTab = (activeCoreTab && visibleTabs.includes(activeCoreTab as RibbonTab)
     ? (activeCoreTab as RibbonTab)
@@ -413,6 +415,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.canRelax,
     props.canPause,
     props.canStop,
+    props.canSkip,
     props.quickPreviewTargets,
     props.selectedQuantity,
     props.antennaSources,

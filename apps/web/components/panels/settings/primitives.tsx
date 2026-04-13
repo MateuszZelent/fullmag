@@ -114,7 +114,7 @@ export function SidebarSection({
         ) : null}
       </button>
       {resolvedOpen ? (
-        <div className="px-4 pb-4 pt-2 flex flex-col gap-4 border-t border-border/20">
+        <div className="@container px-4 pb-4 pt-2 flex flex-col gap-4 border-t border-border/20">
           {children}
         </div>
       ) : null}

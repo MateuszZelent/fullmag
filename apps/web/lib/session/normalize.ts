@@ -1691,6 +1691,47 @@ export function normalizeSessionState(
     }
   }
 
+  // ── Merge step_update_v2.scalars into scalar_rows for live chart population.
+  // The backend emits `step_update_v2` on every live WebSocket step update;
+  // `scalars` contains the scalar row whenever `scalar_row_due` is true in the
+  // Rust runner. Without this merge the chart stays empty during a live run
+  // because no full `raw.scalar_rows` snapshot arrives until the session is over.
+  const rawScalarsFromStep = rawStepV2?.scalars;
+  // solver_dt lives in diagnostics, not in GlobalQuantityRow — pull it so ScalarRow
+  // has a non-zero dt even when the row arrived via the V2 channel.
+  const rawV2Dt: number | undefined =
+    typeof rawStepV2?.diagnostics?.dt === "number" ? rawStepV2.diagnostics.dt : undefined;
+  let rawScalarRowsForMerge: any[] = Array.isArray(raw.scalar_rows) ? raw.scalar_rows : [];
+  if (
+    rawScalarsFromStep &&
+    typeof rawScalarsFromStep.step === "number" &&
+    Number.isFinite(rawScalarsFromStep.step)
+  ) {
+    // Deduplicate: skip if the same step is already in the snapshot batch.
+    // Note: this only deduplicates against rows in the CURRENT delta batch; the
+    // stale-tip guard in mergeSessionState handles the case where the V2 step
+    // equals the previously-accumulated tip step in prev.scalar_rows.
+    const alreadyPresent = rawScalarRowsForMerge.some(
+      (r: any) => Number(r?.step) === rawScalarsFromStep.step,
+    );
+    if (!alreadyPresent) {
+      // Carry solver_dt from diagnostics (not present on GlobalQuantityRow itself).
+      const v2RowWithDt = rawV2Dt != null
+        ? { ...rawScalarsFromStep, solver_dt: rawV2Dt }
+        : rawScalarsFromStep;
+      rawScalarRowsForMerge = [...rawScalarRowsForMerge, v2RowWithDt];
+    }
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    console.debug(
+      `[normalize] scalar_rows=${rawScalarRowsForMerge.length}` +
+      ` raw_delta=${Array.isArray(raw.scalar_rows) ? (raw.scalar_rows as any[]).length : "?"}` +
+      ` v2_step=${rawScalarsFromStep?.step ?? "-"}` +
+      ` scalar_rows_total=${raw.scalar_rows_total ?? "?"}`,
+    );
+  }
+
   const rawPreview = raw.preview ?? null;
   const rawPreviewConfig = raw.preview_config ?? null;
   const displaySelection = normalizeDisplaySelection(raw.display_selection);
@@ -1725,6 +1766,14 @@ export function normalizeSessionState(
         max_dm_dt: rawLive.latest_step?.max_dm_dt ?? 0,
         max_h_eff: rawLive.latest_step?.max_h_eff ?? 0,
         max_h_demag: rawLive.latest_step?.max_h_demag ?? 0,
+        max_torque_Apm:
+          typeof rawLive.latest_step?.max_torque_Apm === "number"
+            ? Number(rawLive.latest_step.max_torque_Apm)
+            : undefined,
+        max_torque_T:
+          typeof rawLive.latest_step?.max_torque_T === "number"
+            ? Number(rawLive.latest_step.max_torque_T)
+            : undefined,
         wall_time_ns: rawLive.latest_step?.wall_time_ns ?? 0,
         grid: rawLive.latest_step?.grid ?? fallbackGrid ?? [0, 0, 0],
         preview_grid: rawLive.latest_step?.preview_grid ?? null,
@@ -1757,11 +1806,10 @@ export function normalizeSessionState(
     scene_document: sceneDocument,
     script_builder: scriptBuilder,
     model_builder_graph: modelBuilderGraph,
-    scalar_rows: Array.isArray(raw.scalar_rows)
-      ? raw.scalar_rows.map((row: any) => ({
+    scalar_rows: rawScalarRowsForMerge.map((row: any) => ({
           step: Number(row?.step ?? 0),
           time: Number(row?.time ?? 0),
-          solver_dt: Number(row?.solver_dt ?? 0),
+          solver_dt: Number(row?.solver_dt ?? row?.dt ?? 0),
           mx: Number(row?.mx ?? 0),
           my: Number(row?.my ?? 0),
           mz: Number(row?.mz ?? 0),
@@ -1774,8 +1822,11 @@ export function normalizeSessionState(
           max_dm_dt: Number(row?.max_dm_dt ?? 0),
           max_h_eff: Number(row?.max_h_eff ?? 0),
           max_h_demag: Number(row?.max_h_demag ?? 0),
-        }))
-      : [],
+          max_torque_Apm: Number(row?.max_torque_Apm ?? 0),
+          max_torque_T: Number(row?.max_torque_T ?? 0),
+        })),
+    // Server-side total row count (used by merge logic to distinguish "empty delta" from no data).
+    scalar_rows_total: typeof raw.scalar_rows_total === "number" ? raw.scalar_rows_total : rawScalarRowsForMerge.length,
     engine_log: Array.isArray(raw.engine_log) ? raw.engine_log : [],
     quantities: Array.isArray(raw.quantities)
       ? raw.quantities.map((quantity: any) => ({

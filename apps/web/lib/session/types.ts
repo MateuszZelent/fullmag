@@ -1123,7 +1123,10 @@ export interface SessionState {
   script_builder: ScriptBuilderState | null;
   model_builder_graph: ModelBuilderGraphV2 | null;
   scalar_rows: ScalarRow[];
+  /** Total number of scalar rows accumulated server-side (including history not in this payload). */
+  scalar_rows_total?: number;
   engine_log: EngineLogEntry[];
+  /** Omitted in WS delta events when quantities haven't changed since last broadcast. */
   quantities: QuantityDescriptor[];
   fem_mesh: FemLiveMesh | null;
   latest_fields: LatestFields;

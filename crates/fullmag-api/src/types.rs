@@ -361,6 +361,14 @@ pub(crate) struct SessionStateResponse {
     pub preview: Option<PreviewState>,
     #[serde(skip_serializing, default)]
     pub builder_adapter: Option<ScriptBuilderState>,
+    /// How many scalar_rows have already been included in a WS broadcast.
+    /// WS events send only the delta slice `scalar_rows[ws_cursor..]`;
+    /// the full history is available via the HTTP snapshot endpoint.
+    #[serde(skip)]
+    pub scalar_rows_ws_cursor: usize,
+    /// Fingerprint of quantities at last WS broadcast; skip re-sending when unchanged.
+    #[serde(skip)]
+    pub quantities_ws_hash: u64,
 }
 
 impl SessionStateResponse {
@@ -413,9 +421,17 @@ pub(crate) struct SessionStateEventView<'a> {
     pub mesh_workspace: Option<&'a Value>,
     pub stage_execution: Option<&'a StageExecutionState>,
     pub scene_document: Option<&'a SceneDocument>,
+    /// Delta: only rows added since the last WS broadcast (empty = no new rows).
+    /// Clients accumulate history by appending deltas.  New clients get full
+    /// history from the HTTP snapshot endpoint on first connection.
     pub scalar_rows: &'a [ScalarRow],
+    /// Total accumulated row count.  Lets the frontend decide whether to replace
+    /// (on reconnect with stale state) or append.
+    pub scalar_rows_total: usize,
     pub engine_log: &'a [EngineLogEntry],
-    pub quantities: &'a [QuantityDescriptor],
+    /// Only present when quantities changed since the last WS broadcast.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantities: Option<&'a [QuantityDescriptor]>,
     pub fem_mesh: Option<&'a FemMeshPayload>,
     pub latest_fields: &'a LatestFields,
     pub artifacts: &'a [ArtifactEntry],
@@ -440,6 +456,7 @@ pub(crate) struct SessionStateResponseView<'a> {
     pub stage_execution: Option<&'a StageExecutionState>,
     pub scene_document: Option<&'a SceneDocument>,
     pub scalar_rows: &'a [ScalarRow],
+    pub scalar_rows_total: usize,
     pub engine_log: &'a [EngineLogEntry],
     pub quantities: &'a [QuantityDescriptor],
     pub fem_mesh: Option<&'a FemMeshPayload>,

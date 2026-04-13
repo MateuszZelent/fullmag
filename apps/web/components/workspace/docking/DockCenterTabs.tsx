@@ -249,11 +249,10 @@ export default function DockCenterTabs() {
                 <span className="truncate">{tab.title}</span>
                 {tab.pinned ? <Pin className="size-3 opacity-65" /> : null}
                 {tab.closable && !tab.pinned ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="ml-auto size-4 rounded-sm p-0 opacity-0 transition-opacity group-hover:opacity-100"
+                  <div
+                    role="button"
+                    tabIndex={-1}
+                    className="ml-auto inline-flex size-4 items-center justify-center rounded-sm p-0 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-accent hover:text-accent-foreground"
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -263,10 +262,18 @@ export default function DockCenterTabs() {
                       event.preventDefault();
                       event.stopPropagation();
                     }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        closeTab(currentStage, tab.id);
+                      }
+                    }}
                     title="Close tab"
+                    aria-label={`Close ${tab.title}`}
                   >
                     <X className="size-3" />
-                  </Button>
+                  </div>
                 ) : null}
               </TabsTrigger>
             ))}

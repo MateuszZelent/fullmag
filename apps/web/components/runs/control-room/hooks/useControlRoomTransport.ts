@@ -1,16 +1,43 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import type { TransportContextValue } from "../context-hooks";
 import { EMPTY_SCALAR_ROWS } from "../shared";
 import type { SessionState, LiveState, ScalarRow } from "../../../../lib/session/types";
+
+// ── Reference-stable scalar rows ────────────────────────────────────
+
+/**
+ * Returns a reference-stable `ScalarRow[]`.  Only creates a new array
+ * reference when the last step or the row count actually changed.
+ * This prevents downstream `useMemo` / `React.memo` invalidation on
+ * every WS tick when the data is semantically identical.
+ */
+function useStableScalarRows(state: SessionState | null): ScalarRow[] {
+  const ref = useRef<ScalarRow[]>(EMPTY_SCALAR_ROWS);
+  const prevFingerprint = useRef<string>("");
+
+  const rows = state?.scalar_rows ?? EMPTY_SCALAR_ROWS;
+  const lastStep = rows.length > 0 ? rows[rows.length - 1]?.step ?? -1 : -1;
+  const fingerprint = `${rows.length}:${lastStep}`;
+
+  if (fingerprint !== prevFingerprint.current) {
+    prevFingerprint.current = fingerprint;
+    ref.current = rows;
+  }
+
+  return ref.current;
+}
+
+// ─── Hook ───────────────────────────────────────────────────────────
 
 export function useControlRoomTransport(state: SessionState | null): TransportContextValue {
   const session = state?.session ?? null;
   const run = state?.run ?? null;
   const liveState = state?.live_state ?? null;
-  const scalarRows = state?.scalar_rows ?? EMPTY_SCALAR_ROWS;
+  const scalarRows = useStableScalarRows(state);
   const preview = state?.preview ?? null;
+
   const hasSolverTelemetry = useMemo(() => 
     (liveState?.step ?? 0) > 0 ||
     (run?.total_steps ?? 0) > 0 ||
@@ -32,6 +59,10 @@ export function useControlRoomTransport(state: SessionState | null): TransportCo
   const effectiveEDmi = liveIsStale ? (run?.final_e_dmi ?? 0) : (liveState?.e_dmi ?? run?.final_e_dmi ?? 0);
   const effectiveETotal = liveIsStale ? (run?.final_e_total ?? 0) : (liveState?.e_total ?? run?.final_e_total ?? 0);
   const effectiveDmDt = liveIsStale ? 0 : (liveState?.max_dm_dt ?? 0);
+  const latestScalarTorqueT = scalarRows.length > 0 ? (scalarRows[scalarRows.length - 1]?.max_torque_T ?? 0) : 0;
+  const effectiveTorqueT = liveIsStale
+    ? latestScalarTorqueT
+    : (liveState?.max_torque_T ?? latestScalarTorqueT);
   const effectiveHEff = liveIsStale ? 0 : (liveState?.max_h_eff ?? 0);
   const effectiveHDemag = liveIsStale ? 0 : (liveState?.max_h_demag ?? 0);
 
@@ -50,12 +81,13 @@ export function useControlRoomTransport(state: SessionState | null): TransportCo
       e_dmi: effectiveEDmi,
       e_total: effectiveETotal,
       max_dm_dt: effectiveDmDt, 
+      max_torque_T: effectiveTorqueT,
       max_h_eff: effectiveHEff, 
       max_h_demag: effectiveHDemag,
     } as LiveState;
   }, [liveState, liveIsStale, effectiveStep, effectiveTime, effectiveDt,
       effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
-      effectiveDmDt, effectiveHEff, effectiveHDemag]);
+      effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag]);
 
   const [now, setNow] = useState(() => Date.now());
 
@@ -80,18 +112,20 @@ export function useControlRoomTransport(state: SessionState | null): TransportCo
     elapsed > 0 ? (effectiveStep / elapsed) * 1000 : 0,
   [elapsed, effectiveStep]);
 
-  /* Sparklines */
+  /* Sparklines — depend on stable scalarRows ref */
   const eTotalSpark = useMemo(() => scalarRows.slice(-40).map((r: ScalarRow) => r.e_total ?? 0), [scalarRows]);
   const dmDtSpark = useMemo(() => scalarRows.slice(-40).map((r: ScalarRow) => Math.log10(Math.max(r.max_dm_dt ?? 1e-15, 1e-15))), [scalarRows]);
   const dtSpark = useMemo(() => scalarRows.slice(-40).map((r: ScalarRow) => r.solver_dt ?? 0), [scalarRows]);
 
-
-
-  return {
+  // ── Memoize the entire return value ──────────────────────────────
+  // Only re-creates the object when an actual value changes, preventing
+  // unnecessary re-renders in every consumer component.
+  return useMemo((): TransportContextValue => ({
     effectiveStep,
     effectiveTime,
     effectiveDt,
     effectiveDmDt,
+    effectiveTorqueT,
     effectiveHEff,
     effectiveHDemag,
     effectiveEEx,
@@ -112,5 +146,16 @@ export function useControlRoomTransport(state: SessionState | null): TransportCo
     selectedVectors: null,
     fieldStats: null,
     hasSolverTelemetry,
-  };
+  }), [
+    effectiveStep, effectiveTime, effectiveDt,
+    effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag,
+    effectiveEEx, effectiveEDemag, effectiveEExt,
+    effectiveEAni, effectiveEDmi, effectiveETotal,
+    elapsed, stepsPerSec,
+    liveState, effectiveLiveState,
+    scalarRows,
+    dmDtSpark, dtSpark, eTotalSpark,
+    preview,
+    hasSolverTelemetry,
+  ]);
 }

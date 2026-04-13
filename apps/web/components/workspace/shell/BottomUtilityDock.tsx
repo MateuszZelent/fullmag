@@ -13,6 +13,7 @@ interface BottomTelemetryDockProps {
   effectiveTime: number;
   effectiveDt: number;
   effectiveDmDt: number;
+  effectiveTorqueT: number;
   effectiveHEff: number;
   stepsPerSec: number;
   elapsed: number;
@@ -34,6 +35,7 @@ export default function BottomTelemetryDock({
   effectiveTime,
   effectiveDt,
   effectiveDmDt,
+  effectiveTorqueT,
   effectiveHEff,
   stepsPerSec,
   elapsed,
@@ -120,6 +122,12 @@ export default function BottomTelemetryDock({
               )}
             >
               {fmtExpOrDash(effectiveDmDt, hasSolverTelemetry)}
+            </span>
+          </div>
+          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-cyan-500">
+            <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">max torque [T]</span>
+            <span className="font-mono text-[0.78rem] font-semibold text-foreground">
+              {fmtExpOrDash(effectiveTorqueT, hasSolverTelemetry)}
             </span>
           </div>
           <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-rose-500">

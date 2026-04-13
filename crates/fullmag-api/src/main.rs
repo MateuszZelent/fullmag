@@ -771,7 +771,25 @@ async fn publish_current_live_state(
     } else {
         previous_preview
     };
-    let session_state_messages = build_current_live_ws_messages(&state, &next)?;
+    let session_state_messages = {
+        // Compute delta: send only rows added since the last WS broadcast.
+        // Track the cursor and quantities hash so we avoid re-sending stale data.
+        let scalar_delta_start = next.scalar_rows_ws_cursor;
+        let new_quantities_hash = quantities_hash(&next.quantities);
+        let quantities_changed = new_quantities_hash != next.quantities_ws_hash;
+        let messages = build_current_live_ws_messages_delta(
+            &state,
+            &next,
+            scalar_delta_start,
+            quantities_changed,
+        )?;
+        // Advance cursor and update hash BEFORE storing.
+        next.scalar_rows_ws_cursor = next.scalar_rows.len();
+        if quantities_changed {
+            next.quantities_ws_hash = new_quantities_hash;
+        }
+        messages
+    };
     let public_json = serialize_current_live_response(&next, true)?;
     *current = Some(next);
     drop(current);
@@ -2797,9 +2815,39 @@ fn serialize_current_live_vector_binary_v2(
     out
 }
 
+/// Compute a cheap fingerprint for a slice of QuantityDescriptors so we
+/// can skip re-broadcasting quantities when they haven't changed.
+fn quantities_hash(quantities: &[crate::types::QuantityDescriptor]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    quantities.len().hash(&mut h);
+    for q in quantities {
+        q.id.hash(&mut h);
+        q.available.hash(&mut h);
+    }
+    h.finish()
+}
+
 fn build_current_live_ws_messages(
     state: &AppState,
     snapshot: &SessionStateResponse,
+) -> Result<Vec<CurrentLiveWireMessage>, ApiError> {
+    // Non-delta path: send full scalar history and always include quantities.
+    // Used for initial WS handshake and infrequent mutation endpoints.
+    build_current_live_ws_messages_delta(state, snapshot, 0, true)
+}
+
+/// Build WS messages using a delta slice of scalar_rows.
+///
+/// `scalar_rows_delta_start` — index from which to slice `scalar_rows` for the WS
+/// event (0 = send full history).  `quantities_changed` controls whether
+/// quantities are included in the event (omit when unchanged to save bandwidth).
+fn build_current_live_ws_messages_delta(
+    state: &AppState,
+    snapshot: &SessionStateResponse,
+    scalar_rows_delta_start: usize,
+    quantities_changed: bool,
 ) -> Result<Vec<CurrentLiveWireMessage>, ApiError> {
     let vector_payload_id = preview_vector_values(snapshot.preview.as_ref())
         .map(|_| next_current_live_vector_payload_id(state));
@@ -2825,7 +2873,12 @@ fn build_current_live_ws_messages(
         messages.push(CurrentLiveWireMessage::Binary(binary));
     }
     messages.push(CurrentLiveWireMessage::Text(
-        serialize_current_live_session_event(snapshot, vector_payload_id)?,
+        serialize_current_live_session_event(
+            snapshot,
+            vector_payload_id,
+            scalar_rows_delta_start,
+            quantities_changed,
+        )?,
     ));
     Ok(messages)
 }
@@ -2839,8 +2892,14 @@ fn send_current_live_ws_messages(state: &AppState, messages: Vec<CurrentLiveWire
 fn serialize_current_live_session_event(
     snapshot: &SessionStateResponse,
     vector_payload_id: Option<u32>,
+    scalar_rows_delta_start: usize,
+    quantities_changed: bool,
 ) -> Result<String, ApiError> {
     let step_update_v2 = snapshot.build_step_update_v2();
+    // Send only new rows since last broadcast (delta slice).  Full history is
+    // available via the HTTP snapshot endpoint; the frontend appends deltas.
+    let delta_start = scalar_rows_delta_start.min(snapshot.scalar_rows.len());
+    let scalar_rows_delta = &snapshot.scalar_rows[delta_start..];
     serde_json::to_string(&CurrentLiveEvent::SessionState {
         state: SessionStateEventView {
             session_protocol_version: &snapshot.session_protocol_version,
@@ -2854,9 +2913,10 @@ fn serialize_current_live_session_event(
             mesh_workspace: snapshot.mesh_workspace.as_ref(),
             stage_execution: snapshot.stage_execution.as_ref(),
             scene_document: snapshot.scene_document.as_ref(),
-            scalar_rows: &snapshot.scalar_rows,
+            scalar_rows: scalar_rows_delta,
+            scalar_rows_total: snapshot.scalar_rows.len(),
             engine_log: &snapshot.engine_log,
-            quantities: &snapshot.quantities,
+            quantities: quantities_changed.then_some(snapshot.quantities.as_slice()),
             fem_mesh: snapshot.fem_mesh.as_ref(),
             latest_fields: &snapshot.latest_fields,
             artifacts: &snapshot.artifacts,
@@ -2884,6 +2944,7 @@ fn serialize_current_live_response(
         stage_execution: snapshot.stage_execution.as_ref(),
         scene_document: snapshot.scene_document.as_ref(),
         scalar_rows: &snapshot.scalar_rows,
+        scalar_rows_total: snapshot.scalar_rows.len(),
         engine_log: &snapshot.engine_log,
         quantities: &snapshot.quantities,
         fem_mesh: snapshot.fem_mesh.as_ref(),
