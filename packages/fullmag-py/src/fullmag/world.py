@@ -711,6 +711,8 @@ _SCALAR_QUANTITY_ATTRS: Mapping[str, str] = {
     "max_dm_dt": "max_dm_dt",
     "max_h_eff": "max_h_eff",
     "max_h_demag": "max_h_demag",
+    "max_torque_Apm": "max_torque_Apm",
+    "max_torque_T": "max_torque_T",
 }
 _VECTOR_QUANTITIES = {
     "m",
@@ -1226,6 +1228,8 @@ mz = QuantityHandle("mz", kind="scalar")
 max_dm_dt = QuantityHandle("max_dm_dt", kind="scalar")
 max_h_eff = QuantityHandle("max_h_eff", kind="scalar")
 max_h_demag = QuantityHandle("max_h_demag", kind="scalar")
+max_torque_Apm = QuantityHandle("max_torque_Apm", kind="scalar")
+max_torque_T = QuantityHandle("max_torque_T", kind="scalar")
 
 m = QuantityHandle("m", kind="vector")
 H_ex = QuantityHandle("H_ex", kind="vector")

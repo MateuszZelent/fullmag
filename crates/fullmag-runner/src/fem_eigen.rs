@@ -1,4 +1,5 @@
 use fullmag_engine::fem::{FemLlgProblem, MeshTopology};
+use fullmag_engine::fem_sparse::{CsrMatrix, lobpcg_generalized};
 use fullmag_engine::{
     sub, EffectiveFieldObservables, EffectiveFieldTerms, LlgConfig, MaterialParameters,
     TimeIntegrator, Vector3, MU0,
@@ -21,6 +22,39 @@ use crate::ExecutionProvenance;
 /// used only for pre-eigen relaxation (small enough for safe LLG convergence).
 const RELAX_DT: f64 = 1e-13;
 const RELAX_MAX_STEPS: u64 = 4_000;
+
+/// DOF threshold above which LOBPCG sparse eigensolver is used instead of
+/// the dense O(n³) path. Below this, Cholesky + SymmetricEigen is used.
+const SPARSE_EIGEN_THRESHOLD: usize = 5_000;
+
+/// Convert a dense nalgebra DMatrix to a sparse CsrMatrix, dropping entries
+/// below `drop_tol` in absolute value.
+fn dmatrix_to_csr(mat: &DMatrix<f64>, drop_tol: f64) -> CsrMatrix {
+    let nrows = mat.nrows();
+    let ncols = mat.ncols();
+    let mut row_ptr = vec![0usize; nrows + 1];
+    let mut col_idx: Vec<u32> = Vec::new();
+    let mut values: Vec<f64> = Vec::new();
+
+    for i in 0..nrows {
+        for j in 0..ncols {
+            let v = mat[(i, j)];
+            if v.abs() > drop_tol {
+                col_idx.push(j as u32);
+                values.push(v);
+            }
+        }
+        row_ptr[i + 1] = col_idx.len();
+    }
+
+    CsrMatrix {
+        nrows,
+        ncols,
+        row_ptr,
+        col_idx,
+        values,
+    }
+}
 
 #[derive(Debug, Clone)]
 struct ReductionMap {
@@ -131,7 +165,7 @@ fn execute_fem_eigen_inner(
     let (problem, equilibrium, relaxation_steps, observables) =
         materialize_equilibrium(plan, &initial_magnetization)?;
     let topology = &problem.topology;
-    let solver_kind = solver_kind_label(plan);
+    let mut solver_kind = solver_kind_label(plan);
     let reduction = build_reduction_map(topology, &plan.spin_wave_bc, plan.k_sampling.as_ref())?;
     if reduction.active_nodes.is_empty() {
         return Err(RunError {
@@ -144,7 +178,8 @@ fn execute_fem_eigen_inner(
     let active_n = reduction.active_nodes.len();
     let is_full_2x2 = matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);
     let effective_dof = if is_full_2x2 { 2 * active_n } else { active_n };
-    if effective_dof > 3000 {
+    let use_sparse = effective_dof > SPARSE_EIGEN_THRESHOLD && !try_gpu && !complex_reduction;
+    if effective_dof > 3000 && !use_sparse {
         eprintln!(
             "warning: FEM eigen dense solver has {} effective DOF ({} active nodes, {}) — O(n³) scaling; \
              consider reducing mesh size or awaiting future sparse/Krylov eigensolver",
@@ -153,8 +188,17 @@ fn execute_fem_eigen_inner(
             if is_full_2x2 { "full 2×2" } else { "scalar" }
         );
     }
+    if use_sparse {
+        eprintln!(
+            "info: FEM eigen using sparse LOBPCG solver for {} effective DOF ({} active nodes, {})",
+            effective_dof,
+            active_n,
+            if is_full_2x2 { "full 2×2" } else { "scalar" }
+        );
+    }
 
     let bases = tangent_bases(&equilibrium);
+    let num_modes = plan.count as usize;
 
     let real_eigenpairs = if complex_reduction {
         Vec::new()
@@ -167,7 +211,11 @@ fn execute_fem_eigen_inner(
             &equilibrium,
             &bases,
         );
-        solve_real_symmetric_eigenpairs(plan, stiffness, mass)?
+        if use_sparse {
+            solve_real_symmetric_eigenpairs_sparse(plan, stiffness, mass, num_modes)?
+        } else {
+            solve_real_symmetric_eigenpairs(plan, stiffness, mass)?
+        }
     } else {
         let (stiffness, mass) = assemble_projected_scalar_operator_real(
             plan,
@@ -201,10 +249,15 @@ fn execute_fem_eigen_inner(
                     }
                 }
             }
+        } else if use_sparse {
+            solve_real_symmetric_eigenpairs_sparse(plan, stiffness, mass, num_modes)?
         } else {
             solve_real_symmetric_eigenpairs(plan, stiffness, mass)?
         }
     };
+    if use_sparse {
+        solver_kind = "cpu_sparse_lobpcg";
+    }
     let complex_eigenpairs = if complex_reduction {
         let (stiffness, mass) = assemble_projected_scalar_operator_complex(
             plan,
@@ -350,9 +403,9 @@ fn execute_fem_eigen_inner(
                 "damping_policy": damping_policy_label(plan.damping_policy),
                 "solver_backend": "cpu_reference_fem_eigen",
                 "solver_kind": solver_kind,
-                "solver_notes": solver_notes(plan, complex_reduction),
-                "solver_capabilities": solver_capabilities(plan, complex_reduction),
-                "solver_limitations": solver_limitations(plan, complex_reduction),
+                "solver_notes": solver_notes(plan, complex_reduction, use_sparse),
+                "solver_capabilities": solver_capabilities(plan, complex_reduction, use_sparse),
+                "solver_limitations": solver_limitations(plan, complex_reduction, use_sparse),
                 "dominant_polarization": dominant_polarization,
                 "k_vector": k_vector_json(plan.k_sampling.as_ref()),
                 "real": real,
@@ -371,9 +424,9 @@ fn execute_fem_eigen_inner(
         "study_kind": "eigenmodes",
         "solver_backend": "cpu_reference_fem_eigen",
         "solver_kind": solver_kind,
-        "solver_notes": solver_notes(plan, complex_reduction),
-        "solver_capabilities": solver_capabilities(plan, complex_reduction),
-        "solver_limitations": solver_limitations(plan, complex_reduction),
+        "solver_notes": solver_notes(plan, complex_reduction, use_sparse),
+        "solver_capabilities": solver_capabilities(plan, complex_reduction, use_sparse),
+        "solver_limitations": solver_limitations(plan, complex_reduction, use_sparse),
         "mesh_name": plan.mesh_name,
         "mode_count": modes_summary.len(),
         "normalization": normalization_label(plan.normalization),
@@ -1303,6 +1356,58 @@ fn solve_real_symmetric_eigenpairs(
     Ok(eigenpairs)
 }
 
+/// Sparse LOBPCG eigensolver for large problems.
+///
+/// Converts dense-assembled stiffness and mass matrices to CSR format
+/// and uses LOBPCG to find the k smallest eigenpairs in O(k·n·iter) time
+/// instead of the O(n³) dense path.
+fn solve_real_symmetric_eigenpairs_sparse(
+    plan: &FemEigenPlanIR,
+    stiffness: DMatrix<f64>,
+    mass: DMatrix<f64>,
+    num_modes: usize,
+) -> Result<Vec<RealEigenpair>, RunError> {
+    let mass = regularize_periodic_mass_if_needed(mass, &plan.spin_wave_bc);
+    let n = stiffness.nrows();
+
+    // Convert to CSR (drop entries < 1e-15 to preserve sparsity)
+    let k_csr = dmatrix_to_csr(&stiffness, 1e-15);
+    let m_csr = dmatrix_to_csr(&mass, 1e-15);
+
+    // LOBPCG: find num_modes smallest eigenpairs
+    let tol = 1e-8;
+    let max_iter = (n * 2).max(500).min(5000) as u32;
+    let (sparse_pairs, report) = lobpcg_generalized(&k_csr, &m_csr, num_modes, tol, max_iter)
+        .map_err(|e| RunError {
+            message: format!("sparse LOBPCG eigensolver failed: {}", e.message),
+        })?;
+
+    eprintln!(
+        "info: sparse LOBPCG converged={} in {} iterations (max_residual={:.2e}, {} modes)",
+        report.converged,
+        report.iterations,
+        report.max_residual,
+        sparse_pairs.len()
+    );
+
+    // Convert SparseEigenpair to RealEigenpair
+    let mut eigenpairs: Vec<RealEigenpair> = sparse_pairs
+        .into_iter()
+        .filter(|ep| ep.eigenvalue.is_finite())
+        .map(|ep| {
+            let vec = DVector::from_vec(ep.vector);
+            RealEigenpair {
+                eigenvalue_real: ep.eigenvalue,
+                eigenvalue_imag: 0.0,
+                vector: normalize_real_mode(vec, &mass, &plan.normalization),
+            }
+        })
+        .collect();
+
+    sort_and_truncate_real_modes(plan, &mut eigenpairs);
+    Ok(eigenpairs)
+}
+
 fn solve_complex_hermitian_eigenpairs(
     plan: &FemEigenPlanIR,
     stiffness: Vec<Vec<Complex64>>,
@@ -1960,9 +2065,13 @@ fn solver_kind_label(plan: &FemEigenPlanIR) -> &'static str {
     }
 }
 
-fn solver_notes(plan: &FemEigenPlanIR, complex_reduction: bool) -> &'static str {
+fn solver_notes(plan: &FemEigenPlanIR, complex_reduction: bool, use_sparse: bool) -> &'static str {
     if complex_reduction {
         "phase-aware periodic reduction on a real doubled Hermitian block"
+    } else if use_sparse && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+        "sparse LOBPCG on full 2×2 Herring-Kittel block operator (2N DOF)"
+    } else if use_sparse {
+        "sparse LOBPCG iterative eigensolver for large DOF systems"
     } else if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
         "full 2×2 Herring-Kittel block operator in tangent plane (2N DOF)"
     } else if matches!(plan.damping_policy, EigenDampingPolicyIR::Include) {
@@ -1972,8 +2081,11 @@ fn solver_notes(plan: &FemEigenPlanIR, complex_reduction: bool) -> &'static str 
     }
 }
 
-fn solver_capabilities(plan: &FemEigenPlanIR, complex_reduction: bool) -> Vec<&'static str> {
+fn solver_capabilities(plan: &FemEigenPlanIR, complex_reduction: bool, use_sparse: bool) -> Vec<&'static str> {
     let mut capabilities = vec!["cpu_reference_eigen", "artifact_backed_analyze"];
+    if use_sparse {
+        capabilities.push("sparse_lobpcg");
+    }
     if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
         capabilities.push("full_2x2_herring_kittel");
     }
@@ -2022,8 +2134,11 @@ fn solver_capabilities(plan: &FemEigenPlanIR, complex_reduction: bool) -> Vec<&'
     capabilities
 }
 
-fn solver_limitations(plan: &FemEigenPlanIR, complex_reduction: bool) -> Vec<&'static str> {
+fn solver_limitations(plan: &FemEigenPlanIR, complex_reduction: bool, use_sparse: bool) -> Vec<&'static str> {
     let mut limitations = Vec::new();
+    if use_sparse {
+        limitations.push("sparse_lobpcg_may_miss_modes_near_degeneracy");
+    }
     if !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
         limitations.push("scalar_projection_only_accurate_for_uniform_equilibrium");
     }

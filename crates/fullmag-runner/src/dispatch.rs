@@ -2412,7 +2412,10 @@ fn execute_native_fem(
             accepted_stats.step = direct_step;
             accepted_stats.time = 0.0;
             accepted_stats.dt = trial_lambda;
-            accepted_stats.max_dm_dt = max_torque_from_field(&m, &h_eff);
+            let torque_apm = max_torque_from_field(&m, &h_eff);
+            accepted_stats.max_dm_dt = 0.0; // direct minimization has no dm/dt
+            accepted_stats.max_torque_Apm = torque_apm;
+            accepted_stats.max_torque_T = torque_apm * crate::MU0;
             accepted_stats.max_h_eff = h_eff
                 .iter()
                 .map(|h| (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt())

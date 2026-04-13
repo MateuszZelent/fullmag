@@ -426,6 +426,11 @@ pub(crate) async fn import_session_commit(
         }
     }
 
+    let restored_ui_state = store
+        .read_document("project/ui_state.json")
+        .map_err(|e| ApiError::internal(format!("reading ui_state document: {e}")))?
+        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok());
+
     Ok(Json(SessionImportCommitResponse {
         session_id: session.session_id,
         restore_class: inspection.restore_class,
@@ -513,7 +518,3 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.decode(s)
 }
-    let restored_ui_state = store
-        .read_document("project/ui_state.json")
-        .map_err(|e| ApiError::internal(format!("reading ui_state document: {e}")))?
-        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok());

@@ -25,8 +25,8 @@ pub(crate) fn relaxation_converged(
     damping: f64,
     pure_damping_rhs: bool,
 ) -> bool {
-    let max_torque = approximate_max_torque(
-        stats.max_dm_dt,
+    let max_torque = effective_max_torque_apm(
+        stats,
         gyromagnetic_ratio,
         damping,
         pure_damping_rhs,
@@ -59,6 +59,23 @@ pub(crate) fn approximate_max_torque(
         return max_dm_dt * (1.0 + damping * damping) / (gyromagnetic_ratio * damping);
     }
     max_dm_dt * (1.0 + damping * damping).sqrt() / gyromagnetic_ratio
+}
+
+/// Return the best available max-torque metric in A/m.
+///
+/// If the solver already computed a native `max_torque_Apm` (e.g. direct
+/// minimization BB/NCG), use it directly.  Otherwise fall back to the
+/// approximate reconstruction from `max_dm_dt` via LLG parameters.
+pub(crate) fn effective_max_torque_apm(
+    stats: &StepStats,
+    gyromagnetic_ratio: f64,
+    damping: f64,
+    pure_damping_rhs: bool,
+) -> f64 {
+    if stats.max_torque_Apm > 0.0 {
+        return stats.max_torque_Apm;
+    }
+    approximate_max_torque(stats.max_dm_dt, gyromagnetic_ratio, damping, pure_damping_rhs)
 }
 
 pub(crate) fn llg_overdamped_uses_pure_damping(control: Option<&RelaxationControlIR>) -> bool {

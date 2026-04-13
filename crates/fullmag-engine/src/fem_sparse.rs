@@ -542,11 +542,13 @@ pub fn lobpcg_generalized(
             break;
         }
 
-        // B-orthogonalize W against X (and itself)
+        // B-orthogonalize W against X (and itself), filter degenerate columns
         let mut bw_cols: Vec<Vec<f64>> = vec![vec![0.0; n]; k];
         for j in 0..k {
             b.matvec(&w_cols[j], &mut bw_cols[j]);
         }
+        // Track which W columns survive orthogonalization
+        let mut w_alive = vec![true; k];
         for j in 0..k {
             // Orthogonalize w_j against all x vectors
             for i in 0..k {
@@ -556,35 +558,58 @@ pub fn lobpcg_generalized(
                     bw_cols[j][l] -= proj * bx_cols[i][l];
                 }
             }
-            // Orthogonalize w_j against previous w vectors
+            // Orthogonalize w_j against previous surviving w vectors
             for i in 0..j {
+                if !w_alive[i] { continue; }
                 let proj = dot_product(&bw_cols[i], &w_cols[j]);
                 for l in 0..n {
                     w_cols[j][l] -= proj * w_cols[i][l];
                     bw_cols[j][l] -= proj * bw_cols[i][l];
                 }
             }
-            // Normalize
+            // Check B-norm; drop if degenerate
             let norm_b = dot_product(&w_cols[j], &bw_cols[j]);
-            if norm_b > 1e-14 {
+            if norm_b > 1e-30 {
                 let inv = 1.0 / norm_b.sqrt();
                 for l in 0..n {
                     w_cols[j][l] *= inv;
                     bw_cols[j][l] *= inv;
                 }
+            } else {
+                w_alive[j] = false;
             }
+        }
+        // Compact W to only surviving columns
+        let mut w_active: Vec<Vec<f64>> = Vec::new();
+        let mut bw_active: Vec<Vec<f64>> = Vec::new();
+        for j in 0..k {
+            if w_alive[j] {
+                w_active.push(std::mem::take(&mut w_cols[j]));
+                bw_active.push(std::mem::take(&mut bw_cols[j]));
+            }
+        }
+        let w_cols = w_active;
+        let bw_cols = bw_active;
+        let n_w = w_cols.len();
+
+        if n_w == 0 {
+            // All residuals are degenerate — eigenvalues have converged
+            report.converged = true;
+            break;
         }
 
         // Compute AW after orthogonalization
-        let mut aw_cols: Vec<Vec<f64>> = vec![vec![0.0; n]; k];
-        for j in 0..k {
+        let mut aw_cols: Vec<Vec<f64>> = vec![vec![0.0; n]; n_w];
+        for j in 0..n_w {
             a.matvec(&w_cols[j], &mut aw_cols[j]);
         }
 
-        // B-orthogonalize P against X, W (and itself)
-        let has_p = !p_cols.is_empty();
-        if has_p {
-            for j in 0..k {
+        // B-orthogonalize P against X, W (and itself), filter degenerate columns
+        let n_p;
+        if !p_cols.is_empty() {
+            let p_k = p_cols.len();
+            let mut p_alive = vec![true; p_k];
+            for j in 0..p_k {
                 // Orthogonalize p_j against all x vectors
                 for i in 0..k {
                     let proj = dot_product(&bx_cols[i], &p_cols[j]);
@@ -593,191 +618,172 @@ pub fn lobpcg_generalized(
                         bp_cols[j][l] -= proj * bx_cols[i][l];
                     }
                 }
-                // Orthogonalize p_j against all w vectors
-                for i in 0..k {
+                // Orthogonalize p_j against all active w vectors
+                for i in 0..n_w {
                     let proj = dot_product(&bw_cols[i], &p_cols[j]);
                     for l in 0..n {
                         p_cols[j][l] -= proj * w_cols[i][l];
                         bp_cols[j][l] -= proj * bw_cols[i][l];
                     }
                 }
-                // Orthogonalize p_j against previous p vectors
+                // Orthogonalize p_j against previous surviving p vectors
                 for i in 0..j {
+                    if !p_alive[i] { continue; }
                     let proj = dot_product(&bp_cols[i], &p_cols[j]);
                     for l in 0..n {
                         p_cols[j][l] -= proj * p_cols[i][l];
                         bp_cols[j][l] -= proj * bp_cols[i][l];
                     }
                 }
-                // Normalize
+                // Check B-norm
                 let norm_b = dot_product(&p_cols[j], &bp_cols[j]);
-                if norm_b > 1e-14 {
+                if norm_b > 1e-10 {
                     let inv = 1.0 / norm_b.sqrt();
                     for l in 0..n {
                         p_cols[j][l] *= inv;
                         bp_cols[j][l] *= inv;
                     }
                 } else {
-                    // Degenerate P vector: zero it out
-                    p_cols[j].fill(0.0);
-                    bp_cols[j].fill(0.0);
+                    p_alive[j] = false;
                 }
             }
-            // Check if any P vector survived orthogonalization
-            let p_alive = p_cols.iter().any(|p| l2_norm(p) > 1e-12);
-            if !p_alive {
-                p_cols.clear();
-                ap_cols.clear();
-                bp_cols.clear();
-            } else {
-                // Recompute AP and BP after orthogonalization
-                for j in 0..k {
+            // Compact P to only surviving columns
+            let mut p_active: Vec<Vec<f64>> = Vec::new();
+            let mut bp_active: Vec<Vec<f64>> = Vec::new();
+            for j in 0..p_k {
+                if p_alive[j] {
+                    p_active.push(std::mem::take(&mut p_cols[j]));
+                    bp_active.push(std::mem::take(&mut bp_cols[j]));
+                }
+            }
+            p_cols = p_active;
+            bp_cols = bp_active;
+            n_p = p_cols.len();
+            if n_p > 0 {
+                // Recompute AP after orthogonalization
+                ap_cols = vec![vec![0.0; n]; n_p];
+                for j in 0..n_p {
                     a.matvec(&p_cols[j], &mut ap_cols[j]);
-                    b.matvec(&p_cols[j], &mut bp_cols[j]);
                 }
+            } else {
+                ap_cols.clear();
             }
+        } else {
+            n_p = 0;
         }
 
-        // Rebuild has_p after potential P pruning
-        let has_p = !p_cols.is_empty();
+        // Build flat subspace vectors: S = [X_0..X_{k-1}, W_0..W_{n_w-1}, P_0..P_{n_p-1}]
+        // Put everything in a block to avoid borrow conflicts with fallback mutation.
+        let subspace_result: Option<(Vec<f64>, Vec<f64>, usize, bool)> = {
+            let s_width = k + n_w + n_p;
+            let mut s_vecs: Vec<&Vec<f64>> = Vec::with_capacity(s_width);
+            let mut as_vecs: Vec<&Vec<f64>> = Vec::with_capacity(s_width);
+            let mut bs_vecs: Vec<&Vec<f64>> = Vec::with_capacity(s_width);
+            for j in 0..k { s_vecs.push(&x_cols[j]); as_vecs.push(&ax_cols[j]); bs_vecs.push(&bx_cols[j]); }
+            for j in 0..n_w { s_vecs.push(&w_cols[j]); as_vecs.push(&aw_cols[j]); bs_vecs.push(&bw_cols[j]); }
+            for j in 0..n_p { s_vecs.push(&p_cols[j]); as_vecs.push(&ap_cols[j]); bs_vecs.push(&bp_cols[j]); }
 
-        // Build subspace S = [X, W] or [X, W, P]
-        let s_width = if has_p { 3 * k } else { 2 * k };
-        let block_count = if has_p { 3 } else { 2 };
-
-        // Build Gram matrices for Rayleigh-Ritz in the [X,W,P] subspace
-        // Ga[i,j] = s_i^T A s_j,  Gb[i,j] = s_i^T B s_j
-        let (ga, gb) = {
+            // Build Gram matrices
             let mut ga = vec![0.0; s_width * s_width];
             let mut gb = vec![0.0; s_width * s_width];
-
-            let cols_a: [&[Vec<f64>]; 3] = [&ax_cols, &aw_cols, &ap_cols];
-            let cols_b: [&[Vec<f64>]; 3] = [&bx_cols, &bw_cols, &bp_cols];
-            let cols_s: [&[Vec<f64>]; 3] = [&x_cols, &w_cols, &p_cols];
-
-            for bi in 0..block_count {
-                for bj in 0..block_count {
-                    for li in 0..k {
-                        for lj in 0..k {
-                            let si = bi * k + li;
-                            let sj = bj * k + lj;
-                            ga[si * s_width + sj] = dot_product(&cols_s[bi][li], &cols_a[bj][lj]);
-                            gb[si * s_width + sj] = dot_product(&cols_s[bi][li], &cols_b[bj][lj]);
-                        }
-                    }
-                }
-            }
-
-            // Symmetrize (numerical safety)
             for i in 0..s_width {
-                for j in (i + 1)..s_width {
-                    let avg_a = 0.5 * (ga[i * s_width + j] + ga[j * s_width + i]);
-                    ga[i * s_width + j] = avg_a;
-                    ga[j * s_width + i] = avg_a;
-                    let avg_b = 0.5 * (gb[i * s_width + j] + gb[j * s_width + i]);
-                    gb[i * s_width + j] = avg_b;
-                    gb[j * s_width + i] = avg_b;
+                for j in i..s_width {
+                    let a_val = dot_product(s_vecs[i], as_vecs[j]);
+                    let b_val = dot_product(s_vecs[i], bs_vecs[j]);
+                    ga[i * s_width + j] = a_val;
+                    ga[j * s_width + i] = a_val;
+                    gb[i * s_width + j] = b_val;
+                    gb[j * s_width + i] = b_val;
                 }
             }
-            (ga, gb)
-        };
 
-        // Solve the small s_width × s_width generalized eigenvalue problem
-        // ga · c = λ · gb · c via Cholesky + symmetric eigen
-        let (small_eigenvalues, small_eigenvectors, actual_s_width) =
             match dense_generalized_eigen(&ga, &gb, s_width) {
-                Ok((evals, evecs)) => (evals, evecs, s_width),
-                Err(_) if has_p => {
-                    // Retry without P if P causes singularity
-                    let s2 = 2 * k;
+                Ok((evals, evecs)) => Some((evals, evecs, s_width, false)),
+                Err(_) if n_p > 0 => {
+                    // Retry without P
+                    let s2 = k + n_w;
                     let mut ga2 = vec![0.0; s2 * s2];
                     let mut gb2 = vec![0.0; s2 * s2];
-                    let sblks: [&[Vec<f64>]; 2] = [&x_cols, &w_cols];
-                    let ablks: [&[Vec<f64>]; 2] = [&ax_cols, &aw_cols];
-                    let bblks: [&[Vec<f64>]; 2] = [&bx_cols, &bw_cols];
-                    for bi in 0..2 {
-                        for bj in 0..2 {
-                            for li in 0..k {
-                                for lj in 0..k {
-                                    let si = bi * k + li;
-                                    let sj = bj * k + lj;
-                                    ga2[si * s2 + sj] = dot_product(&sblks[bi][li], &ablks[bj][lj]);
-                                    gb2[si * s2 + sj] = dot_product(&sblks[bi][li], &bblks[bj][lj]);
-                                }
-                            }
-                        }
-                    }
                     for i in 0..s2 {
-                        for j in (i + 1)..s2 {
-                            let avg_a = 0.5 * (ga2[i * s2 + j] + ga2[j * s2 + i]);
-                            ga2[i * s2 + j] = avg_a;
-                            ga2[j * s2 + i] = avg_a;
-                            let avg_b = 0.5 * (gb2[i * s2 + j] + gb2[j * s2 + i]);
-                            gb2[i * s2 + j] = avg_b;
-                            gb2[j * s2 + i] = avg_b;
+                        for j in i..s2 {
+                            let a_val = dot_product(s_vecs[i], as_vecs[j]);
+                            let b_val = dot_product(s_vecs[i], bs_vecs[j]);
+                            ga2[i * s2 + j] = a_val;
+                            ga2[j * s2 + i] = a_val;
+                            gb2[i * s2 + j] = b_val;
+                            gb2[j * s2 + i] = b_val;
                         }
                     }
                     match dense_generalized_eigen(&ga2, &gb2, s2) {
-                        Ok((evals, evecs)) => {
-                            // Clear P since it failed
-                            p_cols.clear();
-                            ap_cols.clear();
-                            bp_cols.clear();
-                            (evals, evecs, s2)
-                        }
-                        Err(_) => break,
+                        Ok((evals, evecs)) => Some((evals, evecs, s2, true)),
+                        Err(_) => None,
                     }
                 }
-                Err(_) => break,
-            };
+                Err(_) => None,
+            }
+        };
 
-        let effective_block_count = actual_s_width / k;
+        let (small_eigenvalues, small_eigenvectors, actual_s, dropped_p) = match subspace_result {
+            Some(r) => r,
+            None => break,
+        };
+
+        if dropped_p {
+            p_cols.clear();
+            ap_cols.clear();
+            bp_cols.clear();
+        }
+
+        // Rebuild flat subspace refs for extraction (borrows are fresh now)
+        let s_ext: Vec<&Vec<f64>> = {
+            let mut v: Vec<&Vec<f64>> = Vec::new();
+            for j in 0..k { v.push(&x_cols[j]); }
+            for j in 0..n_w { v.push(&w_cols[j]); }
+            if !dropped_p { for j in 0..n_p { v.push(&p_cols[j]); } }
+            v
+        };
+        let as_ext: Vec<&Vec<f64>> = {
+            let mut v: Vec<&Vec<f64>> = Vec::new();
+            for j in 0..k { v.push(&ax_cols[j]); }
+            for j in 0..n_w { v.push(&aw_cols[j]); }
+            if !dropped_p { for j in 0..n_p { v.push(&ap_cols[j]); } }
+            v
+        };
+        let bs_ext: Vec<&Vec<f64>> = {
+            let mut v: Vec<&Vec<f64>> = Vec::new();
+            for j in 0..k { v.push(&bx_cols[j]); }
+            for j in 0..n_w { v.push(&bw_cols[j]); }
+            if !dropped_p { for j in 0..n_p { v.push(&bp_cols[j]); } }
+            v
+        };
 
         // Extract eigenvectors: new X_j = sum_i c[i,j] * S_i
         let mut new_x = vec![vec![0.0; n]; k];
         let mut new_ax = vec![vec![0.0; n]; k];
         let mut new_bx = vec![vec![0.0; n]; k];
-
-        // Build block arrays for extraction (re-borrow after Gram scope ended)
-        let ext_s: Vec<&[Vec<f64>]> = {
-            let mut v: Vec<&[Vec<f64>]> = vec![&x_cols, &w_cols];
-            if effective_block_count >= 3 { v.push(&p_cols); }
-            v
-        };
-        let ext_a: Vec<&[Vec<f64>]> = {
-            let mut v: Vec<&[Vec<f64>]> = vec![&ax_cols, &aw_cols];
-            if effective_block_count >= 3 { v.push(&ap_cols); }
-            v
-        };
-        let ext_b: Vec<&[Vec<f64>]> = {
-            let mut v: Vec<&[Vec<f64>]> = vec![&bx_cols, &bw_cols];
-            if effective_block_count >= 3 { v.push(&bp_cols); }
-            v
-        };
-
         for j in 0..k {
-            for bi in 0..effective_block_count {
-                for li in 0..k {
-                    let si = bi * k + li;
-                    let coeff = small_eigenvectors[si * actual_s_width + j]; // column j, row si
-                    for i in 0..n {
-                        new_x[j][i] += coeff * ext_s[bi][li][i];
-                        new_ax[j][i] += coeff * ext_a[bi][li][i];
-                        new_bx[j][i] += coeff * ext_b[bi][li][i];
-                    }
+            for si in 0..actual_s {
+                let coeff = small_eigenvectors[si * actual_s + j];
+                for i in 0..n {
+                    new_x[j][i] += coeff * s_ext[si][i];
+                    new_ax[j][i] += coeff * as_ext[si][i];
+                    new_bx[j][i] += coeff * bs_ext[si][i];
                 }
             }
         }
 
-        // P = new_X - old_X (search direction)
+        // P = W and P components of the Rayleigh-Ritz combination (excludes X part)
         let mut new_p = vec![vec![0.0; n]; k];
         let mut new_ap = vec![vec![0.0; n]; k];
         let mut new_bp = vec![vec![0.0; n]; k];
         for j in 0..k {
-            for i in 0..n {
-                new_p[j][i] = new_x[j][i] - x_cols[j][i];
-                new_ap[j][i] = new_ax[j][i] - ax_cols[j][i];
-                new_bp[j][i] = new_bx[j][i] - bx_cols[j][i];
+            for si in k..actual_s {
+                let coeff = small_eigenvectors[si * actual_s + j];
+                for i in 0..n {
+                    new_p[j][i] += coeff * s_ext[si][i];
+                    new_ap[j][i] += coeff * as_ext[si][i];
+                    new_bp[j][i] += coeff * bs_ext[si][i];
+                }
             }
         }
 

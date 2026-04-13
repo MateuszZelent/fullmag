@@ -43,6 +43,12 @@ export default function SolverTelemetryPanel() {
       (row) => row.max_h_demag,
       ctx.hasSolverTelemetry ? ctx.effectiveHDemag : null,
     ),
+    torqueT: buildSparkSeries(
+      ctx.scalarRows,
+      (row) => row.max_torque_T ?? 0,
+      ctx.hasSolverTelemetry ? ctx.effectiveTorqueT : null,
+      (value) => Math.log10(Math.max(value, 1e-15)),
+    ),
   }), [
     ctx.scalarRows,
     ctx.hasSolverTelemetry,
@@ -52,6 +58,7 @@ export default function SolverTelemetryPanel() {
     ctx.effectiveDmDt,
     ctx.effectiveHEff,
     ctx.effectiveHDemag,
+    ctx.effectiveTorqueT,
   ]);
 
   return (
@@ -104,6 +111,13 @@ export default function SolverTelemetryPanel() {
             value={fmtExpOrDash(ctx.effectiveHDemag, ctx.hasSolverTelemetry)}
             sparkData={sparkSeries.hDemag}
             sparkColor="var(--chart-amber)"
+          />
+          <MetricField
+            label="max |m×B_eff|"
+            tooltip="Maximum torque in Tesla (comparable to mumax MaxTorque)"
+            value={fmtExpOrDash(ctx.effectiveTorqueT, ctx.hasSolverTelemetry)}
+            sparkData={sparkSeries.torqueT}
+            sparkColor="var(--chart-rose)"
           />
         </div>
         {!ctx.hasSolverTelemetry && (

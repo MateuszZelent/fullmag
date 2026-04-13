@@ -47,6 +47,8 @@ pub(crate) fn scalar_snapshot_from_step(stats: &StepStats) -> HashMap<String, f6
     scalars.insert("max_dm_dt".to_string(), stats.max_dm_dt);
     scalars.insert("max_h_eff".to_string(), stats.max_h_eff);
     scalars.insert("max_h_demag".to_string(), stats.max_h_demag);
+    scalars.insert("max_torque_Apm".to_string(), stats.max_torque_Apm);
+    scalars.insert("max_torque_T".to_string(), stats.max_torque_T);
     scalars
 }
 
