@@ -699,6 +699,7 @@ async fn publish_current_live_state(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CurrentLivePublishRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let publish_start = std::time::Instant::now();
     let has_live_state_update = req.live_state.is_some();
     let has_scalar_row_update = req.latest_scalar_row.is_some();
     let has_latest_fields_update = req.latest_fields.is_some();
@@ -796,6 +797,15 @@ async fn publish_current_live_state(
     *state.current_live_public_snapshot.write().await = Some(public_json);
 
     send_current_live_ws_messages(&state, session_state_messages);
+
+    let publish_elapsed_ms = publish_start.elapsed().as_millis();
+    if publish_elapsed_ms > 50 {
+        eprintln!(
+            "[fullmag-api] PERF: publish_current_live_state took {}ms (>50ms threshold)",
+            publish_elapsed_ms,
+        );
+    }
+
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 
@@ -803,7 +813,7 @@ async fn set_current_preview_quantity(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewQuantityRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, "quantity", move |config| {
         config.quantity = req.quantity;
     })
     .await
@@ -813,7 +823,7 @@ async fn set_current_preview_selection(
     State(state): State<Arc<AppState>>,
     Json(selection): Json<DisplaySelection>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, move |current| {
+    mutate_current_preview(&state, PreviewControlMode::Update, "selection", move |current| {
         *current = selection;
     })
     .await
@@ -823,7 +833,7 @@ async fn set_current_preview_component(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewComponentRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, "component", move |config| {
         config.component = req.component;
     })
     .await
@@ -833,7 +843,7 @@ async fn set_current_preview_x_chosen_size(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewXChosenSizeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, "x_chosen_size", move |config| {
         config.x_chosen_size = req.x_chosen_size as u32;
     })
     .await
@@ -843,7 +853,7 @@ async fn set_current_preview_every_n(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewEveryNRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, "every_n", move |config| {
         config.every_n = req.every_n.clamp(1, u32::MAX as usize) as u32;
     })
     .await
@@ -853,7 +863,7 @@ async fn set_current_preview_y_chosen_size(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewYChosenSizeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, "y_chosen_size", move |config| {
         config.y_chosen_size = req.y_chosen_size as u32;
     })
     .await
@@ -863,7 +873,7 @@ async fn set_current_preview_auto_scale(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewAutoScaleRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, "auto_scale", move |config| {
         config.auto_scale_enabled = req.auto_scale_enabled;
     })
     .await
@@ -873,7 +883,7 @@ async fn set_current_preview_max_points(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewMaxPointsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, "max_points", move |config| {
         config.max_points = req.max_points.min(u32::MAX as usize) as u32;
     })
     .await
@@ -883,7 +893,7 @@ async fn set_current_preview_layer(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewLayerRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, "layer", move |config| {
         config.layer = req.layer as u32;
     })
     .await
@@ -893,7 +903,7 @@ async fn set_current_preview_all_layers(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewAllLayersRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, move |config| {
+    mutate_current_preview(&state, PreviewControlMode::Update, "all_layers", move |config| {
         config.all_layers = req.all_layers;
     })
     .await
@@ -902,7 +912,7 @@ async fn set_current_preview_all_layers(
 async fn refresh_current_preview(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Refresh, |_config| {}).await
+    mutate_current_preview(&state, PreviewControlMode::Refresh, "refresh", |_config| {}).await
 }
 
 async fn enqueue_current_live_command(
@@ -2653,11 +2663,13 @@ enum PreviewControlMode {
 async fn mutate_current_preview<F>(
     state: &Arc<AppState>,
     control_mode: PreviewControlMode,
+    caller: &str,
     mutate: F,
 ) -> Result<Json<serde_json::Value>, ApiError>
 where
     F: FnOnce(&mut DisplaySelection),
 {
+    eprintln!("[fullmag-api] mutate_current_preview caller={}", caller);
     let display_selection = {
         let mut current = state.current_display_selection.write().await;
         mutate(&mut current.selection);
@@ -2873,6 +2885,9 @@ fn build_current_live_ws_messages_delta(
         messages.push(CurrentLiveWireMessage::Binary(binary));
     }
     messages.push(CurrentLiveWireMessage::Text(
+        serialize_current_live_chart_event(snapshot, scalar_rows_delta_start)?,
+    ));
+    messages.push(CurrentLiveWireMessage::Text(
         serialize_current_live_session_event(
             snapshot,
             vector_payload_id,
@@ -2881,6 +2896,21 @@ fn build_current_live_ws_messages_delta(
         )?,
     ));
     Ok(messages)
+}
+
+fn serialize_current_live_chart_event(
+    snapshot: &SessionStateResponse,
+    scalar_rows_delta_start: usize,
+) -> Result<String, ApiError> {
+    let delta_start = scalar_rows_delta_start.min(snapshot.scalar_rows.len());
+    let scalar_rows_delta = &snapshot.scalar_rows[delta_start..];
+    serde_json::to_string(&CurrentLiveEvent::ChartState {
+        state: ChartStateEventView {
+            scalar_rows: scalar_rows_delta,
+            scalar_rows_total: snapshot.scalar_rows.len(),
+        },
+    })
+    .map_err(|error| ApiError::internal(format!("failed to serialize chart state: {}", error)))
 }
 
 fn send_current_live_ws_messages(state: &AppState, messages: Vec<CurrentLiveWireMessage>) {
@@ -2896,10 +2926,10 @@ fn serialize_current_live_session_event(
     quantities_changed: bool,
 ) -> Result<String, ApiError> {
     let step_update_v2 = snapshot.build_step_update_v2();
-    // Send only new rows since last broadcast (delta slice).  Full history is
-    // available via the HTTP snapshot endpoint; the frontend appends deltas.
-    let delta_start = scalar_rows_delta_start.min(snapshot.scalar_rows.len());
-    let scalar_rows_delta = &snapshot.scalar_rows[delta_start..];
+    // Scalar rows are streamed via dedicated `chart_state` events to avoid
+    // forcing full SessionState normalization on every chart tick.
+    // Keep `scalar_rows_total` for compatibility and lightweight progress cues.
+    let _ = scalar_rows_delta_start;
     serde_json::to_string(&CurrentLiveEvent::SessionState {
         state: SessionStateEventView {
             session_protocol_version: &snapshot.session_protocol_version,
@@ -2913,7 +2943,7 @@ fn serialize_current_live_session_event(
             mesh_workspace: snapshot.mesh_workspace.as_ref(),
             stage_execution: snapshot.stage_execution.as_ref(),
             scene_document: snapshot.scene_document.as_ref(),
-            scalar_rows: scalar_rows_delta,
+            scalar_rows: &[],
             scalar_rows_total: snapshot.scalar_rows.len(),
             engine_log: &snapshot.engine_log,
             quantities: quantities_changed.then_some(snapshot.quantities.as_slice()),

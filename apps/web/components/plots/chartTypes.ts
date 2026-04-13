@@ -436,10 +436,36 @@ export interface ChartState {
 
 export const DEFAULT_CHART_STATE: ChartState = {
   xColumn: "time",
-  activeSeriesKeys: [...CHART_PRESETS.energy.yColumns],
-  activePreset: "energy",
+  activeSeriesKeys: ["e_total"],
+  activePreset: null,
   selectedDomain: null,
 };
+
+function unitKey(unit: string): string {
+  return unit.trim().toLowerCase();
+}
+
+export function clampSeriesByUnitLimit(
+  seriesKeys: string[],
+  maxUnits = 2,
+): string[] {
+  const acceptedKeys: string[] = [];
+  const acceptedUnits = new Set<string>();
+
+  for (const key of seriesKeys) {
+    const entry = resolveSeriesEntry(key);
+    const normalizedUnit = unitKey(entry?.unit ?? "");
+    if (
+      acceptedUnits.has(normalizedUnit) ||
+      acceptedUnits.size < maxUnits
+    ) {
+      acceptedKeys.push(key);
+      acceptedUnits.add(normalizedUnit);
+    }
+  }
+
+  return acceptedKeys;
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Series colors

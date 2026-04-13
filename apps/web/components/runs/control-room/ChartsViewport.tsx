@@ -19,7 +19,6 @@ import { useCommand, useModel, useTransport } from "./ControlRoomContext";
 import { useChartPersistence } from "@/hooks/useChartPersistence";
 import {
   type ChartState,
-  CHART_PRESETS,
   seriesColor,
   buildQuantityGroups,
   extendEntryMap,
@@ -55,15 +54,15 @@ export default function ChartsViewport() {
   // Compute effective y-columns from chart state
   const yColumns = useMemo(() => {
     if (chartState.activeSeriesKeys.length === 0) {
-      return [...CHART_PRESETS.energy.yColumns];
+      return ["e_total"];
     }
     return chartState.activeSeriesKeys;
   }, [chartState.activeSeriesKeys]);
 
   // Build colors aligned with yColumns
   const colors = useMemo(() => {
-    return chartState.activeSeriesKeys.map((_key, i) => seriesColor(i));
-  }, [chartState.activeSeriesKeys]);
+    return yColumns.map((_key, i) => seriesColor(i));
+  }, [yColumns]);
 
   // Sampling cadence from execution plan metadata
   const samplingSummary = useMemo(
@@ -117,6 +116,7 @@ export default function ChartsViewport() {
           xColumn={chartState.xColumn}
           yColumns={yColumns}
           seriesColors={colors}
+          uiRevisionKey={`x:${chartState.xColumn}|y:${yColumns.join(",")}`}
         />
         {/* Subtle overlay when no data yet */}
         {tp.scalarRows.length < 1 && (

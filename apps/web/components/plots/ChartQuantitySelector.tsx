@@ -42,6 +42,7 @@ import {
   X_AXIS_OPTIONS,
   resolveSeriesEntry,
   seriesColor,
+  clampSeriesByUnitLimit,
 } from "./chartTypes";
 
 // ── Types ────────────────────────────────────────────────────────
@@ -76,6 +77,7 @@ export default function ChartQuantitySelector({
   quantityGroups,
 }: ChartQuantitySelectorProps) {
   const [addPopoverOpen, setAddPopoverOpen] = useState(false);
+  const [unitLimitHint, setUnitLimitHint] = useState<string | null>(null);
   const multiDomain = domains.length > 1;
 
   // Use dynamic groups when available, otherwise fallback
@@ -93,9 +95,10 @@ export default function ChartQuantitySelector({
     (presetId: ChartPresetId) => {
       onStateChange((prev) => ({
         ...prev,
-        activeSeriesKeys: [...CHART_PRESETS[presetId].yColumns],
+        activeSeriesKeys: clampSeriesByUnitLimit([...CHART_PRESETS[presetId].yColumns]),
         activePreset: presetId,
       }));
+      setUnitLimitHint(null);
     },
     [onStateChange],
   );
@@ -121,9 +124,20 @@ export default function ChartQuantitySelector({
     (key: string) => {
       onStateChange((prev) => {
         if (prev.activeSeriesKeys.includes(key)) return prev;
+        const nextKeys = [...prev.activeSeriesKeys, key];
+        const clampedKeys = clampSeriesByUnitLimit(nextKeys);
+        if (clampedKeys.length < nextKeys.length) {
+          setUnitLimitHint("Charts supports max 2 units at once (left/right axis).");
+          return {
+            ...prev,
+            activeSeriesKeys: clampedKeys,
+            activePreset: null,
+          };
+        }
+        setUnitLimitHint(null);
         return {
           ...prev,
-          activeSeriesKeys: [...prev.activeSeriesKeys, key],
+          activeSeriesKeys: clampedKeys,
           activePreset: null, // custom selection breaks preset
         };
       });
@@ -139,6 +153,7 @@ export default function ChartQuantitySelector({
         activeSeriesKeys: prev.activeSeriesKeys.filter((k) => k !== key),
         activePreset: null,
       }));
+      setUnitLimitHint(null);
     },
     [onStateChange],
   );
@@ -341,6 +356,11 @@ export default function ChartQuantitySelector({
               </>
             )}
           </div>
+        )}
+        {unitLimitHint && (
+          <span className="text-[0.62rem] text-amber-400/90">
+            {unitLimitHint}
+          </span>
         )}
 
         {/* Active series badges */}

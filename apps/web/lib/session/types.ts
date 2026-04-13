@@ -1154,6 +1154,14 @@ export interface SessionStateCurrentLiveEvent {
   state: unknown;
 }
 
+export interface ChartStateCurrentLiveEvent {
+  kind: "chart_state";
+  state: {
+    scalar_rows: unknown[];
+    scalar_rows_total?: number;
+  };
+}
+
 export interface CommandAckCurrentLiveEvent {
   kind: "command_ack";
   session_id: string;

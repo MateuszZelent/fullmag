@@ -117,6 +117,12 @@ pub struct StepStats {
     pub extra_energy_wall_time_ns: u64,
     #[serde(default)]
     pub snapshot_wall_time_ns: u64,
+    /// Wall-clock time spent on active preview field extraction (ns).
+    #[serde(default)]
+    pub preview_wall_time_ns: u64,
+    /// Wall-clock time spent on cached (non-active) preview field copies (ns).
+    #[serde(default)]
+    pub cached_preview_wall_time_ns: u64,
     // --- adaptive time-stepping diagnostics (PR1) ---
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_estimate: Option<f64>,
@@ -160,6 +166,8 @@ impl Default for StepStats {
             rhs_wall_time_ns: 0,
             extra_energy_wall_time_ns: 0,
             snapshot_wall_time_ns: 0,
+            preview_wall_time_ns: 0,
+            cached_preview_wall_time_ns: 0,
             error_estimate: None,
             dt_suggested: None,
             rejected_attempts: 0,

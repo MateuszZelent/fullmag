@@ -225,6 +225,7 @@ fn current_live_publisher_loop(
     wake_rx: mpsc::Receiver<()>,
 ) {
     let mut last_publish_at: Option<Instant> = None;
+    let mut slow_publish_count: u64 = 0;
     while wake_rx.recv().is_ok() {
         while pending.swap(false, Ordering::AcqRel) {
             if let Some(last_publish_at) = last_publish_at {
@@ -235,8 +236,19 @@ fn current_live_publisher_loop(
             }
             let snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
             sending.store(true, Ordering::Release);
+            let cycle_start = Instant::now();
             let publish_result = publish_current_live_state(&session_id, &snapshot);
+            let cycle_ms = cycle_start.elapsed().as_millis();
             sending.store(false, Ordering::Release);
+            if cycle_ms > 100 {
+                slow_publish_count += 1;
+                if slow_publish_count <= 5 || slow_publish_count % 50 == 0 {
+                    eprintln!(
+                        "[fullmag-cli] PERF WARNING: publish cycle took {}ms (count: {})",
+                        cycle_ms, slow_publish_count,
+                    );
+                }
+            }
             if let Err(error) = publish_result {
                 pending.store(true, Ordering::Release);
                 if api_is_ready(api_port()) {
@@ -278,6 +290,8 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             max_dm_dt: 0.0,
             max_h_eff: 0.0,
             max_h_demag: 0.0,
+            max_torque_Apm: 0.0,
+            max_torque_T: 0.0,
             wall_time_ns: 0,
             grid: [0, 0, 0],
             fem_mesh: None,
@@ -322,6 +336,8 @@ pub(crate) fn scalar_row_from_stats(stats: &fullmag_runner::StepStats) -> Curren
         max_dm_dt: stats.max_dm_dt,
         max_h_eff: stats.max_h_eff,
         max_h_demag: stats.max_h_demag,
+        max_torque_Apm: stats.max_torque_Apm,
+        max_torque_T: stats.max_torque_T,
     }
 }
 

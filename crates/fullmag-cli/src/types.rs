@@ -131,6 +131,8 @@ pub(crate) struct LiveStepView {
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
     pub max_h_demag: f64,
+    pub max_torque_Apm: f64,
+    pub max_torque_T: f64,
     pub wall_time_ns: u64,
     pub grid: [u32; 3],
     pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
@@ -364,6 +366,8 @@ pub(crate) struct CurrentLiveScalarRow {
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
     pub max_h_demag: f64,
+    pub max_torque_Apm: f64,
+    pub max_torque_T: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

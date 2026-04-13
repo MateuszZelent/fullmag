@@ -145,7 +145,7 @@
     --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', 'Menlo', monospace;
     
     /* Layout Constants */
-    --sidebar-width: 16rem;      /* synchronized with w-64 */
+    --sidebar-width: 18rem;      /* synchronized with w-72 - increased by 10% */
     --sidebar-collapsed: 4.5rem;  /* synchronized with w-[4.5rem] */
     --topbar-height: 3.5rem;      /* synchronized with h-14 */
     --footer-height: 3rem;

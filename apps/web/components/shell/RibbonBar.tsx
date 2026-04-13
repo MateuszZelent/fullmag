@@ -454,20 +454,20 @@ export default function RibbonBar(props: RibbonBarProps) {
               className={cn(
                 "px-5 py-2.5 min-w-[80px] text-[0.80rem] transition-all duration-300 rounded-t-lg font-sans cursor-pointer",
                 isActive 
-                  ? "text-white font-bold tracking-wide relative bg-transparent"
+                  ? "text-foreground font-medium tracking-wide relative"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted/20"
               )}
               style={isActive ? {
-                textShadow: '0 0 20px rgba(255,255,255,0.5), 0 0 30px rgba(99,102,241,0.4)',
+                textShadow: '0 0 8px rgba(255,255,255,0.2)',
               } : undefined}
             >
-              {/* Gradient background emanating from center */}
+              {/* Very subtle gradient background */}
               {isActive && (
                 <span 
-                  className="absolute inset-0 rounded-t-lg animate-pulse-slow"
+                  className="absolute inset-0 rounded-t-lg"
                   style={{
-                    background: 'linear-gradient(135deg, rgba(99,102,241,0.35) 0%, rgba(139,92,246,0.25) 50%, rgba(99,102,241,0.15) 100%)',
-                    boxShadow: 'inset 0 0 20px rgba(255,255,255,0.1), 0 0 25px rgba(99,102,241,0.3), 0 -2px 10px rgba(99,102,241,0.2)',
+                    background: 'linear-gradient(135deg, rgba(99,102,241,0.10) 0%, rgba(139,92,246,0.06) 100%)',
+                    boxShadow: 'inset 0 0 10px rgba(255,255,255,0.04), 0 0 8px rgba(99,102,241,0.08)',
                   }}
                 />
               )}

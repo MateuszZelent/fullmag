@@ -9,7 +9,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { ChartState } from "../components/plots/chartTypes";
-import { DEFAULT_CHART_STATE } from "../components/plots/chartTypes";
+import { DEFAULT_CHART_STATE, clampSeriesByUnitLimit } from "../components/plots/chartTypes";
 
 const STORAGE_KEY = "fullmag:charts:state";
 const DEBOUNCE_MS = 500;
@@ -20,13 +20,17 @@ function readFromStorage(): ChartState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_CHART_STATE;
     const parsed = JSON.parse(raw) as Partial<ChartState>;
+    const parsedSeries = Array.isArray(parsed.activeSeriesKeys)
+      ? parsed.activeSeriesKeys.filter(
+          (key): key is string => typeof key === "string",
+        )
+      : DEFAULT_CHART_STATE.activeSeriesKeys;
+    const sanitizedSeries = clampSeriesByUnitLimit(parsedSeries);
     return {
       xColumn:
         typeof parsed.xColumn === "string" ? parsed.xColumn : DEFAULT_CHART_STATE.xColumn,
-      activeSeriesKeys: Array.isArray(parsed.activeSeriesKeys)
-        ? parsed.activeSeriesKeys.filter(
-            (key): key is string => typeof key === "string",
-          )
+      activeSeriesKeys: sanitizedSeries.length > 0
+        ? sanitizedSeries
         : DEFAULT_CHART_STATE.activeSeriesKeys,
       activePreset:
         typeof parsed.activePreset === "string"
@@ -62,13 +66,20 @@ export function useChartPersistence(): [
     (next: ChartState | ((prev: ChartState) => ChartState)) => {
       setStateRaw((prev) => {
         const resolved = typeof next === "function" ? next(prev) : next;
+        const clampedKeys = clampSeriesByUnitLimit(resolved.activeSeriesKeys);
+        const sanitized: ChartState = {
+          ...resolved,
+          activeSeriesKeys: clampedKeys.length > 0
+            ? clampedKeys
+            : DEFAULT_CHART_STATE.activeSeriesKeys,
+        };
         // Schedule debounced write
         if (timerRef.current !== null) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => {
-          writeToStorage(resolved);
+          writeToStorage(sanitized);
           timerRef.current = null;
         }, DEBOUNCE_MS);
-        return resolved;
+        return sanitized;
       });
     },
     [],

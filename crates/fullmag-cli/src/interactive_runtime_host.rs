@@ -126,6 +126,52 @@ impl CurrentLiveDisplaySelectionHandle {
         state.queue.pop_front()
     }
 
+    /// Drain all consecutive preview/display-selection commands, apply each to
+    /// the internal display selection state, and return only the **last** one.
+    /// Non-preview commands are returned immediately without draining.
+    /// This prevents processing N identical preview refreshes when a burst of
+    /// display_selection_update commands arrives.
+    pub(super) fn wait_next_command_coalesced(&self, timeout: Duration) -> Option<SessionCommand> {
+        let cmd = self.wait_next_command(timeout)?;
+        if !is_preview_kind(&cmd.kind) {
+            return Some(cmd);
+        }
+        // Apply the first preview command to display selection state.
+        apply_preview_command_to_state_external(&self.shared, &cmd);
+        let mut latest = cmd;
+        let mut coalesced_count = 0u32;
+        // Drain any additional preview commands already queued.
+        loop {
+            let (lock, _) = &*self.shared;
+            let mut state = match lock.lock() {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            // Find the first preview command in the queue.
+            let preview_idx = state
+                .queue
+                .iter()
+                .position(|c| is_preview_kind(&c.kind));
+            match preview_idx {
+                Some(idx) => {
+                    let next = state.queue.remove(idx).unwrap();
+                    apply_preview_command_to_state(&mut state, &next);
+                    drop(state);
+                    latest = next;
+                    coalesced_count += 1;
+                }
+                None => break,
+            }
+        }
+        if coalesced_count > 0 {
+            eprintln!(
+                "[fullmag-host] coalesced {} redundant preview commands (keeping seq={})",
+                coalesced_count, latest.seq
+            );
+        }
+        Some(latest)
+    }
+
     /// Push a synthetic command to the front of the queue (used by sequence runner).
     pub(super) fn push_command_front(&self, command: SessionCommand) {
         let (lock, cvar) = &*self.shared;
@@ -216,6 +262,13 @@ impl CurrentLiveDisplaySelectionHandle {
     }
 }
 
+fn is_preview_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "display_selection_update" | "preview_update" | "preview_refresh"
+    )
+}
+
 fn apply_preview_command_to_state(state: &mut CurrentLiveControlState, command: &SessionCommand) {
     let typed = crate::command_bridge::classify_command(command);
     match typed {
@@ -233,6 +286,17 @@ fn apply_preview_command_to_state(state: &mut CurrentLiveControlState, command: 
             }
         }
         _ => {} // Non-display commands don't update display selection state
+    }
+}
+
+/// Apply a preview command to the shared display selection state (used by coalescing).
+fn apply_preview_command_to_state_external(
+    shared: &Arc<(Mutex<CurrentLiveControlState>, Condvar)>,
+    command: &SessionCommand,
+) {
+    let (lock, _) = &**shared;
+    if let Ok(mut state) = lock.lock() {
+        apply_preview_command_to_state(&mut state, command);
     }
 }
 
@@ -294,6 +358,10 @@ impl InteractiveRuntimeHost {
 
     pub(super) fn wait_next_command(&self, timeout: Duration) -> Option<SessionCommand> {
         self.control.wait_next_command(timeout)
+    }
+
+    pub(super) fn wait_next_command_coalesced(&self, timeout: Duration) -> Option<SessionCommand> {
+        self.control.wait_next_command_coalesced(timeout)
     }
 
     /// Push a synthetic command to the front of the internal queue.
@@ -669,6 +737,8 @@ fn refresh_interactive_preview_runtime_display(
         state.live_state.latest_step.max_dm_dt = step_stats.max_dm_dt;
         state.live_state.latest_step.max_h_eff = step_stats.max_h_eff;
         state.live_state.latest_step.max_h_demag = step_stats.max_h_demag;
+        state.live_state.latest_step.max_torque_Apm = step_stats.max_torque_Apm;
+        state.live_state.latest_step.max_torque_T = step_stats.max_torque_T;
         state.latest_scalar_row = Some(scalar_row_from_stats(&step_stats));
         state.live_state.latest_step.preview_field = preview_field.clone();
         if let Some(preview_field) = preview_field.as_ref() {

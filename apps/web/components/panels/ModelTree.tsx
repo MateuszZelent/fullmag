@@ -402,7 +402,7 @@ function TreeNode({
             className="shrink-0 flex justify-center w-tree-indent"
           >
             {showLine && (
-              <div className="w-px h-full bg-border/50" />
+              <div className="w-px h-full bg-border/25" />
             )}
           </div>
         ))}
@@ -414,12 +414,12 @@ function TreeNode({
           >
             {/* Vertical segment: top → center (last child) or top → bottom */}
             <div
-              className="absolute left-1/2 top-0 -translate-x-1/2 w-px bg-border/50"
+              className="absolute left-1/2 top-0 -translate-x-1/2 w-px bg-border/30"
               style={{ height: isLast ? '50%' : '100%' }}
             />
             {/* Horizontal branch: center → right edge */}
             <div
-              className="absolute top-1/2 -translate-y-1/2 h-px bg-border/50"
+              className="absolute top-1/2 -translate-y-1/2 h-px bg-border/30"
               style={{ left: '50%', right: 0 }}
             />
           </div>
@@ -428,17 +428,20 @@ function TreeNode({
         {/* ─── RIGHT: Interactive content (overflow-clipped) ─── */}
         <div
           className={cn(
-            "flex-1 flex items-center gap-1 pr-2 rounded-md transition-all duration-150 overflow-hidden relative min-w-0",
+            "flex-1 flex items-center gap-1.5 pr-2.5 rounded-lg transition-all duration-200 overflow-hidden relative min-w-0",
             isActive
-              ? "bg-primary/8 text-primary border border-primary/15"
+              ? "bg-primary/12 text-primary-foreground border border-primary/20 shadow-sm"
               : node.status === "active"
-                ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-[0_0_10px_rgba(16,185,129,0.1)]"
-                : "hover:bg-muted/25 text-foreground/90 hover:text-foreground border border-transparent"
+                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                : "hover:bg-muted/30 text-foreground/85 hover:text-foreground border border-transparent hover:border-border/50"
           )}
         >
-          {/* Active indicator bar */}
+          {/* Active indicator bar - glowing effect */}
           {isActive && (
-            <span className="absolute left-0 top-1 bottom-1 w-[2.5px] bg-primary rounded-r-full" />
+            <span 
+              className="absolute left-0 top-1 bottom-1 w-[3px] bg-primary rounded-r-full"
+              style={{ boxShadow: '0 0 8px rgba(99,102,241,0.5), 0 0 12px rgba(99,102,241,0.3)' }}
+            />
           )}
 
           {/* Expand/collapse chevron */}
@@ -460,7 +463,7 @@ function TreeNode({
           {node.icon && (
             <span className={cn(
               "flex h-4 w-4 shrink-0 items-center justify-center text-[0.72rem]",
-              isActive ? "opacity-100" : "opacity-55 group-hover:opacity-75"
+              isActive ? "opacity-100 text-primary" : "opacity-65 group-hover:opacity-90"
             )}>
               <TreeNodeIcon icon={node.icon} size={14} />
             </span>
@@ -468,8 +471,8 @@ function TreeNode({
 
           {/* Label */}
           <span className={cn(
-            "flex-1 truncate text-[0.77rem] pl-0.5",
-            isActive ? "font-semibold" : "font-medium"
+            "flex-1 truncate text-[0.80rem] pl-0.5 tracking-wide",
+            isActive ? "font-semibold" : "font-normal"
           )}>
             {node.label}
           </span>

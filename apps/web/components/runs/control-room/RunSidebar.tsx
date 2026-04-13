@@ -943,8 +943,8 @@ export default function RunSidebar() {
         {/* ── Column 1: Model Builder Tree ── */}
         <Panel
           id="sidebar-model-tree"
-          defaultSize={40}
-          minSize={20}
+          defaultSize={44}
+          minSize={22}
           collapsible
           collapsedSize={4}
           panelRef={treePanelRef}
@@ -1038,8 +1038,8 @@ export default function RunSidebar() {
         {/* ── Column 2: Inspector / SettingsPanel ── */}
         <Panel
           id="sidebar-inspector"
-          defaultSize={60}
-          minSize={25}
+          defaultSize={52}
+          minSize={20}
           collapsible
           collapsedSize={4}
           panelRef={inspectorPanelRef}

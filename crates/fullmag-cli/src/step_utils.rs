@@ -102,6 +102,8 @@ pub(crate) fn live_state_manifest_from_update(
             max_dm_dt: update.stats.max_dm_dt,
             max_h_eff: update.stats.max_h_eff,
             max_h_demag: update.stats.max_h_demag,
+            max_torque_Apm: update.stats.max_torque_Apm,
+            max_torque_T: update.stats.max_torque_T,
             wall_time_ns: update.stats.wall_time_ns,
             grid: update.grid,
             fem_mesh: update.fem_mesh.clone(),

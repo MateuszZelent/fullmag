@@ -56,11 +56,12 @@ import type {
   RuntimeCurrentLiveEvent,
   ConnectionStatus,
   UseSessionStreamResult,
+  ScalarRow,
 } from "./session/types";
 
 /* ── Import submodules ── */
 import { normalizeSessionState } from "./session/normalize";
-import { mergeSessionState, mergeCommandStatusEvent } from "./session/merge";
+import { mergeSessionState, mergeCommandStatusEvent, mergeScalarRowsDelta } from "./session/merge";
 import { decodePreviewBinaryFrame, attachPreviewBinaryPayload } from "./session/binary-preview";
 
 type BootstrapCacheEntry = {
@@ -68,6 +69,30 @@ type BootstrapCacheEntry = {
   fetchedAt: number;
   inFlight: Promise<unknown> | null;
 };
+
+function normalizeChartScalarRows(rows: unknown[]): ScalarRow[] {
+  return rows.map((row: any) => ({
+    step: Number(row?.step ?? 0),
+    time: Number(row?.time ?? 0),
+    solver_dt: Number(row?.solver_dt ?? row?.dt ?? 0),
+    mx: Number(row?.mx ?? 0),
+    my: Number(row?.my ?? 0),
+    mz: Number(row?.mz ?? 0),
+    e_ex: Number(row?.e_ex ?? 0),
+    e_demag: Number(row?.e_demag ?? 0),
+    e_ext: Number(row?.e_ext ?? 0),
+    e_ani: Number(row?.e_ani ?? 0),
+    e_dmi: Number(row?.e_dmi ?? 0),
+    e_total: Number(row?.e_total ?? 0),
+    max_dm_dt: Number(row?.max_dm_dt ?? 0),
+    max_h_eff: Number(row?.max_h_eff ?? 0),
+    max_h_demag: Number(row?.max_h_demag ?? 0),
+    max_torque_Apm:
+      typeof row?.max_torque_Apm === "number" ? Number(row.max_torque_Apm) : undefined,
+    max_torque_T:
+      typeof row?.max_torque_T === "number" ? Number(row.max_torque_T) : undefined,
+  }));
+}
 
 const bootstrapCache = new Map<string, BootstrapCacheEntry>();
 const BOOTSTRAP_CACHE_TTL_MS = 4000;
@@ -240,6 +265,22 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
         try {
           const raw = JSON.parse(event.data);
           setState((prev) => {
+            if (raw?.kind === "chart_state") {
+              if (!prev) return prev;
+              const rawRows = Array.isArray(raw?.state?.scalar_rows) ? raw.state.scalar_rows : [];
+              const deltaRows = normalizeChartScalarRows(rawRows);
+              const total =
+                typeof raw?.state?.scalar_rows_total === "number"
+                  ? raw.state.scalar_rows_total
+                  : undefined;
+              const mergedRows = mergeScalarRowsDelta(prev.scalar_rows, deltaRows, total);
+              if (mergedRows === prev.scalar_rows) return prev;
+              return {
+                ...prev,
+                scalar_rows: mergedRows,
+                scalar_rows_total: total ?? prev.scalar_rows_total,
+              };
+            }
             if (
               raw?.kind === "command_ack" ||
               raw?.kind === "command_rejected" ||

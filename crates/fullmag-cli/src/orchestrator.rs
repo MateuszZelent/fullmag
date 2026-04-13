@@ -2814,7 +2814,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
 
         loop {
-            let Some(cmd) = display_selection_handle.wait_next_command(Duration::from_millis(250))
+            let Some(cmd) = display_selection_handle.wait_next_command_coalesced(Duration::from_millis(250))
             else {
                 continue;
             };
@@ -3586,7 +3586,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let mut active_sequence: Option<(Vec<fullmag_runner::SequenceStage>, usize, usize)> = None; // (remaining_stages, current_1based, total)
         loop {
             let Some(command) =
-                interactive_runtime_host.wait_next_command(Duration::from_millis(250))
+                interactive_runtime_host.wait_next_command_coalesced(Duration::from_millis(250))
             else {
                 continue;
             };
@@ -4637,6 +4637,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             max_dm_dt: step.max_dm_dt,
             max_h_eff: step.max_h_eff,
             max_h_demag: step.max_h_demag,
+            max_torque_Apm: step.max_torque_Apm,
+            max_torque_T: step.max_torque_T,
         });
         set_live_state_status(&mut state.live_state, &summary.status, Some(true));
     });

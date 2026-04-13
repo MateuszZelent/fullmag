@@ -32,6 +32,8 @@ const DERIVED_SERIES = [
   scalarFromQuantity("max_dm_dt", "dm_dt", "max |dm/dt|"),
   scalarFromQuantity("max_h_eff", "H_eff", "max |H_eff|"),
   scalarFromQuantity("max_h_demag", "H_demag", "max |H_demag|"),
+  { key: "max_torque_Apm", label: "max |m×H_eff|", unit: "A/m", kind: "derived" as const },
+  { key: "max_torque_T", label: "max |m×B_eff|", unit: "T", kind: "derived" as const },
 ] satisfies readonly ScalarSeriesMeta[];
 
 function scalarFromQuantity(
@@ -115,6 +117,8 @@ export function defaultScalarTableSeries(
       "max_dm_dt",
       "max_h_eff",
       "max_h_demag",
+      "max_torque_Apm",
+      "max_torque_T",
     ],
     quantities,
   );

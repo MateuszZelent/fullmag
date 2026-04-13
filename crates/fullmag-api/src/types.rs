@@ -372,32 +372,18 @@ pub(crate) struct SessionStateResponse {
 }
 
 impl SessionStateResponse {
-    /// Build `StepUpdateV2` that includes both the base step data (magnetization)
-    /// AND all cached preview fields (H_ext, H_demag, H_ex, etc.).
+    /// Build `StepUpdateV2` with base step data (magnetization diagnostics + scalars)
+    /// and optionally the *currently selected* preview quantity frame.
     ///
-    /// This allows the frontend to populate `fieldMap` with all available
-    /// quantities from a single `step_update_v2.frames` array, enabling
-    /// instant quantity switching without waiting for preview round-trips.
+    /// Cached preview fields for other quantities are NOT included here anymore
+    /// (was a major serialization bottleneck: cloning + JSON-encoding up to 13
+    /// vector fields per publish cycle).  The frontend fetches them on-demand
+    /// via `GET /v1/live/current/fields/:quantity/vector`.
     pub(crate) fn build_step_update_v2(&self) -> Option<fullmag_quantities::StepUpdateV2> {
         let ls = self.live_state.as_ref()?;
-        let mut v2 = ls.latest_step.to_step_update_v2();
-
-        // Inject cached preview fields as additional frames.
-        for (quantity_id, field) in self.preview_cache.iter() {
-            // Skip "m" — already in frames from to_step_update_v2().
-            if quantity_id == "m" {
-                continue;
-            }
-            v2.frames.push(fullmag_quantities::LiveQuantityFrame {
-                quantity_id: quantity_id.clone(),
-                unit: field.unit.clone(),
-                grid: field.preview_grid,
-                n_comp: 3,
-                values: field.vector_field_values.clone(),
-                active_mask: field.active_mask.clone(),
-            });
-        }
-
+        let v2 = ls.latest_step.to_step_update_v2();
+        // Only the base "m" frame (from to_step_update_v2) is included.
+        // Other cached preview fields are served via the field store API.
         Some(v2)
     }
 }
@@ -406,6 +392,15 @@ impl SessionStateResponse {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum CurrentLiveEvent<'a> {
     SessionState { state: SessionStateEventView<'a> },
+    ChartState { state: ChartStateEventView<'a> },
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ChartStateEventView<'a> {
+    /// Delta: only rows added since the last WS broadcast (empty = no new rows).
+    pub scalar_rows: &'a [ScalarRow],
+    /// Total accumulated row count on server side.
+    pub scalar_rows_total: usize,
 }
 
 #[derive(Debug, Serialize)]

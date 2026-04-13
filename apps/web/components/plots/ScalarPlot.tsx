@@ -14,7 +14,7 @@
  * range.
  */
 
-import { useMemo, useRef, useCallback, memo, useEffect, useState } from "react";
+import { useMemo, useRef, memo, useEffect, useState } from "react";
 import type { QuantityDescriptor, ScalarRow } from "../../lib/useSessionStream";
 import Plot from "./DynamicPlot";
 import { scalarSeriesList, type ScalarSeriesMeta } from "../../lib/quantities/scalars";
@@ -24,6 +24,7 @@ import { normalizeUnitLabel } from "../../lib/format";
 
 /** Minimum interval (ms) between chart re-draws during live streaming. */
 const THROTTLE_MS = 350;
+const MAX_VISIBLE_POINTS = 2400;
 
 const SERIES_COLORS = [
   "#60a5fa", "#34d399", "#f472b6", "#fbbf24",
@@ -84,6 +85,7 @@ interface Props {
   yColumns?: string[];
   seriesColors?: string[];
   chartTitle?: string;
+  uiRevisionKey?: string;
 }
 
 // ─── Throttle hook ──────────────────────────────────────────────────
@@ -139,6 +141,7 @@ const ScalarPlot = memo(function ScalarPlot({
   yColumns = DEFAULT_Y_COLUMNS,
   seriesColors,
   chartTitle,
+  uiRevisionKey = "charts",
 }: Props) {
   // ── Throttle rows to ≤3 fps ──
   const throttledRows = useThrottledValue(rows, THROTTLE_MS);
@@ -150,6 +153,17 @@ const ScalarPlot = memo(function ScalarPlot({
     prevRowCount.current = throttledRows.length;
     revision.current += 1;
   }
+
+  const rowsForPlot = useMemo(() => {
+    if (throttledRows.length <= MAX_VISIBLE_POINTS) return throttledRows;
+    const stride = Math.ceil(throttledRows.length / MAX_VISIBLE_POINTS);
+    const sampled = throttledRows.filter((_, index) => index % stride === 0);
+    const last = throttledRows[throttledRows.length - 1];
+    if (sampled[sampled.length - 1] !== last) {
+      sampled.push(last);
+    }
+    return sampled;
+  }, [throttledRows]);
 
   const isTimeColumn = xColumn === "time";
 
@@ -166,18 +180,18 @@ const ScalarPlot = memo(function ScalarPlot({
 
   // ── Auto-scale time axis ──────────────────────────────────────────
   const timeScale = useMemo((): TimeScale | null => {
-    if (!isTimeColumn || throttledRows.length === 0) return null;
-    const maxT = throttledRows.reduce((max, r) => Math.max(max, Math.abs(accessor(r, "time"))), 0);
+    if (!isTimeColumn || rowsForPlot.length === 0) return null;
+    const maxT = rowsForPlot.reduce((max, r) => Math.max(max, Math.abs(accessor(r, "time"))), 0);
     return chooseTimeScale(maxT);
-  }, [isTimeColumn, throttledRows]);
+  }, [isTimeColumn, rowsForPlot]);
 
   // X values: apply time factor when applicable
   const xValues = useMemo(() => {
     if (!timeScale) {
-      return throttledRows.map((r) => accessor(r, xColumn));
+      return rowsForPlot.map((r) => accessor(r, xColumn));
     }
-    return throttledRows.map((r) => accessor(r, "time") * timeScale.factor);
-  }, [throttledRows, xColumn, timeScale]);
+    return rowsForPlot.map((r) => accessor(r, "time") * timeScale.factor);
+  }, [rowsForPlot, xColumn, timeScale]);
 
   // Axis label
   const xLabel = useMemo(() => {
@@ -185,29 +199,53 @@ const ScalarPlot = memo(function ScalarPlot({
     return buildAxisLabel(xMeta);
   }, [timeScale, xMeta]);
 
+  const unitGroups = useMemo(() => {
+    const grouped = new Map<string, string[]>();
+    const unitByKey = new Map<string, string>();
+    for (const series of seriesMeta) {
+      const normalizedUnit = normalizeUnitLabel(series.unit) || "arb.";
+      unitByKey.set(series.key, normalizedUnit);
+      const existing = grouped.get(normalizedUnit) ?? [];
+      existing.push(series.key);
+      grouped.set(normalizedUnit, existing);
+    }
+    const orderedUnits = [...grouped.keys()];
+    return {
+      orderedUnits,
+      leftUnit: orderedUnits[0] ?? "",
+      rightUnit: orderedUnits[1] ?? "",
+      unitByKey,
+    };
+  }, [seriesMeta]);
+
   // Build Plotly traces
   const traces = useMemo(() => {
-    const mode = throttledRows.length > 1 ? ("lines" as const) : ("markers" as const);
+    const mode = rowsForPlot.length > 1 ? ("lines" as const) : ("markers" as const);
 
     return seriesMeta.map((series, i) => ({
       x: xValues,
-      y: throttledRows.map((r) => accessor(r, series.key)),
+      y: rowsForPlot.map((r) => accessor(r, series.key)),
       type: "scattergl" as const,
       mode,
       name: buildAxisLabel(series),
+      yaxis:
+        unitGroups.rightUnit &&
+        unitGroups.unitByKey.get(series.key) === unitGroups.rightUnit
+          ? "y2"
+          : "y",
       line: {
         color: seriesColors?.[i] ?? SERIES_COLORS[i % SERIES_COLORS.length],
         width: 1.5,
       },
       marker: {
         color: seriesColors?.[i] ?? SERIES_COLORS[i % SERIES_COLORS.length],
-        size: throttledRows.length > 1 ? 0 : 7,
+        size: rowsForPlot.length > 1 ? 0 : 7,
       },
       hovertemplate: magnetizationOnly
         ? `%{y:.4f}<extra>${buildAxisLabel(series)}</extra>`
         : `%{y:.4e}<extra>${buildAxisLabel(series)}</extra>`,
     }));
-  }, [xValues, throttledRows, seriesMeta, magnetizationOnly, seriesColors]);
+  }, [xValues, rowsForPlot, seriesMeta, magnetizationOnly, seriesColors, unitGroups]);
 
   const layout = useMemo(
     (): Partial<Plotly.Layout> => ({
@@ -235,16 +273,36 @@ const ScalarPlot = memo(function ScalarPlot({
       },
       yaxis: {
         title: {
-          text: seriesMeta.length === 1 ? buildAxisLabel(seriesMeta[0]) : undefined,
+          text:
+            seriesMeta.length === 1
+              ? buildAxisLabel(seriesMeta[0])
+              : unitGroups.leftUnit
+                ? `Value (${unitGroups.leftUnit})`
+                : "Value",
           standoff: 8,
         },
         color: THEME.text,
         gridcolor: THEME.gridLine,
         gridwidth: 1,
+        griddash: "dot",
         zeroline: false,
         exponentformat: "e",
         tickformat: magnetizationOnly ? ".2f" : undefined,
       },
+      yaxis2: unitGroups.rightUnit
+        ? {
+            title: {
+              text: `Value (${unitGroups.rightUnit})`,
+              standoff: 8,
+            },
+            overlaying: "y",
+            side: "right",
+            color: THEME.text,
+            showgrid: false,
+            zeroline: false,
+            exponentformat: "e",
+          }
+        : undefined,
       legend: {
         orientation: "h",
         yanchor: "top",
@@ -261,6 +319,7 @@ const ScalarPlot = memo(function ScalarPlot({
         namelength: -1,
       },
       dragmode: "zoom",
+      uirevision: uiRevisionKey,
       datarevision: revision.current,
       modebar: {
         bgcolor: "transparent",
@@ -269,7 +328,17 @@ const ScalarPlot = memo(function ScalarPlot({
         orientation: "v",
       },
     }),
-    [xLabel, magnetizationOnly, seriesMeta, chartTitle, timeScale, revision.current],
+    [
+      xLabel,
+      magnetizationOnly,
+      seriesMeta,
+      chartTitle,
+      timeScale,
+      unitGroups.leftUnit,
+      unitGroups.rightUnit,
+      uiRevisionKey,
+      revision.current,
+    ],
   );
 
   const config = useMemo(
