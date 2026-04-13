@@ -321,17 +321,19 @@ RibbonActionTrigger.displayName = "RibbonActionTrigger";
 function ribbonGroupToneClass(tone: RibbonGroup["tone"] | undefined): string {
   switch (tone) {
     case "authoring":
-      return "border-emerald-400/20 bg-emerald-400/6";
+      return "border-emerald-500/30 bg-emerald-500/10";
     case "compose":
-      return "border-violet-400/20 bg-violet-400/6";
+      return "border-violet-500/30 bg-violet-500/10";
     case "compute":
-      return "border-primary/25 bg-primary/8";
+      return "border-primary/40 bg-primary/10";
     case "selection":
-      return "border-amber-400/20 bg-amber-400/6";
+      return "border-amber-500/30 bg-amber-500/10";
     case "sync":
-      return "border-cyan-400/20 bg-cyan-400/6";
+      return "border-cyan-500/30 bg-cyan-500/10";
+    case "neutral":
+      return "border-border/40 bg-muted/30";
     default:
-      return "border-border/25 bg-transparent";
+      return "border-border/40 bg-muted/30";
   }
 }
 
@@ -352,9 +354,9 @@ export default function RibbonBar(props: RibbonBarProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [props.selectedNodeId, props.selectedObjectId, props.viewMode],
   );
-  const activeTab = (activeCoreTab && visibleTabs.includes(activeCoreTab as RibbonTab)
+  const activeTab = activeCoreTab && visibleTabs.includes(activeCoreTab as RibbonTab)
     ? (activeCoreTab as RibbonTab)
-    : defaultTab);
+    : defaultTab;
 
   useEffect(() => {
     if (!activeCoreTab || !visibleTabs.includes(activeCoreTab as RibbonTab)) {
@@ -443,20 +445,36 @@ export default function RibbonBar(props: RibbonBarProps) {
       <div className="flex flex-col w-full bg-card/10 border-b border-border/15 backdrop-blur-xl shrink-0 z-30">
         {/* ── Tab row ── */}
         <div className="flex px-3 pt-2 gap-1 border-b border-border/10">
-          {visibleTabs.map((tab) => (
+          {visibleTabs.map((tab) => {
+            const isActive = String(tab) === String(activeTab);
+            return (
             <button
               key={tab}
               onClick={() => setActiveCoreTab(tab)}
               className={cn(
-                "px-4 py-2 min-w-[72px] text-[0.78rem] font-medium transition-colors rounded-t-lg border-b-2 font-sans cursor-pointer hover:bg-muted/30",
-                tab === activeTab 
-                  ? "border-primary bg-primary/10 text-primary" 
-                  : "border-transparent text-muted-foreground hover:text-foreground"
+                "px-5 py-2.5 min-w-[80px] text-[0.80rem] transition-all duration-300 rounded-t-lg font-sans cursor-pointer",
+                isActive 
+                  ? "text-white font-bold tracking-wide relative bg-transparent"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/20"
               )}
+              style={isActive ? {
+                textShadow: '0 0 20px rgba(255,255,255,0.5), 0 0 30px rgba(99,102,241,0.4)',
+              } : undefined}
             >
-              {tab}
+              {/* Gradient background emanating from center */}
+              {isActive && (
+                <span 
+                  className="absolute inset-0 rounded-t-lg animate-pulse-slow"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(99,102,241,0.35) 0%, rgba(139,92,246,0.25) 50%, rgba(99,102,241,0.15) 100%)',
+                    boxShadow: 'inset 0 0 20px rgba(255,255,255,0.1), 0 0 25px rgba(99,102,241,0.3), 0 -2px 10px rgba(99,102,241,0.2)',
+                  }}
+                />
+              )}
+              <span className="relative z-10">{tab}</span>
             </button>
-          ))}
+            );
+          })}
           {contextualTabs.length > 0 ? (
             <div className="ml-auto mb-2 flex items-center gap-1.5 pl-4">
               <span className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
@@ -518,7 +536,7 @@ export default function RibbonBar(props: RibbonBarProps) {
         <div className="flex items-stretch overflow-x-auto scrollbar-none py-2 px-2 gap-1 min-h-[88px]">
           {groups.filter((g) => g.actions.some((a) => !a.hidden)).map((group, gi) => (
             <div key={group.id} className="flex items-stretch shrink-0">
-              {gi > 0 && <div className="w-px bg-border/40 mx-2 self-stretch my-3 shadow-[1px_0_0_hsla(0,0%,100%,0.02)]" />}
+              {gi > 0 && <div className="w-px bg-border/20 mx-2 self-stretch my-3" />}
               <div
                 className={cn(
                   "flex min-h-[74px] flex-col justify-between items-center rounded-lg border px-2 py-1.5 shrink-0",

@@ -15,6 +15,7 @@ function buildMeshGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "mesh-build",
       title: "Build",
+      tone: "compute",
       actions: [
         {
           id: "build-selected",
@@ -55,6 +56,7 @@ function buildMeshGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "mesh-size",
       title: "Size",
+      tone: "neutral",
       actions: [
         {
           id: "size-controls",
@@ -79,6 +81,7 @@ function buildMeshGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "mesh-method",
       title: "Method",
+      tone: "neutral",
       actions: [
         {
           id: "method-volume",
@@ -103,6 +106,7 @@ function buildMeshGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "mesh-view",
       title: "View",
+      tone: "neutral",
       actions: [
         {
           id: "mesh-inspector",

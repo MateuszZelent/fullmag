@@ -13,6 +13,7 @@ function buildMaterialsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "material-object",
       title: "Materials",
+      tone: "neutral",
       actions: [
         {
           id: "open-material-panel",

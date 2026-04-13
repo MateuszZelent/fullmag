@@ -209,7 +209,7 @@ export default function EigenAnalyzeWorkbench({
             hovermode: "closest",
           }}
           config={{ responsive: true, displaylogo: false }}
-          style={{ width: "100%", height: 320 }}
+          style={{ width: "100%", height: "var(--chart-height)" }}
           onClick={(event: Readonly<PlotMouseEvent>) => {
             const raw = event.points?.[0]?.customdata;
             if (typeof raw === "number") {
@@ -241,7 +241,7 @@ export default function EigenAnalyzeWorkbench({
                 legend: { orientation: "h", y: -0.22 },
               }}
               config={{ responsive: true, displaylogo: false }}
-              style={{ width: "100%", height: 320 }}
+              style={{ width: "100%", height: "var(--chart-height)" }}
               onClick={(event: Readonly<PlotMouseEvent>) => {
                 const raw = event.points?.[0]?.customdata;
                 if (Array.isArray(raw) && raw.length >= 3) {

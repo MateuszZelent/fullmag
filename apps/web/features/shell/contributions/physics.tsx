@@ -55,6 +55,7 @@ function buildPhysicsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "physics-core",
       title: "Core Terms",
+      tone: "neutral",
       actions: [
         {
           id: "open-obj-physics",
@@ -76,13 +77,14 @@ function buildPhysicsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           label: "Global Physics",
           tooltip: "Open global physics status panel",
           action: () => ctx.run({ id: "navigation.select-node", nodeId: "physics" }),
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
       ],
     },
     {
       id: "physics-add",
       title: "Optional Terms",
+      tone: "compose",
       actions: [
         {
           id: "physics-add-dmi",

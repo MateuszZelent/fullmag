@@ -300,7 +300,6 @@ const ScalarPlot = memo(function ScalarPlot({
       revision={revision.current}
       useResizeHandler
       className="h-full w-full"
-      style={{ width: "100%", height: "100%" }}
     />
   );
 });

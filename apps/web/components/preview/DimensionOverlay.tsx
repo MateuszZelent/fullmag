@@ -80,14 +80,14 @@ export default function DimensionOverlay({
     <div className="absolute inset-0 pointer-events-none z-[8] overflow-hidden">
       {/* ── Bottom axis (X) ── */}
       <div className="absolute bottom-[28px] left-[64px] right-[48px] flex items-end gap-1.5">
-        <div className="flex-1 h-[20px] relative border-b border-slate-400/30">
+        <div className="flex-1 h-size-dimension-marker relative border-b border-border/40">
           <svg className="w-full h-full overflow-visible" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true">
             {xTicks.map((v) => {
               const x = axes.x.extent > 0 ? (v / axes.x.extent) * 100 : 0;
               return (
                 <g key={v}>
-                  <line x1={x} x2={x} y1="0" y2="6" className="stroke-slate-400/50 stroke-1" />
-                  <text x={x} y="16" textAnchor="middle" className="text-[0.55rem] font-semibold font-mono fill-slate-300/70 whitespace-nowrap [dominant-baseline:hanging]">
+                  <line x1={x} x2={x} y1="0" y2="6" className="stroke-muted-foreground/50 stroke-1" />
+                  <text x={x} y="16" textAnchor="middle" className="text-[0.55rem] font-semibold font-mono fill-muted-foreground/70 whitespace-nowrap [dominant-baseline:hanging]">
                     {fmtTickLabel(v)}
                   </text>
                 </g>
@@ -95,19 +95,19 @@ export default function DimensionOverlay({
             })}
           </svg>
         </div>
-        <span className="text-[0.6rem] font-bold text-slate-300/60 font-mono whitespace-nowrap mb-[1px]">{axes.unit}</span>
+        <span className="text-[0.6rem] font-bold text-muted-foreground/60 font-mono whitespace-nowrap mb-[1px]">{axes.unit}</span>
       </div>
 
       {/* ── Left axis (Y) ── */}
       <div className="absolute left-[28px] top-[16px] bottom-[64px] flex flex-col items-end gap-1.5">
-        <div className="flex-1 w-[20px] relative border-l border-slate-400/30">
+        <div className="flex-1 w-size-dimension-marker relative border-l border-border/40">
           <svg className="w-full h-full overflow-visible" viewBox="0 0 24 100" preserveAspectRatio="none" aria-hidden="true">
             {yTicks.map((v) => {
               const y = axes.y.extent > 0 ? 100 - (v / axes.y.extent) * 100 : 100;
               return (
                 <g key={v}>
-                  <line x1="0" x2="6" y1={y} y2={y} className="stroke-slate-400/50 stroke-1" />
-                  <text x="18" y={y + 2} textAnchor="end" className="text-[0.55rem] font-semibold font-mono fill-slate-300/70 whitespace-nowrap [dominant-baseline:middle]">
+                  <line x1="0" x2="6" y1={y} y2={y} className="stroke-muted-foreground/50 stroke-1" />
+                  <text x="18" y={y + 2} textAnchor="end" className="text-[0.55rem] font-semibold font-mono fill-muted-foreground/70 whitespace-nowrap [dominant-baseline:middle]">
                     {fmtTickLabel(v)}
                   </text>
                 </g>
@@ -115,20 +115,20 @@ export default function DimensionOverlay({
             })}
           </svg>
         </div>
-        <span className="text-[0.6rem] font-bold text-slate-300/60 font-mono whitespace-nowrap [writing-mode:vertical-lr] rotate-180 mb-[3px]">{axes.unit}</span>
+        <span className="text-[0.6rem] font-bold text-muted-foreground/60 font-mono whitespace-nowrap [writing-mode:vertical-lr] rotate-180 mb-[3px]">{axes.unit}</span>
       </div>
 
 
 
       {/* ── Grid info badge (top-right) ── */}
       {gridCells && (
-        <div className="absolute top-2 right-2 text-[0.58rem] font-bold font-mono text-slate-300/60 bg-slate-900/70 py-0.5 px-1.5 rounded border border-slate-400/20">
+        <div className="absolute top-2 right-2 text-[0.58rem] font-bold font-mono text-muted-foreground/60 bg-card/70 py-0.5 px-1.5 rounded border border-border/30">
           {gridCells[0]}×{gridCells[1]}×{gridCells[2]}
         </div>
       )}
 
       {/* ── Dimension summary badge ── */}
-      <div className="absolute top-2 left-2 text-[0.58rem] font-bold font-mono text-slate-300/60 bg-slate-900/70 py-0.5 px-1.5 rounded border border-slate-400/20">
+      <div className="absolute top-2 left-2 text-[0.58rem] font-bold font-mono text-muted-foreground/60 bg-card/70 py-0.5 px-1.5 rounded border border-border/30">
         {fmtTickLabel(axes.x.extent)} × {fmtTickLabel(axes.y.extent)} × {fmtTickLabel(axes.z.extent)} {axes.unit}
       </div>
     </div>

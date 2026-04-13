@@ -1072,12 +1072,12 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     <div className="flex flex-col flex-1 h-full min-h-0 min-w-0 relative overflow-hidden [&>*]:min-w-0 [&>*]:min-h-0 [&>*:not(.viewportOverlay)]:flex-1 [&>*:not(.viewportOverlay)]:w-full">
       <TelemetryHUD solverSettings={ctx.solverSettings} />
       {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showAntennaPreviewBadge && antennaPreviewBadgeVisible ? (
-        <div className="viewportOverlay absolute right-4 top-4 z-50 rounded-full border border-cyan-400/25 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-cyan-200 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
+        <div className="viewportOverlay absolute right-4 top-4 z-[--z-viewport-badge] rounded-full border border-primary/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-primary shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
           physics 2.5D · preview extruded
         </div>
       ) : null}
       {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showFemSelectionBadges && ctx.isFemBackend ? (
-        <div className="viewportOverlay absolute right-4 top-14 z-50 flex items-center gap-2">
+        <div className="viewportOverlay absolute right-4 top-14 z-[--z-viewport-badge] flex items-center gap-2">
           {ctx.selectedMeshPart || selectedFemObjectId ? (
             <div className="pointer-events-auto flex overflow-hidden rounded-full border border-border/40 bg-background/85 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
               <button
@@ -1109,7 +1109,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
           {selectedFemObjectId ? (
             <button
               type="button"
-              className="pointer-events-auto rounded-full border border-amber-300/25 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-amber-100 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md transition-colors hover:bg-amber-400/15"
+              className="pointer-events-auto rounded-full border border-warning/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-warning shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md transition-colors hover:bg-warning/20"
               onClick={() => {
                 ctx.setViewMode("3D");
                 ctx.requestFocusObject(selectedFemObjectId);
@@ -1119,28 +1119,28 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             </button>
           ) : null}
           {ctx.selectedMeshPart ? (
-            <div className="pointer-events-auto rounded-full border border-amber-300/25 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-amber-100 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
+            <div className="pointer-events-auto rounded-full border border-warning/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-warning shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
               {ctx.selectedMeshPart.role === "air"
                 ? "Airbox Selected"
                 : ctx.selectedMeshPart.label || ctx.selectedMeshPart.id}
             </div>
           ) : null}
           {ctx.focusedMeshPart ? (
-            <div className="pointer-events-auto rounded-full border border-cyan-300/25 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-cyan-100 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
+            <div className="pointer-events-auto rounded-full border border-primary/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-primary shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
               Part: {ctx.focusedMeshPart.label || ctx.focusedMeshPart.id}
             </div>
           ) : null}
           {missingExactScopeSegment ? (
-            <div className="pointer-events-auto rounded-full border border-rose-300/25 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-rose-200 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
+            <div className="pointer-events-auto rounded-full border border-destructive/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-destructive shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
               Missing exact object segmentation
             </div>
           ) : null}
         </div>
       ) : FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showFdmSelectionBadges && ctx.selectedObjectId ? (
-        <div className="viewportOverlay absolute right-4 top-14 z-50 flex items-center gap-2">
+        <div className="viewportOverlay absolute right-4 top-14 z-[--z-viewport-badge] flex items-center gap-2">
           <button
             type="button"
-            className="pointer-events-auto rounded-full border border-amber-300/25 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-amber-100 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md transition-colors hover:bg-amber-400/15"
+            className="pointer-events-auto rounded-full border border-warning/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-warning shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md transition-colors hover:bg-warning/20"
             onClick={() => {
               ctx.setViewMode("3D");
               ctx.requestFocusObject(ctx.selectedObjectId!);

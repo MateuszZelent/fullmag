@@ -104,7 +104,7 @@ export default function VortexTimeTracePlot({
       }}
       config={{ responsive: true, displayModeBar: false }}
       useResizeHandler
-      style={{ width: "100%", height: "100%" }}
+      className="w-full h-full"
     />
   );
 }

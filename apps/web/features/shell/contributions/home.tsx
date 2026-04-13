@@ -13,6 +13,7 @@ function buildHomeGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "project",
       title: "Project",
+      tone: "neutral",
       actions: [
         {
           id: "open",
@@ -37,6 +38,7 @@ function buildHomeGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "workspace-view",
       title: "Workspace",
+      tone: "neutral",
       actions: [
         {
           id: "home-3d",
@@ -76,7 +78,7 @@ function buildHomeGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           active: ctx.sidebarVisible,
           disabled: !ctx.can({ id: "viewport.toggle-sidebar" }),
           action: () => ctx.run({ id: "viewport.toggle-sidebar" }),
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
         {
           id: "home-focus",

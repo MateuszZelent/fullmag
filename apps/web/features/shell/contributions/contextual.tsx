@@ -292,6 +292,7 @@ function buildInterfaceGroups(_ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "ctx-interface",
       title: "Interface",
+      tone: "neutral",
       actions: [
         {
           id: "ctx-interface-coupling",
@@ -299,7 +300,7 @@ function buildInterfaceGroups(_ctx: RibbonBuildContext): RibbonGroup[] {
           label: "Coupling",
           tooltip: "Interface coupling authoring will land in next pass",
           disabled: true,
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
         {
           id: "ctx-interface-bc",
@@ -307,7 +308,7 @@ function buildInterfaceGroups(_ctx: RibbonBuildContext): RibbonGroup[] {
           label: "Boundary BC",
           tooltip: "Boundary condition authoring will land in next pass",
           disabled: true,
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
       ],
     },
@@ -329,6 +330,7 @@ function buildWorkPlaneGroups(_ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "ctx-work-plane",
       title: "Work Plane",
+      tone: "neutral",
       actions: [
         {
           id: "ctx-work-plane-transform",
@@ -336,7 +338,7 @@ function buildWorkPlaneGroups(_ctx: RibbonBuildContext): RibbonGroup[] {
           label: "Transform",
           tooltip: "Work-plane transform tools will land in next pass",
           disabled: true,
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
         {
           id: "ctx-work-plane-sketch",
@@ -344,7 +346,7 @@ function buildWorkPlaneGroups(_ctx: RibbonBuildContext): RibbonGroup[] {
           label: "Sketch",
           tooltip: "Sketch tools will land in next pass",
           disabled: true,
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
       ],
     },
@@ -428,6 +430,7 @@ function buildTableGroups(_ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "ctx-table",
       title: "Table",
+      tone: "neutral",
       actions: [
         {
           id: "ctx-table-open",
@@ -435,7 +438,7 @@ function buildTableGroups(_ctx: RibbonBuildContext): RibbonGroup[] {
           label: "Table View",
           tooltip: "Table tooling will be moved here in next pass",
           disabled: true,
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
         {
           id: "ctx-table-export",
@@ -443,7 +446,7 @@ function buildTableGroups(_ctx: RibbonBuildContext): RibbonGroup[] {
           label: "Export CSV",
           tooltip: "CSV export policy will be wired to results tables",
           disabled: true,
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
       ],
     },

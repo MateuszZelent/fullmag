@@ -135,7 +135,7 @@ export default function VortexTrajectoryPlot({
       }}
       config={{ responsive: true, displayModeBar: false }}
       useResizeHandler
-      style={{ width: "100%", height: "100%" }}
+      className="w-full h-full"
     />
   );
 }

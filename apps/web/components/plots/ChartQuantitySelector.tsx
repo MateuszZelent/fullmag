@@ -175,7 +175,7 @@ export default function ChartQuantitySelector({
                 >
                   <SelectTrigger
                     className={cn(
-                      "h-7 w-[160px] text-[0.7rem] bg-muted/30 border-border/40",
+                      "h-7 w-40 text-[0.7rem] bg-muted/30 border-border/40",
                       !multiDomain && "opacity-60 cursor-default",
                     )}
                   >
@@ -195,7 +195,7 @@ export default function ChartQuantitySelector({
               </div>
             </TooltipTrigger>
             {!multiDomain && (
-              <TooltipContent side="bottom" className="max-w-[260px] text-xs">
+              <TooltipContent side="bottom" className="max-w-64 text-xs">
                 <p className="font-semibold mb-0.5">Scope: Universe</p>
                 <p className="text-muted-foreground">
                   Per-ferromagnet data will be available when multi-domain
@@ -249,7 +249,7 @@ export default function ChartQuantitySelector({
             value={chartState.xColumn}
             onValueChange={handleXColumnChange}
           >
-            <SelectTrigger className="h-7 w-[110px] text-[0.7rem] bg-muted/30 border-border/40">
+            <SelectTrigger className="h-7 w-28 text-[0.7rem] bg-muted/30 border-border/40">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -300,8 +300,8 @@ export default function ChartQuantitySelector({
                   onClick={() => setAddPopoverOpen(false)}
                 />
                 {/* Dropdown */}
-                <div className="absolute left-0 top-full z-50 mt-1.5 w-[240px] rounded-lg border border-border/50 bg-popover/95 backdrop-blur-xl shadow-xl shadow-black/20 overflow-hidden">
-                  <div className="max-h-[340px] overflow-y-auto py-1">
+                <div className="absolute left-0 top-full z-50 mt-1.5 w-60 rounded-lg border border-border/50 bg-popover/95 backdrop-blur-xl shadow-xl shadow-black/20 overflow-hidden">
+                  <div className="max-h-[21.25rem] overflow-y-auto py-1">
                     {availableGroups.map((group) => (
                       <div key={group.category}>
                         <div className="px-3 pt-2 pb-1 text-[0.58rem] font-bold uppercase tracking-[0.12em] text-muted-foreground/50">

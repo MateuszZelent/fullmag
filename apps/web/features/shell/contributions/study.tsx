@@ -31,7 +31,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           active:
             studyNode?.kind === "study-root" ||
             studyNode?.kind === "simulation-root",
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
           action: () =>
             ctx.run({ id: "navigation.select-node", nodeId: "study" }),
         },
@@ -364,7 +364,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
             !hasStageSelection ||
             !ctx.can({ id: "study.toggle-selected-enabled" }),
           action: () => ctx.run({ id: "study.toggle-selected-enabled" }),
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
       ],
     },

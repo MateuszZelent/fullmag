@@ -12,6 +12,7 @@ function buildAutomationGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "automation-sync",
       title: "Automation",
+      tone: "sync",
       actions: [
         {
           id: "automation-sync-script",

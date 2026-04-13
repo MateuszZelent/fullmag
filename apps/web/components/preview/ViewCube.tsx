@@ -185,23 +185,23 @@ export default function ViewCube({
       {/* ViewCube */}
       <div
         className={cn(
-          "w-[88px] h-[98px] flex flex-col items-center pointer-events-none pt-[6px] rounded-xl bg-gradient-to-b from-slate-800/90 to-slate-900/80 border border-slate-500/20 shadow-xl backdrop-blur-md [perspective:220px] relative pointer-events-auto"
+          "w-size-viewcube h-[5.5rem] flex flex-col items-center pointer-events-none pt-[6px] rounded-xl bg-gradient-to-b from-card to-[hsl(var(--background))] border border-border/40 shadow-xl backdrop-blur-md [perspective:220px] relative pointer-events-auto"
         )}
       >
         <div
           ref={cubeSceneRef}
-          className="relative w-[60px] h-[60px] [transform-style:preserve-3d] cursor-grab active:cursor-grabbing touch-none pointer-events-auto"
+          className="relative w-size-viewcube-button h-size-viewcube-button [transform-style:preserve-3d] cursor-grab active:cursor-grabbing touch-none pointer-events-auto"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerLeave={onPointerUp}
         >
           {faces.map((face, fi) => (
-            <div key={fi} className={`absolute inset-0 w-[60px] h-[60px] grid grid-cols-[10px_1fr_10px] grid-rows-[10px_1fr_10px] [backface-visibility:visible] bg-gradient-to-br from-card to-muted border border-slate-400/20`} style={{ transform: face.cssTransform === "vcFaceTop" ? "translateZ(30px)" : face.cssTransform === "vcFaceBottom" ? "rotateY(180deg) translateZ(30px)" : face.cssTransform === "vcFaceRight" ? "rotateY(90deg) translateZ(30px)" : face.cssTransform === "vcFaceLeft" ? "rotateY(-90deg) translateZ(30px)" : face.cssTransform === "vcFaceFront" ? "rotateX(90deg) translateZ(30px)" : "rotateX(-90deg) translateZ(30px)" }}>
+            <div key={fi} className={`absolute inset-0 w-size-viewcube-button h-size-viewcube-button grid grid-cols-[10px_1fr_10px] grid-rows-[10px_1fr_10px] [backface-visibility:visible] bg-gradient-to-br from-card to-muted border border-border/30`} style={{ transform: face.cssTransform === "vcFaceTop" ? "translateZ(30px)" : face.cssTransform === "vcFaceBottom" ? "rotateY(180deg) translateZ(30px)" : face.cssTransform === "vcFaceRight" ? "rotateY(90deg) translateZ(30px)" : face.cssTransform === "vcFaceLeft" ? "rotateY(-90deg) translateZ(30px)" : face.cssTransform === "vcFaceFront" ? "rotateX(90deg) translateZ(30px)" : "rotateX(-90deg) translateZ(30px)" }}>
               {face.zones.flat().map((zone, zi) => (
                 <button
                   key={zi}
-                  className={`flex items-center justify-center border-none bg-transparent cursor-pointer p-0 m-0 transition-colors hover:bg-slate-400/20 ${zone.type === "face" ? "text-slate-200/80 hover:bg-slate-400/40 hover:text-white" : zone.type === "edge" ? "hover:bg-teal-500/30" : "hover:bg-amber-500/30"}`}
+                  className={`flex items-center justify-center border-none bg-transparent cursor-pointer p-0 m-0 transition-colors hover:bg-muted/30 ${zone.type === "face" ? "text-foreground/80 hover:bg-muted/50 hover:text-white" : zone.type === "edge" ? "hover:bg-teal-500/30" : "hover:bg-amber-500/30"}`}
                   onClick={() => handleZoneClick(zone.dir)}
                   title={zone.label ?? ""}
                 >
@@ -211,7 +211,7 @@ export default function ViewCube({
             </div>
           ))}
         </div>
-        <button className="mt-[5px] w-[20px] h-[20px] rounded-full bg-slate-800/90 border border-slate-500/30 text-slate-200/70 text-[12px] cursor-pointer flex items-center justify-center transition-all backdrop-blur-md leading-none pointer-events-auto hover:bg-primary/20 hover:border-primary hover:text-white" onClick={resetCamera} title="Reset view">
+        <button className="mt-[5px] w-size-viewcube-indicator h-size-viewcube-indicator rounded-full bg-card border border-border/40 text-muted-foreground text-[12px] cursor-pointer flex items-center justify-center transition-all backdrop-blur-md leading-none pointer-events-auto hover:bg-primary/20 hover:border-primary hover:text-white" onClick={resetCamera} title="Reset view">
           ⌂
         </button>
       </div>

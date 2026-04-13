@@ -11,6 +11,7 @@ function buildGeometryGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "geometry-model",
       title: "Objects",
+      tone: "neutral",
       actions: [
         {
           id: "geometry-open-objects",
@@ -41,7 +42,7 @@ function buildGeometryGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: "Import geometry asset (coming next)",
           disabled: true,
           hidden: true,
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
       ],
     },

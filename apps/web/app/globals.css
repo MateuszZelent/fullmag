@@ -60,6 +60,45 @@
   --color-warning: hsl(var(--warning));
   --color-error: hsl(var(--error));
   --color-info: hsl(var(--info));
+
+  /* Viewport/UI Colors (Catppuccin Mocha palette) */
+  --color-viewport-slate: hsl(215 15% 27%);    /* Surface1 */
+  --color-viewport-slate-muted: hsl(215 15% 20%);
+  --color-viewport-cyan: hsl(189 71% 73%);     /* Sky */
+  --color-viewport-cyan-muted: hsl(189 60% 55%);
+  --color-viewport-amber: hsl(23 92% 75%);     /* Yellow */
+  --color-viewport-amber-muted: hsl(23 80% 60%);
+  --color-viewport-rose: hsl(343 81% 75%);     /* Red */
+  --color-viewport-rose-muted: hsl(343 70% 60%);
+  --color-viewport-emerald: hsl(115 54% 76%);  /* Green */
+  --color-viewport-emerald-muted: hsl(115 45% 60%);
+  --color-viewport-violet: hsl(267 84% 81%);   /* Mauve */
+  --color-viewport-violet-muted: hsl(267 70% 65%);
+  --color-viewport-indigo: hsl(231 97% 85%);   /* Lavender */
+
+  /* Viewport Spacing */
+  --spacing-viewport-xs: 0.25rem;   /* 4px */
+  --spacing-viewport-sm: 0.5rem;    /* 8px */
+  --spacing-viewport-md: 1rem;      /* 16px */
+  --spacing-viewport-lg: 1.5rem;    /* 24px */
+  --spacing-viewport-xl: 2rem;      /* 32px */
+
+  /* Viewport Sizes */
+  --size-viewcube: 5.5rem;          /* 88px */
+  --size-viewcube-button: 3.75rem;  /* 60px */
+  --size-viewcube-indicator: 1.25rem; /* 20px */
+  --size-dimension-marker: 1.25rem; /* 20px */
+  --size-chart-min-height: 13.75rem; /* 220px */
+  --size-plot-height: 20rem;        /* 320px */
+
+  /* Plotly chart sizing */
+  --chart-height: 20rem;
+
+  /* Z-index layers for viewport */
+  --z-viewport: 1;
+  --z-viewport-overlay: 10;
+  --z-viewport-badge: 20;
+  --z-viewport-tooltip: 30;
 }
 
 @layer base {
@@ -137,7 +176,12 @@
     --chart-emerald: hsl(115 54% 76%);
     --chart-violet: hsl(267 84% 81%);
     --chart-blue: hsl(217 92% 76%);
-    
+    --chart-cyan: hsl(189 71% 73%);
+    --chart-rose: hsl(343 81% 75%);
+    --chart-indigo: hsl(231 97% 85%);
+    --chart-orange: hsl(24 90% 71%);
+    --chart-slate: hsl(215 15% 65%);
+
     /* Z-indexes */
     --z-base: 0;
     --z-sticky: 10;
@@ -1263,6 +1307,15 @@ th {
 @keyframes slideInFromRight {
   from { transform: translateX(4px); }
   to   { transform: translateX(0); }
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 3s ease-in-out infinite;
 }
 
 .animate-in {

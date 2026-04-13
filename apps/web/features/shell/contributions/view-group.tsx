@@ -11,6 +11,7 @@ export function buildViewGroup(ctx: RibbonBuildContext): RibbonGroup {
   return {
     id: "view",
     title: "View",
+    tone: "neutral",
     actions: [
       {
         id: "3d",
@@ -60,7 +61,7 @@ export function buildViewGroup(ctx: RibbonBuildContext): RibbonGroup {
         active: ctx.sidebarVisible,
         disabled: !ctx.can({ id: "viewport.toggle-sidebar" }),
         action: () => ctx.run({ id: "viewport.toggle-sidebar" }),
-        iconColor: "text-slate-400",
+        iconColor: "text-muted-foreground",
       },
       {
         id: "eye",

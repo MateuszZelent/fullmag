@@ -28,7 +28,7 @@ function sleep(ms: number): Promise<void> {
 
 function PlotlyUnavailableFallback() {
   return (
-    <div className="flex h-full w-full min-h-[220px] items-center justify-center bg-background/60 p-6 text-center">
+    <div className="flex h-full w-full min-h-[--size-chart-min-height] items-center justify-center bg-background/60 p-6 text-center">
       <div className="max-w-sm rounded-xl border border-border/60 bg-card/70 px-4 py-3 text-sm text-muted-foreground shadow-sm">
         Plot module is temporarily unavailable. Refresh the page if charts do not recover.
       </div>
@@ -62,7 +62,7 @@ async function loadPlotlyModule(): Promise<{ default: PlotComponent }> {
 const DynamicPlot = dynamic(loadPlotlyModule, {
   ssr: false,
   loading: () => (
-    <div className="flex h-full w-full min-h-[220px] items-center justify-center text-sm text-muted-foreground">
+    <div className="flex h-full w-full min-h-[--size-chart-min-height] items-center justify-center text-sm text-muted-foreground">
       Loading chart module...
     </div>
   ),

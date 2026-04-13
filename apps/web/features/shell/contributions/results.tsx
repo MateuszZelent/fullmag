@@ -68,6 +68,7 @@ function buildResultsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "quantity",
       title: "Quantity",
+      tone: "neutral",
       actions:
         quickPreviewActions.length > 0
           ? quickPreviewActions
@@ -99,6 +100,7 @@ function buildResultsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "plot-tools",
       title: "Plot",
+      tone: "neutral",
       actions: [
         {
           id: "plot",
@@ -123,6 +125,7 @@ function buildResultsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "results-export",
       title: "Export",
+      tone: "sync",
       actions: [
         {
           id: "exportvtk",
@@ -147,6 +150,7 @@ function buildResultsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "analyze",
       title: "Analyze",
+      tone: "compose",
       actions: [
         {
           id: "analyze-spectrum",

@@ -48,11 +48,11 @@ export default function BottomTelemetryDock({
 
   const statusClassName =
     workspaceStatus === "completed"
-      ? "text-emerald-500"
+      ? "text-[--chart-emerald]"
       : workspaceStatus === "running"
         ? "text-primary"
         : workspaceStatus === "materializing_script"
-          ? "text-amber-500"
+          ? "text-[--chart-amber]"
           : workspaceStatus === "failed"
             ? "text-destructive"
             : undefined;
@@ -95,58 +95,58 @@ export default function BottomTelemetryDock({
       {/* ── Telemetry grid ── */}
       <div className="flex-1 overflow-hidden">
         <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-1.5 p-2">
-          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-sky-500">
+          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-[--chart-sky]">
             <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">Step</span>
             <span className="font-mono text-[0.78rem] font-semibold text-foreground">
               {fmtStepValue(effectiveStep, hasSolverTelemetry)}
             </span>
           </div>
-          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-violet-500">
+          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-[--chart-violet]">
             <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">Sim Time</span>
             <span className="font-mono text-[0.78rem] font-semibold text-foreground">
               {fmtTimeOrDash(effectiveTime, hasSolverTelemetry)}
             </span>
           </div>
-          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-amber-500">
+          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-[--chart-amber]">
             <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">Δt</span>
             <span className="font-mono text-[0.78rem] font-semibold text-foreground">
               {fmtSIOrDash(effectiveDt, "s", hasSolverTelemetry)}
             </span>
           </div>
-          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-emerald-500">
+          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-[--chart-emerald]">
             <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">max dm/dt</span>
             <span
               className={cn(
                 "font-mono text-[0.78rem] font-semibold text-foreground",
-                hasSolverTelemetry && effectiveDmDt < convergenceThreshold && "text-emerald-500",
+                hasSolverTelemetry && effectiveDmDt < convergenceThreshold && "text-[--chart-emerald]",
               )}
             >
               {fmtExpOrDash(effectiveDmDt, hasSolverTelemetry)}
             </span>
           </div>
-          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-cyan-500">
+          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-[--chart-cyan]">
             <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">max torque [T]</span>
             <span className="font-mono text-[0.78rem] font-semibold text-foreground">
               {fmtExpOrDash(effectiveTorqueT, hasSolverTelemetry)}
             </span>
           </div>
-          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-rose-500">
+          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-[--chart-rose]">
             <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">max |H_eff|</span>
             <span className="font-mono text-[0.78rem] font-semibold text-foreground">
               {fmtExpOrDash(effectiveHEff, hasSolverTelemetry)}
             </span>
           </div>
-          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-indigo-500">
+          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-[--chart-indigo]">
             <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">E_total</span>
             <span className="font-mono text-[0.78rem] font-semibold text-foreground">
               {fmtSIOrDash(eTotal, "J", hasSolverTelemetry)}
             </span>
           </div>
-          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-slate-400">
+          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-[--chart-slate]">
             <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">Elapsed</span>
             <span className="font-mono text-[0.78rem] font-semibold text-foreground">{fmtDuration(elapsed)}</span>
           </div>
-          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-orange-500">
+          <div className="flex flex-col gap-0.5 p-2 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-[--chart-orange]">
             <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">Throughput</span>
             <span className="font-mono text-[0.78rem] font-semibold text-foreground">
               {stepsPerSec > 0 ? `${stepsPerSec.toFixed(1)} st/s` : "—"}
@@ -157,7 +157,7 @@ export default function BottomTelemetryDock({
           <div className="flex items-center gap-2 p-2 rounded-md bg-card/20 shadow-sm col-span-full border-l-[3px] border-l-primary/50">
             <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground shrink-0 w-[70px]">Convergence</span>
             <progress
-              className="w-full h-1.5 rounded-full overflow-hidden bg-muted appearance-none fill-primary [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary data-[tone=success]:[&::-webkit-progress-value]:bg-emerald-500 data-[tone=warn]:[&::-webkit-progress-value]:bg-amber-500 data-[tone=danger]:[&::-webkit-progress-value]:bg-destructive"
+              className="w-full h-1.5 rounded-full overflow-hidden bg-muted appearance-none fill-primary [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary data-[tone=success]:[&::-webkit-progress-value]:bg-[--chart-emerald] data-[tone=warn]:[&::-webkit-progress-value]:bg-[--chart-amber] data-[tone=danger]:[&::-webkit-progress-value]:bg-destructive"
               value={convergenceDisplay}
               max={100}
               data-tone={convergenceTone}

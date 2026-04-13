@@ -11,6 +11,7 @@ function buildDefinitionsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "definitions-model",
       title: "Definitions",
+      tone: "neutral",
       actions: [
         {
           id: "definitions-parameters",
@@ -19,7 +20,7 @@ function buildDefinitionsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: "Open model parameters and global variables (coming next)",
           disabled: true,
           hidden: true,
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
         {
           id: "definitions-functions",
@@ -28,7 +29,7 @@ function buildDefinitionsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: "Open global functions and dependencies (coming next)",
           disabled: true,
           hidden: true,
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
         {
           id: "definitions-coordinates",
@@ -37,7 +38,7 @@ function buildDefinitionsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           tooltip: "Coordinate systems and frames (coming next)",
           disabled: true,
           hidden: true,
-          iconColor: "text-slate-400",
+          iconColor: "text-muted-foreground",
         },
       ],
     },
