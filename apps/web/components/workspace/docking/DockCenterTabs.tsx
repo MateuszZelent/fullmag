@@ -12,6 +12,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { useRuntimeFeatureFlags } from "@/lib/hooks/useRuntimeFeatureFlags";
 import { cn } from "@/lib/utils";
 import {
   type WorkspaceMode,
@@ -136,6 +137,13 @@ export default function DockCenterTabs() {
   const vp = useViewport();
   const model = useModel();
   const tp = useTransport();
+  const featureFlags = useRuntimeFeatureFlags();
+
+  // Block rendering until feature flags are resolved to avoid mounting Three.js
+  // canvases that would be immediately disabled (causes WebGL context churn).
+  const flagsLoading = featureFlags === null;
+  const chartsDisabled = featureFlags?.disable_charts ?? false;
+  const preview3dDisabled = featureFlags?.disable_preview_3d ?? false;
 
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? null,
@@ -180,6 +188,14 @@ export default function DockCenterTabs() {
 
   const spatialPreview = tp.preview?.kind === "spatial" ? tp.preview : null;
   const previewNoticesVisible = FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices;
+
+  if (flagsLoading) {
+    return (
+      <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
+        Loading…
+      </div>
+    );
+  }
 
   if (tabs.length === 0) {
     return (
@@ -292,9 +308,19 @@ export default function DockCenterTabs() {
               className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
             >
               {tab.kind === "viewport-charts" ? (
-                <ChartsViewport />
+                chartsDisabled ? (
+                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
+                    Charts disabled via feature flags
+                  </div>
+                ) : (
+                  <ChartsViewport />
+                )
               ) : isAnalyzeLikeTab(tab) ? (
                 <AnalyzeViewport />
+              ) : preview3dDisabled ? (
+                <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
+                  3D preview disabled via feature flags
+                </div>
               ) : (
                 <ViewportCanvasArea />
               )}

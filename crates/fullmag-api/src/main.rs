@@ -36,6 +36,7 @@ use fullmag_runner::{
 mod artifacts;
 mod assets;
 mod error;
+mod feature_flags;
 mod field_store;
 mod preview;
 mod quantities;
@@ -46,6 +47,7 @@ mod types;
 use artifacts::*;
 use assets::*;
 use error::ApiError;
+use feature_flags::FeatureFlags;
 use field_store::*;
 use preview::*;
 use quantities::*;
@@ -80,6 +82,14 @@ async fn main() {
         .join("current");
     let static_web_root = resolve_static_web_root(&repo_root);
 
+    let feature_flags = FeatureFlags::resolve();
+    if feature_flags.any_active() {
+        eprintln!(
+            "[fullmag-api] FEATURE FLAGS active: {}",
+            feature_flags.summary()
+        );
+    }
+
     let state = Arc::new(AppState {
         repo_root: repo_root.clone(),
         current_workspace_root,
@@ -93,6 +103,7 @@ async fn main() {
         current_control_events: watch::channel(0).0,
         current_control_next_seq: Arc::new(Mutex::new(0)),
         current_live_snapshot_version: Arc::new(AtomicU64::new(0)),
+        feature_flags,
     });
 
     let cors = CorsLayer::new()
@@ -172,6 +183,11 @@ async fn main() {
         .route(
             "/v1/live/current/scalars",
             get(get_current_live_scalars),
+        )
+        // ── Feature flags (diagnostics) ──────────────────────────────
+        .route(
+            "/v1/live/feature-flags",
+            get(get_feature_flags),
         )
         .route(
             "/v1/live/current/fields/:quantity/vector",
@@ -573,6 +589,13 @@ async fn get_current_live_scalars(
     })))
 }
 
+/// `GET /v1/live/feature-flags` — return the current feature flags.
+async fn get_feature_flags(
+    State(state): State<Arc<AppState>>,
+) -> Json<FeatureFlags> {
+    Json(state.feature_flags.clone())
+}
+
 async fn get_current_display_selection(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CurrentDisplaySelection>, ApiError> {
@@ -780,13 +803,14 @@ async fn publish_current_live_state(
         }
     }
     let has_fresh_preview = live_state_has_fresh_preview(next.live_state.as_ref());
-    let should_rebuild_preview = has_fresh_preview
+    let should_rebuild_preview = !state.feature_flags.disable_preview_3d
+        && (has_fresh_preview
         || has_latest_fields_update
         || has_cached_preview_update
         || (matches!(
             next.display_selection.selection.kind,
             fullmag_runner::DisplayKind::GlobalScalar
-        ) && (has_live_state_update || has_scalar_row_update));
+        ) && (has_live_state_update || has_scalar_row_update)));
     let preview_start = std::time::Instant::now();
     next.preview = if should_rebuild_preview {
         let rebuilt = build_preview_state(&next, &next.display_selection, &preview_config);
@@ -822,6 +846,9 @@ async fn publish_current_live_state(
         let current_fields_hash = next.latest_fields.content_hash();
         let latest_fields_changed = current_fields_hash != next.ws_sent_latest_fields_hash;
 
+        // ── Sparse envelope: only send heavy static fields when version changed ──
+        let envelope_changed = next.envelope_version != next.ws_sent_envelope_version;
+
         let messages = build_current_live_ws_messages_delta(
             &state,
             &next,
@@ -830,6 +857,7 @@ async fn publish_current_live_state(
             fem_mesh_changed,
             preview_changed,
             latest_fields_changed,
+            envelope_changed,
         )?;
         // Advance cursors and update fingerprints BEFORE storing.
         next.scalar_rows_ws_cursor = next.scalar_rows.len();
@@ -844,6 +872,23 @@ async fn publish_current_live_state(
         }
         if latest_fields_changed {
             next.ws_sent_latest_fields_hash = current_fields_hash;
+        }
+        if envelope_changed {
+            next.ws_sent_envelope_version = next.envelope_version;
+        }
+        // Log sparse stats periodically to verify savings.
+        let step = next.live_state.as_ref().map(|l| l.latest_step.step).unwrap_or(0);
+        if step > 0 && step % 200 == 0 {
+            let total_bytes: usize = messages.iter().map(|m| match m {
+                CurrentLiveWireMessage::Text(t) => t.len(),
+                CurrentLiveWireMessage::Binary(b) => b.len(),
+            }).sum();
+            eprintln!(
+                "[fullmag-api] WS delta step={step}: {n} msgs, {kb:.1} KB, envelope={env}",
+                n = messages.len(),
+                kb = total_bytes as f64 / 1024.0,
+                env = if envelope_changed { "full" } else { "sparse" },
+            );
         }
         messages
     };
@@ -863,7 +908,7 @@ async fn publish_current_live_state(
         .current_live_snapshot_version
         .load(std::sync::atomic::Ordering::Relaxed);
     let snapshot_start = std::time::Instant::now();
-    if stored_version < current_state_version {
+    if stored_version < current_state_version && !state.feature_flags.disable_session_state_broadcast {
         if let Ok(public_json) = serialize_current_live_response_from_state(&state).await {
             *state.current_live_public_snapshot.write().await = Some(public_json);
             state.current_live_snapshot_version.store(
@@ -2933,8 +2978,8 @@ pub(crate) fn build_current_live_ws_messages(
 ) -> Result<Vec<CurrentLiveWireMessage>, ApiError> {
     // Non-delta path: send full scalar history and always include quantities.
     // Used for initial WS handshake and infrequent mutation endpoints.
-    // All sparse flags are true → send everything.
-    build_current_live_ws_messages_delta(state, snapshot, 0, true, true, true, true)
+    // All sparse flags are true → send everything (including envelope).
+    build_current_live_ws_messages_delta(state, snapshot, 0, true, true, true, true, true)
 }
 
 /// Build WS messages using a delta slice of scalar_rows.
@@ -2955,49 +3000,60 @@ fn build_current_live_ws_messages_delta(
     fem_mesh_changed: bool,
     preview_changed: bool,
     latest_fields_changed: bool,
+    envelope_changed: bool,
 ) -> Result<Vec<CurrentLiveWireMessage>, ApiError> {
-    // Only generate a binary vector payload when the preview fingerprint changed.
-    let vector_payload_id = if preview_changed {
+    let flags = &state.feature_flags;
+
+    // Only generate a binary vector payload when the preview fingerprint changed
+    // AND 3D preview is not disabled.
+    let vector_payload_id = if preview_changed && !flags.disable_preview_3d {
         preview_vector_values(snapshot.preview.as_ref())
             .map(|_| next_current_live_vector_payload_id(state))
     } else {
         None
     };
     let mut messages = Vec::new();
-    if let (Some(payload_id), Some(values)) = (
-        vector_payload_id,
-        preview_vector_values(snapshot.preview.as_ref()),
-    ) {
-        // Extract V2 metadata from spatial preview if available
-        let v2_meta = match snapshot.preview.as_ref() {
-            Some(PreviewState::Spatial(sp)) => Some((&sp.quantity, sp.n_comp as u8, [
-                sp.preview_grid[0] as u32,
-                sp.preview_grid[1] as u32,
-                sp.preview_grid[2] as u32,
-            ])),
-            _ => None,
-        };
-        let binary = if let Some((quantity_id, n_comp, grid)) = v2_meta {
-            serialize_current_live_vector_binary_v2(payload_id, quantity_id, n_comp, grid, values)
-        } else {
-            serialize_current_live_vector_binary(payload_id, values)
-        };
-        messages.push(CurrentLiveWireMessage::Binary(binary));
-    }
-    messages.push(CurrentLiveWireMessage::Text(
-        serialize_current_live_chart_event(snapshot, scalar_rows_delta_start)?,
-    ));
-    messages.push(CurrentLiveWireMessage::Text(
-        serialize_current_live_session_event(
-            snapshot,
+    if !flags.disable_preview_3d {
+        if let (Some(payload_id), Some(values)) = (
             vector_payload_id,
-            scalar_rows_delta_start,
-            quantities_changed,
-            fem_mesh_changed,
-            preview_changed,
-            latest_fields_changed,
-        )?,
-    ));
+            preview_vector_values(snapshot.preview.as_ref()),
+        ) {
+            // Extract V2 metadata from spatial preview if available
+            let v2_meta = match snapshot.preview.as_ref() {
+                Some(PreviewState::Spatial(sp)) => Some((&sp.quantity, sp.n_comp as u8, [
+                    sp.preview_grid[0] as u32,
+                    sp.preview_grid[1] as u32,
+                    sp.preview_grid[2] as u32,
+                ])),
+                _ => None,
+            };
+            let binary = if let Some((quantity_id, n_comp, grid)) = v2_meta {
+                serialize_current_live_vector_binary_v2(payload_id, quantity_id, n_comp, grid, values)
+            } else {
+                serialize_current_live_vector_binary(payload_id, values)
+            };
+            messages.push(CurrentLiveWireMessage::Binary(binary));
+        }
+    }
+    if !flags.disable_charts {
+        messages.push(CurrentLiveWireMessage::Text(
+            serialize_current_live_chart_event(snapshot, scalar_rows_delta_start)?,
+        ));
+    }
+    if !flags.disable_session_state_broadcast {
+        messages.push(CurrentLiveWireMessage::Text(
+            serialize_current_live_session_event(
+                snapshot,
+                vector_payload_id,
+                scalar_rows_delta_start,
+                quantities_changed,
+                fem_mesh_changed,
+                preview_changed && !flags.disable_preview_3d,
+                latest_fields_changed,
+                envelope_changed,
+            )?,
+        ));
+    }
     Ok(messages)
 }
 
@@ -3045,11 +3101,9 @@ fn serialize_current_live_session_event(
     fem_mesh_changed: bool,
     preview_changed: bool,
     latest_fields_changed: bool,
+    envelope_changed: bool,
 ) -> Result<String, ApiError> {
     let step_update_v2 = snapshot.build_step_update_v2();
-    // Scalar rows are streamed via dedicated `chart_state` events to avoid
-    // forcing full SessionState normalization on every chart tick.
-    // Keep `scalar_rows_total` for compatibility and lightweight progress cues.
     let _ = scalar_rows_delta_start;
 
     // Sparse: only include preview with binary reference when it actually changed.
@@ -3059,28 +3113,51 @@ fn serialize_current_live_session_event(
         None
     };
 
+    // Envelope fields: only include when their version changed.
+    // On a typical per-step publish, none of these change — skipping them
+    // reduces the session_state message from ~1.5 MB to ~2 KB.
+    let (session, run, capabilities, metadata, mesh_workspace, stage_execution,
+         scene_document, engine_log, artifacts, display_selection, preview_config) =
+        if envelope_changed {
+            (
+                Some(&snapshot.session),
+                snapshot.run.as_ref(),
+                snapshot.capabilities.as_ref(),
+                snapshot.metadata.as_ref(),
+                snapshot.mesh_workspace.as_ref(),
+                snapshot.stage_execution.as_ref(),
+                snapshot.scene_document.as_ref(),
+                Some(snapshot.engine_log.as_slice()),
+                Some(snapshot.artifacts.as_slice()),
+                Some(&snapshot.display_selection),
+                Some(&snapshot.preview_config),
+            )
+        } else {
+            (None, None, None, None, None, None, None, None, None, None, None)
+        };
+
     serde_json::to_string(&CurrentLiveEvent::SessionState {
         state: SessionStateEventView {
             session_protocol_version: &snapshot.session_protocol_version,
             capability_profile_version: &snapshot.capability_profile_version,
-            session: &snapshot.session,
-            run: snapshot.run.as_ref(),
+            session,
+            run,
             live_state: snapshot.live_state.as_ref(),
             runtime_status: &snapshot.runtime_status,
-            capabilities: snapshot.capabilities.as_ref(),
-            metadata: snapshot.metadata.as_ref(),
-            mesh_workspace: snapshot.mesh_workspace.as_ref(),
-            stage_execution: snapshot.stage_execution.as_ref(),
-            scene_document: snapshot.scene_document.as_ref(),
+            capabilities,
+            metadata,
+            mesh_workspace,
+            stage_execution,
+            scene_document,
             scalar_rows: &[],
             scalar_rows_total: snapshot.scalar_rows.len(),
-            engine_log: &snapshot.engine_log,
+            engine_log,
             quantities: quantities_changed.then_some(snapshot.quantities.as_slice()),
             fem_mesh: if fem_mesh_changed { snapshot.fem_mesh.as_ref() } else { None },
             latest_fields: if latest_fields_changed { Some(&snapshot.latest_fields) } else { None },
-            artifacts: &snapshot.artifacts,
-            display_selection: &snapshot.display_selection,
-            preview_config: &snapshot.preview_config,
+            artifacts,
+            display_selection,
+            preview_config,
             preview,
             step_update_v2,
         },

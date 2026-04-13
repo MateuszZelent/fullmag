@@ -83,6 +83,7 @@ pub enum StepAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(non_snake_case)]
 pub struct StepStats {
     pub step: u64,
     pub time: f64,
@@ -831,6 +832,7 @@ pub(crate) struct LiveStepConsumer<'a> {
 }
 
 #[derive(Debug, Clone)]
+#[allow(non_snake_case)]
 pub(crate) struct StateObservables {
     pub magnetization: Vec<[f64; 3]>,
     pub exchange_field: Vec<[f64; 3]>,

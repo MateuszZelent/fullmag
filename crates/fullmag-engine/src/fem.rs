@@ -261,8 +261,9 @@ impl CsrMatrix {
     pub fn spmv(&self, x: &[f64]) -> Vec<f64> {
         #[cfg(feature = "parallel")]
         {
-            // Rayon setup dominates for small/medium systems.
-            if self.n >= 20_000 {
+            // Rayon setup dominates for very small systems; parallel SpMV
+            // is worthwhile above ~2 000 rows.
+            if self.n >= 2_000 {
                 return (0..self.n)
                     .into_par_iter()
                     .map(|row| {

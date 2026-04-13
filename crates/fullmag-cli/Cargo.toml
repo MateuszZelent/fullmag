@@ -26,3 +26,4 @@ serde.workspace = true
 serde_json.workspace = true
 uuid = { version = "1", features = ["v4"] }
 libc = "0.2"
+rayon = "1.10"

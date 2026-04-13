@@ -9,6 +9,7 @@ mod args;
 mod command_bridge;
 mod control_room;
 mod diagnostics;
+mod feature_flags;
 mod formatting;
 mod interactive_runtime_host;
 mod live_workspace;

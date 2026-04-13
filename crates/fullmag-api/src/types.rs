@@ -50,6 +50,8 @@ pub(crate) struct AppState {
     /// State version at which the memoized `current_live_public_snapshot` was built.
     /// When `state_version` on the live state exceeds this, the snapshot is stale.
     pub current_live_snapshot_version: Arc<AtomicU64>,
+    /// Runtime feature flags for disabling heavy subsystems during diagnostics.
+    pub feature_flags: crate::feature_flags::FeatureFlags,
 }
 
 #[derive(Debug, Clone)]
@@ -389,6 +391,15 @@ pub(crate) struct SessionStateResponse {
     /// Used for lazy memoization of the public snapshot JSON.
     #[serde(skip)]
     pub state_version: u64,
+    /// Version of the "static envelope" fields last broadcast via WS.
+    /// When unchanged, these fields are omitted from the WS event (sparse delta).
+    /// Covers: session, run, capabilities, metadata, mesh_workspace, stage_execution,
+    /// scene_document, engine_log, artifacts, display_selection, preview_config.
+    #[serde(skip)]
+    pub ws_sent_envelope_version: u64,
+    /// Current version of the static envelope (bumped when any covered field changes).
+    #[serde(skip)]
+    pub envelope_version: u64,
 }
 
 impl SessionStateResponse {
@@ -427,14 +438,23 @@ pub(crate) struct ChartStateEventView<'a> {
 pub(crate) struct SessionStateEventView<'a> {
     pub session_protocol_version: &'a str,
     pub capability_profile_version: &'a str,
-    pub session: &'a SessionManifest,
+    /// Sparse: only present when the session manifest changed (start/end, status change).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<&'a SessionManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub run: Option<&'a RunManifest>,
     pub live_state: Option<&'a LiveState>,
     pub runtime_status: &'a RuntimeStatusView,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<&'a BackendCapabilities>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_workspace: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<&'a StageExecutionState>,
+    /// Sparse: only present when scene_document changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_document: Option<&'a SceneDocument>,
     /// Delta: only rows added since the last WS broadcast (empty = no new rows).
     /// Clients accumulate history by appending deltas.  New clients get full
@@ -443,7 +463,9 @@ pub(crate) struct SessionStateEventView<'a> {
     /// Total accumulated row count.  Lets the frontend decide whether to replace
     /// (on reconnect with stale state) or append.
     pub scalar_rows_total: usize,
-    pub engine_log: &'a [EngineLogEntry],
+    /// Sparse: only present when engine_log changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_log: Option<&'a [EngineLogEntry]>,
     /// Only present when quantities changed since the last WS broadcast.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quantities: Option<&'a [QuantityDescriptor]>,
@@ -453,9 +475,15 @@ pub(crate) struct SessionStateEventView<'a> {
     /// Sparse: only present when content hash changed since the last WS broadcast.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_fields: Option<&'a LatestFields>,
-    pub artifacts: &'a [ArtifactEntry],
-    pub display_selection: &'a CurrentDisplaySelection,
-    pub preview_config: &'a CurrentPreviewConfig,
+    /// Sparse: only present when artifacts changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifacts: Option<&'a [ArtifactEntry]>,
+    /// Sparse: only present when display_selection changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_selection: Option<&'a CurrentDisplaySelection>,
+    /// Sparse: only present when preview_config changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_config: Option<&'a CurrentPreviewConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<PreviewState>,
     /// V2 canonical step representation (Q16/Q17).

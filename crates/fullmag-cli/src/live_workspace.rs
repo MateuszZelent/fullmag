@@ -1,11 +1,26 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::control_room::{api_is_ready, api_port, publish_current_live_state};
+use crate::feature_flags::FeatureFlags;
 use crate::formatting::{push_engine_log, unix_time_millis};
 use crate::types::*;
+
+/// Global feature flags resolved once at startup.
+/// Call `init_feature_flags()` early in `run_script_mode()` to populate.
+static FEATURE_FLAGS: OnceLock<FeatureFlags> = OnceLock::new();
+
+/// Initialize the global feature flags. Call once early in startup.
+pub(crate) fn init_feature_flags(flags: FeatureFlags) {
+    let _ = FEATURE_FLAGS.set(flags);
+}
+
+/// Get the current feature flags (defaults if not initialized).
+pub(crate) fn feature_flags() -> &'static FeatureFlags {
+    FEATURE_FLAGS.get_or_init(FeatureFlags::default)
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct LocalLiveWorkspaceState {
@@ -345,6 +360,10 @@ pub(crate) fn set_latest_scalar_row_if_due(
     state: &mut LocalLiveWorkspaceState,
     update: &fullmag_runner::StepUpdate,
 ) {
+    // Skip scalar row accumulation if charts are disabled (benchmark mode)
+    if feature_flags().disable_charts {
+        return;
+    }
     // Always record the scalar row for live streaming whenever the orchestrator decides
     // to publish a workspace update.  The `scalar_row_due` flag is an artifact-recorder
     // concern (zarr on disk); for live telemetry we want every throttled live-update to
@@ -353,6 +372,10 @@ pub(crate) fn set_latest_scalar_row_if_due(
 }
 
 pub(crate) fn clear_cached_preview_fields(state: &mut LocalLiveWorkspaceState) {
+    // Skip if 3D preview is disabled (benchmark mode)
+    if feature_flags().disable_preview_3d {
+        return;
+    }
     state.preview_fields.clear();
     state.pending_preview_fields.clear();
     state.clear_preview_cache = true;
@@ -362,6 +385,10 @@ pub(crate) fn replace_cached_preview_fields(
     state: &mut LocalLiveWorkspaceState,
     fields: impl IntoIterator<Item = fullmag_runner::LivePreviewField>,
 ) {
+    // Skip if 3D preview is disabled (benchmark mode)
+    if feature_flags().disable_preview_3d {
+        return;
+    }
     state.preview_fields.replace_all(fields);
     state.pending_preview_fields = state.preview_fields.clone();
     state.clear_preview_cache = true;
@@ -371,6 +398,10 @@ pub(crate) fn upsert_cached_preview_field(
     state: &mut LocalLiveWorkspaceState,
     field: &fullmag_runner::LivePreviewField,
 ) {
+    // Skip if 3D preview is disabled (benchmark mode)
+    if feature_flags().disable_preview_3d {
+        return;
+    }
     state.preview_fields.insert(field.clone());
     state.pending_preview_fields.insert(field.clone());
 }
@@ -379,6 +410,10 @@ pub(crate) fn merge_cached_preview_fields_from_update(
     state: &mut LocalLiveWorkspaceState,
     update: &fullmag_runner::StepUpdate,
 ) {
+    // Skip if 3D preview is disabled (benchmark mode)
+    if feature_flags().disable_preview_3d {
+        return;
+    }
     if let Some(fields) = update.cached_preview_fields.as_ref() {
         for field in fields {
             upsert_cached_preview_field(state, field);

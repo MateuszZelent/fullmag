@@ -91,17 +91,19 @@ export function mergeScalarRowsDelta(
 }
 
 export function mergeSessionState(prev: SessionState | null, next: SessionState): SessionState {
-  if (!next?.session) {
+  // When the sparse WS event omits `session`, carry it forward from prev.
+  const effectiveSession = next.session ?? prev?.session ?? null;
+  if (!effectiveSession) {
     return prev ?? next;
   }
   if (!prev) {
-    return next;
+    return { ...next, session: effectiveSession };
   }
   if (!prev.session) {
-    return next;
+    return { ...next, session: effectiveSession };
   }
-  if (prev.session.session_id !== next.session.session_id) {
-    return next;
+  if (prev.session.session_id !== effectiveSession.session_id) {
+    return { ...next, session: effectiveSession };
   }
 
   const prevLiveTs = prev.live_state?.updated_at_unix_ms ?? -1;
@@ -122,11 +124,21 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
   if (timelineReset) {
     return {
       ...next,
+      session: effectiveSession,
       command_status: next.command_status ?? prev.command_status,
     };
   }
 
-  const merged: SessionState = { ...next };
+  const merged: SessionState = { ...next, session: effectiveSession };
+
+  // ── Sparse envelope carry-forward ──
+  // When the backend omits heavy static fields from a WS delta event,
+  // the normalized `next` will have null/empty values.  Carry forward from prev.
+  if (!merged.run && prev.run) merged.run = prev.run;
+  if (!merged.capabilities && prev.capabilities) merged.capabilities = prev.capabilities;
+  if (!merged.metadata && prev.metadata) merged.metadata = prev.metadata;
+  if (!merged.mesh_workspace && prev.mesh_workspace) merged.mesh_workspace = prev.mesh_workspace;
+  if (merged.artifacts.length === 0 && prev.artifacts.length > 0) merged.artifacts = prev.artifacts;
 
   if (!merged.fem_mesh && prev.fem_mesh) {
     merged.fem_mesh = prev.fem_mesh;

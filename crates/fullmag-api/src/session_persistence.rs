@@ -101,6 +101,8 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             ws_sent_preview_fingerprint: None,
             ws_sent_latest_fields_hash: 0,
             state_version: 0,
+            ws_sent_envelope_version: 0,
+            envelope_version: 0,
         }
     }
 }

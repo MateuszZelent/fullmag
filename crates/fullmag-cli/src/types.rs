@@ -118,6 +118,7 @@ pub(crate) struct EngineLogEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(non_snake_case)]
 pub(crate) struct LiveStepView {
     pub step: u64,
     pub time: f64,
@@ -350,6 +351,7 @@ pub(crate) struct SessionCommand {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(non_snake_case)]
 pub(crate) struct CurrentLiveScalarRow {
     pub step: u64,
     pub time: f64,

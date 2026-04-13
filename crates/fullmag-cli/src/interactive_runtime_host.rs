@@ -356,10 +356,6 @@ impl InteractiveRuntimeHost {
         self.control.clone()
     }
 
-    pub(super) fn wait_next_command(&self, timeout: Duration) -> Option<SessionCommand> {
-        self.control.wait_next_command(timeout)
-    }
-
     pub(super) fn wait_next_command_coalesced(&self, timeout: Duration) -> Option<SessionCommand> {
         self.control.wait_next_command_coalesced(timeout)
     }

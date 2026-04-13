@@ -1685,7 +1685,7 @@ fn add_dmi_complex(
 /// Both diagonal blocks (K_11, K_22) get the same surface anisotropy term.
 fn add_surface_anisotropy_2x2(
     plan: &FemEigenPlanIR,
-    topology: &MeshTopology,
+    _topology: &MeshTopology,
     reduction: &ReductionMap,
     equilibrium: &[Vector3],
     stiffness: &mut DMatrix<f64>,

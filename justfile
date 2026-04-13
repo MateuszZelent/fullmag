@@ -188,3 +188,28 @@ fem-gpu-py-layer-hole-headless:
 # Required after source changes to fullmag-plan, fullmag-runner, fullmag-fem-sys, or native/backends/fem.
 rebuild-gpu-runtime:
     ./scripts/export_fem_gpu_runtime.sh
+
+# ── Benchmarks ──────────────────────────────────────────────────────────
+
+# Run FEM CPU scaling benchmark: tests thread counts 4, 8, 20, 40 across mesh sizes.
+# Outputs timing comparison and speedup table.
+bench-cpu-scaling:
+    just ensure-python
+    just build fullmag
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" ./scripts/bench_fem_cpu_scaling.sh
+
+# Quick version of CPU scaling benchmark (fewer steps, fewer mesh sizes).
+bench-cpu-scaling-quick:
+    just ensure-python
+    just build fullmag
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" ./scripts/bench_fem_cpu_scaling.sh --quick
+
+# Single-run profiling benchmark. Use with htop/perf to observe CPU utilization.
+# Example: FULLMAG_CPU_THREADS=8 just bench-profile
+bench-profile threads="auto":
+    just ensure-python
+    just build fullmag
+    PATH="{{local_bin}}:$PATH" \
+    FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_CPU_THREADS="{{threads}}" \
+    fullmag --headless examples/bench_fem_simple.py

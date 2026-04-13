@@ -2174,6 +2174,39 @@ fn execute_synthetic_stage(
 
 pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     init_api_port()?;
+
+    // Eagerly configure the global Rayon pool so that ALL par_iter calls
+    // (including those inside the interactive runtime) use all available cores.
+    let cpu_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let cpu_threads = std::env::var("FULLMAG_CPU_THREADS")
+        .ok()
+        .or_else(|| std::env::var("RAYON_NUM_THREADS").ok())
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(cpu_threads);
+    if let Err(e) = rayon::ThreadPoolBuilder::new()
+        .num_threads(cpu_threads)
+        .build_global()
+    {
+        eprintln!(
+            "[fullmag-cli] WARNING: could not configure global Rayon pool ({cpu_threads} threads): {e}"
+        );
+    } else {
+        eprintln!("[fullmag-cli] Rayon global pool: {cpu_threads} threads");
+    }
+
+    // Load feature flags once at startup (file > env > defaults)
+    let feature_flags = crate::feature_flags::FeatureFlags::resolve();
+    if feature_flags.any_active() {
+        eprintln!(
+            "[fullmag-cli] Feature flags active: {}",
+            feature_flags.summary()
+        );
+    }
+    crate::live_workspace::init_feature_flags(feature_flags);
+
     let args = ScriptCli::parse_from(raw_args);
     let started_at_unix_ms = unix_time_millis()?;
     let script_path = args
@@ -2206,7 +2239,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
     fs::create_dir_all(&workspace_dir)
         .with_context(|| format!("failed to create workspace dir {}", workspace_dir.display()))?;
-    let field_every_n = 10;
+    // When 3D preview is disabled, set field_every_n to infinity to skip expensive computations
+    let field_every_n = if crate::live_workspace::feature_flags().disable_preview_3d {
+        u64::MAX
+    } else {
+        10
+    };
     let current_live_publisher = CurrentLivePublisher::spawn(&session_id);
     let bootstrapping_runtime = requested_runtime_selection(
         &requested_backend_name,
@@ -3188,7 +3226,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             || adjusted.finished;
                         if print_step {
                             let wall_ms = s.wall_time_ns as f64 / 1e6;
-                            let torque_T = if s.max_torque_T > 0.0 {
+                            let torque_t = if s.max_torque_T > 0.0 {
                                 s.max_torque_T
                             } else {
                                 estimate_max_torque_from_step(s.max_dm_dt, torque_mode)
@@ -3203,7 +3241,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 s.time,
                                 s.dt,
                                 s.max_dm_dt,
-                                torque_T,
+                                torque_t,
                                 s.e_total,
                                 s.max_h_eff,
                                 wall_ms
@@ -3260,7 +3298,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             || adjusted.finished;
                         if print_step {
                             let wall_ms = s.wall_time_ns as f64 / 1e6;
-                            let torque_T = if s.max_torque_T > 0.0 {
+                            let torque_t = if s.max_torque_T > 0.0 {
                                 s.max_torque_T
                             } else {
                                 estimate_max_torque_from_step(s.max_dm_dt, torque_mode)
@@ -3275,7 +3313,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 s.time,
                                 s.dt,
                                 s.max_dm_dt,
-                                torque_T,
+                                torque_t,
                                 s.e_total,
                                 s.max_h_eff,
                                 wall_ms
@@ -3945,7 +3983,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             || s.step % 1000 == 0;
                         if print_step {
                             let wall_ms = s.wall_time_ns as f64 / 1e6;
-                            let torque_T = if s.max_torque_T > 0.0 {
+                            let torque_t = if s.max_torque_T > 0.0 {
                                 s.max_torque_T
                             } else {
                                 estimate_max_torque_from_step(s.max_dm_dt, torque_mode)
@@ -3958,7 +3996,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 s.time,
                                 s.dt,
                                 s.max_dm_dt,
-                                torque_T,
+                                torque_t,
                                 s.e_total,
                                 s.max_h_eff,
                                 wall_ms
@@ -4048,7 +4086,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 || s.step % 1000 == 0;
                             if print_step {
                                 let wall_ms = s.wall_time_ns as f64 / 1e6;
-                                let torque_T = if s.max_torque_T > 0.0 {
+                                let torque_t = if s.max_torque_T > 0.0 {
                                     s.max_torque_T
                                 } else {
                                     estimate_max_torque_from_step(s.max_dm_dt, torque_mode)
@@ -4061,7 +4099,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     s.time,
                                     s.dt,
                                     s.max_dm_dt,
-                                    torque_T,
+                                    torque_t,
                                     s.e_total,
                                     s.max_h_eff,
                                     wall_ms

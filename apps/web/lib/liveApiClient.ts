@@ -6,6 +6,14 @@ import type { MeshCommandTarget } from "./session/types";
 type JsonObject = Record<string, unknown>;
 type JsonBody = unknown;
 
+/** Runtime feature flags from the backend. */
+export interface RuntimeFeatureFlags {
+  disable_charts: boolean;
+  disable_preview_2d: boolean;
+  disable_preview_3d: boolean;
+  disable_session_state_broadcast: boolean;
+}
+
 interface QueueRemeshPayload {
   mesh_options?: JsonBody;
   mesh_target: MeshCommandTarget;
@@ -139,6 +147,11 @@ export function currentLiveApiClient() {
         `${baseUrl}/v1/live/current/scalars`,
         { cache: "no-store" },
       );
+    },
+    fetchFeatureFlags() {
+      return requestJson<RuntimeFeatureFlags>(`${baseUrl}/v1/live/feature-flags`, {
+        cache: "no-store",
+      });
     },
     fetchRuntimeCapabilities() {
       return requestJson<HostCapabilityMatrix>(`${baseUrl}/v1/runtime/capabilities`, {
