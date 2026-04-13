@@ -62,13 +62,36 @@ from fullmag.model.problem import (
 )
 from fullmag.model.discretization import FDM, FEM
 
-_MESH_SIZE_CALIBRATIONS = ("general_physics",)
+_MESH_SIZE_CALIBRATIONS = (
+    "general_physics",
+    "micromagnetics_static",
+    "micromagnetics_relaxation",
+    "micromagnetics_frequency_domain",
+    "magnetostatics_dominated",
+    "imported_surface_cleanup",
+)
 _MESH_SIZE_PRESET_ALIASES = {
+    "extremely fine": "extremely_fine",
+    "extremelyfine": "extremely_fine",
     "extra fine": "extra_fine",
     "extrafine": "extra_fine",
     "very_fine": "extra_fine",
+    "extra coarse": "extra_coarse",
+    "extracoarse": "extra_coarse",
+    "extremely coarse": "extremely_coarse",
+    "extremelycoarse": "extremely_coarse",
 }
-_MESH_SIZE_PRESETS = ("coarse", "normal", "fine", "finer", "extra_fine")
+_MESH_SIZE_PRESETS = (
+    "extremely_fine",
+    "extra_fine",
+    "finer",
+    "fine",
+    "normal",
+    "coarse",
+    "coarser",
+    "extra_coarse",
+    "extremely_coarse",
+)
 
 
 def _normalize_mesh_calibration(value: str | None) -> str | None:
@@ -94,6 +117,25 @@ def _normalize_mesh_preset(value: str | None) -> str | None:
     if normalized not in _MESH_SIZE_PRESETS:
         raise ValueError(f"size_preset must be one of {_MESH_SIZE_PRESETS!r}, got {value!r}")
     return normalized
+
+
+def _coalesce_mesh_size_controls(
+    *,
+    hmax: float | str | None,
+    hmin: float | None,
+    maximum_element_size: float | str | None,
+    minimum_element_size: float | None,
+    growth_rate: float | None,
+    maximum_element_growth_rate: float | None,
+) -> tuple[float | str | None, float | None, float | None]:
+    resolved_hmax = maximum_element_size if maximum_element_size is not None else hmax
+    resolved_hmin = minimum_element_size if minimum_element_size is not None else hmin
+    resolved_growth_rate = (
+        maximum_element_growth_rate
+        if maximum_element_growth_rate is not None
+        else growth_rate
+    )
+    return resolved_hmax, resolved_hmin, resolved_growth_rate
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +371,8 @@ class GeometryMeshHandle:
         *,
         hmax: float | str | None = None,
         hmin: float | None = None,
+        maximum_element_size: float | str | None = None,
+        minimum_element_size: float | None = None,
         order: int | None = None,
         source: str | None = None,
         calibrate_for: str | None = None,
@@ -342,20 +386,26 @@ class GeometryMeshHandle:
         size_from_curvature: int | None = None,
         curvature_factor: float | None = None,
         growth_rate: float | None = None,
+        maximum_element_growth_rate: float | None = None,
         narrow_regions: int | None = None,
         narrow_region_resolution: float | None = None,
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
     ) -> "GeometryMeshHandle":
         return self.configure(
-            hmax=hmax, hmin=hmin, order=order, source=source,
+            hmax=hmax, hmin=hmin,
+            maximum_element_size=maximum_element_size,
+            minimum_element_size=minimum_element_size,
+            order=order, source=source,
             calibrate_for=calibrate_for, size_preset=size_preset,
             algorithm_2d=algorithm_2d, algorithm_3d=algorithm_3d,
             optimize=optimize, optimize_iterations=optimize_iterations,
             smoothing_steps=smoothing_steps, size_factor=size_factor,
             size_from_curvature=size_from_curvature,
             curvature_factor=curvature_factor,
-            growth_rate=growth_rate, narrow_regions=narrow_regions,
+            growth_rate=growth_rate,
+            maximum_element_growth_rate=maximum_element_growth_rate,
+            narrow_regions=narrow_regions,
             narrow_region_resolution=narrow_region_resolution,
             compute_quality=compute_quality,
             per_element_quality=per_element_quality,
@@ -366,6 +416,8 @@ class GeometryMeshHandle:
         *,
         hmax: float | str | None = None,
         hmin: float | None = None,
+        maximum_element_size: float | str | None = None,
+        minimum_element_size: float | None = None,
         order: int | None = None,
         source: str | None = None,
         calibrate_for: str | None = None,
@@ -379,6 +431,7 @@ class GeometryMeshHandle:
         size_from_curvature: int | None = None,
         curvature_factor: float | None = None,
         growth_rate: float | None = None,
+        maximum_element_growth_rate: float | None = None,
         narrow_regions: int | None = None,
         narrow_region_resolution: float | None = None,
         compute_quality: bool | None = None,
@@ -432,12 +485,22 @@ class GeometryMeshHandle:
             Include per-element quality arrays (for visualization).
         """
         spec = self._owner._mesh_spec
-        if hmax is not None:
-            if isinstance(hmax, str) and hmax != "auto":
-                raise ValueError(f"hmax must be a positive float or \"auto\", got {hmax!r}")
-            spec.hmax = hmax
-        if hmin is not None:
-            spec.hmin = hmin
+        resolved_hmax, resolved_hmin, resolved_growth_rate = _coalesce_mesh_size_controls(
+            hmax=hmax,
+            hmin=hmin,
+            maximum_element_size=maximum_element_size,
+            minimum_element_size=minimum_element_size,
+            growth_rate=growth_rate,
+            maximum_element_growth_rate=maximum_element_growth_rate,
+        )
+        if resolved_hmax is not None:
+            if isinstance(resolved_hmax, str) and resolved_hmax != "auto":
+                raise ValueError(
+                    f"hmax/maximum_element_size must be a positive float or \"auto\", got {resolved_hmax!r}"
+                )
+            spec.hmax = resolved_hmax
+        if resolved_hmin is not None:
+            spec.hmin = resolved_hmin
         if order is not None:
             spec.order = order
         if source is not None:
@@ -462,8 +525,8 @@ class GeometryMeshHandle:
             spec.size_from_curvature = size_from_curvature
         if curvature_factor is not None:
             spec.curvature_factor = float(curvature_factor)
-        if growth_rate is not None:
-            spec.growth_rate = growth_rate
+        if resolved_growth_rate is not None:
+            spec.growth_rate = resolved_growth_rate
         if narrow_regions is not None:
             spec.narrow_regions = narrow_regions
         if narrow_region_resolution is not None:
@@ -1487,6 +1550,8 @@ class StudyBuilder:
         *,
         hmax: float | str | None = None,
         hmin: float | None = None,
+        maximum_element_size: float | str | None = None,
+        minimum_element_size: float | None = None,
         order: int | None = None,
         source: str | None = None,
         calibrate_for: str | None = None,
@@ -1500,6 +1565,7 @@ class StudyBuilder:
         size_from_curvature: int | None = None,
         curvature_factor: float | None = None,
         growth_rate: float | None = None,
+        maximum_element_growth_rate: float | None = None,
         narrow_regions: int | None = None,
         narrow_region_resolution: float | None = None,
         compute_quality: bool | None = None,
@@ -1508,6 +1574,8 @@ class StudyBuilder:
         object_mesh_defaults(
             hmax=hmax,
             hmin=hmin,
+            maximum_element_size=maximum_element_size,
+            minimum_element_size=minimum_element_size,
             order=order,
             source=source,
             calibrate_for=calibrate_for,
@@ -1521,6 +1589,7 @@ class StudyBuilder:
             size_from_curvature=size_from_curvature,
             curvature_factor=curvature_factor,
             growth_rate=growth_rate,
+            maximum_element_growth_rate=maximum_element_growth_rate,
             narrow_regions=narrow_regions,
             narrow_region_resolution=narrow_region_resolution,
             compute_quality=compute_quality,
@@ -1533,6 +1602,8 @@ class StudyBuilder:
         *,
         hmax: float | str | None = None,
         hmin: float | None = None,
+        maximum_element_size: float | str | None = None,
+        minimum_element_size: float | None = None,
         order: int | None = None,
         source: str | None = None,
         calibrate_for: str | None = None,
@@ -1546,6 +1617,7 @@ class StudyBuilder:
         size_from_curvature: int | None = None,
         curvature_factor: float | None = None,
         growth_rate: float | None = None,
+        maximum_element_growth_rate: float | None = None,
         narrow_regions: int | None = None,
         narrow_region_resolution: float | None = None,
         compute_quality: bool | None = None,
@@ -1555,6 +1627,8 @@ class StudyBuilder:
         object_mesh_defaults(
             hmax=hmax,
             hmin=hmin,
+            maximum_element_size=maximum_element_size,
+            minimum_element_size=minimum_element_size,
             order=order,
             source=source,
             calibrate_for=calibrate_for,
@@ -1568,6 +1642,7 @@ class StudyBuilder:
             size_from_curvature=size_from_curvature,
             curvature_factor=curvature_factor,
             growth_rate=growth_rate,
+            maximum_element_growth_rate=maximum_element_growth_rate,
             narrow_regions=narrow_regions,
             narrow_region_resolution=narrow_region_resolution,
             compute_quality=compute_quality,
@@ -1604,6 +1679,9 @@ class StudyBuilder:
         enabled: bool = True,
         *,
         policy: str = "manual",
+        indicator: str = "geometric_only",
+        target_quantity: str = "auto",
+        convergence_metric: str = "energy_delta",
         theta: float = 0.3,
         h_min: float | None = None,
         h_max: float | None = None,
@@ -1615,6 +1693,9 @@ class StudyBuilder:
         adaptive_mesh(
             enabled,
             policy=policy,
+            indicator=indicator,
+            target_quantity=target_quantity,
+            convergence_metric=convergence_metric,
             theta=theta,
             h_min=h_min,
             h_max=h_max,
@@ -1927,6 +2008,8 @@ def object_mesh_defaults(
     *,
     hmax: float | str | None = None,
     hmin: float | None = None,
+    maximum_element_size: float | str | None = None,
+    minimum_element_size: float | None = None,
     order: int | None = None,
     source: str | None = None,
     calibrate_for: str | None = None,
@@ -1940,19 +2023,30 @@ def object_mesh_defaults(
     size_from_curvature: int | None = None,
     curvature_factor: float | None = None,
     growth_rate: float | None = None,
+    maximum_element_growth_rate: float | None = None,
     narrow_regions: int | None = None,
     narrow_region_resolution: float | None = None,
     compute_quality: bool | None = None,
     per_element_quality: bool | None = None,
 ) -> None:
     """Configure shared default mesher settings for magnetic objects in the flat API."""
-    if hmax is not None:
-        if isinstance(hmax, str) and hmax != "auto":
-            raise ValueError(f"hmax must be a positive float or \"auto\", got {hmax!r}")
-        _state._default_mesh_spec.hmax = hmax
-        _state._hmax = hmax
-    if hmin is not None:
-        _state._default_mesh_spec.hmin = hmin
+    resolved_hmax, resolved_hmin, resolved_growth_rate = _coalesce_mesh_size_controls(
+        hmax=hmax,
+        hmin=hmin,
+        maximum_element_size=maximum_element_size,
+        minimum_element_size=minimum_element_size,
+        growth_rate=growth_rate,
+        maximum_element_growth_rate=maximum_element_growth_rate,
+    )
+    if resolved_hmax is not None:
+        if isinstance(resolved_hmax, str) and resolved_hmax != "auto":
+            raise ValueError(
+                f"hmax/maximum_element_size must be a positive float or \"auto\", got {resolved_hmax!r}"
+            )
+        _state._default_mesh_spec.hmax = resolved_hmax
+        _state._hmax = resolved_hmax
+    if resolved_hmin is not None:
+        _state._default_mesh_spec.hmin = resolved_hmin
     if order is not None:
         _state._default_mesh_spec.order = order
         _state._fem_order = order
@@ -1979,8 +2073,8 @@ def object_mesh_defaults(
         _state._default_mesh_spec.size_from_curvature = size_from_curvature
     if curvature_factor is not None:
         _state._default_mesh_spec.curvature_factor = float(curvature_factor)
-    if growth_rate is not None:
-        _state._default_mesh_spec.growth_rate = growth_rate
+    if resolved_growth_rate is not None:
+        _state._default_mesh_spec.growth_rate = resolved_growth_rate
     if narrow_regions is not None:
         _state._default_mesh_spec.narrow_regions = narrow_regions
     if narrow_region_resolution is not None:
@@ -1995,6 +2089,8 @@ def mesh(
     *,
     hmax: float | str | None = None,
     hmin: float | None = None,
+    maximum_element_size: float | str | None = None,
+    minimum_element_size: float | None = None,
     order: int | None = None,
     source: str | None = None,
     calibrate_for: str | None = None,
@@ -2008,6 +2104,7 @@ def mesh(
     size_from_curvature: int | None = None,
     curvature_factor: float | None = None,
     growth_rate: float | None = None,
+    maximum_element_growth_rate: float | None = None,
     narrow_regions: int | None = None,
     narrow_region_resolution: float | None = None,
     compute_quality: bool | None = None,
@@ -2017,6 +2114,8 @@ def mesh(
     object_mesh_defaults(
         hmax=hmax,
         hmin=hmin,
+        maximum_element_size=maximum_element_size,
+        minimum_element_size=minimum_element_size,
         order=order,
         source=source,
         calibrate_for=calibrate_for,
@@ -2030,6 +2129,7 @@ def mesh(
         size_from_curvature=size_from_curvature,
         curvature_factor=curvature_factor,
         growth_rate=growth_rate,
+        maximum_element_growth_rate=maximum_element_growth_rate,
         narrow_regions=narrow_regions,
         narrow_region_resolution=narrow_region_resolution,
         compute_quality=compute_quality,
@@ -2107,6 +2207,9 @@ def adaptive_mesh(
     enabled: bool = True,
     *,
     policy: str = "manual",
+    indicator: str = "geometric_only",
+    target_quantity: str = "auto",
+    convergence_metric: str = "energy_delta",
     theta: float = 0.3,
     h_min: float | None = None,
     h_max: float | None = None,
@@ -2124,6 +2227,37 @@ def adaptive_mesh(
     """
     if policy not in {"manual", "auto"}:
         raise ValueError("adaptive_mesh policy must be 'manual' or 'auto'")
+    if indicator not in {
+        "geometric_only",
+        "micromagnetics_hybrid",
+        "magnetostatic_potential",
+        "frequency_domain_modal",
+    }:
+        raise ValueError(
+            "adaptive_mesh indicator must be one of "
+            "{'geometric_only','micromagnetics_hybrid','magnetostatic_potential','frequency_domain_modal'}"
+        )
+    if target_quantity not in {
+        "auto",
+        "h_demag_gradient",
+        "phi_jump",
+        "exchange_length",
+        "mode_amplitude",
+    }:
+        raise ValueError(
+            "adaptive_mesh target_quantity must be one of "
+            "{'auto','h_demag_gradient','phi_jump','exchange_length','mode_amplitude'}"
+        )
+    if convergence_metric not in {
+        "energy_delta",
+        "max_torque_delta",
+        "solution_change",
+        "eigenfrequency_delta",
+    }:
+        raise ValueError(
+            "adaptive_mesh convergence_metric must be one of "
+            "{'energy_delta','max_torque_delta','solution_change','eigenfrequency_delta'}"
+        )
     if theta <= 0.0 or theta > 1.0:
         raise ValueError("adaptive_mesh theta must satisfy 0 < theta <= 1")
     if max_passes < 0:
@@ -2144,6 +2278,9 @@ def adaptive_mesh(
     _state._adaptive_mesh = {
         "enabled": bool(enabled),
         "policy": policy,
+        "indicator": indicator,
+        "target_quantity": target_quantity,
+        "convergence_metric": convergence_metric,
         "theta": float(theta),
         "h_min": h_min,
         "h_max": h_max,
@@ -2346,8 +2483,10 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
     payload: dict[str, object] = {}
     if spec.hmax is not None:
         payload["hmax"] = spec.hmax
+        payload["maximum_element_size"] = spec.hmax
     if spec.hmin is not None:
         payload["hmin"] = spec.hmin
+        payload["minimum_element_size"] = spec.hmin
     if spec.order is not None:
         payload["order"] = spec.order
     if spec.source is not None:
@@ -2376,6 +2515,7 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
         payload["curvature_factor"] = spec.curvature_factor
     if spec.growth_rate is not None:
         payload["growth_rate"] = spec.growth_rate
+        payload["maximum_element_growth_rate"] = spec.growth_rate
     if spec.narrow_regions != 0:
         payload["narrow_regions"] = spec.narrow_regions
     if spec.narrow_region_resolution is not None:
@@ -2445,6 +2585,9 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_options["algorithm_3d"] = primary_spec.algorithm_3d
     if primary_spec.hmin is not None:
         mesh_options["hmin"] = primary_spec.hmin
+        mesh_options["minimum_element_size"] = primary_spec.hmin
+    if primary_spec.hmax is not None:
+        mesh_options["maximum_element_size"] = primary_spec.hmax
     if primary_spec.calibrate_for is not None:
         mesh_options["calibrate_for"] = primary_spec.calibrate_for
     if primary_spec.size_preset is not None:
@@ -2463,6 +2606,7 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_options["curvature_factor"] = primary_spec.curvature_factor
     if primary_spec.growth_rate is not None:
         mesh_options["growth_rate"] = primary_spec.growth_rate
+        mesh_options["maximum_element_growth_rate"] = primary_spec.growth_rate
     if primary_spec.narrow_regions > 0:
         mesh_options["narrow_regions"] = primary_spec.narrow_regions
     if primary_spec.narrow_region_resolution is not None:

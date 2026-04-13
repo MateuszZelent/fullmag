@@ -59,8 +59,12 @@ pub(crate) fn collect_scalar_schedules(
 /// spatial-scalar quantity in the canonical catalog.  Used to validate
 /// output schedule requests.
 fn is_supported_field_quantity(name: &str) -> bool {
-    fullmag_quantities::quantity_spec(name)
-        .is_some_and(|spec| matches!(spec.shape, QuantityShape::VectorField | QuantityShape::SpatialScalar))
+    fullmag_quantities::quantity_spec(name).is_some_and(|spec| {
+        matches!(
+            spec.shape,
+            QuantityShape::VectorField | QuantityShape::SpatialScalar
+        )
+    })
 }
 
 pub(crate) fn collect_field_schedules(
@@ -75,7 +79,10 @@ pub(crate) fn collect_field_schedules(
             } => {
                 if !is_supported_field_quantity(name) {
                     return Err(RunError {
-                        message: format!("field output '{}' is not a recognized vector/spatial quantity", name),
+                        message: format!(
+                            "field output '{}' is not a recognized vector/spatial quantity",
+                            name
+                        ),
                     });
                 }
                 schedules.push(OutputSchedule {
@@ -93,7 +100,10 @@ pub(crate) fn collect_field_schedules(
             } => {
                 if !is_supported_field_quantity(field) {
                     return Err(RunError {
-                        message: format!("snapshot field '{}' is not a recognized vector/spatial quantity", field),
+                        message: format!(
+                            "snapshot field '{}' is not a recognized vector/spatial quantity",
+                            field
+                        ),
                     });
                 }
                 // For component-specific snapshots, qualify the name (e.g. "m.z").

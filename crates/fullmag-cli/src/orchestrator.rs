@@ -336,6 +336,32 @@ fn current_fem_mesh_workspace(
         .and_then(|settings| settings.get("max_passes"))
         .and_then(|value| value.as_u64())
         .unwrap_or(0);
+    let adaptive_indicator = adaptive_settings
+        .and_then(|settings| settings.get("indicator"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("geometric_only");
+    let adaptive_target_quantity = adaptive_settings
+        .and_then(|settings| settings.get("target_quantity"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("auto");
+    let adaptive_convergence_metric = adaptive_settings
+        .and_then(|settings| settings.get("convergence_metric"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("energy_delta");
+    let adaptive_theta = adaptive_settings
+        .and_then(|settings| settings.get("theta"))
+        .and_then(|value| value.as_f64())
+        .unwrap_or(0.3);
+    let adaptive_h_min = adaptive_settings
+        .and_then(|settings| settings.get("h_min"))
+        .and_then(|value| value.as_f64());
+    let adaptive_h_max = adaptive_settings
+        .and_then(|settings| settings.get("h_max"))
+        .and_then(|value| value.as_f64());
+    let adaptive_error_tolerance = adaptive_settings
+        .and_then(|settings| settings.get("error_tolerance"))
+        .and_then(|value| value.as_f64())
+        .unwrap_or(1e-3);
     let adaptive_runtime = adaptive_runtime_state.and_then(|value| value.as_object());
     let adaptive_pass_count = adaptive_runtime
         .and_then(|state| state.get("pass_count"))
@@ -356,6 +382,18 @@ fn current_fem_mesh_workspace(
         .and_then(|state| state.get("last_target_h_summary"))
         .cloned()
         .or_else(|| adaptive_settings.cloned().map(serde_json::Value::Object));
+    let adaptive_last_error_summary = adaptive_runtime
+        .and_then(|state| state.get("last_error_summary"))
+        .cloned();
+    let adaptive_last_marking_summary = adaptive_runtime
+        .and_then(|state| state.get("last_marking_summary"))
+        .cloned();
+    let adaptive_last_transfer_summary = adaptive_runtime
+        .and_then(|state| state.get("last_transfer_summary"))
+        .cloned();
+    let adaptive_last_convergence_summary = adaptive_runtime
+        .and_then(|state| state.get("last_convergence_summary"))
+        .cloned();
     let supports_mesh_error_preview = adaptive_runtime
         .and_then(|state| state.get("last_error_summary"))
         .is_some();
@@ -416,10 +454,21 @@ fn current_fem_mesh_workspace(
         "mesh_adaptivity_state": {
             "enabled": adaptive_enabled,
             "policy": adaptive_policy,
+            "indicator": adaptive_indicator,
+            "target_quantity": adaptive_target_quantity,
+            "convergence_metric": adaptive_convergence_metric,
+            "theta": adaptive_theta,
+            "h_min": adaptive_h_min,
+            "h_max": adaptive_h_max,
+            "error_tolerance": adaptive_error_tolerance,
             "pass_count": adaptive_pass_count,
             "max_passes": adaptive_max_passes,
             "convergence_status": adaptive_convergence_status,
             "last_target_h_summary": adaptive_last_target_h_summary,
+            "last_error_summary": adaptive_last_error_summary,
+            "last_marking_summary": adaptive_last_marking_summary,
+            "last_transfer_summary": adaptive_last_transfer_summary,
+            "last_convergence_summary": adaptive_last_convergence_summary,
         },
         "mesh_history": mesh_history,
     })
@@ -675,6 +724,9 @@ fn completed_sequence_stage_execution(
 struct AdaptiveMeshSettings {
     enabled: bool,
     policy: String,
+    indicator: String,
+    target_quantity: String,
+    convergence_metric: String,
     theta: f64,
     h_min: Option<f64>,
     h_max: Option<f64>,
@@ -698,6 +750,21 @@ fn adaptive_mesh_settings(problem: &ProblemIR) -> Option<AdaptiveMeshSettings> {
             .and_then(|value| value.as_str())
             .unwrap_or("manual")
             .to_string(),
+        indicator: adaptive
+            .get("indicator")
+            .and_then(|value| value.as_str())
+            .unwrap_or("geometric_only")
+            .to_string(),
+        target_quantity: adaptive
+            .get("target_quantity")
+            .and_then(|value| value.as_str())
+            .unwrap_or("auto")
+            .to_string(),
+        convergence_metric: adaptive
+            .get("convergence_metric")
+            .and_then(|value| value.as_str())
+            .unwrap_or("energy_delta")
+            .to_string(),
         theta: adaptive
             .get("theta")
             .and_then(|value| value.as_f64())
@@ -713,6 +780,86 @@ fn adaptive_mesh_settings(problem: &ProblemIR) -> Option<AdaptiveMeshSettings> {
             .and_then(|value| value.as_f64())
             .unwrap_or(1e-3),
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RelaxationSolveSummary {
+    energy_total: f64,
+    max_torque_apm: f64,
+    max_dm_dt: f64,
+}
+
+#[derive(Debug, Clone)]
+struct AdaptiveConvergenceSummary {
+    metric: String,
+    delta: f64,
+    tolerance: f64,
+    converged: bool,
+}
+
+fn latest_relaxation_solve_summary(
+    stage_result: &fullmag_runner::RunResult,
+) -> Option<RelaxationSolveSummary> {
+    stage_result
+        .steps
+        .last()
+        .map(|step| RelaxationSolveSummary {
+            energy_total: step.e_total,
+            max_torque_apm: step.max_torque_Apm,
+            max_dm_dt: step.max_dm_dt,
+        })
+}
+
+fn adaptive_convergence_summary(
+    metric: &str,
+    tolerance: f64,
+    previous: RelaxationSolveSummary,
+    current: RelaxationSolveSummary,
+) -> AdaptiveConvergenceSummary {
+    let (resolved_metric, delta) = match metric {
+        "energy_delta" => {
+            let denom = previous.energy_total.abs().max(1e-30);
+            (
+                "energy_delta".to_string(),
+                (current.energy_total - previous.energy_total).abs() / denom,
+            )
+        }
+        "max_torque_delta" => {
+            let denom = previous.max_torque_apm.abs().max(1e-30);
+            (
+                "max_torque_delta".to_string(),
+                (current.max_torque_apm - previous.max_torque_apm).abs() / denom,
+            )
+        }
+        "solution_change" => {
+            let denom = previous.max_dm_dt.abs().max(1e-30);
+            (
+                "solution_change".to_string(),
+                (current.max_dm_dt - previous.max_dm_dt).abs() / denom,
+            )
+        }
+        "eigenfrequency_delta" => (
+            // FEM relaxation stages do not expose eigenfrequency deltas; use energy proxy.
+            "energy_delta".to_string(),
+            {
+                let denom = previous.energy_total.abs().max(1e-30);
+                (current.energy_total - previous.energy_total).abs() / denom
+            },
+        ),
+        _ => {
+            let denom = previous.energy_total.abs().max(1e-30);
+            (
+                "energy_delta".to_string(),
+                (current.energy_total - previous.energy_total).abs() / denom,
+            )
+        }
+    };
+    AdaptiveConvergenceSummary {
+        metric: resolved_metric,
+        delta,
+        tolerance,
+        converged: delta <= tolerance,
+    }
 }
 
 fn apply_current_fem_overrides(
@@ -1339,12 +1486,80 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         .map(|step| step.time)
         .unwrap_or(0.0);
     let mut mutated = false;
+    let mut previous_solve_summary: Option<RelaxationSolveSummary> = None;
+    let indicator_effective = match settings.indicator.as_str() {
+        "geometric_only" | "micromagnetics_hybrid" | "magnetostatic_potential" => {
+            settings.indicator.clone()
+        }
+        unsupported => {
+            live_workspace.push_log(
+                "warning",
+                format!(
+                    "Adaptive indicator '{}' is unsupported for FEM relaxation auto follow-up; supported: geometric_only, micromagnetics_hybrid, magnetostatic_potential",
+                    unsupported
+                ),
+            );
+            return Ok(false);
+        }
+    };
 
     while remesh_pass_count < settings.max_passes {
         let fem_plan = match &execution_plan.backend_plan {
             BackendPlanIR::Fem(plan) => plan.clone(),
             _ => break,
         };
+        let current_solve_summary = latest_relaxation_solve_summary(stage_result);
+        let convergence_summary =
+            previous_solve_summary
+                .zip(current_solve_summary)
+                .map(|(previous, current)| {
+                    adaptive_convergence_summary(
+                        &settings.convergence_metric,
+                        settings.error_tolerance,
+                        previous,
+                        current,
+                    )
+                });
+        if let Some(summary) = convergence_summary.as_ref() {
+            if summary.converged {
+                let current_runtime_state = serde_json::json!({
+                    "pass_count": remesh_pass_count,
+                    "max_passes": settings.max_passes,
+                    "convergence_status": "converged_by_metric",
+                    "indicator_effective": indicator_effective.as_str(),
+                    "target_quantity": settings.target_quantity.as_str(),
+                    "convergence_metric": settings.convergence_metric.as_str(),
+                    "last_convergence_summary": {
+                        "metric": summary.metric,
+                        "delta": summary.delta,
+                        "tolerance": summary.tolerance,
+                        "converged": summary.converged,
+                    },
+                });
+                stage.ir.problem_meta.runtime_metadata.insert(
+                    "adaptive_mesh_runtime_state".to_string(),
+                    current_runtime_state.clone(),
+                );
+                *current_adaptive_runtime_state = Some(current_runtime_state);
+                live_workspace.update(|state| {
+                    state.mesh_workspace = current_mesh_workspace(
+                        &stage.ir,
+                        execution_plan,
+                        "running",
+                        current_mesh_quality.as_ref(),
+                        current_mesh_history,
+                    );
+                });
+                live_workspace.push_log(
+                    "info",
+                    format!(
+                        "Adaptive follow-up converged by {}: delta={:.3e} <= {:.3e}",
+                        summary.metric, summary.delta, summary.tolerance
+                    ),
+                );
+                break;
+            }
+        }
         let topo = fullmag_engine::fem::MeshTopology::from_ir(&fem_plan.mesh)
             .map_err(|error| anyhow!("adaptive mesh topology build failed: {error}"))?;
         let afem_config = fullmag_engine::fem_afem_loop::AfemConfig {
@@ -1357,12 +1572,37 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             max_mark_fraction: 0.8,
             ..Default::default()
         };
-        let afem_step = fullmag_engine::fem_afem_loop::afem_step_vector_field(
-            &topo,
-            &stage_result.final_magnetization,
-            &afem_config,
-            &mut afem_history,
-        )
+        let afem_step = match indicator_effective.as_str() {
+            "geometric_only" | "micromagnetics_hybrid" => {
+                fullmag_engine::fem_afem_loop::afem_step_vector_field(
+                    &topo,
+                    &stage_result.final_magnetization,
+                    &afem_config,
+                    &mut afem_history,
+                )
+            }
+            "magnetostatic_potential" => {
+                let observables = fullmag_runner::fem_observables_for_magnetization(
+                    &fem_plan,
+                    &stage_result.final_magnetization,
+                )
+                .map_err(|error| {
+                    anyhow!("magnetostatic indicator observe failed: {}", error.message)
+                })?;
+                fullmag_engine::fem_afem_loop::afem_step_vector_field(
+                    &topo,
+                    &observables.demag_field,
+                    &afem_config,
+                    &mut afem_history,
+                )
+            }
+            _ => fullmag_engine::fem_afem_loop::afem_step_vector_field(
+                &topo,
+                &stage_result.final_magnetization,
+                &afem_config,
+                &mut afem_history,
+            ),
+        }
         .map_err(|error| anyhow!("adaptive AFEM step failed: {error}"))?;
 
         let target_h_min = afem_step
@@ -1401,6 +1641,9 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             "pass_count": remesh_pass_count,
             "max_passes": settings.max_passes,
             "convergence_status": convergence_status,
+            "indicator_effective": indicator_effective.as_str(),
+            "target_quantity": settings.target_quantity.as_str(),
+            "convergence_metric": settings.convergence_metric.as_str(),
             "last_target_h_summary": {
                 "h_target_min": target_h_min,
                 "h_target_mean": target_h_mean,
@@ -1417,6 +1660,12 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                 "fraction_marked": afem_step.marking.fraction_marked,
                 "captured_error_fraction": afem_step.marking.captured_error_fraction,
             },
+            "last_convergence_summary": convergence_summary.as_ref().map(|summary| serde_json::json!({
+                "metric": summary.metric,
+                "delta": summary.delta,
+                "tolerance": summary.tolerance,
+                "converged": summary.converged,
+            })),
         });
         stage.ir.problem_meta.runtime_metadata.insert(
             "adaptive_mesh_runtime_state".to_string(),
@@ -1461,6 +1710,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                 afem_step.marking.n_marked
             ),
         );
+        previous_solve_summary = current_solve_summary;
         let remesh_result = invoke_adaptive_remesh_full(
             &geometry_entry,
             remesh_hmax,
@@ -1509,6 +1759,9 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             "pass_count": remesh_pass_count,
             "max_passes": settings.max_passes,
             "convergence_status": "remeshed",
+            "indicator_effective": indicator_effective.as_str(),
+            "target_quantity": settings.target_quantity.as_str(),
+            "convergence_metric": settings.convergence_metric.as_str(),
             "last_target_h_summary": {
                 "h_target_min": target_h_min,
                 "h_target_mean": target_h_mean,
@@ -1530,6 +1783,12 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                 "n_located": transfer.n_located,
                 "n_nearest_fallback": transfer.n_nearest_fallback,
             },
+            "last_convergence_summary": convergence_summary.as_ref().map(|summary| serde_json::json!({
+                "metric": summary.metric,
+                "delta": summary.delta,
+                "tolerance": summary.tolerance,
+                "converged": summary.converged,
+            })),
         });
         *current_fem_mesh_override = Some(new_mesh.clone());
         *current_fem_hmax_override = Some(remesh_hmax);
@@ -2852,7 +3111,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
 
         loop {
-            let Some(cmd) = display_selection_handle.wait_next_command_coalesced(Duration::from_millis(250))
+            let Some(cmd) =
+                display_selection_handle.wait_next_command_coalesced(Duration::from_millis(250))
             else {
                 continue;
             };
@@ -3700,7 +3960,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         "system",
                         format!("Resuming paused interactive {} stage", paused.source_kind),
                     );
-                    (paused.command, Some(format!("resume ({})", paused.source_kind)))
+                    (
+                        paused.command,
+                        Some(format!("resume ({})", paused.source_kind)),
+                    )
                 } else {
                     (command, None)
                 };
@@ -3803,7 +4066,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             if command.kind == "run_sequence" {
                 if let Some(stages) = command.stages.clone() {
                     if stages.is_empty() {
-                        live_workspace.push_log("warning", "run_sequence received with empty stages list");
+                        live_workspace
+                            .push_log("warning", "run_sequence received with empty stages list");
                         continue;
                     }
                     let total = stages.len();
@@ -3813,13 +4077,17 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     );
                     active_sequence = Some((stages, 1, total));
                 } else {
-                    live_workspace.push_log("error", "run_sequence command is missing stages payload");
+                    live_workspace
+                        .push_log("error", "run_sequence command is missing stages payload");
                     continue;
                 }
             }
 
             // ── Handle skip_stage when idle (no running segment) ──
-            if matches!(typed_cmd, Some(fullmag_runner::LiveControlCommand::SkipStage)) {
+            if matches!(
+                typed_cmd,
+                Some(fullmag_runner::LiveControlCommand::SkipStage)
+            ) {
                 if let Some((ref mut remaining, ref mut current, total)) = active_sequence {
                     if !remaining.is_empty() {
                         let skipped_label = remaining[0].label();
@@ -3834,7 +4102,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         *current += 1;
                     }
                     if remaining.is_empty() {
-                        live_workspace.push_log("success", "Execution sequence completed (all stages skipped)");
+                        live_workspace.push_log(
+                            "success",
+                            "Execution sequence completed (all stages skipped)",
+                        );
                         active_sequence = None;
                         continue;
                     }
@@ -3845,15 +4116,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
 
             // ── If an active sequence has pending stages, pop the next one as the command ──
-            let (command, command_kind_label) = if let Some((ref mut remaining, current, total)) = active_sequence {
+            let (command, command_kind_label) = if let Some((ref mut remaining, current, total)) =
+                active_sequence
+            {
                 if !remaining.is_empty() && command.kind == "run_sequence" {
                     let stage_def = remaining.remove(0);
                     let stage_label = stage_def.label().to_string();
-                    let synthetic_cmd = sequence_stage_to_session_command(
-                        &stage_def,
-                        &command.command_id,
-                        current,
-                    );
+                    let synthetic_cmd =
+                        sequence_stage_to_session_command(&stage_def, &command.command_id, current);
                     let label = format!("sequence {}/{}: {}", current, total, stage_label);
                     (synthetic_cmd, label)
                 } else {
@@ -3948,16 +4218,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     current_mesh_quality.as_ref(),
                     &current_mesh_history,
                 );
-                state.stage_execution = active_sequence
-                    .as_ref()
-                    .map(|(_, current, total)| {
-                        active_sequence_stage_execution(
-                            *total,
-                            *current,
-                            &stage.entrypoint_kind,
-                            "running",
-                        )
-                    });
+                state.stage_execution = active_sequence.as_ref().map(|(_, current, total)| {
+                    active_sequence_stage_execution(
+                        *total,
+                        *current,
+                        &stage.entrypoint_kind,
+                        "running",
+                    )
+                });
                 state.live_state = live_state_manifest_from_update(&stage_initial_update);
                 clear_cached_preview_fields(state);
             });
@@ -4141,20 +4409,21 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 Ok(result) => result,
                 Err(error) => {
                     let failed_ready_at_unix_ms = unix_time_millis().unwrap_or(awaiting_at_unix_ms);
-                    let failed_stage_execution = active_sequence
-                        .as_ref()
-                        .map(|(_, current, total)| CurrentLiveStageExecutionState {
-                            total_stages: *total,
-                            completed_stage_indexes: stage_execution_completed_indexes(*current),
-                            active_stage_index: Some(current.saturating_sub(1)),
-                            active_stage_kind: Some(stage.entrypoint_kind.clone()),
-                            runtime_state: "failed".to_string(),
+                    let failed_stage_execution =
+                        active_sequence.as_ref().map(|(_, current, total)| {
+                            CurrentLiveStageExecutionState {
+                                total_stages: *total,
+                                completed_stage_indexes: stage_execution_completed_indexes(
+                                    *current,
+                                ),
+                                active_stage_index: Some(current.saturating_sub(1)),
+                                active_stage_kind: Some(stage.entrypoint_kind.clone()),
+                                runtime_state: "failed".to_string(),
+                            }
                         });
                     if active_sequence.is_some() {
-                        live_workspace.push_log(
-                            "warning",
-                            "Execution sequence halted on failed stage",
-                        );
+                        live_workspace
+                            .push_log("warning", "Execution sequence halted on failed stage");
                         active_sequence = None;
                     }
                     live_workspace.update(|state| {
@@ -4215,9 +4484,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         );
                         state.run = ctx.build_run("paused", &aggregated_steps);
                         set_live_state_status(&mut state.live_state, "paused", Some(false));
-                        state.stage_execution = active_sequence
-                            .as_ref()
-                            .map(|(_, current, total)| {
+                        state.stage_execution =
+                            active_sequence.as_ref().map(|(_, current, total)| {
                                 active_sequence_stage_execution(
                                     *total,
                                     *current,
@@ -4315,10 +4583,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         // Abort active sequence if any
                         let aborted_sequence = active_sequence.take();
                         if aborted_sequence.is_some() {
-                            live_workspace.push_log(
-                                "warning",
-                                "Execution sequence aborted by user",
-                            );
+                            live_workspace
+                                .push_log("warning", "Execution sequence aborted by user");
                         }
                         live_workspace.update(|state| {
                             state.session = ctx.build_session(
@@ -4332,15 +4598,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 "awaiting_command",
                                 Some(false),
                             );
-                            state.stage_execution = aborted_sequence.as_ref().map(
-                                |(_, current, total)| {
+                            state.stage_execution =
+                                aborted_sequence.as_ref().map(|(_, current, total)| {
                                     completed_sequence_stage_execution(
                                         *total,
                                         current.saturating_sub(1),
                                         "awaiting_command",
                                     )
-                                },
-                            );
+                                });
                         });
                         interactive_runtime_host.enter_awaiting_command(
                             continuation_magnetization.clone(),
@@ -4385,7 +4650,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 let stage_label = next_stage.label().to_string();
                                 live_workspace.push_log(
                                     "system",
-                                    format!("Sequence: advancing to stage {}/{} ({})", current, total, stage_label),
+                                    format!(
+                                        "Sequence: advancing to stage {}/{} ({})",
+                                        current, total, stage_label
+                                    ),
                                 );
                                 let synthetic_cmd = sequence_stage_to_session_command(
                                     &next_stage,
@@ -4404,7 +4672,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 paused_stage = None;
                                 continue;
                             } else {
-                                live_workspace.push_log("success", format!("Execution sequence completed ({} stages)", total));
+                                live_workspace.push_log(
+                                    "success",
+                                    format!("Execution sequence completed ({} stages)", total),
+                                );
                                 active_sequence = None;
                             }
                         }
@@ -4535,7 +4806,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let stage_label = next_stage.label().to_string();
                     live_workspace.push_log(
                         "system",
-                        format!("Sequence: advancing to stage {}/{} ({})", current, total, stage_label),
+                        format!(
+                            "Sequence: advancing to stage {}/{} ({})",
+                            current, total, stage_label
+                        ),
                     );
                     // Push synthetic command to internal queue front so the loop picks it up next
                     let synthetic_cmd = sequence_stage_to_session_command(
@@ -4556,7 +4830,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     paused_stage = None;
                     continue;
                 } else {
-                    live_workspace.push_log("success", format!("Execution sequence completed ({} stages)", total));
+                    live_workspace.push_log(
+                        "success",
+                        format!("Execution sequence completed ({} stages)", total),
+                    );
                     live_workspace.update(|state| {
                         state.stage_execution = Some(completed_sequence_stage_execution(
                             total,

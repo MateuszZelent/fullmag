@@ -793,12 +793,31 @@ function normalizeScriptBuilder(raw: any): ScriptBuilderState | null {
     mesh: {
       algorithm_2d: Number(raw.mesh?.algorithm_2d ?? 6),
       algorithm_3d: Number(raw.mesh?.algorithm_3d ?? 1),
+      size_mode: raw.mesh?.size_mode === "custom" ? "custom" : "predefined",
       hmax: String(raw.mesh?.hmax ?? ""),
       hmin: String(raw.mesh?.hmin ?? ""),
+      maximum_element_size: String(raw.mesh?.maximum_element_size ?? raw.mesh?.hmax ?? ""),
+      minimum_element_size: String(raw.mesh?.minimum_element_size ?? raw.mesh?.hmin ?? ""),
+      calibrate_for: String(raw.mesh?.calibrate_for ?? ""),
+      size_preset: String(raw.mesh?.size_preset ?? ""),
       size_factor: Number(raw.mesh?.size_factor ?? 1),
       size_from_curvature: Number(raw.mesh?.size_from_curvature ?? 0),
+      curvature_factor: String(raw.mesh?.curvature_factor ?? ""),
       growth_rate: String(raw.mesh?.growth_rate ?? ""),
+      maximum_element_growth_rate: String(
+        raw.mesh?.maximum_element_growth_rate ?? raw.mesh?.growth_rate ?? "",
+      ),
       narrow_regions: Number(raw.mesh?.narrow_regions ?? 0),
+      narrow_region_resolution: String(raw.mesh?.narrow_region_resolution ?? ""),
+      resolved_size_from_curvature:
+        raw.mesh?.resolved_size_from_curvature != null
+          ? Number(raw.mesh.resolved_size_from_curvature)
+          : null,
+      resolved_narrow_regions:
+        raw.mesh?.resolved_narrow_regions != null
+          ? Number(raw.mesh.resolved_narrow_regions)
+          : null,
+      resolved_growth_rate: String(raw.mesh?.resolved_growth_rate ?? ""),
       smoothing_steps: Number(raw.mesh?.smoothing_steps ?? 1),
       optimize: String(raw.mesh?.optimize ?? ""),
       optimize_iterations: Number(raw.mesh?.optimize_iterations ?? 1),
@@ -806,6 +825,9 @@ function normalizeScriptBuilder(raw: any): ScriptBuilderState | null {
       per_element_quality: Boolean(raw.mesh?.per_element_quality),
       adaptive_enabled: Boolean(raw.mesh?.adaptive_enabled),
       adaptive_policy: String(raw.mesh?.adaptive_policy ?? "auto"),
+      adaptive_indicator: String(raw.mesh?.adaptive_indicator ?? "geometric_only"),
+      adaptive_target_quantity: String(raw.mesh?.adaptive_target_quantity ?? "auto"),
+      adaptive_convergence_metric: String(raw.mesh?.adaptive_convergence_metric ?? "energy_delta"),
       adaptive_theta: Number(raw.mesh?.adaptive_theta ?? 0.3),
       adaptive_h_min: String(raw.mesh?.adaptive_h_min ?? ""),
       adaptive_h_max: String(raw.mesh?.adaptive_h_max ?? ""),
@@ -915,16 +937,35 @@ function normalizeScriptBuilder(raw: any): ScriptBuilderState | null {
           },
           mesh: geo?.mesh && typeof geo.mesh === "object" ? {
             mode: geo.mesh.mode === "custom" ? "custom" : "inherit",
+            size_mode: geo.mesh.size_mode === "custom" ? "custom" : "predefined",
             hmax: String(geo.mesh.hmax ?? ""),
             hmin: String(geo.mesh.hmin ?? ""),
+            maximum_element_size: String(geo.mesh.maximum_element_size ?? geo.mesh.hmax ?? ""),
+            minimum_element_size: String(geo.mesh.minimum_element_size ?? geo.mesh.hmin ?? ""),
+            calibrate_for: typeof geo.mesh.calibrate_for === "string" ? geo.mesh.calibrate_for : null,
+            size_preset: typeof geo.mesh.size_preset === "string" ? geo.mesh.size_preset : null,
             order: geo.mesh.order != null ? Number(geo.mesh.order) : null,
             source: typeof geo.mesh.source === "string" ? geo.mesh.source : null,
             algorithm_2d: geo.mesh.algorithm_2d != null ? Number(geo.mesh.algorithm_2d) : null,
             algorithm_3d: geo.mesh.algorithm_3d != null ? Number(geo.mesh.algorithm_3d) : null,
             size_factor: geo.mesh.size_factor != null ? Number(geo.mesh.size_factor) : null,
             size_from_curvature: geo.mesh.size_from_curvature != null ? Number(geo.mesh.size_from_curvature) : null,
+            curvature_factor: String(geo.mesh.curvature_factor ?? ""),
             growth_rate: String(geo.mesh.growth_rate ?? ""),
+            maximum_element_growth_rate: String(
+              geo.mesh.maximum_element_growth_rate ?? geo.mesh.growth_rate ?? "",
+            ),
             narrow_regions: geo.mesh.narrow_regions != null ? Number(geo.mesh.narrow_regions) : null,
+            narrow_region_resolution: String(geo.mesh.narrow_region_resolution ?? ""),
+            resolved_size_from_curvature:
+              geo.mesh.resolved_size_from_curvature != null
+                ? Number(geo.mesh.resolved_size_from_curvature)
+                : null,
+            resolved_narrow_regions:
+              geo.mesh.resolved_narrow_regions != null
+                ? Number(geo.mesh.resolved_narrow_regions)
+                : null,
+            resolved_growth_rate: String(geo.mesh.resolved_growth_rate ?? ""),
             smoothing_steps: geo.mesh.smoothing_steps != null ? Number(geo.mesh.smoothing_steps) : null,
             optimize: typeof geo.mesh.optimize === "string" ? geo.mesh.optimize : null,
             optimize_iterations: geo.mesh.optimize_iterations != null ? Number(geo.mesh.optimize_iterations) : null,

@@ -98,6 +98,14 @@ run-headless script:
     just build fullmag
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag {{script}} --headless --json
 
+# Run headless without 3D preview or chart data (no rendering overhead — good for benchmarks)
+run-headless-bench script:
+    just ensure-python
+    just build fullmag
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    fullmag {{script}} --headless --json
+
 run-py-layer-hole:
     just ensure-python
     just build fullmag

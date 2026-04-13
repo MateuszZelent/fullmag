@@ -18,12 +18,23 @@ export interface SizeFieldSpec {
 export interface MeshOptionsState {
   algorithm2d: number;
   algorithm3d: number;
+  sizeControlMode?: "predefined" | "custom";
+  calibrateFor?: string;
+  sizePreset?: string;
   hmax: string;          // stored as SI metres; edited in the UI as nanometres
   hmin: string;          // stored as SI metres; edited in the UI as nanometres
+  maximumElementSize?: string;
+  minimumElementSize?: string;
   sizeFactor: number;
   sizeFromCurvature: number;
+  curvatureFactor?: string;
   growthRate: string;    // "" = Gmsh default (1.8), otherwise float [1.1–3.0]
+  maximumElementGrowthRate?: string;
   narrowRegions: number; // 0 = off, 1+ = min elements across narrow gap
+  narrowRegionResolution?: string;
+  resolvedSizeFromCurvature?: number | null;
+  resolvedNarrowRegions?: number | null;
+  resolvedGrowthRate?: string;
   smoothingSteps: number;
   optimize: string;      // "" = none, "Netgen", "HighOrder", "Laplace2D", etc.
   optimizeIters: number;
@@ -40,6 +51,9 @@ export interface MeshOptionsState {
   // Adaptive Mesh (AFEM)
   adaptiveEnabled: boolean;
   adaptivePolicy: string;
+  adaptiveIndicator: string;
+  adaptiveTargetQuantity: string;
+  adaptiveConvergenceMetric: string;
   adaptiveTheta: number;
   adaptiveHMin: string;  // stored as SI metres; edited in the UI as nanometres
   adaptiveHMax: string;  // stored as SI metres; edited in the UI as nanometres
@@ -71,12 +85,23 @@ export interface MeshQualityData {
 export const DEFAULT_MESH_OPTIONS: MeshOptionsState = {
   algorithm2d: 6,
   algorithm3d: 1,
+  sizeControlMode: "predefined",
+  calibrateFor: "general_physics",
+  sizePreset: "normal",
   hmax: "",
   hmin: "",
+  maximumElementSize: "",
+  minimumElementSize: "",
   sizeFactor: 1.0,
   sizeFromCurvature: 0,
+  curvatureFactor: "",
   growthRate: "",
+  maximumElementGrowthRate: "",
   narrowRegions: 0,
+  narrowRegionResolution: "",
+  resolvedSizeFromCurvature: null,
+  resolvedNarrowRegions: null,
+  resolvedGrowthRate: "",
   smoothingSteps: 1,
   optimize: "",
   optimizeIters: 1,
@@ -89,6 +114,9 @@ export const DEFAULT_MESH_OPTIONS: MeshOptionsState = {
   transitionGrowth: "",
   adaptiveEnabled: false,
   adaptivePolicy: "auto",
+  adaptiveIndicator: "geometric_only",
+  adaptiveTargetQuantity: "auto",
+  adaptiveConvergenceMetric: "energy_delta",
   adaptiveTheta: 0.3,
   adaptiveHMin: "",
   adaptiveHMax: "",

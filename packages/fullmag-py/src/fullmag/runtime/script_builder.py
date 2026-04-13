@@ -432,6 +432,16 @@ def _render_runtime(
         kwargs: list[str] = []
         if adaptive_mesh.get("policy") is not None:
             kwargs.append(f"policy={_py_repr(str(adaptive_mesh.get('policy')))}")
+        if adaptive_mesh.get("indicator") is not None:
+            kwargs.append(f"indicator={_py_repr(str(adaptive_mesh.get('indicator')))}")
+        if adaptive_mesh.get("target_quantity") is not None:
+            kwargs.append(
+                f"target_quantity={_py_repr(str(adaptive_mesh.get('target_quantity')))}"
+            )
+        if adaptive_mesh.get("convergence_metric") is not None:
+            kwargs.append(
+                f"convergence_metric={_py_repr(str(adaptive_mesh.get('convergence_metric')))}"
+            )
         if adaptive_mesh.get("theta") is not None:
             kwargs.append(f"theta={_py_number(float(adaptive_mesh.get('theta')))}")
         if adaptive_mesh.get("h_min") is not None:
@@ -804,13 +814,21 @@ def _render_mesh_size_literal(value: object) -> str | None:
 def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) -> list[str]:
     kwargs: list[str] = []
 
-    rendered_hmax = _render_mesh_size_literal(mesh_config.get("hmax"))
+    rendered_hmax = _render_mesh_size_literal(
+        mesh_config.get("maximum_element_size")
+        if mesh_config.get("maximum_element_size") is not None
+        else mesh_config.get("hmax")
+    )
     if rendered_hmax is not None:
-        kwargs.append(f"hmax={rendered_hmax}")
+        kwargs.append(f"maximum_element_size={rendered_hmax}")
 
-    hmin_value = _number_or_none(mesh_config.get("hmin"))
+    hmin_value = _number_or_none(
+        mesh_config.get("minimum_element_size")
+        if mesh_config.get("minimum_element_size") is not None
+        else mesh_config.get("hmin")
+    )
     if hmin_value is not None:
-        kwargs.append(f"hmin={_py_number(hmin_value)}")
+        kwargs.append(f"minimum_element_size={_py_number(hmin_value)}")
 
     order_value = mesh_config.get("order")
     if isinstance(order_value, (int, float)):
@@ -843,9 +861,13 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     if curvature_factor_value is not None:
         kwargs.append(f"curvature_factor={_py_number(curvature_factor_value)}")
 
-    growth_rate_value = _number_or_none(mesh_config.get("growth_rate"))
+    growth_rate_value = _number_or_none(
+        mesh_config.get("maximum_element_growth_rate")
+        if mesh_config.get("maximum_element_growth_rate") is not None
+        else mesh_config.get("growth_rate")
+    )
     if growth_rate_value is not None:
-        kwargs.append(f"growth_rate={_py_number(growth_rate_value)}")
+        kwargs.append(f"maximum_element_growth_rate={_py_number(growth_rate_value)}")
 
     narrow_regions_value = mesh_config.get("narrow_regions")
     if isinstance(narrow_regions_value, (int, float)):
@@ -1816,6 +1838,7 @@ def _export_initial_state(problem: Problem) -> dict[str, object] | None:
 
 def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
+    adaptive_mesh = _normalize_mapping(runtime_metadata.get("adaptive_mesh"))
     mesh_workflow = _normalize_mapping(runtime_metadata.get("mesh_workflow"))
     mesh_options = _normalize_mapping(mesh_workflow.get("mesh_options"))
     default_mesh = _normalize_mapping(mesh_workflow.get("default_mesh"))
@@ -1831,21 +1854,57 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
         "algorithm_3d": int(mesh_options.get("algorithm_3d", 1)),
         "hmax": _text_mesh_size(declared_hmax),
         "hmin": _text_number(_number_or_none(mesh_options.get("hmin"))),
+        "maximum_element_size": _text_mesh_size(declared_hmax),
+        "minimum_element_size": _text_number(_number_or_none(mesh_options.get("hmin"))),
         "calibrate_for": str(mesh_options.get("calibrate_for", "") or ""),
         "size_preset": str(mesh_options.get("size_preset", "") or ""),
         "size_factor": float(mesh_options.get("size_factor", 1.0)),
         "size_from_curvature": int(mesh_options.get("size_from_curvature", 0)),
         "curvature_factor": _text_number(_number_or_none(mesh_options.get("curvature_factor"))),
         "growth_rate": _text_number(_number_or_none(mesh_options.get("growth_rate"))),
+        "maximum_element_growth_rate": _text_number(_number_or_none(mesh_options.get("growth_rate"))),
         "narrow_regions": int(mesh_options.get("narrow_regions", 0)),
         "narrow_region_resolution": _text_number(
             _number_or_none(mesh_options.get("narrow_region_resolution"))
         ),
+        "resolved_size_from_curvature": (
+            int(mesh_options.get("resolved_size_from_curvature"))
+            if isinstance(mesh_options.get("resolved_size_from_curvature"), (int, float))
+            else None
+        ),
+        "resolved_narrow_regions": (
+            int(mesh_options.get("resolved_narrow_regions"))
+            if isinstance(mesh_options.get("resolved_narrow_regions"), (int, float))
+            else None
+        ),
+        "resolved_growth_rate": _text_number(_number_or_none(mesh_options.get("resolved_growth_rate"))),
         "smoothing_steps": int(mesh_options.get("smoothing_steps", 1)),
         "optimize": str(mesh_options.get("optimize", "") or ""),
         "optimize_iterations": int(mesh_options.get("optimize_iterations", 1)),
         "compute_quality": bool(mesh_options.get("compute_quality", False)),
         "per_element_quality": bool(mesh_options.get("per_element_quality", False)),
+        "adaptive_enabled": bool(adaptive_mesh.get("enabled", False)),
+        "adaptive_policy": str(adaptive_mesh.get("policy", "auto") or "auto"),
+        "adaptive_indicator": str(adaptive_mesh.get("indicator", "geometric_only") or "geometric_only"),
+        "adaptive_target_quantity": str(adaptive_mesh.get("target_quantity", "auto") or "auto"),
+        "adaptive_convergence_metric": str(
+            adaptive_mesh.get("convergence_metric", "energy_delta") or "energy_delta"
+        ),
+        "adaptive_theta": (
+            float(adaptive_mesh.get("theta"))
+            if isinstance(adaptive_mesh.get("theta"), (int, float))
+            else 0.3
+        ),
+        "adaptive_h_min": _text_number(_number_or_none(adaptive_mesh.get("h_min"))),
+        "adaptive_h_max": _text_number(_number_or_none(adaptive_mesh.get("h_max"))),
+        "adaptive_max_passes": (
+            int(adaptive_mesh.get("max_passes"))
+            if isinstance(adaptive_mesh.get("max_passes"), (int, float))
+            else 2
+        ),
+        "adaptive_error_tolerance": _text_number(
+            _number_or_none(adaptive_mesh.get("error_tolerance"))
+        ),
     }
 
 
@@ -1872,6 +1931,8 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "mode": resolved_mode,
             "hmax": _text_mesh_size(mesh_entry.get("hmax")),
             "hmin": _text_number(_number_or_none(mesh_entry.get("hmin"))),
+            "maximum_element_size": _text_mesh_size(mesh_entry.get("hmax")),
+            "minimum_element_size": _text_number(_number_or_none(mesh_entry.get("hmin"))),
             "calibrate_for": str(mesh_entry.get("calibrate_for")) if isinstance(mesh_entry.get("calibrate_for"), str) else None,
             "size_preset": str(mesh_entry.get("size_preset")) if isinstance(mesh_entry.get("size_preset"), str) else None,
             "order": int(mesh_entry["order"]) if isinstance(mesh_entry.get("order"), (int, float)) else None,
@@ -1882,10 +1943,22 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "size_from_curvature": int(mesh_entry["size_from_curvature"]) if isinstance(mesh_entry.get("size_from_curvature"), (int, float)) else None,
             "curvature_factor": _text_number(_number_or_none(mesh_entry.get("curvature_factor"))),
             "growth_rate": _text_number(_number_or_none(mesh_entry.get("growth_rate"))),
+            "maximum_element_growth_rate": _text_number(_number_or_none(mesh_entry.get("growth_rate"))),
             "narrow_regions": int(mesh_entry["narrow_regions"]) if isinstance(mesh_entry.get("narrow_regions"), (int, float)) else None,
             "narrow_region_resolution": _text_number(
                 _number_or_none(mesh_entry.get("narrow_region_resolution"))
             ),
+            "resolved_size_from_curvature": (
+                int(mesh_entry["resolved_size_from_curvature"])
+                if isinstance(mesh_entry.get("resolved_size_from_curvature"), (int, float))
+                else None
+            ),
+            "resolved_narrow_regions": (
+                int(mesh_entry["resolved_narrow_regions"])
+                if isinstance(mesh_entry.get("resolved_narrow_regions"), (int, float))
+                else None
+            ),
+            "resolved_growth_rate": _text_number(_number_or_none(mesh_entry.get("resolved_growth_rate"))),
             "smoothing_steps": int(mesh_entry["smoothing_steps"]) if isinstance(mesh_entry.get("smoothing_steps"), (int, float)) else None,
             "optimize": str(mesh_entry["optimize"]) if isinstance(mesh_entry.get("optimize"), str) else None,
             "optimize_iterations": int(mesh_entry["optimize_iterations"]) if isinstance(mesh_entry.get("optimize_iterations"), (int, float)) else None,
@@ -1900,6 +1973,8 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "mode": "inherit",
             "hmax": "",
             "hmin": "",
+            "maximum_element_size": "",
+            "minimum_element_size": "",
             "calibrate_for": None,
             "size_preset": None,
             "order": None,
@@ -1910,8 +1985,12 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "size_from_curvature": None,
             "curvature_factor": "",
             "growth_rate": "",
+            "maximum_element_growth_rate": "",
             "narrow_regions": None,
             "narrow_region_resolution": "",
+            "resolved_size_from_curvature": None,
+            "resolved_narrow_regions": None,
+            "resolved_growth_rate": "",
             "smoothing_steps": None,
             "optimize": None,
             "optimize_iterations": None,

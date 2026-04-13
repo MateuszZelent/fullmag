@@ -1,5 +1,5 @@
 use fullmag_engine::fem::{FemLlgProblem, MeshTopology};
-use fullmag_engine::fem_sparse::{CsrMatrix, lobpcg_generalized};
+use fullmag_engine::fem_sparse::{lobpcg_generalized, CsrMatrix};
 use fullmag_engine::{
     sub, EffectiveFieldObservables, EffectiveFieldTerms, LlgConfig, MaterialParameters,
     TimeIntegrator, Vector3, MU0,
@@ -1112,10 +1112,10 @@ fn assemble_full_2x2_operator_real(
             // the cross terms arise from the component of H_eff perpendicular to m₀.
             // In the uniform case h_e1 = h_e2 = 0, so the off-diagonal vanishes.
             [
-                h_parallel,         // h_11 
+                h_parallel,                            // h_11
                 h_e1 * h_e2 / (h_parallel.max(1e-30)), // h_12 (cross coupling)
                 h_e1 * h_e2 / (h_parallel.max(1e-30)), // h_21 = h_12 (symmetric)
-                h_parallel,         // h_22
+                h_parallel,                            // h_22
             ]
         })
         .collect();
@@ -1126,10 +1126,30 @@ fn assemble_full_2x2_operator_real(
         }
         let volume = topology.element_volumes[element_index];
         let local_mass = [
-            [2.0 * volume / 20.0, volume / 20.0, volume / 20.0, volume / 20.0],
-            [volume / 20.0, 2.0 * volume / 20.0, volume / 20.0, volume / 20.0],
-            [volume / 20.0, volume / 20.0, 2.0 * volume / 20.0, volume / 20.0],
-            [volume / 20.0, volume / 20.0, volume / 20.0, 2.0 * volume / 20.0],
+            [
+                2.0 * volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                2.0 * volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                volume / 20.0,
+                2.0 * volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+                2.0 * volume / 20.0,
+            ],
         ];
         for i in 0..4 {
             let node_i = element[i] as usize;
@@ -1944,22 +1964,16 @@ fn project_2x2_mode_to_tangent_basis(
     let mut max_amplitude: f64 = 0.0;
 
     for (reduced_index, node_index) in active_nodes.iter().enumerate() {
-        let u1 = amplitudes[reduced_index];       // e1 component
-        let u2 = amplitudes[reduced_index + n];    // e2 component
+        let u1 = amplitudes[reduced_index]; // e1 component
+        let u2 = amplitudes[reduced_index + n]; // e2 component
         let (e1, e2) = bases[*node_index];
 
         // Real part of the mode: dm_real = u1*e1 + u2*e2
-        real[*node_index] = add_vector(
-            scale_vector(e1, u1),
-            scale_vector(e2, u2),
-        );
+        real[*node_index] = add_vector(scale_vector(e1, u1), scale_vector(e2, u2));
         // Imaginary part: for the undamped real-symmetric case, the mode
         // oscillates as dm ~ cos(ωt)*u, so the "imaginary" part is the
         // orthogonal tangent component (circular/elliptical precession).
-        imag[*node_index] = add_vector(
-            scale_vector(e1, -u2),
-            scale_vector(e2, u1),
-        );
+        imag[*node_index] = add_vector(scale_vector(e1, -u2), scale_vector(e2, u1));
         let amp = (u1 * u1 + u2 * u2).sqrt();
         amplitude[*node_index] = amp;
         phase[*node_index] = u2.atan2(u1);
@@ -2081,7 +2095,11 @@ fn solver_notes(plan: &FemEigenPlanIR, complex_reduction: bool, use_sparse: bool
     }
 }
 
-fn solver_capabilities(plan: &FemEigenPlanIR, complex_reduction: bool, use_sparse: bool) -> Vec<&'static str> {
+fn solver_capabilities(
+    plan: &FemEigenPlanIR,
+    complex_reduction: bool,
+    use_sparse: bool,
+) -> Vec<&'static str> {
     let mut capabilities = vec!["cpu_reference_eigen", "artifact_backed_analyze"];
     if use_sparse {
         capabilities.push("sparse_lobpcg");
@@ -2134,7 +2152,11 @@ fn solver_capabilities(plan: &FemEigenPlanIR, complex_reduction: bool, use_spars
     capabilities
 }
 
-fn solver_limitations(plan: &FemEigenPlanIR, complex_reduction: bool, use_sparse: bool) -> Vec<&'static str> {
+fn solver_limitations(
+    plan: &FemEigenPlanIR,
+    complex_reduction: bool,
+    use_sparse: bool,
+) -> Vec<&'static str> {
     let mut limitations = Vec::new();
     if use_sparse {
         limitations.push("sparse_lobpcg_may_miss_modes_near_degeneracy");

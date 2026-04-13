@@ -319,6 +319,28 @@ class MeshOperation:
 
 
 @dataclass(frozen=True, slots=True)
+class MeshSizeControls:
+    calibrate_for: str | None = None
+    size_preset: str | None = None
+    maximum_element_size: float | None = None
+    minimum_element_size: float | None = None
+    maximum_element_growth_rate: float | None = None
+    curvature_factor: float | None = None
+    narrow_region_resolution: float | None = None
+
+    def to_ir(self) -> dict[str, Any]:
+        return {
+            "calibrate_for": self.calibrate_for,
+            "size_preset": self.size_preset,
+            "maximum_element_size": self.maximum_element_size,
+            "minimum_element_size": self.minimum_element_size,
+            "maximum_element_growth_rate": self.maximum_element_growth_rate,
+            "curvature_factor": self.curvature_factor,
+            "narrow_region_resolution": self.narrow_region_resolution,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class PerObjectMeshRecipe:
     """Full mesh recipe for a single ferromagnetic object.
 

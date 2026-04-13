@@ -25,9 +25,7 @@ use crate::cpu_reference;
 use crate::fem_eigen;
 use crate::fem_reference;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-use crate::interactive_runtime::{
-    display_is_global_scalar, display_refresh_due,
-};
+use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 #[cfg(feature = "cuda")]
 use crate::multilayer_cuda;
 use crate::multilayer_reference;
@@ -2232,11 +2230,7 @@ fn execute_native_fem(
                         None
                     };
                     let cached_preview_fields = if preview_due {
-                        build_fem_cached_preview_fields(
-                            &backend,
-                            &display_selection,
-                            node_count,
-                        )
+                        build_fem_cached_preview_fields(&backend, &display_selection, node_count)
                     } else {
                         None
                     };
@@ -2462,11 +2456,7 @@ fn execute_native_fem(
                         None
                     };
                     let cached_preview_fields = if preview_due {
-                        build_fem_cached_preview_fields(
-                            &backend,
-                            &display_selection,
-                            node_count,
-                        )
+                        build_fem_cached_preview_fields(&backend, &display_selection, node_count)
                     } else {
                         None
                     };
@@ -2528,9 +2518,9 @@ fn execute_native_fem(
                     None
                 };
                 let cached_preview_fields = if preview_due {
-                    display_selection.as_ref().and_then(|sel| {
-                        build_fem_cached_preview_fields(&backend, sel, node_count)
-                    })
+                    display_selection
+                        .as_ref()
+                        .and_then(|sel| build_fem_cached_preview_fields(&backend, sel, node_count))
                 } else {
                     None
                 };

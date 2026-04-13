@@ -42,7 +42,9 @@ const DEFAULT_ADAPTIVE_DT_MAX: f64 = 1e-10;
 pub use capabilities::{BackendCapabilities, RuntimeEngineId};
 pub use interactive::backend::BackendGeometry;
 pub use interactive::checkpoints::RunOutcome;
-pub use interactive::commands::{parse_session_command, LiveControlCommand, RuntimeControlOutcome, SequenceStage};
+pub use interactive::commands::{
+    parse_session_command, LiveControlCommand, RuntimeControlOutcome, SequenceStage,
+};
 pub use interactive::display::{
     DisplayKind, DisplayPayload, DisplaySelection, DisplaySelectionState,
 };
@@ -188,6 +190,13 @@ pub fn run_problem(
     }
 
     Ok(executed.result)
+}
+
+pub fn fem_observables_for_magnetization(
+    plan: &fullmag_ir::FemPlanIR,
+    magnetization: &[[f64; 3]],
+) -> Result<fullmag_engine::EffectiveFieldObservables, RunError> {
+    fem_reference::fem_observables_for_magnetization(plan, magnetization)
 }
 
 /// Run a problem with a per-step callback for live streaming.
@@ -948,9 +957,7 @@ pub fn resolve_runtime_engine(problem: &ProblemIR) -> Result<RuntimeEngineInfo, 
                 dispatch::FemEngine::CpuReference => {
                     ("fem_eigen_cpu_reference", "CPU FEM Eigen", "cpu")
                 }
-                dispatch::FemEngine::NativeGpu => {
-                    ("fem_eigen_native_gpu", "GPU FEM Eigen", "gpu")
-                }
+                dispatch::FemEngine::NativeGpu => ("fem_eigen_native_gpu", "GPU FEM Eigen", "gpu"),
             };
             Ok(RuntimeEngineInfo {
                 backend_family: "fem_eigen".to_string(),

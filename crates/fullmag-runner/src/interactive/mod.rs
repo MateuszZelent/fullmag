@@ -18,7 +18,9 @@ pub use backend::BackendGeometry;
 pub(crate) use backend::InteractiveBackend;
 pub(crate) use checkpoints::CheckpointContext;
 pub use checkpoints::RunOutcome;
-pub use commands::{parse_session_command, LiveControlCommand, RuntimeControlOutcome, SequenceStage};
+pub use commands::{
+    parse_session_command, LiveControlCommand, RuntimeControlOutcome, SequenceStage,
+};
 pub use display::{DisplayKind, DisplayPayload, DisplaySelection, DisplaySelectionState};
 pub use events::{
     CommandAckEvent, CommandCompletedEvent, CommandRejectedEvent, DisplayUpdatedEvent,

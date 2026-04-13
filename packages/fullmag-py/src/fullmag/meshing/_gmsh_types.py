@@ -68,41 +68,49 @@ ALGO_3D_FRONTAL = 4
 ALGO_3D_MMG3D = 7
 ALGO_3D_HXT = 10
 
-MESH_SIZE_CALIBRATIONS = ("general_physics",)
-MESH_SIZE_PRESETS = ("coarse", "normal", "fine", "finer", "extra_fine")
+MESH_SIZE_CALIBRATIONS = (
+    "general_physics",
+    "micromagnetics_static",
+    "micromagnetics_relaxation",
+    "micromagnetics_frequency_domain",
+    "magnetostatics_dominated",
+    "imported_surface_cleanup",
+)
+MESH_SIZE_PRESETS = (
+    "extremely_fine",
+    "extra_fine",
+    "finer",
+    "fine",
+    "normal",
+    "coarse",
+    "coarser",
+    "extra_coarse",
+    "extremely_coarse",
+)
 
 _MESH_SIZE_PRESET_DEFAULTS: dict[str, dict[str, float]] = {
-    "coarse": {
-        "growth_rate": 1.8,
-        "curvature_factor": 0.8,
-        "narrow_region_resolution": 0.3,
-    },
-    "normal": {
-        "growth_rate": 1.6,
-        "curvature_factor": 0.6,
-        "narrow_region_resolution": 0.5,
-    },
-    "fine": {
-        "growth_rate": 1.5,
-        "curvature_factor": 0.5,
-        "narrow_region_resolution": 0.6,
-    },
-    "finer": {
-        "growth_rate": 1.4,
-        "curvature_factor": 0.4,
-        "narrow_region_resolution": 0.7,
-    },
-    "extra_fine": {
-        "growth_rate": 1.3,
-        "curvature_factor": 0.25,
-        "narrow_region_resolution": 0.85,
-    },
+    "extremely_fine": {"growth_rate": 1.2, "curvature_factor": 0.20, "narrow_region_resolution": 1.0},
+    "extra_fine": {"growth_rate": 1.3, "curvature_factor": 0.25, "narrow_region_resolution": 0.85},
+    "finer": {"growth_rate": 1.4, "curvature_factor": 0.4, "narrow_region_resolution": 0.7},
+    "fine": {"growth_rate": 1.5, "curvature_factor": 0.5, "narrow_region_resolution": 0.6},
+    "normal": {"growth_rate": 1.6, "curvature_factor": 0.6, "narrow_region_resolution": 0.5},
+    "coarse": {"growth_rate": 1.8, "curvature_factor": 0.8, "narrow_region_resolution": 0.3},
+    "coarser": {"growth_rate": 2.0, "curvature_factor": 1.0, "narrow_region_resolution": 0.2},
+    "extra_coarse": {"growth_rate": 2.2, "curvature_factor": 1.2, "narrow_region_resolution": 0.15},
+    "extremely_coarse": {"growth_rate": 2.4, "curvature_factor": 1.5, "narrow_region_resolution": 0.1},
 }
 
 _MESH_SIZE_PRESET_ALIASES = {
     "extra fine": "extra_fine",
+    "extremely fine": "extremely_fine",
     "extrafine": "extra_fine",
+    "extremelyfine": "extremely_fine",
     "very_fine": "extra_fine",
+    "coarser_mesh": "coarser",
+    "extra coarse": "extra_coarse",
+    "extracoarse": "extra_coarse",
+    "extremely coarse": "extremely_coarse",
+    "extremelycoarse": "extremely_coarse",
 }
 
 
@@ -153,6 +161,47 @@ class MeshOptions:
                 raise ValueError("narrow_region_resolution must be a positive finite float")
 
 
+@dataclass(frozen=True, slots=True)
+class MeshSizeControls:
+    calibrate_for: str | None = None
+    size_preset: str | None = None
+    maximum_element_size: float | None = None
+    minimum_element_size: float | None = None
+    maximum_element_growth_rate: float | None = None
+    curvature_factor: float | None = None
+    narrow_region_resolution: float | None = None
+    legacy_size_from_curvature: int = 0
+    legacy_narrow_regions: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedMeshSizeControls:
+    maximum_element_size: float | None
+    minimum_element_size: float | None
+    maximum_element_growth_rate: float | None
+    curvature_factor: float | None
+    narrow_region_resolution: float | None
+    resolved_size_from_curvature: int
+    resolved_narrow_regions: int
+    resolved_growth_rate: float | None
+    calibrate_for: str
+    size_preset: str | None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "calibrate_for": self.calibrate_for,
+            "size_preset": self.size_preset,
+            "maximum_element_size": self.maximum_element_size,
+            "minimum_element_size": self.minimum_element_size,
+            "maximum_element_growth_rate": self.maximum_element_growth_rate,
+            "curvature_factor": self.curvature_factor,
+            "narrow_region_resolution": self.narrow_region_resolution,
+            "resolved_size_from_curvature": self.resolved_size_from_curvature,
+            "resolved_narrow_regions": self.resolved_narrow_regions,
+            "resolved_growth_rate": self.resolved_growth_rate,
+        }
+
+
 def _normalize_mesh_size_calibration(value: object) -> str | None:
     if value is None:
         return None
@@ -184,6 +233,19 @@ def _normalize_mesh_size_preset(value: object) -> str | None:
     return normalized
 
 
+def _mesh_size_controls_from_options(opts: MeshOptions) -> MeshSizeControls:
+    return MeshSizeControls(
+        calibrate_for=opts.calibrate_for,
+        size_preset=opts.size_preset,
+        minimum_element_size=opts.hmin,
+        maximum_element_growth_rate=opts.growth_rate,
+        curvature_factor=opts.curvature_factor,
+        narrow_region_resolution=opts.narrow_region_resolution,
+        legacy_size_from_curvature=opts.size_from_curvature,
+        legacy_narrow_regions=opts.narrow_regions,
+    )
+
+
 def _resolve_curvature_points(
     size_from_curvature: int,
     curvature_factor: float | None,
@@ -211,34 +273,44 @@ def _resolve_narrow_region_count(
     return max(1, min(12, int(round(1.0 + 6.0 * clamped))))
 
 
-def resolve_mesh_size_controls(opts: MeshOptions) -> dict[str, object]:
-    calibration = _normalize_mesh_size_calibration(opts.calibrate_for) or "general_physics"
-    preset = _normalize_mesh_size_preset(opts.size_preset)
+def resolve_user_mesh_size_controls(
+    controls: MeshSizeControls,
+) -> ResolvedMeshSizeControls:
+    calibration = _normalize_mesh_size_calibration(controls.calibrate_for) or "general_physics"
+    preset = _normalize_mesh_size_preset(controls.size_preset)
     preset_defaults = _MESH_SIZE_PRESET_DEFAULTS.get(preset or "", {})
-    curvature_factor = opts.curvature_factor
+    curvature_factor = controls.curvature_factor
     if curvature_factor is None and "curvature_factor" in preset_defaults:
         curvature_factor = float(preset_defaults["curvature_factor"])
-    narrow_region_resolution = opts.narrow_region_resolution
+    narrow_region_resolution = controls.narrow_region_resolution
     if narrow_region_resolution is None and "narrow_region_resolution" in preset_defaults:
         narrow_region_resolution = float(preset_defaults["narrow_region_resolution"])
-    growth_rate = opts.growth_rate
+    growth_rate = controls.maximum_element_growth_rate
     if growth_rate is None and "growth_rate" in preset_defaults:
         growth_rate = float(preset_defaults["growth_rate"])
-    return {
-        "calibrate_for": calibration,
-        "size_preset": preset,
-        "curvature_factor": curvature_factor,
-        "narrow_region_resolution": narrow_region_resolution,
-        "resolved_size_from_curvature": _resolve_curvature_points(
-            opts.size_from_curvature,
+    return ResolvedMeshSizeControls(
+        calibrate_for=calibration,
+        size_preset=preset,
+        maximum_element_size=controls.maximum_element_size,
+        minimum_element_size=controls.minimum_element_size,
+        maximum_element_growth_rate=growth_rate,
+        curvature_factor=curvature_factor,
+        narrow_region_resolution=narrow_region_resolution,
+        resolved_size_from_curvature=_resolve_curvature_points(
+            controls.legacy_size_from_curvature,
             curvature_factor,
         ),
-        "resolved_narrow_regions": _resolve_narrow_region_count(
-            opts.narrow_regions,
+        resolved_narrow_regions=_resolve_narrow_region_count(
+            controls.legacy_narrow_regions,
             narrow_region_resolution,
         ),
-        "resolved_growth_rate": growth_rate,
-    }
+        resolved_growth_rate=growth_rate,
+    )
+
+
+def resolve_mesh_size_controls(opts: MeshOptions) -> dict[str, object]:
+    controls = _mesh_size_controls_from_options(opts)
+    return resolve_user_mesh_size_controls(controls).as_dict()
 
 
 @dataclass(frozen=True, slots=True)
@@ -660,5 +732,4 @@ class SharedDomainMeshResult:
     component_surface_tags: dict[str, list[int]]
     interface_surface_tags: list[int]
     outer_boundary_surface_tags: list[int]
-
 

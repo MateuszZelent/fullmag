@@ -6,13 +6,21 @@ use crate::types::{RunError, StepStats};
 // ── Re-exports from the shared crate ─────────────────────────────────
 
 pub use fullmag_quantities::{
-    QuantityComponent, QuantityId, QuantityShape,
-    NormalizationHint, QuantityDomain, QuantityLocation,
-    QuantityReduction,
+    all_quantity_ids,
+    cached_preview_quantity_ids,
+    interactive_preview_quantity_ids,
+    quantity_catalog,
+    quantity_spec,
     // catalog functions
-    quantity_specs, quantity_spec, quantity_unit,
-    interactive_preview_quantity_ids, cached_preview_quantity_ids,
-    all_quantity_ids, quantity_catalog,
+    quantity_specs,
+    quantity_unit,
+    NormalizationHint,
+    QuantityComponent,
+    QuantityDomain,
+    QuantityId,
+    QuantityLocation,
+    QuantityReduction,
+    QuantityShape,
 };
 
 pub use fullmag_quantities::QuantitySpec;

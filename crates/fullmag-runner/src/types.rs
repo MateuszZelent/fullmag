@@ -863,9 +863,7 @@ pub(crate) struct StateObservables {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        normalized_payload_element_markers, LivePreviewField, StepStats, StepUpdate,
-    };
+    use super::{normalized_payload_element_markers, LivePreviewField, StepStats, StepUpdate};
     use std::collections::BTreeSet;
 
     #[test]

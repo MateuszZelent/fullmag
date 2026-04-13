@@ -8,6 +8,7 @@ use fullmag_ir::MeshIR;
 use rayon::prelude::*;
 use std::collections::{BTreeSet, HashMap};
 use std::f64::consts::PI;
+use std::sync::Mutex;
 
 // ── Centralised numeric thresholds (FEM-017) ──
 
@@ -296,7 +297,7 @@ impl CsrMatrix {
     pub fn spmv_into(&self, x: &[f64], y: &mut [f64]) {
         #[cfg(feature = "parallel")]
         {
-            if self.n >= 20_000 {
+            if self.n >= 2_000 {
                 y.par_iter_mut().enumerate().take(self.n).for_each(|(row, out)| {
                     let start = self.row_ptr[row];
                     let end = self.row_ptr[row + 1];
@@ -968,7 +969,7 @@ pub enum FemDataLocation {
     Mirrored,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct FemLlgProblem {
     pub topology: MeshTopology,
     pub material: MaterialParameters,
@@ -988,6 +989,46 @@ pub struct FemLlgProblem {
     pub operator_mode: FemOperatorMode,
     demag_csr: CsrMatrix,
     demag_dirichlet_boundary: bool,
+    /// Cache of the last demag field + energy to avoid redundant CG solves
+    /// in `step_report_from_vectors` (called right after the integrator step).
+    demag_cache: Mutex<Option<(Vec<Vector3>, f64)>>,
+}
+
+impl Clone for FemLlgProblem {
+    fn clone(&self) -> Self {
+        Self {
+            topology: self.topology.clone(),
+            material: self.material.clone(),
+            dynamics: self.dynamics.clone(),
+            terms: self.terms.clone(),
+            dmi_interface_normal: self.dmi_interface_normal,
+            demag_transfer_cell_size_hint: self.demag_transfer_cell_size_hint,
+            sparse_cg_tol: self.sparse_cg_tol,
+            sparse_cg_max_iter: self.sparse_cg_max_iter,
+            cell_size_extent_fraction: self.cell_size_extent_fraction,
+            operator_mode: self.operator_mode.clone(),
+            demag_csr: self.demag_csr.clone(),
+            demag_dirichlet_boundary: self.demag_dirichlet_boundary,
+            demag_cache: Mutex::new(None),
+        }
+    }
+}
+
+impl PartialEq for FemLlgProblem {
+    fn eq(&self, other: &Self) -> bool {
+        self.topology == other.topology
+            && self.material == other.material
+            && self.dynamics == other.dynamics
+            && self.terms == other.terms
+            && self.dmi_interface_normal == other.dmi_interface_normal
+            && self.demag_transfer_cell_size_hint == other.demag_transfer_cell_size_hint
+            && self.sparse_cg_tol == other.sparse_cg_tol
+            && self.sparse_cg_max_iter == other.sparse_cg_max_iter
+            && self.cell_size_extent_fraction == other.cell_size_extent_fraction
+            && self.operator_mode == other.operator_mode
+            && self.demag_csr == other.demag_csr
+            && self.demag_dirichlet_boundary == other.demag_dirichlet_boundary
+    }
 }
 
 impl FemLlgProblem {
@@ -1011,6 +1052,7 @@ impl FemLlgProblem {
             operator_mode: FemOperatorMode::default(),
             demag_csr,
             demag_dirichlet_boundary: false,
+            demag_cache: Mutex::new(None),
         }
     }
 
@@ -1035,6 +1077,7 @@ impl FemLlgProblem {
             operator_mode: FemOperatorMode::default(),
             demag_csr,
             demag_dirichlet_boundary: false,
+            demag_cache: Mutex::new(None),
         }
     }
 
@@ -1067,6 +1110,7 @@ impl FemLlgProblem {
             operator_mode: FemOperatorMode::default(),
             demag_csr,
             demag_dirichlet_boundary: dirichlet_boundary,
+            demag_cache: Mutex::new(None),
         }
     }
 
@@ -2261,8 +2305,18 @@ impl FemLlgProblem {
         } else {
             vec![[0.0, 0.0, 0.0]; n]
         };
+        // Reuse the cached demag from the last integrator RHS evaluation to
+        // avoid a redundant CG solve / FFT demag.  The cache is populated by
+        // every `demag_observables_from_vectors` call inside the step, so it
+        // is always fresh here.  Fall back to a full recomputation only if
+        // the cache is empty (e.g. first call or after an explicit observe).
         let (demag_field, demag_energy_joules) = if self.terms.demag {
-            self.demag_observables_from_vectors(magnetization)?
+            self.demag_cache
+                .lock()
+                .unwrap()
+                .take()
+                .map(Ok)
+                .unwrap_or_else(|| self.demag_observables_from_vectors(magnetization))?
         } else {
             (vec![[0.0, 0.0, 0.0]; n], 0.0)
         };
@@ -2461,10 +2515,15 @@ impl FemLlgProblem {
         &self,
         magnetization: &[Vector3],
     ) -> Result<(Vec<Vector3>, f64)> {
-        if self.demag_transfer_cell_size_hint.is_some() {
-            return self.transfer_grid_demag_observables_from_vectors(magnetization);
-        }
-        self.robin_demag_observables_from_vectors(magnetization)
+        let result = if self.demag_transfer_cell_size_hint.is_some() {
+            self.transfer_grid_demag_observables_from_vectors(magnetization)?
+        } else {
+            self.robin_demag_observables_from_vectors(magnetization)?
+        };
+        // Cache the result so step_report_from_vectors can skip the redundant
+        // CG solve / FFT demag after the integrator step.
+        *self.demag_cache.lock().unwrap() = Some(result.clone());
+        Ok(result)
     }
 
     fn robin_demag_observables_from_vectors(

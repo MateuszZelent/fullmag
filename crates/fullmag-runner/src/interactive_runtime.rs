@@ -2311,27 +2311,15 @@ impl CpuInteractiveFemPreviewRuntime {
                 dt = next;
             }
 
-            let observe_start = std::time::Instant::now();
-            let observables =
-                fem_reference::observe_state(&self.problem, &self.state, &self.antenna_field)?;
-            let observe_us = observe_start.elapsed().as_micros();
-            current_observables = observables.clone();
-
-            if self.total_steps % 100 == 0 && (observe_us > 100 || step_wall_us > 5000) {
-                eprintln!(
-                    "[fullmag-runner] FEM CPU output-step {} telemetry: integrate={:.1}ms observe={:.1}ms",
-                    self.total_steps,
-                    step_wall_us as f64 / 1000.0,
-                    observe_us as f64 / 1000.0,
-                );
-            }
-
-            let total_stats = make_step_stats(
+            // Build lightweight StepStats from the StepReport (no redundant
+            // demag / observe).  Full observe_state is deferred until we know
+            // that preview or field-snapshot data is actually needed.
+            let total_stats = make_step_stats_from_report(
                 self.total_steps,
                 self.state.time_seconds,
-                report.dt_used,
+                &report,
                 wall_elapsed,
-                &observables,
+                self.state.magnetization(),
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -2339,17 +2327,16 @@ impl CpuInteractiveFemPreviewRuntime {
             current_local_stats = local_stats.clone();
             latest_local_stats = Some(local_stats.clone());
 
-            record_due_cpu_outputs(
-                &observables,
-                local_stats.step,
-                local_stats.time,
-                report.dt_used,
-                wall_elapsed,
-                &mut scalar_schedules,
-                &mut field_schedules,
-                &mut steps,
-                &mut artifacts,
-            )?;
+            // Determine what outputs are due BEFORE deciding whether to run
+            // the expensive observe_state.
+            let scalar_due_for_output = scalar_schedules
+                .iter()
+                .any(|schedule| is_due(local_stats.time, schedule.next_time));
+            let due_field_names: Vec<String> = field_schedules
+                .iter()
+                .filter(|schedule| is_due(local_stats.time, schedule.next_time))
+                .map(|schedule| schedule.name.clone())
+                .collect();
 
             let display_state = (checkpoint.display_selection)();
             let preview_due = display_refresh_due(
@@ -2357,11 +2344,57 @@ impl CpuInteractiveFemPreviewRuntime {
                 &display_state,
                 local_stats.step,
             );
+            let needs_observables = !due_field_names.is_empty()
+                || (preview_due && !display_is_global_scalar(&display_state));
+
+            // Only run the expensive full observe when vector-field data is
+            // actually needed (preview refresh or field snapshot output).
+            if needs_observables {
+                let observe_start = std::time::Instant::now();
+                let observables =
+                    fem_reference::observe_state(&self.problem, &self.state, &self.antenna_field)?;
+                let observe_us = observe_start.elapsed().as_micros();
+                current_observables = observables.clone();
+
+                if self.total_steps % 100 == 0 && (observe_us > 100 || step_wall_us > 5000) {
+                    eprintln!(
+                        "[fullmag-runner] FEM CPU output-step {} telemetry: integrate={:.1}ms observe={:.1}ms",
+                        self.total_steps,
+                        step_wall_us as f64 / 1000.0,
+                        observe_us as f64 / 1000.0,
+                    );
+                }
+
+                // Record field snapshots that are due.
+                if !due_field_names.is_empty() {
+                    for name in &due_field_names {
+                        artifacts.record_field_snapshot(FieldSnapshot {
+                            name: name.clone(),
+                            step: local_stats.step,
+                            time: local_stats.time,
+                            solver_dt: report.dt_used,
+                            values: select_output_field_values_from_observables(
+                                &observables,
+                                name,
+                            )?,
+                        })?;
+                    }
+                    advance_due_schedules(&mut field_schedules, local_stats.time);
+                }
+            }
+
+            // Record scalar outputs (uses StepStats only, no vector fields).
+            if scalar_due_for_output {
+                artifacts.record_scalar(&local_stats)?;
+                steps.push(local_stats.clone());
+                advance_due_schedules(&mut scalar_schedules, local_stats.time);
+            }
+
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
                 Some(build_mesh_preview_field_with_active_mask(
                     &preview_cfg,
-                    select_observables(&observables, &preview_cfg.quantity)?,
+                    select_observables(&current_observables, &preview_cfg.quantity)?,
                     mesh_quantity_active_mask(&preview_cfg.quantity, &self.plan_signature.mesh),
                 ))
             } else {
@@ -3580,6 +3613,36 @@ fn make_step_stats(
     };
     crate::scalar_metrics::apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
     stats.per_object_scalars = observables.per_object_scalars.clone();
+    stats
+}
+
+/// Lightweight version of `make_step_stats` that uses only the `StepReport`
+/// scalars and the current magnetization vector, avoiding a full
+/// `observe_state` (which recomputes all fields including demag).
+fn make_step_stats_from_report(
+    step: u64,
+    time: f64,
+    report: &fullmag_engine::StepReport,
+    wall_time_ns: u64,
+    magnetization: &[[f64; 3]],
+) -> StepStats {
+    let mut stats = StepStats {
+        step,
+        time,
+        dt: report.dt_used,
+        e_ex: report.exchange_energy_joules,
+        e_demag: report.demag_energy_joules,
+        e_ext: report.external_energy_joules,
+        e_total: report.total_energy_joules,
+        max_dm_dt: report.max_rhs_amplitude,
+        max_h_eff: report.max_effective_field_amplitude,
+        max_h_demag: report.max_demag_field_amplitude,
+        max_torque_Apm: report.max_torque_Apm,
+        max_torque_T: report.max_torque_Apm * crate::MU0,
+        wall_time_ns,
+        ..StepStats::default()
+    };
+    crate::scalar_metrics::apply_average_m_to_step_stats(&mut stats, magnetization);
     stats
 }
 

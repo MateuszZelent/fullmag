@@ -25,12 +25,7 @@ pub(crate) fn relaxation_converged(
     damping: f64,
     pure_damping_rhs: bool,
 ) -> bool {
-    let max_torque = effective_max_torque_apm(
-        stats,
-        gyromagnetic_ratio,
-        damping,
-        pure_damping_rhs,
-    );
+    let max_torque = effective_max_torque_apm(stats, gyromagnetic_ratio, damping, pure_damping_rhs);
     if max_torque > control.torque_tolerance {
         return false;
     }
@@ -75,7 +70,12 @@ pub(crate) fn effective_max_torque_apm(
     if stats.max_torque_Apm > 0.0 {
         return stats.max_torque_Apm;
     }
-    approximate_max_torque(stats.max_dm_dt, gyromagnetic_ratio, damping, pure_damping_rhs)
+    approximate_max_torque(
+        stats.max_dm_dt,
+        gyromagnetic_ratio,
+        damping,
+        pure_damping_rhs,
+    )
 }
 
 pub(crate) fn llg_overdamped_uses_pure_damping(control: Option<&RelaxationControlIR>) -> bool {

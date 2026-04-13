@@ -58,6 +58,53 @@ const OPTIMIZE_OPTIONS = [
   { value: "Relocate3D",  label: "Relocate 3D" },
 ];
 
+const CALIBRATE_FOR_OPTIONS = [
+  { value: "general_physics", label: "General physics" },
+  { value: "micromagnetics_static", label: "Micromagnetics (static)" },
+  { value: "micromagnetics_relaxation", label: "Micromagnetics (relaxation)" },
+  { value: "micromagnetics_frequency_domain", label: "Micromagnetics (frequency domain)" },
+  { value: "magnetostatics_dominated", label: "Magnetostatics dominated" },
+  { value: "imported_surface_cleanup", label: "Imported surface cleanup" },
+];
+
+const SIZE_PRESET_OPTIONS = [
+  { value: "extremely_fine", label: "Extremely fine" },
+  { value: "extra_fine", label: "Extra fine" },
+  { value: "finer", label: "Finer" },
+  { value: "fine", label: "Fine" },
+  { value: "normal", label: "Normal" },
+  { value: "coarse", label: "Coarse" },
+  { value: "coarser", label: "Coarser" },
+  { value: "extra_coarse", label: "Extra coarse" },
+  { value: "extremely_coarse", label: "Extremely coarse" },
+];
+
+const ADAPTIVE_INDICATOR_OPTIONS = [
+  { value: "geometric_only", label: "Geometric only" },
+  { value: "micromagnetics_hybrid", label: "Micromagnetics hybrid" },
+  { value: "magnetostatic_potential", label: "Magnetostatic potential" },
+];
+
+const ADAPTIVE_TARGET_OPTIONS = [
+  { value: "auto", label: "Auto" },
+  { value: "h_demag_gradient", label: "H_demag gradient" },
+  { value: "phi_jump", label: "Potential jump residual" },
+  { value: "exchange_length", label: "Exchange-length limiter" },
+  { value: "mode_amplitude", label: "Mode amplitude (eigen)" },
+];
+
+const ADAPTIVE_CONVERGENCE_OPTIONS = [
+  { value: "energy_delta", label: "Energy delta" },
+  { value: "max_torque_delta", label: "Max torque delta" },
+  { value: "solution_change", label: "Solution change" },
+  { value: "eigenfrequency_delta", label: "Eigenfrequency delta" },
+];
+
+const SIZE_MODE_OPTIONS = [
+  { value: "predefined", label: "Predefined" },
+  { value: "custom", label: "Custom" },
+];
+
 /* ── SICN color ────────────────────────────────────────────────────── */
 
 function sicnColor(value: number): string {
@@ -195,6 +242,23 @@ export default function MeshSettingsPanel({
     (patch: Partial<MeshOptionsState>) => onChange({ ...options, ...patch }),
     [options, onChange],
   );
+  const sizeControlMode = options.sizeControlMode || "predefined";
+  const isCustomSizeMode = sizeControlMode === "custom";
+  const adaptiveIndicatorValue =
+    options.adaptiveIndicator === "micromagnetics_hybrid" ||
+    options.adaptiveIndicator === "magnetostatic_potential"
+      ? options.adaptiveIndicator
+      : "geometric_only";
+
+  useEffect(() => {
+    if (
+      options.adaptiveIndicator !== "geometric_only" &&
+      options.adaptiveIndicator !== "micromagnetics_hybrid" &&
+      options.adaptiveIndicator !== "magnetostatic_potential"
+    ) {
+      set({ adaptiveIndicator: "geometric_only" });
+    }
+  }, [options.adaptiveIndicator, set]);
 
   // Rating based on SICN p5
   const qualityRating = useMemo(() => {
@@ -306,6 +370,66 @@ export default function MeshSettingsPanel({
         eyebrow="Basic"
         meta={<span className="text-[0.62rem] font-mono text-muted-foreground">UI in nm</span>}
       >
+        <InspectorField
+          label="Size mode"
+          hint="Use preset-driven defaults or manual custom values."
+          control={(
+            <Select
+              value={sizeControlMode}
+              onValueChange={(val) => set({ sizeControlMode: val as "predefined" | "custom" })}
+              disabled={disabled}
+            >
+              <SelectTrigger className="h-8 w-full border-border/35 bg-background/70 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SIZE_MODE_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        />
+        <InspectorField
+          label="Calibrate for"
+          hint="Calibration profile for preset defaults."
+          control={(
+            <Select
+              value={options.calibrateFor || "general_physics"}
+              onValueChange={(val) => set({ calibrateFor: val })}
+              disabled={disabled || isCustomSizeMode}
+            >
+              <SelectTrigger className="h-8 w-full border-border/35 bg-background/70 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CALIBRATE_FOR_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        />
+        <InspectorField
+          label="Predefined"
+          hint="Preset ladder from extremely fine to extremely coarse."
+          control={(
+            <Select
+              value={options.sizePreset || "normal"}
+              onValueChange={(val) => set({ sizePreset: val })}
+              disabled={disabled || isCustomSizeMode}
+            >
+              <SelectTrigger className="h-8 w-full border-border/35 bg-background/70 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SIZE_PRESET_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        />
         <div className="rounded-xl border border-sky-500/20 bg-sky-500/8 px-3 py-2 text-[0.68rem] leading-5 text-sky-100/90">
           These values are entered in nanometres. Fullmag converts them to SI metres for the backend, so typing `1` means `1 nm`, not `1 m`.
         </div>
@@ -317,9 +441,12 @@ export default function MeshSettingsPanel({
               className="h-8 w-full border-border/35 bg-background/70 px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50"
               type="text"
               placeholder="auto"
-              value={metersTextToNanometersInput(options.hmax)}
-              onChange={(e) => set({ hmax: nanometersInputToMetersText(e.target.value) })}
-              disabled={disabled}
+              value={metersTextToNanometersInput(options.maximumElementSize || options.hmax)}
+              onChange={(e) => {
+                const meters = nanometersInputToMetersText(e.target.value);
+                set({ maximumElementSize: meters, hmax: meters });
+              }}
+              disabled={disabled || !isCustomSizeMode}
             />
           )}
         />
@@ -331,9 +458,12 @@ export default function MeshSettingsPanel({
               className="h-8 w-full border-border/35 bg-background/70 px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50"
               type="text"
               placeholder="auto"
-              value={metersTextToNanometersInput(options.hmin)}
-              onChange={(e) => set({ hmin: nanometersInputToMetersText(e.target.value) })}
-              disabled={disabled}
+              value={metersTextToNanometersInput(options.minimumElementSize || options.hmin)}
+              onChange={(e) => {
+                const meters = nanometersInputToMetersText(e.target.value);
+                set({ minimumElementSize: meters, hmin: meters });
+              }}
+              disabled={disabled || !isCustomSizeMode}
             />
           )}
         />
@@ -343,13 +473,11 @@ export default function MeshSettingsPanel({
           control={(
             <Input
               className="h-8 w-full border-border/35 bg-background/70 px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50"
-              type="number"
-              step="1"
-              min="0"
-              max="100"
-              value={options.sizeFromCurvature}
-              onChange={(e) => set({ sizeFromCurvature: Number(e.target.value) || 0 })}
-              disabled={disabled}
+              type="text"
+              placeholder="auto"
+              value={options.curvatureFactor || ""}
+              onChange={(e) => set({ curvatureFactor: e.target.value })}
+              disabled={disabled || !isCustomSizeMode}
             />
           )}
         />
@@ -361,9 +489,9 @@ export default function MeshSettingsPanel({
               className="h-8 w-full border-border/35 bg-background/70 px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50"
               type="text"
               placeholder="1.8"
-              value={options.growthRate}
-              onChange={(e) => set({ growthRate: e.target.value })}
-              disabled={disabled}
+              value={options.maximumElementGrowthRate || options.growthRate}
+              onChange={(e) => set({ maximumElementGrowthRate: e.target.value, growthRate: e.target.value })}
+              disabled={disabled || !isCustomSizeMode}
             />
           )}
         />
@@ -373,16 +501,24 @@ export default function MeshSettingsPanel({
           control={(
             <Input
               className="h-8 w-full border-border/35 bg-background/70 px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50"
-              type="number"
-              step="1"
-              min="0"
-              max="10"
-              value={options.narrowRegions}
-              onChange={(e) => set({ narrowRegions: Number(e.target.value) || 0 })}
-              disabled={disabled}
+              type="text"
+              placeholder="auto"
+              value={options.narrowRegionResolution || ""}
+              onChange={(e) => set({ narrowRegionResolution: e.target.value })}
+              disabled={disabled || !isCustomSizeMode}
             />
           )}
         />
+        {!isCustomSizeMode && (
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/8 px-3 py-2 text-[0.68rem] leading-5 text-emerald-100/90">
+            Preset mode is active. Values below are resolved diagnostics from the translator.
+            <div className="mt-1 font-mono">
+              resolved_size_from_curvature={options.resolvedSizeFromCurvature ?? 0},{" "}
+              resolved_narrow_regions={options.resolvedNarrowRegions ?? 0},{" "}
+              resolved_growth_rate={options.resolvedGrowthRate || "auto"}
+            </div>
+          </div>
+        )}
         {showAdvanced ? (
           <InspectorField
             label="Global size factor"
@@ -404,9 +540,10 @@ export default function MeshSettingsPanel({
       </InspectorSection>
 
       {/* ── Interface & Transition (COMSOL-like region controls) ── */}
+      {showAdvanced && (
       <InspectorSection
         title="Interface & Transition"
-        eyebrow="Region sizing"
+        eyebrow="Advanced"
         meta={<span className="text-[0.62rem] font-mono text-muted-foreground">UI in nm</span>}
       >
         <InspectorField
@@ -466,6 +603,7 @@ export default function MeshSettingsPanel({
           )}
         />
       </InspectorSection>
+      )}
 
       {/* ── Optimization ── */}
       {showAdvanced && (
@@ -656,6 +794,69 @@ export default function MeshSettingsPanel({
                   <SelectContent>
                     <SelectItem value="manual">Manual (remesh now)</SelectItem>
                     <SelectItem value="auto">Auto (solve loop)</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            />
+            <InspectorField
+              label="Indicator"
+              hint="Select the adaptive refinement indicator model."
+              control={(
+                <Select
+                  value={adaptiveIndicatorValue}
+                  onValueChange={(val) => set({ adaptiveIndicator: val })}
+                  disabled={disabled}
+                >
+                  <SelectTrigger className="h-8 w-full border-border/35 bg-background/70 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ADAPTIVE_INDICATOR_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[0.68rem] leading-5 text-amber-100/90">
+              Current runtime support for auto follow-up covers <span className="font-mono">geometric_only</span>, <span className="font-mono">micromagnetics_hybrid</span>, and <span className="font-mono">magnetostatic_potential</span>.
+            </div>
+            <InspectorField
+              label="Target quantity"
+              hint="Primary physics quantity used to derive target element size."
+              control={(
+                <Select
+                  value={options.adaptiveTargetQuantity || "auto"}
+                  onValueChange={(val) => set({ adaptiveTargetQuantity: val })}
+                  disabled={disabled}
+                >
+                  <SelectTrigger className="h-8 w-full border-border/35 bg-background/70 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ADAPTIVE_TARGET_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+            <InspectorField
+              label="Convergence criterion"
+              hint="Metric used to stop adaptive passes when stabilized."
+              control={(
+                <Select
+                  value={options.adaptiveConvergenceMetric || "energy_delta"}
+                  onValueChange={(val) => set({ adaptiveConvergenceMetric: val })}
+                  disabled={disabled}
+                >
+                  <SelectTrigger className="h-8 w-full border-border/35 bg-background/70 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ADAPTIVE_CONVERGENCE_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               )}

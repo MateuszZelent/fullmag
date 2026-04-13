@@ -98,6 +98,18 @@ pub(crate) fn snapshot_vector_fields(
     Ok(cached)
 }
 
+pub(crate) fn fem_observables_for_magnetization(
+    plan: &FemPlanIR,
+    magnetization: &[[f64; 3]],
+) -> Result<fullmag_engine::EffectiveFieldObservables, RunError> {
+    let mut staged_plan = plan.clone();
+    staged_plan.initial_magnetization = magnetization.to_vec();
+    let (problem, state) = build_problem_and_state(&staged_plan)?;
+    problem.observe(&state).map_err(|error| RunError {
+        message: format!("FEM observe: {}", error),
+    })
+}
+
 pub(crate) fn build_problem_and_state(
     plan: &FemPlanIR,
 ) -> Result<(FemLlgProblem, FemLlgState), RunError> {

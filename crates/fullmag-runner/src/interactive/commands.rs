@@ -37,12 +37,24 @@ impl SequenceStage {
     /// Convert this stage to a standalone `LiveControlCommand`.
     pub fn to_command(&self) -> LiveControlCommand {
         match self.clone() {
-            SequenceStage::Run { until_seconds, max_steps } => {
-                LiveControlCommand::Run { until_seconds, max_steps }
-            }
-            SequenceStage::Relax { until_seconds, max_steps, torque_tolerance, energy_tolerance } => {
-                LiveControlCommand::Relax { until_seconds, max_steps, torque_tolerance, energy_tolerance }
-            }
+            SequenceStage::Run {
+                until_seconds,
+                max_steps,
+            } => LiveControlCommand::Run {
+                until_seconds,
+                max_steps,
+            },
+            SequenceStage::Relax {
+                until_seconds,
+                max_steps,
+                torque_tolerance,
+                energy_tolerance,
+            } => LiveControlCommand::Relax {
+                until_seconds,
+                max_steps,
+                torque_tolerance,
+                energy_tolerance,
+            },
         }
     }
 }
@@ -86,9 +98,7 @@ pub enum LiveControlCommand {
     RefreshDisplay,
 
     /// Execute a sequence of stages (run/relax) automatically.
-    RunSequence {
-        stages: Vec<SequenceStage>,
-    },
+    RunSequence { stages: Vec<SequenceStage> },
     /// Skip the current stage in an active sequence and advance to the next one.
     SkipStage,
 }

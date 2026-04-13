@@ -355,12 +355,26 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "mesh": {
             "algorithm_2d": mesh.get("algorithm_2d"),
             "algorithm_3d": mesh.get("algorithm_3d"),
-            "hmax": _number_or_auto(mesh.get("hmax")),
-            "hmin": _number_or_none(mesh.get("hmin")),
+            "hmax": _number_or_auto(mesh.get("maximum_element_size") or mesh.get("hmax")),
+            "hmin": _number_or_none(mesh.get("minimum_element_size") or mesh.get("hmin")),
+            "maximum_element_size": _number_or_auto(mesh.get("maximum_element_size") or mesh.get("hmax")),
+            "minimum_element_size": _number_or_none(mesh.get("minimum_element_size") or mesh.get("hmin")),
+            "calibrate_for": mesh.get("calibrate_for") or None,
+            "size_preset": mesh.get("size_preset") or None,
             "size_factor": mesh.get("size_factor"),
             "size_from_curvature": mesh.get("size_from_curvature"),
-            "growth_rate": _number_or_none(mesh.get("growth_rate")),
+            "curvature_factor": _number_or_none(mesh.get("curvature_factor")),
+            "growth_rate": _number_or_none(
+                mesh.get("maximum_element_growth_rate") or mesh.get("growth_rate")
+            ),
+            "maximum_element_growth_rate": _number_or_none(
+                mesh.get("maximum_element_growth_rate") or mesh.get("growth_rate")
+            ),
             "narrow_regions": mesh.get("narrow_regions"),
+            "narrow_region_resolution": _number_or_none(mesh.get("narrow_region_resolution")),
+            "resolved_size_from_curvature": _int_or_none(mesh.get("resolved_size_from_curvature")),
+            "resolved_narrow_regions": _int_or_none(mesh.get("resolved_narrow_regions")),
+            "resolved_growth_rate": _number_or_none(mesh.get("resolved_growth_rate")),
             "smoothing_steps": mesh.get("smoothing_steps"),
             "optimize": mesh.get("optimize") or None,
             "optimize_iterations": mesh.get("optimize_iterations"),
@@ -371,6 +385,9 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             else {
                 "enabled": True,
                 "policy": mesh.get("adaptive_policy"),
+                "indicator": mesh.get("adaptive_indicator"),
+                "target_quantity": mesh.get("adaptive_target_quantity"),
+                "convergence_metric": mesh.get("adaptive_convergence_metric"),
                 "theta": mesh.get("adaptive_theta"),
                 "h_min": _number_or_none(mesh.get("adaptive_h_min")),
                 "h_max": _number_or_none(mesh.get("adaptive_h_max")),

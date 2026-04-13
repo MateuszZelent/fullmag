@@ -57,16 +57,27 @@ import { HelpTip } from "../../ui/HelpTip";
 function createInheritedMeshState(): ScriptBuilderPerGeometryMeshEntry {
   return {
     mode: "inherit",
+    size_mode: "predefined",
     hmax: "",
     hmin: "",
+    maximum_element_size: "",
+    minimum_element_size: "",
+    calibrate_for: null,
+    size_preset: null,
     order: null,
     source: null,
     algorithm_2d: null,
     algorithm_3d: null,
     size_factor: null,
     size_from_curvature: null,
+    curvature_factor: "",
     growth_rate: "",
+    maximum_element_growth_rate: "",
     narrow_regions: null,
+    narrow_region_resolution: "",
+    resolved_size_from_curvature: null,
+    resolved_narrow_regions: null,
+    resolved_growth_rate: "",
     smoothing_steps: null,
     optimize: null,
     optimize_iterations: null,
@@ -100,14 +111,56 @@ function mapObjectMeshToOptions(
   }
   return {
     ...effective,
-    hmax: mesh.hmax.trim().length > 0 ? mesh.hmax : effective.hmax,
-    hmin: mesh.hmin.trim().length > 0 ? mesh.hmin : effective.hmin,
+    hmax:
+      (mesh.maximum_element_size ?? mesh.hmax).trim().length > 0
+        ? (mesh.maximum_element_size ?? mesh.hmax)
+        : effective.hmax,
+    hmin:
+      (mesh.minimum_element_size ?? mesh.hmin).trim().length > 0
+        ? (mesh.minimum_element_size ?? mesh.hmin)
+        : effective.hmin,
+    sizeControlMode: mesh.size_mode === "custom" ? "custom" : effective.sizeControlMode,
+    calibrateFor:
+      typeof mesh.calibrate_for === "string" && mesh.calibrate_for.trim().length > 0
+        ? mesh.calibrate_for
+        : effective.calibrateFor,
+    sizePreset:
+      typeof mesh.size_preset === "string" && mesh.size_preset.trim().length > 0
+        ? mesh.size_preset
+        : effective.sizePreset,
+    maximumElementSize:
+      (mesh.maximum_element_size ?? mesh.hmax).trim().length > 0
+        ? (mesh.maximum_element_size ?? mesh.hmax)
+        : effective.maximumElementSize,
+    minimumElementSize:
+      (mesh.minimum_element_size ?? mesh.hmin).trim().length > 0
+        ? (mesh.minimum_element_size ?? mesh.hmin)
+        : effective.minimumElementSize,
     algorithm2d: mesh.algorithm_2d ?? effective.algorithm2d,
     algorithm3d: mesh.algorithm_3d ?? effective.algorithm3d,
     sizeFactor: mesh.size_factor ?? effective.sizeFactor,
     sizeFromCurvature: mesh.size_from_curvature ?? effective.sizeFromCurvature,
+    curvatureFactor:
+      mesh.curvature_factor?.trim().length
+        ? mesh.curvature_factor
+        : effective.curvatureFactor,
     growthRate: mesh.growth_rate.trim().length > 0 ? mesh.growth_rate : effective.growthRate,
+    maximumElementGrowthRate:
+      mesh.maximum_element_growth_rate?.trim().length
+        ? mesh.maximum_element_growth_rate
+        : effective.maximumElementGrowthRate,
     narrowRegions: mesh.narrow_regions ?? effective.narrowRegions,
+    narrowRegionResolution:
+      mesh.narrow_region_resolution?.trim().length
+        ? mesh.narrow_region_resolution
+        : effective.narrowRegionResolution,
+    resolvedSizeFromCurvature:
+      mesh.resolved_size_from_curvature ?? effective.resolvedSizeFromCurvature,
+    resolvedNarrowRegions: mesh.resolved_narrow_regions ?? effective.resolvedNarrowRegions,
+    resolvedGrowthRate:
+      mesh.resolved_growth_rate?.trim().length
+        ? mesh.resolved_growth_rate
+        : effective.resolvedGrowthRate,
     smoothingSteps: mesh.smoothing_steps ?? effective.smoothingSteps,
     optimize: mesh.optimize ?? effective.optimize,
     optimizeIters: mesh.optimize_iterations ?? effective.optimizeIters,
@@ -122,6 +175,9 @@ function mapObjectMeshToOptions(
         : effective.refinementZones,
     adaptiveEnabled: effective.adaptiveEnabled,
     adaptivePolicy: effective.adaptivePolicy,
+    adaptiveIndicator: effective.adaptiveIndicator,
+    adaptiveTargetQuantity: effective.adaptiveTargetQuantity,
+    adaptiveConvergenceMetric: effective.adaptiveConvergenceMetric,
     adaptiveTheta: effective.adaptiveTheta,
     adaptiveHMin: effective.adaptiveHMin,
     adaptiveHMax: effective.adaptiveHMax,
@@ -144,16 +200,27 @@ function buildCustomMeshState(
 ): ScriptBuilderPerGeometryMeshEntry {
   return {
     mode: "custom",
+    size_mode: options.sizeControlMode === "custom" ? "custom" : "predefined",
     hmax: options.hmax,
     hmin: options.hmin,
+    maximum_element_size: options.maximumElementSize,
+    minimum_element_size: options.minimumElementSize,
+    calibrate_for: options.calibrateFor,
+    size_preset: options.sizePreset,
     order: extras.order,
     source: extras.source,
     algorithm_2d: options.algorithm2d,
     algorithm_3d: options.algorithm3d,
     size_factor: options.sizeFactor,
     size_from_curvature: options.sizeFromCurvature,
+    curvature_factor: options.curvatureFactor,
     growth_rate: options.growthRate,
+    maximum_element_growth_rate: options.maximumElementGrowthRate,
     narrow_regions: options.narrowRegions,
+    narrow_region_resolution: options.narrowRegionResolution,
+    resolved_size_from_curvature: options.resolvedSizeFromCurvature ?? null,
+    resolved_narrow_regions: options.resolvedNarrowRegions ?? null,
+    resolved_growth_rate: options.resolvedGrowthRate ?? "",
     smoothing_steps: options.smoothingSteps,
     optimize: options.optimize.trim().length > 0 ? options.optimize : null,
     optimize_iterations: options.optimize.trim().length > 0 ? options.optimizeIters : 1,

@@ -1407,6 +1407,7 @@ fn observe_multilayer_cuda(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
+        max_torque_Apm: 0.0,
         per_object_scalars,
     })
 }
@@ -1697,6 +1698,7 @@ fn observe_multilayer_cuda_single(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
+        max_torque_Apm: 0.0,
         per_object_scalars,
     })
 }
@@ -2013,6 +2015,7 @@ fn observe_native_stacked_cuda(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
+        max_torque_Apm: 0.0,
         per_object_scalars,
     })
 }

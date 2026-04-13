@@ -547,6 +547,7 @@ impl NativeFdmBackend {
             max_effective_field_amplitude: 0.0,
             max_demag_field_amplitude: 0.0,
             max_rhs_amplitude: 0.0,
+            max_torque_Apm: 0.0,
             suggested_next_dt: 0.0,
             wall_time_ns: 0,
         };
@@ -897,6 +898,7 @@ impl NativeFdmBackend {
             max_effective_field_amplitude: 0.0,
             max_demag_field_amplitude: 0.0,
             max_rhs_amplitude: 0.0,
+            max_torque_Apm: 0.0,
             suggested_next_dt: 0.0,
             wall_time_ns: 0,
         };
