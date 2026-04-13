@@ -34,6 +34,13 @@ function compareLexicographic(
   return 0;
 }
 
+/**
+ * Maximum number of scalar rows retained in the in-memory live window.
+ * Rows beyond this limit are trimmed from the front (oldest first).
+ * The full history is available from `GET /v1/live/current/scalars`.
+ */
+const MAX_LIVE_SCALAR_ROWS = 10_000;
+
 export function mergeScalarRowsDelta(
   prevRows: ScalarRow[],
   nextRows: ScalarRow[],
@@ -42,37 +49,45 @@ export function mergeScalarRowsDelta(
   const prevScalarStep = lastScalarStep(prevRows);
   const nextScalarStep = lastScalarStep(nextRows);
 
+  let result: ScalarRow[];
+
   if (nextScalarStep < prevScalarStep) {
-    return prevRows;
-  }
-  if (
+    result = prevRows;
+  } else if (
     nextRows.length === 0 &&
     (scalarRowsTotal ?? 0) > 0 &&
     prevRows.length > 0
   ) {
-    return prevRows;
-  }
-  if (nextRows.length > 0 && nextScalarStep > prevScalarStep) {
+    result = prevRows;
+  } else if (nextRows.length > 0 && nextScalarStep > prevScalarStep) {
     const firstNextStep = nextRows[0]?.step ?? -1;
     const isPureDelta = firstNextStep > prevScalarStep;
     if (isPureDelta) {
       const prevStepSet = new Set(prevRows.map((r) => r.step));
       const genuinelyNew = nextRows.filter((r) => !prevStepSet.has(r.step));
-      return genuinelyNew.length > 0 ? [...prevRows, ...genuinelyNew] : prevRows;
+      result = genuinelyNew.length > 0 ? [...prevRows, ...genuinelyNew] : prevRows;
+    } else {
+      result = nextRows;
     }
-    return nextRows;
-  }
-  if (nextScalarStep === prevScalarStep && nextRows.length < prevRows.length) {
-    return prevRows;
-  }
-  if (nextRows.length === prevRows.length && nextScalarStep === prevScalarStep) {
+  } else if (nextScalarStep === prevScalarStep && nextRows.length < prevRows.length) {
+    result = prevRows;
+  } else if (nextRows.length === prevRows.length && nextScalarStep === prevScalarStep) {
     const prevLast = prevRows[prevRows.length - 1];
     const nextLast = nextRows[nextRows.length - 1];
     if (prevLast?.e_total === nextLast?.e_total && prevLast?.max_dm_dt === nextLast?.max_dm_dt) {
-      return prevRows;
+      result = prevRows;
+    } else {
+      result = nextRows;
     }
+  } else {
+    result = nextRows;
   }
-  return nextRows;
+
+  // Enforce hard cap on in-memory scalar rows.
+  if (result.length > MAX_LIVE_SCALAR_ROWS) {
+    return result.slice(result.length - MAX_LIVE_SCALAR_ROWS);
+  }
+  return result;
 }
 
 export function mergeSessionState(prev: SessionState | null, next: SessionState): SessionState {
@@ -234,6 +249,15 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
   // Quantities are omitted from WS delta events when unchanged — keep the previous value.
   if (merged.quantities.length === 0 && prev.quantities.length > 0) {
     merged.quantities = prev.quantities;
+  }
+
+  // Sparse delta: latest_fields is omitted when unchanged — keep previous.
+  if (
+    Object.keys(merged.latest_fields.frames).length === 0 &&
+    Object.keys(prev.latest_fields.frames).length > 0 &&
+    !liveRegressed
+  ) {
+    merged.latest_fields = prev.latest_fields;
   }
 
   const prevLogTs = lastLogTimestamp(prev.engine_log);

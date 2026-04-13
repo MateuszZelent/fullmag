@@ -134,6 +134,12 @@ export function currentLiveApiClient() {
         cache: "no-store",
       });
     },
+    fetchScalarsHistory() {
+      return requestJson<{ scalar_rows: JsonObject[]; scalar_rows_total: number }>(
+        `${baseUrl}/v1/live/current/scalars`,
+        { cache: "no-store" },
+      );
+    },
     fetchRuntimeCapabilities() {
       return requestJson<HostCapabilityMatrix>(`${baseUrl}/v1/runtime/capabilities`, {
         cache: "no-store",

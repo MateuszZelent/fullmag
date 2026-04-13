@@ -20,7 +20,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Mutex, RwLock};
 use tower_http::cors::{Any, CorsLayer};
@@ -92,6 +92,7 @@ async fn main() {
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: watch::channel(0).0,
         current_control_next_seq: Arc::new(Mutex::new(0)),
+        current_live_snapshot_version: Arc::new(AtomicU64::new(0)),
     });
 
     let cors = CorsLayer::new()
@@ -166,6 +167,11 @@ async fn main() {
         .route(
             "/v1/live/current/fields/catalog",
             get(get_live_field_catalog),
+        )
+        // ── Scalar history (read-only, full history for charts) ───────
+        .route(
+            "/v1/live/current/scalars",
+            get(get_current_live_scalars),
         )
         .route(
             "/v1/live/current/fields/:quantity/vector",
@@ -550,6 +556,23 @@ async fn get_current_live_state(State(state): State<Arc<AppState>>) -> Result<Re
     get_current_live_bootstrap(State(state)).await
 }
 
+/// `GET /v1/live/current/scalars` — return the full scalar history for the
+/// current workspace.  The frontend fetches this once on tab open and then
+/// appends WS chart_state deltas.
+async fn get_current_live_scalars(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let rows = guard
+        .as_ref()
+        .map(|s| &s.scalar_rows[..])
+        .unwrap_or(&[]);
+    Ok(Json(serde_json::json!({
+        "scalar_rows": rows,
+        "scalar_rows_total": rows.len(),
+    })))
+}
+
 async fn get_current_display_selection(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CurrentDisplaySelection>, ApiError> {
@@ -732,7 +755,9 @@ async fn publish_current_live_state(
         _ => default_current_live_state(&req),
     };
     let previous_preview = next.preview.clone();
+    let apply_start = std::time::Instant::now();
     apply_current_live_publish(&mut next, req)?;
+    let apply_ms = apply_start.elapsed().as_micros();
     next.display_selection = display_selection.clone();
     next.preview_config = preview_config.clone();
     if next.scene_document.is_none() && !next.session.script_path.trim().is_empty() {
@@ -762,6 +787,7 @@ async fn publish_current_live_state(
             next.display_selection.selection.kind,
             fullmag_runner::DisplayKind::GlobalScalar
         ) && (has_live_state_update || has_scalar_row_update));
+    let preview_start = std::time::Instant::now();
     next.preview = if should_rebuild_preview {
         let rebuilt = build_preview_state(&next, &next.display_selection, &preview_config);
         if allow_previous_preview_fallback {
@@ -772,37 +798,93 @@ async fn publish_current_live_state(
     } else {
         previous_preview
     };
+    let preview_ms = preview_start.elapsed().as_micros();
+    let serialize_start = std::time::Instant::now();
     let session_state_messages = {
         // Compute delta: send only rows added since the last WS broadcast.
         // Track the cursor and quantities hash so we avoid re-sending stale data.
         let scalar_delta_start = next.scalar_rows_ws_cursor;
         let new_quantities_hash = quantities_hash(&next.quantities);
         let quantities_changed = new_quantities_hash != next.quantities_ws_hash;
+
+        // ── Sparse FEM mesh: only send when generation_id changed ──
+        let current_fem_gen = next
+            .fem_mesh
+            .as_ref()
+            .and_then(|m| m.generation_id.clone());
+        let fem_mesh_changed = current_fem_gen != next.ws_sent_fem_mesh_generation;
+
+        // ── Sparse preview: only generate vector_payload_id when fingerprint changed ──
+        let current_preview_fp = next.preview.as_ref().map(|p| p.fingerprint());
+        let preview_changed = current_preview_fp != next.ws_sent_preview_fingerprint;
+
+        // ── Sparse latest_fields: only send when content hash changed ──
+        let current_fields_hash = next.latest_fields.content_hash();
+        let latest_fields_changed = current_fields_hash != next.ws_sent_latest_fields_hash;
+
         let messages = build_current_live_ws_messages_delta(
             &state,
             &next,
             scalar_delta_start,
             quantities_changed,
+            fem_mesh_changed,
+            preview_changed,
+            latest_fields_changed,
         )?;
-        // Advance cursor and update hash BEFORE storing.
+        // Advance cursors and update fingerprints BEFORE storing.
         next.scalar_rows_ws_cursor = next.scalar_rows.len();
         if quantities_changed {
             next.quantities_ws_hash = new_quantities_hash;
         }
+        if fem_mesh_changed {
+            next.ws_sent_fem_mesh_generation = current_fem_gen;
+        }
+        if preview_changed {
+            next.ws_sent_preview_fingerprint = current_preview_fp;
+        }
+        if latest_fields_changed {
+            next.ws_sent_latest_fields_hash = current_fields_hash;
+        }
         messages
     };
-    let public_json = serialize_current_live_response(&next, true)?;
+    let serialize_ms = serialize_start.elapsed().as_micros();
+
+    // Lazy memoization: bump state version and only rebuild full JSON snapshot
+    // when requested by HTTP endpoints (bootstrap / state).
+    next.state_version = next.state_version.wrapping_add(1);
+    let current_state_version = next.state_version;
     *current = Some(next);
     drop(current);
-    *state.current_live_public_snapshot.write().await = Some(public_json);
+
+    // We still eagerly serialize the public snapshot for now so HTTP endpoints
+    // get a fresh value.  TODO(perf): make this truly lazy by deferring to
+    // the HTTP handler with version comparison.
+    let stored_version = state
+        .current_live_snapshot_version
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let snapshot_start = std::time::Instant::now();
+    if stored_version < current_state_version {
+        if let Ok(public_json) = serialize_current_live_response_from_state(&state).await {
+            *state.current_live_public_snapshot.write().await = Some(public_json);
+            state.current_live_snapshot_version.store(
+                current_state_version,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+    }
+    let snapshot_ms = snapshot_start.elapsed().as_micros();
 
     send_current_live_ws_messages(&state, session_state_messages);
 
-    let publish_elapsed_ms = publish_start.elapsed().as_millis();
-    if publish_elapsed_ms > 50 {
+    let publish_elapsed_us = publish_start.elapsed().as_micros();
+    if publish_elapsed_us > 50_000 {
         eprintln!(
-            "[fullmag-api] PERF: publish_current_live_state took {}ms (>50ms threshold)",
-            publish_elapsed_ms,
+            "[fullmag-api] PERF: publish took {:.1}ms (apply={:.1}ms preview={:.1}ms serialize={:.1}ms snapshot={:.1}ms)",
+            publish_elapsed_us as f64 / 1000.0,
+            apply_ms as f64 / 1000.0,
+            preview_ms as f64 / 1000.0,
+            serialize_ms as f64 / 1000.0,
+            snapshot_ms as f64 / 1000.0,
         );
     }
 
@@ -2767,6 +2849,10 @@ fn ws_preview_state(
                 cloned.vector_payload_id = vector_payload_id;
                 cloned.vector_field_values = None;
             }
+            // Strip `fem_mesh` from WS preview — the frontend must use the
+            // top-level `fem_mesh` field.  Sending it twice was a major
+            // bandwidth and memory waste.
+            cloned.fem_mesh = None;
             Some(PreviewState::Spatial(cloned))
         }
         Some(PreviewState::GlobalScalar(state)) => Some(PreviewState::GlobalScalar(state.clone())),
@@ -2847,7 +2933,8 @@ pub(crate) fn build_current_live_ws_messages(
 ) -> Result<Vec<CurrentLiveWireMessage>, ApiError> {
     // Non-delta path: send full scalar history and always include quantities.
     // Used for initial WS handshake and infrequent mutation endpoints.
-    build_current_live_ws_messages_delta(state, snapshot, 0, true)
+    // All sparse flags are true → send everything.
+    build_current_live_ws_messages_delta(state, snapshot, 0, true, true, true, true)
 }
 
 /// Build WS messages using a delta slice of scalar_rows.
@@ -2855,14 +2942,27 @@ pub(crate) fn build_current_live_ws_messages(
 /// `scalar_rows_delta_start` — index from which to slice `scalar_rows` for the WS
 /// event (0 = send full history).  `quantities_changed` controls whether
 /// quantities are included in the event (omit when unchanged to save bandwidth).
+///
+/// The `fem_mesh_changed`, `preview_changed`, and `latest_fields_changed` flags
+/// control whether the corresponding heavy payloads are included.  When `false`,
+/// the field is omitted from the JSON (sparse delta) and the frontend preserves
+/// the previously-received value.
 fn build_current_live_ws_messages_delta(
     state: &AppState,
     snapshot: &SessionStateResponse,
     scalar_rows_delta_start: usize,
     quantities_changed: bool,
+    fem_mesh_changed: bool,
+    preview_changed: bool,
+    latest_fields_changed: bool,
 ) -> Result<Vec<CurrentLiveWireMessage>, ApiError> {
-    let vector_payload_id = preview_vector_values(snapshot.preview.as_ref())
-        .map(|_| next_current_live_vector_payload_id(state));
+    // Only generate a binary vector payload when the preview fingerprint changed.
+    let vector_payload_id = if preview_changed {
+        preview_vector_values(snapshot.preview.as_ref())
+            .map(|_| next_current_live_vector_payload_id(state))
+    } else {
+        None
+    };
     let mut messages = Vec::new();
     if let (Some(payload_id), Some(values)) = (
         vector_payload_id,
@@ -2893,6 +2993,9 @@ fn build_current_live_ws_messages_delta(
             vector_payload_id,
             scalar_rows_delta_start,
             quantities_changed,
+            fem_mesh_changed,
+            preview_changed,
+            latest_fields_changed,
         )?,
     ));
     Ok(messages)
@@ -2914,6 +3017,21 @@ fn serialize_current_live_chart_event(
 }
 
 fn send_current_live_ws_messages(state: &AppState, messages: Vec<CurrentLiveWireMessage>) {
+    let mut total_text_bytes: usize = 0;
+    let mut total_binary_bytes: usize = 0;
+    for message in &messages {
+        match message {
+            CurrentLiveWireMessage::Text(t) => total_text_bytes += t.len(),
+            CurrentLiveWireMessage::Binary(b) => total_binary_bytes += b.len(),
+        }
+    }
+    if total_text_bytes + total_binary_bytes > 512 * 1024 {
+        eprintln!(
+            "[fullmag-api] PERF: WS broadcast payload {:.1}KB text + {:.1}KB binary",
+            total_text_bytes as f64 / 1024.0,
+            total_binary_bytes as f64 / 1024.0,
+        );
+    }
     for message in messages {
         let _ = state.current_live_events.send(message);
     }
@@ -2924,12 +3042,23 @@ fn serialize_current_live_session_event(
     vector_payload_id: Option<u32>,
     scalar_rows_delta_start: usize,
     quantities_changed: bool,
+    fem_mesh_changed: bool,
+    preview_changed: bool,
+    latest_fields_changed: bool,
 ) -> Result<String, ApiError> {
     let step_update_v2 = snapshot.build_step_update_v2();
     // Scalar rows are streamed via dedicated `chart_state` events to avoid
     // forcing full SessionState normalization on every chart tick.
     // Keep `scalar_rows_total` for compatibility and lightweight progress cues.
     let _ = scalar_rows_delta_start;
+
+    // Sparse: only include preview with binary reference when it actually changed.
+    let preview = if preview_changed {
+        ws_preview_state(snapshot.preview.as_ref(), vector_payload_id)
+    } else {
+        None
+    };
+
     serde_json::to_string(&CurrentLiveEvent::SessionState {
         state: SessionStateEventView {
             session_protocol_version: &snapshot.session_protocol_version,
@@ -2947,12 +3076,12 @@ fn serialize_current_live_session_event(
             scalar_rows_total: snapshot.scalar_rows.len(),
             engine_log: &snapshot.engine_log,
             quantities: quantities_changed.then_some(snapshot.quantities.as_slice()),
-            fem_mesh: snapshot.fem_mesh.as_ref(),
-            latest_fields: &snapshot.latest_fields,
+            fem_mesh: if fem_mesh_changed { snapshot.fem_mesh.as_ref() } else { None },
+            latest_fields: if latest_fields_changed { Some(&snapshot.latest_fields) } else { None },
             artifacts: &snapshot.artifacts,
             display_selection: &snapshot.display_selection,
             preview_config: &snapshot.preview_config,
-            preview: ws_preview_state(snapshot.preview.as_ref(), vector_payload_id),
+            preview,
             step_update_v2,
         },
     })
@@ -2988,6 +3117,19 @@ pub(crate) fn serialize_current_live_response(
         step_update_v2,
     })
     .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
+}
+
+/// Read from AppState's live state (read lock) and serialize the full public
+/// snapshot.  Used for lazy memoization instead of serializing inline during
+/// publish while holding the write lock.
+async fn serialize_current_live_response_from_state(
+    state: &AppState,
+) -> Result<String, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::internal("no live state to serialize".to_string()))?;
+    serialize_current_live_response(snapshot, true)
 }
 
 fn serialize_runtime_event(event: &RuntimeEventEnvelope) -> Result<String, ApiError> {

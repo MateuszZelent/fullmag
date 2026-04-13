@@ -97,6 +97,10 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             builder_adapter: value.builder_adapter,
             scalar_rows_ws_cursor: 0,
             quantities_ws_hash: 0,
+            ws_sent_fem_mesh_generation: None,
+            ws_sent_preview_fingerprint: None,
+            ws_sent_latest_fields_hash: 0,
+            state_version: 0,
         }
     }
 }

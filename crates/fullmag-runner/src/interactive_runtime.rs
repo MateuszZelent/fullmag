@@ -400,8 +400,13 @@ impl InteractiveFemPreviewRuntime {
                         .to_string(),
             });
         };
-        let engine = dispatch::resolve_fem_engine(problem)?;
-        Self::from_fem_plan(fem, engine)
+        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+        eprintln!(
+            "[fullmag-runner] interactive FEM engine: resolved_engine_id={} fallback={:?}",
+            dispatch::fem_engine_label(resolution.engine),
+            resolution.fallback.as_ref().map(|f| &f.reason),
+        );
+        Self::from_fem_plan(fem, resolution.engine)
     }
 
     fn from_fem_plan(plan: &FemPlanIR, engine: FemEngine) -> Result<Self, RunError> {
@@ -2033,15 +2038,29 @@ impl CpuInteractiveFemPreviewRuntime {
                 .map_err(|error| RunError {
                     message: format!("interactive FEM CPU step failed: {}", error),
                 })?;
+            let step_wall_us = wall_start.elapsed().as_micros();
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             self.total_steps += 1;
             if let Some(next) = report.suggested_next_dt {
                 dt = next;
             }
 
+            let observe_start = std::time::Instant::now();
             let observables =
                 fem_reference::observe_state(&self.problem, &self.state, &self.antenna_field)?;
+            let observe_us = observe_start.elapsed().as_micros();
             current_observables = observables.clone();
+
+            // Per-step telemetry: log every 100 steps if observe overhead is significant.
+            if self.total_steps % 100 == 0 && (observe_us > 100 || step_wall_us > 5000) {
+                eprintln!(
+                    "[fullmag-runner] FEM CPU step {} telemetry: integrate={:.1}ms observe={:.1}ms",
+                    self.total_steps,
+                    step_wall_us as f64 / 1000.0,
+                    observe_us as f64 / 1000.0,
+                );
+            }
+
             let total_stats = make_step_stats(
                 self.total_steps,
                 self.state.time_seconds,
@@ -2285,15 +2304,28 @@ impl CpuInteractiveFemPreviewRuntime {
                 .map_err(|error| RunError {
                     message: format!("interactive FEM CPU step failed: {}", error),
                 })?;
+            let step_wall_us = wall_start.elapsed().as_micros();
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             self.total_steps += 1;
             if let Some(next) = report.suggested_next_dt {
                 dt = next;
             }
 
+            let observe_start = std::time::Instant::now();
             let observables =
                 fem_reference::observe_state(&self.problem, &self.state, &self.antenna_field)?;
+            let observe_us = observe_start.elapsed().as_micros();
             current_observables = observables.clone();
+
+            if self.total_steps % 100 == 0 && (observe_us > 100 || step_wall_us > 5000) {
+                eprintln!(
+                    "[fullmag-runner] FEM CPU output-step {} telemetry: integrate={:.1}ms observe={:.1}ms",
+                    self.total_steps,
+                    step_wall_us as f64 / 1000.0,
+                    observe_us as f64 / 1000.0,
+                );
+            }
+
             let total_stats = make_step_stats(
                 self.total_steps,
                 self.state.time_seconds,

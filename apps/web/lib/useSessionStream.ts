@@ -255,11 +255,22 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
         if (event.data instanceof ArrayBuffer) {
           const p = decodePreviewBinaryFrame(event.data);
           if (!p) return;
-          pendingPreviewPayloadsRef.current.set(p.payloadId, p.vectorFieldValues);
+          // FIFO eviction: keep at most 4 pending payloads to prevent memory leak.
+          const pending = pendingPreviewPayloadsRef.current;
+          pending.set(p.payloadId, p.vectorFieldValues);
+          if (pending.size > 4) {
+            const oldest = pending.keys().next().value;
+            if (oldest !== undefined) pending.delete(oldest);
+          }
           const v2Meta = "version" in p && p.version === 2
             ? { quantityId: (p as any).quantityId as string, nComp: (p as any).nComp as number, grid: (p as any).grid as [number, number, number] }
             : undefined;
-          setState((prev) => attachPreviewBinaryPayload(prev, p.payloadId, p.vectorFieldValues, v2Meta));
+          setState((prev) => {
+            const next = attachPreviewBinaryPayload(prev, p.payloadId, p.vectorFieldValues, v2Meta);
+            // Clean up attached payload immediately so it doesn't leak.
+            if (next !== prev) pending.delete(p.payloadId);
+            return next;
+          });
           return;
         }
         try {
@@ -293,7 +304,18 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
               return prev;
             }
             if (next.live_state?.finished) (finishedRef as any).current = true;
-            return mergeSessionState(prev, next);
+            const merged = mergeSessionState(prev, next);
+            // Periodic diagnostics (every 100 session_state messages).
+            if (merged.live_state && (merged.live_state.step % 100 === 0)) {
+              recordFrontendDebugEvent("live-stream", "session_state_diagnostics", {
+                pendingPayloads: pendingPreviewPayloadsRef.current.size,
+                scalarRowsInMemory: merged.scalar_rows.length,
+                latestFieldsKeys: Object.keys(merged.latest_fields.frames).length,
+                hasFemMesh: Boolean(merged.fem_mesh),
+                step: merged.live_state.step,
+              });
+            }
+            return merged;
           });
         } catch (e) { console.warn("WS parse error", e); }
       };

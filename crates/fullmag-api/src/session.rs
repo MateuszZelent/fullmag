@@ -111,6 +111,10 @@ pub(crate) fn default_current_live_state(req: &CurrentLivePublishRequest) -> Ses
         builder_adapter: None,
         scalar_rows_ws_cursor: 0,
         quantities_ws_hash: 0,
+        ws_sent_fem_mesh_generation: None,
+        ws_sent_preview_fingerprint: None,
+        ws_sent_latest_fields_hash: 0,
+        state_version: 0,
     }
 }
 
@@ -118,6 +122,14 @@ pub(crate) fn apply_current_live_publish(
     current: &mut SessionStateResponse,
     req: CurrentLivePublishRequest,
 ) -> Result<(), ApiError> {
+    // Capture flags _before_ fields are moved out of `req`.
+    let has_metadata = req.metadata.is_some();
+    let has_latest_fields = req.latest_fields.is_some();
+    let has_preview_fields = req.preview_fields.is_some();
+    let has_run = req.run.is_some();
+    let has_scalar_row = req.latest_scalar_row.is_some();
+    let clear_preview_cache = req.clear_preview_cache;
+
     if let Some(session) = req.session {
         current.session = session;
     }
@@ -222,29 +234,44 @@ pub(crate) fn apply_current_live_publish(
 
     refresh_runtime_status(current);
 
-    let field_location = if current.fem_mesh.is_some() {
-        "node"
-    } else {
-        "cell"
-    };
-    current.quantities = build_quantities(
-        &current.latest_fields,
-        &current.preview_cache,
-        current.live_state.as_ref(),
-        current.run.as_ref(),
-        current.metadata.as_ref(),
-        &current.scalar_rows,
-        field_location,
-    );
+    // Only rebuild the quantities catalog when inputs that affect availability
+    // change.  On a typical per-step publish only a scalar row arrives, which
+    // does not alter the catalog — skipping this saves a surprisingly expensive
+    // iteration over the full catalog + capabilities each step.
+    let quantities_inputs_changed = has_metadata
+        || has_latest_fields
+        || has_preview_fields
+        || clear_preview_cache
+        || has_run
+        || current.quantities.is_empty()
+        || (has_scalar_row && current.scalar_rows.len() == 1);
+    if quantities_inputs_changed {
+        let field_location = if current.fem_mesh.is_some() {
+            "node"
+        } else {
+            "cell"
+        };
+        current.quantities = build_quantities(
+            &current.latest_fields,
+            &current.preview_cache,
+            current.live_state.as_ref(),
+            current.run.as_ref(),
+            current.metadata.as_ref(),
+            &current.scalar_rows,
+            field_location,
+        );
+    }
 
-    let artifact_dir = current_artifact_dir(current);
-    if current.artifacts.is_empty()
-        || current
-            .live_state
-            .as_ref()
-            .map(|state| state.latest_step.finished)
-            .unwrap_or(false)
-    {
+    // Only scan the artifact directory on run finish or when the artifacts list
+    // has never been populated and a run manifest just arrived.  Scanning the
+    // filesystem on every per-step publish was an unnecessary bottleneck.
+    let finished = current
+        .live_state
+        .as_ref()
+        .map(|state| state.latest_step.finished)
+        .unwrap_or(false);
+    if finished || (current.artifacts.is_empty() && has_run) {
+        let artifact_dir = current_artifact_dir(current);
         current.artifacts = read_artifacts_from_dir(artifact_dir.as_deref())?;
     }
 

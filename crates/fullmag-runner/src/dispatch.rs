@@ -121,6 +121,11 @@ fn fem_engine_id(engine: FemEngine) -> &'static str {
     }
 }
 
+/// Human-readable engine label for diagnostics/logging.
+pub(crate) fn fem_engine_label(engine: FemEngine) -> &'static str {
+    fem_engine_id(engine)
+}
+
 fn runtime_fallback(
     original_engine: &str,
     fallback_engine: &str,

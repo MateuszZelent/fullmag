@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Mutex, RwLock};
 
@@ -47,6 +47,9 @@ pub(crate) struct AppState {
     pub current_control_events: watch::Sender<u64>,
     /// Monotonic sequence generator for the current session control stream.
     pub current_control_next_seq: Arc<Mutex<u64>>,
+    /// State version at which the memoized `current_live_public_snapshot` was built.
+    /// When `state_version` on the live state exceeds this, the snapshot is stale.
+    pub current_live_snapshot_version: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone)]
@@ -369,6 +372,23 @@ pub(crate) struct SessionStateResponse {
     /// Fingerprint of quantities at last WS broadcast; skip re-sending when unchanged.
     #[serde(skip)]
     pub quantities_ws_hash: u64,
+    /// `generation_id` of the FEM mesh last broadcast over WS.
+    /// When unchanged, the WS event omits `fem_mesh` entirely (sparse delta).
+    #[serde(skip)]
+    pub ws_sent_fem_mesh_generation: Option<String>,
+    /// Fingerprint of the preview state last broadcast over WS.
+    /// Tuple of (quantity, component, config_revision, source_step).
+    /// When unchanged, no new `vector_payload_id` is generated.
+    #[serde(skip)]
+    pub ws_sent_preview_fingerprint: Option<(String, String, u64, u64)>,
+    /// Fingerprint of `latest_fields` keys+lengths last broadcast.
+    /// When unchanged, the WS event sends an empty `latest_fields` (sparse delta).
+    #[serde(skip)]
+    pub ws_sent_latest_fields_hash: u64,
+    /// Monotonic state version counter.  Bumped on every publish.
+    /// Used for lazy memoization of the public snapshot JSON.
+    #[serde(skip)]
+    pub state_version: u64,
 }
 
 impl SessionStateResponse {
@@ -427,8 +447,12 @@ pub(crate) struct SessionStateEventView<'a> {
     /// Only present when quantities changed since the last WS broadcast.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quantities: Option<&'a [QuantityDescriptor]>,
+    /// Only present when `generation_id` changed since the last WS broadcast (sparse delta).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_mesh: Option<&'a FemMeshPayload>,
-    pub latest_fields: &'a LatestFields,
+    /// Sparse: only present when content hash changed since the last WS broadcast.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_fields: Option<&'a LatestFields>,
     pub artifacts: &'a [ArtifactEntry],
     pub display_selection: &'a CurrentDisplaySelection,
     pub preview_config: &'a CurrentPreviewConfig,
@@ -507,6 +531,23 @@ impl LatestFields {
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
         self.0.iter()
     }
+
+    /// Cheap fingerprint over keys and per-key value lengths.
+    /// Useful for detecting whether the set of populated quantities changed.
+    pub(crate) fn content_hash(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        self.0.len().hash(&mut h);
+        for (key, value) in &self.0 {
+            key.hash(&mut h);
+            // Hash a size proxy: array length or serialized length for scalars.
+            if let Some(arr) = value.as_array() {
+                arr.len().hash(&mut h);
+            }
+        }
+        h.finish()
+    }
 }
 
 impl CachedPreviewFields {
@@ -528,6 +569,28 @@ impl CachedPreviewFields {
 pub(crate) enum PreviewState {
     Spatial(SpatialPreviewState),
     GlobalScalar(GlobalScalarPreviewState),
+}
+
+impl PreviewState {
+    /// Fingerprint tuple: (quantity, component, config_revision, source_step).
+    /// Used to detect whether the preview content has materially changed and
+    /// a new binary vector payload needs to be sent.
+    pub(crate) fn fingerprint(&self) -> (String, String, u64, u64) {
+        match self {
+            PreviewState::Spatial(s) => (
+                s.quantity.clone(),
+                s.component.clone(),
+                s.config_revision,
+                s.source_step,
+            ),
+            PreviewState::GlobalScalar(s) => (
+                s.quantity.clone(),
+                String::new(),
+                s.config_revision,
+                s.source_step,
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

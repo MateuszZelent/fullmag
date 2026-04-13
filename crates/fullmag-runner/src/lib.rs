@@ -424,9 +424,14 @@ pub fn run_problem_with_live_preview_interruptible(
             )
         }
         BackendPlanIR::Fem(fem) => {
-            let engine = dispatch::resolve_fem_engine(problem)?;
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+            eprintln!(
+                "[fullmag-runner] live FEM engine: resolved_engine_id={} fallback={:?}",
+                dispatch::fem_engine_label(resolution.engine),
+                resolution.fallback.as_ref().map(|f| &f.reason),
+            );
             dispatch::execute_fem(
-                engine,
+                resolution.engine,
                 fem,
                 until_seconds,
                 &plan.output_plan.outputs,
