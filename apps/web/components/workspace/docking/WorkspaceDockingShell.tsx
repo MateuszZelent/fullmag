@@ -128,8 +128,12 @@ export default function WorkspaceDockingShell() {
             effectiveTime={tp.effectiveTime}
             effectiveDt={tp.effectiveDt}
             effectiveDmDt={tp.effectiveDmDt}
+            effectiveHEff={tp.effectiveHEff}
             stepsPerSec={tp.stepsPerSec}
+            elapsed={tp.elapsed}
             hasSolverTelemetry={tp.hasSolverTelemetry}
+            eTotal={tp.effectiveETotal}
+            activityDetail={cmd.activity?.detail ?? null}
           />
         );
       }
@@ -152,6 +156,9 @@ export default function WorkspaceDockingShell() {
       tp.effectiveDt,
       tp.effectiveStep,
       tp.effectiveTime,
+      tp.effectiveHEff,
+      tp.effectiveETotal,
+      tp.elapsed,
       tp.hasSolverTelemetry,
       tp.stepsPerSec,
     ],

@@ -303,7 +303,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           accent: true,
           disabled: !ctx.can({ id: "solver.control", action: "run" }),
           action: () => ctx.run({ id: "solver.control", action: "run" }),
-          iconColor: "text-emerald-400",
+          iconColor: "text-cyan-400",
         },
         {
           id: "study-compute-pause",

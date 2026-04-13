@@ -1,5 +1,5 @@
 use crate::{
-    add, cross, dot, norm, normalized, scale, sub, AbmHistory, CellSize, EffectiveFieldObservables,
+    add, cross, dot, max_cross_norm, norm, normalized, scale, sub, AbmHistory, CellSize, EffectiveFieldObservables,
     EffectiveFieldTerms, EngineError, ExchangeLlgProblem, GridShape, LlgConfig, MaterialParameters,
     Result, RhsEvaluation, StepReport, TimeIntegrator, Vector3, MU0,
 };
@@ -2141,6 +2141,7 @@ impl FemLlgProblem {
         }
     }
 
+    #[allow(non_snake_case)]
     fn observe_vectors(&self, magnetization: &[Vector3]) -> Result<EffectiveFieldObservables> {
         let n = self.topology.n_nodes;
         let exchange_field = if self.terms.exchange {
@@ -2232,6 +2233,8 @@ impl FemLlgProblem {
         let total_energy_joules =
             exchange_energy_joules + demag_energy_joules + external_energy_joules;
 
+        let max_torque_Apm = max_cross_norm(magnetization, &effective_field);
+
         Ok(EffectiveFieldObservables {
             magnetization: magnetization.to_vec(),
             exchange_field,
@@ -2245,9 +2248,11 @@ impl FemLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude,
             max_rhs_amplitude,
+            max_torque_Apm,
         })
     }
 
+    #[allow(non_snake_case)]
     fn evaluate_rhs_summary_from_vectors(&self, magnetization: &[Vector3]) -> Result<RhsEvaluation> {
         let n = self.topology.n_nodes;
         let exchange_field = if self.terms.exchange {
@@ -2279,6 +2284,7 @@ impl FemLlgProblem {
         let max_demag_field_amplitude = max_norm(&demag_field);
         let mut max_effective_field_amplitude = 0.0f64;
         let mut max_rhs_amplitude = 0.0f64;
+        let mut max_torque_Apm = 0.0f64;
         for node in 0..n {
             let effective = add(
                 add(
@@ -2293,6 +2299,10 @@ impl FemLlgProblem {
             let h_norm = norm(effective);
             if h_norm > max_effective_field_amplitude {
                 max_effective_field_amplitude = h_norm;
+            }
+            let torque_norm = norm(cross(magnetization[node], effective));
+            if torque_norm > max_torque_Apm {
+                max_torque_Apm = torque_norm;
             }
             let rhs = if self.topology.magnetic_node_volumes[node] > 0.0 {
                 self.llg_rhs_from_field(magnetization[node], effective)
@@ -2313,6 +2323,7 @@ impl FemLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude,
             max_rhs_amplitude,
+            max_torque_Apm,
         })
     }
 

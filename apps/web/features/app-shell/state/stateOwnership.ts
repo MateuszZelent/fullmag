@@ -128,6 +128,8 @@ export const SESSION_RUNTIME_STATE_OWNERSHIP: StateOwnershipMap = {
   "currentStep":            "runtime_telemetry",
   "currentTime":            "runtime_telemetry",
   "maxTorque":              "runtime_telemetry",
+  "maxTorqueApm":           "runtime_telemetry",
+  "maxTorqueT":             "runtime_telemetry",
   "wallClockElapsed":       "runtime_telemetry",
   "meshBuildPhase":         "runtime_telemetry",
 } as const;

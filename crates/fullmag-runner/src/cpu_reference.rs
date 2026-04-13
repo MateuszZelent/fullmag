@@ -649,6 +649,8 @@ pub(crate) fn execute_reference_fdm(
                 max_dm_dt: report.max_rhs_amplitude,
                 max_h_eff: report.max_effective_field_amplitude,
                 max_h_demag: report.max_demag_field_amplitude,
+                max_torque_Apm: report.max_torque_Apm,
+                max_torque_T: report.max_torque_Apm * crate::MU0,
                 wall_time_ns: wall_elapsed,
                 ..StepStats::default()
             };
@@ -960,6 +962,7 @@ pub(crate) fn observe_state(
         max_dm_dt: observables.max_rhs_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
         max_h_demag: observables.max_demag_field_amplitude,
+        max_torque_Apm: observables.max_torque_Apm,
         per_object_scalars: std::collections::HashMap::new(),
     })
 }

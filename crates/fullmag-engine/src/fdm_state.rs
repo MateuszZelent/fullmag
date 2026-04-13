@@ -265,6 +265,7 @@ impl AbmHistory {
 // ── StepReport ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(non_snake_case)]
 pub struct StepReport {
     pub time_seconds: f64,
     pub dt_used: f64,
@@ -277,11 +278,13 @@ pub struct StepReport {
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
     pub max_rhs_amplitude: f64,
+    pub max_torque_Apm: f64,
 }
 
 // ── EffectiveFieldObservables ──────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(non_snake_case)]
 pub struct EffectiveFieldObservables {
     pub magnetization: Vec<Vector3>,
     pub exchange_field: Vec<Vector3>,
@@ -295,12 +298,14 @@ pub struct EffectiveFieldObservables {
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
     pub max_rhs_amplitude: f64,
+    pub max_torque_Apm: f64,
 }
 
 // ── RhsEvaluation ─────────────────────────────────────────────────────
 
 /// Lightweight observables from a single RHS evaluation.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(non_snake_case)]
 pub struct RhsEvaluation {
     pub exchange_energy_joules: f64,
     pub demag_energy_joules: f64,
@@ -309,6 +314,7 @@ pub struct RhsEvaluation {
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
     pub max_rhs_amplitude: f64,
+    pub max_torque_Apm: f64,
 }
 
 impl RhsEvaluation {
@@ -331,6 +337,7 @@ impl RhsEvaluation {
             max_effective_field_amplitude: self.max_effective_field_amplitude,
             max_demag_field_amplitude: self.max_demag_field_amplitude,
             max_rhs_amplitude: self.max_rhs_amplitude,
+            max_torque_Apm: self.max_torque_Apm,
         }
     }
 }

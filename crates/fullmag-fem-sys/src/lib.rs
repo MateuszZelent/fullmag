@@ -233,6 +233,7 @@ pub struct fullmag_fem_step_stats {
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
     pub max_rhs_amplitude: f64,
+    pub max_torque_Apm: f64,
     pub demag_linear_iterations: u32,
     pub demag_linear_residual: f64,
     pub wall_time_ns: u64,

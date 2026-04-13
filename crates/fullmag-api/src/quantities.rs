@@ -132,6 +132,8 @@ mod tests {
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
                 max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [2, 1, 1],
                 fem_mesh: None,

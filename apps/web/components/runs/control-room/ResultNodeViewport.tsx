@@ -54,7 +54,7 @@ export default function ResultNodeViewport({ mode }: ResultNodeViewportProps) {
           ? [activeNode.quantityId]
           : [];
 
-    if (yColumns.length === 0 || tp.scalarRows.length < 2) {
+    if (yColumns.length === 0 || tp.scalarRows.length < 1) {
       return (
         <div className="flex h-full items-center justify-center">
           <EmptyState

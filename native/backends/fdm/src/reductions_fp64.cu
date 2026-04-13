@@ -666,6 +666,71 @@ double reduce_max_norm_fp32(Context &ctx, const void *vx, const void *vy, const 
     return std::sqrt(max_norm_sq);
 }
 
+// ── max |a × b| (fused cross-product max-norm reduction) ──
+
+template <typename Scalar>
+__global__ void cross_max_norm_blocks_kernel(
+    const Scalar *ax, const Scalar *ay, const Scalar *az,
+    const Scalar *bx, const Scalar *by, const Scalar *bz,
+    double *block_out,
+    uint64_t n)
+{
+    __shared__ double shared[REDUCTION_BLOCK_SIZE];
+    uint64_t idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
+
+    double local_max = 0.0;
+    for (; idx < n; idx += stride) {
+        double a0 = to_f64(ax[idx]), a1 = to_f64(ay[idx]), a2 = to_f64(az[idx]);
+        double b0 = to_f64(bx[idx]), b1 = to_f64(by[idx]), b2 = to_f64(bz[idx]);
+        double cx = a1 * b2 - a2 * b1;
+        double cy = a2 * b0 - a0 * b2;
+        double cz = a0 * b1 - a1 * b0;
+        double norm_sq = cx * cx + cy * cy + cz * cz;
+        local_max = fmax(local_max, norm_sq);
+    }
+
+    shared[threadIdx.x] = local_max;
+    __syncthreads();
+
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset) {
+            shared[threadIdx.x] = fmax(shared[threadIdx.x], shared[threadIdx.x + offset]);
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+        block_out[blockIdx.x] = shared[0];
+    }
+}
+
+double reduce_max_cross_norm_fp64(Context &ctx,
+    const void *ax, const void *ay, const void *az,
+    const void *bx, const void *by, const void *bz,
+    uint64_t n) {
+    uint64_t blocks = launch_grid_for(n);
+    cross_max_norm_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
+        static_cast<const double *>(ax), static_cast<const double *>(ay), static_cast<const double *>(az),
+        static_cast<const double *>(bx), static_cast<const double *>(by), static_cast<const double *>(bz),
+        ctx.reduction_scratch, n);
+    double max_norm_sq = finalize_max_reduction(ctx.reduction_scratch, blocks);
+    return std::sqrt(max_norm_sq);
+}
+
+double reduce_max_cross_norm_fp32(Context &ctx,
+    const void *ax, const void *ay, const void *az,
+    const void *bx, const void *by, const void *bz,
+    uint64_t n) {
+    uint64_t blocks = launch_grid_for(n);
+    cross_max_norm_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
+        static_cast<const float *>(ax), static_cast<const float *>(ay), static_cast<const float *>(az),
+        static_cast<const float *>(bx), static_cast<const float *>(by), static_cast<const float *>(bz),
+        ctx.reduction_scratch, n);
+    double max_norm_sq = finalize_max_reduction(ctx.reduction_scratch, blocks);
+    return std::sqrt(max_norm_sq);
+}
+
 // Helper: dispatch exchange energy reduction to the correct kernel tier.
 template <typename Scalar>
 static double reduce_exchange_energy_dispatch(Context &ctx) {

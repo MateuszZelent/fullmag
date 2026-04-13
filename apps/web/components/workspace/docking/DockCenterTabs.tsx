@@ -62,6 +62,7 @@ function applyWorkspaceTabSelection(
     setWorkspaceMode: (next: WorkspaceMode | ((prev: WorkspaceMode) => WorkspaceMode)) => void;
     setViewMode: Dispatch<SetStateAction<"3D" | "2D" | "Mesh" | "Analyze">>;
     handleViewModeChange: (mode: string) => void;
+    effectiveViewMode: "3D" | "2D" | "Mesh" | "Analyze";
     requestPreviewQuantity: (quantity: string) => void;
     model: ReturnType<typeof useModel>;
   },
@@ -73,17 +74,23 @@ function applyWorkspaceTabSelection(
 
   if (tab.kind === "viewport-3d") {
     api.setWorkspaceMode(stage);
-    api.handleViewModeChange("3D");
+    if (api.effectiveViewMode !== "3D") {
+      api.handleViewModeChange("3D");
+    }
     return;
   }
   if (tab.kind === "viewport-2d") {
     api.setWorkspaceMode(stage);
-    api.handleViewModeChange("2D");
+    if (api.effectiveViewMode !== "2D") {
+      api.handleViewModeChange("2D");
+    }
     return;
   }
   if (tab.kind === "viewport-mesh") {
     api.setWorkspaceMode(stage);
-    api.handleViewModeChange("Mesh");
+    if (api.effectiveViewMode !== "Mesh") {
+      api.handleViewModeChange("Mesh");
+    }
     return;
   }
   if (tab.kind === "viewport-charts") {
@@ -95,7 +102,9 @@ function applyWorkspaceTabSelection(
     if (tab.payload?.quantityId) {
       api.requestPreviewQuantity(tab.payload.quantityId);
     }
-    api.setViewMode("3D");
+    if (api.effectiveViewMode !== "3D") {
+      api.setViewMode("3D");
+    }
     return;
   }
 
@@ -163,6 +172,7 @@ export default function DockCenterTabs() {
       setWorkspaceMode: vp.setWorkspaceMode,
       setViewMode: vp.setViewMode,
       handleViewModeChange: vp.handleViewModeChange,
+      effectiveViewMode: vp.effectiveViewMode,
       requestPreviewQuantity: vp.requestPreviewQuantity,
       model,
     });

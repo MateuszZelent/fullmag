@@ -315,6 +315,9 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
 
   /* ── handleViewModeChange ── */
   const handleViewModeChange = useCallback((mode: string) => {
+    if (mode === effectiveViewMode) {
+      return;
+    }
     if (mode === "Mesh") { if (isFemBackend) openFemMeshWorkspace("mesh"); startTransition(() => setViewMode("Mesh")); return; }
     if (mode === "2D") {
       startTransition(() => {
@@ -327,7 +330,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     if (mode === "3D" || mode === "2D" || mode === "Mesh" || mode === "Analyze") {
       activateWorkspaceTab(currentStage, coreTabIdForViewMode(mode as "3D" | "2D" | "Mesh" | "Analyze"));
     }
-  }, [activateWorkspaceTab, currentStage, isFemBackend, openFemMeshWorkspace]);
+  }, [activateWorkspaceTab, currentStage, effectiveViewMode, isFemBackend, openFemMeshWorkspace]);
 
   /* ── handleSimulationAction ── */
   const handleSimulationAction = useCallback((action: string) => {

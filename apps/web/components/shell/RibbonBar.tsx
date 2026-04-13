@@ -293,7 +293,7 @@ const RibbonActionTrigger = React.forwardRef<
         className={cn(
           "flex flex-col items-center",
           isPrimaryAction
-            ? "text-primary-foreground"
+            ? action.iconColor ?? "text-primary-foreground"
             : action.active
               ? "text-primary"
               : action.iconColor ?? "text-muted-foreground",
@@ -385,9 +385,20 @@ export default function RibbonBar(props: RibbonBarProps) {
       ? resolveRibbonGroups(ctxTabId, ctx)
       : [];
 
-    return contextualGroups.length > 0
+    const combined = contextualGroups.length > 0
       ? [...baseGroups, ...contextualGroups]
       : baseGroups;
+
+    // Deduplicate by group.id — last occurrence wins (contextual overrides base).
+    const seen = new Set<string>();
+    const deduped: typeof combined = [];
+    for (let i = combined.length - 1; i >= 0; i--) {
+      if (!seen.has(combined[i].id)) {
+        seen.add(combined[i].id);
+        deduped.unshift(combined[i]);
+      }
+    }
+    return deduped;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     activeTab,

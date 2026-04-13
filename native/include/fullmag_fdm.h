@@ -289,6 +289,7 @@ typedef struct {
     double   max_effective_field_amplitude;  /* max |H_eff| */
     double   max_demag_field_amplitude;      /* max |H_demag| */
     double   max_rhs_amplitude;              /* max |dm/dt| */
+    double   max_torque_Apm;                 /* max |m × H_eff|  (A/m) */
     double   suggested_next_dt;               /* adaptive optimal dt for next call */
     uint64_t wall_time_ns;
 } fullmag_fdm_step_stats;

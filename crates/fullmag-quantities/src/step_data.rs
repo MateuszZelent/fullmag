@@ -36,6 +36,7 @@ pub struct StepDiagnostics {
 /// Each entry corresponds to a `GlobalScalar` quantity from the catalog.
 /// The field names match the `scalar_metric_key` values in `QuantitySpec`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[allow(non_snake_case)]
 pub struct GlobalQuantityRow {
     pub step: u64,
     pub time: f64,
@@ -51,6 +52,10 @@ pub struct GlobalQuantityRow {
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
     pub max_h_demag: f64,
+    #[serde(default)]
+    pub max_torque_Apm: f64,
+    #[serde(default)]
+    pub max_torque_T: f64,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
 }
@@ -71,6 +76,8 @@ impl GlobalQuantityRow {
             "max_dm_dt" => Some(self.max_dm_dt),
             "max_h_eff" => Some(self.max_h_eff),
             "max_h_demag" => Some(self.max_h_demag),
+            "max_torque_Apm" => Some(self.max_torque_Apm),
+            "max_torque_T" => Some(self.max_torque_T),
             _ => None,
         }
     }

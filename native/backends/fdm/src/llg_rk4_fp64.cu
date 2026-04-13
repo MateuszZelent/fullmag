@@ -32,6 +32,9 @@ extern double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx);
 extern double reduce_cubic_anisotropy_energy_fp64(Context &ctx);
 extern double reduce_dmi_energy_fp64(Context &ctx);
 extern double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy, const void *vz, uint64_t n);
+extern double reduce_max_cross_norm_fp64(Context &ctx,
+    const void *ax, const void *ay, const void *az,
+    const void *bx, const void *by, const void *bz, uint64_t n);
 
 // Reuse the LLG RHS kernel declared in llg_fp64.cu
 extern __global__ void llg_rhs_fp64_kernel(
@@ -213,6 +216,11 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         ? reduce_max_norm_fp64(ctx, ctx.h_demag.x, ctx.h_demag.y, ctx.h_demag.z, ctx.cell_count)
         : 0.0;
 
+    // Max |m × H_eff| — native torque metric (A/m)
+    double max_torque = reduce_max_cross_norm_fp64(ctx,
+        ctx.m.x, ctx.m.y, ctx.m.z,
+        ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
+
     // Max |dm/dt| — compute RHS at final state
     llg_rhs_fp64_kernel<<<grid, 256>>>(
         static_cast<const double*>(ctx.m.x),
@@ -243,6 +251,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
     stats->max_effective_field_amplitude = max_h_eff;
     stats->max_demag_field_amplitude = max_h_demag;
     stats->max_rhs_amplitude = max_dm_dt;
+    stats->max_torque_Apm = max_torque;
 }
 
 } // namespace fdm

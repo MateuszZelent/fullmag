@@ -25,6 +25,9 @@ extern double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx);
 extern double reduce_cubic_anisotropy_energy_fp32(Context &ctx);
 extern double reduce_dmi_energy_fp32(Context &ctx);
 extern double reduce_max_norm_fp32(Context &ctx, const void *vx, const void *vy, const void *vz, uint64_t n);
+extern double reduce_max_cross_norm_fp32(Context &ctx,
+    const void *ax, const void *ay, const void *az,
+    const void *bx, const void *by, const void *bz, uint64_t n);
 
 extern __global__ void llg_rhs_fp32_kernel(
     const float * __restrict__ mx, const float * __restrict__ my, const float * __restrict__ mz,
@@ -313,6 +316,9 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             double max_h_demag = ctx.enable_demag
                 ? reduce_max_norm_fp32(ctx, ctx.h_demag.x, ctx.h_demag.y, ctx.h_demag.z, ctx.cell_count)
                 : 0.0;
+            double max_torque = reduce_max_cross_norm_fp32(ctx,
+                ctx.m.x, ctx.m.y, ctx.m.z,
+                ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
             double max_dm_dt = reduce_max_norm_fp32(ctx, ctx.k_fsal.x, ctx.k_fsal.y, ctx.k_fsal.z, ctx.cell_count);
             cudaDeviceSynchronize();
 
@@ -329,6 +335,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             stats->max_effective_field_amplitude = max_h_eff;
             stats->max_demag_field_amplitude = max_h_demag;
             stats->max_rhs_amplitude = max_dm_dt;
+            stats->max_torque_Apm = max_torque;
             stats->suggested_next_dt = dt_next;
             return;
         }

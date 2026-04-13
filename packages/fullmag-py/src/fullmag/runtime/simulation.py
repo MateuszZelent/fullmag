@@ -29,6 +29,8 @@ class StepStats:
     e_ani: float = 0.0
     e_dmi: float = 0.0
     max_h_demag: float = 0.0
+    max_torque_Apm: float = 0.0
+    max_torque_T: float = 0.0
     exchange_wall_time_ns: int = 0
     demag_wall_time_ns: int = 0
     rhs_wall_time_ns: int = 0
@@ -216,6 +218,8 @@ def result_from_run_payload(
                 e_ani=s.get("e_ani", 0.0),
                 e_dmi=s.get("e_dmi", 0.0),
                 max_h_demag=s.get("max_h_demag", 0.0),
+                max_torque_Apm=s.get("max_torque_Apm", 0.0),
+                max_torque_T=s.get("max_torque_T", 0.0),
                 exchange_wall_time_ns=s.get("exchange_wall_time_ns", 0),
                 demag_wall_time_ns=s.get("demag_wall_time_ns", 0),
                 rhs_wall_time_ns=s.get("rhs_wall_time_ns", 0),
@@ -255,6 +259,8 @@ _SCALAR_QUANTITY_ALIASES: Mapping[str, str] = {
     "max_dm_dt": "max_dm_dt",
     "max_h_eff": "max_h_eff",
     "max_h_demag": "max_h_demag",
+    "max_torque_Apm": "max_torque_Apm",
+    "max_torque_T": "max_torque_T",
 }
 
 _SCALAR_QUANTITY_DESCRIPTORS: Mapping[str, ScalarQuantityDescriptor] = {
@@ -270,6 +276,8 @@ _SCALAR_QUANTITY_DESCRIPTORS: Mapping[str, ScalarQuantityDescriptor] = {
     "max_dm_dt": ScalarQuantityDescriptor("dm_dt", "max |dm/dt|", "1/s", "max_dm_dt", kind="derived"),
     "max_h_eff": ScalarQuantityDescriptor("H_eff", "max |H_eff|", "A/m", "max_h_eff", kind="derived"),
     "max_h_demag": ScalarQuantityDescriptor("H_demag", "max |H_demag|", "A/m", "max_h_demag", kind="derived"),
+    "max_torque_Apm": ScalarQuantityDescriptor("torque", "max |m×H_eff|", "A/m", "max_torque_Apm", kind="derived"),
+    "max_torque_T": ScalarQuantityDescriptor("torque", "max |m×B_eff|", "T", "max_torque_T", kind="derived"),
 }
 
 _SCALAR_QUANTITY_ORDER: tuple[str, ...] = (
@@ -285,6 +293,8 @@ _SCALAR_QUANTITY_ORDER: tuple[str, ...] = (
     "max_dm_dt",
     "max_h_eff",
     "max_h_demag",
+    "max_torque_Apm",
+    "max_torque_T",
 )
 
 

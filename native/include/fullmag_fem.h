@@ -205,6 +205,7 @@ typedef struct {
     double max_effective_field_amplitude;
     double max_demag_field_amplitude;
     double max_rhs_amplitude;
+    double max_torque_Apm;                 /* max |m × H_eff|  (A/m) */
     uint32_t demag_linear_iterations;
     double demag_linear_residual;
     uint64_t wall_time_ns;

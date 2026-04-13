@@ -52,6 +52,16 @@ extern double reduce_max_norm_fp32(
     const void *vy,
     const void *vz,
     uint64_t n);
+extern double reduce_max_cross_norm_fp64(
+    Context &ctx,
+    const void *ax, const void *ay, const void *az,
+    const void *bx, const void *by, const void *bz,
+    uint64_t n);
+extern double reduce_max_cross_norm_fp32(
+    Context &ctx,
+    const void *ax, const void *ay, const void *az,
+    const void *bx, const void *by, const void *bz,
+    uint64_t n);
 extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 } }
 
@@ -113,6 +123,11 @@ bool fill_current_stats(Context &ctx, fullmag_fdm_step_stats *out_stats) {
                 ctx.h_demag.z,
                 ctx.cell_count)
             : 0.0;
+        out_stats->max_torque_Apm = reduce_max_cross_norm_fp64(
+            ctx,
+            ctx.m.x, ctx.m.y, ctx.m.z,
+            ctx.work.x, ctx.work.y, ctx.work.z,
+            ctx.cell_count);
     } else {
         out_stats->exchange_energy_joules =
             ctx.enable_exchange ? launch_exchange_energy_fp32(ctx) : 0.0;
@@ -132,6 +147,11 @@ bool fill_current_stats(Context &ctx, fullmag_fdm_step_stats *out_stats) {
                 ctx.h_demag.z,
                 ctx.cell_count)
             : 0.0;
+        out_stats->max_torque_Apm = reduce_max_cross_norm_fp32(
+            ctx,
+            ctx.m.x, ctx.m.y, ctx.m.z,
+            ctx.work.x, ctx.work.y, ctx.work.z,
+            ctx.cell_count);
     }
 
     out_stats->total_energy_joules =

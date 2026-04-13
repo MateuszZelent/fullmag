@@ -69,6 +69,8 @@ export interface LiveState {
   max_dm_dt: number;
   max_h_eff: number;
   max_h_demag: number;
+  max_torque_Apm?: number;
+  max_torque_T?: number;
   wall_time_ns: number;
   grid: [number, number, number];
   preview_grid: [number, number, number] | null;
@@ -207,6 +209,8 @@ export interface ScalarRow {
   max_dm_dt: number;
   max_h_eff: number;
   max_h_demag: number;
+  max_torque_Apm?: number;
+  max_torque_T?: number;
 }
 
 export interface EngineLogEntry {
@@ -1229,6 +1233,8 @@ export interface GlobalQuantityRow {
   max_dm_dt: number;
   max_h_eff: number;
   max_h_demag: number;
+  max_torque_Apm?: number;
+  max_torque_T?: number;
   per_object_scalars?: Record<string, Record<string, number>>;
 }
 

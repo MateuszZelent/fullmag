@@ -63,7 +63,7 @@ pub use fdm_types::{
 };
 
 // ── Vector math utilities ─────────────────────────────────────────────
-pub use vector::{add, cross, dot, max_norm, norm, normalized, scale, squared_norm, sub};
+pub use vector::{add, cross, dot, max_cross_norm, max_norm, norm, normalized, scale, squared_norm, sub};
 
 // ── VectorFieldSoA (kept in lib.rs — small, frequently referenced) ────
 /// Structure-of-Arrays layout for 3D vector fields.

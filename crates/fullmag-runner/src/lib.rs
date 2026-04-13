@@ -7,6 +7,9 @@
 //! - `cpu_reference` — CPU reference execution path (calibration baseline)
 //! - `dispatch`      — engine selection (CPU now, CUDA in Phase 2)
 
+/// Vacuum permeability μ₀ in T·m/A.
+pub const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
+
 mod antenna_fields;
 pub mod artifact_pipeline;
 mod artifacts;

@@ -78,6 +78,7 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude: observables.max_effective_field_amplitude,
             max_demag_field_amplitude: observables.max_demag_field_amplitude,
             max_rhs_amplitude: observables.max_rhs_amplitude,
+            max_torque_Apm: observables.max_torque_Apm,
         })
     }
 
@@ -893,6 +894,7 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude: observables.max_effective_field_amplitude,
             max_demag_field_amplitude: observables.max_demag_field_amplitude,
             max_rhs_amplitude: observables.max_rhs_amplitude,
+            max_torque_Apm: observables.max_torque_Apm,
         }
     }
 

@@ -36,6 +36,7 @@ study.build_domain_mesh()
 study.solver(integrator="rk45", max_error=1e-06, gamma=233728.481992)
 
 # Outputs
+study.tableautosave(1e-14, quantities=("time", "mx", "E_total"))
 # study.save("time", every=1e-11)
 # study.save("step", every=1e-11)
 # study.save("solver_dt", every=1e-11)
@@ -47,4 +48,10 @@ study.solver(integrator="rk45", max_error=1e-06, gamma=233728.481992)
 # study.save("max_h_eff", every=1e-11)
 
 # Stages
-study.stages.add_relax(max_steps=25_000, tol=1e-6, algorithm="llg_overdamped")
+study.stages.add_relax(max_steps=8_000, tol=1e-6, algorithm="llg_overdamped")
+study.stages.add_eigenmodes(
+    count=20,
+    target="lowest",
+    include_demag=True,
+    equilibrium_source="relax",
+)

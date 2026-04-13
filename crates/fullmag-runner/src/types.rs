@@ -99,6 +99,13 @@ pub struct StepStats {
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
     pub max_h_demag: f64,
+    /// Native max |m × H_eff| torque metric in A/m.
+    #[serde(default)]
+    pub max_torque_Apm: f64,
+    /// max |m × B_eff| = μ₀ · max_torque_Apm, in Tesla.
+    /// Comparable to mumax MaxTorque.
+    #[serde(default)]
+    pub max_torque_T: f64,
     pub wall_time_ns: u64,
     #[serde(default)]
     pub exchange_wall_time_ns: u64,
@@ -145,6 +152,8 @@ impl Default for StepStats {
             max_dm_dt: 0.0,
             max_h_eff: 0.0,
             max_h_demag: 0.0,
+            max_torque_Apm: 0.0,
+            max_torque_T: 0.0,
             wall_time_ns: 0,
             exchange_wall_time_ns: 0,
             demag_wall_time_ns: 0,
@@ -201,6 +210,8 @@ impl StepStats {
             max_dm_dt: self.max_dm_dt,
             max_h_eff: self.max_h_eff,
             max_h_demag: self.max_h_demag,
+            max_torque_Apm: self.max_torque_Apm,
+            max_torque_T: self.max_torque_T,
             per_object_scalars: self.per_object_scalars.clone(),
         }
     }
@@ -836,6 +847,7 @@ pub(crate) struct StateObservables {
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
     pub max_h_demag: f64,
+    pub max_torque_Apm: f64,
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
 }
 

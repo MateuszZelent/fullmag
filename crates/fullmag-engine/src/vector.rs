@@ -36,6 +36,25 @@ pub fn max_norm(vectors: &[Vector3]) -> f64 {
     }
 }
 
+/// Maximum Euclidean norm of the cross product a×b across paired slices.
+pub fn max_cross_norm(a: &[Vector3], b: &[Vector3]) -> f64 {
+    debug_assert_eq!(a.len(), b.len());
+    #[cfg(feature = "parallel")]
+    {
+        a.par_iter()
+            .zip(b.par_iter())
+            .map(|(ai, bi)| norm(cross(*ai, *bi)))
+            .reduce(|| 0.0, f64::max)
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        a.iter()
+            .zip(b.iter())
+            .map(|(ai, bi)| norm(cross(*ai, *bi)))
+            .fold(0.0, f64::max)
+    }
+}
+
 /// Component-wise addition.
 pub fn add(left: Vector3, right: Vector3) -> Vector3 {
     [left[0] + right[0], left[1] + right[1], left[2] + right[2]]

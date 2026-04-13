@@ -453,6 +453,7 @@ fn observe_multilayer(
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
+    let mut max_torque_Apm: f64 = 0.0;
     let mut per_object_scalars: std::collections::HashMap<
         String,
         std::collections::HashMap<String, f64>,
@@ -522,6 +523,19 @@ fn observe_multilayer(
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&local_effective));
         max_h_demag = max_h_demag.max(max_norm(&local_demag));
+        max_torque_Apm = max_torque_Apm.max(
+            state
+                .magnetization()
+                .iter()
+                .zip(local_effective.iter())
+                .map(|(m, h)| {
+                    let cx = m[1] * h[2] - m[2] * h[1];
+                    let cy = m[2] * h[0] - m[0] * h[2];
+                    let cz = m[0] * h[1] - m[1] * h[0];
+                    (cx * cx + cy * cy + cz * cz).sqrt()
+                })
+                .fold(0.0_f64, f64::max),
+        );
 
         let [mx, my, mz] =
             crate::scalar_metrics::average_magnetization_components(state.magnetization());
@@ -579,6 +593,7 @@ fn observe_multilayer(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
+        max_torque_Apm,
         per_object_scalars,
     })
 }

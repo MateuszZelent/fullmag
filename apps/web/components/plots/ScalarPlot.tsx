@@ -50,6 +50,10 @@ interface Props {
   quantities?: QuantityDescriptor[];
   xColumn?: string;
   yColumns?: string[];
+  /** Override per-series colors (index-aligned with yColumns). */
+  seriesColors?: string[];
+  /** Optional chart title rendered by Plotly. */
+  chartTitle?: string;
 }
 
 // ─── Component ──────────────────────────────────────────────────────
@@ -59,6 +63,8 @@ const ScalarPlot = memo(function ScalarPlot({
   quantities = [],
   xColumn = "time",
   yColumns = DEFAULT_Y_COLUMNS,
+  seriesColors,
+  chartTitle,
 }: Props) {
   const xMeta = useMemo(
     () => scalarSeriesList([xColumn], quantities)[0] ?? { key: xColumn, label: xColumn, unit: "", kind: "diagnostic" as const },
@@ -75,15 +81,21 @@ const ScalarPlot = memo(function ScalarPlot({
 
   // Build Plotly traces (memoised on rows + column identity)
   const traces = useMemo(() => {
+    const mode = rows.length > 1 ? ("lines" as const) : ("markers" as const);
+
     return seriesMeta.map((series, i) => ({
       x: rows.map((r) => accessor(r, xColumn)),
       y: rows.map((r) => accessor(r, series.key)),
       type: "scattergl" as const,
-      mode: "lines" as const,
+      mode,
       name: buildAxisLabel(series),
       line: {
-        color: SERIES_COLORS[i % SERIES_COLORS.length],
+        color: seriesColors?.[i] ?? SERIES_COLORS[i % SERIES_COLORS.length],
         width: 1.5,
+      },
+      marker: {
+        color: seriesColors?.[i] ?? SERIES_COLORS[i % SERIES_COLORS.length],
+        size: rows.length > 1 ? 0 : 7,
       },
       hovertemplate: magnetizationOnly
         ? `%{y:.4f}<extra>${buildAxisLabel(series)}</extra>`
@@ -100,7 +112,10 @@ const ScalarPlot = memo(function ScalarPlot({
         size: 11,
         color: THEME.text,
       },
-      margin: { l: 72, r: 16, t: 8, b: 48 },
+      title: chartTitle
+        ? { text: chartTitle, font: { size: 13, color: THEME.text }, x: 0.5, xanchor: "center" as const, y: 0.98 }
+        : undefined,
+      margin: { l: 72, r: 16, t: chartTitle ? 32 : 8, b: 48 },
       xaxis: {
         title: { text: xLabel, standoff: 8 },
         color: THEME.text,
@@ -144,7 +159,7 @@ const ScalarPlot = memo(function ScalarPlot({
         orientation: "v",
       },
     }),
-    [xLabel, magnetizationOnly, seriesMeta],
+    [xLabel, magnetizationOnly, seriesMeta, chartTitle],
   );
 
   const config = useMemo(

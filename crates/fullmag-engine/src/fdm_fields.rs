@@ -9,7 +9,7 @@ use crate::fdm_fft::{combine_fields_4, padded_index, zero_vectors};
 use crate::fdm_types::{neighbor_index, AxisBoundary};
 use crate::magnetoelastic;
 use crate::telemetry::{StepTelemetry, sections};
-use crate::vector::{add, cross, dot, max_norm, norm, scale, squared_norm, sub};
+use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, squared_norm, sub};
 use crate::{
     EffectiveFieldObservables, ExchangeLlgProblem, FftWorkspace, RhsEvaluation,
     SlonczewskiSttConfig, SotConfig, Vector3, ZhangLiSttConfig, MU0,
@@ -100,6 +100,7 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude,
             max_rhs_amplitude,
+            max_torque_Apm: max_cross_norm(magnetization, &effective_field),
         }
     }
 
@@ -1680,6 +1681,7 @@ impl ExchangeLlgProblem {
     ///
     /// Uses `h_scratch` for individual field components to compute decomposed
     /// energies, accumulates into `h_eff`, then computes RHS into `rhs_out`.
+    #[allow(non_snake_case)]
     pub(crate) fn compute_step_observables_zero_alloc(
         &self,
         magnetization: &[Vector3],
@@ -1790,6 +1792,7 @@ impl ExchangeLlgProblem {
         }
 
         let max_rhs_amplitude = max_norm(&rhs_out[..n]);
+        let max_torque_Apm = max_cross_norm(&magnetization[..n], &h_eff[..n]);
 
         RhsEvaluation {
             exchange_energy_joules,
@@ -1803,6 +1806,7 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude,
             max_rhs_amplitude,
+            max_torque_Apm,
         }
     }
 
@@ -1811,7 +1815,7 @@ impl ExchangeLlgProblem {
     ///
     /// This avoids the extra scratch-buffer passes needed to separate
     /// exchange / demag / external energy contributions.
-    #[allow(dead_code)]
+    #[allow(dead_code, non_snake_case)]
     pub(crate) fn compute_step_observables_minimal(
         &self,
         magnetization: &[Vector3],
@@ -1855,6 +1859,7 @@ impl ExchangeLlgProblem {
         }
 
         let max_rhs_amplitude = max_norm(&rhs_out[..n]);
+        let max_torque_Apm = max_cross_norm(&magnetization[..n], &h_eff[..n]);
 
         RhsEvaluation {
             exchange_energy_joules: 0.0,
@@ -1864,6 +1869,7 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude: 0.0,
             max_rhs_amplitude,
+            max_torque_Apm,
         }
     }
 
@@ -2143,6 +2149,7 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude: max_norm(&effective_field),
             max_demag_field_amplitude: max_norm(&demag_field),
             max_rhs_amplitude: max_norm(&rhs),
+            max_torque_Apm: max_cross_norm(magnetization, &effective_field),
         };
 
         (rhs, eval)

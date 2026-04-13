@@ -14,7 +14,7 @@ import type { ActivityInfo } from "../runs/control-room/types";
 
 /* ── Types ─────────────────────────────────────────────────── */
 
-type ConsoleTab = "live" | "log" | "energy" | "charts" | "table" | "progress" | "perf";
+type ConsoleTab = "log" | "energy" | "charts" | "table" | "progress" | "perf";
 export type ChartPreset = "energy" | "magnetization" | "convergence" | "timestep" | "all";
 export interface ChartPresetConfig { label: string; yColumns: string[] }
 
@@ -69,7 +69,6 @@ function formatBytes(bytes: number): string {
 
 const TABS: { value: ConsoleTab; label: string }[] = [
   { value: "progress", label: "Progress" },
-  { value: "live", label: "Live" },
   { value: "log", label: "Log" },
 ];
 
@@ -92,7 +91,7 @@ export default function EngineConsole({
   meshWorkspace = null,
 }: EngineConsoleProps) {
   const convergenceThreshold = convergenceThresholdProp ?? DEFAULT_CONVERGENCE_THRESHOLD;
-  const [activeTab, setActiveTab] = useState<ConsoleTab>("progress");
+  const [activeTab, setActiveTab] = useState<ConsoleTab>("log");
   const [chartPreset, setChartPreset] = useState<ChartPreset>("energy");
   /* Note: we keep state manually for backwards compat; Radix Tabs controlled via value/onValueChange */
   const logContainerRef = useRef<HTMLDivElement>(null);
@@ -235,88 +234,6 @@ export default function EngineConsole({
 
       {/* ─── Tab content ─────────────────────────────── */}
       <div className="min-h-[120px] flex-1 flex flex-col focus-visible:outline-none">
-        <TabsContent value="live" className="min-h-0 flex-1 flex flex-col focus-visible:outline-none data-[state=inactive]:hidden outline-none">
-          <>
-            {/* Live telemetry grid */}
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2 p-3">
-              <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-primary">
-                <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">Status</span>
-                <span className={cn("font-mono text-sm font-semibold text-foreground", statusValueClassName)}>
-                  {workspaceStatus}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-sky-500">
-                <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">Step</span>
-                <span className="font-mono text-sm font-semibold text-foreground">
-                  {fmtStepValue(liveState?.step ?? run?.total_steps ?? 0, hasSolverTelemetry)}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-violet-500">
-                <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">Sim Time</span>
-                <span className="font-mono text-sm font-semibold text-foreground">
-                  {fmtTimeOrDash(liveState?.time ?? run?.final_time ?? 0, hasSolverTelemetry)}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-amber-500">
-                <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">Δt</span>
-                <span className="font-mono text-sm font-semibold text-foreground">
-                  {fmtSIOrDash(liveState?.dt ?? 0, "s", hasSolverTelemetry)}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-emerald-500">
-                <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">max dm/dt</span>
-                <span
-                  className={cn("font-mono text-sm font-semibold text-foreground", hasSolverTelemetry && (liveState?.max_dm_dt ?? 0) < convergenceThreshold && "text-emerald-500")}
-                >
-                  {fmtExpOrDash(liveState?.max_dm_dt ?? 0, hasSolverTelemetry)}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-rose-500">
-                <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">max |H_eff|</span>
-                <span className="font-mono text-sm font-semibold text-foreground">
-                  {fmtExpOrDash(liveState?.max_h_eff ?? 0, hasSolverTelemetry)}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-slate-400">
-                <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">Elapsed</span>
-                <span className="font-mono text-sm font-semibold text-foreground">{fmtDuration(elapsed)}</span>
-              </div>
-              <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/20 shadow-sm border-l-[3px] border-l-orange-500">
-                <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">Throughput</span>
-                <span className="font-mono text-sm font-semibold text-foreground">{stepsPerSec > 0 ? `${stepsPerSec.toFixed(1)} st/s` : "—"}</span>
-              </div>
-            </div>
-            {!hasSolverTelemetry && (
-              <div className="px-3 pb-3 text-sm text-muted-foreground font-medium">
-                {solverNotStartedMessage}
-              </div>
-            )}
-
-            {/* Convergence bars */}
-            <div className="px-3 py-2 flex flex-col gap-2">
-              <div className="grid grid-cols-[100px_1fr_70px] gap-2 items-center py-1">
-                <span className="text-xs font-semibold text-muted-foreground">Convergence</span>
-                <progress
-                  className="w-full h-1.5 rounded-full overflow-hidden bg-muted appearance-none fill-primary [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary data-[tone=success]:[&::-webkit-progress-value]:bg-emerald-500 data-[tone=warn]:[&::-webkit-progress-value]:bg-amber-500 data-[tone=danger]:[&::-webkit-progress-value]:bg-destructive"
-                  value={convergenceDisplay}
-                  max={100}
-                  data-tone={convergenceTone}
-                />
-                <span className="font-mono text-[0.7rem] font-semibold text-muted-foreground text-right">
-                  {convergenceDisplay.toFixed(0)}%
-                </span>
-              </div>
-              <div className="grid grid-cols-[100px_1fr_70px] gap-2 items-center py-1">
-                <span className="text-xs font-semibold text-muted-foreground">Memory est.</span>
-                <progress className="w-full h-1.5 rounded-full overflow-hidden bg-muted appearance-none fill-primary [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary data-[tone=success]:[&::-webkit-progress-value]:bg-emerald-500 data-[tone=warn]:[&::-webkit-progress-value]:bg-amber-500 data-[tone=danger]:[&::-webkit-progress-value]:bg-destructive" value={memoryEstimate} max={100} />
-                <span className="font-mono text-[0.7rem] font-semibold text-muted-foreground text-right">
-                  {artifacts.length} files
-                </span>
-              </div>
-            </div>
-          </>
-        </TabsContent>
-
         <TabsContent value="log" className="min-h-0 flex-1 flex flex-col focus-visible:outline-none data-[state=inactive]:hidden outline-none">
           <div
             className="max-h-[360px] overflow-y-auto py-2 pr-1 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-muted-foreground/20"
@@ -426,9 +343,9 @@ export default function EngineConsole({
                 </button>
               ))}
             </div>
-            {scalarRows.length < 2 ? (
+            {scalarRows.length < 1 ? (
               <div className="p-6 text-sm text-muted-foreground text-center flex-1 flex items-center justify-center font-medium">
-                Waiting for at least 2 data points to render chart…
+                Waiting for solver telemetry…
               </div>
             ) : (
               <div className="flex-1 min-h-[180px] relative p-2">
@@ -513,6 +430,12 @@ export default function EngineConsole({
                   className={cn("font-mono text-sm font-semibold text-foreground", hasSolverTelemetry && (liveState?.max_dm_dt ?? 1) < convergenceThreshold && "text-emerald-500")}
                 >
                   {fmtExpOrDash(liveState?.max_dm_dt ?? 0, hasSolverTelemetry)}
+                </span>
+              </div>
+              <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/30 border border-border/40 shadow-sm">
+                <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">max torque [T]</span>
+                <span className="font-mono text-sm font-semibold text-foreground">
+                  {fmtExpOrDash(liveState?.max_torque_T ?? 0, hasSolverTelemetry)}
                 </span>
               </div>
               <div className="flex flex-col gap-1 p-2.5 rounded-md bg-card/30 border border-border/40 shadow-sm">

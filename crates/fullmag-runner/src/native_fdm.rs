@@ -571,6 +571,8 @@ impl NativeFdmBackend {
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
             max_dm_dt: stats.max_rhs_amplitude,
+            max_torque_Apm: stats.max_torque_Apm,
+            max_torque_T: stats.max_torque_Apm * crate::MU0,
             wall_time_ns: stats.wall_time_ns,
             dt_suggested: if stats.suggested_next_dt > 0.0 {
                 Some(stats.suggested_next_dt)

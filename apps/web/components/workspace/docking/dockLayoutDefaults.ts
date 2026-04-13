@@ -69,7 +69,7 @@ function bottomTabset(): IJsonTabSetNode {
       {
         type: "tab",
         id: "dock-bottom",
-        name: "Utility",
+        name: "Telemetry",
         component: "dock-bottom",
         enableClose: false,
         enableDrag: false,
@@ -152,7 +152,7 @@ function tabletLayout(): IJsonModel {
           {
             type: "tab",
             id: "dock-bottom",
-            name: "Utility",
+            name: "Telemetry",
             component: "dock-bottom",
             enableClose: false,
             enableDrag: false,
@@ -225,7 +225,7 @@ function mobileLayout(): IJsonModel {
           {
             type: "tab",
             id: "dock-bottom",
-            name: "Utility",
+            name: "Telemetry",
             component: "dock-bottom",
             enableClose: false,
             enableDrag: false,

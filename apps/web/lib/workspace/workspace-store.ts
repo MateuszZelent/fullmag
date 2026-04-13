@@ -351,7 +351,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
     launcherVisible: false,
     launchIntent: null,
     rightInspectorOpen: false,
-    rightInspectorTab: "selected-submeshes",
+    rightInspectorTab: "console",
     settingsOpen: false,
     physicsDocsOpen: false,
     physicsDocsTopic: null,

@@ -141,14 +141,14 @@ pub(crate) fn write_scalars_csv(path: &Path, steps: &[StepStats]) -> std::io::Re
 pub(crate) fn write_scalars_csv_header(writer: &mut impl Write) -> std::io::Result<()> {
     writeln!(
         writer,
-        "step,time,solver_dt,mx,my,mz,E_ex,E_demag,E_ext,E_ani,E_dmi,E_total,max_dm_dt,max_h_eff,max_h_demag"
+        "step,time,solver_dt,mx,my,mz,E_ex,E_demag,E_ext,E_ani,E_dmi,E_total,max_dm_dt,max_h_eff,max_h_demag,max_torque_Apm,max_torque_T"
     )
 }
 
 pub(crate) fn write_scalar_row(writer: &mut impl Write, step: &StepStats) -> std::io::Result<()> {
     writeln!(
         writer,
-        "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
+        "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
         step.step,
         step.time,
         step.dt,
@@ -163,7 +163,9 @@ pub(crate) fn write_scalar_row(writer: &mut impl Write, step: &StepStats) -> std
         step.e_total,
         step.max_dm_dt,
         step.max_h_eff,
-        step.max_h_demag
+        step.max_h_demag,
+        step.max_torque_Apm,
+        step.max_torque_T
     )
 }
 

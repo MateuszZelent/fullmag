@@ -783,6 +783,20 @@ double max_norm_aos(const std::vector<double> &field_xyz) {
     return max_value;
 }
 
+double max_cross_norm_aos(const std::vector<double> &a_xyz,
+                          const std::vector<double> &b_xyz) {
+    double max_value = 0.0;
+    const size_t n = a_xyz.size() / 3u;
+    for (size_t i = 0; i < n; ++i) {
+        const size_t base = i * 3u;
+        double cx = a_xyz[base+1]*b_xyz[base+2] - a_xyz[base+2]*b_xyz[base+1];
+        double cy = a_xyz[base+2]*b_xyz[base+0] - a_xyz[base+0]*b_xyz[base+2];
+        double cz = a_xyz[base+0]*b_xyz[base+1] - a_xyz[base+1]*b_xyz[base+0];
+        max_value = std::max(max_value, std::sqrt(cx*cx + cy*cy + cz*cz));
+    }
+    return max_value;
+}
+
 void zero_non_magnetic_nodes_aos(
     std::vector<double> &field_xyz,
     const std::vector<uint8_t> &magnetic_node_mask)
@@ -1995,6 +2009,7 @@ void fill_common_step_metrics(
     stats.max_effective_field_amplitude = max_norm_aos(ctx.h_eff_xyz);
     stats.max_demag_field_amplitude = max_norm_aos(ctx.h_demag_xyz);
     stats.max_rhs_amplitude = max_rhs;
+    stats.max_torque_Apm = max_cross_norm_aos(ctx.m_xyz, ctx.h_eff_xyz);
     fill_demag_solver_stats(ctx, stats);
 }
 

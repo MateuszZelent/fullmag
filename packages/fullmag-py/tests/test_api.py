@@ -1185,6 +1185,25 @@ class ProblemApiTests(unittest.TestCase):
         )
         self.assertTrue(all(output["every_seconds"] == 5e-12 for output in outputs if output["kind"] == "scalar"))
 
+    def test_flat_tableautosave_accepts_custom_scalar_columns(self) -> None:
+        fm.reset()
+        fm.engine("fdm")
+        fm.cell(2e-9, 2e-9, 2e-9)
+        track = fm.geometry(fm.Box(size=(20e-9, 10e-9, 2e-9), name="track"), name="track")
+        track.Ms = 800e3
+        track.Aex = 13e-12
+        track.alpha = 0.1
+        track.m = fm.uniform(1.0, 0.0, 0.0)
+
+        fm.tableautosave(5e-12, quantities=("time", "mx", "E_total"))
+        problem = flat_world._build_problem()
+        ir = problem.to_ir()
+        outputs = ir["study"]["sampling"]["outputs"]
+        scalar_names = [output["name"] for output in outputs if output["kind"] == "scalar"]
+
+        self.assertEqual(scalar_names, ["time", "mx", "E_total"])
+        self.assertTrue(all(output["every_seconds"] == 5e-12 for output in outputs if output["kind"] == "scalar"))
+
     def test_cylinder_serializes_to_ir(self) -> None:
         geometry = fm.Cylinder(radius=50e-9, height=10e-9, name="pillar")
 

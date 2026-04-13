@@ -1704,8 +1704,12 @@ class StudyBuilder:
         snapshot(layer_or_quantity, quantity, every=every)
         return self
 
-    def tableautosave(self, every: float) -> "StudyBuilder":
-        tableautosave(every)
+    def tableautosave(
+        self,
+        every: float,
+        quantities: Sequence[str] | None = None,
+    ) -> "StudyBuilder":
+        tableautosave(every, quantities=quantities)
         return self
 
     def antenna_field_source(
@@ -2882,22 +2886,24 @@ def snapshot(
     _state._outputs.append(Snapshot(field=field, component=component, every=every, layer=layer_name))
 
 
-def tableautosave(every: float) -> None:
+def tableautosave(every: float, quantities: Sequence[str] | None = None) -> None:
     """Configure a mumax-style scalar table autosave cadence.
 
     Registers the default time-series table columns:
     ``time``, ``step``, ``solver_dt``, averaged ``mx/my/mz``,
     ``E_total``, ``max_dm_dt``, and ``max_h_eff``.
-    Existing scalar outputs for those names are replaced so the cadence is
-    always unambiguous.
+    Pass ``quantities`` to seed a custom scalar table instead. Existing scalar
+    outputs for the selected names are replaced so the cadence is always
+    unambiguous.
     """
+    selected_scalars = tuple(quantities) if quantities is not None else _TABLE_DEFAULT_SCALARS
     retained_outputs = []
     for output in _state._outputs:
-        if isinstance(output, SaveScalar) and output.scalar in _TABLE_DEFAULT_SCALARS:
+        if isinstance(output, SaveScalar) and output.scalar in selected_scalars:
             continue
         retained_outputs.append(output)
     _state._outputs = retained_outputs
-    for scalar in _TABLE_DEFAULT_SCALARS:
+    for scalar in selected_scalars:
         _state._outputs.append(SaveScalar(scalar=scalar, every=every))
 
 

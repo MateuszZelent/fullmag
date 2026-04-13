@@ -214,6 +214,10 @@ pub(crate) struct ScalarRow {
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
     pub max_h_demag: f64,
+    #[serde(default)]
+    pub max_torque_Apm: f64,
+    #[serde(default)]
+    pub max_torque_T: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -247,6 +251,10 @@ pub(crate) struct StepUpdateView {
     pub max_h_eff: f64,
     #[serde(default)]
     pub max_h_demag: f64,
+    #[serde(default)]
+    pub max_torque_Apm: f64,
+    #[serde(default)]
+    pub max_torque_T: f64,
     pub wall_time_ns: u64,
     pub grid: [u32; 3],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -294,6 +302,8 @@ impl StepUpdateView {
             max_dm_dt: self.max_dm_dt,
             max_h_eff: self.max_h_eff,
             max_h_demag: self.max_h_demag,
+            max_torque_Apm: self.max_torque_Apm,
+            max_torque_T: self.max_torque_T,
             ..Default::default()
         };
 
@@ -1089,6 +1099,8 @@ mod tests {
             max_dm_dt: 0.0,
             max_h_eff: 0.0,
             max_h_demag: 0.0,
+            max_torque_Apm: 0.0,
+            max_torque_T: 0.0,
             wall_time_ns: 0,
             grid: [2, 1, 1],
             fem_mesh: None,
