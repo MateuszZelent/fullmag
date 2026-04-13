@@ -1222,6 +1222,12 @@ export function buildFullmagModelTree(opts: {
             defaultOpen: false,
             children: [
               {
+                id: "res-eigenmodes-summary",
+                label: "Summary",
+                icon: "📋",
+                status: "ready" as const,
+              },
+              {
                 id: "res-eigenmodes-spectrum",
                 label: "Spectrum",
                 icon: "📊",

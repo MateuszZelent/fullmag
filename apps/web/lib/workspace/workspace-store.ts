@@ -168,6 +168,14 @@ interface PersistedDockingState {
   dockLayoutByStage: Record<WorkspaceMode, DockLayoutModel | null>;
 }
 
+export interface WorkspaceUiStateSnapshot {
+  version: 1;
+  docking: PersistedDockingState;
+  currentStage: WorkspaceMode;
+  rightInspectorOpen: boolean;
+  rightInspectorTab: RightInspectorTab;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -278,6 +286,8 @@ interface WorkspaceStoreState {
   syncTabsFromArtifacts: (stage: WorkspaceMode, artifactPaths: string[]) => void;
   setDockLayout: (stage: WorkspaceMode, model: DockLayoutModel | null) => void;
   resetDockingState: () => void;
+  exportUiStateSnapshot: () => WorkspaceUiStateSnapshot;
+  importUiStateSnapshot: (snapshot: unknown) => boolean;
 }
 
 function updateStageLayout(
@@ -600,6 +610,64 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         persistDockingFromState({ ...state, ...nextState });
         return nextState;
       }),
+
+    exportUiStateSnapshot: () => {
+      const state = get();
+      return {
+        version: 1,
+        docking: {
+          workspaceTabsByStage: state.workspaceTabsByStage,
+          activeWorkspaceTabByStage: state.activeWorkspaceTabByStage,
+          dockLayoutByStage: state.dockLayoutByStage,
+        },
+        currentStage: state.currentStage,
+        rightInspectorOpen: state.rightInspectorOpen,
+        rightInspectorTab: state.rightInspectorTab,
+      };
+    },
+
+    importUiStateSnapshot: (snapshot) => {
+      if (!isPlainObject(snapshot)) {
+        return false;
+      }
+      const dockingRaw = snapshot.docking;
+      const currentStageRaw = snapshot.currentStage;
+      const rightInspectorOpenRaw = snapshot.rightInspectorOpen;
+      const rightInspectorTabRaw = snapshot.rightInspectorTab;
+      if (!isPlainObject(dockingRaw)) {
+        return false;
+      }
+      const persistedDockingState = parsePersistedDockingState(JSON.stringify(dockingRaw));
+      if (!persistedDockingState) {
+        return false;
+      }
+      const currentStage: WorkspaceMode =
+        currentStageRaw === "build" || currentStageRaw === "study" || currentStageRaw === "analyze"
+          ? currentStageRaw
+          : "analyze";
+      const rightInspectorOpen =
+        typeof rightInspectorOpenRaw === "boolean" ? rightInspectorOpenRaw : false;
+      const rightInspectorTab: RightInspectorTab =
+        rightInspectorTabRaw === "selected-submeshes" ||
+        rightInspectorTabRaw === "tools" ||
+        rightInspectorTabRaw === "console"
+          ? rightInspectorTabRaw
+          : "console";
+
+      set((state) => {
+        const nextState = {
+          workspaceTabsByStage: cloneTabsByStage(persistedDockingState.workspaceTabsByStage),
+          activeWorkspaceTabByStage: { ...persistedDockingState.activeWorkspaceTabByStage },
+          dockLayoutByStage: { ...persistedDockingState.dockLayoutByStage },
+          currentStage,
+          rightInspectorOpen,
+          rightInspectorTab,
+        };
+        persistDockingFromState({ ...state, ...nextState });
+        return nextState;
+      });
+      return true;
+    },
   };
 });
 

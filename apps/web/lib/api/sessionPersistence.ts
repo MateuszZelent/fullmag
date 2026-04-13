@@ -20,6 +20,7 @@ export interface SessionExportRequest {
   profile: SaveProfile;
   name?: string;
   compression?: 'speed' | 'balanced' | 'smallest';
+  ui_state?: unknown;
 }
 
 export interface SessionExportResponse {
@@ -68,6 +69,7 @@ export interface SessionImportCommitResponse {
   session_id: string;
   restore_class: RestoreClass;
   warnings: string[];
+  ui_state?: unknown;
 }
 
 export interface CheckpointEntry {

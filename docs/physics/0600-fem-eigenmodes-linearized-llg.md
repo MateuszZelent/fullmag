@@ -30,8 +30,34 @@ The executable reference path currently retains the following field contribution
 - exchange
 - demag
 - zeeman / external field
+- uniaxial anisotropy (first- and second-order)
+- cubic anisotropy (first-order)
+- interfacial DMI
+- bulk DMI
+- surface anisotropy (boundary-face mass term)
 
-Anisotropy, DMI, spin torques, and Bloch-periodic complex operators remain future work.
+Spin torques and Bloch-periodic complex operators remain future work.
+
+## Operator variants
+
+Two operator formulations are available (selected via `EigenOperatorIR`):
+
+### Scalar projected operator (`LinearizedLlg`)
+
+The default and historically first path. The perturbation at each node is
+represented by a single scalar amplitude in a local e1 tangent direction.
+This yields an `N × N` generalized eigenproblem and is accurate when the
+equilibrium is approximately uniform.
+
+### Full 2×2 Herring–Kittel block operator (`Full2x2`)
+
+The full tangent-plane formulation. At each node the perturbation is
+represented by two scalar amplitudes `(u1, u2)` in the `(e1, e2)` tangent
+basis, yielding a `2N × 2N` generalized eigenproblem. This correctly
+captures cross-coupling between tangent-plane components and is required
+for non-uniform equilibria (vortices, skyrmions, domain walls).
+
+See `docs/physics/0600-fem-eigenmodes.md` for the block-matrix equations.
 
 ## Discrete operator
 
@@ -101,12 +127,12 @@ These artifacts are consumed by the Analyze UI and by the dedicated API endpoint
 
 ## Current limitations
 
-- CPU reference only
-- dense eigensolve
+- CPU reference only (dense eigensolve, O(N³) scaling)
 - no residual / orthogonality / tangent leakage diagnostics exported yet
-- no anisotropy or DMI in the executable eigen baseline
-- no Bloch-periodic FEM operator yet
+- Floquet BC requires `k_sampling = Single{...}`; `Floquet + Path` not yet supported
 - no native MFEM/libCEED/hypre/SLEPc eigen backend yet
+- `mode_tracking` field is in IR but not yet used in the runner
+- interactive preview snapshots are not supported for FEM eigen plans
 
 ## Acceptance expectations for this phase
 

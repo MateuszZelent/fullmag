@@ -102,6 +102,78 @@ Cholesky factorisation and full dense diagonalisation (nalgebra
 > complex operator (Herring–Kittel form) is needed for non-uniform
 > equilibria; this is deferred to a future milestone.
 
+#### Full 2×2 Herring–Kittel operator
+
+For non-uniform equilibria (vortices, skyrmions, domain walls) the scalar
+projection is qualitatively wrong because it discards the coupling between
+the two tangent-plane components of $\delta\mathbf{m}$.
+
+The full linearised LLG (undamped) in the local tangent basis
+$(\mathbf{e}_1, \mathbf{e}_2)$ yields a $2N \times 2N$ generalised
+eigenvalue problem of the form
+
+$$
+\begin{pmatrix}
+\mathbf{K}_{11} & \mathbf{K}_{12} \\
+\mathbf{K}_{21} & \mathbf{K}_{22}
+\end{pmatrix}
+\begin{pmatrix} \mathbf{u}_1 \\ \mathbf{u}_2 \end{pmatrix}
+= \lambda
+\begin{pmatrix}
+\mathbf{M} & \mathbf{0} \\
+\mathbf{0} & \mathbf{M}
+\end{pmatrix}
+\begin{pmatrix} \mathbf{u}_1 \\ \mathbf{u}_2 \end{pmatrix},
+$$
+
+where $\delta\mathbf{m}_i = u_{1,i}\,\mathbf{e}_{1,i}
++ u_{2,i}\,\mathbf{e}_{2,i}$ and $\mathbf{M}$ is the consistent FEM
+mass matrix.
+
+The $2 \times 2$ block structure arises because the effective-field
+Hessian $\partial \mathbf{H}_\mathrm{eff}/\partial \mathbf{m}$ is, in
+general, a tensor that couples the two tangent-plane directions.  The
+block entries for each pair of active nodes $(i, j)$ are
+
+$$
+K_{\alpha\beta,ij}
+= \langle e_{\alpha,i},\,
+    \mathcal{H}_\mathrm{eff}^{\prime}\, e_{\beta,j} \rangle_{ij}
+$$
+
+where $\alpha, \beta \in \{1, 2\}$ index tangent directions and
+$\mathcal{H}_\mathrm{eff}^{\prime}$ is the effective-field linearisation
+operator acting on the FEM space.
+
+Specifically, at each element the contributions are:
+
+- **Exchange:** $A_{ij}^{\mathrm{ex}} \delta_{\alpha\beta}$ — the
+  exchange stiffness is isotropic in the tangent plane, so the exchange
+  contribution to the off-diagonal blocks $K_{12}$ and $K_{21}$ vanishes.
+
+- **Parallel field shift:** $M_{ij}\, h_\parallel^{\{ij\}}\,
+  \delta_{\alpha\beta}$ — the projection of $\mathbf{H}_\mathrm{eff}$
+  parallel to $\mathbf{m}_0$ contributes identically to both diagonal
+  blocks, the same as in the scalar operator.
+
+- **Perpendicular effective-field Hessian:** the cross-coupling terms
+  arise from the non-diagonal part of $\partial\mathbf{H}_\mathrm{eff}
+  / \partial\mathbf{m}$ projected into the tangent plane.  For the demag
+  field this produces non-zero $K_{12}$ and $K_{21}$ blocks.
+
+When the equilibrium is spatially uniform, $K_{12} = K_{21} = 0$ and both
+diagonal blocks are identical, reducing to the scalar operator (with a
+factor-of-two eigenvalue degeneracy).
+
+The operator is real-symmetric when damping is ignored.  Dense symmetric
+eigenvalue decomposition (`SymmetricEigen` on the $2N \times 2N$ system)
+remains applicable, with $O((2N)^3)$ cost.
+
+Implementation: the operator kind is selected by `EigenOperatorIR`:
+- `LinearizedLlg` — the scalar projection (MVP, faster, $N \times N$).
+- `Full2x2` — the 2×2 block operator ($2N \times 2N$, needed for
+  non-uniform equilibria).
+
 ### 2.2 Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -313,13 +385,14 @@ For $k = 0$ this reduces to the Kittel formula.  The k-vector series
 
 ## 7. Known limits and deferred work
 
-1. **Scalar operator accuracy**: the current scalar linearisation is exact
-   only for spatially uniform equilibria.  Vortex states, domain walls, and
-   other inhomogeneous equilibria require the full 2×2 complex Herring–Kittel
-   block operator.
-2. **Damping**: `EigenDampingPolicyIR::Include` is defined in the IR but
-   not yet exercised in the CPU reference solver.  Complex eigenvalues
-   encoding mode linewidth are a future milestone.
+1. **Full 2×2 operator**: implemented via `EigenOperatorIR::Full2x2`.
+   The scalar projection (`LinearizedLlg`) remains the default for
+   performance; the 2×2 path is needed for non-uniform equilibria
+   (vortices, skyrmions, domain walls).
+2. **Damping**: `EigenDampingPolicyIR::Include` is defined in the IR and
+   supported.  When damping is included with the full 2×2 operator, the
+   system becomes non-Hermitian and requires a general eigenvalue solver
+   (`Dgeev`/`Zgeev`).  Complex eigenvalues encode mode linewidth.
 3. **GPU / ARPACK**: the dense `SymmetricEigen` path scales as $O(N^3)$
    and is limited to meshes with $\lesssim 10^4$ DOF.  ARPACK / SLEPc
    integration is needed for production-scale geometries.

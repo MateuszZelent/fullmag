@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Panel,
   Group as PanelGroup,
@@ -40,6 +40,8 @@ import { parseResultNodeContext } from "@/features/analyze/model/resultNodeConte
 import { resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import type { StudyPipelineDocument } from "@/lib/study-builder/types";
+import { resolveApiBase } from "@/lib/apiBase";
+import type { EigenModeSummary } from "@/components/analyze/eigenTypes";
 
 type TreeFilterScope = "all" | "objects" | "mesh" | "physics" | "results";
 
@@ -176,14 +178,44 @@ export default function RunSidebar() {
     }
     return null;
   }, [savedEigenModeIndices.length]);
-  const eigenModeSummaries = useMemo(
-    () =>
-      savedEigenModeIndices.map((index) => ({
-        index,
-        label: `Mode ${index}`,
-      })),
-    [savedEigenModeIndices],
-  );
+
+  // Fetch spectrum summary for richer tree labels (frequency & polarization)
+  const [spectrumModes, setSpectrumModes] = useState<EigenModeSummary[] | null>(null);
+  useEffect(() => {
+    if (!hasEigenSpectrumArtifact) {
+      setSpectrumModes(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const base = resolveApiBase();
+        const res = await fetch(`${base}/v1/live/current/eigen/spectrum`, { cache: "no-store" });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { modes?: EigenModeSummary[] };
+        if (!cancelled && Array.isArray(data.modes)) {
+          setSpectrumModes(data.modes);
+        }
+      } catch {
+        // Noncritical — tree will fall back to "Mode N" labels
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [hasEigenSpectrumArtifact]);
+
+  const eigenModeSummaries = useMemo(() => {
+    const fmtGHz = (hz: number) => `${(hz / 1e9).toFixed(2)} GHz`;
+    return savedEigenModeIndices.map((index) => {
+      const spec = spectrumModes?.find((m) => m.index === index);
+      if (spec) {
+        return {
+          index,
+          label: `Mode ${index} · ${fmtGHz(spec.frequency_hz)} · ${spec.dominant_polarization}`,
+        };
+      }
+      return { index, label: `Mode ${index}` };
+    });
+  }, [savedEigenModeIndices, spectrumModes]);
   const resultQuantityTree = useMemo(() => {
     const available = (cmd.quantities ?? []).filter((quantity) => quantity.available);
     const asTreeNode = (quantity: (typeof available)[number]) => ({

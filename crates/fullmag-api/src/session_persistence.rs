@@ -9,12 +9,97 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
-use crate::types::AppState;
+use crate::types::{AppState, RuntimeStatusView, SessionStateResponse};
+use crate::{build_current_live_ws_messages, serialize_current_live_response};
 
 use fullmag_session::{
     inspect_fms, pack_fms, unpack_fms, FmsExportProfile, FmsRunManifest, FmsSessionManifest,
     FmsWorkspaceManifest, PackOptions, SaveProfile, SessionInspection, SessionStore,
 };
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct PersistedCurrentLiveSnapshot {
+    session_protocol_version: String,
+    capability_profile_version: String,
+    session: crate::types::SessionManifest,
+    run: Option<crate::types::RunManifest>,
+    live_state: Option<crate::types::LiveState>,
+    runtime_status: RuntimeStatusView,
+    capabilities: Option<fullmag_runner::BackendCapabilities>,
+    metadata: Option<serde_json::Value>,
+    mesh_workspace: Option<serde_json::Value>,
+    stage_execution: Option<crate::types::StageExecutionState>,
+    scene_document: Option<fullmag_authoring::SceneDocument>,
+    scalar_rows: Vec<crate::types::ScalarRow>,
+    engine_log: Vec<crate::types::EngineLogEntry>,
+    quantities: Vec<crate::types::QuantityDescriptor>,
+    fem_mesh: Option<fullmag_runner::FemMeshPayload>,
+    latest_fields: crate::types::LatestFields,
+    artifacts: Vec<crate::types::ArtifactEntry>,
+    display_selection: crate::types::CurrentDisplaySelection,
+    preview_config: crate::types::CurrentPreviewConfig,
+    preview: Option<crate::types::PreviewState>,
+    builder_adapter: Option<fullmag_authoring::ScriptBuilderState>,
+}
+
+impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
+    fn from(value: &SessionStateResponse) -> Self {
+        Self {
+            session_protocol_version: value.session_protocol_version.clone(),
+            capability_profile_version: value.capability_profile_version.clone(),
+            session: value.session.clone(),
+            run: value.run.clone(),
+            live_state: value.live_state.clone(),
+            runtime_status: value.runtime_status.clone(),
+            capabilities: value.capabilities.clone(),
+            metadata: value.metadata.clone(),
+            mesh_workspace: value.mesh_workspace.clone(),
+            stage_execution: value.stage_execution.clone(),
+            scene_document: value.scene_document.clone(),
+            scalar_rows: value.scalar_rows.clone(),
+            engine_log: value.engine_log.clone(),
+            quantities: value.quantities.clone(),
+            fem_mesh: value.fem_mesh.clone(),
+            latest_fields: value.latest_fields.clone(),
+            artifacts: value.artifacts.clone(),
+            display_selection: value.display_selection.clone(),
+            preview_config: value.preview_config.clone(),
+            preview: value.preview.clone(),
+            builder_adapter: value.builder_adapter.clone(),
+        }
+    }
+}
+
+impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
+    fn from(value: PersistedCurrentLiveSnapshot) -> Self {
+        SessionStateResponse {
+            session_protocol_version: value.session_protocol_version,
+            capability_profile_version: value.capability_profile_version,
+            session: value.session,
+            run: value.run,
+            live_state: value.live_state,
+            runtime_status: value.runtime_status,
+            capabilities: value.capabilities,
+            metadata: value.metadata,
+            mesh_workspace: value.mesh_workspace,
+            stage_execution: value.stage_execution,
+            scene_document: value.scene_document,
+            scalar_rows: value.scalar_rows,
+            engine_log: value.engine_log,
+            quantities: value.quantities,
+            fem_mesh: value.fem_mesh,
+            latest_fields: value.latest_fields,
+            preview_cache: crate::types::CachedPreviewFields::default(),
+            artifacts: value.artifacts,
+            display_selection: value.display_selection,
+            preview_config: value.preview_config,
+            preview: value.preview,
+            builder_adapter: value.builder_adapter,
+            scalar_rows_ws_cursor: 0,
+            quantities_ws_hash: 0,
+        }
+    }
+}
 
 // ── Request / Response types ───────────────────────────────────────────
 
@@ -28,6 +113,9 @@ pub(crate) struct SessionExportRequest {
     /// Compression: "speed", "balanced", "smallest".
     #[serde(default)]
     pub compression: Option<fullmag_session::CompressionProfile>,
+    /// Optional UI workspace snapshot provided by frontend.
+    #[serde(default)]
+    pub ui_state: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +153,8 @@ pub(crate) struct SessionImportCommitResponse {
     pub session_id: String,
     pub restore_class: fullmag_session::RestoreClass,
     pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_state: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -120,7 +210,10 @@ async fn current_session_id(state: &AppState) -> Result<String, ApiError> {
         .ok_or_else(|| ApiError::not_found("no active workspace"))
 }
 
-async fn collect_project_documents(state: &AppState) -> HashMap<String, Vec<u8>> {
+async fn collect_project_documents(
+    state: &AppState,
+    ui_state: Option<&serde_json::Value>,
+) -> HashMap<String, Vec<u8>> {
     let mut docs = HashMap::new();
     let guard = state.current_live_state.read().await;
     if let Some(snapshot) = guard.as_ref() {
@@ -136,8 +229,19 @@ async fn collect_project_documents(state: &AppState) -> HashMap<String, Vec<u8>>
                 docs.insert("script_builder.json".into(), data);
             }
         }
-        // UI state placeholder (panel layout, analyze selection, etc.)
-        docs.insert("ui_state.json".into(), b"{}".to_vec());
+        // UI state (panel layout, analyze selection, workspace tabs).
+        if let Some(value) = ui_state {
+            if let Ok(data) = serde_json::to_vec_pretty(value) {
+                docs.insert("ui_state.json".into(), data);
+            }
+        } else {
+            docs.insert("ui_state.json".into(), b"{}".to_vec());
+        }
+        // Full workspace/session snapshot used for exact workspace restore.
+        let persisted = PersistedCurrentLiveSnapshot::from(snapshot);
+        if let Ok(data) = serde_json::to_vec_pretty(&persisted) {
+            docs.insert("current_live_snapshot.json".into(), data);
+        }
     }
 
     // Try to read the main script from disk.
@@ -223,7 +327,7 @@ pub(crate) async fn export_session(
     };
 
     let export_profile = FmsExportProfile::for_profile(req.profile);
-    let docs = collect_project_documents(&state).await;
+    let docs = collect_project_documents(&state, req.ui_state.as_ref()).await;
 
     let opts = PackOptions {
         compression: req
@@ -289,10 +393,44 @@ pub(crate) async fn import_session_commit(
     let inspection = inspect_fms(Cursor::new(&fms_bytes))
         .map_err(|e| ApiError::internal(format!("re-inspecting .fms: {e}")))?;
 
+    // Try to restore the current live workspace snapshot from packaged docs.
+    if let Some(snapshot_bytes) = store
+        .read_document("project/current_live_snapshot.json")
+        .map_err(|e| ApiError::internal(format!("reading snapshot document: {e}")))?
+    {
+        if let Ok(persisted) = serde_json::from_slice::<PersistedCurrentLiveSnapshot>(&snapshot_bytes)
+        {
+            let restored: SessionStateResponse = persisted.into();
+            // Refresh the in-memory active workspace.
+            {
+                let mut current = state.current_live_state.write().await;
+                *current = Some(restored.clone());
+            }
+            {
+                let mut selection = state.current_display_selection.write().await;
+                *selection = restored.display_selection.clone();
+            }
+            // Refresh HTTP bootstrap/state payload.
+            let public = serialize_current_live_response(&restored, true)
+                .map_err(|e| ApiError::internal(format!("serializing restored snapshot: {e:?}")))?;
+            {
+                let mut public_guard = state.current_live_public_snapshot.write().await;
+                *public_guard = Some(public);
+            }
+            // Broadcast restored state to active WS clients.
+            let messages = build_current_live_ws_messages(&state, &restored)
+                .map_err(|e| ApiError::internal(format!("building restored ws event: {e:?}")))?;
+            for message in messages {
+                let _ = state.current_live_events.send(message);
+            }
+        }
+    }
+
     Ok(Json(SessionImportCommitResponse {
         session_id: session.session_id,
         restore_class: inspection.restore_class,
         warnings: inspection.warnings,
+        ui_state: restored_ui_state,
     }))
 }
 
@@ -375,3 +513,7 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.decode(s)
 }
+    let restored_ui_state = store
+        .read_document("project/ui_state.json")
+        .map_err(|e| ApiError::internal(format!("reading ui_state document: {e}")))?
+        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok());

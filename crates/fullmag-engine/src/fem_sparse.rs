@@ -393,6 +393,719 @@ fn triangle_area(p0: [f64; 3], p1: [f64; 3], p2: [f64; 3]) -> f64 {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Generalized eigenvalue solver: LOBPCG
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Convergence report from a LOBPCG eigensolver run.
+#[derive(Debug, Clone)]
+pub struct LobpcgReport {
+    /// Number of outer iterations performed.
+    pub iterations: u32,
+    /// Maximum residual norm across all converged eigenpairs.
+    pub max_residual: f64,
+    /// Whether all requested eigenpairs converged.
+    pub converged: bool,
+    /// Number of eigenpairs that converged.
+    pub converged_count: usize,
+}
+
+/// A single real eigenpair from the sparse eigensolver.
+#[derive(Debug, Clone)]
+pub struct SparseEigenpair {
+    /// Eigenvalue (real).
+    pub eigenvalue: f64,
+    /// Eigenvector (length n).
+    pub vector: Vec<f64>,
+}
+
+/// Solve the generalized symmetric eigenvalue problem `A·x = λ·B·x`
+/// for the `k` smallest eigenvalues using LOBPCG.
+///
+/// Both `A` and `B` must be symmetric positive semi-definite (A) and
+/// symmetric positive definite (B). The algorithm is matrix-free: it
+/// only requires matrix–vector products.
+///
+/// # Arguments
+/// * `a`        — stiffness matrix (SPD or SPSD),
+/// * `b`        — mass matrix (SPD),
+/// * `k`        — number of smallest eigenpairs to compute,
+/// * `tol`      — convergence tolerance on relative residual,
+/// * `max_iter` — maximum number of LOBPCG outer iterations.
+///
+/// Returns up to `k` eigenpairs sorted by ascending eigenvalue.
+pub fn lobpcg_generalized(
+    a: &CsrMatrix,
+    b: &CsrMatrix,
+    k: usize,
+    tol: f64,
+    max_iter: u32,
+) -> Result<(Vec<SparseEigenpair>, LobpcgReport), LinearSolveError> {
+    let n = a.nrows;
+    if n == 0 || k == 0 {
+        return Ok((
+            Vec::new(),
+            LobpcgReport {
+                iterations: 0,
+                max_residual: 0.0,
+                converged: true,
+                converged_count: 0,
+            },
+        ));
+    }
+    let k = k.min(n);
+
+    // Diagonal preconditioner: M⁻¹ ≈ diag(A)⁻¹
+    let diag_a = a.diagonal();
+    let precond: Vec<f64> = diag_a
+        .iter()
+        .map(|&d| if d.abs() > 1e-300 { 1.0 / d } else { 1.0 })
+        .collect();
+
+    // Initialize X (n × k) with deterministic pseudo-random vectors.
+    // Use a simple LCG seeded per column for reproducibility.
+    let mut x_cols: Vec<Vec<f64>> = Vec::with_capacity(k);
+    for j in 0..k {
+        let mut col = vec![0.0; n];
+        let mut seed: u64 = 6364136223846793005u64.wrapping_mul(j as u64 + 1).wrapping_add(1442695040888963407);
+        for v in col.iter_mut() {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *v = ((seed >> 33) as f64) / (u32::MAX as f64) - 0.5;
+        }
+        x_cols.push(col);
+    }
+
+    // B-orthogonalize X
+    let mut bx_cols: Vec<Vec<f64>> = vec![vec![0.0; n]; k];
+    for j in 0..k {
+        b.matvec(&x_cols[j], &mut bx_cols[j]);
+    }
+    b_orthogonalize(&mut x_cols, &mut bx_cols, b);
+
+    // Compute AX
+    let mut ax_cols: Vec<Vec<f64>> = vec![vec![0.0; n]; k];
+    for j in 0..k {
+        a.matvec(&x_cols[j], &mut ax_cols[j]);
+    }
+
+    // Initial Rayleigh-Ritz
+    let mut eigenvalues = rayleigh_ritz_inplace(&mut x_cols, &mut ax_cols, &mut bx_cols, k);
+
+    let mut p_cols: Vec<Vec<f64>> = Vec::new();
+    let mut ap_cols: Vec<Vec<f64>> = Vec::new();
+    let mut bp_cols: Vec<Vec<f64>> = Vec::new();
+
+    let mut converged_mask = vec![false; k];
+    let mut report = LobpcgReport {
+        iterations: 0,
+        max_residual: f64::MAX,
+        converged: false,
+        converged_count: 0,
+    };
+
+    for iter in 0..max_iter {
+        // Compute residuals: R_j = AX_j - eigenvalue_j * BX_j
+        let mut w_cols: Vec<Vec<f64>> = Vec::with_capacity(k);
+        let mut max_res = 0.0f64;
+        let mut n_converged = 0usize;
+
+        for j in 0..k {
+            let mut rj = vec![0.0; n];
+            for i in 0..n {
+                rj[i] = ax_cols[j][i] - eigenvalues[j] * bx_cols[j][i];
+            }
+            let r_norm = l2_norm(&rj);
+            let lambda_scale = eigenvalues[j].abs().max(1.0);
+            let rel_res = r_norm / lambda_scale;
+
+            if rel_res < tol {
+                converged_mask[j] = true;
+                n_converged += 1;
+            } else {
+                converged_mask[j] = false;
+            }
+            max_res = max_res.max(rel_res);
+
+            // Apply preconditioner: W_j = M⁻¹ · R_j
+            for i in 0..n {
+                rj[i] *= precond[i];
+            }
+            w_cols.push(rj);
+        }
+
+        report.iterations = iter + 1;
+        report.max_residual = max_res;
+        report.converged_count = n_converged;
+
+        if n_converged >= k {
+            report.converged = true;
+            break;
+        }
+
+        // B-orthogonalize W against X (and itself)
+        let mut bw_cols: Vec<Vec<f64>> = vec![vec![0.0; n]; k];
+        for j in 0..k {
+            b.matvec(&w_cols[j], &mut bw_cols[j]);
+        }
+        for j in 0..k {
+            // Orthogonalize w_j against all x vectors
+            for i in 0..k {
+                let proj = dot_product(&bx_cols[i], &w_cols[j]);
+                for l in 0..n {
+                    w_cols[j][l] -= proj * x_cols[i][l];
+                    bw_cols[j][l] -= proj * bx_cols[i][l];
+                }
+            }
+            // Orthogonalize w_j against previous w vectors
+            for i in 0..j {
+                let proj = dot_product(&bw_cols[i], &w_cols[j]);
+                for l in 0..n {
+                    w_cols[j][l] -= proj * w_cols[i][l];
+                    bw_cols[j][l] -= proj * bw_cols[i][l];
+                }
+            }
+            // Normalize
+            let norm_b = dot_product(&w_cols[j], &bw_cols[j]);
+            if norm_b > 1e-14 {
+                let inv = 1.0 / norm_b.sqrt();
+                for l in 0..n {
+                    w_cols[j][l] *= inv;
+                    bw_cols[j][l] *= inv;
+                }
+            }
+        }
+
+        // Compute AW after orthogonalization
+        let mut aw_cols: Vec<Vec<f64>> = vec![vec![0.0; n]; k];
+        for j in 0..k {
+            a.matvec(&w_cols[j], &mut aw_cols[j]);
+        }
+
+        // B-orthogonalize P against X, W (and itself)
+        let has_p = !p_cols.is_empty();
+        if has_p {
+            for j in 0..k {
+                // Orthogonalize p_j against all x vectors
+                for i in 0..k {
+                    let proj = dot_product(&bx_cols[i], &p_cols[j]);
+                    for l in 0..n {
+                        p_cols[j][l] -= proj * x_cols[i][l];
+                        bp_cols[j][l] -= proj * bx_cols[i][l];
+                    }
+                }
+                // Orthogonalize p_j against all w vectors
+                for i in 0..k {
+                    let proj = dot_product(&bw_cols[i], &p_cols[j]);
+                    for l in 0..n {
+                        p_cols[j][l] -= proj * w_cols[i][l];
+                        bp_cols[j][l] -= proj * bw_cols[i][l];
+                    }
+                }
+                // Orthogonalize p_j against previous p vectors
+                for i in 0..j {
+                    let proj = dot_product(&bp_cols[i], &p_cols[j]);
+                    for l in 0..n {
+                        p_cols[j][l] -= proj * p_cols[i][l];
+                        bp_cols[j][l] -= proj * bp_cols[i][l];
+                    }
+                }
+                // Normalize
+                let norm_b = dot_product(&p_cols[j], &bp_cols[j]);
+                if norm_b > 1e-14 {
+                    let inv = 1.0 / norm_b.sqrt();
+                    for l in 0..n {
+                        p_cols[j][l] *= inv;
+                        bp_cols[j][l] *= inv;
+                    }
+                } else {
+                    // Degenerate P vector: zero it out
+                    p_cols[j].fill(0.0);
+                    bp_cols[j].fill(0.0);
+                }
+            }
+            // Check if any P vector survived orthogonalization
+            let p_alive = p_cols.iter().any(|p| l2_norm(p) > 1e-12);
+            if !p_alive {
+                p_cols.clear();
+                ap_cols.clear();
+                bp_cols.clear();
+            } else {
+                // Recompute AP and BP after orthogonalization
+                for j in 0..k {
+                    a.matvec(&p_cols[j], &mut ap_cols[j]);
+                    b.matvec(&p_cols[j], &mut bp_cols[j]);
+                }
+            }
+        }
+
+        // Rebuild has_p after potential P pruning
+        let has_p = !p_cols.is_empty();
+
+        // Build subspace S = [X, W] or [X, W, P]
+        let s_width = if has_p { 3 * k } else { 2 * k };
+        let block_count = if has_p { 3 } else { 2 };
+
+        // Build Gram matrices for Rayleigh-Ritz in the [X,W,P] subspace
+        // Ga[i,j] = s_i^T A s_j,  Gb[i,j] = s_i^T B s_j
+        let (ga, gb) = {
+            let mut ga = vec![0.0; s_width * s_width];
+            let mut gb = vec![0.0; s_width * s_width];
+
+            let cols_a: [&[Vec<f64>]; 3] = [&ax_cols, &aw_cols, &ap_cols];
+            let cols_b: [&[Vec<f64>]; 3] = [&bx_cols, &bw_cols, &bp_cols];
+            let cols_s: [&[Vec<f64>]; 3] = [&x_cols, &w_cols, &p_cols];
+
+            for bi in 0..block_count {
+                for bj in 0..block_count {
+                    for li in 0..k {
+                        for lj in 0..k {
+                            let si = bi * k + li;
+                            let sj = bj * k + lj;
+                            ga[si * s_width + sj] = dot_product(&cols_s[bi][li], &cols_a[bj][lj]);
+                            gb[si * s_width + sj] = dot_product(&cols_s[bi][li], &cols_b[bj][lj]);
+                        }
+                    }
+                }
+            }
+
+            // Symmetrize (numerical safety)
+            for i in 0..s_width {
+                for j in (i + 1)..s_width {
+                    let avg_a = 0.5 * (ga[i * s_width + j] + ga[j * s_width + i]);
+                    ga[i * s_width + j] = avg_a;
+                    ga[j * s_width + i] = avg_a;
+                    let avg_b = 0.5 * (gb[i * s_width + j] + gb[j * s_width + i]);
+                    gb[i * s_width + j] = avg_b;
+                    gb[j * s_width + i] = avg_b;
+                }
+            }
+            (ga, gb)
+        };
+
+        // Solve the small s_width × s_width generalized eigenvalue problem
+        // ga · c = λ · gb · c via Cholesky + symmetric eigen
+        let (small_eigenvalues, small_eigenvectors, actual_s_width) =
+            match dense_generalized_eigen(&ga, &gb, s_width) {
+                Ok((evals, evecs)) => (evals, evecs, s_width),
+                Err(_) if has_p => {
+                    // Retry without P if P causes singularity
+                    let s2 = 2 * k;
+                    let mut ga2 = vec![0.0; s2 * s2];
+                    let mut gb2 = vec![0.0; s2 * s2];
+                    let sblks: [&[Vec<f64>]; 2] = [&x_cols, &w_cols];
+                    let ablks: [&[Vec<f64>]; 2] = [&ax_cols, &aw_cols];
+                    let bblks: [&[Vec<f64>]; 2] = [&bx_cols, &bw_cols];
+                    for bi in 0..2 {
+                        for bj in 0..2 {
+                            for li in 0..k {
+                                for lj in 0..k {
+                                    let si = bi * k + li;
+                                    let sj = bj * k + lj;
+                                    ga2[si * s2 + sj] = dot_product(&sblks[bi][li], &ablks[bj][lj]);
+                                    gb2[si * s2 + sj] = dot_product(&sblks[bi][li], &bblks[bj][lj]);
+                                }
+                            }
+                        }
+                    }
+                    for i in 0..s2 {
+                        for j in (i + 1)..s2 {
+                            let avg_a = 0.5 * (ga2[i * s2 + j] + ga2[j * s2 + i]);
+                            ga2[i * s2 + j] = avg_a;
+                            ga2[j * s2 + i] = avg_a;
+                            let avg_b = 0.5 * (gb2[i * s2 + j] + gb2[j * s2 + i]);
+                            gb2[i * s2 + j] = avg_b;
+                            gb2[j * s2 + i] = avg_b;
+                        }
+                    }
+                    match dense_generalized_eigen(&ga2, &gb2, s2) {
+                        Ok((evals, evecs)) => {
+                            // Clear P since it failed
+                            p_cols.clear();
+                            ap_cols.clear();
+                            bp_cols.clear();
+                            (evals, evecs, s2)
+                        }
+                        Err(_) => break,
+                    }
+                }
+                Err(_) => break,
+            };
+
+        let effective_block_count = actual_s_width / k;
+
+        // Extract eigenvectors: new X_j = sum_i c[i,j] * S_i
+        let mut new_x = vec![vec![0.0; n]; k];
+        let mut new_ax = vec![vec![0.0; n]; k];
+        let mut new_bx = vec![vec![0.0; n]; k];
+
+        // Build block arrays for extraction (re-borrow after Gram scope ended)
+        let ext_s: Vec<&[Vec<f64>]> = {
+            let mut v: Vec<&[Vec<f64>]> = vec![&x_cols, &w_cols];
+            if effective_block_count >= 3 { v.push(&p_cols); }
+            v
+        };
+        let ext_a: Vec<&[Vec<f64>]> = {
+            let mut v: Vec<&[Vec<f64>]> = vec![&ax_cols, &aw_cols];
+            if effective_block_count >= 3 { v.push(&ap_cols); }
+            v
+        };
+        let ext_b: Vec<&[Vec<f64>]> = {
+            let mut v: Vec<&[Vec<f64>]> = vec![&bx_cols, &bw_cols];
+            if effective_block_count >= 3 { v.push(&bp_cols); }
+            v
+        };
+
+        for j in 0..k {
+            for bi in 0..effective_block_count {
+                for li in 0..k {
+                    let si = bi * k + li;
+                    let coeff = small_eigenvectors[si * actual_s_width + j]; // column j, row si
+                    for i in 0..n {
+                        new_x[j][i] += coeff * ext_s[bi][li][i];
+                        new_ax[j][i] += coeff * ext_a[bi][li][i];
+                        new_bx[j][i] += coeff * ext_b[bi][li][i];
+                    }
+                }
+            }
+        }
+
+        // P = new_X - old_X (search direction)
+        let mut new_p = vec![vec![0.0; n]; k];
+        let mut new_ap = vec![vec![0.0; n]; k];
+        let mut new_bp = vec![vec![0.0; n]; k];
+        for j in 0..k {
+            for i in 0..n {
+                new_p[j][i] = new_x[j][i] - x_cols[j][i];
+                new_ap[j][i] = new_ax[j][i] - ax_cols[j][i];
+                new_bp[j][i] = new_bx[j][i] - bx_cols[j][i];
+            }
+        }
+
+        // Update state
+        for j in 0..k {
+            eigenvalues[j] = small_eigenvalues[j];
+        }
+        x_cols = new_x;
+        ax_cols = new_ax;
+        bx_cols = new_bx;
+        p_cols = new_p;
+        ap_cols = new_ap;
+        bp_cols = new_bp;
+    }
+
+    // Build result
+    let mut eigenpairs: Vec<SparseEigenpair> = eigenvalues
+        .iter()
+        .zip(x_cols.iter())
+        .map(|(&eval, evec)| SparseEigenpair {
+            eigenvalue: eval,
+            vector: evec.clone(),
+        })
+        .collect();
+
+    eigenpairs.sort_by(|a, b| a.eigenvalue.partial_cmp(&b.eigenvalue).unwrap_or(std::cmp::Ordering::Equal));
+
+    Ok((eigenpairs, report))
+}
+
+/// B-orthogonalize a set of column vectors using modified Gram-Schmidt
+/// with respect to the B inner product.
+fn b_orthogonalize(
+    x: &mut [Vec<f64>],
+    bx: &mut [Vec<f64>],
+    b: &CsrMatrix,
+) {
+    let k = x.len();
+    let n = if k > 0 { x[0].len() } else { return };
+
+    for j in 0..k {
+        // Orthogonalize against previous vectors
+        for i in 0..j {
+            let proj = dot_product(&bx[i], &x[j]);
+            for l in 0..n {
+                x[j][l] -= proj * x[i][l];
+                bx[j][l] -= proj * bx[i][l];
+            }
+        }
+        // Normalize: ||x_j||_B = 1
+        let norm_b = dot_product(&x[j], &bx[j]).sqrt();
+        if norm_b > 1e-14 {
+            let inv = 1.0 / norm_b;
+            for l in 0..n {
+                x[j][l] *= inv;
+                bx[j][l] *= inv;
+            }
+        } else {
+            // Degenerate vector: re-randomize
+            let mut seed: u64 = 314159265u64.wrapping_mul(j as u64 + 42);
+            for v in x[j].iter_mut() {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                *v = ((seed >> 33) as f64) / (u32::MAX as f64) - 0.5;
+            }
+            b.matvec(&x[j], &mut bx[j]);
+            let norm_b2 = dot_product(&x[j], &bx[j]).sqrt();
+            if norm_b2 > 1e-14 {
+                let inv = 1.0 / norm_b2;
+                for l in 0..n {
+                    x[j][l] *= inv;
+                    bx[j][l] *= inv;
+                }
+            }
+        }
+    }
+}
+
+/// Initial Rayleigh-Ritz: project onto X to get eigenvalues and
+/// rotate X to diagonalize the projected problem.
+fn rayleigh_ritz_inplace(
+    x: &mut [Vec<f64>],
+    ax: &mut [Vec<f64>],
+    bx: &mut [Vec<f64>],
+    k: usize,
+) -> Vec<f64> {
+    // Build k×k Gram matrices: Ga[i,j] = x_i^T A x_j, Gb[i,j] = x_i^T B x_j
+    let mut ga = vec![0.0; k * k];
+    let mut gb = vec![0.0; k * k];
+    for i in 0..k {
+        for j in 0..k {
+            ga[i * k + j] = dot_product(&x[i], &ax[j]);
+            gb[i * k + j] = dot_product(&x[i], &bx[j]);
+        }
+    }
+
+    let (eigenvalues, eigenvectors) = match dense_generalized_eigen(&ga, &gb, k) {
+        Ok(result) => result,
+        Err(_) => {
+            // If Rayleigh-Ritz fails, return diagonal estimates
+            let mut evals = vec![0.0; k];
+            for i in 0..k {
+                evals[i] = ga[i * k + i] / gb[i * k + i].max(1e-300);
+            }
+            return evals;
+        }
+    };
+
+    // Rotate X, AX, BX by the eigenvectors of the small problem
+    let n = x[0].len();
+    let mut new_x = vec![vec![0.0; n]; k];
+    let mut new_ax = vec![vec![0.0; n]; k];
+    let mut new_bx = vec![vec![0.0; n]; k];
+    for j in 0..k {
+        for i in 0..k {
+            let coeff = eigenvectors[i * k + j]; // column j, row i
+            for l in 0..n {
+                new_x[j][l] += coeff * x[i][l];
+                new_ax[j][l] += coeff * ax[i][l];
+                new_bx[j][l] += coeff * bx[i][l];
+            }
+        }
+    }
+    for j in 0..k {
+        x[j].copy_from_slice(&new_x[j]);
+        ax[j].copy_from_slice(&new_ax[j]);
+        bx[j].copy_from_slice(&new_bx[j]);
+    }
+
+    eigenvalues
+}
+
+/// Solve a small dense generalized eigenvalue problem Ga·c = λ·Gb·c
+/// via Cholesky factorization of Gb and symmetric eigendecomposition.
+///
+/// Returns (eigenvalues sorted ascending, eigenvectors in column-major
+/// layout as a flat vec of size m×m, column j starts at offset j*m).
+fn dense_generalized_eigen(
+    ga: &[f64],
+    gb: &[f64],
+    m: usize,
+) -> Result<(Vec<f64>, Vec<f64>), LinearSolveError> {
+    if m == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    // Add small diagonal regularization to Gb for numerical stability.
+    // eps = max(trace(Gb), 1) * 1e-14
+    let trace_gb: f64 = (0..m).map(|i| gb[i * m + i]).sum();
+    let eps = trace_gb.abs().max(1.0) * 1e-14;
+    let mut gb_reg = gb.to_vec();
+    for i in 0..m {
+        gb_reg[i * m + i] += eps;
+    }
+
+    // Cholesky factorize Gb_reg = L·L^T
+    let mut l_mat = vec![0.0; m * m];
+    for j in 0..m {
+        let mut sum = 0.0;
+        for k_ in 0..j {
+            sum += l_mat[j * m + k_] * l_mat[j * m + k_];
+        }
+        let diag = gb_reg[j * m + j] - sum;
+        if diag <= 1e-14 {
+            return Err(LinearSolveError {
+                message: format!("Gb is not positive definite at index {j}"),
+            });
+        }
+        l_mat[j * m + j] = diag.sqrt();
+        for i in (j + 1)..m {
+            let mut s = 0.0;
+            for k_ in 0..j {
+                s += l_mat[i * m + k_] * l_mat[j * m + k_];
+            }
+            l_mat[i * m + j] = (gb[i * m + j] - s) / l_mat[j * m + j];
+        }
+    }
+
+    // L_inv via forward substitution
+    let mut l_inv = vec![0.0; m * m];
+    for i in 0..m {
+        l_inv[i * m + i] = 1.0 / l_mat[i * m + i];
+        for j in (i + 1)..m {
+            let mut s = 0.0;
+            for k_ in i..j {
+                s += l_mat[j * m + k_] * l_inv[k_ * m + i];
+            }
+            l_inv[j * m + i] = -s / l_mat[j * m + j];
+        }
+    }
+
+    // Transform: C = L_inv * Ga * L_inv^T
+    // First compute T = Ga * L_inv^T
+    let mut t_mat = vec![0.0; m * m];
+    for i in 0..m {
+        for j in 0..m {
+            let mut s = 0.0;
+            for k_ in 0..m {
+                // L_inv^T[k_, j] = L_inv[j * m + k_]
+                s += ga[i * m + k_] * l_inv[j * m + k_];
+            }
+            t_mat[i * m + j] = s;
+        }
+    }
+    // C = L_inv * T
+    let mut c_mat = vec![0.0; m * m];
+    for i in 0..m {
+        for j in 0..m {
+            let mut s = 0.0;
+            for k_ in 0..m {
+                s += l_inv[i * m + k_] * t_mat[k_ * m + j];
+            }
+            c_mat[i * m + j] = s;
+        }
+    }
+
+    // Symmetrize C
+    for i in 0..m {
+        for j in (i + 1)..m {
+            let avg = 0.5 * (c_mat[i * m + j] + c_mat[j * m + i]);
+            c_mat[i * m + j] = avg;
+            c_mat[j * m + i] = avg;
+        }
+    }
+
+    // Eigendecomposition of the small symmetric matrix C via Jacobi rotations
+    let (evals, evecs_c) = jacobi_eigen_symmetric(&c_mat, m);
+
+    // Back-transform: v = L_inv^T * u
+    let mut evecs = vec![0.0; m * m];
+    for j in 0..m {
+        for i in 0..m {
+            let mut s = 0.0;
+            for k_ in 0..m {
+                s += l_inv[k_ * m + i] * evecs_c[k_ * m + j];
+            }
+            evecs[i * m + j] = s;
+        }
+    }
+
+    // Sort by ascending eigenvalue
+    let mut indices: Vec<usize> = (0..m).collect();
+    indices.sort_by(|&a, &b| evals[a].partial_cmp(&evals[b]).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut sorted_evals = vec![0.0; m];
+    let mut sorted_evecs = vec![0.0; m * m];
+    for (new_j, &old_j) in indices.iter().enumerate() {
+        sorted_evals[new_j] = evals[old_j];
+        for i in 0..m {
+            sorted_evecs[i * m + new_j] = evecs[i * m + old_j];
+        }
+    }
+
+    Ok((sorted_evals, sorted_evecs))
+}
+
+/// Jacobi eigenvalue algorithm for a small symmetric matrix.
+/// Returns (eigenvalues, eigenvectors in column-major flat layout).
+fn jacobi_eigen_symmetric(a: &[f64], m: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut d = a.to_vec(); // working copy
+    let mut v = vec![0.0; m * m]; // eigenvectors (identity start)
+    for i in 0..m {
+        v[i * m + i] = 1.0;
+    }
+
+    let max_sweeps = 100;
+    for _ in 0..max_sweeps {
+        // Find largest off-diagonal element
+        let mut max_off = 0.0f64;
+        let mut p = 0;
+        let mut q = 1;
+        for i in 0..m {
+            for j in (i + 1)..m {
+                if d[i * m + j].abs() > max_off {
+                    max_off = d[i * m + j].abs();
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+        if max_off < 1e-15 {
+            break;
+        }
+
+        // Compute rotation angle
+        let app = d[p * m + p];
+        let aqq = d[q * m + q];
+        let apq = d[p * m + q];
+        let theta = if (app - aqq).abs() < 1e-300 {
+            std::f64::consts::FRAC_PI_4
+        } else {
+            0.5 * (2.0 * apq / (app - aqq)).atan()
+        };
+        let c = theta.cos();
+        let s = theta.sin();
+
+        // Apply Jacobi rotation: D' = G^T D G
+        // Update rows/columns p and q
+        let mut new_row_p = vec![0.0; m];
+        let mut new_row_q = vec![0.0; m];
+        for k in 0..m {
+            new_row_p[k] = c * d[p * m + k] + s * d[q * m + k];
+            new_row_q[k] = -s * d[p * m + k] + c * d[q * m + k];
+        }
+        for k in 0..m {
+            d[p * m + k] = new_row_p[k];
+            d[q * m + k] = new_row_q[k];
+        }
+        // Update columns p and q
+        for k in 0..m {
+            let dp = c * d[k * m + p] + s * d[k * m + q];
+            let dq = -s * d[k * m + p] + c * d[k * m + q];
+            d[k * m + p] = dp;
+            d[k * m + q] = dq;
+        }
+
+        // Update eigenvectors
+        for k in 0..m {
+            let vp = c * v[k * m + p] + s * v[k * m + q];
+            let vq = -s * v[k * m + p] + c * v[k * m + q];
+            v[k * m + p] = vp;
+            v[k * m + q] = vq;
+        }
+    }
+
+    let eigenvalues: Vec<f64> = (0..m).map(|i| d[i * m + i]).collect();
+    (eigenvalues, v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,5 +1273,126 @@ mod tests {
             };
             assert!(row_sum.abs() < 1e-13, "row {i} sum = {row_sum}");
         }
+    }
+
+    /// Build a simple identity matrix of size n for use as mass matrix.
+    fn identity_csr(n: usize) -> CsrMatrix {
+        let mut coo = CooAssembler::new(n, n);
+        for i in 0..n {
+            coo.add(i, i, 1.0);
+        }
+        coo.into_csr()
+    }
+
+    #[test]
+    fn lobpcg_finds_smallest_eigenvalues_of_1d_laplacian() {
+        // 1-D Laplacian with known eigenvalues:
+        // λ_k = 2 - 2·cos(π·k / (n+1)), k = 1, 2, ...
+        let n = 20;
+        let a = tridiagonal_laplacian(n);
+        let b = identity_csr(n);
+        let k = 3;
+
+        let (eigenpairs, report) = lobpcg_generalized(&a, &b, k, 1e-8, 200)
+            .expect("LOBPCG failed");
+
+        assert!(report.converged, "LOBPCG did not converge: {:?}", report);
+        assert_eq!(eigenpairs.len(), k);
+
+        // Check eigenvalues against analytic formula
+        for j in 0..k {
+            let expected = 2.0 - 2.0 * (std::f64::consts::PI * (j + 1) as f64 / (n + 1) as f64).cos();
+            let rel_err = (eigenpairs[j].eigenvalue - expected).abs() / expected;
+            assert!(
+                rel_err < 1e-6,
+                "eigenvalue {j}: got {}, expected {}, rel_err = {}",
+                eigenpairs[j].eigenvalue,
+                expected,
+                rel_err
+            );
+        }
+    }
+
+    #[test]
+    fn lobpcg_generalized_with_mass_matrix() {
+        // Solve K·x = λ·M·x where M is a diagonal mass matrix
+        let n = 16;
+        let k_mat = tridiagonal_laplacian(n);
+
+        // Mass matrix: diagonal with entries [1, 2, 3, ..., n]
+        let mut mass_coo = CooAssembler::new(n, n);
+        for i in 0..n {
+            mass_coo.add(i, i, (i + 1) as f64);
+        }
+        let m_mat = mass_coo.into_csr();
+
+        let k_modes = 3;
+        let (eigenpairs, report) = lobpcg_generalized(&k_mat, &m_mat, k_modes, 1e-8, 300)
+            .expect("LOBPCG generalized failed");
+
+        assert!(
+            report.converged,
+            "LOBPCG generalized did not converge: {:?}",
+            report
+        );
+        assert_eq!(eigenpairs.len(), k_modes);
+
+        // Verify eigenpairs: check residual ||K·v - λ·M·v|| / ||K·v||
+        for ep in &eigenpairs {
+            let mut kv = vec![0.0; n];
+            let mut mv = vec![0.0; n];
+            k_mat.matvec(&ep.vector, &mut kv);
+            m_mat.matvec(&ep.vector, &mut mv);
+            let mut residual = vec![0.0; n];
+            for i in 0..n {
+                residual[i] = kv[i] - ep.eigenvalue * mv[i];
+            }
+            let res_norm = l2_norm(&residual);
+            let kv_norm = l2_norm(&kv);
+            let rel_res = res_norm / kv_norm.max(1e-14);
+            assert!(
+                rel_res < 1e-6,
+                "eigenpair λ={} has relative residual {}",
+                ep.eigenvalue,
+                rel_res
+            );
+        }
+
+        // Eigenvalues should be positive and ascending
+        for i in 1..k_modes {
+            assert!(
+                eigenpairs[i].eigenvalue >= eigenpairs[i - 1].eigenvalue - 1e-10,
+                "eigenvalues not ascending: {} > {}",
+                eigenpairs[i - 1].eigenvalue,
+                eigenpairs[i].eigenvalue,
+            );
+        }
+    }
+
+    #[test]
+    fn jacobi_eigen_2x2() {
+        // Simple 2×2 symmetric matrix: [[2, 1], [1, 3]]
+        // eigenvalues: (5 ± sqrt(5)) / 2 ≈ 1.382, 3.618
+        let a = vec![2.0, 1.0, 1.0, 3.0];
+        let (evals, _) = jacobi_eigen_symmetric(&a, 2);
+        let mut sorted = evals.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let e1 = (5.0 - 5.0f64.sqrt()) / 2.0;
+        let e2 = (5.0 + 5.0f64.sqrt()) / 2.0;
+        assert!((sorted[0] - e1).abs() < 1e-10, "λ₁: got {}, expected {}", sorted[0], e1);
+        assert!((sorted[1] - e2).abs() < 1e-10, "λ₂: got {}, expected {}", sorted[1], e2);
+    }
+
+    #[test]
+    fn dense_generalized_eigen_identity_mass() {
+        // Ga = [[3, 1], [1, 2]], Gb = I
+        // eigenvalues of Ga: (5 ± sqrt(5)) / 2
+        let ga = vec![3.0, 1.0, 1.0, 2.0];
+        let gb = vec![1.0, 0.0, 0.0, 1.0];
+        let (evals, _) = dense_generalized_eigen(&ga, &gb, 2).unwrap();
+        let e1 = (5.0 - 5.0f64.sqrt()) / 2.0;
+        let e2 = (5.0 + 5.0f64.sqrt()) / 2.0;
+        assert!((evals[0] - e1).abs() < 1e-10, "λ₁: got {}, expected {}", evals[0], e1);
+        assert!((evals[1] - e2).abs() < 1e-10, "λ₂: got {}, expected {}", evals[1], e2);
     }
 }

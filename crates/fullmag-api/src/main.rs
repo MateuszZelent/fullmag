@@ -2841,7 +2841,7 @@ fn quantities_hash(quantities: &[crate::types::QuantityDescriptor]) -> u64 {
     h.finish()
 }
 
-fn build_current_live_ws_messages(
+pub(crate) fn build_current_live_ws_messages(
     state: &AppState,
     snapshot: &SessionStateResponse,
 ) -> Result<Vec<CurrentLiveWireMessage>, ApiError> {
@@ -2959,7 +2959,7 @@ fn serialize_current_live_session_event(
     .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
 }
 
-fn serialize_current_live_response(
+pub(crate) fn serialize_current_live_response(
     snapshot: &SessionStateResponse,
     include_preview: bool,
 ) -> Result<String, ApiError> {

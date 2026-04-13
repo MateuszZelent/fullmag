@@ -1,6 +1,7 @@
 "use client";
 
 export type AnalyzeTab =
+  | "summary"
   | "spectrum"
   | "modes"
   | "dispersion"
@@ -49,6 +50,9 @@ export function parseAnalyzeTreeNode(
   nodeId: string,
 ): Partial<AnalyzeSelectionState> | null {
   // ── Eigenmodes domain ──
+  if (nodeId === "res-eigenmodes-summary") {
+    return { domain: "eigenmodes", tab: "summary", selectedModeIndex: null };
+  }
   if (nodeId === "res-eigenmodes" || nodeId === "res-eigenmodes-spectrum") {
     return { domain: "eigenmodes", tab: "spectrum", selectedModeIndex: null };
   }

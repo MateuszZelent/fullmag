@@ -937,9 +937,23 @@ pub fn resolve_runtime_engine(problem: &ProblemIR) -> Result<RuntimeEngineInfo, 
                 accelerator: accelerator.to_string(),
             })
         }
-        BackendPlanIR::FemEigen(_) => Err(RunError {
-            message: "eigenmode analysis execution is not yet implemented".to_string(),
-        }),
+        BackendPlanIR::FemEigen(_) => {
+            let engine = dispatch::resolve_fem_engine_with_trail(problem)?.engine;
+            let (engine_id, engine_label, accelerator) = match engine {
+                dispatch::FemEngine::CpuReference => {
+                    ("fem_eigen_cpu_reference", "CPU FEM Eigen", "cpu")
+                }
+                dispatch::FemEngine::NativeGpu => {
+                    ("fem_eigen_native_gpu", "GPU FEM Eigen", "gpu")
+                }
+            };
+            Ok(RuntimeEngineInfo {
+                backend_family: "fem_eigen".to_string(),
+                engine_id: engine_id.to_string(),
+                engine_label: engine_label.to_string(),
+                accelerator: accelerator.to_string(),
+            })
+        }
     }
 }
 

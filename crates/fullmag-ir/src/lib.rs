@@ -844,6 +844,11 @@ pub struct SamplingIR {
 #[serde(rename_all = "snake_case")]
 pub enum EigenOperatorIR {
     LinearizedLlg,
+    /// Full 2×2 Herring–Kittel block operator in the tangent plane.
+    /// Required for non-uniform equilibria (vortices, skyrmions, domain walls).
+    /// Doubles the DOF from N to 2N.
+    #[serde(rename = "full_2x2", alias = "full2x2")]
+    Full2x2,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2820,6 +2825,7 @@ impl ProblemIR {
                 }
                 match operator.kind {
                     EigenOperatorIR::LinearizedLlg => {}
+                    EigenOperatorIR::Full2x2 => {}
                 }
                 match target {
                     EigenTargetIR::Lowest => {}

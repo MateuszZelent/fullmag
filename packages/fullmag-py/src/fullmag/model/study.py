@@ -25,7 +25,7 @@ SUPPORTED_RELAXATION_ALGORITHMS = {
     "nonlinear_cg",
     "tangent_plane_implicit",
 }
-SUPPORTED_EIGEN_OPERATORS = {"linearized_llg"}
+SUPPORTED_EIGEN_OPERATORS = {"linearized_llg", "full_2x2"}
 SUPPORTED_EIGEN_TARGETS = {"lowest", "nearest"}
 SUPPORTED_EQUILIBRIUM_SOURCES = {"provided", "relax", "artifact"}
 SUPPORTED_EIGEN_NORMALIZATIONS = {"unit_l2", "unit_max_amplitude"}

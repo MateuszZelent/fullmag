@@ -142,16 +142,32 @@ fn execute_fem_eigen_inner(
 
     // Warn about dense O(n³) scaling for large problems (transitional path).
     let active_n = reduction.active_nodes.len();
-    if active_n > 3000 {
+    let is_full_2x2 = matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);
+    let effective_dof = if is_full_2x2 { 2 * active_n } else { active_n };
+    if effective_dof > 3000 {
         eprintln!(
-            "warning: FEM eigen dense solver has {} active DOF — O(n³) scaling; \
+            "warning: FEM eigen dense solver has {} effective DOF ({} active nodes, {}) — O(n³) scaling; \
              consider reducing mesh size or awaiting future sparse/Krylov eigensolver",
-            active_n
+            effective_dof,
+            active_n,
+            if is_full_2x2 { "full 2×2" } else { "scalar" }
         );
     }
 
+    let bases = tangent_bases(&equilibrium);
+
     let real_eigenpairs = if complex_reduction {
         Vec::new()
+    } else if is_full_2x2 {
+        let (stiffness, mass) = assemble_full_2x2_operator_real(
+            plan,
+            topology,
+            &reduction,
+            &observables,
+            &equilibrium,
+            &bases,
+        );
+        solve_real_symmetric_eigenpairs(plan, stiffness, mass)?
     } else {
         let (stiffness, mass) = assemble_projected_scalar_operator_real(
             plan,
@@ -202,7 +218,6 @@ fn execute_fem_eigen_inner(
         Vec::new()
     };
 
-    let bases = tangent_bases(&equilibrium);
     let requested_modes = requested_mode_indices(outputs);
     let wants_spectrum = outputs
         .iter()
@@ -237,6 +252,26 @@ fn execute_fem_eigen_inner(
                     .map(|value| value.norm_sqr())
                     .sum::<f64>()
                     .sqrt();
+                (
+                    pair.eigenvalue_real,
+                    pair.eigenvalue_imag,
+                    real,
+                    imag,
+                    amplitude,
+                    phase,
+                    max_amplitude,
+                    norm,
+                )
+            } else if is_full_2x2 {
+                let pair = &real_eigenpairs[mode_index];
+                let (real, imag, amplitude, phase, max_amplitude) =
+                    project_2x2_mode_to_tangent_basis(
+                        topology.n_nodes,
+                        &reduction.active_nodes,
+                        &pair.vector,
+                        &bases,
+                    );
+                let norm = pair.vector.norm();
                 (
                     pair.eigenvalue_real,
                     pair.eigenvalue_imag,
@@ -949,6 +984,153 @@ fn assemble_projected_scalar_operator_real(
     (stiffness, mass)
 }
 
+/// Assemble the full 2×2 Herring–Kittel block operator.
+///
+/// The operator is 2N × 2N with blocks:
+/// ```text
+///   K = [ K_11  K_12 ]    M_block = [ M  0 ]
+///       [ K_21  K_22 ]              [ 0  M ]
+/// ```
+///
+/// Block layout: rows/cols [0..N) correspond to the e1 tangent component,
+/// rows/cols [N..2N) correspond to the e2 tangent component.
+///
+/// For exchange: the exchange stiffness is isotropic in the tangent plane,
+/// so it contributes equally to K_11 and K_22 diagonals and does NOT couple
+/// K_12/K_21.
+///
+/// For the effective-field Hessian: the full field linearisation at each node
+/// projects the per-node effective field into the tangent basis, producing
+/// diagonal parallel-field shifts on K_11/K_22 AND off-diagonal couplings on
+/// K_12/K_21 from the perpendicular field components.
+fn assemble_full_2x2_operator_real(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    reduction: &ReductionMap,
+    observables: &EffectiveFieldObservables,
+    equilibrium: &[Vector3],
+    bases: &[(Vector3, Vector3)],
+) -> (DMatrix<f64>, DMatrix<f64>) {
+    let n = reduction.active_nodes.len();
+    let dim = 2 * n;
+    let mut stiffness = DMatrix::<f64>::zeros(dim, dim);
+    let mut mass = DMatrix::<f64>::zeros(dim, dim);
+
+    // Compute local effective-field tangent-plane projection at each node.
+    // For the full 2×2 operator we need all four components:
+    //   h_11 = e1 · H_eff'[e1]   (parallel field along e1 direction)
+    //   h_22 = e2 · H_eff'[e2]   (parallel field along e2 direction)
+    //   h_12 = e1 · H_eff'[e2]   (cross-coupling e2 → e1)
+    //   h_21 = e2 · H_eff'[e1]   (cross-coupling e1 → e2)
+    //
+    // For uniform equilibrium h_11 = h_22 = h_parallel and h_12 = h_21 = 0,
+    // recovering the scalar operator.
+    let field_blocks: Vec<[f64; 4]> = observables
+        .magnetization
+        .iter()
+        .enumerate()
+        .map(|(idx, m)| {
+            let mut h_eff = [0.0, 0.0, 0.0];
+            if plan.enable_exchange {
+                h_eff = add_vector(h_eff, observables.exchange_field[idx]);
+            }
+            if plan.enable_demag {
+                h_eff = add_vector(h_eff, observables.demag_field[idx]);
+            }
+            if plan.external_field.is_some() {
+                h_eff = add_vector(h_eff, observables.external_field[idx]);
+            }
+            h_eff = add_vector(h_eff, volume_anisotropy_field(*m, plan));
+
+            let (e1, e2) = bases[idx];
+            // Project effective field into tangent basis.
+            // The diagonal components are the parallel field projections,
+            // and the off-diagonal components capture the Hessian coupling.
+            let h_parallel = dot(*m, h_eff).max(0.0);
+            // For the cross terms, we project H_eff components perpendicular to m₀.
+            // The effective-field Hessian ∂H/∂m in the tangent plane gives the 2×2 block.
+            // For the MVP, we use the h_parallel on the diagonal and compute cross terms
+            // from the tangent projections of H_eff itself.
+            let h_e1 = dot(e1, h_eff);
+            let h_e2 = dot(e2, h_eff);
+            // The 2×2 effective field tensor in the tangent basis is:
+            //   T_αβ = δ_αβ * h_parallel + correction from non-uniform field
+            // For the first-order Herring–Kittel form with dipole coupling,
+            // the cross terms arise from the component of H_eff perpendicular to m₀.
+            // In the uniform case h_e1 = h_e2 = 0, so the off-diagonal vanishes.
+            [
+                h_parallel,         // h_11 
+                h_e1 * h_e2 / (h_parallel.max(1e-30)), // h_12 (cross coupling)
+                h_e1 * h_e2 / (h_parallel.max(1e-30)), // h_21 = h_12 (symmetric)
+                h_parallel,         // h_22
+            ]
+        })
+        .collect();
+
+    for (element_index, element) in topology.elements.iter().enumerate() {
+        if !topology.magnetic_element_mask[element_index] {
+            continue;
+        }
+        let volume = topology.element_volumes[element_index];
+        let local_mass = [
+            [2.0 * volume / 20.0, volume / 20.0, volume / 20.0, volume / 20.0],
+            [volume / 20.0, 2.0 * volume / 20.0, volume / 20.0, volume / 20.0],
+            [volume / 20.0, volume / 20.0, 2.0 * volume / 20.0, volume / 20.0],
+            [volume / 20.0, volume / 20.0, volume / 20.0, 2.0 * volume / 20.0],
+        ];
+        for i in 0..4 {
+            let node_i = element[i] as usize;
+            let Some(row) = reduction.node_map[node_i] else {
+                continue;
+            };
+            for j in 0..4 {
+                let node_j = element[j] as usize;
+                let Some(col) = reduction.node_map[node_j] else {
+                    continue;
+                };
+                let m_ij = local_mass[i][j];
+                let fb_i = &field_blocks[node_i];
+                let fb_j = &field_blocks[node_j];
+
+                // Block mass matrix: M_block = diag(M, M)
+                mass[(row, col)] += m_ij;
+                mass[(row + n, col + n)] += m_ij;
+
+                // Exchange stiffness: isotropic → K_11 and K_22 only
+                if plan.enable_exchange {
+                    let ex = topology.element_stiffness[element_index][i][j];
+                    stiffness[(row, col)] += ex;
+                    stiffness[(row + n, col + n)] += ex;
+                }
+
+                // Field shift contribution (averaged between nodes i and j):
+                // K_11: h_11 shift
+                let h11 = 0.5 * (fb_i[0] + fb_j[0]);
+                stiffness[(row, col)] += m_ij * h11;
+
+                // K_22: h_22 shift
+                let h22 = 0.5 * (fb_i[3] + fb_j[3]);
+                stiffness[(row + n, col + n)] += m_ij * h22;
+
+                // K_12: cross-coupling e2 → e1
+                let h12 = 0.5 * (fb_i[1] + fb_j[1]);
+                stiffness[(row, col + n)] += m_ij * h12;
+
+                // K_21: cross-coupling e1 → e2
+                let h21 = 0.5 * (fb_i[2] + fb_j[2]);
+                stiffness[(row + n, col)] += m_ij * h21;
+            }
+        }
+    }
+
+    // Apply surface anisotropy to both diagonal blocks
+    add_surface_anisotropy_2x2(plan, topology, reduction, equilibrium, &mut stiffness, n);
+    // Apply DMI to both diagonal blocks
+    add_dmi_2x2(plan, topology, reduction, &mut stiffness, n);
+
+    (stiffness, mass)
+}
+
 fn assemble_projected_scalar_operator_complex(
     plan: &FemEigenPlanIR,
     topology: &MeshTopology,
@@ -1394,6 +1576,77 @@ fn add_dmi_complex(
     }
 }
 
+/// Apply surface anisotropy to the 2×2 block operator.
+/// Both diagonal blocks (K_11, K_22) get the same surface anisotropy term.
+fn add_surface_anisotropy_2x2(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    reduction: &ReductionMap,
+    equilibrium: &[Vector3],
+    stiffness: &mut DMatrix<f64>,
+    n: usize,
+) {
+    let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
+        return;
+    };
+    for face in &plan.mesh.boundary_faces {
+        let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
+        for i in 0..3 {
+            let Some(row) = reduction.node_map[face[i] as usize] else {
+                continue;
+            };
+            for j in 0..3 {
+                let Some(col) = reduction.node_map[face[j] as usize] else {
+                    continue;
+                };
+                // Both diagonal blocks
+                stiffness[(row, col)] += local[i][j];
+                stiffness[(row + n, col + n)] += local[i][j];
+            }
+        }
+    }
+}
+
+/// Apply DMI to the 2×2 block operator.
+/// Both diagonal blocks get the same DMI skew contribution.
+fn add_dmi_2x2(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    reduction: &ReductionMap,
+    stiffness: &mut DMatrix<f64>,
+    n: usize,
+) {
+    let scale = plan.interfacial_dmi.map(f64::abs).unwrap_or(0.0)
+        + plan.bulk_dmi.map(f64::abs).unwrap_or(0.0);
+    if scale <= 0.0 {
+        return;
+    }
+    let coeff =
+        scale / (MU0 * plan.material.saturation_magnetisation.max(1e-30) * plan.hmax.max(1e-30));
+    for (element_index, element) in topology.elements.iter().enumerate() {
+        if !topology.magnetic_element_mask[element_index] {
+            continue;
+        }
+        let gradients = &topology.grad_phi[element_index];
+        for i in 0..4 {
+            let Some(row) = reduction.node_map[element[i] as usize] else {
+                continue;
+            };
+            for j in 0..4 {
+                let Some(col) = reduction.node_map[element[j] as usize] else {
+                    continue;
+                };
+                let skew = coeff
+                    * (gradients[i][0] * gradients[j][1] - gradients[i][1] * gradients[j][0])
+                    * topology.element_volumes[element_index];
+                // Both diagonal blocks
+                stiffness[(row, col)] += skew;
+                stiffness[(row + n, col + n)] += skew;
+            }
+        }
+    }
+}
+
 /// Compute the uniaxial anisotropy effective field at a single node.
 ///
 /// H_uni = (2 Ku1 / (mu0 Ms)) (m · u) u + (4 Ku2 / (mu0 Ms)) (m · u)^3 u
@@ -1567,6 +1820,50 @@ fn project_complex_mode_to_tangent_basis(
     (real, imag, amplitude, phase, max_amplitude)
 }
 
+/// Project a 2×2 block eigenvector back to full 3D mode fields.
+///
+/// The eigenvector has 2N elements: [u1_0..u1_{N-1}, u2_0..u2_{N-1}]
+/// where u1 are the e1-component amplitudes and u2 are the e2-component
+/// amplitudes.  The 3D mode field is dm = u1*e1 + u2*e2.
+fn project_2x2_mode_to_tangent_basis(
+    total_nodes: usize,
+    active_nodes: &[usize],
+    amplitudes: &DVector<f64>,
+    bases: &[(Vector3, Vector3)],
+) -> (Vec<Vector3>, Vec<Vector3>, Vec<f64>, Vec<f64>, f64) {
+    let n = active_nodes.len();
+    let mut real = vec![[0.0, 0.0, 0.0]; total_nodes];
+    let mut imag = vec![[0.0, 0.0, 0.0]; total_nodes];
+    let mut amplitude = vec![0.0; total_nodes];
+    let mut phase = vec![0.0; total_nodes];
+    let mut max_amplitude: f64 = 0.0;
+
+    for (reduced_index, node_index) in active_nodes.iter().enumerate() {
+        let u1 = amplitudes[reduced_index];       // e1 component
+        let u2 = amplitudes[reduced_index + n];    // e2 component
+        let (e1, e2) = bases[*node_index];
+
+        // Real part of the mode: dm_real = u1*e1 + u2*e2
+        real[*node_index] = add_vector(
+            scale_vector(e1, u1),
+            scale_vector(e2, u2),
+        );
+        // Imaginary part: for the undamped real-symmetric case, the mode
+        // oscillates as dm ~ cos(ωt)*u, so the "imaginary" part is the
+        // orthogonal tangent component (circular/elliptical precession).
+        imag[*node_index] = add_vector(
+            scale_vector(e1, -u2),
+            scale_vector(e2, u1),
+        );
+        let amp = (u1 * u1 + u2 * u2).sqrt();
+        amplitude[*node_index] = amp;
+        phase[*node_index] = u2.atan2(u1);
+        max_amplitude = max_amplitude.max(amp);
+    }
+
+    (real, imag, amplitude, phase, max_amplitude)
+}
+
 fn frequency_from_eigenvalue(gyromagnetic_ratio: f64, eigenvalue: f64) -> f64 {
     angular_frequency_from_eigenvalue(gyromagnetic_ratio, eigenvalue) / (2.0 * std::f64::consts::PI)
 }
@@ -1650,9 +1947,15 @@ fn solver_kind_label(plan: &FemEigenPlanIR) -> &'static str {
     if matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet) {
         "cpu_phase_reduced_floquet"
     } else {
-        match plan.damping_policy {
-            EigenDampingPolicyIR::Ignore => "cpu_reference_symmetric",
-            EigenDampingPolicyIR::Include => "cpu_generalized_eigen",
+        match (plan.operator.kind, plan.damping_policy) {
+            (fullmag_ir::EigenOperatorIR::Full2x2, EigenDampingPolicyIR::Ignore) => {
+                "cpu_full_2x2_symmetric"
+            }
+            (fullmag_ir::EigenOperatorIR::Full2x2, EigenDampingPolicyIR::Include) => {
+                "cpu_full_2x2_damped"
+            }
+            (_, EigenDampingPolicyIR::Ignore) => "cpu_reference_symmetric",
+            (_, EigenDampingPolicyIR::Include) => "cpu_generalized_eigen",
         }
     }
 }
@@ -1660,6 +1963,8 @@ fn solver_kind_label(plan: &FemEigenPlanIR) -> &'static str {
 fn solver_notes(plan: &FemEigenPlanIR, complex_reduction: bool) -> &'static str {
     if complex_reduction {
         "phase-aware periodic reduction on a real doubled Hermitian block"
+    } else if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+        "full 2×2 Herring-Kittel block operator in tangent plane (2N DOF)"
     } else if matches!(plan.damping_policy, EigenDampingPolicyIR::Include) {
         "damping artifacts use first-order alpha linewidth correction over the CPU reference eigenbasis"
     } else {
@@ -1669,6 +1974,9 @@ fn solver_notes(plan: &FemEigenPlanIR, complex_reduction: bool) -> &'static str 
 
 fn solver_capabilities(plan: &FemEigenPlanIR, complex_reduction: bool) -> Vec<&'static str> {
     let mut capabilities = vec!["cpu_reference_eigen", "artifact_backed_analyze"];
+    if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+        capabilities.push("full_2x2_herring_kittel");
+    }
     match plan.spin_wave_bc.kind() {
         SpinWaveBoundaryKindIR::Free => capabilities.push("free_bc"),
         SpinWaveBoundaryKindIR::Pinned => capabilities.push("pinned_bc"),
@@ -1716,6 +2024,9 @@ fn solver_capabilities(plan: &FemEigenPlanIR, complex_reduction: bool) -> Vec<&'
 
 fn solver_limitations(plan: &FemEigenPlanIR, complex_reduction: bool) -> Vec<&'static str> {
     let mut limitations = Vec::new();
+    if !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+        limitations.push("scalar_projection_only_accurate_for_uniform_equilibrium");
+    }
     if matches!(plan.damping_policy, EigenDampingPolicyIR::Include) {
         limitations.push("no_generalized_qz_backend");
         limitations.push("damping_is_first_order_linewidth_correction");

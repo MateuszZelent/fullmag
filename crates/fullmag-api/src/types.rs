@@ -157,7 +157,7 @@ pub(crate) struct RunManifest {
     pub artifact_dir: String,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct ArtifactEntry {
     pub path: String,
     pub kind: String,
@@ -465,7 +465,7 @@ pub(crate) struct SessionStateResponseView<'a> {
     pub step_update_v2: Option<fullmag_quantities::StepUpdateV2>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct QuantityDescriptor {
     pub id: String,
     pub label: String,
@@ -523,14 +523,14 @@ impl CachedPreviewFields {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum PreviewState {
     Spatial(SpatialPreviewState),
     GlobalScalar(GlobalScalarPreviewState),
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct SpatialPreviewState {
     pub display_kind: String,
     pub config_revision: u64,
@@ -577,7 +577,7 @@ pub(crate) struct SpatialPreviewState {
     pub active_mask: Option<Vec<bool>>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct GlobalScalarPreviewState {
     pub display_kind: String,
     pub config_revision: u64,

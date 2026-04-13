@@ -6,6 +6,7 @@ import { RefreshCw } from "lucide-react";
 import DispersionBranchPlot from "@/components/analyze/DispersionBranchPlot";
 import EigenAnalyzeWorkbench from "@/components/analyze/EigenAnalyzeWorkbench";
 import EigenModeInspector from "@/components/analyze/EigenModeInspector";
+import EigenSolverSummary from "@/components/analyze/EigenSolverSummary";
 import ModeSpectrumPlot from "@/components/analyze/ModeSpectrumPlot";
 import VortexAnalyzeWorkbench from "@/components/analyze/VortexAnalyzeWorkbench";
 import type { VortexTimeSample } from "@/components/analyze/vortexTypes";
@@ -372,11 +373,14 @@ export default function AnalyzeViewport() {
           ) : (
           <Tabs
             value={model.analyzeSelection.tab}
-            onValueChange={(value) => model.selectAnalyzeTab(value as "spectrum" | "modes" | "dispersion")}
+            onValueChange={(value) => model.selectAnalyzeTab(value as "summary" | "spectrum" | "modes" | "dispersion")}
             className="flex h-full flex-col"
           >
             <div className="shrink-0 border-b border-border/20 px-3 pt-2">
               <TabsList className="h-7 gap-0.5 bg-transparent p-0">
+                <TabsTrigger value="summary" className="h-7 px-3 text-[0.72rem]">
+                  Summary
+                </TabsTrigger>
                 <TabsTrigger value="spectrum" className="h-7 px-3 text-[0.72rem]">
                   Spectrum
                 </TabsTrigger>
@@ -391,11 +395,18 @@ export default function AnalyzeViewport() {
               </TabsList>
             </div>
 
+            <TabsContent value="summary" className="flex-1 min-h-0 overflow-y-auto p-3">
+              <EigenSolverSummary spectrum={spectrum} />
+            </TabsContent>
+
             <TabsContent value="spectrum" className="flex-1 min-h-0 p-3">
               <ModeSpectrumPlot
                 modes={spectrum.modes}
                 selectedMode={selectedMode}
-                onSelectMode={(modeIndex) => selectMode(modeIndex)}
+                onSelectMode={(modeIndex) => {
+                  selectMode(modeIndex);
+                  model.selectAnalyzeTab("modes");
+                }}
               />
             </TabsContent>
 

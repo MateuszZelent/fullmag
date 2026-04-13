@@ -24,6 +24,7 @@ import {
   type CheckpointEntry,
   type RecoveryEntry,
 } from "../api/sessionPersistence";
+import { useWorkspaceStore } from "../workspace/workspace-store";
 
 export interface UseSessionPersistenceResult {
   /** True while any persistence operation is in flight. */
@@ -83,7 +84,8 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
   const saveSession = useCallback(
     async (profile: SaveProfile, name?: string) => {
       return wrap(async () => {
-        const resp = await exportSession({ profile, name });
+        const uiState = useWorkspaceStore.getState().exportUiStateSnapshot();
+        const resp = await exportSession({ profile, name, ui_state: uiState });
         const filename = `${name ?? "session"}.fms`;
         downloadFmsFile(resp.fms_base64, filename);
         return resp;
@@ -107,10 +109,14 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
     async (file: File, restoreMode?: string) => {
       return wrap(async () => {
         const base64 = await fileToBase64(file);
-        return commitSessionImport({
+        const response = await commitSessionImport({
           fms_base64: base64,
           restore_mode: restoreMode,
         });
+        if (response.ui_state !== undefined) {
+          useWorkspaceStore.getState().importUiStateSnapshot(response.ui_state);
+        }
+        return response;
       });
     },
     [wrap],
