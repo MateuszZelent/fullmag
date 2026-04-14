@@ -307,8 +307,9 @@ def resolve_shared_domain_targets(
             if isinstance(workflow_entry, Mapping)
             else None
         )
-        if interface_hmax is None and bulk_hmax is not None and default_hmax is not None and bulk_hmax < default_hmax:
-            interface_hmax = bulk_hmax * 0.6
+        # interface_hmax is only set when the user explicitly requests it.
+        # The previous auto-default (0.6×bulk) created elements finer than
+        # the body interior, throttling SmoothRatio growth in the airbox.
 
         transition_distance = (
             _coerce_positive_float(workflow_entry.get("transition_distance"))

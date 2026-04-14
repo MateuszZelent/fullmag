@@ -186,8 +186,13 @@ def _build_interface_fields(
         )
 
         if interface_hmax is None:
-            # Default: interface is 60% of bulk to give visible refinement
-            interface_hmax = bulk_hmax * 0.6
+            # Only generate interface refinement when the user explicitly
+            # requests it.  The auto-computed 0.6×bulk default created
+            # elements *finer* than the body interior at the boundary,
+            # throttling SmoothRatio growth and inflating airbox element
+            # count.  The transition field already grades from bulk_hmax
+            # outward, so the interface layer is redundant by default.
+            continue
         if interface_thickness is None:
             # Default thickness = 2× the interface element size
             interface_thickness = interface_hmax * 2.0
@@ -269,6 +274,13 @@ def _build_transition_fields(
         if bulk_hmax >= default_hmax:
             continue
 
+        # SizeMax = default_hmax (the airbox target) so the Threshold
+        # linearly ramps from bulk_hmax at the body surface to
+        # default_hmax at the transition boundary.  Previously SizeMax
+        # was 1e22, which jumped to infinity at d>0 and left grading
+        # entirely to SmoothRatio — wasting the transition field.
+        transition_size_max = default_hmax
+
         if component_aware:
             fields.append(
                 {
@@ -276,7 +288,7 @@ def _build_transition_fields(
                     "params": {
                         "GeometryName": geometry.geometry_name,
                         "SizeMin": float(bulk_hmax),
-                        "SizeMax": float(_NO_OP_FIELD_SIZE),
+                        "SizeMax": float(transition_size_max),
                         "DistMin": 0.0,
                         "DistMax": float(transition_distance),
                         "Sampling": 20,
@@ -302,7 +314,7 @@ def _build_transition_fields(
                     "BoundsMin": list(bounds_min),
                     "BoundsMax": list(bounds_max),
                     "SizeMin": float(bulk_hmax),
-                    "SizeMax": float(_NO_OP_FIELD_SIZE),
+                    "SizeMax": float(transition_size_max),
                     "DistMin": 0.0,
                     "DistMax": float(transition_distance),
                     "Sampling": 20,
