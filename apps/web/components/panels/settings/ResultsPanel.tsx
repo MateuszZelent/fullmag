@@ -452,7 +452,7 @@ export default function ResultsPanel() {
           break;
       }
     },
-    [dispatch, workspace.datasets],
+    [dispatch, workspace.datasets, workspace.derivedValues],
   );
 
   const datasetIds = useMemo(

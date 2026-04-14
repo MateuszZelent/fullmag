@@ -1,33 +1,11 @@
 "use client";
 
-/**
- * ScalarPlot – Plotly.js line chart for time-series data.
- *
- * Performance-critical: during live simulation the upstream store pushes
- * new `rows` on every poll cycle.  We throttle visual updates to
- * ≤3 fps by tracking a `revision` counter that only bumps every
- * THROTTLE_MS.  Plotly.react() is called only when `revision` changes,
- * avoiding expensive full re-renders.
- *
- * Incremental trace building: x/y arrays are cached and extended
- * (append-only) when the row set grows monotonically, avoiding full
- * O(N) rebuilds on every render cycle.
- *
- * Automatic X-axis time scaling: raw time values (seconds) are normalised
- * to the most readable SI prefix (ps, ns, µs, ms, s) based on the data
- * range.
- */
-
-import { useMemo, useRef, memo, useEffect, useState } from "react";
+import { memo, useMemo } from "react";
 import type { QuantityDescriptor, ScalarRow } from "../../lib/useSessionStream";
 import Plot from "./DynamicPlot";
 import { scalarSeriesList, type ScalarSeriesMeta } from "../../lib/quantities/scalars";
 import { normalizeUnitLabel } from "../../lib/format";
 
-// ─── Constants ──────────────────────────────────────────────────────
-
-/** Minimum interval (ms) between chart re-draws during live streaming. */
-const THROTTLE_MS = 350;
 const MAX_VISIBLE_POINTS = 2400;
 
 const SERIES_COLORS = [
@@ -46,8 +24,6 @@ const accessor = (row: ScalarRow, key: string): number => {
   return typeof value === "number" ? value : 0;
 };
 
-// ─── Time auto-scaling ───────────────────────────────────────────────
-
 interface TimeScale {
   factor: number;
   unit: string;
@@ -55,11 +31,11 @@ interface TimeScale {
 }
 
 const TIME_SCALES: TimeScale[] = [
-  { factor: 1e12, unit: "ps",  tickformat: ".3g" },
-  { factor: 1e9,  unit: "ns",  tickformat: ".3g" },
-  { factor: 1e6,  unit: "µs",  tickformat: ".3g" },
-  { factor: 1e3,  unit: "ms",  tickformat: ".3g" },
-  { factor: 1,    unit: "s",   tickformat: ".4g" },
+  { factor: 1e12, unit: "ps", tickformat: ".3g" },
+  { factor: 1e9, unit: "ns", tickformat: ".3g" },
+  { factor: 1e6, unit: "µs", tickformat: ".3g" },
+  { factor: 1e3, unit: "ms", tickformat: ".3g" },
+  { factor: 1, unit: "s", tickformat: ".4g" },
 ];
 
 function chooseTimeScale(maxAbsSeconds: number): TimeScale {
@@ -69,8 +45,6 @@ function chooseTimeScale(maxAbsSeconds: number): TimeScale {
   }
   return TIME_SCALES[TIME_SCALES.length - 1];
 }
-
-// ─── Theme ──────────────────────────────────────────────────────────
 
 const THEME = {
   bg: "transparent",
@@ -82,8 +56,6 @@ const THEME = {
   hoverBorder: "hsl(217.2, 32.6%, 17.5%)",
 } as const;
 
-// ─── Props ──────────────────────────────────────────────────────────
-
 interface Props {
   rows: ScalarRow[];
   quantities?: QuantityDescriptor[];
@@ -94,164 +66,6 @@ interface Props {
   uiRevisionKey?: string;
 }
 
-// ─── Throttle hook ──────────────────────────────────────────────────
-
-/**
- * Accepts a fast-changing value and returns a throttled version that
- * updates at most once every `intervalMs`.  This prevents Plotly from
- * re-rendering on every WS tick.
- */
-function useThrottledValue<T>(value: T, intervalMs: number): T {
-  const [throttled, setThrottled] = useState(value);
-  const lastUpdate = useRef(0);
-  const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    const now = Date.now();
-    const elapsed = now - lastUpdate.current;
-
-    if (elapsed >= intervalMs) {
-      // Enough time passed — update immediately
-      lastUpdate.current = now;
-      setThrottled(value);
-      if (pending.current) {
-        clearTimeout(pending.current);
-        pending.current = null;
-      }
-    } else if (!pending.current) {
-      // Schedule a trailing update
-      pending.current = setTimeout(() => {
-        lastUpdate.current = Date.now();
-        setThrottled(value);
-        pending.current = null;
-      }, intervalMs - elapsed);
-    }
-
-    return () => {
-      if (pending.current) {
-        clearTimeout(pending.current);
-        pending.current = null;
-      }
-    };
-  }, [value, intervalMs]);
-
-  return throttled;
-}
-
-// ─── Incremental trace cache ────────────────────────────────────────
-
-interface TraceCache {
-  /** Length of rowsForPlot when last computed. */
-  rowCount: number;
-  /** Last step value — used to detect pure appends vs resets. */
-  lastStep: number;
-  /** Cached x-values array. */
-  xValues: number[];
-  /** Cached y-values per series key. */
-  yByKey: Map<string, number[]>;
-  /** Time scale factor used for x-values. */
-  timeScaleFactor: number;
-  /** X column used. */
-  xColumn: string;
-}
-
-/**
- * Build x/y trace arrays incrementally.
- *
- * When the row set grows monotonically (pure append), only the new rows
- * are mapped and pushed onto the cached arrays.  When a reset, downsample
- * stride change, or config change is detected, a full rebuild is done.
- */
-function useIncrementalTraces(
-  rowsForPlot: ScalarRow[],
-  seriesMeta: ScalarSeriesMeta[],
-  xColumn: string,
-  timeScale: TimeScale | null,
-): { xValues: number[]; yByKey: Map<string, number[]> } {
-  const cacheRef = useRef<TraceCache | null>(null);
-
-  return useMemo(() => {
-    const timeScaleFactor = timeScale?.factor ?? 1;
-    const isTime = xColumn === "time" && timeScale != null;
-    const cache = cacheRef.current;
-
-    const currentLastStep = rowsForPlot.length > 0
-      ? (rowsForPlot[rowsForPlot.length - 1]?.step ?? -1)
-      : -1;
-
-    // Check if we can do an incremental append
-    const canAppend =
-      cache != null &&
-      cache.xColumn === xColumn &&
-      cache.timeScaleFactor === timeScaleFactor &&
-      cache.rowCount > 0 &&
-      rowsForPlot.length >= cache.rowCount &&
-      currentLastStep >= cache.lastStep &&
-      // Verify the prefix is unchanged by checking the old last row
-      rowsForPlot.length > 0 &&
-      cache.rowCount <= rowsForPlot.length;
-
-    if (canAppend && cache != null) {
-      const startIdx = cache.rowCount;
-      const newCount = rowsForPlot.length - startIdx;
-
-      if (newCount === 0) {
-        // No new rows — return cached arrays directly (stable reference)
-        return { xValues: cache.xValues, yByKey: cache.yByKey };
-      }
-
-      // Extend x-values
-      const xValues = cache.xValues;
-      for (let i = startIdx; i < rowsForPlot.length; i++) {
-        const row = rowsForPlot[i];
-        xValues.push(isTime ? accessor(row, "time") * timeScaleFactor : accessor(row, xColumn));
-      }
-
-      // Extend y-values per series
-      const yByKey = cache.yByKey;
-      for (const series of seriesMeta) {
-        let arr = yByKey.get(series.key);
-        if (!arr) {
-          // New series added — full compute
-          arr = rowsForPlot.map((r) => accessor(r, series.key));
-          yByKey.set(series.key, arr);
-        } else {
-          for (let i = startIdx; i < rowsForPlot.length; i++) {
-            arr.push(accessor(rowsForPlot[i], series.key));
-          }
-        }
-      }
-
-      cache.rowCount = rowsForPlot.length;
-      cache.lastStep = currentLastStep;
-      return { xValues, yByKey };
-    }
-
-    // Full rebuild
-    const xValues: number[] = isTime
-      ? rowsForPlot.map((r) => accessor(r, "time") * timeScaleFactor)
-      : rowsForPlot.map((r) => accessor(r, xColumn));
-
-    const yByKey = new Map<string, number[]>();
-    for (const series of seriesMeta) {
-      yByKey.set(series.key, rowsForPlot.map((r) => accessor(r, series.key)));
-    }
-
-    cacheRef.current = {
-      rowCount: rowsForPlot.length,
-      lastStep: currentLastStep,
-      xValues,
-      yByKey,
-      timeScaleFactor,
-      xColumn,
-    };
-
-    return { xValues, yByKey };
-  }, [rowsForPlot, seriesMeta, xColumn, timeScale]);
-}
-
-// ─── Component ──────────────────────────────────────────────────────
-
 const ScalarPlot = memo(function ScalarPlot({
   rows,
   quantities = [],
@@ -261,27 +75,14 @@ const ScalarPlot = memo(function ScalarPlot({
   chartTitle,
   uiRevisionKey = "charts",
 }: Props) {
-  // ── Throttle rows to ≤3 fps ──
-  const throttledRows = useThrottledValue(rows, THROTTLE_MS);
-  const revision = useRef(0);
-  const prevRowCount = useRef(0);
-
-  // Bump revision only when the throttled snapshot actually changed
-  if (throttledRows.length !== prevRowCount.current) {
-    prevRowCount.current = throttledRows.length;
-    revision.current += 1;
-  }
-
   const rowsForPlot = useMemo(() => {
-    if (throttledRows.length <= MAX_VISIBLE_POINTS) return throttledRows;
-    const stride = Math.ceil(throttledRows.length / MAX_VISIBLE_POINTS);
-    const sampled = throttledRows.filter((_, index) => index % stride === 0);
-    const last = throttledRows[throttledRows.length - 1];
-    if (sampled[sampled.length - 1] !== last) {
-      sampled.push(last);
-    }
+    if (rows.length <= MAX_VISIBLE_POINTS) return rows;
+    const stride = Math.ceil(rows.length / MAX_VISIBLE_POINTS);
+    const sampled = rows.filter((_, index) => index % stride === 0);
+    const last = rows[rows.length - 1];
+    if (sampled[sampled.length - 1] !== last) sampled.push(last);
     return sampled;
-  }, [throttledRows]);
+  }, [rows]);
 
   const isTimeColumn = xColumn === "time";
 
@@ -289,24 +90,36 @@ const ScalarPlot = memo(function ScalarPlot({
     () => scalarSeriesList([xColumn], quantities)[0] ?? { key: xColumn, label: xColumn, unit: "", kind: "diagnostic" as const },
     [quantities, xColumn],
   );
+
   const seriesMeta = useMemo(
     () => scalarSeriesList(yColumns, quantities),
     [quantities, yColumns],
   );
+
   const magnetizationOnly =
     seriesMeta.length > 0 && seriesMeta.every((meta) => isMagnetizationAverageColumn(meta.key));
 
-  // ── Auto-scale time axis ──────────────────────────────────────────
   const timeScale = useMemo((): TimeScale | null => {
     if (!isTimeColumn || rowsForPlot.length === 0) return null;
     const maxT = rowsForPlot.reduce((max, r) => Math.max(max, Math.abs(accessor(r, "time"))), 0);
     return chooseTimeScale(maxT);
   }, [isTimeColumn, rowsForPlot]);
 
-  // ── Incremental x/y trace arrays ─────────────────────────────────
-  const { xValues, yByKey } = useIncrementalTraces(rowsForPlot, seriesMeta, xColumn, timeScale);
+  const xValues = useMemo(() => {
+    if (xColumn === "time" && timeScale) {
+      return rowsForPlot.map((r) => accessor(r, "time") * timeScale.factor);
+    }
+    return rowsForPlot.map((r) => accessor(r, xColumn));
+  }, [rowsForPlot, xColumn, timeScale]);
 
-  // Axis label
+  const yByKey = useMemo(() => {
+    const grouped = new Map<string, number[]>();
+    for (const series of seriesMeta) {
+      grouped.set(series.key, rowsForPlot.map((r) => accessor(r, series.key)));
+    }
+    return grouped;
+  }, [rowsForPlot, seriesMeta]);
+
   const xLabel = useMemo(() => {
     if (timeScale) return `Time (${timeScale.unit})`;
     return buildAxisLabel(xMeta);
@@ -324,14 +137,12 @@ const ScalarPlot = memo(function ScalarPlot({
     }
     const orderedUnits = [...grouped.keys()];
     return {
-      orderedUnits,
       leftUnit: orderedUnits[0] ?? "",
       rightUnit: orderedUnits[1] ?? "",
       unitByKey,
     };
   }, [seriesMeta]);
 
-  // Build Plotly traces — uses incremental x/y arrays
   const traces = useMemo(() => {
     const mode = rowsForPlot.length > 1 ? ("lines" as const) : ("markers" as const);
 
@@ -433,7 +244,7 @@ const ScalarPlot = memo(function ScalarPlot({
       },
       dragmode: "zoom",
       uirevision: uiRevisionKey,
-      datarevision: revision.current,
+      datarevision: rowsForPlot.length,
       modebar: {
         bgcolor: "transparent",
         color: THEME.text,
@@ -450,7 +261,7 @@ const ScalarPlot = memo(function ScalarPlot({
       unitGroups.leftUnit,
       unitGroups.rightUnit,
       uiRevisionKey,
-      revision.current,
+      rowsForPlot.length,
     ],
   );
 
@@ -479,7 +290,7 @@ const ScalarPlot = memo(function ScalarPlot({
       data={traces}
       layout={layout}
       config={config}
-      revision={revision.current}
+      revision={rowsForPlot.length}
       useResizeHandler
       className="h-full w-full"
     />

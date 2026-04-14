@@ -328,7 +328,13 @@ export function useFemToolbarModel({
       density: baseArrowDensity,
       effectiveDensity: effectiveArrowDensity,
     }),
-    [arrowRenderState, baseArrowDensity, effectiveArrowDensity],
+    [
+      arrowRenderState.requested,
+      arrowRenderState.visible,
+      arrowRenderState.reason,
+      baseArrowDensity,
+      effectiveArrowDensity,
+    ],
   );
 
   // P1-1: Use canonical resolveViewportSelectionScope for scope label
@@ -385,7 +391,7 @@ export function useFemToolbarModel({
       return null;
     }
     return { min, max, mean: sum / meshData.nNodes };
-  }, [legendField, meshData.fieldData, meshData.nNodes, qualityPerFace]);
+  }, [legendField, meshData.fieldData, meshData.fieldNComp, meshData.nNodes, qualityPerFace]);
 
   return {
     selectionScope,
