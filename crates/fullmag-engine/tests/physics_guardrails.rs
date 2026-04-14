@@ -92,7 +92,10 @@ fn guardrail_uniform_exchange_field_is_zero() {
     let max = h_ex.iter().fold(0.0f64, |acc, v| {
         acc.max(v[0].abs()).max(v[1].abs()).max(v[2].abs())
     });
-    assert!(max < 1e-10, "exchange field of uniform state must be zero, got max={max}");
+    assert!(
+        max < 1e-10,
+        "exchange field of uniform state must be zero, got max={max}"
+    );
 }
 
 /// Uniform sphere/ellipsoid average demag field sanity.
@@ -100,9 +103,16 @@ fn guardrail_uniform_exchange_field_is_zero() {
 #[test]
 fn guardrail_thin_film_demag_shape_anisotropy() {
     let p = permalloy_problem(
-        32, 32, 1, 5.0,
+        32,
+        32,
+        1,
+        5.0,
         TimeIntegrator::Heun,
-        EffectiveFieldTerms { exchange: false, demag: true, ..Default::default() },
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: true,
+            ..Default::default()
+        },
     );
 
     let in_plane = p.uniform_state([1.0, 0.0, 0.0]).unwrap();
@@ -131,7 +141,14 @@ fn guardrail_rk45_heun_parity_exchange_relax() {
     let mut s_heun = p_heun.new_state(mag.clone()).unwrap();
     let mut ws_heun = p_heun.create_workspace();
     let mut bufs_heun = p_heun.create_integrator_buffers();
-    relax_steps(&p_heun, &mut s_heun, &mut ws_heun, &mut bufs_heun, dt, steps);
+    relax_steps(
+        &p_heun,
+        &mut s_heun,
+        &mut ws_heun,
+        &mut bufs_heun,
+        dt,
+        steps,
+    );
     let e_heun = p_heun.observe(&s_heun).unwrap().exchange_energy_joules;
 
     // RK45 relaxation (adaptive → may take different timesteps)
@@ -139,7 +156,14 @@ fn guardrail_rk45_heun_parity_exchange_relax() {
     let mut s_rk45 = p_rk45.new_state(mag).unwrap();
     let mut ws_rk45 = p_rk45.create_workspace();
     let mut bufs_rk45 = p_rk45.create_integrator_buffers();
-    relax_steps(&p_rk45, &mut s_rk45, &mut ws_rk45, &mut bufs_rk45, dt, steps);
+    relax_steps(
+        &p_rk45,
+        &mut s_rk45,
+        &mut ws_rk45,
+        &mut bufs_rk45,
+        dt,
+        steps,
+    );
     let e_rk45 = p_rk45.observe(&s_rk45).unwrap().exchange_energy_joules;
 
     // Both should produce approximately the same relaxed energy
@@ -179,9 +203,16 @@ fn guardrail_relax_monotonicity_exchange_demag() {
 #[test]
 fn guardrail_demag_energy_non_negative() {
     let p = permalloy_problem(
-        8, 8, 4, 5.0,
+        8,
+        8,
+        4,
+        5.0,
         TimeIntegrator::Heun,
-        EffectiveFieldTerms { exchange: false, demag: true, ..Default::default() },
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: true,
+            ..Default::default()
+        },
     );
     for seed in [1, 42, 137, 999, 2025] {
         let mag = random_magnetization(p.grid.cell_count(), seed);
@@ -203,13 +234,17 @@ fn guardrail_buffer_path_matches_workspace_path() {
     // Path A: step_with_workspace (legacy)
     let mut state_a = p.new_state(mag.clone()).unwrap();
     let mut ws_a = p.create_workspace();
-    let _report_a = p.step_with_workspace(&mut state_a, 1e-14, &mut ws_a).unwrap();
+    let _report_a = p
+        .step_with_workspace(&mut state_a, 1e-14, &mut ws_a)
+        .unwrap();
 
     // Path B: step_with_buffers (optimized)
     let mut state_b = p.new_state(mag).unwrap();
     let mut ws_b = p.create_workspace();
     let mut bufs = p.create_integrator_buffers();
-    let _report_b = p.step_with_buffers(&mut state_b, 1e-14, &mut ws_b, &mut bufs).unwrap();
+    let _report_b = p
+        .step_with_buffers(&mut state_b, 1e-14, &mut ws_b, &mut bufs)
+        .unwrap();
 
     // Magnetization must be bitwise identical
     for (i, (a, b)) in state_a
@@ -229,9 +264,16 @@ fn guardrail_buffer_path_matches_workspace_path() {
 #[test]
 fn guardrail_workspace_demag_consistency() {
     let p = permalloy_problem(
-        8, 8, 4, 5.0,
+        8,
+        8,
+        4,
+        5.0,
         TimeIntegrator::Heun,
-        EffectiveFieldTerms { exchange: false, demag: true, ..Default::default() },
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: true,
+            ..Default::default()
+        },
     );
     let mag = random_magnetization(p.grid.cell_count(), 55);
     let state = p.new_state(mag).unwrap();

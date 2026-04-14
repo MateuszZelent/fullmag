@@ -33,11 +33,7 @@ impl QuantityRegistry {
     }
 
     /// Evaluate a quantity by id.
-    pub fn evaluate(
-        &self,
-        id: QuantityId,
-        ctx: &QuantityEvalContext<'_>,
-    ) -> Option<QuantityValue> {
+    pub fn evaluate(&self, id: QuantityId, ctx: &QuantityEvalContext<'_>) -> Option<QuantityValue> {
         self.providers.get(&id)?.evaluate(ctx)
     }
 
@@ -53,9 +49,7 @@ impl QuantityRegistry {
 
     /// Check whether a quantity is available in the current context.
     pub fn is_available(&self, id: QuantityId, ctx: &QuantityEvalContext<'_>) -> bool {
-        self.providers
-            .get(&id)
-            .is_some_and(|p| p.is_available(ctx))
+        self.providers.get(&id).is_some_and(|p| p.is_available(ctx))
     }
 
     /// Evaluate all available quantities in the current context.
@@ -65,10 +59,7 @@ impl QuantityRegistry {
     /// Python `SaveQuantity`, artifact export). Each call iterates the
     /// full provider set and returns only those that are currently
     /// computable.
-    pub fn evaluate_all(
-        &self,
-        ctx: &QuantityEvalContext<'_>,
-    ) -> Vec<(QuantityId, QuantityValue)> {
+    pub fn evaluate_all(&self, ctx: &QuantityEvalContext<'_>) -> Vec<(QuantityId, QuantityValue)> {
         let mut results = Vec::new();
         for (&id, provider) in &self.providers {
             if let Some(value) = provider.evaluate(ctx) {
@@ -148,8 +139,7 @@ impl QuantityProvider for VectorFieldProvider {
 
     fn is_available(&self, ctx: &QuantityEvalContext<'_>) -> bool {
         if self.id == QuantityId::M {
-            return ctx.magnetization.is_some()
-                || ctx.named_fields.get_field("m").is_some();
+            return ctx.magnetization.is_some() || ctx.named_fields.get_field("m").is_some();
         }
         ctx.named_fields.get_field(self.id.as_str()).is_some()
     }
@@ -223,10 +213,8 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
 
     // Vector fields
     for id in [
-        M, HEx, HDemag, HExt, HAnt, HEff, HAni, HDmi, HMel,
-        HAniCubic, HDmiBulk, HOe, HTherm,
-        ModeReal, ModeImag,
-        // Second wave (QB-17)
+        M, HEx, HDemag, HExt, HAnt, HEff, HAni, HDmi, HMel, HAniCubic, HDmiBulk, HOe, HTherm,
+        ModeReal, ModeImag, // Second wave (QB-17)
         DmDt, TorqueStt, TorqueSot,
     ] {
         registry.register(Box::new(VectorFieldProvider::new(id)));
@@ -234,9 +222,15 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
 
     // Spatial-scalar fields
     for id in [
-        ModeAmplitude, ModePhase,
+        ModeAmplitude,
+        ModePhase,
         // Second wave (QB-17): energy densities
-        EdenEx, EdenDemag, EdenExt, EdenAni, EdenDmi, EdenTotal,
+        EdenEx,
+        EdenDemag,
+        EdenExt,
+        EdenAni,
+        EdenDmi,
+        EdenTotal,
     ] {
         registry.register(Box::new(SpatialScalarFieldProvider::new(id)));
     }

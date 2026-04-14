@@ -103,11 +103,8 @@ pub fn capture_checkpoint(
     let aux = provider.auxiliary_fields(request.field_policy)?;
     for (name, data) in &aux {
         let hash = store.store_magnetization(data)?;
-        let desc = TensorDescriptor::new_f64(
-            &name,
-            vec![data.len(), 3],
-            vec!["node".into(), "c".into()],
-        );
+        let desc =
+            TensorDescriptor::new_f64(&name, vec![data.len(), 3], vec!["node".into(), "c".into()]);
         let desc_hash = store.cas().put_json(&desc)?;
         checkpoint.field_refs.push(FieldRef {
             name: name.clone(),
@@ -120,13 +117,12 @@ pub fn capture_checkpoint(
     }
 
     // 6. Backend state.
-    let backend_state = if request.profile != SaveProfile::Compact
-        && request.profile != SaveProfile::Solved
-    {
-        provider.backend_state_payload()?
-    } else {
-        None
-    };
+    let backend_state =
+        if request.profile != SaveProfile::Compact && request.profile != SaveProfile::Solved {
+            provider.backend_state_payload()?
+        } else {
+            None
+        };
 
     if let Some(ref bsp) = backend_state {
         let bsp_json = serde_json::to_vec_pretty(bsp)?;

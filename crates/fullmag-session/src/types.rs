@@ -6,7 +6,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-
 // ── Save profiles ──────────────────────────────────────────────────────
 
 /// Which elements to include when saving a session.
@@ -72,7 +71,11 @@ pub struct FmsSessionManifest {
 }
 
 impl FmsSessionManifest {
-    pub fn new(session_id: impl Into<String>, name: impl Into<String>, profile: SaveProfile) -> Self {
+    pub fn new(
+        session_id: impl Into<String>,
+        name: impl Into<String>,
+        profile: SaveProfile,
+    ) -> Self {
         let now = Utc::now();
         Self {
             format: "fullmag.session.v1".into(),

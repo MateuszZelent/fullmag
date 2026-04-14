@@ -52,7 +52,10 @@ impl SessionStore {
     /// Persist a session manifest and update the `CURRENT` pointer.
     pub fn commit_session(&self, manifest: &FmsSessionManifest) -> Result<()> {
         let json = serde_json::to_vec_pretty(manifest)?;
-        let path = self.root.join("manifests").join(format!("{}.json", manifest.session_id));
+        let path = self
+            .root
+            .join("manifests")
+            .join(format!("{}.json", manifest.session_id));
         atomic_write(&path, &json)?;
         // Atomically update CURRENT to point to this session.
         let current_path = self.root.join("CURRENT");
@@ -67,7 +70,10 @@ impl SessionStore {
             return Ok(None);
         }
         let session_id = fs::read_to_string(&current_path)?.trim().to_string();
-        let manifest_path = self.root.join("manifests").join(format!("{session_id}.json"));
+        let manifest_path = self
+            .root
+            .join("manifests")
+            .join(format!("{session_id}.json"));
         if !manifest_path.exists() {
             return Ok(None);
         }
@@ -91,7 +97,11 @@ impl SessionStore {
 
     /// Read a run manifest.
     pub fn read_run(&self, run_id: &str) -> Result<Option<FmsRunManifest>> {
-        let path = self.root.join("runs").join(run_id).join("run_manifest.json");
+        let path = self
+            .root
+            .join("runs")
+            .join(run_id)
+            .join("run_manifest.json");
         if !path.exists() {
             return Ok(None);
         }
@@ -191,7 +201,10 @@ impl SessionStore {
     /// Write a crash-recovery snapshot.
     pub fn write_recovery(&self, session: &FmsSessionManifest) -> Result<()> {
         let data = serde_json::to_vec_pretty(session)?;
-        let path = self.root.join("recovery").join(format!("{}.json", session.session_id));
+        let path = self
+            .root
+            .join("recovery")
+            .join(format!("{}.json", session.session_id));
         atomic_write(&path, &data)
     }
 
@@ -309,8 +322,7 @@ impl SessionStore {
 /// Atomic write: write to temp then rename.
 fn atomic_write(dest: &Path, data: &[u8]) -> Result<()> {
     let temp = dest.with_extension("part");
-    fs::write(&temp, data)
-        .with_context(|| format!("writing {}", temp.display()))?;
+    fs::write(&temp, data).with_context(|| format!("writing {}", temp.display()))?;
     fs::rename(&temp, dest)
         .with_context(|| format!("renaming {} → {}", temp.display(), dest.display()))?;
     Ok(())

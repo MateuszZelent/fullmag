@@ -87,6 +87,12 @@ Use physically meaningful stopping criteria:
 
 Do **not** stop on energy stagnation alone.
 
+For shared product semantics with the current FDM runner, the public
+`torque_tolerance` control is expressed in `A/m` as
+`max |m × H_eff|`. A derived `max_torque_T = μ0 * max_torque_Apm` observable may
+still be surfaced for mumax-style comparability, but it is auxiliary and must
+not replace the canonical stop threshold.
+
 ### 2.3 Symbols and SI units
 
 | Symbol | Meaning | Unit |
@@ -121,6 +127,17 @@ See:
 
 This is the easiest bootstrap because it reuses the dynamic RHS machinery.
 Use adaptive DOPRI54 or similar once explicit RK support exists.
+
+When a relaxation stage needs a pseudo-time execution budget for scheduling,
+preview cadence, or stage materialization, that budget should be seeded from
+the same rule as FDM:
+
+1. `fixed_timestep` when explicitly provided,
+2. otherwise `adaptive_timestep.dt_initial` when provided,
+3. otherwise fallback `1e-13 s`.
+
+This pseudo-time is a runtime-control quantity only; convergence remains driven
+by torque and optional energy criteria rather than physical simulation time.
 
 Pros:
 

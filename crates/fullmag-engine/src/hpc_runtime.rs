@@ -83,8 +83,7 @@ pub fn aligned_f64_vec(n: usize, align: usize) -> Vec<f64> {
         return Vec::new();
     }
     // Use Layout to get aligned memory, then wrap in Vec.
-    let layout = std::alloc::Layout::from_size_align(n * 8, align)
-        .expect("invalid layout");
+    let layout = std::alloc::Layout::from_size_align(n * 8, align).expect("invalid layout");
     unsafe {
         let ptr = std::alloc::alloc_zeroed(layout) as *mut f64;
         if ptr.is_null() {

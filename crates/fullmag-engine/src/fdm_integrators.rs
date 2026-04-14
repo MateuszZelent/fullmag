@@ -100,22 +100,34 @@ impl ExchangeLlgProblem {
         {
             let (k, m0, heff) = (&mut bufs.k[0][..n], &bufs.m0[..n], &bufs.h_eff[..n]);
             #[cfg(feature = "parallel")]
-            k.par_iter_mut().zip(m0.par_iter()).zip(heff.par_iter())
-                .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+            k.par_iter_mut()
+                .zip(m0.par_iter())
+                .zip(heff.par_iter())
+                .for_each(|((k, m), h)| {
+                    *k = self.llg_rhs_from_field(*m, *h);
+                });
             #[cfg(not(feature = "parallel"))]
-            for i in 0..n { k[i] = self.llg_rhs_from_field(m0[i], heff[i]); }
+            for i in 0..n {
+                k[i] = self.llg_rhs_from_field(m0[i], heff[i]);
+            }
         }
 
         // predicted = normalize(m0 + dt * k1)
         {
             let (stage, m0, k0) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[0][..n]);
             #[cfg(feature = "parallel")]
-            stage.par_iter_mut().zip(m0.par_iter()).zip(k0.par_iter())
+            stage
+                .par_iter_mut()
+                .zip(m0.par_iter())
+                .zip(k0.par_iter())
                 .try_for_each(|((s, m), k)| -> Result<()> {
-                    *s = normalized(add(*m, scale(*k, dt)))?; Ok(())
+                    *s = normalized(add(*m, scale(*k, dt)))?;
+                    Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
-            for i in 0..n { stage[i] = normalized(add(m0[i], scale(k0[i], dt)))?; }
+            for i in 0..n {
+                stage[i] = normalized(add(m0[i], scale(k0[i], dt)))?;
+            }
         }
 
         // k2 = f(t+dt, predicted)
@@ -123,19 +135,34 @@ impl ExchangeLlgProblem {
         {
             let (k, ms, heff) = (&mut bufs.k[1][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
             #[cfg(feature = "parallel")]
-            k.par_iter_mut().zip(ms.par_iter()).zip(heff.par_iter())
-                .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+            k.par_iter_mut()
+                .zip(ms.par_iter())
+                .zip(heff.par_iter())
+                .for_each(|((k, m), h)| {
+                    *k = self.llg_rhs_from_field(*m, *h);
+                });
             #[cfg(not(feature = "parallel"))]
-            for i in 0..n { k[i] = self.llg_rhs_from_field(ms[i], heff[i]); }
+            for i in 0..n {
+                k[i] = self.llg_rhs_from_field(ms[i], heff[i]);
+            }
         }
 
         // corrected = normalize(m0 + dt/2 * (k1 + k2))
         {
-            let (mag, m0, k0, k1) = (&mut state.magnetization[..n], &bufs.m0[..n], &bufs.k[0][..n], &bufs.k[1][..n]);
+            let (mag, m0, k0, k1) = (
+                &mut state.magnetization[..n],
+                &bufs.m0[..n],
+                &bufs.k[0][..n],
+                &bufs.k[1][..n],
+            );
             #[cfg(feature = "parallel")]
-            mag.par_iter_mut().zip(m0.par_iter()).zip(k0.par_iter()).zip(k1.par_iter())
+            mag.par_iter_mut()
+                .zip(m0.par_iter())
+                .zip(k0.par_iter())
+                .zip(k1.par_iter())
                 .try_for_each(|(((m, m0), k0), k1)| -> Result<()> {
-                    *m = normalized(add(*m0, scale(add(*k0, *k1), 0.5 * dt)))?; Ok(())
+                    *m = normalized(add(*m0, scale(add(*k0, *k1), 0.5 * dt)))?;
+                    Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
             for i in 0..n {
@@ -145,7 +172,11 @@ impl ExchangeLlgProblem {
         state.time_seconds += dt;
 
         let eval = self.compute_step_observables_zero_alloc(
-            &state.magnetization, ws, &mut bufs.h_eff, &mut bufs.h_scratch, &mut bufs.rhs,
+            &state.magnetization,
+            ws,
+            &mut bufs.h_eff,
+            &mut bufs.h_scratch,
+            &mut bufs.rhs,
         );
         Ok(eval.into_step_report(state.time_seconds, dt, false))
     }
@@ -168,94 +199,159 @@ impl ExchangeLlgProblem {
         {
             let (k, m, heff) = (&mut bufs.k[0][..n], &bufs.m0[..n], &bufs.h_eff[..n]);
             #[cfg(feature = "parallel")]
-            k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+            k.par_iter_mut()
+                .zip(m.par_iter())
+                .zip(heff.par_iter())
+                .for_each(|((k, m), h)| {
+                    *k = self.llg_rhs_from_field(*m, *h);
+                });
             #[cfg(not(feature = "parallel"))]
-            for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+            for i in 0..n {
+                k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+            }
         }
 
         // m1 = normalize(m0 + dt/2 * k1)
         {
             let (stage, m0, kj) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[0][..n]);
             #[cfg(feature = "parallel")]
-            stage.par_iter_mut().zip(m0.par_iter()).zip(kj.par_iter())
-                .try_for_each(|((s, m), k)| -> Result<()> { *s = normalized(add(*m, scale(*k, 0.5 * dt)))?; Ok(()) })?;
+            stage
+                .par_iter_mut()
+                .zip(m0.par_iter())
+                .zip(kj.par_iter())
+                .try_for_each(|((s, m), k)| -> Result<()> {
+                    *s = normalized(add(*m, scale(*k, 0.5 * dt)))?;
+                    Ok(())
+                })?;
             #[cfg(not(feature = "parallel"))]
-            for i in 0..n { stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?; }
+            for i in 0..n {
+                stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?;
+            }
         }
         self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
         {
             let (k, m, heff) = (&mut bufs.k[1][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
             #[cfg(feature = "parallel")]
-            k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+            k.par_iter_mut()
+                .zip(m.par_iter())
+                .zip(heff.par_iter())
+                .for_each(|((k, m), h)| {
+                    *k = self.llg_rhs_from_field(*m, *h);
+                });
             #[cfg(not(feature = "parallel"))]
-            for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+            for i in 0..n {
+                k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+            }
         }
 
         // m2 = normalize(m0 + dt/2 * k2)
         {
             let (stage, m0, kj) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[1][..n]);
             #[cfg(feature = "parallel")]
-            stage.par_iter_mut().zip(m0.par_iter()).zip(kj.par_iter())
-                .try_for_each(|((s, m), k)| -> Result<()> { *s = normalized(add(*m, scale(*k, 0.5 * dt)))?; Ok(()) })?;
+            stage
+                .par_iter_mut()
+                .zip(m0.par_iter())
+                .zip(kj.par_iter())
+                .try_for_each(|((s, m), k)| -> Result<()> {
+                    *s = normalized(add(*m, scale(*k, 0.5 * dt)))?;
+                    Ok(())
+                })?;
             #[cfg(not(feature = "parallel"))]
-            for i in 0..n { stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?; }
+            for i in 0..n {
+                stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?;
+            }
         }
         self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
         {
             let (k, m, heff) = (&mut bufs.k[2][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
             #[cfg(feature = "parallel")]
-            k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+            k.par_iter_mut()
+                .zip(m.par_iter())
+                .zip(heff.par_iter())
+                .for_each(|((k, m), h)| {
+                    *k = self.llg_rhs_from_field(*m, *h);
+                });
             #[cfg(not(feature = "parallel"))]
-            for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+            for i in 0..n {
+                k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+            }
         }
 
         // m3 = normalize(m0 + dt * k3)
         {
             let (stage, m0, kj) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[2][..n]);
             #[cfg(feature = "parallel")]
-            stage.par_iter_mut().zip(m0.par_iter()).zip(kj.par_iter())
-                .try_for_each(|((s, m), k)| -> Result<()> { *s = normalized(add(*m, scale(*k, dt)))?; Ok(()) })?;
+            stage
+                .par_iter_mut()
+                .zip(m0.par_iter())
+                .zip(kj.par_iter())
+                .try_for_each(|((s, m), k)| -> Result<()> {
+                    *s = normalized(add(*m, scale(*k, dt)))?;
+                    Ok(())
+                })?;
             #[cfg(not(feature = "parallel"))]
-            for i in 0..n { stage[i] = normalized(add(m0[i], scale(kj[i], dt)))?; }
+            for i in 0..n {
+                stage[i] = normalized(add(m0[i], scale(kj[i], dt)))?;
+            }
         }
         self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
         {
             let (k, m, heff) = (&mut bufs.k[3][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
             #[cfg(feature = "parallel")]
-            k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+            k.par_iter_mut()
+                .zip(m.par_iter())
+                .zip(heff.par_iter())
+                .for_each(|((k, m), h)| {
+                    *k = self.llg_rhs_from_field(*m, *h);
+                });
             #[cfg(not(feature = "parallel"))]
-            for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+            for i in 0..n {
+                k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+            }
         }
 
         // y = normalize(m0 + dt/6 * (k1 + 2*k2 + 2*k3 + k4))
         {
             let (mag, m0) = (&mut state.magnetization[..n], &bufs.m0[..n]);
-            let (k0, k1, k2, k3) = (&bufs.k[0][..n], &bufs.k[1][..n], &bufs.k[2][..n], &bufs.k[3][..n]);
+            let (k0, k1, k2, k3) = (
+                &bufs.k[0][..n],
+                &bufs.k[1][..n],
+                &bufs.k[2][..n],
+                &bufs.k[3][..n],
+            );
             let dt6 = dt / 6.0;
             #[cfg(feature = "parallel")]
-            mag.par_iter_mut().enumerate()
+            mag.par_iter_mut()
+                .enumerate()
                 .try_for_each(|(i, m)| -> Result<()> {
-                    *m = normalized(add(m0[i], scale(
-                        add(add(k0[i], scale(k1[i], 2.0)), add(scale(k2[i], 2.0), k3[i])),
-                        dt6,
-                    )))?; Ok(())
+                    *m = normalized(add(
+                        m0[i],
+                        scale(
+                            add(add(k0[i], scale(k1[i], 2.0)), add(scale(k2[i], 2.0), k3[i])),
+                            dt6,
+                        ),
+                    ))?;
+                    Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
             for i in 0..n {
-                mag[i] = normalized(add(m0[i], scale(
-                    add(add(k0[i], scale(k1[i], 2.0)), add(scale(k2[i], 2.0), k3[i])),
-                    dt6,
-                )))?;
+                mag[i] = normalized(add(
+                    m0[i],
+                    scale(
+                        add(add(k0[i], scale(k1[i], 2.0)), add(scale(k2[i], 2.0), k3[i])),
+                        dt6,
+                    ),
+                ))?;
             }
         }
         state.time_seconds += dt;
 
         let eval = self.compute_step_observables_zero_alloc(
-            &state.magnetization, ws, &mut bufs.h_eff, &mut bufs.h_scratch, &mut bufs.rhs,
+            &state.magnetization,
+            ws,
+            &mut bufs.h_eff,
+            &mut bufs.h_scratch,
+            &mut bufs.rhs,
         );
         Ok(eval.into_step_report(state.time_seconds, dt, false))
     }
@@ -306,10 +402,16 @@ impl ExchangeLlgProblem {
             {
                 let (k, m, heff) = (&mut bufs.k[0][..n], &bufs.m0[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // m1 = normalize(m0 + dt/2 * k1)
@@ -317,19 +419,33 @@ impl ExchangeLlgProblem {
                 let (stage, m0, kj) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[0][..n]);
                 let f = 0.5 * dt;
                 #[cfg(feature = "parallel")]
-                stage.par_iter_mut().zip(m0.par_iter()).zip(kj.par_iter())
-                    .try_for_each(|((s, m), k)| -> Result<()> { *s = normalized(add(*m, scale(*k, f)))?; Ok(()) })?;
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .zip(kj.par_iter())
+                    .try_for_each(|((s, m), k)| -> Result<()> {
+                        *s = normalized(add(*m, scale(*k, f)))?;
+                        Ok(())
+                    })?;
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { stage[i] = normalized(add(m0[i], scale(kj[i], f)))?; }
+                for i in 0..n {
+                    stage[i] = normalized(add(m0[i], scale(kj[i], f)))?;
+                }
             }
             self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
             {
                 let (k, m, heff) = (&mut bufs.k[1][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // m2 = normalize(m0 + 3dt/4 * k2)
@@ -337,39 +453,64 @@ impl ExchangeLlgProblem {
                 let (stage, m0, kj) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[1][..n]);
                 let f = 0.75 * dt;
                 #[cfg(feature = "parallel")]
-                stage.par_iter_mut().zip(m0.par_iter()).zip(kj.par_iter())
-                    .try_for_each(|((s, m), k)| -> Result<()> { *s = normalized(add(*m, scale(*k, f)))?; Ok(()) })?;
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .zip(kj.par_iter())
+                    .try_for_each(|((s, m), k)| -> Result<()> {
+                        *s = normalized(add(*m, scale(*k, f)))?;
+                        Ok(())
+                    })?;
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { stage[i] = normalized(add(m0[i], scale(kj[i], f)))?; }
+                for i in 0..n {
+                    stage[i] = normalized(add(m0[i], scale(kj[i], f)))?;
+                }
             }
             self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
             {
                 let (k, m, heff) = (&mut bufs.k[2][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // y3 = normalize(m0 + dt*(2/9*k1 + 1/3*k2 + 4/9*k3))
             {
-                let (delta, stage, m0) = (&mut bufs.delta[..n], &mut bufs.m_stage[..n], &bufs.m0[..n]);
+                let (delta, stage, m0) =
+                    (&mut bufs.delta[..n], &mut bufs.m_stage[..n], &bufs.m0[..n]);
                 let (k0, k1, k2) = (&bufs.k[0][..n], &bufs.k[1][..n], &bufs.k[2][..n]);
                 #[cfg(feature = "parallel")]
-                delta.par_iter_mut().zip(stage.par_iter_mut()).zip(m0.par_iter())
+                delta
+                    .par_iter_mut()
+                    .zip(stage.par_iter_mut())
+                    .zip(m0.par_iter())
                     .enumerate()
                     .try_for_each(|(i, ((d, s), m))| -> Result<()> {
                         *d = scale(
-                            add(add(scale(k0[i], 2.0 / 9.0), scale(k1[i], 1.0 / 3.0)), scale(k2[i], 4.0 / 9.0)),
+                            add(
+                                add(scale(k0[i], 2.0 / 9.0), scale(k1[i], 1.0 / 3.0)),
+                                scale(k2[i], 4.0 / 9.0),
+                            ),
                             dt,
                         );
-                        *s = normalized(add(*m, *d))?; Ok(())
+                        *s = normalized(add(*m, *d))?;
+                        Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
                     delta[i] = scale(
-                        add(add(scale(k0[i], 2.0 / 9.0), scale(k1[i], 1.0 / 3.0)), scale(k2[i], 4.0 / 9.0)),
+                        add(
+                            add(scale(k0[i], 2.0 / 9.0), scale(k1[i], 1.0 / 3.0)),
+                            scale(k2[i], 4.0 / 9.0),
+                        ),
                         dt,
                     );
                     stage[i] = normalized(add(m0[i], delta[i]))?;
@@ -381,10 +522,16 @@ impl ExchangeLlgProblem {
             {
                 let (k, m, heff) = (&mut bufs.k[3][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // Error
@@ -410,7 +557,11 @@ impl ExchangeLlgProblem {
                     .max(cfg.shrink_limit);
                 let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
                 let eval = self.compute_step_observables_zero_alloc(
-                    &state.magnetization, ws, &mut bufs.h_eff, &mut bufs.h_scratch, &mut bufs.rhs,
+                    &state.magnetization,
+                    ws,
+                    &mut bufs.h_eff,
+                    &mut bufs.h_scratch,
+                    &mut bufs.rhs,
                 );
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = Some(dt_next);
@@ -475,10 +626,16 @@ impl ExchangeLlgProblem {
                 self.effective_field_into_ws(&bufs.m0[..n], ws, &mut bufs.h_eff[..n]);
                 let (k, m, heff) = (&mut bufs.k[0][..n], &bufs.m0[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // Stage 2
@@ -486,19 +643,33 @@ impl ExchangeLlgProblem {
                 let (stage, m0, k0) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[0][..n]);
                 let f = A21 * dt;
                 #[cfg(feature = "parallel")]
-                stage.par_iter_mut().zip(m0.par_iter()).zip(k0.par_iter())
-                    .try_for_each(|((s, m), k)| -> Result<()> { *s = normalized(add(*m, scale(*k, f)))?; Ok(()) })?;
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .zip(k0.par_iter())
+                    .try_for_each(|((s, m), k)| -> Result<()> {
+                        *s = normalized(add(*m, scale(*k, f)))?;
+                        Ok(())
+                    })?;
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { stage[i] = normalized(add(m0[i], scale(k0[i], f)))?; }
+                for i in 0..n {
+                    stage[i] = normalized(add(m0[i], scale(k0[i], f)))?;
+                }
             }
             self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
             {
                 let (k, m, heff) = (&mut bufs.k[1][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // Stage 3
@@ -506,23 +677,39 @@ impl ExchangeLlgProblem {
                 let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
                 let (k0, k1) = (&bufs.k[0][..n], &bufs.k[1][..n]);
                 #[cfg(feature = "parallel")]
-                stage.par_iter_mut().zip(m0.par_iter()).enumerate()
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .enumerate()
                     .try_for_each(|(i, (s, m))| -> Result<()> {
-                        *s = normalized(add(*m, scale(add(scale(k0[i], A31), scale(k1[i], A32)), dt)))?; Ok(())
+                        *s = normalized(add(
+                            *m,
+                            scale(add(scale(k0[i], A31), scale(k1[i], A32)), dt),
+                        ))?;
+                        Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(m0[i], scale(add(scale(k0[i], A31), scale(k1[i], A32)), dt)))?;
+                    stage[i] = normalized(add(
+                        m0[i],
+                        scale(add(scale(k0[i], A31), scale(k1[i], A32)), dt),
+                    ))?;
                 }
             }
             self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
             {
                 let (k, m, heff) = (&mut bufs.k[2][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // Stage 4
@@ -530,107 +717,205 @@ impl ExchangeLlgProblem {
                 let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
                 let (k0, k1, k2) = (&bufs.k[0][..n], &bufs.k[1][..n], &bufs.k[2][..n]);
                 #[cfg(feature = "parallel")]
-                stage.par_iter_mut().zip(m0.par_iter()).enumerate()
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .enumerate()
                     .try_for_each(|(i, (s, m))| -> Result<()> {
-                        *s = normalized(add(*m, scale(
-                            add(add(scale(k0[i], A41), scale(k1[i], A42)), scale(k2[i], A43)), dt,
-                        )))?; Ok(())
+                        *s = normalized(add(
+                            *m,
+                            scale(
+                                add(add(scale(k0[i], A41), scale(k1[i], A42)), scale(k2[i], A43)),
+                                dt,
+                            ),
+                        ))?;
+                        Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(m0[i], scale(
-                        add(add(scale(k0[i], A41), scale(k1[i], A42)), scale(k2[i], A43)), dt,
-                    )))?;
+                    stage[i] = normalized(add(
+                        m0[i],
+                        scale(
+                            add(add(scale(k0[i], A41), scale(k1[i], A42)), scale(k2[i], A43)),
+                            dt,
+                        ),
+                    ))?;
                 }
             }
             self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
             {
                 let (k, m, heff) = (&mut bufs.k[3][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // Stage 5
             {
                 let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
-                let (k0, k1, k2, k3) = (&bufs.k[0][..n], &bufs.k[1][..n], &bufs.k[2][..n], &bufs.k[3][..n]);
+                let (k0, k1, k2, k3) = (
+                    &bufs.k[0][..n],
+                    &bufs.k[1][..n],
+                    &bufs.k[2][..n],
+                    &bufs.k[3][..n],
+                );
                 #[cfg(feature = "parallel")]
-                stage.par_iter_mut().zip(m0.par_iter()).enumerate()
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .enumerate()
                     .try_for_each(|(i, (s, m))| -> Result<()> {
-                        *s = normalized(add(*m, scale(
-                            add(add(scale(k0[i], A51), scale(k1[i], A52)),
-                                add(scale(k2[i], A53), scale(k3[i], A54))), dt,
-                        )))?; Ok(())
+                        *s = normalized(add(
+                            *m,
+                            scale(
+                                add(
+                                    add(scale(k0[i], A51), scale(k1[i], A52)),
+                                    add(scale(k2[i], A53), scale(k3[i], A54)),
+                                ),
+                                dt,
+                            ),
+                        ))?;
+                        Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(m0[i], scale(
-                        add(add(scale(k0[i], A51), scale(k1[i], A52)),
-                            add(scale(k2[i], A53), scale(k3[i], A54))), dt,
-                    )))?;
+                    stage[i] = normalized(add(
+                        m0[i],
+                        scale(
+                            add(
+                                add(scale(k0[i], A51), scale(k1[i], A52)),
+                                add(scale(k2[i], A53), scale(k3[i], A54)),
+                            ),
+                            dt,
+                        ),
+                    ))?;
                 }
             }
             self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
             {
                 let (k, m, heff) = (&mut bufs.k[4][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // Stage 6
             {
                 let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
-                let (k0, k1, k2, k3, k4) = (&bufs.k[0][..n], &bufs.k[1][..n], &bufs.k[2][..n], &bufs.k[3][..n], &bufs.k[4][..n]);
+                let (k0, k1, k2, k3, k4) = (
+                    &bufs.k[0][..n],
+                    &bufs.k[1][..n],
+                    &bufs.k[2][..n],
+                    &bufs.k[3][..n],
+                    &bufs.k[4][..n],
+                );
                 #[cfg(feature = "parallel")]
-                stage.par_iter_mut().zip(m0.par_iter()).enumerate()
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .enumerate()
                     .try_for_each(|(i, (s, m))| -> Result<()> {
-                        *s = normalized(add(*m, scale(
-                            add(add(add(scale(k0[i], A61), scale(k1[i], A62)), scale(k2[i], A63)),
-                                add(scale(k3[i], A64), scale(k4[i], A65))), dt,
-                        )))?; Ok(())
+                        *s = normalized(add(
+                            *m,
+                            scale(
+                                add(
+                                    add(
+                                        add(scale(k0[i], A61), scale(k1[i], A62)),
+                                        scale(k2[i], A63),
+                                    ),
+                                    add(scale(k3[i], A64), scale(k4[i], A65)),
+                                ),
+                                dt,
+                            ),
+                        ))?;
+                        Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(m0[i], scale(
-                        add(add(add(scale(k0[i], A61), scale(k1[i], A62)), scale(k2[i], A63)),
-                            add(scale(k3[i], A64), scale(k4[i], A65))), dt,
-                    )))?;
+                    stage[i] = normalized(add(
+                        m0[i],
+                        scale(
+                            add(
+                                add(add(scale(k0[i], A61), scale(k1[i], A62)), scale(k2[i], A63)),
+                                add(scale(k3[i], A64), scale(k4[i], A65)),
+                            ),
+                            dt,
+                        ),
+                    ))?;
                 }
             }
             self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
             {
                 let (k, m, heff) = (&mut bufs.k[5][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // 5th-order solution → m_stage
             {
                 let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
-                let (k0, k2, k3, k4, k5) = (&bufs.k[0][..n], &bufs.k[2][..n], &bufs.k[3][..n], &bufs.k[4][..n], &bufs.k[5][..n]);
+                let (k0, k2, k3, k4, k5) = (
+                    &bufs.k[0][..n],
+                    &bufs.k[2][..n],
+                    &bufs.k[3][..n],
+                    &bufs.k[4][..n],
+                    &bufs.k[5][..n],
+                );
                 #[cfg(feature = "parallel")]
-                stage.par_iter_mut().zip(m0.par_iter()).enumerate()
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .enumerate()
                     .try_for_each(|(i, (s, m))| -> Result<()> {
-                        *s = normalized(add(*m, scale(
-                            add(add(add(scale(k0[i], B1), scale(k2[i], B3)), scale(k3[i], B4)),
-                                add(scale(k4[i], B5), scale(k5[i], B6))), dt,
-                        )))?; Ok(())
+                        *s = normalized(add(
+                            *m,
+                            scale(
+                                add(
+                                    add(add(scale(k0[i], B1), scale(k2[i], B3)), scale(k3[i], B4)),
+                                    add(scale(k4[i], B5), scale(k5[i], B6)),
+                                ),
+                                dt,
+                            ),
+                        ))?;
+                        Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(m0[i], scale(
-                        add(add(add(scale(k0[i], B1), scale(k2[i], B3)), scale(k3[i], B4)),
-                            add(scale(k4[i], B5), scale(k5[i], B6))), dt,
-                    )))?;
+                    stage[i] = normalized(add(
+                        m0[i],
+                        scale(
+                            add(
+                                add(add(scale(k0[i], B1), scale(k2[i], B3)), scale(k3[i], B4)),
+                                add(scale(k4[i], B5), scale(k5[i], B6)),
+                            ),
+                            dt,
+                        ),
+                    ))?;
                 }
             }
 
@@ -639,10 +924,16 @@ impl ExchangeLlgProblem {
             {
                 let (k, m, heff) = (&mut bufs.k[6][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // Error estimate
@@ -664,7 +955,11 @@ impl ExchangeLlgProblem {
                     .max(cfg.shrink_limit);
                 let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
                 let eval = self.compute_step_observables_zero_alloc(
-                    &state.magnetization, ws, &mut bufs.h_eff, &mut bufs.h_scratch, &mut bufs.rhs,
+                    &state.magnetization,
+                    ws,
+                    &mut bufs.h_eff,
+                    &mut bufs.h_scratch,
+                    &mut bufs.rhs,
                 );
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = Some(dt_next);
@@ -699,20 +994,34 @@ impl ExchangeLlgProblem {
             {
                 let (k, m, heff) = (&mut bufs.k[0][..n], &bufs.m0[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // predicted = normalize(m0 + dt * k1)
             {
                 let (stage, m0, k0) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[0][..n]);
                 #[cfg(feature = "parallel")]
-                stage.par_iter_mut().zip(m0.par_iter()).zip(k0.par_iter())
-                    .try_for_each(|((s, m), k)| -> Result<()> { *s = normalized(add(*m, scale(*k, dt)))?; Ok(()) })?;
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .zip(k0.par_iter())
+                    .try_for_each(|((s, m), k)| -> Result<()> {
+                        *s = normalized(add(*m, scale(*k, dt)))?;
+                        Ok(())
+                    })?;
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { stage[i] = normalized(add(m0[i], scale(k0[i], dt)))?; }
+                for i in 0..n {
+                    stage[i] = normalized(add(m0[i], scale(k0[i], dt)))?;
+                }
             }
 
             // k2 = f(t+dt, predicted)
@@ -720,19 +1029,34 @@ impl ExchangeLlgProblem {
             {
                 let (k, m, heff) = (&mut bufs.k[1][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
                 #[cfg(feature = "parallel")]
-                k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                    .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+                k.par_iter_mut()
+                    .zip(m.par_iter())
+                    .zip(heff.par_iter())
+                    .for_each(|((k, m), h)| {
+                        *k = self.llg_rhs_from_field(*m, *h);
+                    });
                 #[cfg(not(feature = "parallel"))]
-                for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+                for i in 0..n {
+                    k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+                }
             }
 
             // corrected = normalize(m0 + dt/2 * (k1 + k2))
             {
-                let (mag, m0, k0, k1) = (&mut state.magnetization[..n], &bufs.m0[..n], &bufs.k[0][..n], &bufs.k[1][..n]);
+                let (mag, m0, k0, k1) = (
+                    &mut state.magnetization[..n],
+                    &bufs.m0[..n],
+                    &bufs.k[0][..n],
+                    &bufs.k[1][..n],
+                );
                 #[cfg(feature = "parallel")]
-                mag.par_iter_mut().zip(m0.par_iter()).zip(k0.par_iter()).zip(k1.par_iter())
+                mag.par_iter_mut()
+                    .zip(m0.par_iter())
+                    .zip(k0.par_iter())
+                    .zip(k1.par_iter())
                     .try_for_each(|(((m, m0), k0), k1)| -> Result<()> {
-                        *m = normalized(add(*m0, scale(add(*k0, *k1), 0.5 * dt)))?; Ok(())
+                        *m = normalized(add(*m0, scale(add(*k0, *k1), 0.5 * dt)))?;
+                        Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
@@ -746,7 +1070,11 @@ impl ExchangeLlgProblem {
             state.abm_history.push(f_accepted, dt);
 
             let eval = self.compute_step_observables_zero_alloc(
-                &state.magnetization, ws, &mut bufs.h_eff, &mut bufs.h_scratch, &mut bufs.rhs,
+                &state.magnetization,
+                ws,
+                &mut bufs.h_eff,
+                &mut bufs.h_scratch,
+                &mut bufs.rhs,
             );
             return Ok(eval.into_step_report(state.time_seconds, dt, false));
         }
@@ -762,13 +1090,17 @@ impl ExchangeLlgProblem {
         {
             let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
             #[cfg(feature = "parallel")]
-            stage.par_iter_mut().zip(m0.par_iter()).enumerate()
+            stage
+                .par_iter_mut()
+                .zip(m0.par_iter())
+                .enumerate()
                 .try_for_each(|(i, (s, m))| -> Result<()> {
                     let pred = add(
                         add(scale(f_n[i], 23.0 / 12.0), scale(f_n1[i], -16.0 / 12.0)),
                         scale(f_n2[i], 5.0 / 12.0),
                     );
-                    *s = normalized(add(*m, scale(pred, dt)))?; Ok(())
+                    *s = normalized(add(*m, scale(pred, dt)))?;
+                    Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
             for i in 0..n {
@@ -785,23 +1117,36 @@ impl ExchangeLlgProblem {
         {
             let (k, m, heff) = (&mut bufs.k[0][..n], &bufs.m_stage[..n], &bufs.h_eff[..n]);
             #[cfg(feature = "parallel")]
-            k.par_iter_mut().zip(m.par_iter()).zip(heff.par_iter())
-                .for_each(|((k, m), h)| { *k = self.llg_rhs_from_field(*m, *h); });
+            k.par_iter_mut()
+                .zip(m.par_iter())
+                .zip(heff.par_iter())
+                .for_each(|((k, m), h)| {
+                    *k = self.llg_rhs_from_field(*m, *h);
+                });
             #[cfg(not(feature = "parallel"))]
-            for i in 0..n { k[i] = self.llg_rhs_from_field(m[i], heff[i]); }
+            for i in 0..n {
+                k[i] = self.llg_rhs_from_field(m[i], heff[i]);
+            }
         }
 
         // Adams–Moulton corrector → state.magnetization
         {
-            let (mag, m0, k0) = (&mut state.magnetization[..n], &bufs.m0[..n], &bufs.k[0][..n]);
+            let (mag, m0, k0) = (
+                &mut state.magnetization[..n],
+                &bufs.m0[..n],
+                &bufs.k[0][..n],
+            );
             #[cfg(feature = "parallel")]
-            mag.par_iter_mut().zip(m0.par_iter()).enumerate()
+            mag.par_iter_mut()
+                .zip(m0.par_iter())
+                .enumerate()
                 .try_for_each(|(i, (m, m0))| -> Result<()> {
                     let corr = add(
                         add(scale(k0[i], 5.0 / 12.0), scale(f_n[i], 8.0 / 12.0)),
                         scale(f_n1[i], -1.0 / 12.0),
                     );
-                    *m = normalized(add(*m0, scale(corr, dt)))?; Ok(())
+                    *m = normalized(add(*m0, scale(corr, dt)))?;
+                    Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
             for i in 0..n {
@@ -818,7 +1163,11 @@ impl ExchangeLlgProblem {
         state.abm_history.push(bufs.k[0][..n].to_vec(), dt);
 
         let eval = self.compute_step_observables_zero_alloc(
-            &state.magnetization, ws, &mut bufs.h_eff, &mut bufs.h_scratch, &mut bufs.rhs,
+            &state.magnetization,
+            ws,
+            &mut bufs.h_eff,
+            &mut bufs.h_scratch,
+            &mut bufs.rhs,
         );
         Ok(eval.into_step_report(state.time_seconds, dt, false))
     }
@@ -859,7 +1208,10 @@ impl ExchangeLlgProblem {
 
         #[cfg(feature = "parallel")]
         {
-            (0..n).into_par_iter().map(compute_err).reduce(|| 0.0f64, f64::max)
+            (0..n)
+                .into_par_iter()
+                .map(compute_err)
+                .reduce(|| 0.0f64, f64::max)
         }
         #[cfg(not(feature = "parallel"))]
         {
@@ -901,7 +1253,11 @@ impl ExchangeLlgProblem {
     // -----------------------------------------------------------------------
     // Helper: parallel/sequential m_new[i] = normalize(m0[i] + delta[i])
     // -----------------------------------------------------------------------
-    pub(crate) fn par_apply_normalized(&self, m0: &[Vector3], delta: &[Vector3]) -> Result<Vec<Vector3>> {
+    pub(crate) fn par_apply_normalized(
+        &self,
+        m0: &[Vector3],
+        delta: &[Vector3],
+    ) -> Result<Vec<Vector3>> {
         let compute = |i: usize| normalized(add(m0[i], delta[i]));
         #[cfg(feature = "parallel")]
         {
@@ -1271,7 +1627,12 @@ impl ExchangeLlgProblem {
     // -----------------------------------------------------------------------
     // Legacy error norm helper
     // -----------------------------------------------------------------------
-    pub(crate) fn max_error_norm(&self, weighted_stages: &[(&Vec<Vector3>, f64)], dt: f64, n: usize) -> f64 {
+    pub(crate) fn max_error_norm(
+        &self,
+        weighted_stages: &[(&Vec<Vector3>, f64)],
+        dt: f64,
+        n: usize,
+    ) -> f64 {
         let compute = |i: usize| {
             let mut err = [0.0, 0.0, 0.0];
             for &(k, w) in weighted_stages {

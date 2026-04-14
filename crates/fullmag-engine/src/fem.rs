@@ -1,7 +1,7 @@
 use crate::{
-    add, cross, dot, max_cross_norm, norm, normalized, scale, sub, AbmHistory, CellSize, EffectiveFieldObservables,
-    EffectiveFieldTerms, EngineError, ExchangeLlgProblem, GridShape, LlgConfig, MaterialParameters,
-    Result, RhsEvaluation, StepReport, TimeIntegrator, Vector3, MU0,
+    add, cross, dot, max_cross_norm, norm, normalized, scale, sub, AbmHistory, CellSize,
+    EffectiveFieldObservables, EffectiveFieldTerms, EngineError, ExchangeLlgProblem, GridShape,
+    LlgConfig, MaterialParameters, Result, RhsEvaluation, StepReport, TimeIntegrator, Vector3, MU0,
 };
 use fullmag_ir::MeshIR;
 #[cfg(feature = "parallel")]
@@ -298,15 +298,18 @@ impl CsrMatrix {
         #[cfg(feature = "parallel")]
         {
             if self.n >= 2_000 {
-                y.par_iter_mut().enumerate().take(self.n).for_each(|(row, out)| {
-                    let start = self.row_ptr[row];
-                    let end = self.row_ptr[row + 1];
-                    let mut sum = 0.0;
-                    for idx in start..end {
-                        sum += self.values[idx] * x[self.col_idx[idx]];
-                    }
-                    *out = sum;
-                });
+                y.par_iter_mut()
+                    .enumerate()
+                    .take(self.n)
+                    .for_each(|(row, out)| {
+                        let start = self.row_ptr[row];
+                        let end = self.row_ptr[row + 1];
+                        let mut sum = 0.0;
+                        for idx in start..end {
+                            sum += self.values[idx] * x[self.col_idx[idx]];
+                        }
+                        *out = sum;
+                    });
                 return;
             }
         }
@@ -1569,11 +1572,10 @@ impl FemLlgProblem {
                 state.magnetization[..n].copy_from_slice(&ws.m_stage[..n]);
                 state.time_seconds += dt;
                 state.k_fsal = Some(ws.k[6][..n].to_vec());
-                let dt_next = (cfg.headroom
-                    * dt
-                    * (cfg.max_error / error.max(ZERO_THRESHOLD)).powf(0.2))
-                .max(cfg.dt_min)
-                .min(cfg.dt_max);
+                let dt_next =
+                    (cfg.headroom * dt * (cfg.max_error / error.max(ZERO_THRESHOLD)).powf(0.2))
+                        .max(cfg.dt_min)
+                        .min(cfg.dt_max);
                 return self.step_report_from_vectors(
                     state.magnetization(),
                     state.time_seconds,
@@ -1607,10 +1609,8 @@ impl FemLlgProblem {
             self.llg_rhs_into(&ws.m_stage[..n], &mut ws.scratch, &mut ws.k[1])?;
 
             for i in 0..n {
-                state.magnetization[i] = normalized(add(
-                    ws.m0[i],
-                    scale(add(ws.k[0][i], ws.k[1][i]), 0.5 * dt),
-                ))?;
+                state.magnetization[i] =
+                    normalized(add(ws.m0[i], scale(add(ws.k[0][i], ws.k[1][i]), 0.5 * dt)))?;
             }
             state.time_seconds += dt;
 
@@ -2170,7 +2170,8 @@ impl FemLlgProblem {
         }
 
         // C2: DMI requires a well-defined interface normal.
-        if self.terms.interfacial_dmi.is_some() && norm(self.dmi_interface_normal) < ZERO_THRESHOLD {
+        if self.terms.interfacial_dmi.is_some() && norm(self.dmi_interface_normal) < ZERO_THRESHOLD
+        {
             eprintln!(
                 "[fullmag::fem::reference] WARNING: interfacial DMI enabled but interface \
                  normal is zero — DMI contribution will be zero."
@@ -2298,7 +2299,10 @@ impl FemLlgProblem {
     }
 
     #[allow(non_snake_case)]
-    fn evaluate_rhs_summary_from_vectors(&self, magnetization: &[Vector3]) -> Result<RhsEvaluation> {
+    fn evaluate_rhs_summary_from_vectors(
+        &self,
+        magnetization: &[Vector3],
+    ) -> Result<RhsEvaluation> {
         let n = self.topology.n_nodes;
         let exchange_field = if self.terms.exchange {
             self.exchange_field_from_vectors(magnetization)
@@ -3224,13 +3228,25 @@ impl TransferGridCache {
             ];
 
             let (ix0, ix1) = cell_index_range_for_tet(
-                desc.bbox_min[0], desc.cell_size.dx, desc.grid.nx, vertices, 0,
+                desc.bbox_min[0],
+                desc.cell_size.dx,
+                desc.grid.nx,
+                vertices,
+                0,
             );
             let (iy0, iy1) = cell_index_range_for_tet(
-                desc.bbox_min[1], desc.cell_size.dy, desc.grid.ny, vertices, 1,
+                desc.bbox_min[1],
+                desc.cell_size.dy,
+                desc.grid.ny,
+                vertices,
+                1,
             );
             let (iz0, iz1) = cell_index_range_for_tet(
-                desc.bbox_min[2], desc.cell_size.dz, desc.grid.nz, vertices, 2,
+                desc.bbox_min[2],
+                desc.cell_size.dz,
+                desc.grid.nz,
+                vertices,
+                2,
             );
 
             let mut cells = Vec::new();
@@ -3251,7 +3267,10 @@ impl TransferGridCache {
             }
 
             if !cells.is_empty() {
-                overlaps.push(TetGridOverlap { element_index, cells });
+                overlaps.push(TetGridOverlap {
+                    element_index,
+                    cells,
+                });
             }
         }
 
@@ -3273,8 +3292,12 @@ impl TransferGridCache {
         out_active: &mut [bool],
     ) {
         // Clear
-        for m in out_mag.iter_mut() { *m = [0.0, 0.0, 0.0]; }
-        for a in out_active.iter_mut() { *a = false; }
+        for m in out_mag.iter_mut() {
+            *m = [0.0, 0.0, 0.0];
+        }
+        for a in out_active.iter_mut() {
+            *a = false;
+        }
         let mut hit_count = vec![0u32; self.n_cells];
 
         for overlap in &self.overlaps {
@@ -3311,10 +3334,14 @@ impl TransferGridCache {
 
     /// Grid descriptor (for accessing cell_size, grid shape, etc.).
     #[allow(dead_code)]
-    pub(crate) fn desc(&self) -> &TransferGridDesc { &self.desc }
+    pub(crate) fn desc(&self) -> &TransferGridDesc {
+        &self.desc
+    }
 
     /// Number of grid cells.
-    pub fn n_cells(&self) -> usize { self.n_cells }
+    pub fn n_cells(&self) -> usize {
+        self.n_cells
+    }
 }
 
 fn transfer_axis_cells(extent: f64, requested_cell: f64) -> Result<usize> {

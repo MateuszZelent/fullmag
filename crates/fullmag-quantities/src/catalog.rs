@@ -693,9 +693,7 @@ pub fn quantity_specs() -> &'static [QuantitySpec] {
 /// Look up a single quantity spec by its string ID.
 pub fn quantity_spec(id: &str) -> Option<&'static QuantitySpec> {
     let normalized = normalize_quantity_id(id).ok()?;
-    CATALOG
-        .iter()
-        .find(|spec| spec.id == normalized)
+    CATALOG.iter().find(|spec| spec.id == normalized)
 }
 
 /// Return a list of all defined quantity IDs.
@@ -717,9 +715,7 @@ pub fn cached_preview_quantity_ids() -> Vec<&'static str> {
     CATALOG
         .iter()
         .filter(|spec| {
-            spec.ui_exposed
-                && spec.cached_preview
-                && spec.shape == QuantityShape::VectorField
+            spec.ui_exposed && spec.cached_preview && spec.shape == QuantityShape::VectorField
         })
         .map(|spec| spec.id.as_str())
         .collect()

@@ -51,10 +51,7 @@ pub struct QuantityOutputIR {
 /// Convert a legacy `OutputIR::Field` to the new `QuantityOutputIR`.
 ///
 /// Returns `None` if the field name cannot be resolved to a known `QuantityId`.
-pub fn field_to_quantity_output(
-    field_name: &str,
-    every_seconds: f64,
-) -> Option<QuantityOutputIR> {
+pub fn field_to_quantity_output(field_name: &str, every_seconds: f64) -> Option<QuantityOutputIR> {
     let quantity_id = fullmag_quantities::normalize_quantity_id(field_name).ok()?;
     Some(QuantityOutputIR {
         quantity_id,

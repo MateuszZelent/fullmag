@@ -21,7 +21,10 @@ pub mod store;
 pub mod types;
 
 // Re-export the most commonly used items at crate root.
-pub use capture::{capture_checkpoint, determine_restore_class, CaptureRequest, CaptureResult, CheckpointSnapshotProvider};
+pub use capture::{
+    capture_checkpoint, determine_restore_class, CaptureRequest, CaptureResult,
+    CheckpointSnapshotProvider,
+};
 pub use cas::{hex_sha256, CasStore};
 pub use fms::{inspect_fms, pack_fms, unpack_fms, PackOptions};
 pub use store::SessionStore;

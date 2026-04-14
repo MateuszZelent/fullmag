@@ -1,7 +1,9 @@
 //! Simulation state, integrator buffers, and solver session types.
 
 use crate::vector::normalized;
-use crate::{EngineError, ExchangeLlgProblem, FftWorkspace, GridShape, Result, Vector3, VectorFieldSoA};
+use crate::{
+    EngineError, ExchangeLlgProblem, FftWorkspace, GridShape, Result, Vector3, VectorFieldSoA,
+};
 
 // ── ExchangeLlgStateSoA ───────────────────────────────────────────────
 

@@ -181,15 +181,9 @@ async fn main() {
             get(get_live_field_catalog),
         )
         // ── Scalar history (read-only, full history for charts) ───────
-        .route(
-            "/v1/live/current/scalars",
-            get(get_current_live_scalars),
-        )
+        .route("/v1/live/current/scalars", get(get_current_live_scalars))
         // ── Feature flags (diagnostics) ──────────────────────────────
-        .route(
-            "/v1/live/feature-flags",
-            get(get_feature_flags),
-        )
+        .route("/v1/live/feature-flags", get(get_feature_flags))
         .route(
             "/v1/live/current/fields/:quantity/vector",
             get(get_live_field_vector),
@@ -447,16 +441,14 @@ async fn get_current_live_bootstrap(
     // The publish hot path no longer eagerly serializes the full snapshot,
     // so we serialize here when the HTTP endpoint is actually called.
     if let Some(live) = state.current_live_state.read().await.as_ref() {
-        let public_json = serialize_current_live_response(live, true).map_err(|e| {
-            ApiError::internal(format!("failed to serialize live state: {}", e))
-        })?;
+        let public_json = serialize_current_live_response(live, true)
+            .map_err(|e| ApiError::internal(format!("failed to serialize live state: {}", e)))?;
         // Update the cached snapshot opportunistically for SSE consumers.
         *state.current_live_public_snapshot.write().await = Some(public_json.clone());
         let current_version = live.state_version;
-        state.current_live_snapshot_version.store(
-            current_version,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        state
+            .current_live_snapshot_version
+            .store(current_version, std::sync::atomic::Ordering::Relaxed);
         let json = bootstrap_workspace_payload(&public_json)?;
         return Ok(([(CONTENT_TYPE, "application/json")], json).into_response());
     }
@@ -572,9 +564,8 @@ async fn create_current_live_workspace(
 ) -> Result<Response, ApiError> {
     // If a workspace already exists, serialize and return its bootstrap payload.
     if let Some(live) = state.current_live_state.read().await.as_ref() {
-        let public_json = serialize_current_live_response(live, true).map_err(|e| {
-            ApiError::internal(format!("failed to serialize live state: {}", e))
-        })?;
+        let public_json = serialize_current_live_response(live, true)
+            .map_err(|e| ApiError::internal(format!("failed to serialize live state: {}", e)))?;
         let json = bootstrap_workspace_payload(&public_json)?;
         return Ok(([(CONTENT_TYPE, "application/json")], json).into_response());
     }
@@ -614,10 +605,7 @@ async fn get_current_live_scalars(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let guard = state.current_live_state.read().await;
-    let rows = guard
-        .as_ref()
-        .map(|s| &s.scalar_rows[..])
-        .unwrap_or(&[]);
+    let rows = guard.as_ref().map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
     Ok(Json(serde_json::json!({
         "scalar_rows": rows,
         "scalar_rows_total": rows.len(),
@@ -625,9 +613,7 @@ async fn get_current_live_scalars(
 }
 
 /// `GET /v1/live/feature-flags` — return the current feature flags.
-async fn get_feature_flags(
-    State(state): State<Arc<AppState>>,
-) -> Json<FeatureFlags> {
+async fn get_feature_flags(State(state): State<Arc<AppState>>) -> Json<FeatureFlags> {
     Json(state.feature_flags.clone())
 }
 
@@ -840,12 +826,12 @@ async fn publish_current_live_state(
     let has_fresh_preview = live_state_has_fresh_preview(next.live_state.as_ref());
     let should_rebuild_preview = !state.feature_flags.disable_preview_3d
         && (has_fresh_preview
-        || has_latest_fields_update
-        || has_cached_preview_update
-        || (matches!(
-            next.display_selection.selection.kind,
-            fullmag_runner::DisplayKind::GlobalScalar
-        ) && (has_live_state_update || has_scalar_row_update)));
+            || has_latest_fields_update
+            || has_cached_preview_update
+            || (matches!(
+                next.display_selection.selection.kind,
+                fullmag_runner::DisplayKind::GlobalScalar
+            ) && (has_live_state_update || has_scalar_row_update)));
     let preview_start = std::time::Instant::now();
     next.preview = if should_rebuild_preview {
         let rebuilt = build_preview_state(&next, &next.display_selection, &preview_config);
@@ -870,10 +856,7 @@ async fn publish_current_live_state(
         let quantities_changed = new_quantities_hash != next.quantities_ws_hash;
 
         // ── Sparse FEM mesh: only send when generation_id changed ──
-        let current_fem_gen = next
-            .fem_mesh
-            .as_ref()
-            .and_then(|m| m.generation_id.clone());
+        let current_fem_gen = next.fem_mesh.as_ref().and_then(|m| m.generation_id.clone());
         let fem_mesh_changed = current_fem_gen != next.ws_sent_fem_mesh_generation;
 
         // ── Sparse preview: only generate vector_payload_id when fingerprint changed ──
@@ -915,12 +898,19 @@ async fn publish_current_live_state(
             next.ws_sent_envelope_version = next.envelope_version;
         }
         // Log sparse stats periodically to verify savings.
-        let step = next.live_state.as_ref().map(|l| l.latest_step.step).unwrap_or(0);
+        let step = next
+            .live_state
+            .as_ref()
+            .map(|l| l.latest_step.step)
+            .unwrap_or(0);
         if step > 0 && step % 200 == 0 {
-            let total_bytes: usize = messages.iter().map(|m| match m {
-                CurrentLiveWireMessage::Text(t) => t.len(),
-                CurrentLiveWireMessage::Binary(b) => b.len(),
-            }).sum();
+            let total_bytes: usize = messages
+                .iter()
+                .map(|m| match m {
+                    CurrentLiveWireMessage::Text(t) => t.len(),
+                    CurrentLiveWireMessage::Binary(b) => b.len(),
+                })
+                .sum();
             eprintln!(
                 "[fullmag-api] WS delta step={step}: {n} msgs, {kb:.1} KB, envelope={env}",
                 n = messages.len(),
@@ -967,9 +957,14 @@ async fn set_current_preview_quantity(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewQuantityRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, "quantity", move |config| {
-        config.quantity = req.quantity;
-    })
+    mutate_current_preview(
+        &state,
+        PreviewControlMode::Update,
+        "quantity",
+        move |config| {
+            config.quantity = req.quantity;
+        },
+    )
     .await
 }
 
@@ -977,9 +972,14 @@ async fn set_current_preview_selection(
     State(state): State<Arc<AppState>>,
     Json(selection): Json<DisplaySelection>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, "selection", move |current| {
-        *current = selection;
-    })
+    mutate_current_preview(
+        &state,
+        PreviewControlMode::Update,
+        "selection",
+        move |current| {
+            *current = selection;
+        },
+    )
     .await
 }
 
@@ -987,9 +987,14 @@ async fn set_current_preview_component(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewComponentRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, "component", move |config| {
-        config.component = req.component;
-    })
+    mutate_current_preview(
+        &state,
+        PreviewControlMode::Update,
+        "component",
+        move |config| {
+            config.component = req.component;
+        },
+    )
     .await
 }
 
@@ -997,9 +1002,14 @@ async fn set_current_preview_x_chosen_size(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewXChosenSizeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, "x_chosen_size", move |config| {
-        config.x_chosen_size = req.x_chosen_size as u32;
-    })
+    mutate_current_preview(
+        &state,
+        PreviewControlMode::Update,
+        "x_chosen_size",
+        move |config| {
+            config.x_chosen_size = req.x_chosen_size as u32;
+        },
+    )
     .await
 }
 
@@ -1007,9 +1017,14 @@ async fn set_current_preview_every_n(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewEveryNRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, "every_n", move |config| {
-        config.every_n = req.every_n.clamp(1, u32::MAX as usize) as u32;
-    })
+    mutate_current_preview(
+        &state,
+        PreviewControlMode::Update,
+        "every_n",
+        move |config| {
+            config.every_n = req.every_n.clamp(1, u32::MAX as usize) as u32;
+        },
+    )
     .await
 }
 
@@ -1017,9 +1032,14 @@ async fn set_current_preview_y_chosen_size(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewYChosenSizeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, "y_chosen_size", move |config| {
-        config.y_chosen_size = req.y_chosen_size as u32;
-    })
+    mutate_current_preview(
+        &state,
+        PreviewControlMode::Update,
+        "y_chosen_size",
+        move |config| {
+            config.y_chosen_size = req.y_chosen_size as u32;
+        },
+    )
     .await
 }
 
@@ -1027,9 +1047,14 @@ async fn set_current_preview_auto_scale(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewAutoScaleRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, "auto_scale", move |config| {
-        config.auto_scale_enabled = req.auto_scale_enabled;
-    })
+    mutate_current_preview(
+        &state,
+        PreviewControlMode::Update,
+        "auto_scale",
+        move |config| {
+            config.auto_scale_enabled = req.auto_scale_enabled;
+        },
+    )
     .await
 }
 
@@ -1037,9 +1062,14 @@ async fn set_current_preview_max_points(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewMaxPointsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, "max_points", move |config| {
-        config.max_points = req.max_points.min(u32::MAX as usize) as u32;
-    })
+    mutate_current_preview(
+        &state,
+        PreviewControlMode::Update,
+        "max_points",
+        move |config| {
+            config.max_points = req.max_points.min(u32::MAX as usize) as u32;
+        },
+    )
     .await
 }
 
@@ -1057,9 +1087,14 @@ async fn set_current_preview_all_layers(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewAllLayersRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, "all_layers", move |config| {
-        config.all_layers = req.all_layers;
-    })
+    mutate_current_preview(
+        &state,
+        PreviewControlMode::Update,
+        "all_layers",
+        move |config| {
+            config.all_layers = req.all_layers;
+        },
+    )
     .await
 }
 
@@ -2959,8 +2994,7 @@ fn serialize_current_live_vector_binary_v2(
     grid: [u32; 3],
     values: &[f64],
 ) -> Vec<u8> {
-    let mut out =
-        Vec::with_capacity(CURRENT_LIVE_VECTOR_FRAME_V2_HEADER_LEN + values.len() * 8);
+    let mut out = Vec::with_capacity(CURRENT_LIVE_VECTOR_FRAME_V2_HEADER_LEN + values.len() * 8);
     out.extend_from_slice(&CURRENT_LIVE_VECTOR_FRAME_MAGIC);
     out.push(CURRENT_LIVE_VECTOR_FRAME_V2_VERSION);
     out.push(CURRENT_LIVE_VECTOR_FRAME_KIND_F64);
@@ -2973,7 +3007,9 @@ fn serialize_current_live_vector_binary_v2(
     out.extend_from_slice(&grid[2].to_le_bytes());
     // quantity_id: 16 bytes, null-padded
     let id_bytes = quantity_id.as_bytes();
-    let copy_len = id_bytes.len().min(CURRENT_LIVE_VECTOR_FRAME_QUANTITY_ID_LEN);
+    let copy_len = id_bytes
+        .len()
+        .min(CURRENT_LIVE_VECTOR_FRAME_QUANTITY_ID_LEN);
     out.extend_from_slice(&id_bytes[..copy_len]);
     for _ in copy_len..CURRENT_LIVE_VECTOR_FRAME_QUANTITY_ID_LEN {
         out.push(0u8);
@@ -3047,15 +3083,25 @@ fn build_current_live_ws_messages_delta(
         ) {
             // Extract V2 metadata from spatial preview if available
             let v2_meta = match snapshot.preview.as_ref() {
-                Some(PreviewState::Spatial(sp)) => Some((&sp.quantity, sp.n_comp as u8, [
-                    sp.preview_grid[0] as u32,
-                    sp.preview_grid[1] as u32,
-                    sp.preview_grid[2] as u32,
-                ])),
+                Some(PreviewState::Spatial(sp)) => Some((
+                    &sp.quantity,
+                    sp.n_comp as u8,
+                    [
+                        sp.preview_grid[0] as u32,
+                        sp.preview_grid[1] as u32,
+                        sp.preview_grid[2] as u32,
+                    ],
+                )),
                 _ => None,
             };
             let binary = if let Some((quantity_id, n_comp, grid)) = v2_meta {
-                serialize_current_live_vector_binary_v2(payload_id, quantity_id, n_comp, grid, values)
+                serialize_current_live_vector_binary_v2(
+                    payload_id,
+                    quantity_id,
+                    n_comp,
+                    grid,
+                    values,
+                )
             } else {
                 serialize_current_live_vector_binary(payload_id, values)
             };
@@ -3143,25 +3189,37 @@ fn serialize_current_live_session_event(
     // Envelope fields: only include when their version changed.
     // On a typical per-step publish, none of these change — skipping them
     // reduces the session_state message from ~1.5 MB to ~2 KB.
-    let (session, run, capabilities, metadata, mesh_workspace, stage_execution,
-         scene_document, engine_log, artifacts, display_selection, preview_config) =
-        if envelope_changed {
-            (
-                Some(&snapshot.session),
-                snapshot.run.as_ref(),
-                snapshot.capabilities.as_ref(),
-                snapshot.metadata.as_ref(),
-                snapshot.mesh_workspace.as_ref(),
-                snapshot.stage_execution.as_ref(),
-                snapshot.scene_document.as_ref(),
-                Some(snapshot.engine_log.as_slice()),
-                Some(snapshot.artifacts.as_slice()),
-                Some(&snapshot.display_selection),
-                Some(&snapshot.preview_config),
-            )
-        } else {
-            (None, None, None, None, None, None, None, None, None, None, None)
-        };
+    let (
+        session,
+        run,
+        capabilities,
+        metadata,
+        mesh_workspace,
+        stage_execution,
+        scene_document,
+        engine_log,
+        artifacts,
+        display_selection,
+        preview_config,
+    ) = if envelope_changed {
+        (
+            Some(&snapshot.session),
+            snapshot.run.as_ref(),
+            snapshot.capabilities.as_ref(),
+            snapshot.metadata.as_ref(),
+            snapshot.mesh_workspace.as_ref(),
+            snapshot.stage_execution.as_ref(),
+            snapshot.scene_document.as_ref(),
+            Some(snapshot.engine_log.as_slice()),
+            Some(snapshot.artifacts.as_slice()),
+            Some(&snapshot.display_selection),
+            Some(&snapshot.preview_config),
+        )
+    } else {
+        (
+            None, None, None, None, None, None, None, None, None, None, None,
+        )
+    };
 
     serde_json::to_string(&CurrentLiveEvent::SessionState {
         state: SessionStateEventView {
@@ -3180,8 +3238,16 @@ fn serialize_current_live_session_event(
             scalar_rows_total: snapshot.scalar_rows.len(),
             engine_log,
             quantities: quantities_changed.then_some(snapshot.quantities.as_slice()),
-            fem_mesh: if fem_mesh_changed { snapshot.fem_mesh.as_ref() } else { None },
-            latest_fields: if latest_fields_changed { Some(&snapshot.latest_fields) } else { None },
+            fem_mesh: if fem_mesh_changed {
+                snapshot.fem_mesh.as_ref()
+            } else {
+                None
+            },
+            latest_fields: if latest_fields_changed {
+                Some(&snapshot.latest_fields)
+            } else {
+                None
+            },
             artifacts,
             display_selection,
             preview_config,
@@ -3260,9 +3326,7 @@ fn serialize_current_live_poll_response(
 /// snapshot.  Used for lazy memoization instead of serializing inline during
 /// publish while holding the write lock.
 #[allow(dead_code)]
-async fn serialize_current_live_response_from_state(
-    state: &AppState,
-) -> Result<String, ApiError> {
+async fn serialize_current_live_response_from_state(state: &AppState) -> Result<String, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()

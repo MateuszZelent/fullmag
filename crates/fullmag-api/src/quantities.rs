@@ -110,9 +110,7 @@ pub(crate) fn extract_fem_mesh_from_metadata(metadata: &Value) -> Option<FemMesh
 #[cfg(test)]
 mod tests {
     use super::build_quantities;
-    use crate::types::{
-        CachedPreviewFields, LatestFields, LiveState, StepUpdateView,
-    };
+    use crate::types::{CachedPreviewFields, LatestFields, LiveState, StepUpdateView};
 
     #[test]
     fn magnetization_is_not_marked_available_from_legacy_inline_field() {

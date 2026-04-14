@@ -50,9 +50,7 @@ impl Default for PackOptions {
 fn zip_compression(profile: CompressionProfile) -> CompressionMethod {
     match profile {
         CompressionProfile::Speed => CompressionMethod::Stored,
-        CompressionProfile::Balanced | CompressionProfile::Smallest => {
-            CompressionMethod::Deflated
-        }
+        CompressionProfile::Balanced | CompressionProfile::Smallest => CompressionMethod::Deflated,
     }
 }
 
@@ -83,7 +81,12 @@ pub fn pack_fms<W: Write + Seek>(
     // ── manifest/ ──────────────────────────────────────────────────────
     write_json(&mut zip, "manifest/session.json", session, fopts)?;
     write_json(&mut zip, "manifest/workspace.json", workspace, fopts)?;
-    write_json(&mut zip, "manifest/export_profile.json", export_profile, fopts)?;
+    write_json(
+        &mut zip,
+        "manifest/export_profile.json",
+        export_profile,
+        fopts,
+    )?;
 
     // ── project/ ───────────────────────────────────────────────────────
     for (name, data) in documents {
@@ -252,7 +255,10 @@ pub fn inspect_fms<R: Read + Seek>(reader: R) -> Result<SessionInspection> {
                             time_s: cp.time_s,
                             study_kind: cp.compatibility.study_kind.unwrap_or_default(),
                         };
-                        if latest_cp.as_ref().map_or(true, |prev| summary.step > prev.step) {
+                        if latest_cp
+                            .as_ref()
+                            .map_or(true, |prev| summary.step > prev.step)
+                        {
                             latest_cp = Some(summary);
                         }
                     }
@@ -296,13 +302,9 @@ pub fn inspect_fms<R: Read + Seek>(reader: R) -> Result<SessionInspection> {
 }
 
 /// Extract a `.fms` archive into a `SessionStore`.
-pub fn unpack_fms<R: Read + Seek>(
-    reader: R,
-    store: &SessionStore,
-) -> Result<FmsSessionManifest> {
+pub fn unpack_fms<R: Read + Seek>(reader: R, store: &SessionStore) -> Result<FmsSessionManifest> {
     let mut archive = zip::ZipArchive::new(reader)?;
-    let session: FmsSessionManifest =
-        read_json_entry(&mut archive, "manifest/session.json")?;
+    let session: FmsSessionManifest = read_json_entry(&mut archive, "manifest/session.json")?;
 
     // Extract all entries into the store.
     for i in 0..archive.len() {
@@ -389,14 +391,8 @@ mod tests {
             "main.py".into(),
             b"# fullmag script\nprint('hello')".to_vec(),
         );
-        docs.insert(
-            "ui_state.json".into(),
-            b"{}".to_vec(),
-        );
-        docs.insert(
-            "scene_document.json".into(),
-            b"{}".to_vec(),
-        );
+        docs.insert("ui_state.json".into(), b"{}".to_vec());
+        docs.insert("scene_document.json".into(), b"{}".to_vec());
 
         // Pack to memory.
         let mut buf = Cursor::new(Vec::new());

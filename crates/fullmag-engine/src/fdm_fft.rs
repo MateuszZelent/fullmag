@@ -592,7 +592,13 @@ pub(crate) fn fft3_with_workspace(data: &mut [Complex<f64>], ws: &mut FftWorkspa
 
 /// Legacy wrapper — creates workspace on the fly (used only in tests).
 #[allow(dead_code)]
-pub(crate) fn fft3_in_place(data: &mut [Complex<f64>], nx: usize, ny: usize, nz: usize, inverse: bool) {
+pub(crate) fn fft3_in_place(
+    data: &mut [Complex<f64>],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    inverse: bool,
+) {
     let mut ws = FftWorkspace::new(nx / 2, ny / 2, nz / 2, 1.0, 1.0, 1.0);
     fft3_with_workspace(data, &mut ws, inverse);
 }

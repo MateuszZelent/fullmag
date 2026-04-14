@@ -67,7 +67,10 @@ pub fn reduce_vector_field(data: &[f64], reduction: QuantityReduction) -> Option
                 sz += data[3 * i + 2];
             }
             let inv_n = 1.0 / n as f64;
-            Some((sx * inv_n * sx * inv_n + sy * inv_n * sy * inv_n + sz * inv_n * sz * inv_n).sqrt())
+            Some(
+                (sx * inv_n * sx * inv_n + sy * inv_n * sy * inv_n + sz * inv_n * sz * inv_n)
+                    .sqrt(),
+            )
         }
         QuantityReduction::Magnitude => {
             let sum_sq: f64 = data.iter().map(|v| v * v).sum();
@@ -76,8 +79,7 @@ pub fn reduce_vector_field(data: &[f64], reduction: QuantityReduction) -> Option
         QuantityReduction::Max => {
             let mut max_mag_sq = 0.0_f64;
             for i in 0..n {
-                let mag_sq =
-                    data[3 * i] * data[3 * i]
+                let mag_sq = data[3 * i] * data[3 * i]
                     + data[3 * i + 1] * data[3 * i + 1]
                     + data[3 * i + 2] * data[3 * i + 2];
                 max_mag_sq = max_mag_sq.max(mag_sq);
@@ -87,8 +89,7 @@ pub fn reduce_vector_field(data: &[f64], reduction: QuantityReduction) -> Option
         QuantityReduction::Min => {
             let mut min_mag_sq = f64::INFINITY;
             for i in 0..n {
-                let mag_sq =
-                    data[3 * i] * data[3 * i]
+                let mag_sq = data[3 * i] * data[3 * i]
                     + data[3 * i + 1] * data[3 * i + 1]
                     + data[3 * i + 2] * data[3 * i + 2];
                 min_mag_sq = min_mag_sq.min(mag_sq);

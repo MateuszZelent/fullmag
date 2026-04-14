@@ -137,7 +137,11 @@ pub fn h_mel_field_add_into(
             }
         }
         PrescribedStrainField::PerCell(eps_field) => {
-            assert_eq!(eps_field.len(), n, "strain field length must match magnetization");
+            assert_eq!(
+                eps_field.len(),
+                n,
+                "strain field length must match magnetization"
+            );
             for i in 0..n {
                 let active = active_mask.map_or(true, |mask| mask[i]);
                 if active {

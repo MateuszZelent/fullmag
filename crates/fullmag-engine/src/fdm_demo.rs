@@ -1,10 +1,10 @@
 //! Reference demo for exchange-only LLG simulation.
 
+use crate::EngineError;
 use crate::{
     CellSize, EffectiveFieldTerms, ExchangeLlgProblem, GridShape, LlgConfig, MaterialParameters,
     Result, StepReport, Vector3,
 };
-use crate::EngineError;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReferenceDemoReport {

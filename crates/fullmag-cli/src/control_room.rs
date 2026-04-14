@@ -152,7 +152,10 @@ pub(crate) fn bootstrap_control_plane(
     if stream_api_logs_to_terminal {
         eprintln!("  streaming fullmag-api logs to terminal (and saving to .fullmag/logs/fullmag-api.log)");
     } else {
-        eprintln!("  fullmag-api logs: {}", log_dir.join("fullmag-api.log").display());
+        eprintln!(
+            "  fullmag-api logs: {}",
+            log_dir.join("fullmag-api.log").display()
+        );
     }
 
     let self_exe = std::env::current_exe().unwrap_or_default();

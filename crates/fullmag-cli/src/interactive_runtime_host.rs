@@ -148,10 +148,7 @@ impl CurrentLiveDisplaySelectionHandle {
                 Err(_) => break,
             };
             // Find the first preview command in the queue.
-            let preview_idx = state
-                .queue
-                .iter()
-                .position(|c| is_preview_kind(&c.kind));
+            let preview_idx = state.queue.iter().position(|c| is_preview_kind(&c.kind));
             match preview_idx {
                 Some(idx) => {
                     let next = state.queue.remove(idx).unwrap();
@@ -250,9 +247,7 @@ impl CurrentLiveDisplaySelectionHandle {
                 }
                 Some(fullmag_runner::LiveControlCommand::SkipStage) => {
                     self.set_running_interrupt(InteractiveStageInterrupt::Skip);
-                    eprintln!(
-                        "interactive: received 'skip' command — skipping current stage",
-                    );
+                    eprintln!("interactive: received 'skip' command — skipping current stage",);
                     return Some(fullmag_runner::StepAction::Stop);
                 }
                 // Run/Relax/Resume are not handled during running — they go to orchestrator

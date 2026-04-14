@@ -158,13 +158,13 @@ pub(crate) fn parse_python_progress_event(message: &str) -> PythonProgressEvent 
                 .get("fem_mesh")
                 .and_then(|value| parse_fem_surface_preview_mesh(value, geometry_name.as_deref()));
             match (geometry_name, fem_mesh) {
-            (Some(geometry_name), Some(fem_mesh)) => PythonProgressEvent::FemSurfacePreview {
-                geometry_name,
-                fem_mesh,
-                message,
-            },
-            _ => PythonProgressEvent::Message(trimmed.to_string()),
-        }
+                (Some(geometry_name), Some(fem_mesh)) => PythonProgressEvent::FemSurfacePreview {
+                    geometry_name,
+                    fem_mesh,
+                    message,
+                },
+                _ => PythonProgressEvent::Message(trimmed.to_string()),
+            }
         }
         _ => {
             let mut payload = serde_json::Map::new();

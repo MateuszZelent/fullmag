@@ -333,19 +333,28 @@ pub(crate) fn resolve_script_until_seconds(
             dynamics,
             max_steps,
             ..
-        } => {
-            let dt = match dynamics {
-                fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } => {
-                    fixed_timestep.unwrap_or(1e-13)
-                }
-            };
-            Ok(dt * (*max_steps as f64))
-        }
+        } => Ok(resolve_relaxation_pseudo_time_seconds(dynamics, *max_steps)),
         fullmag_ir::StudyIR::TimeEvolution { .. } => bail!(
             "no stop time provided. Define DEFAULT_UNTIL in the script for time-evolution runs"
         ),
         fullmag_ir::StudyIR::Eigenmodes { .. } => Ok(0.0),
     }
+}
+
+fn resolve_relaxation_pseudo_time_seconds(
+    dynamics: &fullmag_ir::DynamicsIR,
+    max_steps: u64,
+) -> f64 {
+    let dt = match dynamics {
+        fullmag_ir::DynamicsIR::Llg {
+            fixed_timestep,
+            adaptive_timestep,
+            ..
+        } => fixed_timestep
+            .or_else(|| adaptive_timestep.as_ref().and_then(|cfg| cfg.dt_initial))
+            .unwrap_or(1e-13),
+    };
+    dt * (max_steps as f64)
 }
 
 pub(crate) fn materialize_script_stages(
@@ -1661,11 +1670,7 @@ pub(crate) fn build_interactive_command_stage(
                 sampling,
             };
 
-            let until_seconds = match dynamics {
-                fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } => {
-                    fixed_timestep.unwrap_or(1e-13) * max_steps as f64
-                }
-            };
+            let until_seconds = resolve_relaxation_pseudo_time_seconds(&dynamics, max_steps);
 
             Ok(Some(ResolvedScriptStage::solver(
                 ir,
@@ -1728,32 +1733,33 @@ pub(crate) fn sequence_stage_to_session_command(
         .map(|d| d.as_millis())
         .unwrap_or(0);
     match stage {
-        fullmag_runner::SequenceStage::Run { until_seconds, max_steps } => {
-            crate::types::SessionCommand {
-                seq: 0,
-                command_id: format!("{}_stage_{}", sequence_id, stage_index),
-                kind: "run".to_string(),
-                created_at_unix_ms: now_ms,
-                until_seconds: Some(*until_seconds),
-                max_steps: *max_steps,
-                torque_tolerance: None,
-                energy_tolerance: None,
-                integrator: None,
-                fixed_timestep: None,
-                relax_algorithm: None,
-                relax_alpha: None,
-                mesh_options: None,
-                mesh_target: None,
-                mesh_reason: None,
-                state_path: None,
-                state_format: None,
-                state_dataset: None,
-                state_sample_index: None,
-                display_selection: None,
-                preview_config: None,
-                stages: None,
-            }
-        }
+        fullmag_runner::SequenceStage::Run {
+            until_seconds,
+            max_steps,
+        } => crate::types::SessionCommand {
+            seq: 0,
+            command_id: format!("{}_stage_{}", sequence_id, stage_index),
+            kind: "run".to_string(),
+            created_at_unix_ms: now_ms,
+            until_seconds: Some(*until_seconds),
+            max_steps: *max_steps,
+            torque_tolerance: None,
+            energy_tolerance: None,
+            integrator: None,
+            fixed_timestep: None,
+            relax_algorithm: None,
+            relax_alpha: None,
+            mesh_options: None,
+            mesh_target: None,
+            mesh_reason: None,
+            state_path: None,
+            state_format: None,
+            state_dataset: None,
+            state_sample_index: None,
+            display_selection: None,
+            preview_config: None,
+            stages: None,
+        },
         fullmag_runner::SequenceStage::Relax {
             until_seconds,
             max_steps,
@@ -1873,6 +1879,103 @@ mod tests {
         .expect("sample ProblemIR should deserialize")
     }
 
+    fn sample_problem_ir_with_adaptive_relax_dt(dt_initial: f64) -> ProblemIR {
+        serde_json::from_value(json!({
+            "ir_version": "0.2.0",
+            "problem_meta": {
+                "name": "pipeline_test_adaptive_relax",
+                "description": null,
+                "script_language": "python",
+                "script_source": null,
+                "script_api_version": "0.2.0",
+                "serializer_version": "0.2.0",
+                "entrypoint_kind": "direct_script",
+                "source_hash": null,
+                "runtime_metadata": {},
+                "backend_revision": null,
+                "seeds": []
+            },
+            "geometry": {
+                "entries": [
+                    {
+                        "kind": "box",
+                        "name": "track",
+                        "size": [1.0, 1.0, 1.0]
+                    }
+                ]
+            },
+            "regions": [
+                {
+                    "name": "track",
+                    "geometry": "track"
+                }
+            ],
+            "materials": [
+                {
+                    "name": "Py",
+                    "saturation_magnetisation": 800000.0,
+                    "exchange_stiffness": 1.3e-11,
+                    "damping": 0.01,
+                    "uniaxial_anisotropy": null,
+                    "anisotropy_axis": null
+                }
+            ],
+            "magnets": [
+                {
+                    "name": "track",
+                    "region": "track",
+                    "material": "Py",
+                    "initial_magnetization": {
+                        "kind": "uniform",
+                        "value": [1.0, 0.0, 0.0]
+                    }
+                }
+            ],
+            "energy_terms": [
+                {
+                    "kind": "exchange"
+                }
+            ],
+            "study": {
+                "kind": "relaxation",
+                "algorithm": "llg_overdamped",
+                "torque_tolerance": 1e-6,
+                "energy_tolerance": null,
+                "max_steps": 50,
+                "dynamics": {
+                    "kind": "llg",
+                    "gyromagnetic_ratio": 221000.0,
+                    "integrator": "rk23",
+                    "fixed_timestep": null,
+                    "adaptive_timestep": {
+                        "atol": 1e-6,
+                        "rtol": 1e-3,
+                        "dt_initial": dt_initial,
+                        "dt_min": 1e-18,
+                        "dt_max": 1e-12,
+                        "safety": 0.9,
+                        "growth_limit": 2.0,
+                        "shrink_limit": 0.25,
+                        "max_spin_rotation": null,
+                        "norm_tolerance": null
+                    }
+                },
+                "sampling": {
+                    "outputs": []
+                }
+            },
+            "backend_policy": {
+                "requested_backend": "fdm",
+                "execution_precision": "double",
+                "discretization_hints": null
+            },
+            "validation_profile": {
+                "execution_mode": "strict"
+            }
+        }))
+        .expect("adaptive relax ProblemIR should deserialize")
+    }
+
     fn zeeman_field(problem: &ProblemIR) -> Option<[f64; 3]> {
         problem.energy_terms.iter().find_map(|term| match term {
             fullmag_ir::EnergyTermIR::Zeeman { b } => Some(*b),
@@ -1938,6 +2041,78 @@ mod tests {
             fullmag_ir::StudyIR::Relaxation { max_steps: 25, .. }
         ));
         assert!((stages[1].until_seconds - (25.0 * 2e-13)).abs() < 1e-24);
+    }
+
+    #[test]
+    fn materialize_pipeline_relax_uses_adaptive_dt_initial_for_default_until() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir_with_adaptive_relax_dt(3e-16),
+            shared_geometry_assets: None,
+            default_until_seconds: None,
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![StudyPipelineNode::Primitive {
+                    id: "stage_1_relax".to_string(),
+                    label: "".to_string(),
+                    enabled: true,
+                    notes: None,
+                    source: Some("script_imported".to_string()),
+                    stage_kind: "relax".to_string(),
+                    payload: serde_json::from_value(json!({
+                        "kind": "relax",
+                        "entrypoint_kind": "pipeline_relax",
+                        "integrator": "rk23",
+                        "fixed_timestep": "",
+                        "relax_algorithm": "llg_overdamped",
+                        "torque_tolerance": "1e-6",
+                        "max_steps": "25"
+                    }))
+                    .expect("payload"),
+                }],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].entrypoint_kind, "pipeline_relax");
+        assert!((stages[0].until_seconds - (25.0 * 3e-16)).abs() < 1e-30);
+    }
+
+    #[test]
+    fn build_interactive_relax_uses_adaptive_dt_initial_for_default_until() {
+        let base_problem = sample_problem_ir_with_adaptive_relax_dt(4e-16);
+        let command = crate::types::SessionCommand {
+            seq: 1,
+            command_id: "cmd-relax".to_string(),
+            kind: "relax".to_string(),
+            created_at_unix_ms: 0,
+            until_seconds: None,
+            max_steps: Some(20),
+            torque_tolerance: Some(1e-6),
+            energy_tolerance: None,
+            integrator: None,
+            fixed_timestep: None,
+            relax_algorithm: Some("llg_overdamped".to_string()),
+            relax_alpha: None,
+            mesh_options: None,
+            mesh_target: None,
+            mesh_reason: None,
+            state_path: None,
+            state_format: None,
+            state_dataset: None,
+            state_sample_index: None,
+            display_selection: None,
+            preview_config: None,
+            stages: None,
+        };
+
+        let stage = build_interactive_command_stage(&base_problem, &command)
+            .expect("interactive relax should build")
+            .expect("relax command should materialize a stage");
+
+        assert_eq!(stage.entrypoint_kind, "interactive_relax");
+        assert!((stage.until_seconds - (20.0 * 4e-16)).abs() < 1e-30);
     }
 
     #[test]

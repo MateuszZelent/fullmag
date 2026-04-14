@@ -3601,7 +3601,11 @@ fn fdm_boundary_params_none_when_not_set() {
 fn fdm_pbc_with_exchange_is_rejected() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.pbc = Some(FdmPeriodicityIR {
-        axes: [AxisBoundary::Periodic, AxisBoundary::Open, AxisBoundary::Open],
+        axes: [
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+            AxisBoundary::Open,
+        ],
         demag: FdmDemagPeriodicityIR::Open,
         image_counts: None,
     });
@@ -3645,7 +3649,11 @@ fn fdm_open_boundary_demag_with_periodic_axes_still_rejects_exchange() {
     // Even with open-boundary demag, periodic exchange is unsupported.
     let mut ir = ProblemIR::bootstrap_example();
     ir.pbc = Some(FdmPeriodicityIR {
-        axes: [AxisBoundary::Periodic, AxisBoundary::Open, AxisBoundary::Open],
+        axes: [
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+            AxisBoundary::Open,
+        ],
         demag: FdmDemagPeriodicityIR::Open,
         image_counts: None,
     });

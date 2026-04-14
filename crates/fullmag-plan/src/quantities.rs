@@ -98,10 +98,7 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
     let mut m = CapabilityMatrix::new();
 
     // ── FDM CPU Reference ────────────────────────────────────
-    let fdm_cpu_exact = [
-        M, HEx, HDemag, HExt, HAnt, HEff,
-        EEx, EDemag, EExt, ETotal,
-    ];
+    let fdm_cpu_exact = [M, HEx, HDemag, HExt, HAnt, HEff, EEx, EDemag, EExt, ETotal];
     for id in fdm_cpu_exact {
         m.set(FdmCpuReference, id, Exact);
     }
@@ -202,11 +199,8 @@ mod tests {
     #[test]
     fn validate_rejects_unsupported() {
         let m = default_capability_matrix();
-        let unsupported = validate_quantity_requests(
-            &m,
-            BackendFamily::FdmCpuReference,
-            &[M, HOe, HTherm],
-        );
+        let unsupported =
+            validate_quantity_requests(&m, BackendFamily::FdmCpuReference, &[M, HOe, HTherm]);
         assert_eq!(unsupported.len(), 2);
         assert!(unsupported.contains(&HOe));
         assert!(unsupported.contains(&HTherm));

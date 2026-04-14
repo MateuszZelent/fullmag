@@ -59,8 +59,7 @@ impl CasStore {
         if !path.exists() {
             return Ok(None);
         }
-        let data = fs::read(&path)
-            .with_context(|| format!("reading CAS object {hash}"))?;
+        let data = fs::read(&path).with_context(|| format!("reading CAS object {hash}"))?;
         // Verify integrity.
         let actual = hex_sha256(&data);
         if actual != hash {

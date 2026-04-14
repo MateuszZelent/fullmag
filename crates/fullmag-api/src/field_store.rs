@@ -22,11 +22,11 @@ use std::sync::Arc;
 pub(crate) struct LiveFieldCatalogEntry {
     pub quantity_id: String,
     pub label: String,
-    pub kind: String,        // "vector_field" | "spatial_scalar" | "global_scalar"
+    pub kind: String, // "vector_field" | "spatial_scalar" | "global_scalar"
     pub unit: String,
     pub spatial_domain: String, // "magnetic_only" | "full_domain"
     pub n_comp: usize,
-    pub source: String,      // "latest_fields" | "preview_cache"
+    pub source: String, // "latest_fields" | "preview_cache"
     pub available: bool,
     pub element_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,8 +54,12 @@ fn compute_stats(values: &[f64], n_comp: usize) -> Option<FieldStats> {
     let mut max = f64::NEG_INFINITY;
     let mut sum = 0.0_f64;
     for &v in values {
-        if v < min { min = v; }
-        if v > max { max = v; }
+        if v < min {
+            min = v;
+        }
+        if v > max {
+            max = v;
+        }
         sum += v;
     }
     let mean = sum / values.len() as f64;
@@ -65,8 +69,12 @@ fn compute_stats(values: &[f64], n_comp: usize) -> Option<FieldStats> {
         let mut cmax = [f64::NEG_INFINITY; 3];
         for chunk in values.chunks_exact(3) {
             for c in 0..3 {
-                if chunk[c] < cmin[c] { cmin[c] = chunk[c]; }
-                if chunk[c] > cmax[c] { cmax[c] = chunk[c]; }
+                if chunk[c] < cmin[c] {
+                    cmin[c] = chunk[c];
+                }
+                if chunk[c] > cmax[c] {
+                    cmax[c] = chunk[c];
+                }
             }
         }
         (Some(cmin), Some(cmax))
@@ -74,7 +82,13 @@ fn compute_stats(values: &[f64], n_comp: usize) -> Option<FieldStats> {
         (None, None)
     };
 
-    Some(FieldStats { min, max, mean, component_min, component_max })
+    Some(FieldStats {
+        min,
+        max,
+        mean,
+        component_min,
+        component_max,
+    })
 }
 
 // ── Vector response ─────────────────────────────────────────────────────
@@ -122,7 +136,9 @@ pub(crate) async fn get_live_field_catalog(
     for (quantity_id, value) in snapshot.latest_fields.entries() {
         let spec = quantity_spec(quantity_id);
         let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
-        let label = spec.map(|s| s.label.to_string()).unwrap_or_else(|| quantity_id.to_string());
+        let label = spec
+            .map(|s| s.label.to_string())
+            .unwrap_or_else(|| quantity_id.to_string());
         let element_count = value
             .get("values")
             .and_then(|v| v.as_array())
@@ -189,7 +205,9 @@ pub(crate) async fn get_live_field_catalog(
         }
         let spec = quantity_spec(quantity_id);
         let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
-        let label = spec.map(|s| s.label.to_string()).unwrap_or_else(|| quantity_id.to_string());
+        let label = spec
+            .map(|s| s.label.to_string())
+            .unwrap_or_else(|| quantity_id.to_string());
         let element_count = if n_comp > 0 {
             field.vector_field_values.len() / n_comp
         } else {
@@ -245,10 +263,7 @@ pub(crate) async fn get_live_field_vector(
                 arr.iter()
                     .flat_map(|v| {
                         if let Some(inner) = v.as_array() {
-                            inner
-                                .iter()
-                                .filter_map(|c| c.as_f64())
-                                .collect::<Vec<_>>()
+                            inner.iter().filter_map(|c| c.as_f64()).collect::<Vec<_>>()
                         } else if let Some(f) = v.as_f64() {
                             vec![f]
                         } else {

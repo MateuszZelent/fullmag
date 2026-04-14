@@ -178,6 +178,23 @@ Fullmag currently still uses the runner's pseudo-time and output cadence during
 `llg_overdamped` relaxation, so reported stage time is an execution-control
 quantity rather than a physically meaningful evolution time.
 
+For stage materialization and interactive control, the pseudo-time budget must
+be derived consistently as
+
+$$
+t_{\mathrm{budget}} = N_{\mathrm{steps}} \, \Delta t_{\mathrm{seed}},
+$$
+
+where $\Delta t_{\mathrm{seed}}$ is taken from:
+
+1. `fixed_timestep` when present,
+2. otherwise `adaptive_timestep.dt_initial` when present,
+3. otherwise the fallback seed `1\times10^{-13}\,\mathrm{s}`.
+
+This seed-time rule is only a runtime-control convention. It must not be
+confused with a physical stopping criterion, and it must not override the
+canonical convergence test based on torque and optional energy delta.
+
 **Convergence criterion**: the runner monitors the approximate maximum torque
 derived from the pure-damping right-hand side:
 
@@ -195,6 +212,12 @@ discrete-time integrator still introduces the usual $O(\Delta t)$ step error.
 1. $\tau_{\max} \le \epsilon_\tau$ (torque tolerance),
 2. optionally $|E_{n} - E_{n-1}| \le \epsilon_E$ (energy tolerance),
 3. hard cap on iteration count.
+
+The canonical public unit for `torque_tolerance` is **A/m** because the
+residual is defined as $\max_i |m_i \times H_{\mathrm{eff},i}|$.
+`max_torque_T = \mu_0 \, \tau_{\max}` may be reported as an auxiliary derived
+observable for mumax-style comparison, but it is not the control variable used
+for Fullmag relaxation stop checks.
 
 #### 3.1.2 Algorithm B — Projected Gradient + Barzilai–Borwein
 

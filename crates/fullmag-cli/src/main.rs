@@ -219,16 +219,19 @@ fn main() -> Result<()> {
 fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
     use args::SessionSubcommand;
     use fullmag_session::{
-        inspect_fms, pack_fms, unpack_fms,
-        FmsExportProfile, FmsSessionManifest, FmsWorkspaceManifest,
-        PackOptions, SessionStore,
+        inspect_fms, pack_fms, unpack_fms, FmsExportProfile, FmsSessionManifest,
+        FmsWorkspaceManifest, PackOptions, SessionStore,
     };
     use std::collections::HashMap;
 
     let default_store_root = std::path::PathBuf::from(".fullmag/local-live/session-store");
 
     match cmd {
-        SessionSubcommand::Save { path, profile, name } => {
+        SessionSubcommand::Save {
+            path,
+            profile,
+            name,
+        } => {
             let store = SessionStore::open(&default_store_root)?;
             let profile = fullmag_session::SaveProfile::from(profile);
             let session_name = name.unwrap_or_else(|| "CLI Session".into());
@@ -253,7 +256,15 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
 
             let file = std::fs::File::create(&path)?;
             let writer = std::io::BufWriter::new(file);
-            pack_fms(writer, &store, &session, &workspace, &export_profile, &docs, &opts)?;
+            pack_fms(
+                writer,
+                &store,
+                &session,
+                &workspace,
+                &export_profile,
+                &docs,
+                &opts,
+            )?;
 
             println!("Session saved to {}", path.display());
             println!("  session_id: {session_id}");
@@ -305,8 +316,10 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
                 } else {
                     println!("Recovery snapshots ({}):", snapshots.len());
                     for s in &snapshots {
-                        println!("  {} — {} ({:?}, saved {})",
-                            s.session_id, s.name, s.profile, s.saved_at);
+                        println!(
+                            "  {} — {} ({:?}, saved {})",
+                            s.session_id, s.name, s.profile, s.saved_at
+                        );
                     }
                 }
             }

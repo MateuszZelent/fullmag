@@ -77,7 +77,8 @@ impl StepTelemetry {
     pub fn end(&mut self, name: &'static str) {
         if let Some((open_name, start)) = self.open.take() {
             debug_assert_eq!(open_name, name, "mismatched telemetry end");
-            self.sections.push((name, start.elapsed().as_nanos() as u64));
+            self.sections
+                .push((name, start.elapsed().as_nanos() as u64));
         }
     }
 
@@ -169,7 +170,12 @@ impl SimulationTelemetry {
             } else {
                 0.0
             };
-            lines.push(format!("  {:<30} {:>10.3} ms ({:>5.1}%)", name, ns as f64 / 1e6, frac));
+            lines.push(format!(
+                "  {:<30} {:>10.3} ms ({:>5.1}%)",
+                name,
+                ns as f64 / 1e6,
+                frac
+            ));
         }
         lines.join("\n")
     }

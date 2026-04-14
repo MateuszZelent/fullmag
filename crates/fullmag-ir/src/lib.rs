@@ -168,7 +168,9 @@ pub enum FdmDemagPeriodicityIR {
 impl FdmPeriodicityIR {
     /// Returns `true` if any axis is periodic.
     pub fn has_any_periodic(&self) -> bool {
-        self.axes.iter().any(|a| matches!(a, AxisBoundary::Periodic))
+        self.axes
+            .iter()
+            .any(|a| matches!(a, AxisBoundary::Periodic))
     }
 
     /// Returns `true` if a specific axis index (0=x, 1=y, 2=z) is periodic.

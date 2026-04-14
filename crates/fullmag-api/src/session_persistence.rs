@@ -404,7 +404,8 @@ pub(crate) async fn import_session_commit(
         .read_document("project/current_live_snapshot.json")
         .map_err(|e| ApiError::internal(format!("reading snapshot document: {e}")))?
     {
-        if let Ok(persisted) = serde_json::from_slice::<PersistedCurrentLiveSnapshot>(&snapshot_bytes)
+        if let Ok(persisted) =
+            serde_json::from_slice::<PersistedCurrentLiveSnapshot>(&snapshot_bytes)
         {
             let restored: SessionStateResponse = persisted.into();
             // Refresh the in-memory active workspace.

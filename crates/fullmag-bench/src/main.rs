@@ -10,9 +10,8 @@
 use std::time::Instant;
 
 use fullmag_engine::{
-    AdaptiveStepConfig, CellSize, EffectiveFieldTerms, ExchangeLlgProblem,
-    GridShape, LlgConfig, MaterialParameters,
-    TimeIntegrator, Vector3,
+    AdaptiveStepConfig, CellSize, EffectiveFieldTerms, ExchangeLlgProblem, GridShape, LlgConfig,
+    MaterialParameters, TimeIntegrator, Vector3,
 };
 use serde::Serialize;
 
@@ -148,13 +147,7 @@ fn run_benchmark(
     let terms_desc = describe_terms(&terms);
     let integrator_name = format!("{:?}", integrator);
 
-    let problem = ExchangeLlgProblem::with_terms(
-        grid,
-        cell_size,
-        permalloy(),
-        dynamics,
-        terms,
-    );
+    let problem = ExchangeLlgProblem::with_terms(grid, cell_size, permalloy(), dynamics, terms);
 
     let mag = random_magnetization(grid.cell_count(), 12345);
     let mut state = problem.new_state(mag).unwrap();
@@ -271,10 +264,10 @@ fn main() {
 
     // Grid sizes to benchmark
     let grids: &[([usize; 3], usize)] = &[
-        ([64, 64, 1], 50),     // thin film 2D-ish — fast
-        ([64, 64, 64], 20),    // 3D cube small
-        ([128, 128, 1], 30),   // thin film medium
-        ([128, 128, 128], 5),  // 3D cube medium (2M cells)
+        ([64, 64, 1], 50),    // thin film 2D-ish — fast
+        ([64, 64, 64], 20),   // 3D cube small
+        ([128, 128, 1], 30),  // thin film medium
+        ([128, 128, 128], 5), // 3D cube medium (2M cells)
     ];
 
     // Integrators to test

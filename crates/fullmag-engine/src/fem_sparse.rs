@@ -467,9 +467,13 @@ pub fn lobpcg_generalized(
     let mut x_cols: Vec<Vec<f64>> = Vec::with_capacity(k);
     for j in 0..k {
         let mut col = vec![0.0; n];
-        let mut seed: u64 = 6364136223846793005u64.wrapping_mul(j as u64 + 1).wrapping_add(1442695040888963407);
+        let mut seed: u64 = 6364136223846793005u64
+            .wrapping_mul(j as u64 + 1)
+            .wrapping_add(1442695040888963407);
         for v in col.iter_mut() {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             *v = ((seed >> 33) as f64) / (u32::MAX as f64) - 0.5;
         }
         x_cols.push(col);
@@ -560,7 +564,9 @@ pub fn lobpcg_generalized(
             }
             // Orthogonalize w_j against previous surviving w vectors
             for i in 0..j {
-                if !w_alive[i] { continue; }
+                if !w_alive[i] {
+                    continue;
+                }
                 let proj = dot_product(&bw_cols[i], &w_cols[j]);
                 for l in 0..n {
                     w_cols[j][l] -= proj * w_cols[i][l];
@@ -628,7 +634,9 @@ pub fn lobpcg_generalized(
                 }
                 // Orthogonalize p_j against previous surviving p vectors
                 for i in 0..j {
-                    if !p_alive[i] { continue; }
+                    if !p_alive[i] {
+                        continue;
+                    }
                     let proj = dot_product(&bp_cols[i], &p_cols[j]);
                     for l in 0..n {
                         p_cols[j][l] -= proj * p_cols[i][l];
@@ -679,9 +687,21 @@ pub fn lobpcg_generalized(
             let mut s_vecs: Vec<&Vec<f64>> = Vec::with_capacity(s_width);
             let mut as_vecs: Vec<&Vec<f64>> = Vec::with_capacity(s_width);
             let mut bs_vecs: Vec<&Vec<f64>> = Vec::with_capacity(s_width);
-            for j in 0..k { s_vecs.push(&x_cols[j]); as_vecs.push(&ax_cols[j]); bs_vecs.push(&bx_cols[j]); }
-            for j in 0..n_w { s_vecs.push(&w_cols[j]); as_vecs.push(&aw_cols[j]); bs_vecs.push(&bw_cols[j]); }
-            for j in 0..n_p { s_vecs.push(&p_cols[j]); as_vecs.push(&ap_cols[j]); bs_vecs.push(&bp_cols[j]); }
+            for j in 0..k {
+                s_vecs.push(&x_cols[j]);
+                as_vecs.push(&ax_cols[j]);
+                bs_vecs.push(&bx_cols[j]);
+            }
+            for j in 0..n_w {
+                s_vecs.push(&w_cols[j]);
+                as_vecs.push(&aw_cols[j]);
+                bs_vecs.push(&bw_cols[j]);
+            }
+            for j in 0..n_p {
+                s_vecs.push(&p_cols[j]);
+                as_vecs.push(&ap_cols[j]);
+                bs_vecs.push(&bp_cols[j]);
+            }
 
             // Build Gram matrices
             let mut ga = vec![0.0; s_width * s_width];
@@ -737,23 +757,47 @@ pub fn lobpcg_generalized(
         // Rebuild flat subspace refs for extraction (borrows are fresh now)
         let s_ext: Vec<&Vec<f64>> = {
             let mut v: Vec<&Vec<f64>> = Vec::new();
-            for j in 0..k { v.push(&x_cols[j]); }
-            for j in 0..n_w { v.push(&w_cols[j]); }
-            if !dropped_p { for j in 0..n_p { v.push(&p_cols[j]); } }
+            for j in 0..k {
+                v.push(&x_cols[j]);
+            }
+            for j in 0..n_w {
+                v.push(&w_cols[j]);
+            }
+            if !dropped_p {
+                for j in 0..n_p {
+                    v.push(&p_cols[j]);
+                }
+            }
             v
         };
         let as_ext: Vec<&Vec<f64>> = {
             let mut v: Vec<&Vec<f64>> = Vec::new();
-            for j in 0..k { v.push(&ax_cols[j]); }
-            for j in 0..n_w { v.push(&aw_cols[j]); }
-            if !dropped_p { for j in 0..n_p { v.push(&ap_cols[j]); } }
+            for j in 0..k {
+                v.push(&ax_cols[j]);
+            }
+            for j in 0..n_w {
+                v.push(&aw_cols[j]);
+            }
+            if !dropped_p {
+                for j in 0..n_p {
+                    v.push(&ap_cols[j]);
+                }
+            }
             v
         };
         let bs_ext: Vec<&Vec<f64>> = {
             let mut v: Vec<&Vec<f64>> = Vec::new();
-            for j in 0..k { v.push(&bx_cols[j]); }
-            for j in 0..n_w { v.push(&bw_cols[j]); }
-            if !dropped_p { for j in 0..n_p { v.push(&bp_cols[j]); } }
+            for j in 0..k {
+                v.push(&bx_cols[j]);
+            }
+            for j in 0..n_w {
+                v.push(&bw_cols[j]);
+            }
+            if !dropped_p {
+                for j in 0..n_p {
+                    v.push(&bp_cols[j]);
+                }
+            }
             v
         };
 
@@ -809,18 +853,18 @@ pub fn lobpcg_generalized(
         })
         .collect();
 
-    eigenpairs.sort_by(|a, b| a.eigenvalue.partial_cmp(&b.eigenvalue).unwrap_or(std::cmp::Ordering::Equal));
+    eigenpairs.sort_by(|a, b| {
+        a.eigenvalue
+            .partial_cmp(&b.eigenvalue)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     Ok((eigenpairs, report))
 }
 
 /// B-orthogonalize a set of column vectors using modified Gram-Schmidt
 /// with respect to the B inner product.
-fn b_orthogonalize(
-    x: &mut [Vec<f64>],
-    bx: &mut [Vec<f64>],
-    b: &CsrMatrix,
-) {
+fn b_orthogonalize(x: &mut [Vec<f64>], bx: &mut [Vec<f64>], b: &CsrMatrix) {
     let k = x.len();
     let n = if k > 0 { x[0].len() } else { return };
 
@@ -1025,7 +1069,11 @@ fn dense_generalized_eigen(
 
     // Sort by ascending eigenvalue
     let mut indices: Vec<usize> = (0..m).collect();
-    indices.sort_by(|&a, &b| evals[a].partial_cmp(&evals[b]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| {
+        evals[a]
+            .partial_cmp(&evals[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut sorted_evals = vec![0.0; m];
     let mut sorted_evecs = vec![0.0; m * m];
@@ -1299,15 +1347,15 @@ mod tests {
         let b = identity_csr(n);
         let k = 3;
 
-        let (eigenpairs, report) = lobpcg_generalized(&a, &b, k, 1e-8, 200)
-            .expect("LOBPCG failed");
+        let (eigenpairs, report) = lobpcg_generalized(&a, &b, k, 1e-8, 200).expect("LOBPCG failed");
 
         assert!(report.converged, "LOBPCG did not converge: {:?}", report);
         assert_eq!(eigenpairs.len(), k);
 
         // Check eigenvalues against analytic formula
         for j in 0..k {
-            let expected = 2.0 - 2.0 * (std::f64::consts::PI * (j + 1) as f64 / (n + 1) as f64).cos();
+            let expected =
+                2.0 - 2.0 * (std::f64::consts::PI * (j + 1) as f64 / (n + 1) as f64).cos();
             let rel_err = (eigenpairs[j].eigenvalue - expected).abs() / expected;
             assert!(
                 rel_err < 1e-6,
@@ -1385,8 +1433,18 @@ mod tests {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let e1 = (5.0 - 5.0f64.sqrt()) / 2.0;
         let e2 = (5.0 + 5.0f64.sqrt()) / 2.0;
-        assert!((sorted[0] - e1).abs() < 1e-10, "λ₁: got {}, expected {}", sorted[0], e1);
-        assert!((sorted[1] - e2).abs() < 1e-10, "λ₂: got {}, expected {}", sorted[1], e2);
+        assert!(
+            (sorted[0] - e1).abs() < 1e-10,
+            "λ₁: got {}, expected {}",
+            sorted[0],
+            e1
+        );
+        assert!(
+            (sorted[1] - e2).abs() < 1e-10,
+            "λ₂: got {}, expected {}",
+            sorted[1],
+            e2
+        );
     }
 
     #[test]
@@ -1398,7 +1456,17 @@ mod tests {
         let (evals, _) = dense_generalized_eigen(&ga, &gb, 2).unwrap();
         let e1 = (5.0 - 5.0f64.sqrt()) / 2.0;
         let e2 = (5.0 + 5.0f64.sqrt()) / 2.0;
-        assert!((evals[0] - e1).abs() < 1e-10, "λ₁: got {}, expected {}", evals[0], e1);
-        assert!((evals[1] - e2).abs() < 1e-10, "λ₂: got {}, expected {}", evals[1], e2);
+        assert!(
+            (evals[0] - e1).abs() < 1e-10,
+            "λ₁: got {}, expected {}",
+            evals[0],
+            e1
+        );
+        assert!(
+            (evals[1] - e2).abs() < 1e-10,
+            "λ₂: got {}, expected {}",
+            evals[1],
+            e2
+        );
     }
 }

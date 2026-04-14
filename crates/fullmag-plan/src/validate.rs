@@ -311,7 +311,9 @@ pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<Stri
                     errors.push("eigen diagnostics output is declared more than once".to_string());
                 }
             }
-            OutputIR::Field { .. } | OutputIR::Scalar { .. } | OutputIR::Snapshot { .. }
+            OutputIR::Field { .. }
+            | OutputIR::Scalar { .. }
+            | OutputIR::Snapshot { .. }
             | OutputIR::SaveQuantity { .. } => {
                 errors.push(
                     "StudyIR::Eigenmodes supports only eigen_spectrum, eigen_mode, dispersion_curve, and eigen_diagnostics outputs"

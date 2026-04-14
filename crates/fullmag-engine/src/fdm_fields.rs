@@ -8,7 +8,7 @@ use rustfft::num_complex::Complex;
 use crate::fdm_fft::{combine_fields_4, padded_index, zero_vectors};
 use crate::fdm_types::{neighbor_index, AxisBoundary};
 use crate::magnetoelastic;
-use crate::telemetry::{StepTelemetry, sections};
+use crate::telemetry::{sections, StepTelemetry};
 use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, squared_norm, sub};
 use crate::{
     EffectiveFieldObservables, ExchangeLlgProblem, FftWorkspace, RhsEvaluation,
@@ -347,7 +347,11 @@ impl ExchangeLlgProblem {
             .collect()
     }
 
-    pub(crate) fn anisotropy_energy(&self, magnetization: &[Vector3], ani_field: &[Vector3]) -> f64 {
+    pub(crate) fn anisotropy_energy(
+        &self,
+        magnetization: &[Vector3],
+        ani_field: &[Vector3],
+    ) -> f64 {
         let cell_volume = self.cell_size.volume();
         let ms = self.material.saturation_magnetisation;
         (0..magnetization.len())
@@ -634,7 +638,11 @@ impl ExchangeLlgProblem {
         }
     }
 
-    pub(crate) fn magnetoelastic_field_add_into(&self, magnetization: &[Vector3], h_eff: &mut [Vector3]) {
+    pub(crate) fn magnetoelastic_field_add_into(
+        &self,
+        magnetization: &[Vector3],
+        h_eff: &mut [Vector3],
+    ) {
         if let Some(ref config) = self.terms.magnetoelastic {
             magnetoelastic::h_mel_field_add_into(
                 magnetization,
@@ -646,7 +654,11 @@ impl ExchangeLlgProblem {
         }
     }
 
-    pub(crate) fn anisotropy_field_add_into(&self, magnetization: &[Vector3], h_eff: &mut [Vector3]) {
+    pub(crate) fn anisotropy_field_add_into(
+        &self,
+        magnetization: &[Vector3],
+        h_eff: &mut [Vector3],
+    ) {
         let ms = self.material.saturation_magnetisation;
         let has_uni = self.terms.uniaxial_anisotropy.is_some();
         let has_cub = self.terms.cubic_anisotropy.is_some();
@@ -705,7 +717,11 @@ impl ExchangeLlgProblem {
         }
     }
 
-    pub(crate) fn interfacial_dmi_field_add_into(&self, magnetization: &[Vector3], h_eff: &mut [Vector3]) {
+    pub(crate) fn interfacial_dmi_field_add_into(
+        &self,
+        magnetization: &[Vector3],
+        h_eff: &mut [Vector3],
+    ) {
         let d = match self.terms.interfacial_dmi {
             Some(d) if d.abs() > 0.0 => d,
             _ => return,
@@ -943,7 +959,11 @@ impl ExchangeLlgProblem {
             const KB: f64 = 1.380649e-23;
             const MU0_LOCAL: f64 = 1.2566370614359173e-6;
             (2.0 * alpha * KB * self.temperature
-                / (gamma0 * MU0_LOCAL * self.material.saturation_magnetisation * v_cell * self.thermal_dt))
+                / (gamma0
+                    * MU0_LOCAL
+                    * self.material.saturation_magnetisation
+                    * v_cell
+                    * self.thermal_dt))
                 .sqrt()
         } else {
             0.0
@@ -1072,9 +1092,7 @@ impl ExchangeLlgProblem {
         let cz = oe.center[2];
 
         // Normalise the axis to a unit vector.
-        let ax_len = (oe.axis[0] * oe.axis[0]
-            + oe.axis[1] * oe.axis[1]
-            + oe.axis[2] * oe.axis[2])
+        let ax_len = (oe.axis[0] * oe.axis[0] + oe.axis[1] * oe.axis[1] + oe.axis[2] * oe.axis[2])
             .sqrt()
             .max(1e-30);
         let ax = [
@@ -1888,9 +1906,13 @@ impl ExchangeLlgProblem {
             crate::EvaluationRequest::Minimal => {
                 self.compute_step_observables_minimal(magnetization, ws, h_eff, rhs_out)
             }
-            crate::EvaluationRequest::Full => {
-                self.compute_step_observables_zero_alloc(magnetization, ws, h_eff, h_scratch, rhs_out)
-            }
+            crate::EvaluationRequest::Full => self.compute_step_observables_zero_alloc(
+                magnetization,
+                ws,
+                h_eff,
+                h_scratch,
+                rhs_out,
+            ),
         }
     }
 
@@ -2245,7 +2267,11 @@ impl ExchangeLlgProblem {
         }
     }
 
-    pub(crate) fn demag_energy_from_fields(&self, magnetization: &[Vector3], demag_field: &[Vector3]) -> f64 {
+    pub(crate) fn demag_energy_from_fields(
+        &self,
+        magnetization: &[Vector3],
+        demag_field: &[Vector3],
+    ) -> f64 {
         let cell_volume = self.cell_size.volume();
         let ms = self.material.saturation_magnetisation;
         let compute =

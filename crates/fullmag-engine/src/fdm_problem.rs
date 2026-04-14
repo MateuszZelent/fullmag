@@ -2,9 +2,9 @@
 
 use crate::fdm_fft::zero_vectors;
 use crate::{
-    EffectiveFieldObservables, EffectiveFieldTerms, EngineError, ExchangeLlgState,
-    FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
-    MaterialParameters, Result, StepReport, TimeIntegrator, Vector3, CellSize,
+    CellSize, EffectiveFieldObservables, EffectiveFieldTerms, EngineError, ExchangeLlgState,
+    FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig, MaterialParameters,
+    Result, StepReport, TimeIntegrator, Vector3,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 

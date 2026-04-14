@@ -31,8 +31,6 @@ mod fdm_types;
 // ── Imports used locally (VectorFieldSoA, constants, tests) ───────────
 use std::f64::consts::PI;
 
-
-
 // ── Constants ─────────────────────────────────────────────────────────
 pub const MU0: f64 = 4.0 * PI * 1e-7;
 pub const DEFAULT_GYROMAGNETIC_RATIO: f64 = 2.211e5;
@@ -55,15 +53,16 @@ pub use fdm_state::{
 pub use fdm_problem::ExchangeLlgProblem;
 
 pub use fdm_types::{
-    AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
-    EngineError, EvaluationRequest, FdmBoundaryPolicy, GridShape, LlgConfig,
+    neighbor_index, AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig,
+    EffectiveFieldTerms, EngineError, EvaluationRequest, FdmBoundaryPolicy, GridShape, LlgConfig,
     MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, Result,
     SlonczewskiSttConfig, SotConfig, TimeIntegrator, UniaxialAnisotropyConfig, ZhangLiSttConfig,
-    neighbor_index,
 };
 
 // ── Vector math utilities ─────────────────────────────────────────────
-pub use vector::{add, cross, dot, max_cross_norm, max_norm, norm, normalized, scale, squared_norm, sub};
+pub use vector::{
+    add, cross, dot, max_cross_norm, max_norm, norm, normalized, scale, squared_norm, sub,
+};
 
 // ── VectorFieldSoA (kept in lib.rs — small, frequently referenced) ────
 /// Structure-of-Arrays layout for 3D vector fields.

@@ -50,7 +50,11 @@ impl DistributedGridShape {
         let dim = self.axis_size();
         let base = dim / self.world_size;
         let remainder = dim % self.world_size;
-        if rank < remainder { base + 1 } else { base }
+        if rank < remainder {
+            base + 1
+        } else {
+            base
+        }
     }
 
     /// Starting global index along decomp axis for a given rank.
@@ -278,11 +282,19 @@ pub trait GlobalReductionService {
 pub struct SingleRankReduction;
 
 impl GlobalReductionService for SingleRankReduction {
-    fn all_reduce_sum_f64(&self, local: f64) -> f64 { local }
-    fn all_reduce_max_f64(&self, local: f64) -> f64 { local }
+    fn all_reduce_sum_f64(&self, local: f64) -> f64 {
+        local
+    }
+    fn all_reduce_max_f64(&self, local: f64) -> f64 {
+        local
+    }
     fn barrier(&self) {}
-    fn rank(&self) -> usize { 0 }
-    fn world_size(&self) -> usize { 1 }
+    fn rank(&self) -> usize {
+        0
+    }
+    fn world_size(&self) -> usize {
+        1
+    }
 }
 
 // ── DistributedCheckpointMetadata ──────────────────────────────────────
@@ -504,9 +516,7 @@ mod tests {
 
         // Local mag: owned_extent=4, upper_halo=1, total layers=5, each plane=4
         let total = sub.total_cells();
-        let mut local_mag: Vec<Vector3> = (0..total)
-            .map(|i| [i as f64, 0.0, 0.0])
-            .collect();
+        let mut local_mag: Vec<Vector3> = (0..total).map(|i| [i as f64, 0.0, 0.0]).collect();
 
         let mut halo = HaloBuffers::new(&sub);
         halo.pack_send_upper(&local_mag, &sub);
