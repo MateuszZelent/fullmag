@@ -529,9 +529,13 @@ export default function FemMeshSlice2DPlotly({
     colorScale.max,
     colorScale.min,
     colorScale.mode,
+    effectiveComponent,
+    hasField,
     hasVectorField,
+    isMagnetizationQuantity,
     quantityId,
     quantityLabel,
+    quantityUnit,
     sampledArrows,
     slice,
   ]);

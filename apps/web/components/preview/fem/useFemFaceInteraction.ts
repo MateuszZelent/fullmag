@@ -46,9 +46,11 @@ export function useFemFaceInteraction({
 
   // Reset on topology change
   useEffect(() => {
-    setSelectedFaces([]);
-    setHoveredFace(null);
-    setCtxMenu(null);
+    queueMicrotask(() => {
+      setSelectedFaces([]);
+      setHoveredFace(null);
+      setCtxMenu(null);
+    });
   }, [topologySignature]);
 
   // Publish selection
@@ -65,9 +67,11 @@ export function useFemFaceInteraction({
   // Dismiss when pointer interactions disabled
   useEffect(() => {
     if (geometryPointerInteractionsEnabled) return;
-    setHoveredFace(null);
-    setCtxMenu(null);
-    setSelectedFaces([]);
+    queueMicrotask(() => {
+      setHoveredFace(null);
+      setCtxMenu(null);
+      setSelectedFaces([]);
+    });
   }, [geometryPointerInteractionsEnabled]);
 
   // Auto-dismiss context menu on click

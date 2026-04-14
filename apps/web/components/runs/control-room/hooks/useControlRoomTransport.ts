@@ -1,33 +1,9 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect } from "react";
 import type { TransportContextValue } from "../context-hooks";
 import { EMPTY_SCALAR_ROWS } from "../shared";
 import type { SessionState, LiveState, ScalarRow } from "../../../../lib/session/types";
-
-// ── Reference-stable scalar rows ────────────────────────────────────
-
-/**
- * Returns a reference-stable `ScalarRow[]`.  Only creates a new array
- * reference when the last step or the row count actually changed.
- * This prevents downstream `useMemo` / `React.memo` invalidation on
- * every WS tick when the data is semantically identical.
- */
-function useStableScalarRows(state: SessionState | null): ScalarRow[] {
-  const ref = useRef<ScalarRow[]>(EMPTY_SCALAR_ROWS);
-  const prevFingerprint = useRef<string>("");
-
-  const rows = state?.scalar_rows ?? EMPTY_SCALAR_ROWS;
-  const lastStep = rows.length > 0 ? rows[rows.length - 1]?.step ?? -1 : -1;
-  const fingerprint = `${rows.length}:${lastStep}`;
-
-  if (fingerprint !== prevFingerprint.current) {
-    prevFingerprint.current = fingerprint;
-    ref.current = rows;
-  }
-
-  return ref.current;
-}
 
 // ─── Hook ───────────────────────────────────────────────────────────
 
@@ -35,7 +11,7 @@ export function useControlRoomTransport(state: SessionState | null): TransportCo
   const session = state?.session ?? null;
   const run = state?.run ?? null;
   const liveState = state?.live_state ?? null;
-  const scalarRows = useStableScalarRows(state);
+  const scalarRows = state?.scalar_rows ?? EMPTY_SCALAR_ROWS;
   const preview = state?.preview ?? null;
 
   const hasSolverTelemetry = useMemo(() => 

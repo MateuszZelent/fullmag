@@ -183,7 +183,7 @@ export default function RunSidebar() {
   const [spectrumModes, setSpectrumModes] = useState<EigenModeSummary[] | null>(null);
   useEffect(() => {
     if (!hasEigenSpectrumArtifact) {
-      setSpectrumModes(null);
+      queueMicrotask(() => setSpectrumModes(null));
       return;
     }
     let cancelled = false;
