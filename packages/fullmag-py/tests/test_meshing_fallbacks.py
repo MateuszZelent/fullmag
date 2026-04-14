@@ -240,9 +240,9 @@ class BuildReportTests(unittest.TestCase):
 class ResolutionPrecedenceTests(unittest.TestCase):
     """Lock down the hmax resolution chain that PR 2 will refactor."""
 
-    def _airbox(self, hmax=None):
+    def _airbox(self, maximum_element_size=None):
         return AirboxOptions(
-            size=(8.0, 8.0, 8.0), center=(0.0, 0.0, 0.0), hmax=hmax,
+            size=(8.0, 8.0, 8.0), center=(0.0, 0.0, 0.0), maximum_element_size=maximum_element_size,
         )
 
     def test_recipe_overrides_workflow(self):
@@ -296,14 +296,14 @@ class ResolutionPrecedenceTests(unittest.TestCase):
         geom = fm.Box(2.0, 2.0, 2.0, name="left")
         airbox_hmax, _ = _resolve_requested_partition_hmaxs(
             [geom], fm.FEM(order=1, hmax=100e-9),
-            airbox=self._airbox(hmax=200e-9),
+            airbox=self._airbox(maximum_element_size=200e-9),
             mesh_workflow=None,
             per_object_recipes=None,
         )
         self.assertAlmostEqual(airbox_hmax, 200e-9)
 
     def test_effective_targets_auto_interface_and_transition(self):
-        """When bulk_hmax < default, interface and transition are auto-derived."""
+        """When bulk_hmax < default, transition is auto-derived but interface is not."""
         geom = fm.Box(2.0, 2.0, 2.0, name="left")
         _, per_obj = _resolve_effective_shared_domain_targets(
             [geom], fm.FEM(order=1, hmax=100e-9),
@@ -317,8 +317,8 @@ class ResolutionPrecedenceTests(unittest.TestCase):
         )
         target = per_obj["left"]
         self.assertAlmostEqual(target["hmax"], 20e-9)
-        # interface_hmax = bulk_hmax * 0.6
-        self.assertAlmostEqual(target["interface_hmax"], 12e-9)
+        # interface_hmax is no longer auto-computed
+        self.assertIsNone(target["interface_hmax"])
         # transition_distance = bulk_hmax * 3.0
         self.assertAlmostEqual(target["transition_distance"], 60e-9)
         self.assertEqual(target["source"], "local_override")
@@ -356,9 +356,10 @@ class FieldStackParityTests(unittest.TestCase):
             component_aware=True,
         )
         kinds = sorted(f["kind"] for f in fields)
+        # No auto-generated interface field; only bulk + transition
         self.assertEqual(
             kinds,
-            ["ComponentVolumeConstant", "InterfaceShellThreshold", "TransitionShellThreshold"],
+            ["ComponentVolumeConstant", "TransitionShellThreshold"],
         )
 
     def test_bounds_path_produces_coordinate_kinds(self):
@@ -369,9 +370,10 @@ class FieldStackParityTests(unittest.TestCase):
             component_aware=False,
         )
         kinds = sorted(f["kind"] for f in fields)
+        # No auto-generated interface field; only bulk Box + transition BoundsSurfaceThreshold
         self.assertEqual(
             kinds,
-            ["BoundsSurfaceThreshold", "BoundsSurfaceThreshold", "Box"],
+            ["BoundsSurfaceThreshold", "Box"],
         )
 
     def test_both_paths_produce_same_count(self):
@@ -382,7 +384,8 @@ class FieldStackParityTests(unittest.TestCase):
                 per_geometry=[{"geometry": "left", "mode": "custom", "hmax": "8e-9"}],
                 component_aware=ca,
             )
-            self.assertEqual(len(fields), 3, f"component_aware={ca}")
+            # Bulk + transition (no auto interface)
+            self.assertEqual(len(fields), 2, f"component_aware={ca}")
 
     def test_no_fields_when_coarser_than_default(self):
         geom = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -565,7 +568,8 @@ class TypedResolutionAPITests(unittest.TestCase):
         self.assertAlmostEqual(targets.airbox.hmax, 200e-9)
         self.assertIn("left", targets.per_object)
         self.assertAlmostEqual(targets.per_object["left"].hmax, 20e-9)
-        self.assertAlmostEqual(targets.per_object["left"].interface_hmax, 12e-9)
+        # interface_hmax is no longer auto-computed
+        self.assertIsNone(targets.per_object["left"].interface_hmax)
         self.assertEqual(targets.per_object["left"].source, "local_override")
         self.assertAlmostEqual(targets.effective_hmax, 200e-9)
 
