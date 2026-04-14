@@ -229,6 +229,102 @@ class FDM:
 
 
 # ---------------------------------------------------------------------------
+# Swept (through-thickness) mesh controls
+# ---------------------------------------------------------------------------
+_SWEEP_KINDS = ("uniform", "arithmetic", "geometric")
+_SWEEP_DIRECTIONS = ("auto", "x", "y", "z")
+
+
+@dataclass(frozen=True, slots=True)
+class SweepDistribution:
+    """Distribution of element layers through the sweep direction.
+
+    Attributes:
+        kind: ``"uniform"`` (equal layers), ``"arithmetic"`` (linear growth),
+            or ``"geometric"`` (exponential growth).
+        num_layers: Number of element layers.
+        growth_rate: Growth factor for arithmetic/geometric distributions.
+            Ignored for ``"uniform"``.
+
+    Example::
+
+        fm.SweepDistribution(kind="geometric", num_layers=4, growth_rate=1.5)
+    """
+
+    kind: Literal["uniform", "arithmetic", "geometric"] = "uniform"
+    num_layers: int = 1
+    growth_rate: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.kind not in _SWEEP_KINDS:
+            raise ValueError(
+                f"kind must be one of {_SWEEP_KINDS!r}, got {self.kind!r}"
+            )
+        if self.num_layers < 1:
+            raise ValueError(f"num_layers must be >= 1, got {self.num_layers}")
+        if self.kind != "uniform" and self.growth_rate <= 0.0:
+            raise ValueError(
+                f"growth_rate must be > 0 for {self.kind!r} distribution, "
+                f"got {self.growth_rate}"
+            )
+
+    def to_ir(self) -> dict[str, object]:
+        ir: dict[str, object] = {
+            "kind": self.kind,
+            "num_layers": self.num_layers,
+        }
+        if self.kind != "uniform":
+            ir["growth_rate"] = self.growth_rate
+        return ir
+
+
+@dataclass(frozen=True, slots=True)
+class SweptMeshControls:
+    """Controls for swept (through-thickness) meshing of thin-film geometries.
+
+    Swept meshing extrudes a 2-D triangulation through a specified direction,
+    producing structured prismatic layers.  This is typically superior to
+    full tetrahedral meshing for thin films where in-plane extent greatly
+    exceeds thickness.
+
+    Attributes:
+        distribution: Layer distribution through the sweep direction.
+        sweep_direction: ``"auto"`` resolves from the geometry bounding box
+            (shortest axis); ``"x"``, ``"y"``, ``"z"`` force a specific axis.
+
+    Example::
+
+        fm.SweptMeshControls(
+            distribution=fm.SweepDistribution(
+                kind="geometric", num_layers=4, growth_rate=1.5
+            ),
+            sweep_direction="z",
+        )
+    """
+
+    distribution: SweepDistribution = field(default_factory=SweepDistribution)
+    sweep_direction: Literal["auto", "x", "y", "z"] = "auto"
+
+    def __post_init__(self) -> None:
+        if self.sweep_direction not in _SWEEP_DIRECTIONS:
+            raise ValueError(
+                f"sweep_direction must be one of {_SWEEP_DIRECTIONS!r}, "
+                f"got {self.sweep_direction!r}"
+            )
+        if not isinstance(self.distribution, SweepDistribution):
+            raise TypeError(
+                f"distribution must be a SweepDistribution, "
+                f"got {type(self.distribution).__name__}"
+            )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "sweep_direction": self.sweep_direction,
+            "distribution": self.distribution.to_ir(),
+        }
+
+
+# ---------------------------------------------------------------------------
 # FEM discretization hints
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)

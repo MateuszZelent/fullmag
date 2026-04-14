@@ -4,10 +4,14 @@
  * ScalarPlot – Plotly.js line chart for time-series data.
  *
  * Performance-critical: during live simulation the upstream store pushes
- * new `rows` on every WS tick (~60 Hz).  We throttle visual updates to
+ * new `rows` on every poll cycle.  We throttle visual updates to
  * ≤3 fps by tracking a `revision` counter that only bumps every
  * THROTTLE_MS.  Plotly.react() is called only when `revision` changes,
  * avoiding expensive full re-renders.
+ *
+ * Incremental trace building: x/y arrays are cached and extended
+ * (append-only) when the row set grows monotonically, avoiding full
+ * O(N) rebuilds on every render cycle.
  *
  * Automatic X-axis time scaling: raw time values (seconds) are normalised
  * to the most readable SI prefix (ps, ns, µs, ms, s) based on the data
@@ -134,6 +138,118 @@ function useThrottledValue<T>(value: T, intervalMs: number): T {
   return throttled;
 }
 
+// ─── Incremental trace cache ────────────────────────────────────────
+
+interface TraceCache {
+  /** Length of rowsForPlot when last computed. */
+  rowCount: number;
+  /** Last step value — used to detect pure appends vs resets. */
+  lastStep: number;
+  /** Cached x-values array. */
+  xValues: number[];
+  /** Cached y-values per series key. */
+  yByKey: Map<string, number[]>;
+  /** Time scale factor used for x-values. */
+  timeScaleFactor: number;
+  /** X column used. */
+  xColumn: string;
+}
+
+/**
+ * Build x/y trace arrays incrementally.
+ *
+ * When the row set grows monotonically (pure append), only the new rows
+ * are mapped and pushed onto the cached arrays.  When a reset, downsample
+ * stride change, or config change is detected, a full rebuild is done.
+ */
+function useIncrementalTraces(
+  rowsForPlot: ScalarRow[],
+  seriesMeta: ScalarSeriesMeta[],
+  xColumn: string,
+  timeScale: TimeScale | null,
+): { xValues: number[]; yByKey: Map<string, number[]> } {
+  const cacheRef = useRef<TraceCache | null>(null);
+
+  return useMemo(() => {
+    const timeScaleFactor = timeScale?.factor ?? 1;
+    const isTime = xColumn === "time" && timeScale != null;
+    const cache = cacheRef.current;
+
+    const currentLastStep = rowsForPlot.length > 0
+      ? (rowsForPlot[rowsForPlot.length - 1]?.step ?? -1)
+      : -1;
+
+    // Check if we can do an incremental append
+    const canAppend =
+      cache != null &&
+      cache.xColumn === xColumn &&
+      cache.timeScaleFactor === timeScaleFactor &&
+      cache.rowCount > 0 &&
+      rowsForPlot.length >= cache.rowCount &&
+      currentLastStep >= cache.lastStep &&
+      // Verify the prefix is unchanged by checking the old last row
+      rowsForPlot.length > 0 &&
+      cache.rowCount <= rowsForPlot.length;
+
+    if (canAppend && cache != null) {
+      const startIdx = cache.rowCount;
+      const newCount = rowsForPlot.length - startIdx;
+
+      if (newCount === 0) {
+        // No new rows — return cached arrays directly (stable reference)
+        return { xValues: cache.xValues, yByKey: cache.yByKey };
+      }
+
+      // Extend x-values
+      const xValues = cache.xValues;
+      for (let i = startIdx; i < rowsForPlot.length; i++) {
+        const row = rowsForPlot[i];
+        xValues.push(isTime ? accessor(row, "time") * timeScaleFactor : accessor(row, xColumn));
+      }
+
+      // Extend y-values per series
+      const yByKey = cache.yByKey;
+      for (const series of seriesMeta) {
+        let arr = yByKey.get(series.key);
+        if (!arr) {
+          // New series added — full compute
+          arr = rowsForPlot.map((r) => accessor(r, series.key));
+          yByKey.set(series.key, arr);
+        } else {
+          for (let i = startIdx; i < rowsForPlot.length; i++) {
+            arr.push(accessor(rowsForPlot[i], series.key));
+          }
+        }
+      }
+
+      cache.rowCount = rowsForPlot.length;
+      cache.lastStep = currentLastStep;
+      return { xValues, yByKey };
+    }
+
+    // Full rebuild
+    const xValues: number[] = isTime
+      ? rowsForPlot.map((r) => accessor(r, "time") * timeScaleFactor)
+      : rowsForPlot.map((r) => accessor(r, xColumn));
+
+    const yByKey = new Map<string, number[]>();
+    for (const series of seriesMeta) {
+      yByKey.set(series.key, rowsForPlot.map((r) => accessor(r, series.key)));
+    }
+
+    cacheRef.current = {
+      rowCount: rowsForPlot.length,
+      lastStep: currentLastStep,
+      xValues,
+      yByKey,
+      timeScaleFactor,
+      xColumn,
+    };
+
+    return { xValues, yByKey };
+  }, [rowsForPlot, seriesMeta, xColumn, timeScale]);
+}
+
 // ─── Component ──────────────────────────────────────────────────────
 
 const ScalarPlot = memo(function ScalarPlot({
@@ -187,13 +303,8 @@ const ScalarPlot = memo(function ScalarPlot({
     return chooseTimeScale(maxT);
   }, [isTimeColumn, rowsForPlot]);
 
-  // X values: apply time factor when applicable
-  const xValues = useMemo(() => {
-    if (!timeScale) {
-      return rowsForPlot.map((r) => accessor(r, xColumn));
-    }
-    return rowsForPlot.map((r) => accessor(r, "time") * timeScale.factor);
-  }, [rowsForPlot, xColumn, timeScale]);
+  // ── Incremental x/y trace arrays ─────────────────────────────────
+  const { xValues, yByKey } = useIncrementalTraces(rowsForPlot, seriesMeta, xColumn, timeScale);
 
   // Axis label
   const xLabel = useMemo(() => {
@@ -220,13 +331,13 @@ const ScalarPlot = memo(function ScalarPlot({
     };
   }, [seriesMeta]);
 
-  // Build Plotly traces
+  // Build Plotly traces — uses incremental x/y arrays
   const traces = useMemo(() => {
     const mode = rowsForPlot.length > 1 ? ("lines" as const) : ("markers" as const);
 
     return seriesMeta.map((series, i) => ({
       x: xValues,
-      y: rowsForPlot.map((r) => accessor(r, series.key)),
+      y: yByKey.get(series.key) ?? [],
       type: "scattergl" as const,
       mode,
       name: buildAxisLabel(series),
@@ -247,7 +358,7 @@ const ScalarPlot = memo(function ScalarPlot({
         ? `%{y:.4f}<extra>${buildAxisLabel(series)}</extra>`
         : `%{y:.4e}<extra>${buildAxisLabel(series)}</extra>`,
     }));
-  }, [xValues, rowsForPlot, seriesMeta, magnetizationOnly, seriesColors, unitGroups]);
+  }, [xValues, yByKey, rowsForPlot.length, seriesMeta, magnetizationOnly, seriesColors, unitGroups]);
 
   const layout = useMemo(
     (): Partial<Plotly.Layout> => ({

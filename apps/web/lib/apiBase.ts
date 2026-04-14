@@ -30,14 +30,3 @@ export function resolveApiBase(): string {
   const port = window.location.port ? `:${window.location.port}` : "";
   return `${protocol}//${hostname}${port}`;
 }
-
-export function resolveApiWsBase(): string {
-  const apiBase = resolveApiBase();
-  if (apiBase.startsWith("https://")) {
-    return `wss://${apiBase.slice("https://".length)}`;
-  }
-  if (apiBase.startsWith("http://")) {
-    return `ws://${apiBase.slice("http://".length)}`;
-  }
-  return apiBase;
-}

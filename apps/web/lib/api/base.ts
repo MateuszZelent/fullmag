@@ -21,16 +21,6 @@ export function resolveRuntimeHttpBase(): string {
   return 'http://localhost:3001';
 }
 
-/**
- * Convert an HTTP base URL to its WebSocket equivalent.
- */
-export function resolveRuntimeWsBase(): string {
-  const base = resolveRuntimeHttpBase();
-  if (base.startsWith('https://')) return `wss://${base.slice('https://'.length)}`;
-  if (base.startsWith('http://')) return `ws://${base.slice('http://'.length)}`;
-  return base;
-}
-
 /** Build URL for the current live session. */
 export function currentLiveUrl(path: string): string {
   const p = path.startsWith('/') ? path : `/${path}`;

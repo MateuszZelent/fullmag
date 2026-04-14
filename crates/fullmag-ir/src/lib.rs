@@ -1411,6 +1411,27 @@ pub struct FemDomainRegionMarkerIR {
     pub marker: u32,
 }
 
+/// Through-thickness sweep distribution for a single object.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SweepDistributionIR {
+    /// Distribution kind: "uniform", "arithmetic", or "geometric".
+    pub kind: String,
+    /// Number of element layers through the sweep direction.
+    pub num_layers: u32,
+    /// Growth factor for arithmetic/geometric distributions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub growth_rate: Option<f64>,
+}
+
+/// Swept (through-thickness) mesh hints for a per-object mesh recipe.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SweptMeshHintsIR {
+    /// Sweep direction: "auto", "x", "y", or "z".
+    pub sweep_direction: String,
+    /// Layer distribution through the sweep direction.
+    pub distribution: SweepDistributionIR,
+}
+
 /// Per-object mesh-size target as resolved by the Python meshing pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemPerObjectTargetIR {
@@ -1424,6 +1445,9 @@ pub struct FemPerObjectTargetIR {
     pub transition_distance: Option<f64>,
     #[serde(default)]
     pub source: String,
+    /// Optional swept (through-thickness) mesh controls for this object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swept: Option<SweptMeshHintsIR>,
 }
 
 /// Build report for a shared-domain FEM mesh, propagated from the Python

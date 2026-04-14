@@ -274,6 +274,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const [meshBuildIntent, setMeshBuildIntent] = useState<ReturnType<typeof meshBuildIntentForNode> | null>(null);
   const [meshBuildError, setMeshBuildError] = useState<string | null>(null);
   const [meshBuildOpenedAt, setMeshBuildOpenedAt] = useState<number | null>(null);
+  const [meshBuildNotice, setMeshBuildNotice] = useState<{ title: string; message: string } | null>(null);
+  const awaitingMeshBuildCompletionRef = useRef(false);
+  const meshBuildAutoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const meshBuildNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dismissedBackendErrorAt, setDismissedBackendErrorAt] = useState<number | null>(null);
   const selectedAntennaName = useMemo(
     () =>
@@ -748,6 +752,11 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     setMeshBuildIntent(intent);
     setMeshBuildOpenedAt(Date.now());
     setMeshBuildDialogOpen(true);
+    awaitingMeshBuildCompletionRef.current = true;
+    if (meshBuildAutoCloseTimerRef.current) {
+      clearTimeout(meshBuildAutoCloseTimerRef.current);
+      meshBuildAutoCloseTimerRef.current = null;
+    }
   }, []);
 
   const syncIfPossible = useCallback(async () => {
@@ -954,6 +963,72 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       setMeshBuildOpenedAt(null);
     }
   }, [meshBuildRuntime.generating]);
+
+  useEffect(() => {
+    if (!awaitingMeshBuildCompletionRef.current) {
+      return;
+    }
+    if (meshBuildRuntime.status === "failure") {
+      awaitingMeshBuildCompletionRef.current = false;
+      return;
+    }
+    const succeeded =
+      !meshBuildRuntime.generating &&
+      !meshBuildRuntime.errorMessage &&
+      !ctx.meshConfigDirty;
+    if (!succeeded) {
+      return;
+    }
+    awaitingMeshBuildCompletionRef.current = false;
+    const nodeCount = ctx.meshWorkspace?.mesh_summary?.node_count ?? ctx.femMesh?.nodes.length ?? 0;
+    const elementCount = ctx.meshWorkspace?.mesh_summary?.element_count ?? ctx.femMesh?.elements.length ?? 0;
+    setMeshBuildNotice({
+      title: "Mesh build completed",
+      message: `${nodeCount.toLocaleString()} nodes · ${elementCount.toLocaleString()} tetrahedra. Viewport is now updated.`,
+    });
+    if (meshBuildDialogOpen) {
+      meshBuildAutoCloseTimerRef.current = setTimeout(() => {
+        setMeshBuildDialogOpen(false);
+      }, 1200);
+    }
+  }, [
+    ctx.femMesh?.elements.length,
+    ctx.femMesh?.nodes.length,
+    ctx.meshConfigDirty,
+    ctx.meshWorkspace?.mesh_summary?.element_count,
+    ctx.meshWorkspace?.mesh_summary?.node_count,
+    meshBuildDialogOpen,
+    meshBuildRuntime.errorMessage,
+    meshBuildRuntime.generating,
+    meshBuildRuntime.status,
+  ]);
+
+  useEffect(() => {
+    if (!meshBuildNotice) {
+      return;
+    }
+    if (meshBuildNoticeTimerRef.current) {
+      clearTimeout(meshBuildNoticeTimerRef.current);
+    }
+    meshBuildNoticeTimerRef.current = setTimeout(() => {
+      setMeshBuildNotice(null);
+    }, 4800);
+    return () => {
+      if (meshBuildNoticeTimerRef.current) {
+        clearTimeout(meshBuildNoticeTimerRef.current);
+        meshBuildNoticeTimerRef.current = null;
+      }
+    };
+  }, [meshBuildNotice]);
+
+  useEffect(() => () => {
+    if (meshBuildAutoCloseTimerRef.current) {
+      clearTimeout(meshBuildAutoCloseTimerRef.current);
+    }
+    if (meshBuildNoticeTimerRef.current) {
+      clearTimeout(meshBuildNoticeTimerRef.current);
+    }
+  }, []);
 
   const handleStageChange = useCallback((stage: WorkspaceMode) => {
     ctx.setWorkspaceMode(stage);
@@ -1300,6 +1375,18 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onBackground={handleBackgroundMeshBuild}
         onClose={handleCloseMeshBuildDialog}
       />
+      {meshBuildNotice ? (
+        <div className="pointer-events-none fixed right-5 top-20 z-[170] w-[min(420px,calc(100vw-2rem))]">
+          <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-emerald-100 shadow-[0_14px_40px_rgba(0,0,0,0.35)] backdrop-blur-md">
+            <div className="text-[0.68rem] font-semibold uppercase tracking-[0.15em] text-emerald-200/90">
+              {meshBuildNotice.title}
+            </div>
+            <div className="mt-1 text-sm leading-relaxed text-emerald-50/95">
+              {meshBuildNotice.message}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* ── Workspace overlays (settings, docs) ── */}
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showWorkspaceOverlays ? <SettingsDialog /> : null}

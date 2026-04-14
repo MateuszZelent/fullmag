@@ -333,6 +333,8 @@ class AirboxOptions:
         shape: Outer shell geometry: ``"bbox"`` or ``"sphere"``.
         grading_ratio: Element growth ratio from interface toward outer boundary.
         boundary_marker: Gmsh physical group tag for the outer boundary Γ_out.
+        hmax: Maximum element size for the airbox mesh.
+        hmin: Minimum element size for the airbox mesh.
     """
 
     padding_factor: float = 3.0
@@ -342,6 +344,7 @@ class AirboxOptions:
     size: tuple[float, float, float] | None = None
     center: tuple[float, float, float] | None = None
     hmax: float | None = None
+    hmin: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

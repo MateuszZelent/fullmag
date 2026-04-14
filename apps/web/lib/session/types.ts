@@ -131,10 +131,22 @@ export interface FemMeshPart {
   bounds_max: [number, number, number] | null;
 }
 
+// ── Swept mesh controls ─────────────────────────────────────────────
+
+export interface SweepDistribution {
+  kind: "uniform" | "arithmetic" | "geometric";
+  num_layers: number;
+  growth_rate?: number;
+}
+
+export interface SweptMeshHints {
+  sweep_direction: "auto" | "x" | "y" | "z";
+  distribution: SweepDistribution;
+}
+
+// ── Mesh quality ────────────────────────────────────────────────────
+
 export interface MeshQualityStats {
-  n_elements: number;
-  sicn_min: number;
-  sicn_max: number;
   sicn_mean: number;
   sicn_p5: number;
   sicn_histogram?: number[];

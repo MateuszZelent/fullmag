@@ -1783,13 +1783,19 @@ class StudyBuilder:
         center: Sequence[float] | None = None,
         padding: Sequence[float] | None = None,
         airbox_hmax: float | None = None,
+        maximum_element_size: float | None = None,
+        minimum_element_size: float | None = None,
     ) -> "StudyBuilder":
+        # maximum_element_size / minimum_element_size are UI-exported aliases for
+        # airbox_hmax / (ignored floor hint).  Prefer the explicit airbox_hmax when
+        # both are supplied.
+        resolved_hmax = airbox_hmax if airbox_hmax is not None else maximum_element_size
         _configure_study_universe(
             mode=mode,
             size=size,
             center=center,
             padding=padding,
-            airbox_hmax=airbox_hmax,
+            airbox_hmax=resolved_hmax,
         )
         return self
 

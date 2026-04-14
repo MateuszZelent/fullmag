@@ -1014,6 +1014,9 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             "shared FEM domain mesh generation requires a declared study universe "
             "(manual size/center or auto padding)"
         )
+    single_geometry_occ_direct = (
+        len(geometries) == 1 and not isinstance(geometries[0], ImportedGeometry)
+    )
 
     trimesh = _import_trimesh()
     bounds_by_name: dict[str, tuple] = {}
@@ -1042,7 +1045,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             geometries=geometries,
             default_hmax=float(hints.hmax),
             bounds_by_name=bounds_by_name,
-            component_aware=True,
+            component_aware=not single_geometry_occ_direct,
         )
         if per_object_recipes:
             _policy = assembly_policy if assembly_policy is not None else SharedMeshAssemblyPolicy()
@@ -1052,7 +1055,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 _policy,
                 default_hmax=float(hints.hmax),
                 bounds_by_name=bounds_by_name,
-                component_aware=True,
+                component_aware=not single_geometry_occ_direct,
             )
             if recipe_fields:
                 existing = _strip_overridden_geometry_fields(
@@ -1071,7 +1074,9 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         emit_progress_event(
             {
                 "kind": "mesh_build_started",
-                "shared_domain_build_mode": "component_aware",
+                "shared_domain_build_mode": (
+                    "single_geometry_occ" if single_geometry_occ_direct else "component_aware"
+                ),
                 "effective_airbox_target": effective_airbox_target,
                 "effective_per_object_targets": effective_per_object_targets,
                 "used_size_field_kinds": used_size_field_kinds,
@@ -1103,78 +1108,100 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         build_mode = "component_aware"
         fallbacks_triggered: list[str] = []
         try:
-            emit_progress_event(
-                {
-                    "kind": "mesh_build_phase",
-                    "phase": "meshing",
-                    "message": "Generating component-aware 3D tetrahedral mesh",
-                }
-            )
-            try:
-                result = generate_shared_domain_mesh_from_components(
-                    component_descriptors,
+            if single_geometry_occ_direct:
+                build_mode = "single_geometry_occ"
+                emit_progress_event(
+                    {
+                        "kind": "mesh_build_phase",
+                        "phase": "meshing",
+                        "message": "Generating direct OCC 3D tetrahedral mesh",
+                    }
+                )
+                emit_progress(
+                    "Single-geometry OCC mesh path selected (skipping STL component import)"
+                )
+                mesh = generate_mesh(
+                    geometries[0],
                     hmax=effective_hmax,
                     order=hints.order,
                     airbox=airbox,
                     options=mesh_options,
                 )
-                mesh = result.mesh
-                emit_progress(
-                    f"Component-aware mesh: geometry→volume mapping established for "
-                    f"{len(result.component_volume_tags)} components"
+            else:
+                emit_progress_event(
+                    {
+                        "kind": "mesh_build_phase",
+                        "phase": "meshing",
+                        "message": "Generating component-aware 3D tetrahedral mesh",
+                    }
                 )
-            except Exception as exc:
-                build_mode = "concatenated_stl_fallback"
-                fallbacks_triggered.append("component_aware_import_failed")
-                emit_progress(
-                    f"Component-aware mesh failed ({exc!r}), falling back to concatenated STL"
-                )
-                # Rebuild mesh options for the non-component STL path so local
-                # refinement fields do not depend on recovered component tags.
-                # This preserves per-object hmax behavior (Box/Bounds thresholds)
-                # even when component-aware tagging fails.
-                mesh_options = _mesh_options_from_runtime_metadata(
-                    mesh_workflow,
-                    geometries=geometries,
-                    default_hmax=float(hints.hmax),
-                    bounds_by_name=bounds_by_name,
-                    component_aware=False,
-                )
-                if per_object_recipes:
-                    _policy = (
-                        assembly_policy if assembly_policy is not None else SharedMeshAssemblyPolicy()
+                try:
+                    result = generate_shared_domain_mesh_from_components(
+                        component_descriptors,
+                        hmax=effective_hmax,
+                        order=hints.order,
+                        airbox=airbox,
+                        options=mesh_options,
                     )
-                    recipe_fields = _resolve_per_object_mesh_options(
-                        geometries,
-                        per_object_recipes,
-                        _policy,
+                    mesh = result.mesh
+                    emit_progress(
+                        f"Component-aware mesh: geometry→volume mapping established for "
+                        f"{len(result.component_volume_tags)} components"
+                    )
+                except Exception as exc:
+                    build_mode = "concatenated_stl_fallback"
+                    fallbacks_triggered.append("component_aware_import_failed")
+                    emit_progress(
+                        f"Component-aware mesh failed ({exc!r}), falling back to concatenated STL"
+                    )
+                    # Rebuild mesh options for the non-component STL path so local
+                    # refinement fields do not depend on recovered component tags.
+                    # This preserves per-object hmax behavior (Box/Bounds thresholds)
+                    # even when component-aware tagging fails.
+                    mesh_options = _mesh_options_from_runtime_metadata(
+                        mesh_workflow,
+                        geometries=geometries,
                         default_hmax=float(hints.hmax),
                         bounds_by_name=bounds_by_name,
                         component_aware=False,
                     )
-                    if recipe_fields:
-                        existing = _strip_overridden_geometry_fields(
-                            list(mesh_options.size_fields), per_object_recipes
+                    if per_object_recipes:
+                        _policy = (
+                            assembly_policy if assembly_policy is not None else SharedMeshAssemblyPolicy()
                         )
-                        from dataclasses import replace as _dc_replace
-                        mesh_options = _dc_replace(mesh_options, size_fields=recipe_fields + existing)
-                used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
-                if mesh_options.size_fields:
-                    emit_progress(
-                        f"Fallback local sizing active ({len(mesh_options.size_fields)} size fields)"
+                        recipe_fields = _resolve_per_object_mesh_options(
+                            geometries,
+                            per_object_recipes,
+                            _policy,
+                            default_hmax=float(hints.hmax),
+                            bounds_by_name=bounds_by_name,
+                            component_aware=False,
+                        )
+                        if recipe_fields:
+                            existing = _strip_overridden_geometry_fields(
+                                list(mesh_options.size_fields), per_object_recipes
+                            )
+                            from dataclasses import replace as _dc_replace
+                            mesh_options = _dc_replace(
+                                mesh_options, size_fields=recipe_fields + existing
+                            )
+                    used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
+                    if mesh_options.size_fields:
+                        emit_progress(
+                            f"Fallback local sizing active ({len(mesh_options.size_fields)} size fields)"
+                        )
+                    component_meshes = [_geometry_to_trimesh(g, trimesh).copy() for g in geometries]
+                    combined_surface = trimesh.util.concatenate(component_meshes)
+                    surface_path = Path(tmp_dir) / "shared_domain_surface.stl"
+                    combined_surface.export(surface_path)
+                    from .gmsh_bridge import generate_mesh_from_file
+                    mesh = generate_mesh_from_file(
+                        surface_path,
+                        hmax=effective_hmax,
+                        order=hints.order,
+                        airbox=airbox,
+                        options=mesh_options,
                     )
-                component_meshes = [_geometry_to_trimesh(g, trimesh).copy() for g in geometries]
-                combined_surface = trimesh.util.concatenate(component_meshes)
-                surface_path = Path(tmp_dir) / "shared_domain_surface.stl"
-                combined_surface.export(surface_path)
-                from .gmsh_bridge import generate_mesh_from_file
-                mesh = generate_mesh_from_file(
-                    surface_path,
-                    hmax=effective_hmax,
-                    order=hints.order,
-                    airbox=airbox,
-                    options=mesh_options,
-                )
             emit_progress_event(
                 {
                     "kind": "mesh_build_phase",
