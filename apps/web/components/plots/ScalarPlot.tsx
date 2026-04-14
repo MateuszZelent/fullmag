@@ -370,15 +370,21 @@ const ScalarPlot = memo(function ScalarPlot({
         color: THEME.text,
       },
       title: chartTitle
-        ? { text: chartTitle, font: { size: 13, color: THEME.text }, x: 0.5, xanchor: "center" as const, y: 0.98 }
+        ? { text: chartTitle, font: { size: 13, color: THEME.text, weight: 600 }, x: 0.5, xanchor: "center" as const, y: 0.96 }
         : undefined,
-      margin: { l: 72, r: 16, t: chartTitle ? 32 : 8, b: 48 },
+      margin: { l: 60, r: 24, t: chartTitle ? 36 : 16, b: 40, pad: 4 },
       xaxis: {
-        title: { text: xLabel, standoff: 8 },
+        title: { text: xLabel, standoff: 12, font: { size: 11, color: THEME.text } },
         color: THEME.text,
         gridcolor: THEME.gridLine,
         gridwidth: 1,
-        zeroline: false,
+        zeroline: true,
+        zerolinecolor: THEME.gridLine,
+        zerolinewidth: 1,
+        automargin: true,
+        showline: true,
+        linecolor: THEME.gridLine,
+        tickfont: { size: 10, color: THEME.text },
         exponentformat: timeScale ? "none" : "e",
         tickformat: timeScale
           ? timeScale.tickformat
@@ -392,13 +398,20 @@ const ScalarPlot = memo(function ScalarPlot({
               : unitGroups.leftUnit
                 ? `Value (${unitGroups.leftUnit})`
                 : "Value",
-          standoff: 8,
+          standoff: 12,
+          font: { size: 11, color: THEME.text }
         },
         color: THEME.text,
         gridcolor: THEME.gridLine,
         gridwidth: 1,
         griddash: "dot",
-        zeroline: false,
+        zeroline: true,
+        zerolinecolor: THEME.gridLine,
+        zerolinewidth: 1,
+        automargin: true,
+        showline: true,
+        linecolor: THEME.gridLine,
+        tickfont: { size: 10, color: THEME.text },
         exponentformat: "e",
         tickformat: magnetizationOnly ? ".2f" : undefined,
       },
@@ -406,13 +419,18 @@ const ScalarPlot = memo(function ScalarPlot({
         ? {
             title: {
               text: `Value (${unitGroups.rightUnit})`,
-              standoff: 8,
+              standoff: 12,
+              font: { size: 11, color: THEME.text }
             },
             overlaying: "y",
             side: "right",
             color: THEME.text,
             showgrid: false,
             zeroline: false,
+            automargin: true,
+            showline: true,
+            linecolor: THEME.gridLine,
+            tickfont: { size: 10, color: THEME.text },
             exponentformat: "e",
           }
         : undefined,
@@ -423,6 +441,8 @@ const ScalarPlot = memo(function ScalarPlot({
         xanchor: "center",
         x: 0.5,
         font: { size: 11, color: THEME.text },
+        bgcolor: "rgba(0,0,0,0)",
+        bordercolor: "rgba(0,0,0,0)"
       },
       hovermode: "x unified",
       hoverlabel: {
@@ -431,7 +451,7 @@ const ScalarPlot = memo(function ScalarPlot({
         font: { color: THEME.hoverText, size: 12 },
         namelength: -1,
       },
-      dragmode: "zoom",
+      dragmode: "pan",
       uirevision: uiRevisionKey,
       datarevision: revision.current,
       modebar: {
