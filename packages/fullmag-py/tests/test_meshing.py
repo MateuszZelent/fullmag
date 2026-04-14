@@ -543,6 +543,9 @@ class MeshScaffoldTests(unittest.TestCase):
                         "geometry": "left",
                         "mode": "custom",
                         "hmax": "5e-9",
+                        "interface_hmax": "3e-9",
+                        "interface_thickness": "7e-9",
+                        "transition_growth": "1.5",
                     }
                 ]
             },
@@ -551,7 +554,9 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertAlmostEqual(effective_targets["left_geom"]["hmax"], 5e-9)
         self.assertAlmostEqual(effective_targets["left_geom"]["interface_hmax"], 3e-9)
+        self.assertAlmostEqual(effective_targets["left_geom"]["interface_thickness"], 7e-9)
         self.assertAlmostEqual(effective_targets["left_geom"]["transition_distance"], 15e-9)
+        self.assertAlmostEqual(effective_targets["left_geom"]["transition_growth"], 1.5)
         self.assertEqual(effective_targets["left_geom"]["source"], "local_override")
 
     def test_apply_mesh_options_falls_back_from_mmg3d_when_size_fields_are_active(self) -> None:
