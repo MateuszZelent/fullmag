@@ -147,7 +147,10 @@ export interface SweptMeshHints {
 // ── Mesh quality ────────────────────────────────────────────────────
 
 export interface MeshQualityStats {
+  n_elements: number;
   sicn_mean: number;
+  sicn_min: number;
+  sicn_max: number;
   sicn_p5: number;
   sicn_histogram?: number[];
   gamma_min: number;
@@ -500,6 +503,7 @@ export interface ScriptBuilderUniverseState {
   airbox_hmax: number | null;
   airbox_hmin: number | null;
   airbox_growth_rate: number | null;
+  airbox_grading: string | null;
 }
 
 export interface DomainFrameDeclaredUniverseState {
@@ -510,6 +514,7 @@ export interface DomainFrameDeclaredUniverseState {
   airbox_hmax: number | null;
   airbox_hmin: number | null;
   airbox_growth_rate: number | null;
+  airbox_grading: string | null;
 }
 
 export interface DomainFrameState {

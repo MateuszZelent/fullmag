@@ -68,6 +68,9 @@ from ._size_field_plan import (
     _resolve_per_object_mesh_options as _resolve_per_object_mesh_options,
 )
 
+_DEFAULT_AIRBOX_GROWTH_RATE = 1.3
+_DEFAULT_AIRBOX_GRADING = "geometric"
+
 
 def _surface_preview_to_mesh_data(preview: dict[str, object]) -> MeshData:
     nodes = np.asarray(preview.get("nodes", []), dtype=np.float64)
@@ -146,7 +149,7 @@ def realize_fem_mesh_asset(
     else:
         emit_progress(
             f"Generating FEM mesh from geometry '{geometry.geometry_name}' "
-            f"with hmax={target.hmax:.4e} (source={target.source})"
+            f"with maximum_element_size={target.hmax:.4e} (source={target.source})"
         )
         mesh = generate_mesh(geometry, hmax=target.hmax, order=target.order)
 
@@ -303,6 +306,19 @@ def _study_universe_airbox_options(
     declared_size = _optional_vec3(study_universe.get("size"))
     airbox_hmax = study_universe.get("airbox_hmax")
     resolved_airbox_hmax = float(airbox_hmax) if airbox_hmax is not None else None
+    airbox_hmin = study_universe.get("airbox_hmin")
+    resolved_airbox_hmin = float(airbox_hmin) if airbox_hmin is not None else None
+    resolved_airbox_growth_rate = _coerce_positive_float(study_universe.get("airbox_growth_rate"))
+    raw_airbox_grading = study_universe.get("airbox_grading")
+    resolved_airbox_grading: str | None = None
+    if isinstance(raw_airbox_grading, str) and raw_airbox_grading.strip():
+        resolved_airbox_grading = raw_airbox_grading.strip().lower()
+        if resolved_airbox_grading == "auto":
+            resolved_airbox_grading = "geometric"
+        if resolved_airbox_grading not in {"geometric", "linear"}:
+            raise ValueError(
+                "study_universe.airbox_grading must resolve to 'geometric' or 'linear'"
+            )
 
     # Treat an explicit declared size as an authoritative airbox, even when the
     # builder currently marks the universe as "auto". The frontend/script
@@ -312,7 +328,14 @@ def _study_universe_airbox_options(
             return AirboxOptions(
                 size=declared_size,
                 center=declared_center,
-                hmax=resolved_airbox_hmax,
+                maximum_element_size=resolved_airbox_hmax,
+                minimum_element_size=resolved_airbox_hmin,
+                grading_ratio=(
+                    float(resolved_airbox_growth_rate)
+                    if resolved_airbox_growth_rate is not None
+                    else _DEFAULT_AIRBOX_GROWTH_RATE
+                ),
+                grading_mode=resolved_airbox_grading or _DEFAULT_AIRBOX_GRADING,
             )
         return None
 
@@ -340,7 +363,14 @@ def _study_universe_airbox_options(
     return AirboxOptions(
         size=size,
         center=center,
-        hmax=resolved_airbox_hmax,
+        maximum_element_size=resolved_airbox_hmax,
+        minimum_element_size=resolved_airbox_hmin,
+        grading_ratio=(
+            float(resolved_airbox_growth_rate)
+            if resolved_airbox_growth_rate is not None
+            else _DEFAULT_AIRBOX_GROWTH_RATE
+        ),
+        grading_mode=resolved_airbox_grading or _DEFAULT_AIRBOX_GRADING,
     )
 
 
@@ -593,7 +623,7 @@ def _resolve_requested_partition_hmaxs(
     """Backward-compatible wrapper — delegates to ``_mesh_targets``."""
     return _mesh_targets_resolve_partition_hmaxs(
         geometries, hints,
-        airbox_hmax=float(airbox.hmax) if airbox is not None and airbox.hmax is not None else None,
+        airbox_hmax=float(airbox.maximum_element_size) if airbox is not None and airbox.maximum_element_size is not None else None,
         mesh_workflow=mesh_workflow,
         per_object_recipes=per_object_recipes,
     )
@@ -614,10 +644,10 @@ def _resolve_effective_shared_domain_targets(
     """
     resolved = resolve_shared_domain_targets(
         geometries, hints,
-        airbox_hmax=float(airbox.hmax) if airbox is not None and airbox.hmax is not None else None,
+        airbox_hmax=float(airbox.maximum_element_size) if airbox is not None and airbox.maximum_element_size is not None else None,
         airbox_hmin=(
-            _coerce_positive_float(getattr(airbox, "hmin", None))
-            if airbox is not None and getattr(airbox, "hmin", None) is not None
+            _coerce_positive_float(getattr(airbox, "minimum_element_size", None))
+            if airbox is not None and getattr(airbox, "minimum_element_size", None) is not None
             else None
         ),
         airbox_growth_rate=(
@@ -659,10 +689,10 @@ def _build_shared_domain_build_report(
 ) -> SharedDomainBuildReport:
     resolved = resolve_shared_domain_targets(
         geometries, hints,
-        airbox_hmax=float(airbox.hmax) if airbox is not None and airbox.hmax is not None else None,
+        airbox_hmax=float(airbox.maximum_element_size) if airbox is not None and airbox.maximum_element_size is not None else None,
         airbox_hmin=(
-            _coerce_positive_float(getattr(airbox, "hmin", None))
-            if airbox is not None and getattr(airbox, "hmin", None) is not None
+            _coerce_positive_float(getattr(airbox, "minimum_element_size", None))
+            if airbox is not None and getattr(airbox, "minimum_element_size", None) is not None
             else None
         ),
         airbox_growth_rate=(
@@ -900,10 +930,10 @@ def realize_fem_domain_mesh_asset(
             )
         # Raise the Gmsh CharacteristicLengthMax to the maximum of all intended element sizes
         # so coarser per-geometry overrides (VIn > hints.hmax) are not silently clamped.
-        # The airbox hmax takes natural precedence as the coarsest intended size.
+        # The airbox maximum_element_size takes natural precedence as the coarsest intended size.
         effective_hmax = float(hints.hmax)
-        if airbox is not None and airbox.hmax is not None and float(airbox.hmax) > effective_hmax:
-            effective_hmax = float(airbox.hmax)
+        if airbox is not None and airbox.maximum_element_size is not None and float(airbox.maximum_element_size) > effective_hmax:
+            effective_hmax = float(airbox.maximum_element_size)
         for field in mesh_options.size_fields:
             vin = field.get("params", {}).get("VIn") if isinstance(field.get("params"), dict) else None
             if isinstance(vin, (int, float)) and float(vin) > effective_hmax:
@@ -1014,9 +1044,17 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             "shared FEM domain mesh generation requires a declared study universe "
             "(manual size/center or auto padding)"
         )
-    single_geometry_occ_direct = (
-        len(geometries) == 1 and not isinstance(geometries[0], ImportedGeometry)
-    )
+    # Keep component-aware shared-domain meshing as the default even for
+    # single-body studies. This preserves the same field-stack behavior and
+    # avoids OCC single-body regressions in through-thickness refinement.
+    single_geometry_occ_direct = False
+    if (
+        isinstance(mesh_workflow, Mapping)
+        and bool(mesh_workflow.get("single_geometry_occ_direct")) is True
+    ):
+        single_geometry_occ_direct = (
+            len(geometries) == 1 and not isinstance(geometries[0], ImportedGeometry)
+        )
 
     trimesh = _import_trimesh()
     bounds_by_name: dict[str, tuple] = {}
@@ -1097,8 +1135,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             )
 
         effective_hmax = float(hints.hmax)
-        if airbox is not None and airbox.hmax is not None and float(airbox.hmax) > effective_hmax:
-            effective_hmax = float(airbox.hmax)
+        if airbox is not None and airbox.maximum_element_size is not None and float(airbox.maximum_element_size) > effective_hmax:
+            effective_hmax = float(airbox.maximum_element_size)
         for field in mesh_options.size_fields:
             vin = field.get("params", {}).get("VIn") if isinstance(field.get("params"), dict) else None
             if isinstance(vin, (int, float)) and float(vin) > effective_hmax:

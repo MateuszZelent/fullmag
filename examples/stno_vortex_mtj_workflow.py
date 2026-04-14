@@ -4,11 +4,6 @@ Source: stno_vortex_mtj_workflow.py
 Entrypoint: flat_workspace
 """
 
-import base64
-import json
-from pathlib import Path
-from urllib import request
-
 import fullmag as fm
 
 study = fm.study("stno_vortex_mtj_workflow")
@@ -16,8 +11,8 @@ study = fm.study("stno_vortex_mtj_workflow")
 # Engine
 study.engine("fem")
 study.device("cpu", precision="double")
-study.universe(mode="auto", size=(2.5e-07, 2.5e-07, 6e-08), center=(0, 0, 0), padding=(0, 0, 0),    maximum_element_size=100e-09,
-    minimum_element_size=50e-09)
+study.universe(mode="auto", size=(5.5e-07, 5.5e-07, 6e-08), center=(0, 0, 0), padding=(0, 0, 0),    maximum_element_size=100e-09,
+    minimum_element_size=10e-09)
 study.interactive(True)
 
 # Geometry & Material
@@ -25,7 +20,7 @@ body = study.geometry(fm.Cylinder(radius=5e-08, height=9e-09, name="free"), name
 body.Ms = 700000
 body.Aex = 1.2e-11
 body.alpha = 0.01
-body.m = fm.uniform(1, 0, 0)
+body.m = fm.uniform(1, 0, 0)  # type: ignore[assignment]
 
 # External field
 study.b_ext(0, 0, 0.02)
@@ -50,7 +45,7 @@ study.object_mesh_defaults(
 body.mesh(
     # 10 nm thickness -> target ~4 elements through thickness.
     maximum_element_size=20e-09,
-    minimum_element_size=4.5e-09,  # lowered: hmin=5nm conflicted with narrow-region field targets
+    minimum_element_size=6e-09,  # lowered: hmin=5nm conflicted with narrow-region field targets
     order=1,
     compute_quality=True,
     per_element_quality=False,

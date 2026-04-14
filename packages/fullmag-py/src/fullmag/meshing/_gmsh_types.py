@@ -332,19 +332,25 @@ class AirboxOptions:
                         (e.g. 3.0 means air domain is 3× the body in each axis).
         shape: Outer shell geometry: ``"bbox"`` or ``"sphere"``.
         grading_ratio: Element growth ratio from interface toward outer boundary.
+                       For geometric grading (default), this is the layer-to-layer
+                       size ratio (h_{n+1}/h_n). Typical values: 1.2–1.5.
+                       For linear grading (legacy), this controls dist_max.
+        grading_mode: Mesh grading algorithm: ``"geometric"`` (default, COMSOL-like
+                      exponential growth) or ``"linear"`` (legacy linear interpolation).
         boundary_marker: Gmsh physical group tag for the outer boundary Γ_out.
-        hmax: Maximum element size for the airbox mesh.
-        hmin: Minimum element size for the airbox mesh.
+        maximum_element_size: Maximum element size for the airbox mesh (far field).
+        minimum_element_size: Minimum element size for the airbox mesh (at interface).
     """
 
     padding_factor: float = 3.0
     shape: str = "bbox"
-    grading_ratio: float = 1.4
+    grading_ratio: float = 1.3
+    grading_mode: str = "geometric"
     boundary_marker: int = 99
     size: tuple[float, float, float] | None = None
     center: tuple[float, float, float] | None = None
-    hmax: float | None = None
-    hmin: float | None = None
+    maximum_element_size: float | None = None
+    minimum_element_size: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -76,7 +76,11 @@ def _add_airbox_geo(
 
     x0, y0, z0 = cx - ox / 2, cy - oy / 2, cz - oz / 2
     x1, y1, z1 = cx + ox / 2, cy + oy / 2, cz + oz / 2
-    h_outer = airbox.hmax if airbox.hmax is not None else hmax * max(airbox.grading_ratio ** 4, 1.0)
+    h_outer = (
+        airbox.maximum_element_size
+        if airbox.maximum_element_size is not None
+        else hmax * max(airbox.grading_ratio ** 4, 1.0)
+    )
 
     # 3 — build box geometry using GEO points/lines/surfaces
     p = []
@@ -162,6 +166,11 @@ def _add_airbox_geo(
 
     # 6 — mesh grading: fine at interface, coarse at outer boundary
     if airbox.grading_ratio > 1.0:
+        h_inner = (
+            airbox.minimum_element_size
+            if airbox.minimum_element_size is not None
+            else hmax
+        )
         if explicit_size is not None:
             d_outer = max(
                 max(ox - dx, 0.0),
@@ -171,16 +180,37 @@ def _add_airbox_geo(
         else:
             d_outer = max(dx, dy, dz) * (pf - 1) / 2
 
-        gmsh.model.mesh.field.add("Distance", 1)
-        gmsh.model.mesh.field.setNumbers(1, "SurfacesList", body_surf_tags)
+        # Distance field from magnetic body interface
+        f_dist = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(f_dist, "SurfacesList", body_surf_tags)
+        gmsh.model.mesh.field.setNumber(f_dist, "Sampling", 20)
 
-        gmsh.model.mesh.field.add("Threshold", 2)
-        gmsh.model.mesh.field.setNumber(2, "InField", 1)
-        gmsh.model.mesh.field.setNumber(2, "SizeMin", hmax)
-        gmsh.model.mesh.field.setNumber(2, "SizeMax", h_outer)
-        gmsh.model.mesh.field.setNumber(2, "DistMin", 0.0)
-        gmsh.model.mesh.field.setNumber(2, "DistMax", max(d_outer, hmax))
-        return 2
+        if airbox.grading_mode == "geometric":
+            # Geometric growth: h(r) = h_inner * exp(ln(g) * r / h_inner), capped at h_outer
+            # This matches COMSOL's approach and is physically correct for Laplacian decay
+            log_g = math.log(airbox.grading_ratio)
+            f_growth = gmsh.model.mesh.field.add("MathEval")
+            gmsh.model.mesh.field.setString(
+                f_growth, "F",
+                f"{h_inner} * exp({log_g} * F{f_dist} / {h_inner})"
+            )
+
+            # Cap at h_outer via constant field + Min
+            f_cap = gmsh.model.mesh.field.add("MathEval")
+            gmsh.model.mesh.field.setString(f_cap, "F", f"{h_outer}")
+
+            f_min = gmsh.model.mesh.field.add("Min")
+            gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", [f_growth, f_cap])
+            return f_min
+        else:
+            # Linear grading (legacy): linear interpolation from h_inner to h_outer
+            f_thresh = gmsh.model.mesh.field.add("Threshold")
+            gmsh.model.mesh.field.setNumber(f_thresh, "InField", f_dist)
+            gmsh.model.mesh.field.setNumber(f_thresh, "SizeMin", h_inner)
+            gmsh.model.mesh.field.setNumber(f_thresh, "SizeMax", h_outer)
+            gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", 0.0)
+            gmsh.model.mesh.field.setNumber(f_thresh, "DistMax", max(d_outer, hmax))
+            return f_thresh
     return None
 
 
@@ -301,7 +331,16 @@ def _add_airbox_and_fragment(
 
     # 7 — mesh grading: fine at interface, coarse at outer boundary
     if airbox.grading_ratio > 1.0:
-        h_outer = airbox.hmax if airbox.hmax is not None else hmax * airbox.grading_ratio ** 4
+        h_outer = (
+            airbox.maximum_element_size
+            if airbox.maximum_element_size is not None
+            else hmax * airbox.grading_ratio ** 4
+        )
+        h_inner = (
+            airbox.minimum_element_size
+            if airbox.minimum_element_size is not None
+            else hmax
+        )
         if explicit_size is not None:
             d_outer = max(
                 max(ox - dx, 0.0),
@@ -311,16 +350,37 @@ def _add_airbox_and_fragment(
         else:
             d_outer = max(dx, dy, dz) * (pf - 1) / 2
 
-        gmsh.model.mesh.field.add("Distance", 1)
-        gmsh.model.mesh.field.setNumbers(1, "SurfacesList", interface_list)
+        # Distance field from magnetic body interface
+        f_dist = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(f_dist, "SurfacesList", interface_list)
+        gmsh.model.mesh.field.setNumber(f_dist, "Sampling", 20)
 
-        gmsh.model.mesh.field.add("Threshold", 2)
-        gmsh.model.mesh.field.setNumber(2, "InField", 1)
-        gmsh.model.mesh.field.setNumber(2, "SizeMin", hmax)
-        gmsh.model.mesh.field.setNumber(2, "SizeMax", h_outer)
-        gmsh.model.mesh.field.setNumber(2, "DistMin", 0.0)
-        gmsh.model.mesh.field.setNumber(2, "DistMax", max(d_outer, hmax))
-        return 2
+        if airbox.grading_mode == "geometric":
+            # Geometric growth: h(r) = h_inner * exp(ln(g) * r / h_inner), capped at h_outer
+            # This matches COMSOL's approach and is physically correct for Laplacian decay
+            log_g = math.log(airbox.grading_ratio)
+            f_growth = gmsh.model.mesh.field.add("MathEval")
+            gmsh.model.mesh.field.setString(
+                f_growth, "F",
+                f"{h_inner} * exp({log_g} * F{f_dist} / {h_inner})"
+            )
+
+            # Cap at h_outer via constant field + Min
+            f_cap = gmsh.model.mesh.field.add("MathEval")
+            gmsh.model.mesh.field.setString(f_cap, "F", f"{h_outer}")
+
+            f_min = gmsh.model.mesh.field.add("Min")
+            gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", [f_growth, f_cap])
+            return f_min
+        else:
+            # Linear grading (legacy): linear interpolation from h_inner to h_outer
+            f_thresh = gmsh.model.mesh.field.add("Threshold")
+            gmsh.model.mesh.field.setNumber(f_thresh, "InField", f_dist)
+            gmsh.model.mesh.field.setNumber(f_thresh, "SizeMin", h_inner)
+            gmsh.model.mesh.field.setNumber(f_thresh, "SizeMax", h_outer)
+            gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", 0.0)
+            gmsh.model.mesh.field.setNumber(f_thresh, "DistMax", max(d_outer, hmax))
+            return f_thresh
     return None
 
 

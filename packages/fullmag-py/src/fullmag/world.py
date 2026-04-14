@@ -178,7 +178,7 @@ class MagnetHandle:
         return self._m_proxy
 
     @m.setter
-    def m(self, value: Any) -> None:
+    def m(self, value: Any) -> None:  # type: ignore[assignment]
         self._m_value = value
 
     def _resolved_geometry(self) -> object:
@@ -690,6 +690,9 @@ class StudyUniverseConfig:
     center: tuple[float, float, float] = (0.0, 0.0, 0.0)
     padding: tuple[float, float, float] = (0.0, 0.0, 0.0)
     airbox_hmax: float | None = None
+    airbox_hmin: float | None = None
+    airbox_growth_rate: float | None = None
+    airbox_grading: str | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in {"auto", "manual"}:
@@ -707,6 +710,29 @@ class StudyUniverseConfig:
         if self.airbox_hmax is not None:
             object.__setattr__(self, "airbox_hmax", float(self.airbox_hmax))
             require_positive(self.airbox_hmax, "airbox_hmax")
+        if self.airbox_hmin is not None:
+            object.__setattr__(self, "airbox_hmin", float(self.airbox_hmin))
+            require_positive(self.airbox_hmin, "airbox_hmin")
+        if self.airbox_growth_rate is not None:
+            object.__setattr__(self, "airbox_growth_rate", float(self.airbox_growth_rate))
+            if (
+                not math.isfinite(self.airbox_growth_rate)
+                or self.airbox_growth_rate <= 0.0
+            ):
+                raise ValueError("airbox_growth_rate must be a positive finite float")
+        if self.airbox_grading is not None:
+            normalized_grading = str(self.airbox_grading).strip().lower()
+            if normalized_grading not in {"auto", "geometric", "linear"}:
+                raise ValueError(
+                    "airbox_grading must be one of 'auto', 'geometric', or 'linear'"
+                )
+            object.__setattr__(self, "airbox_grading", normalized_grading)
+        # Validate that hmin <= hmax if both are set
+        if self.airbox_hmin is not None and self.airbox_hmax is not None:
+            if self.airbox_hmin > self.airbox_hmax:
+                raise ValueError(
+                    f"airbox_hmin ({self.airbox_hmin}) cannot be greater than airbox_hmax ({self.airbox_hmax})"
+                )
         if self.mode == "manual" and self.size is None:
             raise ValueError("manual universe mode requires an explicit size")
 
@@ -717,6 +743,9 @@ class StudyUniverseConfig:
             "center": list(self.center),
             "padding": list(self.padding),
             "airbox_hmax": self.airbox_hmax,
+            "airbox_hmin": self.airbox_hmin,
+            "airbox_growth_rate": self.airbox_growth_rate,
+            "airbox_grading": self.airbox_grading,
         }
 
 
@@ -1572,6 +1601,9 @@ def _configure_study_universe(
     center: Sequence[float] | None = None,
     padding: Sequence[float] | None = None,
     airbox_hmax: float | None = None,
+    airbox_hmin: float | None = None,
+    airbox_growth_rate: float | None = None,
+    airbox_grading: str | None = None,
 ) -> StudyUniverseConfig:
     current = _state._study_universe or StudyUniverseConfig()
     universe = StudyUniverseConfig(
@@ -1580,6 +1612,13 @@ def _configure_study_universe(
         center=current.center if center is None else as_vector3(center, "center"),
         padding=current.padding if padding is None else as_vector3(padding, "padding"),
         airbox_hmax=current.airbox_hmax if airbox_hmax is None else float(airbox_hmax),
+        airbox_hmin=current.airbox_hmin if airbox_hmin is None else float(airbox_hmin),
+        airbox_growth_rate=(
+            current.airbox_growth_rate
+            if airbox_growth_rate is None
+            else float(airbox_growth_rate)
+        ),
+        airbox_grading=current.airbox_grading if airbox_grading is None else str(airbox_grading),
     )
     _state._study_universe = universe
     return universe
@@ -1783,19 +1822,25 @@ class StudyBuilder:
         center: Sequence[float] | None = None,
         padding: Sequence[float] | None = None,
         airbox_hmax: float | None = None,
+        airbox_growth_rate: float | None = None,
+        airbox_grading: str | None = None,
         maximum_element_size: float | None = None,
         minimum_element_size: float | None = None,
     ) -> "StudyBuilder":
         # maximum_element_size / minimum_element_size are UI-exported aliases for
-        # airbox_hmax / (ignored floor hint).  Prefer the explicit airbox_hmax when
+        # airbox_hmax / airbox_hmin.  Prefer the explicit airbox_hmax/airbox_hmin when
         # both are supplied.
         resolved_hmax = airbox_hmax if airbox_hmax is not None else maximum_element_size
+        resolved_hmin = minimum_element_size
         _configure_study_universe(
             mode=mode,
             size=size,
             center=center,
             padding=padding,
             airbox_hmax=resolved_hmax,
+            airbox_hmin=resolved_hmin,
+            airbox_growth_rate=airbox_growth_rate,
+            airbox_grading=airbox_grading,
         )
         return self
 
@@ -2478,8 +2523,8 @@ def _resolve_flat_fem_hint() -> FEM | None:
             has_shared_base_hmax = isinstance(shared_hmax, (int, float)) or shared_hmax == "auto"
             if strict_domain_requirements and not has_shared_base_hmax:
                 raise ValueError(
-                    "Generated shared-domain FEM mesh requires an explicit airbox mesh size. "
-                    "Set study.airbox(hmax=...) or study.universe(..., airbox_hmax=...)."
+                    "Generated shared-domain FEM mesh requires an explicit airbox maximum_element_size. "
+                    "Set study.universe(..., maximum_element_size=...) or use the legacy airbox_hmax alias."
                 )
             explicit_hmaxs = _explicit_object_hmaxs()
             if isinstance(shared_hmax, (int, float)):
@@ -2493,7 +2538,7 @@ def _resolve_flat_fem_hint() -> FEM | None:
             else:
                 resolved_hmax = "auto"
             emit_progress(
-                "No explicit airbox_hmax provided for generated shared-domain FEM mesh; "
+                "No explicit airbox maximum_element_size provided for generated shared-domain FEM mesh; "
                 "falling back to implicit base mesh size"
             )
         else:
@@ -2505,12 +2550,12 @@ def _resolve_flat_fem_hint() -> FEM | None:
             if strict_domain_requirements:
                 missing_names = ", ".join(repr(name) for name in missing_object_hmax)
                 raise ValueError(
-                    "Generated shared-domain FEM mesh requires an explicit object mesh hmax for every "
-                    "magnetic geometry unless study.object_mesh_defaults(hmax=...) is set. "
-                    f"Missing hmax for: {missing_names}."
+                    "Generated shared-domain FEM mesh requires an explicit object maximum_element_size for every "
+                    "magnetic geometry unless study.object_mesh_defaults(maximum_element_size=...) is set. "
+                    f"Missing maximum_element_size for: {missing_names}."
                 )
             emit_progress(
-                "No explicit per-object hmax for all magnetic geometries; "
+                "No explicit per-object maximum_element_size for all magnetic geometries; "
                 "using shared-domain base mesh size as compatibility fallback"
             )
         if isinstance(resolved_hmax, (int, float)):

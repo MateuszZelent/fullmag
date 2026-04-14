@@ -4,7 +4,7 @@ use crate::{
     SceneMetadata, SceneObject, SceneOutputsState, SceneStudyState, ScriptBuilderGeometryEntry,
     ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
     ScriptBuilderMagnetizationState, ScriptBuilderPerGeometryMeshState, ScriptBuilderState,
-    Transform3D,
+    StudyPipelineNode, Transform3D,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -80,7 +80,9 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
 pub fn scene_document_to_script_builder(
     scene: &SceneDocument,
 ) -> Result<ScriptBuilderState, SceneDocumentValidationError> {
-    validate_scene_document(scene)?;
+    let mut normalized_scene = scene.clone();
+    normalize_study_pipeline_labels(&mut normalized_scene);
+    validate_scene_document(&normalized_scene)?;
     let materials = scene
         .materials
         .iter()
@@ -152,23 +154,23 @@ pub fn scene_document_to_script_builder(
 
     Ok(ScriptBuilderState {
         revision: scene.revision,
-        backend: scene.study.backend.clone(),
-        demag_realization: scene.study.demag_realization.clone(),
-        external_field: scene.study.external_field,
-        solver: scene.study.solver.clone(),
-        mesh: scene.study.shared_domain_mesh.clone(),
-        universe: scene
+        backend: normalized_scene.study.backend.clone(),
+        demag_realization: normalized_scene.study.demag_realization.clone(),
+        external_field: normalized_scene.study.external_field,
+        solver: normalized_scene.study.solver.clone(),
+        mesh: normalized_scene.study.shared_domain_mesh.clone(),
+        universe: normalized_scene
             .study
             .universe_mesh
             .clone()
-            .or_else(|| scene.universe.clone()),
+            .or_else(|| normalized_scene.universe.clone()),
         domain_frame: None,
-        stages: scene.study.stages.clone(),
-        study_pipeline: scene.study.study_pipeline.clone(),
-        initial_state: scene.study.initial_state.clone(),
+        stages: normalized_scene.study.stages.clone(),
+        study_pipeline: normalized_scene.study.study_pipeline.clone(),
+        initial_state: normalized_scene.study.initial_state.clone(),
         geometries,
-        current_modules: scene.current_modules.modules.clone(),
-        excitation_analysis: scene.current_modules.excitation_analysis.clone(),
+        current_modules: normalized_scene.current_modules.modules.clone(),
+        excitation_analysis: normalized_scene.current_modules.excitation_analysis.clone(),
     })
 }
 
@@ -307,6 +309,35 @@ pub fn scene_document_to_script_builder_overrides(
             "samples": analysis.samples,
         })).unwrap_or(Value::Null),
     }))
+}
+
+fn normalize_study_pipeline_labels(scene: &mut SceneDocument) {
+    if let Some(document) = &mut scene.study.study_pipeline {
+        normalize_study_pipeline_node_labels(&mut document.nodes);
+    }
+}
+
+fn normalize_study_pipeline_node_labels(nodes: &mut [StudyPipelineNode]) {
+    for node in nodes {
+        match node {
+            StudyPipelineNode::Primitive(node) => {
+                if node.label.trim().is_empty() {
+                    node.label = node.id.clone();
+                }
+            }
+            StudyPipelineNode::Macro(node) => {
+                if node.label.trim().is_empty() {
+                    node.label = node.id.clone();
+                }
+            }
+            StudyPipelineNode::Group(node) => {
+                if node.label.trim().is_empty() {
+                    node.label = node.id.clone();
+                }
+                normalize_study_pipeline_node_labels(&mut node.children);
+            }
+        }
+    }
 }
 
 pub fn scene_document_problem_projection(
@@ -1356,5 +1387,39 @@ mod tests {
         let error = scene_document_to_script_builder(&scene)
             .expect_err("unsupported study pipeline version must fail");
         assert!(error.message.contains("unsupported study pipeline version"));
+    }
+
+    #[test]
+    fn scene_problem_projection_fills_missing_study_pipeline_labels_from_ids() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        let pipeline = scene
+            .study
+            .study_pipeline
+            .as_mut()
+            .expect("sample builder should contain study pipeline");
+        let StudyPipelineNode::Primitive(first_node) = pipeline
+            .nodes
+            .first_mut()
+            .expect("sample builder should have at least one study node")
+        else {
+            panic!("first study node should be primitive");
+        };
+        first_node.label = "  ".to_string();
+        let expected_id = first_node.id.clone();
+
+        let projection =
+            scene_document_problem_projection(&scene).expect("problem projection should build");
+        let projected_pipeline = projection
+            .builder
+            .study_pipeline
+            .expect("projection should include study pipeline");
+        let StudyPipelineNode::Primitive(projected_first_node) = projected_pipeline
+            .nodes
+            .first()
+            .expect("projected pipeline should keep first node")
+        else {
+            panic!("first projected study node should be primitive");
+        };
+        assert_eq!(projected_first_node.label, expected_id);
     }
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace as _dc_replace
 import math
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ from fullmag.model.geometry import (
 )
 
 from ._gmsh_types import (
+    ALGO_2D_FRONTAL_DELAUNAY,
+    ALGO_2D_FRONTAL_QUADS,
     AirboxOptions,
     ComponentDescriptor,
     MeshData,
@@ -48,6 +51,119 @@ from ._gmsh_fields import _apply_mesh_options, _apply_post_mesh_options
 from ._gmsh_airbox import _add_airbox_and_fragment, _add_airbox_geo
 from ._gmsh_swept import should_use_swept, generate_swept_mesh, classify_sweepability
 
+_NO_OP_FIELD_SIZE = 1.0e22
+
+
+def _airbox_volume_tags_for_components(
+    gmsh: Any,
+    component_volume_tags: dict[str, list[int]],
+) -> list[int]:
+    component_volumes = {
+        int(tag)
+        for tags in component_volume_tags.values()
+        for tag in tags
+    }
+    all_volumes = [int(tag) for dim, tag in gmsh.model.getEntities(3) if dim == 3]
+    return [tag for tag in all_volumes if tag not in component_volumes]
+
+
+def _add_airbox_volume_clamp_fields(
+    gmsh: Any,
+    *,
+    air_volume_tags: list[int],
+    airbox: AirboxOptions,
+) -> tuple[list[int], list[int]]:
+    upper_bound_fields: list[int] = []
+    lower_bound_fields: list[int] = []
+    if not air_volume_tags:
+        return upper_bound_fields, lower_bound_fields
+
+    if airbox.maximum_element_size is not None:
+        f_air_max = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(f_air_max, "VolumesList", air_volume_tags)
+        gmsh.model.mesh.field.setNumber(f_air_max, "VIn", float(airbox.maximum_element_size))
+        gmsh.model.mesh.field.setNumber(f_air_max, "VOut", float(_NO_OP_FIELD_SIZE))
+        upper_bound_fields.append(f_air_max)
+
+    if airbox.minimum_element_size is not None:
+        f_air_min = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(f_air_min, "VolumesList", air_volume_tags)
+        gmsh.model.mesh.field.setNumber(f_air_min, "VIn", float(airbox.minimum_element_size))
+        gmsh.model.mesh.field.setNumber(f_air_min, "VOut", 0.0)
+        lower_bound_fields.append(f_air_min)
+
+    return upper_bound_fields, lower_bound_fields
+
+
+def _scale_airbox_options(
+    airbox: AirboxOptions | None,
+    scale: float,
+) -> AirboxOptions | None:
+    """Scale explicit airbox dimensions into the active meshing coordinate system.
+
+    OCC mesh generators in this module often scale geometry from SI metres to
+    micrometres for numerical robustness.  When an explicit ``airbox.size`` /
+    ``airbox.center`` is provided from study metadata (still in SI), we must
+    scale those fields too before calling OCC booleans; otherwise OCC receives
+    near-zero box dimensions and can fail or create distorted outer domains.
+    """
+    if airbox is None:
+        return None
+
+    size = (
+        tuple(float(component) * scale for component in airbox.size)
+        if airbox.size is not None
+        else None
+    )
+    center = (
+        tuple(float(component) * scale for component in airbox.center)
+        if airbox.center is not None
+        else None
+    )
+    maximum_element_size = (
+        float(airbox.maximum_element_size) * scale
+        if airbox.maximum_element_size is not None
+        else None
+    )
+    minimum_element_size = (
+        float(airbox.minimum_element_size) * scale
+        if airbox.minimum_element_size is not None
+        else None
+    )
+
+    return AirboxOptions(
+        padding_factor=float(airbox.padding_factor),
+        shape=str(airbox.shape),
+        grading_ratio=float(airbox.grading_ratio),
+        grading_mode=str(airbox.grading_mode),
+        boundary_marker=int(airbox.boundary_marker),
+        size=size,
+        center=center,
+        maximum_element_size=maximum_element_size,
+        minimum_element_size=minimum_element_size,
+    )
+
+
+def _sanitize_volume_mesh_options(
+    opts: MeshOptions,
+    *,
+    context: str,
+) -> MeshOptions:
+    """Guard against cap-pole singularities in thin-body volume meshing.
+
+    ``Mesh.Algorithm=8`` (Frontal for Quads) can produce severe pole-like
+    connectivity spikes and poor through-thickness layering on thin films.
+    For 3D tetrahedral workflows we consistently prefer Frontal-Delaunay
+    triangles on the surface stage.
+    """
+    if opts.algorithm_2d != ALGO_2D_FRONTAL_QUADS:
+        return opts
+    emit_progress(
+        f"Gmsh: {context}: algorithm_2d=8 (FrontalQuads) is unstable for 3D thin-film volume meshing; "
+        "falling back to algorithm_2d=6 (Frontal-Delaunay)"
+    )
+    return _dc_replace(opts, algorithm_2d=ALGO_2D_FRONTAL_DELAUNAY)
+
 
 def generate_mesh(
     geometry: Geometry,
@@ -71,7 +187,10 @@ def generate_mesh(
     resolved_airbox = airbox or (
         AirboxOptions(padding_factor=air_padding) if air_padding > 0 else None
     )
-    opts = options or MeshOptions()
+    opts = _sanitize_volume_mesh_options(
+        options or MeshOptions(),
+        context="volume mesh dispatch",
+    )
 
     # ── Swept mesh dispatch ──
     if should_use_swept(geometry, opts):
@@ -153,7 +272,11 @@ def generate_box_mesh(
     options: MeshOptions | None = None,
 ) -> MeshData:
     resolved = airbox or (AirboxOptions(padding_factor=air_padding) if air_padding > 0 else None)
-    opts = options or MeshOptions()
+    resolved_scaled = _scale_airbox_options(resolved, 1e6)
+    opts = _sanitize_volume_mesh_options(
+        options or MeshOptions(),
+        context="box mesh",
+    )
     SCALE = 1e6  # m → µm for better OCC robustness on thin nano-scale films
     emit_progress("Gmsh: generating box geometry")
     gmsh = _import_gmsh()
@@ -165,12 +288,12 @@ def generate_box_mesh(
         sx, sy, sz = [dim * SCALE for dim in size]
         gmsh.model.occ.addBox(-sx / 2.0, -sy / 2.0, -sz / 2.0, sx, sy, sz)
         gmsh.model.occ.synchronize()
-        has_airbox = resolved is not None
+        has_airbox = resolved_scaled is not None
         airbox_field_ids: list[int] = []
         if has_airbox:
             emit_progress("Gmsh: adding airbox domain")
             airbox_field = _add_airbox_and_fragment(
-                gmsh, [(3, 1)], resolved, hmax * SCALE,
+                gmsh, [(3, 1)], resolved_scaled, hmax * SCALE,
             )
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
@@ -182,6 +305,7 @@ def generate_box_mesh(
             opts,
             hscale=SCALE,
             preexisting_field_ids=airbox_field_ids,
+            airbox_maximum_element_size=resolved_scaled.maximum_element_size * SCALE if resolved_scaled is not None and resolved_scaled.maximum_element_size is not None else None,
         )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
@@ -214,7 +338,11 @@ def generate_cylinder_mesh(
     options: MeshOptions | None = None,
 ) -> MeshData:
     resolved = airbox or (AirboxOptions(padding_factor=air_padding) if air_padding > 0 else None)
-    opts = options or MeshOptions()
+    resolved_scaled = _scale_airbox_options(resolved, 1e6)
+    opts = _sanitize_volume_mesh_options(
+        options or MeshOptions(),
+        context="cylinder mesh",
+    )
     SCALE = 1e6  # m → µm for better OCC robustness on thin nano-scale films
     emit_progress("Gmsh: generating cylinder geometry")
     gmsh = _import_gmsh()
@@ -225,12 +353,12 @@ def generate_cylinder_mesh(
         gmsh.model.add("fullmag_cylinder")
         gmsh.model.occ.addCylinder(0.0, 0.0, -height * SCALE / 2.0, 0.0, 0.0, height * SCALE, radius * SCALE)
         gmsh.model.occ.synchronize()
-        has_airbox = resolved is not None
+        has_airbox = resolved_scaled is not None
         airbox_field_ids: list[int] = []
         if has_airbox:
             emit_progress("Gmsh: adding airbox domain")
             airbox_field = _add_airbox_and_fragment(
-                gmsh, [(3, 1)], resolved, hmax * SCALE,
+                gmsh, [(3, 1)], resolved_scaled, hmax * SCALE,
             )
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
@@ -242,6 +370,7 @@ def generate_cylinder_mesh(
             opts,
             hscale=SCALE,
             preexisting_field_ids=airbox_field_ids,
+            airbox_maximum_element_size=resolved_scaled.maximum_element_size * SCALE if resolved_scaled is not None and resolved_scaled.maximum_element_size is not None else None,
         )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
@@ -275,7 +404,10 @@ def generate_difference_mesh(
     OCC has numerical precision limits, so we scale geometry from SI metres
     to micrometres (×1e6) for boolean ops, then scale nodes back (×1e-6).
     """
-    opts = options or MeshOptions()
+    opts = _sanitize_volume_mesh_options(
+        options or MeshOptions(),
+        context="difference mesh",
+    )
     SCALE = 1e6  # m → µm
     emit_progress("Gmsh: building OCC difference geometry")
     gmsh = _import_gmsh()
@@ -323,8 +455,12 @@ def _generate_csg_mesh(
 
     Uses micrometre scaling (×1e6) for OCC numerical stability.
     """
-    opts = options or MeshOptions()
+    opts = _sanitize_volume_mesh_options(
+        options or MeshOptions(),
+        context="CSG mesh",
+    )
     SCALE = 1e6
+    airbox_scaled = _scale_airbox_options(airbox, SCALE)
     emit_progress("Gmsh: building OCC geometry")
     gmsh = _import_gmsh()
     gmsh.initialize()
@@ -334,12 +470,12 @@ def _generate_csg_mesh(
         gmsh.model.add("fullmag_csg")
         mag_tags = _add_geometry_to_occ(gmsh, geometry, scale=SCALE)
         gmsh.model.occ.synchronize()
-        has_airbox = airbox is not None
+        has_airbox = airbox_scaled is not None
         airbox_field_ids: list[int] = []
         if has_airbox:
             emit_progress("Gmsh: adding airbox domain")
             airbox_field = _add_airbox_and_fragment(
-                gmsh, mag_tags, airbox, hmax * SCALE,
+                gmsh, mag_tags, airbox_scaled, hmax * SCALE,
             )
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
@@ -351,6 +487,7 @@ def _generate_csg_mesh(
             opts,
             hscale=SCALE,
             preexisting_field_ids=airbox_field_ids,
+            airbox_maximum_element_size=airbox_scaled.maximum_element_size * SCALE if airbox_scaled is not None and airbox_scaled.maximum_element_size is not None else None,
         )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
@@ -519,7 +656,10 @@ def _mesh_cad_file(
     scale_xyz: NDArray[np.float64] = np.ones(3),
     options: MeshOptions | None = None,
 ) -> MeshData:
-    opts = options or MeshOptions()
+    opts = _sanitize_volume_mesh_options(
+        options or MeshOptions(),
+        context=f"CAD mesh ({path.name})",
+    )
     gmsh = _import_gmsh()
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
@@ -538,7 +678,7 @@ def _mesh_cad_file(
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
-        _apply_mesh_options(gmsh, hmax, order, opts, preexisting_field_ids=airbox_field_ids)
+        _apply_mesh_options(gmsh, hmax, order, opts, preexisting_field_ids=airbox_field_ids, airbox_maximum_element_size=airbox.maximum_element_size if airbox is not None else None)
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
         _apply_post_mesh_options(gmsh, opts)
@@ -647,6 +787,7 @@ def _mesh_stl_surface(
     options: MeshOptions | None = None,
 ) -> MeshData:
     opts = options or MeshOptions()
+    stl_opts = _sanitize_volume_mesh_options(opts, context="STL mesh")
     gmsh = _import_gmsh()
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
@@ -662,11 +803,20 @@ def _mesh_stl_surface(
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
-        _apply_mesh_options(gmsh, hmax, order, opts, preexisting_field_ids=airbox_field_ids)
+        _apply_mesh_options(
+            gmsh,
+            hmax,
+            order,
+            stl_opts,
+            preexisting_field_ids=airbox_field_ids,
+            airbox_maximum_element_size=airbox.maximum_element_size if airbox is not None else None,
+        )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
-        _apply_post_mesh_options(gmsh, opts)
-        quality, _pdq = _extract_quality_metrics(gmsh, opts) if opts.compute_quality else (None, None)
+        _apply_post_mesh_options(gmsh, stl_opts)
+        quality, _pdq = (
+            _extract_quality_metrics(gmsh, stl_opts) if stl_opts.compute_quality else (None, None)
+        )
         mesh = _scale_mesh_nodes(
             _extract_mesh_data(gmsh, quality=quality, has_physical_groups=has_airbox, per_domain_quality=_pdq),
             scale_xyz,
@@ -769,6 +919,10 @@ def generate_shared_domain_mesh_from_components(
         raise ValueError("at least one component is required")
 
     opts = options or MeshOptions()
+    shared_stl_opts = _sanitize_volume_mesh_options(
+        opts,
+        context="shared-domain STL mesh",
+    )
     gmsh = _import_gmsh()
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
@@ -808,6 +962,7 @@ def generate_shared_domain_mesh_from_components(
 
         has_airbox = airbox is not None
         airbox_field_ids: list[int] = []
+        airbox_lower_bound_field_ids: list[int] = []
         interface_surface_tags: list[int] = list(all_body_surfs)
         outer_boundary_surface_tags: list[int] = []
 
@@ -824,6 +979,14 @@ def generate_shared_domain_mesh_from_components(
             )
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
+            air_volume_tags = _airbox_volume_tags_for_components(gmsh, component_volume_tags)
+            clamp_max_fields, clamp_min_fields = _add_airbox_volume_clamp_fields(
+                gmsh,
+                air_volume_tags=air_volume_tags,
+                airbox=airbox,
+            )
+            airbox_field_ids.extend(clamp_max_fields)
+            airbox_lower_bound_field_ids.extend(clamp_min_fields)
             # The airbox creates 6 outer boundary surfaces — collect them
             for _, phys_tag in gmsh.model.getPhysicalGroups(dim=2):
                 if phys_tag == airbox.boundary_marker:
@@ -836,16 +999,20 @@ def generate_shared_domain_mesh_from_components(
             gmsh,
             hmax,
             order,
-            opts,
+            shared_stl_opts,
             preexisting_field_ids=airbox_field_ids,
+            preexisting_lower_bound_field_ids=airbox_lower_bound_field_ids,
             component_volume_tags=component_volume_tags,
             component_surface_tags=component_surface_tags,
+            airbox_maximum_element_size=airbox.maximum_element_size if airbox is not None else None,
         )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
-        _apply_post_mesh_options(gmsh, opts)
+        _apply_post_mesh_options(gmsh, shared_stl_opts)
         quality, per_domain_quality = (
-            _extract_quality_metrics(gmsh, opts) if opts.compute_quality else (None, None)
+            _extract_quality_metrics(gmsh, shared_stl_opts)
+            if shared_stl_opts.compute_quality
+            else (None, None)
         )
         mesh = _extract_mesh_data(
             gmsh,
@@ -868,5 +1035,3 @@ def generate_shared_domain_mesh_from_components(
         )
     finally:
         gmsh.finalize()
-
-

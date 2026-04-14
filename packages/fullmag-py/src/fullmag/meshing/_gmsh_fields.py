@@ -22,8 +22,10 @@ def _apply_mesh_options(
     opts: MeshOptions,
     hscale: float = 1.0,
     preexisting_field_ids: list[int] | None = None,
+    preexisting_lower_bound_field_ids: list[int] | None = None,
     component_volume_tags: dict[str, list[int]] | None = None,
     component_surface_tags: dict[str, list[int]] | None = None,
+    airbox_maximum_element_size: float | None = None,
 ) -> None:
     """Apply MeshOptions to the Gmsh context before mesh.generate()."""
     emit_progress("Gmsh: applying mesh options")
@@ -39,7 +41,13 @@ def _apply_mesh_options(
             "falling back to HXT for stable local sizing"
         )
         algorithm_3d = ALGO_3D_HXT
-    gmsh.option.setNumber("Mesh.CharacteristicLengthMax", hmax)
+    # When an airbox is present, allow larger elements in the far field
+    effective_hmax = (
+        max(hmax, airbox_maximum_element_size)
+        if airbox_maximum_element_size is not None
+        else hmax
+    )
+    gmsh.option.setNumber("Mesh.CharacteristicLengthMax", effective_hmax)
     # The exported mesh asset is intentionally first-order topology.
     # Higher-order FEM lives in the solver space (`fe_order`), not in the
     # geometric mesh connectivity. Generating quadratic Gmsh elements here
@@ -112,6 +120,7 @@ def _apply_mesh_options(
             opts.size_fields,
             hscale,
             extra_field_ids,
+            list(preexisting_lower_bound_field_ids or []),
             component_volume_tags=component_volume_tags,
             component_surface_tags=component_surface_tags,
         )
@@ -123,6 +132,7 @@ def _apply_mesh_options(
             [],
             hscale,
             extra_field_ids,
+            list(preexisting_lower_bound_field_ids or []),
             component_volume_tags=component_volume_tags,
             component_surface_tags=component_surface_tags,
         )
@@ -385,6 +395,7 @@ def _configure_mesh_size_fields(
     fields: list[dict[str, Any]],
     hscale: float = 1.0,
     extra_field_ids: list[int] | None = None,
+    lower_bound_field_ids: list[int] | None = None,
     component_volume_tags: dict[str, list[int]] | None = None,
     component_surface_tags: dict[str, list[int]] | None = None,
 ) -> None:
@@ -482,13 +493,36 @@ def _configure_mesh_size_fields(
     if extra_field_ids:
         field_ids.extend(extra_field_ids)
 
+    if not field_ids and not lower_bound_field_ids:
+        return
+
+    size_upper_field = None
     if field_ids:
         if len(field_ids) > 1:
-            combo = gmsh.model.mesh.field.add("Min")
-            gmsh.model.mesh.field.setNumbers(combo, "FieldsList", field_ids)
-            gmsh.model.mesh.field.setAsBackgroundMesh(combo)
+            size_upper_field = gmsh.model.mesh.field.add("Min")
+            gmsh.model.mesh.field.setNumbers(size_upper_field, "FieldsList", field_ids)
         else:
-            gmsh.model.mesh.field.setAsBackgroundMesh(field_ids[0])
+            size_upper_field = field_ids[0]
 
+    size_lower_field = None
+    if lower_bound_field_ids:
+        if len(lower_bound_field_ids) > 1:
+            size_lower_field = gmsh.model.mesh.field.add("Max")
+            gmsh.model.mesh.field.setNumbers(
+                size_lower_field, "FieldsList", lower_bound_field_ids
+            )
+        else:
+            size_lower_field = lower_bound_field_ids[0]
+
+    if size_upper_field is not None and size_lower_field is not None:
+        bounded = gmsh.model.mesh.field.add("Max")
+        gmsh.model.mesh.field.setNumbers(
+            bounded, "FieldsList", [size_upper_field, size_lower_field]
+        )
+        gmsh.model.mesh.field.setAsBackgroundMesh(bounded)
+    elif size_upper_field is not None:
+        gmsh.model.mesh.field.setAsBackgroundMesh(size_upper_field)
+    elif size_lower_field is not None:
+        gmsh.model.mesh.field.setAsBackgroundMesh(size_lower_field)
 
 

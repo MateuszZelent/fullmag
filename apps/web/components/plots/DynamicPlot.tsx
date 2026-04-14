@@ -7,6 +7,7 @@ import type { PlotParams } from "react-plotly.js";
 type PlotComponent = ComponentType<PlotParams>;
 
 const PLOTLY_RETRY_DELAY_MS = 400;
+const PLOTLY_CHUNK_RELOAD_KEY = "fullmag.plotly_chunk_reload_once";
 
 function isChunkLoadError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -26,6 +27,22 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function requestSingleHardReloadForChunkError(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    if (window.sessionStorage.getItem(PLOTLY_CHUNK_RELOAD_KEY) === "1") {
+      return false;
+    }
+    window.sessionStorage.setItem(PLOTLY_CHUNK_RELOAD_KEY, "1");
+    window.location.reload();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function PlotlyUnavailableFallback() {
   return (
     <div className="flex h-full w-full min-h-[--size-chart-min-height] items-center justify-center bg-background/60 p-6 text-center">
@@ -42,6 +59,10 @@ async function loadPlotlyModule(): Promise<{ default: PlotComponent }> {
   } catch (error) {
     if (!isChunkLoadError(error)) {
       throw error;
+    }
+
+    if (requestSingleHardReloadForChunkError()) {
+      return { default: PlotlyUnavailableFallback };
     }
 
     console.warn("[DynamicPlot] Plotly chunk load failed, retrying once", error);

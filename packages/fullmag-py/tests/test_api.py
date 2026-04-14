@@ -418,6 +418,9 @@ class ProblemApiTests(unittest.TestCase):
             center=(5e-9, 0.0, -1e-9),
             padding=(2e-9, 2e-9, 1e-9),
             airbox_hmax=50e-9,
+            minimum_element_size=15e-9,
+            airbox_growth_rate=1.4,
+            airbox_grading="linear",
         )
         study.object_mesh_defaults(hmax=20e-9, order=1)
 
@@ -440,6 +443,9 @@ class ProblemApiTests(unittest.TestCase):
             [5e-9, 0.0, -1e-9],
         )
         self.assertEqual(problem.runtime_metadata["study_universe"]["airbox_hmax"], 50e-9)
+        self.assertEqual(problem.runtime_metadata["study_universe"]["airbox_hmin"], 15e-9)
+        self.assertEqual(problem.runtime_metadata["study_universe"]["airbox_growth_rate"], 1.4)
+        self.assertEqual(problem.runtime_metadata["study_universe"]["airbox_grading"], "linear")
 
         ir = problem.to_ir()
         builder = ir["problem_meta"]["runtime_metadata"]["model_builder"]
@@ -451,6 +457,9 @@ class ProblemApiTests(unittest.TestCase):
             [2e-9, 2e-9, 1e-9],
         )
         self.assertEqual(builder["problem"]["universe"]["airbox_hmax"], 50e-9)
+        self.assertEqual(builder["problem"]["universe"]["airbox_hmin"], 15e-9)
+        self.assertEqual(builder["problem"]["universe"]["airbox_growth_rate"], 1.4)
+        self.assertEqual(builder["problem"]["universe"]["airbox_grading"], "linear")
 
     def test_load_problem_from_study_script_preserves_universe_metadata(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -468,6 +477,9 @@ class ProblemApiTests(unittest.TestCase):
                         mode="auto",
                         padding=(10e-9, 5e-9, 2e-9),
                         airbox_hmax=25e-9,
+                        minimum_element_size=5e-9,
+                        airbox_growth_rate=1.35,
+                        airbox_grading="linear",
                     )
 
                     body = study.geometry(fm.Box(size=(10e-9, 10e-9, 5e-9), name="track"), name="track")
@@ -493,17 +505,35 @@ class ProblemApiTests(unittest.TestCase):
                 loaded.problem.runtime_metadata["study_universe"]["airbox_hmax"],
                 25e-9,
             )
+            self.assertEqual(
+                loaded.problem.runtime_metadata["study_universe"]["airbox_hmin"],
+                5e-9,
+            )
+            self.assertEqual(
+                loaded.problem.runtime_metadata["study_universe"]["airbox_growth_rate"],
+                1.35,
+            )
+            self.assertEqual(
+                loaded.problem.runtime_metadata["study_universe"]["airbox_grading"],
+                "linear",
+            )
 
             draft = export_builder_draft(loaded)
             self.assertEqual(draft["universe"]["mode"], "auto")
             self.assertEqual(draft["universe"]["padding"], [10e-9, 5e-9, 2e-9])
             self.assertEqual(draft["universe"]["airbox_hmax"], 25e-9)
+            self.assertEqual(draft["universe"]["airbox_hmin"], 5e-9)
+            self.assertEqual(draft["universe"]["airbox_growth_rate"], 1.35)
+            self.assertEqual(draft["universe"]["airbox_grading"], "linear")
 
             rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
             self.assertIn('study = fm.study("captured_study")', rewritten)
-            self.assertIn('study.universe(mode="auto", center=(0, 0, 0), padding=(1e-08, 5e-09, 2e-09), airbox_hmax=2.5e-08)', rewritten)
+            self.assertIn(
+                'study.universe(mode="auto", center=(0, 0, 0), padding=(1e-08, 5e-09, 2e-09), maximum_element_size=2.5e-08, minimum_element_size=5e-09, airbox_growth_rate=1.35, airbox_grading="linear")',
+                rewritten,
+            )
             self.assertIn('study.geometry(fm.Box(1e-08, 1e-08, 5e-09), name="track")', rewritten)
-            self.assertIn('study.run(1e-12)', rewritten)
+            self.assertIn('study.stages.add_run(1e-12)', rewritten)
 
             overridden = rewrite_loaded_problem_script(
                 loaded,
@@ -514,11 +544,14 @@ class ProblemApiTests(unittest.TestCase):
                         "center": [5e-9, -2e-9, 1e-9],
                         "padding": [0.0, 0.0, 0.0],
                         "airbox_hmax": 30e-9,
+                        "airbox_hmin": 8e-9,
+                        "airbox_growth_rate": 1.5,
+                        "airbox_grading": "geometric",
                     },
                 },
             )["rendered_source"]
             self.assertIn(
-                'study.universe(mode="manual", size=(8e-08, 6e-08, 4e-08), center=(5e-09, -2e-09, 1e-09), padding=(0, 0, 0), airbox_hmax=3e-08)',
+                'study.universe(mode="manual", size=(8e-08, 6e-08, 4e-08), center=(5e-09, -2e-09, 1e-09), padding=(0, 0, 0), maximum_element_size=3e-08, minimum_element_size=8e-09, airbox_growth_rate=1.5, airbox_grading="geometric")',
                 overridden,
             )
 
@@ -726,7 +759,7 @@ class ProblemApiTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "study_build_domain_mesh_missing_airbox_hmax.py"
             path.write_text(textwrap.dedent(script), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "explicit airbox mesh size"):
+            with self.assertRaisesRegex(ValueError, "explicit airbox maximum_element_size"):
                 fm.load_problem_from_script(path, lightweight_assets=True)
 
     def test_study_build_domain_mesh_requires_object_hmax_coverage(self) -> None:
@@ -1462,6 +1495,9 @@ class ProblemApiTests(unittest.TestCase):
             mode="manual",
             size=(80e-9, 60e-9, 40e-9),
             center=(5e-9, -2e-9, 1e-9),
+            minimum_element_size=12e-9,
+            airbox_growth_rate=1.25,
+            airbox_grading="linear",
         )
 
         body = study.geometry(fm.Box(size=(10e-9, 10e-9, 10e-9), name="box"), name="box")
@@ -1489,7 +1525,7 @@ class ProblemApiTests(unittest.TestCase):
         with patch.dict(os.environ, {"FULLMAG_FEM_MESH_CACHE_DIR": ""}), patch(
             "fullmag.meshing.realize_fem_mesh_asset", return_value=mesh
         ) as mocked_mesh, patch(
-            "fullmag.meshing.realize_fem_domain_mesh_asset",
+            "fullmag.meshing.realize_fem_domain_mesh_asset_from_components",
             return_value=(mesh, [{"geometry_name": "box", "marker": 1}]),
         ) as mocked_domain, patch("fullmag._core.validate_mesh_ir", return_value=True):
             problem.to_ir(requested_backend=fm.BackendTarget.FEM)
@@ -1502,6 +1538,9 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(forwarded_universe["mode"], "manual")
         self.assertEqual(forwarded_universe["size"], [80e-9, 60e-9, 40e-9])
         self.assertEqual(forwarded_universe["center"], [5e-9, -2e-9, 1e-9])
+        self.assertEqual(forwarded_universe["airbox_hmin"], 12e-9)
+        self.assertEqual(forwarded_universe["airbox_growth_rate"], 1.25)
+        self.assertEqual(forwarded_universe["airbox_grading"], "linear")
         self.assertEqual(forwarded_domain_universe, forwarded_universe)
 
     def test_fem_backend_emits_shared_domain_mesh_asset_for_manual_universe(self) -> None:

@@ -165,6 +165,9 @@ def build_domain_frame(
         declared_center = _optional_vec3(study_universe.get("center"))
         declared_padding = _optional_vec3(study_universe.get("padding"))
         declared_airbox_hmax = study_universe.get("airbox_hmax")
+        declared_airbox_hmin = study_universe.get("airbox_hmin")
+        declared_airbox_growth_rate = study_universe.get("airbox_growth_rate")
+        declared_airbox_grading = study_universe.get("airbox_grading")
         declared_universe = {
             "mode": str(declared_mode) if isinstance(declared_mode, str) else "auto",
             "size": list(declared_size) if declared_size is not None else None,
@@ -173,6 +176,21 @@ def build_domain_frame(
             "airbox_hmax": (
                 float(declared_airbox_hmax)
                 if isinstance(declared_airbox_hmax, (int, float))
+                else None
+            ),
+            "airbox_hmin": (
+                float(declared_airbox_hmin)
+                if isinstance(declared_airbox_hmin, (int, float))
+                else None
+            ),
+            "airbox_growth_rate": (
+                float(declared_airbox_growth_rate)
+                if isinstance(declared_airbox_growth_rate, (int, float))
+                else None
+            ),
+            "airbox_grading": (
+                str(declared_airbox_grading)
+                if isinstance(declared_airbox_grading, str) and declared_airbox_grading.strip()
                 else None
             ),
         }

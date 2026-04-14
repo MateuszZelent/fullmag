@@ -857,6 +857,10 @@ function normalizeScriptBuilder(raw: any): ScriptBuilderState | null {
               raw.universe.airbox_growth_rate != null
                 ? Number(raw.universe.airbox_growth_rate)
                 : null,
+            airbox_grading:
+              raw.universe.airbox_grading != null
+                ? String(raw.universe.airbox_grading)
+                : null,
           }
         : null,
     domain_frame: normalizeDomainFrame(raw.domain_frame),
@@ -1228,6 +1232,10 @@ function normalizeSceneStudy(raw: any) {
               raw.universe_mesh.airbox_growth_rate != null
                 ? Number(raw.universe_mesh.airbox_growth_rate)
                 : null,
+            airbox_grading:
+              raw.universe_mesh.airbox_grading != null
+                ? String(raw.universe_mesh.airbox_grading)
+                : null,
           }
         : null,
     shared_domain_mesh: normalized?.mesh ?? defaults.mesh,
@@ -1277,6 +1285,10 @@ function normalizeSceneDocument(raw: any): SceneDocument | null {
             airbox_growth_rate:
               raw.universe.airbox_growth_rate != null
                 ? Number(raw.universe.airbox_growth_rate)
+                : null,
+            airbox_grading:
+              raw.universe.airbox_grading != null
+                ? String(raw.universe.airbox_grading)
                 : null,
           }
         : null,
@@ -1464,6 +1476,10 @@ function normalizeDomainFrame(raw: any) {
             airbox_growth_rate:
               raw.declared_universe.airbox_growth_rate != null
                 ? Number(raw.declared_universe.airbox_growth_rate)
+                : null,
+            airbox_grading:
+              raw.declared_universe.airbox_grading != null
+                ? String(raw.declared_universe.airbox_grading)
                 : null,
           }
         : null,

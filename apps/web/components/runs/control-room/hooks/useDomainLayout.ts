@@ -262,6 +262,7 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
             airbox_hmax: scriptBuilderUniverse.airbox_hmax,
             airbox_hmin: scriptBuilderUniverse.airbox_hmin,
             airbox_growth_rate: scriptBuilderUniverse.airbox_growth_rate,
+            airbox_grading: scriptBuilderUniverse.airbox_grading,
           }
         : null,
       object_bounds_min: builderObjectBounds?.boundsMin ?? null,

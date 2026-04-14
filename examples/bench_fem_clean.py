@@ -35,7 +35,7 @@ CPU_THREADS = os.environ.get("FULLMAG_CPU_THREADS", "auto")
 
 # ── Problem setup ───────────────────────────────────────────────────────
 
-print("[bench] FEM CPU scaling benchmark", file=sys.stderr)
+print(f"[bench] FEM CPU scaling benchmark", file=sys.stderr)
 print(f"[bench]   hmax          = {HMAX:.2e} m", file=sys.stderr)
 print(f"[bench]   max_steps     = {MAX_STEPS}", file=sys.stderr)
 print(f"[bench]   radius        = {RADIUS:.2e} m", file=sys.stderr)
@@ -67,4 +67,6 @@ body = study.geometry(
 body.Ms = 700_000       # A/m
 body.Aex = 1.2e-11      # J/m
 body.alpha = 0.01       # Gilbert damping
-body.m = fm.uniform(1, 0, 0)  # type: ignore[assignment]
+body.m = fm.uniform(1, 0, 0)  # Initial magnetization along +x  # type: ignore[assignment]
+# External field
+study.b_ext(0, 0, 0.02)  # 20 mT along z

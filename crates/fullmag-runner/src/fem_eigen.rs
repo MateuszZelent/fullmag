@@ -1988,11 +1988,13 @@ fn frequency_from_eigenvalue(gyromagnetic_ratio: f64, eigenvalue: f64) -> f64 {
 }
 
 fn angular_frequency_from_eigenvalue(gyromagnetic_ratio: f64, eigenvalue: f64) -> f64 {
-    gyromagnetic_ratio * MU0 * eigenvalue.max(0.0)
+    // gyromagnetic_ratio is μ₀γ (≈ 2.211e5 m/(A·s)), eigenvalue is H_eff in A/m.
+    // ω = μ₀γ · H_eff — no additional μ₀ factor needed.
+    gyromagnetic_ratio * eigenvalue.max(0.0)
 }
 
 fn angular_frequency_from_raw_eigenvalue(gyromagnetic_ratio: f64, eigenvalue: f64) -> f64 {
-    gyromagnetic_ratio * MU0 * eigenvalue
+    gyromagnetic_ratio * eigenvalue
 }
 
 fn requested_mode_indices(outputs: &[OutputIR]) -> std::collections::BTreeSet<u32> {

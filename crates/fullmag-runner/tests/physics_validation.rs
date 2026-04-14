@@ -710,12 +710,14 @@ fn cube_mesh(side_nm: f64) -> MeshIR {
 /// Kittel uniform-mode frequency for an infinite thin film magnetized along x
 /// with an in-plane external field `h_x_am` (A/m).
 ///
-/// f_K = (γ·μ₀)/(2π) · sqrt(H_x · (H_x + Ms))
+/// f_K = γ₀/(2π) · sqrt(H_x · (H_x + Ms))
 ///
-/// This is a rough analytic reference for exchange-off, Zeeman-only tests.
+/// where γ₀ = μ₀γ ≈ 2.211e5 m/(A·s) is the gyromagnetic ratio already
+/// including μ₀.  This is a rough analytic reference for exchange-off,
+/// Zeeman-only tests.
 fn kittel_frequency_hz(h_x_am: f64, ms_am: f64, gamma: f64) -> f64 {
-    const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
-    let omega = gamma * MU0 * (h_x_am * (h_x_am + ms_am)).sqrt();
+    // gamma is already μ₀γ — no additional μ₀ factor needed.
+    let omega = gamma * (h_x_am * (h_x_am + ms_am)).sqrt();
     omega / (2.0 * std::f64::consts::PI)
 }
 

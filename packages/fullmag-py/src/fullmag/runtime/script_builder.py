@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from fullmag.init.magnetization import (
     RandomMagnetization,
@@ -22,7 +22,7 @@ from fullmag.model.antenna import (
 from fullmag.model.discretization import FDM, FEM
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds as shared_geometry_bounds
 from fullmag.model.dynamics import DEFAULT_GAMMA, LLG
-from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedCylinder, Pulse, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedCylinder, Pulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.geometry import (
     Box,
     Cylinder,
@@ -62,8 +62,8 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
         "solver": {
-            "integrator": base_problem.study.dynamics.integrator,
-            "fixed_timestep": _text_number(base_problem.study.dynamics.fixed_timestep),
+            "integrator": base_problem.study.dynamics.integrator if base_problem.study is not None else None,
+            "fixed_timestep": _text_number(base_problem.study.dynamics.fixed_timestep) if base_problem.study is not None else None,
             "relax_algorithm": relax_stage.algorithm if relax_stage is not None else "llg_overdamped",
             "torque_tolerance": _text_number(
                 relax_stage.torque_tolerance if relax_stage is not None else 1e-6
@@ -305,6 +305,8 @@ def _study_pipeline_stage_label(
 
 def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
     study = stage.problem.study
+    if study is None:
+        return {"kind": "unknown", "entrypoint_kind": stage.entrypoint_kind}
     dynamics = study.dynamics
     if isinstance(study, Relaxation):
         return {
@@ -421,7 +423,22 @@ def _render_runtime(
                 universe_kwargs.append(f"padding={_py_tuple3(padding)}")
             airbox_hmax = universe.get("airbox_hmax")
             if airbox_hmax is not None:
-                universe_kwargs.append(f"airbox_hmax={_py_number(float(airbox_hmax))}")
+                universe_kwargs.append(
+                    f"maximum_element_size={_py_number(float(airbox_hmax))}"
+                )  # type: ignore[arg-type]
+            airbox_hmin = universe.get("airbox_hmin")
+            if airbox_hmin is not None:
+                universe_kwargs.append(
+                    f"minimum_element_size={_py_number(float(airbox_hmin))}"
+                )  # type: ignore[arg-type]
+            airbox_growth_rate = universe.get("airbox_growth_rate")
+            if airbox_growth_rate is not None:
+                universe_kwargs.append(
+                    f"airbox_growth_rate={_py_number(float(airbox_growth_rate))}"
+                )  # type: ignore[arg-type]
+            airbox_grading = universe.get("airbox_grading")
+            if isinstance(airbox_grading, str) and airbox_grading:
+                universe_kwargs.append(f"airbox_grading={_py_repr(airbox_grading)}")
             lines.append(f"{_surface_call(surface, 'universe')}({', '.join(universe_kwargs)})")
     if runtime_metadata.get("interactive_session_requested") is True:
         lines.append(f"{_surface_call(surface, 'interactive')}(True)")
@@ -443,23 +460,23 @@ def _render_runtime(
                 f"convergence_metric={_py_repr(str(adaptive_mesh.get('convergence_metric')))}"
             )
         if adaptive_mesh.get("theta") is not None:
-            kwargs.append(f"theta={_py_number(float(adaptive_mesh.get('theta')))}")
+            kwargs.append(f"theta={_py_number(float(adaptive_mesh.get('theta')))}")  # type: ignore[arg-type]
         if adaptive_mesh.get("h_min") is not None:
-            kwargs.append(f"h_min={_py_number(float(adaptive_mesh.get('h_min')))}")
+            kwargs.append(f"h_min={_py_number(float(adaptive_mesh.get('h_min')))}")  # type: ignore[arg-type]
         if adaptive_mesh.get("h_max") is not None:
-            kwargs.append(f"h_max={_py_number(float(adaptive_mesh.get('h_max')))}")
+            kwargs.append(f"h_max={_py_number(float(adaptive_mesh.get('h_max')))}")  # type: ignore[arg-type]
         if adaptive_mesh.get("max_passes") is not None:
-            kwargs.append(f"max_passes={int(adaptive_mesh.get('max_passes'))}")
+            kwargs.append(f"max_passes={int(adaptive_mesh.get('max_passes'))}")  # type: ignore[arg-type]
         if adaptive_mesh.get("error_tolerance") is not None:
             kwargs.append(
-                f"error_tolerance={_py_number(float(adaptive_mesh.get('error_tolerance')))}"
+                f"error_tolerance={_py_number(float(adaptive_mesh.get('error_tolerance')))}"  # type: ignore[arg-type]
             )
         if adaptive_mesh.get("chunk_until_seconds") is not None:
             kwargs.append(
-                f"chunk_until_seconds={_py_number(float(adaptive_mesh.get('chunk_until_seconds')))}"
+                f"chunk_until_seconds={_py_number(float(adaptive_mesh.get('chunk_until_seconds')))}"  # type: ignore[arg-type]
             )
         if adaptive_mesh.get("steps_per_pass") is not None:
-            kwargs.append(f"steps_per_pass={int(adaptive_mesh.get('steps_per_pass'))}")
+            kwargs.append(f"steps_per_pass={int(adaptive_mesh.get('steps_per_pass'))}")  # type: ignore[arg-type]
         enabled = bool(adaptive_mesh.get("enabled", True))
         if kwargs:
             lines.append(f"{_surface_call(surface, 'adaptive_mesh')}({str(enabled)}, {', '.join(kwargs)})")
@@ -574,10 +591,14 @@ def _render_geometries_from_override(
             lines.append(f"{var_name}.Dind = {_py_number(dmi)}")
         uniaxial = _physics_stack_uniaxial_params(physics_stack)
         if uniaxial is not None:
-            lines.append(f"{var_name}.Ku1 = {_py_number(uniaxial['ku1'])}")
-            axis = uniaxial["axis"]
+            ku1_val = uniaxial["ku1"]  # type: ignore[index]
+            lines.append(f"{var_name}.Ku1 = {_py_number(ku1_val)}")  # type: ignore[arg-type]
+            axis = uniaxial["axis"]  # type: ignore[index]
+            axis0 = axis[0]  # type: ignore[index]
+            axis1 = axis[1]  # type: ignore[index]
+            axis2 = axis[2]  # type: ignore[index]
             lines.append(
-                f"{var_name}.anisU = ({_py_number(axis[0])}, {_py_number(axis[1])}, {_py_number(axis[2])})"
+                f"{var_name}.anisU = ({_py_number(axis0)}, {_py_number(axis1)}, {_py_number(axis2)})"
             )
 
         rendered_initial_override = _render_initial_state_override(
@@ -603,8 +624,8 @@ def _render_geometries_from_override(
                 if src:
                     kwargs = []
                     if mag.get("source_format") and mag.get("source_format") != "json":
-                        kwargs.append(f"format={_py_repr(mag.get('source_format'))}")
-                    if mag.get("dataset"): kwargs.append(f"dataset={_py_repr(mag.get('dataset'))}")
+                        kwargs.append(f"format={_py_repr(mag.get('source_format'))}")  # type: ignore[arg-type]
+                    if mag.get("dataset"): kwargs.append(f"dataset={_py_repr(mag.get('dataset'))}")  # type: ignore[arg-type]
                     if mag.get("sample_index") not in {None, -1, ""}:
                         kwargs.append(f"sample={int(str(mag.get('sample_index')))}")
                     suffix = f", {', '.join(kwargs)}" if kwargs else ""
@@ -637,7 +658,7 @@ def _normalize_geometry_interaction_entry(
         return None
     if kind in {"exchange", "demag"}:
         return {"kind": kind, "enabled": True, "params": None}
-    params = dict(raw.get("params")) if isinstance(raw.get("params"), dict) else {}
+    params = raw.get("params") if isinstance(raw.get("params"), dict) else {}  # type: ignore[assignment]
     if kind == "interfacial_dmi":
         dind = _number_or_none(params.get("dind"))
         if dind is None:
@@ -685,7 +706,7 @@ def _physics_stack_dmi_value(stack: list[dict[str, object]]) -> float | None:
             continue
         if not bool(entry.get("enabled", True)):
             return None
-        params = dict(entry.get("params")) if isinstance(entry.get("params"), dict) else {}
+        params = entry.get("params") if isinstance(entry.get("params"), dict) else {}  # type: ignore[assignment]
         return _number_or_none(params.get("dind"))
     return None
 
@@ -698,7 +719,7 @@ def _physics_stack_uniaxial_params(
             continue
         if not bool(entry.get("enabled", True)):
             return None
-        params = dict(entry.get("params")) if isinstance(entry.get("params"), dict) else {}
+        params = entry.get("params") if isinstance(entry.get("params"), dict) else {}  # type: ignore[assignment]
         ku1 = _number_or_none(params.get("ku1"))
         axis = _normalize_vec3(params.get("axis"), fallback=(0.0, 0.0, 1.0))
         return {"ku1": ku1 if ku1 is not None else 0.0, "axis": axis}
@@ -960,7 +981,7 @@ def _render_mesh_operations(target_var: str, mesh_config: dict[str, object]) -> 
         params = _normalize_mapping(operation.get("params"))
         if kind == "optimize":
             method = params.get("method")
-            iterations = int(params.get("iterations", 1)) if isinstance(params.get("iterations"), (int, float)) else 1
+            iterations = int(params.get("iterations", 1)) if isinstance(params.get("iterations"), (int, float)) else 1  # type: ignore[arg-type]
             kwargs: list[str] = []
             if isinstance(method, str) and method != "default":
                 kwargs.append(f"method={_py_repr(method)}")
@@ -969,13 +990,13 @@ def _render_mesh_operations(target_var: str, mesh_config: dict[str, object]) -> 
             suffix = f"({', '.join(kwargs)})" if kwargs else "()"
             lines.append(f"{target_var}.mesh.optimize{suffix}")
         elif kind == "refine":
-            steps = int(params.get("steps", 1)) if isinstance(params.get("steps"), (int, float)) else 1
+            steps = int(params.get("steps", 1)) if isinstance(params.get("steps"), (int, float)) else 1  # type: ignore[arg-type]
             if steps == 1:
                 lines.append(f"{target_var}.mesh.refine()")
             else:
                 lines.append(f"{target_var}.mesh.refine(steps={steps})")
         elif kind == "smooth":
-            iterations = int(params.get("iterations", 1)) if isinstance(params.get("iterations"), (int, float)) else 1
+            iterations = int(params.get("iterations", 1)) if isinstance(params.get("iterations"), (int, float)) else 1  # type: ignore[arg-type]
             if iterations == 1:
                 lines.append(f"{target_var}.mesh.smooth()")
             else:
@@ -1246,11 +1267,15 @@ def _render_solver(
     surface: str,
 ) -> list[str]:
     solver_override = _normalize_mapping(overrides.get("solver"))
+    if problem.study is None:
+        return ["# Solver (not configured)"]
     dynamics = problem.study.dynamics
     return ["# Solver", _render_solver_call(dynamics, solver_override, surface=surface)]
 
 
 def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: str) -> list[str]:
+    if problem.study is None:
+        return []
     outputs = _study_outputs(problem.study)
     if not outputs:
         return []
@@ -1305,6 +1330,8 @@ def _render_stages(
     lines = ["# Stages" if is_study_surface else "# Run"]
     previous_dynamics_signature: dict[str, object] | None = None
     for index, stage in enumerate(stages):
+        if stage.problem.study is None:
+            continue
         dynamics_signature = stage.problem.study.dynamics.to_ir()
         if previous_dynamics_signature is not None and dynamics_signature != previous_dynamics_signature:
             lines.append(
@@ -1361,7 +1388,7 @@ def _render_stages(
                     or study.spin_wave_bc
                 )
             if spin_wave_bc != "free":
-                call_parts.append(f"bc={_py_repr(spin_wave_bc)}")
+                call_parts.append(f"bc={_py_repr(spin_wave_bc)}")  # type: ignore[arg-type]
             k_vector_raw = _override_string(stage_override, "eigen_k_vector", None)
             if k_vector_raw is not None and k_vector_raw.strip():
                 try:
@@ -1408,7 +1435,7 @@ def _render_stages(
                 _override_int(relax_override, "max_steps", study.max_steps),
             )
             call_parts = [
-                f"tol={_py_number(torque_tolerance)}",
+                f"tol={_py_number(torque_tolerance)}",  # type: ignore[arg-type]
                 f"max_steps={max_steps}",
                 f"algorithm={_py_repr(algorithm)}",
             ]
@@ -1551,8 +1578,8 @@ def _render_current_module_override(module: dict[str, object], *, surface: str) 
     if solver != "mqs_2p5d_az":
         kwargs.append(f"solver={_py_repr(solver)}")
     air_box_factor = module.get("air_box_factor")
-    if air_box_factor is not None and abs(float(air_box_factor) - 12.0) > 1e-12:
-        kwargs.append(f"air_box_factor={_py_number(float(air_box_factor))}")
+    if air_box_factor is not None and abs(float(air_box_factor)) > 1e-12:  # type: ignore[arg-type]
+        kwargs.append(f"air_box_factor={_py_number(float(air_box_factor))}")  # type: ignore[arg-type]
     return f"{_surface_call(surface, 'antenna_field_source')}({', '.join(kwargs)})"
 
 
@@ -1565,7 +1592,7 @@ def _render_antenna_override(kind: str, params: dict[str, object]) -> str:
             f"height_above_magnet={_py_number(float(params.get('height_above_magnet', 0.0)))}, "
             f"preview_length={_py_number(float(params.get('preview_length', 1.0)))}, "
             f"center_x={_py_number(float(params.get('center_x', 0.0)))}, "
-            f"center_y={_py_number(float(params.get('center_y', 0.0)))})"
+            f"center_y={_py_number(float(params.get('center_y', 0.0)))})"  # type: ignore[arg-type]
         )
     if kind == "CPWAntenna":
         return (
@@ -1577,19 +1604,19 @@ def _render_antenna_override(kind: str, params: dict[str, object]) -> str:
             f"height_above_magnet={_py_number(float(params.get('height_above_magnet', 0.0)))}, "
             f"preview_length={_py_number(float(params.get('preview_length', 1.0)))}, "
             f"center_x={_py_number(float(params.get('center_x', 0.0)))}, "
-            f"center_y={_py_number(float(params.get('center_y', 0.0)))})"
+            f"center_y={_py_number(float(params.get('center_y', 0.0)))})"  # type: ignore[arg-type]
         )
     raise ValueError(f"unsupported antenna override kind: {kind}")
 
 
 def _render_drive_override(drive: dict[str, object]) -> str:
-    kwargs = [f"current_a={_py_number(float(drive.get('current_a', 0.0)))}"]
+    kwargs = [f"current_a={_py_number(float(drive.get('current_a', 0.0)))}"]  # type: ignore[arg-type]
     frequency_hz = drive.get("frequency_hz")
     if frequency_hz is not None:
-        kwargs.append(f"frequency_hz={_py_number(float(frequency_hz))}")
+        kwargs.append(f"frequency_hz={_py_number(float(frequency_hz))}")  # type: ignore[arg-type]
     phase_rad = drive.get("phase_rad")
-    if phase_rad is not None and abs(float(phase_rad)) > 1e-15:
-        kwargs.append(f"phase_rad={_py_number(float(phase_rad))}")
+    if phase_rad is not None and abs(float(phase_rad)) > 1e-15:  # type: ignore[arg-type]
+        kwargs.append(f"phase_rad={_py_number(float(phase_rad))}")  # type: ignore[arg-type]
     waveform = drive.get("waveform")
     if isinstance(waveform, dict):
         kwargs.append(f"waveform={_render_waveform_override(waveform)}")
@@ -1599,7 +1626,7 @@ def _render_drive_override(drive: dict[str, object]) -> str:
 def _render_waveform_override(waveform: dict[str, object]) -> str:
     kind = str(waveform.get("kind") or "")
     if kind == "sinusoidal":
-        kwargs = [f"frequency_hz={_py_number(float(waveform.get('frequency_hz', 0.0)))}"]
+        kwargs = [f"frequency_hz={_py_number(float(waveform.get('frequency_hz', 0.0)))}"]  # type: ignore[arg-type]
         if abs(float(waveform.get("phase_rad", 0.0))) > 1e-15:
             kwargs.append(f"phase_rad={_py_number(float(waveform.get('phase_rad', 0.0)))}")
         if abs(float(waveform.get("offset", 0.0))) > 1e-15:
@@ -2512,12 +2539,22 @@ def _export_universe(problem: Problem) -> dict[str, object] | None:
     center = _optional_vec3(universe.get("center"))
     padding = _optional_vec3(universe.get("padding"))
     airbox_hmax = universe.get("airbox_hmax")
+    airbox_hmin = universe.get("airbox_hmin")
+    airbox_growth_rate = universe.get("airbox_growth_rate")
+    airbox_grading = universe.get("airbox_grading")
     return {
         "mode": str(mode) if isinstance(mode, str) else "auto",
         "size": list(size) if size is not None else None,
         "center": list(center) if center is not None else None,
         "padding": list(padding) if padding is not None else None,
         "airbox_hmax": float(airbox_hmax) if airbox_hmax is not None else None,
+        "airbox_hmin": float(airbox_hmin) if airbox_hmin is not None else None,
+        "maximum_element_size": float(airbox_hmax) if airbox_hmax is not None else None,
+        "minimum_element_size": float(airbox_hmin) if airbox_hmin is not None else None,
+        "airbox_growth_rate": (
+            float(airbox_growth_rate) if airbox_growth_rate is not None else None
+        ),
+        "airbox_grading": str(airbox_grading) if isinstance(airbox_grading, str) else None,
     }
 
 

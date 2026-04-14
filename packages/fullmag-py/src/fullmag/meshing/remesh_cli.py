@@ -196,7 +196,9 @@ def _describe_remesh_job(
     declared_universe: dict[str, Any] | None = None,
     mesh_options: dict[str, Any] | None = None,
 ) -> str:
-    summary = f"Remesh: accepted - mode={mode}, hmax={float(hmax):.3e}, order=P{int(order)}"
+    summary = (
+        f"Remesh: accepted - mode={mode}, maximum_element_size={float(hmax):.3e}, order=P{int(order)}"
+    )
     per_geometry = mesh_options.get("per_geometry") if isinstance(mesh_options, dict) else None
     local_override_count = (
         sum(
@@ -220,8 +222,8 @@ def _describe_remesh_job(
     if isinstance(airbox_hmax, (int, float)) and float(airbox_hmax) > 0.0:
         scope_bits.extend(
             [
-                f"body_hmax={float(hmax):.3e}",
-                f"airbox_hmax={float(airbox_hmax):.3e}",
+                f"body_maximum_element_size={float(hmax):.3e}",
+                f"airbox_maximum_element_size={float(airbox_hmax):.3e}",
             ]
         )
     if local_override_count > 0:

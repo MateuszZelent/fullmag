@@ -226,7 +226,7 @@ class MeshScaffoldTests(unittest.TestCase):
         assert airbox is not None
         self.assertEqual(airbox.size, (8.0, 8.0, 8.0))
         self.assertEqual(airbox.center, (0.0, 0.0, 0.0))
-        self.assertEqual(airbox.hmax, 0.5)
+        self.assertEqual(airbox.maximum_element_size, 0.5)
 
     def test_study_universe_auto_mode_accepts_explicit_size_as_airbox(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -244,7 +244,44 @@ class MeshScaffoldTests(unittest.TestCase):
         assert airbox is not None
         self.assertEqual(airbox.size, (10.0, 12.0, 14.0))
         self.assertEqual(airbox.center, (1.0, -2.0, 3.0))
-        self.assertEqual(airbox.hmax, 0.75)
+        self.assertEqual(airbox.maximum_element_size, 0.75)
+
+    def test_study_universe_airbox_growth_and_grading_propagate(self) -> None:
+        left = fm.Box(2.0, 2.0, 2.0, name="left")
+        airbox = _study_universe_airbox_options(
+            [left],
+            {
+                "mode": "manual",
+                "size": [8.0, 8.0, 8.0],
+                "center": [0.0, 0.0, 0.0],
+                "airbox_hmax": 0.5,
+                "airbox_hmin": 0.2,
+                "airbox_growth_rate": 1.45,
+                "airbox_grading": "linear",
+            },
+        )
+        self.assertIsNotNone(airbox)
+        assert airbox is not None
+        self.assertEqual(airbox.maximum_element_size, 0.5)
+        self.assertEqual(airbox.minimum_element_size, 0.2)
+        self.assertEqual(airbox.grading_ratio, 1.45)
+        self.assertEqual(airbox.grading_mode, "linear")
+
+    def test_study_universe_airbox_grading_auto_resolves_to_geometric(self) -> None:
+        left = fm.Box(2.0, 2.0, 2.0, name="left")
+        airbox = _study_universe_airbox_options(
+            [left],
+            {
+                "mode": "manual",
+                "size": [8.0, 8.0, 8.0],
+                "airbox_growth_rate": 1.25,
+                "airbox_grading": "auto",
+            },
+        )
+        self.assertIsNotNone(airbox)
+        assert airbox is not None
+        self.assertEqual(airbox.grading_ratio, 1.25)
+        self.assertEqual(airbox.grading_mode, "geometric")
 
     def test_meshdata_roundtrip_json(self) -> None:
         mesh = self._unit_tet_mesh()
@@ -312,7 +349,7 @@ class MeshScaffoldTests(unittest.TestCase):
     def test_remesh_cli_describes_start_of_job(self) -> None:
         self.assertEqual(
             _describe_remesh_job("manual_remesh", 20e-9, 1),
-            "Remesh: accepted - mode=manual_remesh, hmax=2.000e-08, order=P1",
+            "Remesh: accepted - mode=manual_remesh, maximum_element_size=2.000e-08, order=P1",
         )
 
     def test_remesh_cli_describes_shared_domain_airbox_scope(self) -> None:
@@ -323,8 +360,8 @@ class MeshScaffoldTests(unittest.TestCase):
                 1,
                 declared_universe={"airbox_hmax": 60e-9},
             ),
-            "Remesh: accepted - mode=shared_domain_manual_remesh, hmax=2.000e-08, order=P1, "
-            "scope=shared_domain, body_hmax=2.000e-08, airbox_hmax=6.000e-08",
+            "Remesh: accepted - mode=shared_domain_manual_remesh, maximum_element_size=2.000e-08, order=P1, "
+            "scope=shared_domain, body_maximum_element_size=2.000e-08, airbox_maximum_element_size=6.000e-08",
         )
 
     def test_remesh_cli_describes_shared_domain_local_object_overrides(self) -> None:
@@ -341,8 +378,8 @@ class MeshScaffoldTests(unittest.TestCase):
                     ]
                 },
             ),
-            "Remesh: accepted - mode=shared_domain_manual_remesh, hmax=2.000e-08, order=P1, "
-            "scope=shared_domain, body_hmax=2.000e-08, airbox_hmax=6.000e-08, local_object_overrides=1",
+            "Remesh: accepted - mode=shared_domain_manual_remesh, maximum_element_size=2.000e-08, order=P1, "
+            "scope=shared_domain, body_maximum_element_size=2.000e-08, airbox_maximum_element_size=6.000e-08, local_object_overrides=1",
         )
 
     def test_remesh_cli_shared_domain_manual_remesh_uses_component_aware_path(self) -> None:
