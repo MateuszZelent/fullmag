@@ -63,6 +63,9 @@ export default function ChartsViewport() {
   const colors = useMemo(() => {
     return yColumns.map((_key, i) => seriesColor(i));
   }, [yColumns]);
+  const rowCount = tp.scalarRows.length;
+  const selectedSeriesCount = chartState.activeSeriesKeys.length;
+  const renderedSeriesCount = yColumns.length;
 
   // Sampling cadence from execution plan metadata
   const samplingSummary = useMemo(
@@ -88,25 +91,34 @@ export default function ChartsViewport() {
         onStateChange={handleStateChange}
         quantityGroups={quantityGroups}
       />
-      <div className="flex items-center justify-between gap-3 border-b border-border/40 bg-card/20 px-3 py-2 text-[0.7rem]">
-        <div className="flex items-center gap-2">
-          <span className="rounded-md border border-border/30 bg-muted/30 px-2 py-1 font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-            Sampling
-          </span>
-          <span className="font-mono text-sm font-semibold text-foreground">
+      <div className="grid grid-cols-1 gap-2 border-b border-border/40 bg-card/25 px-3 py-2.5 text-[0.72rem] md:grid-cols-3">
+        <div className="rounded-md border border-border/40 bg-background/30 px-2.5 py-1.5">
+          <p className="text-[0.6rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">
+            Sampling cadence
+          </p>
+          <p className="mt-0.5 font-mono text-sm font-semibold text-foreground">
             {samplingSummary.cadenceLabel}
-          </span>
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="rounded-md border border-border/30 bg-muted/30 px-2 py-1 font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-            RAM rows
-          </span>
-          <span className="font-mono text-sm font-semibold text-foreground">
-            {tp.scalarRows.length.toLocaleString()}
-          </span>
-          <span className="text-muted-foreground/70">
-            samples in memory
-          </span>
+        <div className="rounded-md border border-border/40 bg-background/30 px-2.5 py-1.5">
+          <p className="text-[0.6rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">
+            Active series
+          </p>
+          <p className="mt-0.5 font-mono text-sm font-semibold text-foreground">
+            {selectedSeriesCount}
+            <span className="text-xs font-normal text-muted-foreground/70">
+              {" "}
+              selected / {renderedSeriesCount} rendered
+            </span>
+          </p>
+        </div>
+        <div className="rounded-md border border-border/40 bg-background/30 px-2.5 py-1.5">
+          <p className="text-[0.6rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">
+            Telemetry rows (RAM)
+          </p>
+          <p className="mt-0.5 font-mono text-sm font-semibold text-foreground">
+            {rowCount.toLocaleString()}
+          </p>
         </div>
       </div>
       <div className="relative flex-1 min-h-0 min-w-0">
@@ -119,7 +131,7 @@ export default function ChartsViewport() {
           uiRevisionKey={`x:${chartState.xColumn}|y:${yColumns.join(",")}`}
         />
         {/* Subtle overlay when no data yet */}
-        {tp.scalarRows.length < 1 && (
+        {rowCount < 1 && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             <div className="rounded-lg border border-border/30 bg-background/80 backdrop-blur-sm px-5 py-3 shadow-lg">
               <p className="text-sm font-medium text-muted-foreground">

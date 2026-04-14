@@ -13,8 +13,8 @@
  * falling back to the static catalog when groups are empty.
  */
 
-import { useCallback, useMemo, useState } from "react";
-import { Plus, X, ChevronDown, Info } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus, X, ChevronDown, Info, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +31,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   type ChartPresetId,
@@ -78,6 +79,7 @@ export default function ChartQuantitySelector({
 }: ChartQuantitySelectorProps) {
   const [addPopoverOpen, setAddPopoverOpen] = useState(false);
   const [unitLimitHint, setUnitLimitHint] = useState<string | null>(null);
+  const [seriesFilter, setSeriesFilter] = useState("");
   const multiDomain = domains.length > 1;
 
   // Use dynamic groups when available, otherwise fallback
@@ -142,6 +144,7 @@ export default function ChartQuantitySelector({
         };
       });
       setAddPopoverOpen(false);
+      setSeriesFilter("");
     },
     [onStateChange],
   );
@@ -160,7 +163,7 @@ export default function ChartQuantitySelector({
 
   // ── Available (not-yet-added) quantities ─────────────────────
 
-  const availableGroups = useMemo(() => {
+  const availableGroupsUnfiltered = useMemo(() => {
     const activeSet = new Set(chartState.activeSeriesKeys);
     return effectiveGroups
       .map((group) => ({
@@ -170,15 +173,45 @@ export default function ChartQuantitySelector({
       .filter((group) => group.items.length > 0);
   }, [chartState.activeSeriesKeys, effectiveGroups]);
 
-  const hasAvailable = availableGroups.length > 0;
+  const availableGroups = useMemo(() => {
+    const filter = seriesFilter.trim().toLowerCase();
+    if (!filter) return availableGroupsUnfiltered;
+    return availableGroupsUnfiltered
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => (
+          item.label.toLowerCase().includes(filter) ||
+          item.key.toLowerCase().includes(filter) ||
+          (item.unit ?? "").toLowerCase().includes(filter)
+        )),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [availableGroupsUnfiltered, seriesFilter]);
+
+  const hasAvailable = availableGroupsUnfiltered.length > 0;
+
+  useEffect(() => {
+    if (!addPopoverOpen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setAddPopoverOpen(false);
+        setSeriesFilter("");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [addPopoverOpen]);
 
   // ── Render ───────────────────────────────────────────────────
 
   return (
-    <div className="shrink-0 border-b border-border/30 bg-card/30">
+    <div className="shrink-0 border-b border-border/30 bg-gradient-to-b from-card/60 to-card/20 backdrop-blur-sm">
       {/* Row 1: Scope + Presets */}
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-border/15">
         {/* Scope selector */}
+        <span className="text-[0.58rem] font-bold uppercase tracking-[0.18em] text-muted-foreground/60">
+          Scope
+        </span>
         <TooltipProvider delayDuration={300}>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -289,33 +322,59 @@ export default function ChartQuantitySelector({
         </span>
 
         {/* Add quantity */}
-        {hasAvailable && (
-          <div className="relative">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-6 gap-1 px-2 text-[0.65rem] font-semibold border-dashed border-border/40 text-muted-foreground hover:text-foreground hover:border-primary/40"
-              onClick={() => setAddPopoverOpen(!addPopoverOpen)}
-            >
-              <Plus size={12} />
-              Add
-              <ChevronDown
-                size={10}
-                className={cn(
-                  "transition-transform",
-                  addPopoverOpen && "rotate-180",
-                )}
-              />
-            </Button>
-            {addPopoverOpen && (
+        <div className="relative">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasAvailable}
+            aria-label="Add chart series"
+            className="h-6 gap-1 px-2 text-[0.65rem] font-semibold border-dashed border-border/40 text-muted-foreground hover:text-foreground hover:border-primary/40 disabled:opacity-55"
+            onClick={() => {
+              if (!hasAvailable) return;
+              setAddPopoverOpen((prev) => {
+                const next = !prev;
+                if (!next) setSeriesFilter("");
+                return next;
+              });
+            }}
+          >
+            <Plus size={12} />
+            Add
+            <ChevronDown
+              size={10}
+              className={cn(
+                "transition-transform",
+                addPopoverOpen && "rotate-180",
+              )}
+            />
+          </Button>
+          {addPopoverOpen && (
               <>
                 {/* Backdrop */}
                 <div
                   className="fixed inset-0 z-40"
-                  onClick={() => setAddPopoverOpen(false)}
+                  onClick={() => {
+                    setAddPopoverOpen(false);
+                    setSeriesFilter("");
+                  }}
                 />
                 {/* Dropdown */}
-                <div className="absolute left-0 top-full z-50 mt-1.5 w-60 rounded-lg border border-border/50 bg-popover/95 backdrop-blur-xl shadow-xl shadow-black/20 overflow-hidden">
+                <div className="absolute left-0 top-full z-50 mt-1.5 w-72 rounded-lg border border-border/50 bg-popover/95 backdrop-blur-xl shadow-xl shadow-black/20 overflow-hidden">
+                  <div className="border-b border-border/30 p-2">
+                    <label className="sr-only" htmlFor="chart-series-filter">
+                      Filter chart quantities
+                    </label>
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+                      <Input
+                        id="chart-series-filter"
+                        value={seriesFilter}
+                        onChange={(event) => setSeriesFilter(event.target.value)}
+                        placeholder="Filter quantities…"
+                        className="h-8 border-border/40 bg-muted/20 pl-7 text-xs"
+                      />
+                    </div>
+                  </div>
                   <div className="max-h-[21.25rem] overflow-y-auto py-1">
                     {availableGroups.map((group) => (
                       <div key={group.category}>
@@ -351,11 +410,20 @@ export default function ChartQuantitySelector({
                         ))}
                       </div>
                     ))}
+                    {availableGroups.length === 0 && (
+                      <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                        No quantities match this filter.
+                      </div>
+                    )}
                   </div>
                 </div>
               </>
             )}
-          </div>
+        </div>
+        {!hasAvailable && (
+          <span role="status" className="text-[0.62rem] text-muted-foreground/70">
+            All available quantities are already selected.
+          </span>
         )}
         {unitLimitHint && (
           <span className="text-[0.62rem] text-amber-400/90">
@@ -388,6 +456,7 @@ export default function ChartQuantitySelector({
                 )}
                 <button
                   type="button"
+                  aria-label={`Remove ${entry?.label ?? key}`}
                   className="ml-0.5 rounded-sm p-0.5 opacity-40 hover:opacity-100 hover:bg-destructive/20 transition-all"
                   onClick={() => handleRemoveSeries(key)}
                   title={`Remove ${entry?.label ?? key}`}
@@ -397,6 +466,11 @@ export default function ChartQuantitySelector({
               </Badge>
             );
           })}
+          {chartState.activeSeriesKeys.length === 0 && (
+            <span className="rounded-md border border-dashed border-border/40 bg-muted/20 px-2 py-1 text-[0.62rem] text-muted-foreground">
+              No Y series selected — pick a preset or click Add.
+            </span>
+          )}
         </div>
       </div>
     </div>

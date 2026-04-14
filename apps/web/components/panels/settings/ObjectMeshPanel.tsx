@@ -115,6 +115,11 @@ function mapObjectMeshToOptions(
   if (!mesh) {
     return effective;
   }
+  const transitionGrowthText =
+    typeof mesh.transition_growth === "number" && Number.isFinite(mesh.transition_growth)
+      ? String(mesh.transition_growth)
+      : "";
+
   return {
     ...effective,
     hmax:
@@ -226,6 +231,13 @@ function buildCustomMeshState(
     sweepFaceMeshing?: string | null;
   },
 ): ScriptBuilderPerGeometryMeshEntry {
+  const transitionGrowthParsed =
+    options.transitionGrowth.trim().length > 0 &&
+    Number.isFinite(Number(options.transitionGrowth)) &&
+    Number(options.transitionGrowth) > 0
+      ? Number(options.transitionGrowth)
+      : null;
+
   return {
     mode: "custom",
     size_mode: options.sizeControlMode === "custom" ? "custom" : "predefined",
