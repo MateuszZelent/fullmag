@@ -85,7 +85,7 @@ export default function ChartQuantitySelector({
     () =>
       quantityGroups && quantityGroups.length > 0
         ? quantityGroups
-        : (FALLBACK_QUANTITY_GROUPS as unknown as ChartQuantityGroup[]),
+        : [...FALLBACK_QUANTITY_GROUPS],
     [quantityGroups],
   );
 

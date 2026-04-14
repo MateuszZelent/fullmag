@@ -37,8 +37,10 @@ function isMagnetizationAverageColumn(col: string): boolean {
   return col === "mx" || col === "my" || col === "mz";
 }
 
-const accessor = (row: ScalarRow, key: string): number =>
-  (row as unknown as Record<string, number>)[key] ?? 0;
+const accessor = (row: ScalarRow, key: string): number => {
+  const value = Reflect.get(row, key);
+  return typeof value === "number" ? value : 0;
+};
 
 // ─── Time auto-scaling ───────────────────────────────────────────────
 

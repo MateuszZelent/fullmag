@@ -131,7 +131,7 @@ function uniquePoints<T extends { point: Point3; value: number }>(points: T[], e
 
 function sortIntersectionLoop<T extends { point: Point3; value: number }>(points: T[], plane: SlicePlane): T[] {
   if (points.length <= 2) return points;
-  const projected = points.map((entry) => ({ ...entry, uv: project(entry.point, plane) }));
+  const projected = points.map((entry, index) => ({ index, uv: project(entry.point, plane) }));
   const centerU = projected.reduce((sum, entry) => sum + entry.uv[0], 0) / projected.length;
   const centerV = projected.reduce((sum, entry) => sum + entry.uv[1], 0) / projected.length;
   projected.sort(
@@ -139,7 +139,7 @@ function sortIntersectionLoop<T extends { point: Point3; value: number }>(points
       Math.atan2(left.uv[1] - centerV, left.uv[0] - centerU) -
       Math.atan2(right.uv[1] - centerV, right.uv[0] - centerU),
   );
-  return projected.map(({ uv: _uv, ...entry }) => entry as unknown as T);
+  return projected.map((entry) => points[entry.index]);
 }
 
 function finalizeRange(

@@ -1,7 +1,15 @@
 /* ── Binary preview frame decoder ──
- * Handles the FMVP binary websocket protocol for vector field payloads. */
+ * Handles the FMVP binary websocket protocol for vector field payloads.
+ *
+ * NOTE: Currently unused after the WS→HTTP polling migration.
+ * Retained for potential future binary transport (e.g. chunked HTTP, SSE). */
 
-import type { PreviewBinaryPayload, SessionState } from "./types";
+import type { SessionState } from "./types";
+
+interface PreviewBinaryPayload {
+  payloadId: number;
+  vectorFieldValues: Float64Array;
+}
 
 const PREVIEW_BINARY_FRAME_MAGIC = "FMVP";
 const PREVIEW_BINARY_FRAME_HEADER_LEN = 16;

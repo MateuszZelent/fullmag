@@ -90,9 +90,9 @@ const BORDER = "#313244";
 const TEXT = "#a6adc8";
 const TEXT_STRONG = "#cdd6f4";
 const GRID = "rgba(108, 112, 134, 0.08)";
-const DIVERGING = DIVERGING_PALETTE as unknown as string[];
-const POSITIVE = POSITIVE_PALETTE as unknown as string[];
-const NEGATIVE = SEQUENTIAL_BLUE_PALETTE as unknown as string[];
+const DIVERGING = [...DIVERGING_PALETTE];
+const POSITIVE = [...POSITIVE_PALETTE];
+const NEGATIVE = [...SEQUENTIAL_BLUE_PALETTE];
 const COOLWARM = [
   "#3b4cc0",
   "#6f92f3",
@@ -142,7 +142,7 @@ function colorForValue(
   const isMagnetization = !quantityId || quantityId === "m";
   if (isMagnetization && component !== "magnitude") {
     const t = max > min ? (value - min) / (max - min) : 0.5;
-    return paletteColor(t, COOLWARM as unknown as string[]);
+    return paletteColor(t, [...COOLWARM]);
   }
   if (isMagnetization && min === 0 && max === 1) {
     return paletteColor(value, POSITIVE);
@@ -447,7 +447,7 @@ export default function FemMeshSlice2DPlotly({
           color: [colorScale.min, colorScale.max],
           colorscale:
             isMagnetizationQuantity && effectiveComponent !== "magnitude"
-              ? (COOLWARM as unknown as string[])
+              ? [...COOLWARM]
               : colorScale.mode === "diverging"
               ? DIVERGING
               : colorScale.mode === "negative"

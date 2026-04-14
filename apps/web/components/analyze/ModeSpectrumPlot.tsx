@@ -128,13 +128,13 @@ export default function ModeSpectrumPlot({
         type: "scatter",
         mode: "markers",
         name: "Modes",
-        customdata: customData as unknown as Plotly.Datum[],
+        customdata: customData as Plotly.Datum[],
         text: hoverText,
         hovertemplate: "%{text}<extra></extra>",
         marker: {
           color: modes.map((m) =>
             m.index === selectedMode ? C.sel : polColor(m.dominant_polarization),
-          ) as unknown as string,
+          ),
           size: modes.map((m) => (m.index === selectedMode ? 14 : 9)),
           line: { color: "rgba(8,12,24,0.5)", width: 1 },
           symbol: "circle",

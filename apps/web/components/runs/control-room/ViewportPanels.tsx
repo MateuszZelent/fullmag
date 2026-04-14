@@ -388,9 +388,9 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       ...ctx.femMeshData,
       fieldData: {
         ...fld,
-        x: fld.x ? Float64Array.from(fld.x, (v) => v * scaleFactor) as unknown as ArrayLike<number> : null,
-        y: fld.y ? Float64Array.from(fld.y, (v) => v * scaleFactor) as unknown as ArrayLike<number> : null,
-        z: fld.z ? Float64Array.from(fld.z, (v) => v * scaleFactor) as unknown as ArrayLike<number> : null,
+        x: fld.x ? Float64Array.from(fld.x, (v) => v * scaleFactor) : null,
+        y: fld.y ? Float64Array.from(fld.y, (v) => v * scaleFactor) : null,
+        z: fld.z ? Float64Array.from(fld.z, (v) => v * scaleFactor) : null,
       },
     } as typeof ctx.femMeshData;
   }, [ctx.femMeshData, scaleFactor]);

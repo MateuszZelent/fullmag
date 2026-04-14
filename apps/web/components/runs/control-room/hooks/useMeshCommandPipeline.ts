@@ -274,7 +274,7 @@ export function useMeshCommandPipeline({
     setPreviewPostInFlight(true);
     setPreviewMessage(`Switching to ${nextSelection.quantity}`);
     try {
-      await liveApi.updateDisplaySelection(nextSelection as unknown as Record<string, unknown>);
+      await liveApi.updateDisplaySelection(nextSelection);
     }
     catch (e) {
       setOptimisticDisplaySelection(null);

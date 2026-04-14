@@ -2,6 +2,8 @@
 
 import type { LaunchEntryKind, LaunchIntent, WorkspaceStage } from "./launch-intent";
 import { resolveApiBase } from "@/lib/apiBase";
+import { apiGet } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/errors";
 import { recordFrontendDebugEvent } from "./navigation-debug";
 
 type JsonRecord = Record<string, unknown>;
@@ -58,28 +60,24 @@ export async function detectLiveSessionIntent(): Promise<DetectedLiveSession | n
 
   const promise = (async (): Promise<DetectedLiveSession | null> => {
   recordFrontendDebugEvent("live-intent", "bootstrap_fetch_start", { baseUrl });
-  let response: Response;
-
+  let payload: unknown;
   try {
-    response = await fetch(`${baseUrl}/v1/live/current/bootstrap`, { cache: "no-store" });
-  } catch {
+    payload = await apiGet<unknown>(`${baseUrl}/v1/live/current/bootstrap`);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      recordFrontendDebugEvent("live-intent", "bootstrap_fetch_not_found", { baseUrl });
+      return null;
+    }
+    if (error instanceof ApiError) {
+      recordFrontendDebugEvent("live-intent", "bootstrap_fetch_http_error", {
+        baseUrl,
+        status: error.status,
+      });
+      return null;
+    }
     recordFrontendDebugEvent("live-intent", "bootstrap_fetch_network_error", { baseUrl });
     return null;
   }
-
-  if (response.status === 404) {
-    recordFrontendDebugEvent("live-intent", "bootstrap_fetch_not_found", { baseUrl });
-    return null;
-  }
-  if (!response.ok) {
-    recordFrontendDebugEvent("live-intent", "bootstrap_fetch_http_error", {
-      baseUrl,
-      status: response.status,
-    });
-    return null;
-  }
-
-  const payload = (await response.json().catch(() => null)) as unknown;
   const root = asRecord(payload);
   if (!root) {
     return null;

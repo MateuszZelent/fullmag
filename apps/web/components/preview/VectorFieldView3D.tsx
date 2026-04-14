@@ -165,11 +165,13 @@ function settingsToPreset(state: Settings): VisualizationPresetFdmState {
 }
 
 function loadSettings(): Settings {
+  const rawSampling = loadEnum(STORAGE_KEYS.voxelSampling, ["1", "2", "4"], "1");
+  const sampling: VoxelSampling = rawSampling === "2" ? 2 : rawSampling === "4" ? 4 : 1;
   return {
     quality: loadEnum(STORAGE_KEYS.quality, ["low", "high", "ultra"], "high"),
     renderMode: loadEnum(STORAGE_KEYS.renderMode, ["glyph", "voxel"], "glyph"),
     voxelColorMode: loadEnum(STORAGE_KEYS.voxelColorMode, ["orientation", "x", "y", "z"], "orientation"),
-    sampling: loadEnum(STORAGE_KEYS.voxelSampling, ["1", "2", "4"], "1") as unknown as VoxelSampling,
+    sampling,
     brightness: loadClamped(STORAGE_KEYS.brightness, 1.5, 0.3, 3.0),
     voxelOpacity: loadClamped(STORAGE_KEYS.voxelOpacity, 0.5, 0.15, 0.95),
     voxelGap: loadClamped(STORAGE_KEYS.voxelGap, 0.14, 0.02, 0.42),

@@ -2,8 +2,8 @@
  * Transport Contract v2 — Layer 10
  *
  * Canonical wire-level message and command envelope types for the
- * WebSocket transport between the control-room frontend and the
- * Rust control-plane API.
+ * transport between the control-room frontend and the
+ * Rust control-plane API (currently HTTP polling, historically WebSocket).
  *
  * These types unify all command/response paths so that every action
  * from ribbon, inspector, command palette, and context menu maps to
@@ -19,7 +19,7 @@
 // ── Workspace bootstrap ──────────────────────────────────────
 
 /**
- * Payload returned on initial WebSocket handshake or HTTP bootstrap.
+ * Payload returned on HTTP bootstrap (or initial handshake).
  * Contains everything the frontend needs to hydrate.
  */
 export interface WorkspaceBootstrapResponse {
@@ -58,7 +58,7 @@ export type MeshBuildPhase =
   | "ready"
   | "failed";
 
-// ── Inbound WebSocket messages ───────────────────────────────
+// ── Inbound messages ─────────────────────────────────────────
 
 /** Discriminated‐union message pushed from backend → frontend. */
 export type RuntimeWsMessage =

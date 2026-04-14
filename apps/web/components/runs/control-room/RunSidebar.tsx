@@ -40,7 +40,7 @@ import { parseResultNodeContext } from "@/features/analyze/model/resultNodeConte
 import { resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import type { StudyPipelineDocument } from "@/lib/study-builder/types";
-import { resolveApiBase } from "@/lib/apiBase";
+import { currentLiveApiClient } from "@/lib/liveApiClient";
 import type { EigenModeSummary } from "@/components/analyze/eigenTypes";
 
 type TreeFilterScope = "all" | "objects" | "mesh" | "physics" | "results";
@@ -189,10 +189,9 @@ export default function RunSidebar() {
     let cancelled = false;
     (async () => {
       try {
-        const base = resolveApiBase();
-        const res = await fetch(`${base}/v1/live/current/eigen/spectrum`, { cache: "no-store" });
-        if (!res.ok || cancelled) return;
-        const data = (await res.json()) as { modes?: EigenModeSummary[] };
+        const client = currentLiveApiClient();
+        const data = (await client.fetchEigenSpectrum()) as { modes?: EigenModeSummary[] };
+        if (cancelled) return;
         if (!cancelled && Array.isArray(data.modes)) {
           setSpectrumModes(data.modes);
         }
@@ -372,7 +371,7 @@ export default function RunSidebar() {
       return {};
     }
     const materialized = materializeStudyPipeline(
-      document as unknown as StudyPipelineDocument,
+      document as StudyPipelineDocument,
     );
     const entries: Array<[string, number[]]> = [];
     const collectEntries = (mapEntries: typeof materialized.map): void => {

@@ -1,7 +1,7 @@
 /**
  * Transport metrics for session-runtime diagnostics.
  *
- * Tracks SSE/WebSocket connection health, latency, and throughput.
+ * Tracks polling connection health, latency, and throughput.
  */
 
 export interface TransportMetrics {

@@ -14,6 +14,17 @@ interface Column {
   format: (v: number) => string;
 }
 
+function numericCell(row: ScalarRow, key: string): number {
+  const value = Reflect.get(row, key);
+  return typeof value === "number" ? value : 0;
+}
+
+function textCell(row: ScalarRow, key: string): string {
+  const value = Reflect.get(row, key);
+  if (value == null) return "";
+  return String(value);
+}
+
 function fmtFloat(v: number): string {
   if (!Number.isFinite(v)) return "—";
   return v.toFixed(6);
@@ -45,8 +56,8 @@ export default function ScalarTable({ rows, quantities = [] }: ScalarTableProps)
   const sorted = useMemo(() => {
     const copy = [...rows];
     copy.sort((a, b) => {
-      const va = (a as unknown as Record<string, number>)[sortKey] ?? 0;
-      const vb = (b as unknown as Record<string, number>)[sortKey] ?? 0;
+      const va = numericCell(a, sortKey);
+      const vb = numericCell(b, sortKey);
       return sortAsc ? va - vb : vb - va;
     });
     return copy;
@@ -66,7 +77,7 @@ export default function ScalarTable({ rows, quantities = [] }: ScalarTableProps)
 
   const handleCopyCSV = useCallback(() => {
     const header = columns.map((c) => c.label).join("\t");
-    const body = rows.map((r) => columns.map((c) => String((r as unknown as Record<string, number>)[c.key] ?? "")).join("\t")).join("\n");
+    const body = rows.map((r) => columns.map((c) => textCell(r, c.key)).join("\t")).join("\n");
     void navigator.clipboard.writeText(`${header}\n${body}`);
   }, [columns, rows]);
 
@@ -121,7 +132,7 @@ export default function ScalarTable({ rows, quantities = [] }: ScalarTableProps)
               <tr key={row.step} className="border-b border-border/20 last:border-0 hover:bg-muted/10 data-[latest=true]:bg-primary/5 font-mono" data-latest={i === sorted.length - 1}>
                 {columns.map((col) => (
                   <td key={col.key} className="p-2 whitespace-nowrap">
-                    {col.format((row as unknown as Record<string, number>)[col.key] as number)}
+                    {col.format(numericCell(row, col.key))}
                   </td>
                 ))}
               </tr>

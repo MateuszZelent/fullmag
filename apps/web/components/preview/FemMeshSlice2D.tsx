@@ -62,9 +62,9 @@ const EMPTY = "rgba(205, 214, 244, 0.08)"; /* Catppuccin Text */
 const PANEL = "rgba(24, 24, 37, 0.88)";
 const PANEL_SOFT = "rgba(30, 30, 46, 0.76)";
 const ACCENT_LINE = "rgba(137, 180, 250, 0.4)";
-const DIVERGING = DIVERGING_PALETTE as unknown as string[];
-const POSITIVE = POSITIVE_PALETTE as unknown as string[];
-const NEGATIVE = SEQUENTIAL_BLUE_PALETTE as unknown as string[];
+const DIVERGING = [...DIVERGING_PALETTE];
+const POSITIVE = [...POSITIVE_PALETTE];
+const NEGATIVE = [...SEQUENTIAL_BLUE_PALETTE];
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));

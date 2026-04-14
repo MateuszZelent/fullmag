@@ -124,6 +124,7 @@ async fn main() {
             get(get_current_live_bootstrap),
         )
         .route("/v1/live/current/state", get(get_current_live_state))
+        .route("/v1/live/current/poll", get(get_current_live_poll))
         .route("/v1/live/current/events", get(get_current_live_events))
         .route("/v1/live/current/publish", post(publish_current_live_state))
         .route(
@@ -587,6 +588,25 @@ async fn get_current_live_state(State(state): State<Arc<AppState>>) -> Result<Re
     get_current_live_bootstrap(State(state)).await
 }
 
+async fn get_current_live_poll(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<CurrentLivePollQuery>,
+) -> Result<Response, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let Some(snapshot) = guard.as_ref() else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    if query
+        .since_version
+        .is_some_and(|since_version| since_version >= snapshot.state_version)
+    {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    let scalar_rows_delta_start = query.scalar_rows_total.unwrap_or(0);
+    let json = serialize_current_live_poll_response(snapshot, scalar_rows_delta_start)?;
+    Ok(([(CONTENT_TYPE, "application/json")], json).into_response())
+}
+
 /// `GET /v1/live/current/scalars` — return the full scalar history for the
 /// current workspace.  The frontend fetches this once on tab open and then
 /// appends WS chart_state deltas.
@@ -839,7 +859,10 @@ async fn publish_current_live_state(
     };
     let preview_ms = preview_start.elapsed().as_micros();
     let serialize_start = std::time::Instant::now();
-    let session_state_messages = {
+    let ws_subscribers = state.current_live_events.receiver_count();
+    let session_state_messages = if ws_subscribers == 0 {
+        Vec::new()
+    } else {
         // Compute delta: send only rows added since the last WS broadcast.
         // Track the cursor and quantities hash so we avoid re-sending stale data.
         let scalar_delta_start = next.scalar_rows_ws_cursor;
@@ -912,7 +935,7 @@ async fn publish_current_live_state(
     // Lazy memoization: bump state version and only rebuild full JSON snapshot
     // when requested by HTTP endpoints (bootstrap / state).
     next.state_version = next.state_version.wrapping_add(1);
-    let current_state_version = next.state_version;
+    let _current_state_version = next.state_version;
     *current = Some(next);
     drop(current);
 
@@ -3164,6 +3187,7 @@ fn serialize_current_live_session_event(
             preview_config,
             preview,
             step_update_v2,
+            state_version: snapshot.state_version,
         },
     })
     .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
@@ -3196,13 +3220,46 @@ pub(crate) fn serialize_current_live_response(
             .then_some(snapshot.preview.as_ref())
             .flatten(),
         step_update_v2,
+        state_version: snapshot.state_version,
     })
     .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
+}
+
+fn serialize_current_live_poll_response(
+    snapshot: &SessionStateResponse,
+    scalar_rows_delta_start: usize,
+) -> Result<String, ApiError> {
+    let step_update_v2 = snapshot.build_step_update_v2();
+    let delta_start = scalar_rows_delta_start.min(snapshot.scalar_rows.len());
+    serde_json::to_string(&SessionStateResponseView {
+        session: &snapshot.session,
+        run: snapshot.run.as_ref(),
+        live_state: snapshot.live_state.as_ref(),
+        runtime_status: &snapshot.runtime_status,
+        metadata: snapshot.metadata.as_ref(),
+        mesh_workspace: snapshot.mesh_workspace.as_ref(),
+        stage_execution: snapshot.stage_execution.as_ref(),
+        scene_document: snapshot.scene_document.as_ref(),
+        scalar_rows: &snapshot.scalar_rows[delta_start..],
+        scalar_rows_total: snapshot.scalar_rows.len(),
+        engine_log: &snapshot.engine_log,
+        quantities: &snapshot.quantities,
+        fem_mesh: snapshot.fem_mesh.as_ref(),
+        latest_fields: &snapshot.latest_fields,
+        artifacts: &snapshot.artifacts,
+        display_selection: &snapshot.display_selection,
+        preview_config: &snapshot.preview_config,
+        preview: snapshot.preview.as_ref(),
+        step_update_v2,
+        state_version: snapshot.state_version,
+    })
+    .map_err(|error| ApiError::internal(format!("failed to serialize poll state: {}", error)))
 }
 
 /// Read from AppState's live state (read lock) and serialize the full public
 /// snapshot.  Used for lazy memoization instead of serializing inline during
 /// publish while holding the write lock.
+#[allow(dead_code)]
 async fn serialize_current_live_response_from_state(
     state: &AppState,
 ) -> Result<String, ApiError> {

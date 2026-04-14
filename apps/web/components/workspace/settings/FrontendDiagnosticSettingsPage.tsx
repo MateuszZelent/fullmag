@@ -66,7 +66,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function flattenFlags(input: Record<string, unknown>, prefix = ""): FlagEntry[] {
+function flattenFlags(input: unknown, prefix = ""): FlagEntry[] {
+  if (!isRecord(input)) return [];
   const entries: FlagEntry[] = [];
   for (const [key, value] of Object.entries(input)) {
     const path = prefix ? `${prefix}.${key}` : key;
@@ -92,9 +93,9 @@ function flattenFlags(input: Record<string, unknown>, prefix = ""): FlagEntry[] 
   return entries;
 }
 
-function setByPath(target: Record<string, unknown>, path: string, nextValue: Primitive): Record<string, unknown> {
+function setByPath<T extends object>(target: T, path: string, nextValue: Primitive): T {
   const keys = path.split(".");
-  const root: Record<string, unknown> = structuredClone(target);
+  const root: Record<string, unknown> = structuredClone(target) as Record<string, unknown>;
   let cursor: Record<string, unknown> = root;
   for (let index = 0; index < keys.length - 1; index += 1) {
     const key = keys[index];
@@ -105,7 +106,7 @@ function setByPath(target: Record<string, unknown>, path: string, nextValue: Pri
     cursor = cursor[key] as Record<string, unknown>;
   }
   cursor[keys[keys.length - 1]] = nextValue;
-  return root;
+  return root as T;
 }
 
 function enforceHardConstraints(next: FrontendDiagnosticFlags): FrontendDiagnosticFlags {
@@ -126,7 +127,7 @@ export default function FrontendDiagnosticSettingsPage() {
   );
 
   const grouped = useMemo(() => {
-    const flat = flattenFlags(draft as unknown as Record<string, unknown>);
+    const flat = flattenFlags(draft);
     const bySection = new Map<string, FlagEntry[]>();
     for (const entry of flat) {
       const current = bySection.get(entry.section) ?? [];
@@ -252,11 +253,7 @@ export default function FrontendDiagnosticSettingsPage() {
                                 disabled={lock}
                                 onChange={(event) => {
                                   setDraft((prev) =>
-                                    setByPath(
-                                      prev as unknown as Record<string, unknown>,
-                                      entry.path,
-                                      event.target.checked,
-                                    ) as FrontendDiagnosticFlags,
+                                    setByPath(prev, entry.path, event.target.checked),
                                   );
                                 }}
                               />
@@ -269,11 +266,7 @@ export default function FrontendDiagnosticSettingsPage() {
                               disabled={lock}
                               onChange={(event) => {
                                 setDraft((prev) =>
-                                  setByPath(
-                                    prev as unknown as Record<string, unknown>,
-                                    entry.path,
-                                    event.target.value,
-                                  ) as FrontendDiagnosticFlags,
+                                  setByPath(prev, entry.path, event.target.value),
                                 );
                               }}
                             >
@@ -295,11 +288,7 @@ export default function FrontendDiagnosticSettingsPage() {
                                 const parsed = raw.length === 0 ? null : Number(raw);
                                 const nextValue = parsed == null || Number.isNaN(parsed) ? null : parsed;
                                 setDraft((prev) =>
-                                  setByPath(
-                                    prev as unknown as Record<string, unknown>,
-                                    entry.path,
-                                    nextValue,
-                                  ) as FrontendDiagnosticFlags,
+                                  setByPath(prev, entry.path, nextValue),
                                 );
                               }}
                             />
@@ -311,11 +300,7 @@ export default function FrontendDiagnosticSettingsPage() {
                               disabled={lock}
                               onChange={(event) => {
                                 setDraft((prev) =>
-                                  setByPath(
-                                    prev as unknown as Record<string, unknown>,
-                                    entry.path,
-                                    event.target.value,
-                                  ) as FrontendDiagnosticFlags,
+                                  setByPath(prev, entry.path, event.target.value),
                                 );
                               }}
                             />

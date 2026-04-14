@@ -1737,7 +1737,7 @@ export function normalizeSessionState(
   }
 
   // ── Merge step_update_v2.scalars into scalar_rows for live chart population.
-  // The backend emits `step_update_v2` on every live WebSocket step update;
+  // The backend emits `step_update_v2` on every live step update;
   // `scalars` contains the scalar row whenever `scalar_row_due` is true in the
   // Rust runner. Without this merge the chart stays empty during a live run
   // because no full `raw.scalar_rows` snapshot arrives until the session is over.
@@ -1833,6 +1833,8 @@ export function normalizeSessionState(
     : null;
 
   return {
+    state_version:
+      typeof raw.state_version === "number" ? raw.state_version : undefined,
     session_protocol_version:
       typeof raw.session_protocol_version === "string" ? raw.session_protocol_version : undefined,
     capability_profile_version:

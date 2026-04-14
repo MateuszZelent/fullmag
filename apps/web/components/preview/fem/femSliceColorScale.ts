@@ -98,9 +98,9 @@ export function smartAutoScale(
 
 // ── Palette helpers ──────────────────────────────────────────────
 
-const DIVERGING = DIVERGING_PALETTE as unknown as string[];
-const POSITIVE = POSITIVE_PALETTE as unknown as string[];
-const NEGATIVE = SEQUENTIAL_BLUE_PALETTE as unknown as string[];
+const DIVERGING = [...DIVERGING_PALETTE];
+const POSITIVE = [...POSITIVE_PALETTE];
+const NEGATIVE = [...SEQUENTIAL_BLUE_PALETTE];
 
 export function paletteForMode(mode: PaletteMode): string[] {
   switch (mode) {

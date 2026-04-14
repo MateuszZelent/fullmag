@@ -80,6 +80,16 @@ export default function DispersionBranchPlot({
         const color = isSelected ? C.sel : BRANCH_COLORS[idx % BRANCH_COLORS.length];
         const vg = groupVelocity(sorted);
         const vgLabel = fmtVg(vg);
+        const hoverText = sorted.map(
+          (r) =>
+            `<b>Mode ${r.modeIndex}</b><br>` +
+            `|k| = ${kMag(r).toExponential(4)} m⁻¹<br>` +
+            `f = ${(r.frequencyHz / 1e9).toFixed(4)} GHz<br>` +
+            `kx = ${r.kx.toExponential(3)}<br>` +
+            `ky = ${r.ky.toExponential(3)}<br>` +
+            `kz = ${r.kz.toExponential(3)}<br>` +
+            `vg ≈ ${vgLabel}`,
+        );
 
         return {
           x: sorted.map(kMag),
@@ -87,7 +97,7 @@ export default function DispersionBranchPlot({
           type: "scatter" as const,
           mode: sorted.length > 1 ? ("lines+markers" as const) : ("markers" as const),
           name: `M${modeIndex}`,
-          customdata: sorted.map((r) => [r.modeIndex, r.kx, r.ky, r.kz, vgLabel] as unknown as Plotly.Datum),
+          text: hoverText,
           line: { color, width: isSelected ? 2.8 : 1.6, dash: "solid" as const },
           marker: {
             color,
@@ -98,15 +108,7 @@ export default function DispersionBranchPlot({
             },
             symbol: "circle" as const,
           },
-          hovertemplate:
-            "<b>Mode %{customdata[0]}</b><br>" +
-            "|k| = %{x:.4e} m⁻¹<br>" +
-            "f = %{y:.4f} GHz<br>" +
-            "kx = %{customdata[1]:.3e}<br>" +
-            "ky = %{customdata[2]:.3e}<br>" +
-            "kz = %{customdata[3]:.3e}<br>" +
-            "vg ≈ %{customdata[4]}" +
-            "<extra></extra>",
+          hovertemplate: "%{text}<extra></extra>",
           showlegend: sorted.length > 1 || grouped.size <= 12,
         };
       });

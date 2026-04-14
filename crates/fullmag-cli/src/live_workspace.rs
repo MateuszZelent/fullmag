@@ -166,7 +166,7 @@ pub(crate) struct CurrentLivePublisher {
     wake_tx: mpsc::SyncSender<()>,
 }
 
-const CURRENT_LIVE_MIN_PUBLISH_INTERVAL: Duration = Duration::from_millis(1500);
+const CURRENT_LIVE_MIN_PUBLISH_INTERVAL: Duration = Duration::from_millis(1000);
 
 impl CurrentLivePublisher {
     pub fn spawn(session_id: &str) -> Self {
@@ -406,6 +406,7 @@ pub(crate) fn upsert_cached_preview_field(
     state.pending_preview_fields.insert(field.clone());
 }
 
+#[allow(dead_code)]
 pub(crate) fn merge_cached_preview_fields_from_update(
     state: &mut LocalLiveWorkspaceState,
     update: &fullmag_runner::StepUpdate,

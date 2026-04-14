@@ -23,6 +23,7 @@ import type {
   MeshWorkspaceState,
   ScriptBuilderState,
 } from "@/lib/useSessionStream";
+import type { SessionState } from "@/lib/session/types";
 
 // Empty stable arrays to avoid unnecessary re-renders
 const EMPTY_SCALAR_ROWS: ScalarRow[] = [];
@@ -55,7 +56,7 @@ export interface NormalizedSessionState {
  * into a structured, typed read-model.
  */
 export function deriveSessionReadModel(
-  state: Record<string, unknown> | null,
+  state: SessionState | null,
   connection: "connecting" | "connected" | "disconnected",
 ): NormalizedSessionState {
   if (!state) {
@@ -80,32 +81,31 @@ export function deriveSessionReadModel(
     };
   }
 
-  const session = (state.session as SessionManifest | null) ?? null;
-  const run = (state.run as RunManifest | null) ?? null;
+  const session = state.session ?? null;
+  const run = state.run ?? null;
   const metadata = (state.metadata as Record<string, unknown> | null) ?? null;
-  const liveState = (state.live_state as LiveState | null) ?? null;
-  const scalarRows = (state.scalar_rows as ScalarRow[] | null) ?? EMPTY_SCALAR_ROWS;
-  const engineLog = (state.engine_log as EngineLogEntry[] | null) ?? EMPTY_ENGINE_LOG;
-  const quantities = (state.quantities as QuantityDescriptor[] | null) ?? EMPTY_QUANTITIES;
-  const artifacts = (state.artifacts as ArtifactEntry[] | null) ?? EMPTY_ARTIFACTS;
-  const femMesh = (state.fem_mesh as FemLiveMesh | null) ?? liveState?.fem_mesh ?? null;
-  const preview = (state.preview as PreviewState | null) ?? null;
-  const scriptBuilder = (state.script_builder as ScriptBuilderState | null) ?? null;
-  const runtimeStatus = (state.runtime_status as RuntimeStatusState | null) ?? null;
-  const commandStatus = (state.command_status as CommandStatus | null) ?? null;
-  const meshWorkspace = (state.mesh_workspace as MeshWorkspaceState | null) ?? null;
-  const stepUpdateV2 = (state.step_update_v2 as StepUpdateV2 | null) ?? null;
+  const liveState = state.live_state ?? null;
+  const scalarRows = state.scalar_rows ?? EMPTY_SCALAR_ROWS;
+  const engineLog = state.engine_log ?? EMPTY_ENGINE_LOG;
+  const quantities = state.quantities ?? EMPTY_QUANTITIES;
+  const artifacts = state.artifacts ?? EMPTY_ARTIFACTS;
+  const femMesh = state.fem_mesh ?? liveState?.fem_mesh ?? null;
+  const preview = state.preview ?? null;
+  const scriptBuilder = state.script_builder ?? null;
+  const runtimeStatus = state.runtime_status ?? null;
+  const commandStatus = state.command_status ?? null;
+  const meshWorkspace = state.mesh_workspace ?? null;
+  const stepUpdateV2 = state.step_update_v2 ?? null;
 
   const workspaceStatus =
     runtimeStatus?.code ?? liveState?.status ?? session?.status ?? run?.status ?? "idle";
 
   // Detect FEM backend
   const planSummary = session?.plan_summary as Record<string, unknown> | undefined;
+  const sceneDocument = state.scene_document as { study?: { backend?: unknown } } | null;
   const scriptBackendHint =
     (typeof scriptBuilder?.backend === "string" ? scriptBuilder.backend : null) ??
-    (typeof (state.scene_document as Record<string, unknown> | null)?.study === "object"
-      ? (((state.scene_document as Record<string, unknown>)?.study as Record<string, unknown>)?.backend as string)
-      : null) ??
+    (typeof sceneDocument?.study?.backend === "string" ? sceneDocument.study.backend : null) ??
     null;
   const resolvedBackend =
     (typeof planSummary?.resolved_backend === "string" ? planSummary.resolved_backend : null) ??

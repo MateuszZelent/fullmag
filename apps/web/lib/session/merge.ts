@@ -4,11 +4,9 @@
 import type {
   EngineLogEntry,
   PreviewState,
-  RuntimeCurrentLiveEvent,
   ScalarRow,
   SessionState,
 } from "./types";
-import { normalizeDisplaySelection, normalizeMeshCommandTarget } from "./normalize";
 
 function lastScalarStep(rows: ScalarRow[]): number {
   return rows.length > 0 ? rows[rows.length - 1]?.step ?? -1 : -1;
@@ -286,84 +284,12 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
   if (!merged.stage_execution && prev.stage_execution) {
     merged.stage_execution = prev.stage_execution;
   }
+  if (
+    typeof prev.state_version === "number" &&
+    (typeof merged.state_version !== "number" || merged.state_version < prev.state_version)
+  ) {
+    merged.state_version = prev.state_version;
+  }
 
   return merged;
-}
-
-export function mergeCommandStatusEvent(
-  prev: SessionState | null,
-  raw: RuntimeCurrentLiveEvent,
-): SessionState | null {
-  if (!prev || !prev.session || prev.session.session_id !== raw.session_id) {
-    return prev;
-  }
-
-  if (raw.kind === "command_ack") {
-    const displaySelection =
-      normalizeDisplaySelection(raw.display_selection) ?? prev.display_selection;
-    return {
-      ...prev,
-      command_status: {
-        session_id: raw.session_id,
-        seq: Number(raw.seq ?? 0),
-        command_id: String(raw.command_id ?? ""),
-        command_kind: String(raw.command_kind ?? ""),
-        state: "acknowledged",
-        issued_at_unix_ms: Number(raw.issued_at_unix_ms ?? 0),
-        completed_at_unix_ms: null,
-        completion_state: null,
-        reason: null,
-        display_selection: displaySelection,
-        mesh_target: normalizeMeshCommandTarget(raw.mesh_target),
-        mesh_reason:
-          typeof raw.mesh_reason === "string" && raw.mesh_reason.trim().length > 0
-            ? raw.mesh_reason
-            : null,
-      },
-    };
-  }
-
-  if (raw.kind === "command_rejected") {
-    return {
-      ...prev,
-      command_status: {
-        session_id: raw.session_id,
-        seq: null,
-        command_id: String(raw.command_id ?? ""),
-        command_kind: String(raw.command_kind ?? ""),
-        state: "rejected",
-        issued_at_unix_ms: Number(raw.issued_at_unix_ms ?? 0),
-        completed_at_unix_ms: null,
-        completion_state: null,
-        reason: String(raw.reason ?? ""),
-        display_selection: prev.display_selection,
-        mesh_target: normalizeMeshCommandTarget(raw.mesh_target),
-        mesh_reason:
-          typeof raw.mesh_reason === "string" && raw.mesh_reason.trim().length > 0
-            ? raw.mesh_reason
-            : null,
-      },
-    };
-  }
-
-  return {
-    ...prev,
-    command_status: {
-      session_id: raw.session_id,
-      seq: Number(raw.seq ?? 0),
-      command_id: String(raw.command_id ?? ""),
-      command_kind: String(raw.command_kind ?? ""),
-      state: "completed",
-      issued_at_unix_ms: null,
-      completed_at_unix_ms: Number(raw.completed_at_unix_ms ?? 0),
-      completion_state: String(raw.completion_state ?? ""),
-      reason: null,
-      display_selection: prev.display_selection,
-      mesh_target: normalizeMeshCommandTarget(raw.mesh_target),
-      mesh_reason:
-        typeof raw.mesh_reason === "string" && raw.mesh_reason.trim().length > 0
-          ? raw.mesh_reason
-          : null,
-    },
-  };
 }

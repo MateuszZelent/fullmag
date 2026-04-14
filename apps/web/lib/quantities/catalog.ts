@@ -665,14 +665,14 @@ function wireToDescriptor(w: WireQuantityDescriptor): QuantityDescriptor {
  * Falls back to the static catalog on failure.
  */
 export async function fetchQuantityCatalog(
-  baseUrl: string = "",
+  _baseUrl: string = "",
 ): Promise<readonly QuantityDescriptor[]> {
   try {
-    const resp = await fetch(`${baseUrl}/v1/quantities/catalog`);
-    if (!resp.ok) return CATALOG;
-    const body: WireCatalogResponse = await resp.json();
+    const client = currentLiveApiClient();
+    const body = (await client.fetchQuantitiesCatalog()) as WireCatalogResponse;
     return body.quantities.map(wireToDescriptor);
   } catch {
     return CATALOG;
   }
 }
+import { currentLiveApiClient } from "@/lib/liveApiClient";

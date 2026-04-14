@@ -5,6 +5,12 @@ import { X, Monitor, Cpu, Sliders, Keyboard, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import {
+  getLivePollIntervalMs,
+  LIVE_POLL_INTERVAL_MAX_MS,
+  LIVE_POLL_INTERVAL_MIN_MS,
+  setLivePollIntervalMs,
+} from "@/lib/livePolling";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -108,6 +114,10 @@ function AppearanceTab() {
 }
 
 function RuntimeTab() {
+  const [pollIntervalMs, setPollIntervalMsState] = useState<number>(() =>
+    getLivePollIntervalMs(),
+  );
+
   return (
     <div className="flex flex-col gap-5">
       <SettingsSection title="Backend connection">
@@ -120,11 +130,15 @@ function RuntimeTab() {
         <SettingsRow label="Polling interval (ms)" description="Live state refresh rate">
           <Input
             type="number"
-            defaultValue={250}
-            min={50}
-            max={5000}
+            value={pollIntervalMs}
+            min={LIVE_POLL_INTERVAL_MIN_MS}
+            max={LIVE_POLL_INTERVAL_MAX_MS}
             step={50}
             className="w-24 h-8 bg-muted/40 border-border/60 text-[0.78rem]"
+            onChange={(event) => {
+              const normalized = setLivePollIntervalMs(Number(event.target.value));
+              setPollIntervalMsState(normalized);
+            }}
           />
         </SettingsRow>
       </SettingsSection>

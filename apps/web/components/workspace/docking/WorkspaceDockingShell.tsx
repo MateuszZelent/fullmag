@@ -36,7 +36,11 @@ import {
 function parseDockLayout(model: DockLayoutModel | null, preset: DockResponsivePreset): IJsonModel {
   if (model) {
     try {
-      return model as unknown as IJsonModel;
+      const candidate = model as Partial<IJsonModel>;
+      if (candidate.layout && typeof candidate.layout === "object") {
+        return candidate as IJsonModel;
+      }
+      return createDefaultDockLayout(preset);
     } catch {
       return createDefaultDockLayout(preset);
     }
@@ -90,7 +94,7 @@ export default function WorkspaceDockingShell() {
   const onModelChange = useCallback(
     (nextModel: Model, action: Action) => {
       void action;
-      const serialized = nextModel.toJson() as unknown as DockLayoutModel;
+      const serialized: DockLayoutModel = { ...nextModel.toJson() };
       setDockLayout(currentStage, serialized);
     },
     [currentStage, setDockLayout],

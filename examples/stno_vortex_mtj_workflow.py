@@ -20,7 +20,7 @@ study.universe(mode="auto", size=(2.5e-07, 2.5e-07, 6e-08), center=(0, 0, 0), pa
 study.interactive(True)
 
 # Geometry & Material
-body = study.geometry(fm.Cylinder(radius=5e-08, height=9e-09, name="free"), name="free")
+body = study.geometry(fm.Cylinder(radius=5e-08, height=10e-09, name="free"), name="free")
 body.Ms = 700000
 body.Aex = 1.2e-11
 body.alpha = 0.01
@@ -33,8 +33,27 @@ study.b_ext(0, 0, 0.02)
 study.demag(realization="poisson_robin")
 
 # Mesh
-study.object_mesh_defaults(algorithm_2d=8, algorithm_3d=1, size_factor=1, size_from_curvature=3, smoothing_steps=1, optimize_iterations=1, narrow_regions=1, compute_quality=True, per_element_quality=True)
-body.mesh(hmax=4e-09, order=1, algorithm_2d=8, algorithm_3d=1, size_from_curvature=1, narrow_regions=1, compute_quality=True, per_element_quality=True)
+study.object_mesh_defaults(
+    algorithm_2d=8,
+    algorithm_3d=10,  # HXT: robust for thin films, supports multithreaded 3D
+    size_factor=1,
+    smoothing_steps=1,
+    optimize_iterations=1,
+    # Keep refinement transitions smooth to avoid stretched tets in thin films.
+    maximum_element_growth_rate=1.3,
+    curvature_factor=0.3,
+    narrow_region_resolution=0.5,  # ~4 elements across thickness (sufficient for 10 nm film)
+    compute_quality=True,
+    per_element_quality=True,
+)
+body.mesh(
+    # 10 nm thickness -> target ~4 elements through thickness.
+    maximum_element_size=10e-09,
+    minimum_element_size=2e-09,  # lowered: hmin=5nm conflicted with narrow-region field targets
+    order=1,
+    compute_quality=True,
+    per_element_quality=False,
+)
 study.build_domain_mesh()
 
 # Solver

@@ -4,7 +4,7 @@
  * F-P1: Bridge hook that syncs useCurrentLiveStream → useSessionRuntimeStore.
  *
  * Mount this once (e.g. in ControlRoomProvider or the workspace shell) to
- * keep the session-runtime Zustand store in sync with the live WebSocket
+ * keep the session-runtime Zustand store in sync with the live polling
  * stream.  Components can then subscribe to the store via narrow selectors
  * instead of consuming the full ControlRoom context.
  */
@@ -45,7 +45,7 @@ export function useSessionRuntimeBridge(
   // Sync normalized state
   useEffect(() => {
     const normalized = deriveSessionReadModel(
-      state as unknown as Record<string, unknown> | null,
+      state,
       connection,
     );
     applyNormalizedState(normalized);

@@ -1981,9 +1981,7 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "transition_distance": _text_number(
                 _number_or_none(mesh_entry.get("transition_distance"))
             ),
-            "transition_growth": _text_number(
-                _number_or_none(mesh_entry.get("transition_growth"))
-            ),
+            "transition_growth": _number_or_none(mesh_entry.get("transition_growth")),
             "resolved_size_from_curvature": (
                 int(mesh_entry["resolved_size_from_curvature"])
                 if isinstance(mesh_entry.get("resolved_size_from_curvature"), (int, float))
@@ -2027,7 +2025,7 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "interface_hmax": "",
             "interface_thickness": "",
             "transition_distance": "",
-            "transition_growth": "",
+            "transition_growth": None,
             "resolved_size_from_curvature": None,
             "resolved_narrow_regions": None,
             "resolved_growth_rate": "",

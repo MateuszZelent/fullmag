@@ -1,10 +1,13 @@
 "use client";
 
-import { resolveApiBase, resolveApiWsBase } from "./apiBase";
+import { resolveApiBase } from "./apiBase";
+import { apiGet, apiGetOptional, apiPost } from "./api/client";
+import { ApiError } from "./api/errors";
 import type { MeshCommandTarget } from "./session/types";
 
 type JsonObject = Record<string, unknown>;
 type JsonBody = unknown;
+type RequestOptions = { signal?: AbortSignal };
 
 /** Runtime feature flags from the backend. */
 export interface RuntimeFeatureFlags {
@@ -95,6 +98,11 @@ export interface LiveFieldVectorResponse {
   source: string;
 }
 
+export interface QuantityCatalogResponse {
+  schema_version: string;
+  quantities: unknown[];
+}
+
 export class ApiHttpError extends Error {
   status: number;
 
@@ -105,28 +113,45 @@ export class ApiHttpError extends Error {
   }
 }
 
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    const detail =
-      (payload && typeof payload === "object" && ("message" in payload || "error" in payload)
-        ? String((payload as { message?: unknown; error?: unknown }).message ?? (payload as { error?: unknown }).error)
-        : null) ?? `HTTP ${response.status}`;
-    throw new ApiHttpError(response.status, detail);
+function normalizeApiError(error: unknown): never {
+  if (error instanceof ApiError) {
+    throw new ApiHttpError(error.status, error.message);
   }
-  return payload as T;
+  throw error;
+}
+
+async function requestGet<T>(url: string, options?: RequestOptions): Promise<T> {
+  try {
+    return await apiGet<T>(url, options);
+  } catch (error) {
+    normalizeApiError(error);
+  }
+}
+
+async function requestGetOptional<T>(url: string, options?: RequestOptions): Promise<T | null> {
+  try {
+    return await apiGetOptional<T>(url, options);
+  } catch (error) {
+    normalizeApiError(error);
+  }
+}
+
+async function requestPost<T>(url: string, body: JsonBody, options?: RequestOptions): Promise<T> {
+  try {
+    return await apiPost<T>(url, body, options);
+  } catch (error) {
+    normalizeApiError(error);
+  }
 }
 
 export function currentLiveApiClient() {
   const baseUrl = resolveApiBase();
-  const wsBaseUrl = resolveApiWsBase();
 
   return {
     urls: {
       bootstrap: `${baseUrl}/v1/live/current/bootstrap`,
+      poll: `${baseUrl}/v1/live/current/poll`,
       runtimeCapabilities: `${baseUrl}/v1/runtime/capabilities`,
-      ws: `${wsBaseUrl}/ws/live/current`,
       commands: `${baseUrl}/v1/live/current/commands`,
       preview: (path: string) => `${baseUrl}/v1/live/current/preview${path}`,
       previewSelection: `${baseUrl}/v1/live/current/preview/selection`,
@@ -136,132 +161,117 @@ export function currentLiveApiClient() {
       scriptSync: `${baseUrl}/v1/live/current/script/sync`,
       scene: `${baseUrl}/v1/live/current/scene`,
       gpuTelemetry: `${baseUrl}/v1/live/current/gpu/telemetry`,
+      artifacts: `${baseUrl}/v1/live/current/artifacts`,
+      eigenSpectrum: `${baseUrl}/v1/live/current/eigen/spectrum`,
+      eigenDispersion: `${baseUrl}/v1/live/current/eigen/dispersion`,
+      eigenBranches: `${baseUrl}/v1/live/current/eigen/branches`,
+      eigenMode: `${baseUrl}/v1/live/current/eigen/mode`,
+      quantitiesCatalog: `${baseUrl}/v1/quantities/catalog`,
     },
-    fetchBootstrap() {
-      return requestJson<JsonObject>(`${baseUrl}/v1/live/current/bootstrap`, {
-        cache: "no-store",
-      });
+    fetchBootstrap<T = JsonObject>(options?: RequestOptions) {
+      return requestGet<T>(`${baseUrl}/v1/live/current/bootstrap`, options);
     },
-    fetchScalarsHistory() {
-      return requestJson<{ scalar_rows: JsonObject[]; scalar_rows_total: number }>(
+    async fetchPoll(params: { sinceVersion: number; scalarRowsTotal: number }, options?: RequestOptions) {
+      const url = new URL(`${baseUrl}/v1/live/current/poll`);
+      url.searchParams.set("since_version", String(params.sinceVersion));
+      url.searchParams.set("scalar_rows_total", String(params.scalarRowsTotal));
+      return requestGetOptional<JsonObject>(url.toString(), options);
+    },
+    fetchScalarsHistory(options?: RequestOptions) {
+      return requestGet<{ scalar_rows: JsonObject[]; scalar_rows_total: number }>(
         `${baseUrl}/v1/live/current/scalars`,
-        { cache: "no-store" },
+        options,
       );
     },
-    fetchFeatureFlags() {
-      return requestJson<RuntimeFeatureFlags>(`${baseUrl}/v1/live/feature-flags`, {
-        cache: "no-store",
-      });
+    fetchFeatureFlags(options?: RequestOptions) {
+      return requestGet<RuntimeFeatureFlags>(`${baseUrl}/v1/live/feature-flags`, options);
     },
-    fetchRuntimeCapabilities() {
-      return requestJson<HostCapabilityMatrix>(`${baseUrl}/v1/runtime/capabilities`, {
-        cache: "no-store",
-      });
+    fetchRuntimeCapabilities(options?: RequestOptions) {
+      return requestGet<HostCapabilityMatrix>(`${baseUrl}/v1/runtime/capabilities`, options);
     },
-    connectWebSocket() {
-      return new WebSocket(`${wsBaseUrl}/ws/live/current`);
+    queueCommand(payload: JsonBody, options?: RequestOptions) {
+      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/commands`, payload, options);
     },
-    queueCommand(payload: JsonBody) {
-      return requestJson<JsonObject>(`${baseUrl}/v1/live/current/commands`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+    queueRemesh(payload: QueueRemeshPayload, options?: RequestOptions) {
+      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/commands`, {
+        kind: "remesh",
+        mesh_options: payload.mesh_options,
+        mesh_target: payload.mesh_target,
+        mesh_reason: payload.mesh_reason,
+      }, options);
     },
-    queueRemesh(payload: QueueRemeshPayload) {
-      return requestJson<JsonObject>(`${baseUrl}/v1/live/current/commands`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: "remesh",
-          mesh_options: payload.mesh_options,
-          mesh_target: payload.mesh_target,
-          mesh_reason: payload.mesh_reason,
-        }),
-      });
+    queueStudyDomainRemesh(meshOptions: JsonBody, meshReason?: string, options?: RequestOptions) {
+      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/commands`, {
+        kind: "remesh",
+        mesh_options: meshOptions,
+        mesh_target: { kind: "study_domain" },
+        mesh_reason: meshReason,
+      }, options);
     },
-    queueStudyDomainRemesh(meshOptions: JsonBody, meshReason?: string) {
-      return requestJson<JsonObject>(`${baseUrl}/v1/live/current/commands`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: "remesh",
-          mesh_options: meshOptions,
-          mesh_target: { kind: "study_domain" },
-          mesh_reason: meshReason,
-        }),
-      });
+    updatePreview(path: string, payload: JsonBody = {}, options?: RequestOptions) {
+      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/preview${path}`, payload, options);
     },
-    updatePreview(path: string, payload: JsonBody = {}) {
-      return requestJson<JsonObject>(`${baseUrl}/v1/live/current/preview${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+    updateDisplaySelection(payload: JsonBody, options?: RequestOptions) {
+      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/preview/selection`, payload, options);
     },
-    updateDisplaySelection(payload: JsonBody) {
-      return requestJson<JsonObject>(`${baseUrl}/v1/live/current/preview/selection`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+    importAsset(payload: JsonBody, options?: RequestOptions) {
+      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/assets/import`, payload, options);
     },
-    importAsset(payload: JsonBody) {
-      return requestJson<JsonObject>(`${baseUrl}/v1/live/current/assets/import`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+    exportState(payload: JsonBody, options?: RequestOptions) {
+      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/state/export`, payload, options);
     },
-    exportState(payload: JsonBody) {
-      return requestJson<JsonObject>(`${baseUrl}/v1/live/current/state/export`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+    importState(payload: JsonBody, options?: RequestOptions) {
+      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/state/import`, payload, options);
     },
-    importState(payload: JsonBody) {
-      return requestJson<JsonObject>(`${baseUrl}/v1/live/current/state/import`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+    syncScript(payload: JsonBody = {}, options?: RequestOptions) {
+      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/script/sync`, payload, options);
     },
-    syncScript(payload: JsonBody = {}) {
-      return requestJson<JsonObject>(`${baseUrl}/v1/live/current/script/sync`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+    updateSceneDocument(payload: JsonBody, options?: RequestOptions) {
+      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/scene`, payload, options);
     },
-    updateSceneDocument(payload: JsonBody) {
-      return requestJson<JsonObject>(`${baseUrl}/v1/live/current/scene`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+    fetchGpuTelemetry(options?: RequestOptions) {
+      return requestGet<GpuTelemetryResponse>(`${baseUrl}/v1/live/current/gpu/telemetry`, options);
     },
-    fetchGpuTelemetry() {
-      return requestJson<GpuTelemetryResponse>(`${baseUrl}/v1/live/current/gpu/telemetry`, {
-        cache: "no-store",
-      });
+    fetchArtifacts(options?: RequestOptions) {
+      return requestGet<Array<{ path: string; kind?: string }>>(
+        `${baseUrl}/v1/live/current/artifacts`,
+        options,
+      );
+    },
+    fetchEigenSpectrum<T = { modes?: unknown[] }>(options?: RequestOptions) {
+      return requestGet<T>(`${baseUrl}/v1/live/current/eigen/spectrum`, options);
+    },
+    fetchEigenDispersion<T = { csv_path: string; path_metadata?: unknown; rows: unknown[] }>(options?: RequestOptions) {
+      return requestGet<T>(`${baseUrl}/v1/live/current/eigen/dispersion`, options);
+    },
+    fetchEigenBranches<T = unknown>(options?: RequestOptions) {
+      return requestGet<T>(`${baseUrl}/v1/live/current/eigen/branches`, options);
+    },
+    fetchEigenMode<T = unknown>(index: number, sampleIndex?: number | null, options?: RequestOptions) {
+      const url = new URL(`${baseUrl}/v1/live/current/eigen/mode`);
+      url.searchParams.set("index", String(index));
+      if (sampleIndex != null) {
+        url.searchParams.set("sample_index", String(sampleIndex));
+      }
+      return requestGet<T>(url.toString(), options);
+    },
+    fetchQuantitiesCatalog(options?: RequestOptions) {
+      return requestGet<QuantityCatalogResponse>(`${baseUrl}/v1/quantities/catalog`, options);
     },
     // ── Data-plane field store (read-only, no command queue) ──────────
-    getFieldCatalog() {
-      return requestJson<LiveFieldCatalogEntry[]>(`${baseUrl}/v1/live/current/fields/catalog`, {
-        cache: "no-store",
-      });
+    getFieldCatalog(options?: RequestOptions) {
+      return requestGet<LiveFieldCatalogEntry[]>(`${baseUrl}/v1/live/current/fields/catalog`, options);
     },
-    getFieldVector(quantityId: string) {
-      return requestJson<LiveFieldVectorResponse>(
+    getFieldVector(quantityId: string, options?: RequestOptions) {
+      return requestGet<LiveFieldVectorResponse>(
         `${baseUrl}/v1/live/current/fields/${encodeURIComponent(quantityId)}/vector`,
-        { cache: "no-store" },
+        options,
       );
     },
-    getFieldMeta(quantityId: string) {
-      return requestJson<LiveFieldCatalogEntry>(
+    getFieldMeta(quantityId: string, options?: RequestOptions) {
+      return requestGet<LiveFieldCatalogEntry>(
         `${baseUrl}/v1/live/current/fields/${encodeURIComponent(quantityId)}/meta`,
-        { cache: "no-store" },
+        options,
       );
     },
   };

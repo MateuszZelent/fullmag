@@ -1138,6 +1138,7 @@ export interface MeshWorkspaceState {
 }
 
 export interface SessionState {
+  state_version?: number;
   session_protocol_version?: string;
   capability_profile_version?: string;
   session: SessionManifest;
@@ -1189,51 +1190,6 @@ export interface ChartStateCurrentLiveEvent {
     scalar_rows: unknown[];
     scalar_rows_total?: number;
   };
-}
-
-export interface CommandAckCurrentLiveEvent {
-  kind: "command_ack";
-  session_id: string;
-  seq: number;
-  command_id: string;
-  command_kind: string;
-  issued_at_unix_ms: number;
-  display_selection?: unknown;
-  mesh_target?: unknown;
-  mesh_reason?: unknown;
-}
-
-export interface CommandRejectedCurrentLiveEvent {
-  kind: "command_rejected";
-  session_id: string;
-  command_id: string;
-  command_kind: string;
-  issued_at_unix_ms: number;
-  reason: string;
-  mesh_target?: unknown;
-  mesh_reason?: unknown;
-}
-
-export interface CommandCompletedCurrentLiveEvent {
-  kind: "command_completed";
-  session_id: string;
-  seq: number;
-  command_id: string;
-  command_kind: string;
-  completed_at_unix_ms: number;
-  completion_state: string;
-  mesh_target?: unknown;
-  mesh_reason?: unknown;
-}
-
-export type RuntimeCurrentLiveEvent =
-  | CommandAckCurrentLiveEvent
-  | CommandRejectedCurrentLiveEvent
-  | CommandCompletedCurrentLiveEvent;
-
-export interface PreviewBinaryPayload {
-  payloadId: number;
-  vectorFieldValues: Float64Array;
 }
 
 /* ── StepUpdateV2 canonical types (Q16/Q17) ── */

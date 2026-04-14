@@ -490,6 +490,7 @@ pub(crate) struct SessionStateEventView<'a> {
     /// Present when `live_state` contains a latest step.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_update_v2: Option<fullmag_quantities::StepUpdateV2>,
+    pub state_version: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -515,6 +516,15 @@ pub(crate) struct SessionStateResponseView<'a> {
     pub preview: Option<&'a PreviewState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_update_v2: Option<fullmag_quantities::StepUpdateV2>,
+    pub state_version: u64,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct CurrentLivePollQuery {
+    #[serde(default)]
+    pub since_version: Option<u64>,
+    #[serde(default)]
+    pub scalar_rows_total: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

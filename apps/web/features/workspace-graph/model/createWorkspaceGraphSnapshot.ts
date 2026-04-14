@@ -141,14 +141,14 @@ export function createWorkspaceGraphSnapshot(
           .filter((q) => q.shape === "global_scalar")
           .slice(0, 8)
           .map((q) => {
-            const latestRow =
-              input.scalarRows[input.scalarRows.length - 1] as unknown as Record<string, number | undefined> | undefined;
+            const latestRow = input.scalarRows[input.scalarRows.length - 1];
+            const latestValueRaw = latestRow ? Reflect.get(latestRow, q.quantityId) : undefined;
             return {
               id: `derived:${q.quantityId}`,
               label: q.label,
               quantityId: q.quantityId,
               sourceDatasetId: inferredDatasetId,
-              latestValue: latestRow?.[q.quantityId] ?? null,
+              latestValue: typeof latestValueRaw === "number" ? latestValueRaw : null,
               unit: q.unit,
             };
           }),

@@ -17,7 +17,7 @@ function fieldDataCacheId(fieldData: FemMeshData["fieldData"] | undefined): stri
   if (!fieldData || typeof fieldData !== "object") {
     return "none";
   }
-  const key = fieldData as unknown as object;
+  const key = fieldData;
   let id = FIELD_DATA_ID_CACHE.get(key);
   if (!id) {
     id = NEXT_FIELD_DATA_CACHE_ID++;
@@ -165,7 +165,7 @@ export function computeVertexColors(
 }
 
 function getBaseVertexColorCache(meshData: FemMeshData): Map<string, Float32Array> {
-  const cacheKey = meshData as unknown as object;
+  const cacheKey = meshData;
   let cache = BASE_VERTEX_COLOR_CACHE.get(cacheKey);
   if (!cache) {
     cache = new Map<string, Float32Array>();

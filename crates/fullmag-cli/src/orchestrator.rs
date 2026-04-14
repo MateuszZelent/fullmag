@@ -1845,10 +1845,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                     global_time_offset + local_time_offset,
                     false,
                 );
-                if adjusted.stats.step <= 1
-                    || adjusted.stats.step % field_every_n == 0
-                    || adjusted.scalar_row_due
-                {
+                if adjusted.stats.step <= 1 || adjusted.stats.step % field_every_n == 0 {
                     live_workspace.update(|state| {
                         state.session.status = "running".to_string();
                         state.run = running_run_manifest_from_update(
@@ -3514,7 +3511,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
                         if adjusted.stats.step <= 1
                             || adjusted.stats.step % field_every_n == 0
-                            || adjusted.scalar_row_due
                             || adjusted.preview_field.is_some()
                             || adjusted.finished
                         {
@@ -3532,7 +3528,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 );
                                 state.live_state = live_state_manifest_from_update(&adjusted);
                                 set_latest_scalar_row_if_due(state, &adjusted);
-                                merge_cached_preview_fields_from_update(state, &adjusted);
                             });
                         }
                         if let Some(action) = display_selection_handle.process_running_control() {
@@ -3586,7 +3581,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
                         if adjusted.stats.step <= 1
                             || adjusted.stats.step % field_every_n == 0
-                            || adjusted.scalar_row_due
                             || adjusted.finished
                         {
                             live_workspace.update(|state| {
@@ -3728,7 +3722,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 };
                 if update.stats.step <= 1
                     || update.stats.step % field_every_n == 0
-                    || update.scalar_row_due
                     || update.finished
                 {
                     live_workspace.update(|state| {
@@ -4277,7 +4270,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
                         if adjusted.stats.step <= 1
                             || adjusted.stats.step % field_every_n == 0
-                            || adjusted.scalar_row_due
                             || adjusted.preview_field.is_some()
                         {
                             live_workspace.update(|state| {
@@ -4290,7 +4282,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 );
                                 state.live_state = live_state_manifest_from_update(&adjusted);
                                 set_latest_scalar_row_if_due(state, &adjusted);
-                                merge_cached_preview_fields_from_update(state, &adjusted);
                             });
                         }
 
@@ -4378,9 +4369,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 );
                             }
 
-                            if adjusted.stats.step <= 1
-                                || adjusted.stats.step % field_every_n == 0
-                                || adjusted.scalar_row_due
+                            if adjusted.stats.step <= 1 || adjusted.stats.step % field_every_n == 0
                             {
                                 live_workspace.update(|state| {
                                     state.session.status = "running".to_string();
@@ -4392,7 +4381,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     );
                                     state.live_state = live_state_manifest_from_update(&adjusted);
                                     set_latest_scalar_row_if_due(state, &adjusted);
-                                    merge_cached_preview_fields_from_update(state, &adjusted);
                                 });
                             }
 
@@ -4743,10 +4731,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         scalar_row_due: true,
                         finished: false,
                     };
-                    if update.stats.step <= 1
-                        || update.stats.step % field_every_n == 0
-                        || update.scalar_row_due
-                    {
+                    if update.stats.step <= 1 || update.stats.step % field_every_n == 0 {
                         live_workspace.update(|state| {
                             state.session.status = "running".to_string();
                             state.run = running_run_manifest_from_update(

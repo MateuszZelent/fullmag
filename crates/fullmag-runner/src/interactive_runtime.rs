@@ -31,33 +31,22 @@ use crate::DisplaySelectionState;
 pub(crate) fn display_refresh_due(
     last_preview_revision: Option<u64>,
     display_state: &DisplaySelectionState,
-    local_step: u64,
+    _local_step: u64,
 ) -> bool {
-    let preview_emit_every = u64::from(display_state.selection.every_n.max(1));
+    // Poll-only FE model: refresh active preview only on explicit selection/config
+    // changes (revision bump) instead of periodic per-step cadence.
     last_preview_revision != Some(display_state.revision)
-        || local_step <= 1
-        || local_step % preview_emit_every == 0
 }
 
 pub(crate) fn cached_preview_refresh_due(
     last_cached_preview_revision: Option<u64>,
     display_state: &DisplaySelectionState,
-    local_step: u64,
-    field_every_n: u64,
+    _local_step: u64,
+    _field_every_n: u64,
 ) -> bool {
-    // Refresh the quick-switch cache at a much lower cadence than the active
-    // preview.  Copying 12+ vector fields from GPU/compute every single step
-    // was the primary bottleneck (each copy is ~0.4ms × 12 = ~5ms overhead per
-    // step, throttling the solver to ~30% of peak throughput).
-    //
-    // The active preview quantity is still refreshed at full rate via the
-    // normal `preview_due` path.  Cached fields are served on-demand through
-    // the field store API (`GET /fields/:quantity/vector`), so moderate
-    // staleness is acceptable — the user only notices when switching quantity.
-    let cache_every_n = field_every_n.max(50);
+    // Poll-only FE model: cached preview quantities are refreshed only on
+    // explicit preview revision changes, never periodically in the step loop.
     last_cached_preview_revision != Some(display_state.revision)
-        || local_step <= 1
-        || local_step % cache_every_n == 0
 }
 
 pub(crate) fn cached_preview_quantities_for(
@@ -834,8 +823,8 @@ impl CpuInteractiveFdmPreviewRuntime {
 
             // Only run the expensive full observe when vector-field data is
             // actually needed (preview refresh or cached preview refresh).
-            let needs_observables = (preview_due && !display_is_global_scalar(&display_state))
-                || cached_preview_due;
+            let needs_observables =
+                (preview_due && !display_is_global_scalar(&display_state)) || cached_preview_due;
 
             if needs_observables {
                 let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
