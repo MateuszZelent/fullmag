@@ -4,7 +4,7 @@ import { useRef, useEffect, useState, useMemo } from "react";
 import type { LiveState, ScalarRow, SessionManifest, RunManifest, ArtifactEntry, EngineLogEntry, CommandStatus, MeshWorkspaceState, QuantityDescriptor } from "../../lib/useSessionStream";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { fmtSI, fmtExp, fmtTime, fmtDuration, fmtStepValue, fmtSIOrDash, fmtExpOrDash } from "@/lib/format";
+import { fmtSI, fmtExp, fmtTime, fmtDuration, fmtExpOrDash } from "@/lib/format";
 import ScalarPlot from "../plots/ScalarPlot";
 import ScalarTable from "./ScalarTable";
 import { buildLogEntries } from "./engine/buildLogEntries";
@@ -163,13 +163,6 @@ export default function EngineConsole({
     scalarRows.length > 0 ||
     workspaceStatus === "completed" ||
     workspaceStatus === "failed";
-  const solverNotStartedMessage =
-    workspaceStatus === "materializing_script"
-      ? "Solver not started yet. FEM materialization and tetrahedral meshing are still running."
-      : workspaceStatus === "bootstrapping"
-        ? "Solver not started yet. Workspace bootstrap is still running."
-        : "Solver telemetry is not available yet.";
-
   // Convergence metric: normalize max_dm_dt to a 0-100 progress bar
   // max_dm_dt < convergenceThreshold is "converged", > 1e2 is "diverged"
   const LOG_DECADES = 7;          // display spans 7 decades (from LOG_FLOOR to LOG_FLOOR + 7)
@@ -179,7 +172,6 @@ export default function EngineConsole({
   const convergencePct = Math.max(0, Math.min(100, ((LOG_DECADES + dmDtLog) / LOG_DECADES) * 100));
   // Lower dm/dt = more converged, so invert
   const convergenceDisplay = Math.max(0, Math.min(100, 100 - convergencePct));
-  const memoryEstimate = Math.min(100, (artifacts.length / 20) * 100);
   const convergenceTone =
     convergenceDisplay > 80 ? "success"
       : convergenceDisplay > 40 ? "warn"
@@ -189,17 +181,6 @@ export default function EngineConsole({
     stepsPerSec > 50 ? "success"
       : stepsPerSec > 10 ? "warn"
       : undefined;
-  const statusValueClassName =
-    run?.status === "completed"
-      ? "text-emerald-500"
-      : workspaceStatus === "running"
-        ? "text-primary"
-        : workspaceStatus === "materializing_script"
-          ? "text-amber-500"
-          : run?.status === "failed"
-            ? "text-destructive"
-            : undefined;
-
   return (
     <div className="flex flex-col h-full bg-background/35 overflow-hidden isolate">
       {/* ─── Header Bar ──────────────────────────────── */}

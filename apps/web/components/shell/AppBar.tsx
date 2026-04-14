@@ -44,6 +44,12 @@ interface MenuItem {
   action?: () => void;
 }
 
+const PERSPECTIVE_ENTRIES: Array<{ id: WorkspaceMode; label: string }> = [
+  { id: "build", label: "Model" },
+  { id: "study", label: "Study" },
+  { id: "analyze", label: "Results" },
+];
+
 function quickSyncBadge(
   canSyncScriptBuilder: boolean | undefined,
   scriptSyncBusy: boolean | undefined,
@@ -166,22 +172,14 @@ export default function AppBar(props: AppBarProps) {
       </div>
 
       <div className="mx-auto hidden items-center gap-1 rounded-lg border border-border/35 bg-card/30 p-1 md:flex">
-        {([
-          { id: "build" as const, label: "Model" },
-          { id: "study" as const, label: "Study" },
-          {
-            id: "analyze" as const,
-            label: "Results",
-            disabled: props.resultsAvailable === false,
-          },
-        ] satisfies Array<{ id: WorkspaceMode; label: string; disabled?: boolean }>).map((entry) => (
+        {PERSPECTIVE_ENTRIES.map((entry) => (
           <button
             key={entry.id}
             type="button"
             onClick={() => props.onPerspectiveChange?.(entry.id)}
-            disabled={entry.disabled}
+            disabled={entry.id === "analyze" && props.resultsAvailable === false}
             title={
-              entry.id === "analyze" && entry.disabled
+              entry.id === "analyze" && props.resultsAvailable === false
                 ? "Results become available after the first completed solve."
                 : undefined
             }
@@ -190,7 +188,7 @@ export default function AppBar(props: AppBarProps) {
               props.workspaceMode === entry.id
                 ? "bg-primary/15 text-primary border border-primary/30"
                 : "text-muted-foreground border border-transparent hover:bg-muted/40 hover:text-foreground",
-              entry.disabled && "opacity-45 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground",
+              entry.id === "analyze" && props.resultsAvailable === false && "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
             )}
           >
             {entry.label}

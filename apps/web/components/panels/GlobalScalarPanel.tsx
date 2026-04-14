@@ -1,8 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { historyQuantities, quantityById } from "../../lib/quantities/catalog";
-import type { QuantityId, QuantityDescriptor } from "../../lib/quantities/types";
+import { historyQuantities } from "../../lib/quantities/catalog";
 import { fmtExp, fmtSI } from "../../lib/format";
 
 // ── Types ────────────────────────────────────────────────────────
