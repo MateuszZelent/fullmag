@@ -76,7 +76,11 @@ def _apply_mesh_options(
 
     resolved_narrow_regions = int(resolved_size_controls["resolved_narrow_regions"])
     if resolved_narrow_regions > 0:
-        fid = _add_narrow_region_field(gmsh, resolved_narrow_regions, hmax, hscale)
+        fid = _add_narrow_region_field(
+            gmsh, resolved_narrow_regions, hmax, hscale,
+            component_surface_tags=component_surface_tags,
+            component_volume_tags=component_volume_tags,
+        )
         if fid is not None:
             extra_field_ids.append(fid)
 
@@ -152,13 +156,26 @@ def _add_narrow_region_field(
     n_resolve: int,
     hmax: float,
     hscale: float = 1.0,
+    component_surface_tags: dict[str, list[int]] | None = None,
+    component_volume_tags: dict[str, list[int]] | None = None,
 ) -> int | None:
     """Add a size field that refines narrow regions of the geometry.
 
-    Uses a Distance field from all boundary surfaces: the local wall
+    Uses a Distance field from boundary surfaces: the local wall
     thickness is approximately ``2 × dist_to_nearest_boundary``.
     The target element size is ``thickness / n_resolve``, clamped to
     ``[hmax * 0.05, hmax]`` (scaled by *hscale*).
+
+    When *component_surface_tags* is provided (shared-domain mesh with
+    airbox), only the ferromagnetic component surfaces are used.  This
+    prevents airbox outer-boundary faces from being treated as "walls"
+    of a narrow region, which would otherwise create unnecessarily fine
+    elements at airbox boundaries and in the body–airbox gap.
+
+    When *component_volume_tags* is also provided, the resulting size
+    field is restricted to body volumes only.  This prevents the field
+    from constraining the airbox, where distance-to-body is not a
+    physical narrow-region measurement.
 
     Returns the Gmsh field ID of a MathEval field, or ``None`` when
     no surfaces are present.
@@ -166,10 +183,19 @@ def _add_narrow_region_field(
     if n_resolve < 1:
         return None
 
-    surfaces = gmsh.model.getEntities(2)
-    if not surfaces:
-        return None
-    surf_tags = [t for _, t in surfaces]
+    # Prefer component surfaces (bodies only) so the airbox boundary
+    # is not treated as a narrow-region wall.
+    if component_surface_tags:
+        surf_tags: list[int] = []
+        for tags in component_surface_tags.values():
+            surf_tags.extend(tags)
+        if not surf_tags:
+            return None
+    else:
+        surfaces = gmsh.model.getEntities(2)
+        if not surfaces:
+            return None
+        surf_tags = [t for _, t in surfaces]
 
     f_dist = gmsh.model.mesh.field.add("Distance")
     gmsh.model.mesh.field.setNumbers(f_dist, "SurfacesList", surf_tags)
@@ -181,6 +207,19 @@ def _add_narrow_region_field(
     expr = f"Min(Max(2*F{f_dist}/{n_resolve}, {hmin_val}), {hmax_val})"
     f_math = gmsh.model.mesh.field.add("MathEval")
     gmsh.model.mesh.field.setString(f_math, "F", expr)
+
+    # Restrict to body volumes only: in the airbox, distance-to-body
+    # is not a narrow-region measurement and would over-refine.
+    if component_volume_tags:
+        body_vol_tags: list[int] = []
+        for tags in component_volume_tags.values():
+            body_vol_tags.extend(tags)
+        if body_vol_tags:
+            f_restrict = gmsh.model.mesh.field.add("Restrict")
+            gmsh.model.mesh.field.setNumber(f_restrict, "InField", f_math)
+            gmsh.model.mesh.field.setNumbers(f_restrict, "VolumesList", body_vol_tags)
+            return f_restrict
+
     return f_math
 
 
