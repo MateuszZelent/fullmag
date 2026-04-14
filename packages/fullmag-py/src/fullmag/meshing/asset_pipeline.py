@@ -669,7 +669,9 @@ def _resolve_effective_shared_domain_targets(
             "marker": None,
             "hmax": target.hmax,
             "interface_hmax": target.interface_hmax,
+            "interface_thickness": target.interface_thickness,
             "transition_distance": target.transition_distance,
+            "transition_growth": target.transition_growth,
             "source": target.source,
         }
     return effective_airbox_target, effective_per_object_targets

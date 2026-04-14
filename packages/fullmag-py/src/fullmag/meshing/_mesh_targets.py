@@ -45,7 +45,9 @@ class ResolvedSharedObjectTarget:
     geometry_name: str
     hmax: float | None
     interface_hmax: float | None = None
+    interface_thickness: float | None = None
     transition_distance: float | None = None
+    transition_growth: float | None = None
     source: str = "study_default"
     marker: int | None = None
 
@@ -310,9 +312,19 @@ def resolve_shared_domain_targets(
         # interface_hmax is only set when the user explicitly requests it.
         # The previous auto-default (0.6×bulk) created elements finer than
         # the body interior, throttling SmoothRatio growth in the airbox.
+        interface_thickness = (
+            _coerce_positive_float(workflow_entry.get("interface_thickness"))
+            if isinstance(workflow_entry, Mapping)
+            else None
+        )
 
         transition_distance = (
             _coerce_positive_float(workflow_entry.get("transition_distance"))
+            if isinstance(workflow_entry, Mapping)
+            else None
+        )
+        transition_growth = (
+            _coerce_positive_float(workflow_entry.get("transition_growth"))
             if isinstance(workflow_entry, Mapping)
             else None
         )
@@ -330,7 +342,9 @@ def resolve_shared_domain_targets(
             geometry_name=geometry.geometry_name,
             hmax=bulk_hmax,
             interface_hmax=interface_hmax,
+            interface_thickness=interface_thickness,
             transition_distance=transition_distance,
+            transition_growth=transition_growth,
             source=source,
         )
 
@@ -384,7 +398,9 @@ class SharedDomainBuildReport:
                     "marker": target.marker,
                     "hmax": target.hmax,
                     "interface_hmax": target.interface_hmax,
+                    "interface_thickness": target.interface_thickness,
                     "transition_distance": target.transition_distance,
+                    "transition_growth": target.transition_growth,
                     "source": target.source,
                 }
                 for name, target in self.effective_per_object_targets.items()

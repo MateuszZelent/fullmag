@@ -310,7 +310,15 @@ class ResolutionPrecedenceTests(unittest.TestCase):
             airbox=self._airbox(),
             mesh_workflow={
                 "per_geometry": [
-                    {"geometry": "left", "mode": "custom", "hmax": "20e-9"},
+                    {
+                        "geometry": "left",
+                        "mode": "custom",
+                        "hmax": "20e-9",
+                        "interface_hmax": "12e-9",
+                        "interface_thickness": "18e-9",
+                        "transition_distance": "60e-9",
+                        "transition_growth": "1.6",
+                    },
                 ],
             },
             per_object_recipes=None,
@@ -559,7 +567,15 @@ class TypedResolutionAPITests(unittest.TestCase):
             airbox_hmax=200e-9,
             mesh_workflow={
                 "per_geometry": [
-                    {"geometry": "left", "mode": "custom", "hmax": "20e-9"},
+                    {
+                        "geometry": "left",
+                        "mode": "custom",
+                        "hmax": "20e-9",
+                        "interface_hmax": "12e-9",
+                        "interface_thickness": "18e-9",
+                        "transition_distance": "60e-9",
+                        "transition_growth": "1.6",
+                    },
                 ],
             },
             per_object_recipes=None,
@@ -568,8 +584,10 @@ class TypedResolutionAPITests(unittest.TestCase):
         self.assertAlmostEqual(targets.airbox.hmax, 200e-9)
         self.assertIn("left", targets.per_object)
         self.assertAlmostEqual(targets.per_object["left"].hmax, 20e-9)
-        # interface_hmax is no longer auto-computed
-        self.assertIsNone(targets.per_object["left"].interface_hmax)
+        self.assertAlmostEqual(targets.per_object["left"].interface_hmax, 12e-9)
+        self.assertAlmostEqual(targets.per_object["left"].interface_thickness, 18e-9)
+        self.assertAlmostEqual(targets.per_object["left"].transition_distance, 60e-9)
+        self.assertAlmostEqual(targets.per_object["left"].transition_growth, 1.6)
         self.assertEqual(targets.per_object["left"].source, "local_override")
         self.assertAlmostEqual(targets.effective_hmax, 200e-9)
 
