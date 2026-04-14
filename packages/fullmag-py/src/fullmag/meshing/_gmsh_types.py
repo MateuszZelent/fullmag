@@ -143,6 +143,16 @@ class MeshOptions:
     boundary_layer_thickness: float | None = None   # target first-layer thickness (SI)
     boundary_layer_stretching: float | None = None  # layer growth ratio (e.g. 1.2–1.5)
 
+    # ── Swept mesh / through-thickness control ──
+    mesh_strategy: str | None = None  # "auto" | "free_tetrahedral" | "swept_prism" | "swept_hex"
+    through_thickness_elements: int | None = None   # explicit layer count for swept extrusion
+    through_thickness_distribution: str | None = None  # "fixed" | "linear" | "exponential"
+    through_thickness_element_ratio: float | None = None  # grading ratio for non-uniform distribution
+    through_thickness_symmetric: bool = False  # mirror distribution about mid-plane
+    sweep_face_meshing: str | None = None  # "triangular" → prisms, "quadrilateral" → hexes
+    sweep_source: str | None = None  # "auto" | face selector hint
+    sweep_destination: str | None = None  # "auto" | face selector hint
+
     def __post_init__(self) -> None:
         calibration = _normalize_mesh_size_calibration(self.calibrate_for)
         preset = _normalize_mesh_size_preset(self.size_preset)

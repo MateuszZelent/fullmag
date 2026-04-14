@@ -11,6 +11,7 @@ import type { ScriptBuilderMeshOperationEntry } from "../../../lib/session/types
 
 const OPERATION_KINDS = [
   { label: "Free Tetrahedral", value: "free_tetrahedral" },
+  { label: "Swept (through-thickness)", value: "swept" },
   { label: "Boundary Layers", value: "boundary_layers" },
   { label: "Refine (uniform h)", value: "refine" },
   { label: "Adaptive (AFEM)", value: "adapt" },
@@ -27,6 +28,14 @@ function defaultParamsFor(kind: string): Record<string, unknown> {
       return { theta: 0.5, max_passes: 5 };
     case "size_field":
       return { kind: "Box", params: {} };
+    case "swept":
+      return {
+        through_thickness_elements: 6,
+        through_thickness_distribution: "fixed",
+        through_thickness_element_ratio: 1.0,
+        through_thickness_symmetric: false,
+        sweep_face_meshing: "triangular",
+      };
     default:
       return {};
   }

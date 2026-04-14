@@ -370,9 +370,14 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
     activeWorkspaceTabByStage: dockingState.activeWorkspaceTabByStage,
     dockLayoutByStage: dockingState.dockLayoutByStage,
 
-    setCurrentStage: (currentStage) => set({ currentStage }),
-    setActiveCoreTab: (activeCoreTab) => set({ activeCoreTab }),
-    setActiveContextualTab: (activeContextualTab) => set({ activeContextualTab }),
+    setCurrentStage: (currentStage) =>
+      set((state) => (state.currentStage === currentStage ? state : { currentStage })),
+    setActiveCoreTab: (activeCoreTab) =>
+      set((state) => (state.activeCoreTab === activeCoreTab ? state : { activeCoreTab })),
+    setActiveContextualTab: (activeContextualTab) =>
+      set((state) =>
+        state.activeContextualTab === activeContextualTab ? state : { activeContextualTab },
+      ),
     setLeftDock: (mode, leftDock) =>
       set((state) => ({ stageLayouts: updateStageLayout(state, mode, { leftDock }) })),
     setCenterDock: (mode, centerDock) =>

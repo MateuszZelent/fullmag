@@ -324,6 +324,13 @@ class _MeshSpecState:
     # Quality
     compute_quality: bool = False
     per_element_quality: bool = False
+    # Swept mesh / through-thickness control
+    mesh_strategy: str | None = None
+    through_thickness_elements: int | None = None
+    through_thickness_distribution: str | None = None
+    through_thickness_element_ratio: float | None = None
+    through_thickness_symmetric: bool = False
+    sweep_face_meshing: str | None = None
 
     def is_configured(self) -> bool:
         return (
@@ -391,6 +398,12 @@ class GeometryMeshHandle:
         narrow_region_resolution: float | None = None,
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
+        mesh_strategy: str | None = None,
+        through_thickness_elements: int | None = None,
+        through_thickness_distribution: str | None = None,
+        through_thickness_element_ratio: float | None = None,
+        through_thickness_symmetric: bool | None = None,
+        sweep_face_meshing: str | None = None,
     ) -> "GeometryMeshHandle":
         return self.configure(
             hmax=hmax, hmin=hmin,
@@ -409,6 +422,12 @@ class GeometryMeshHandle:
             narrow_region_resolution=narrow_region_resolution,
             compute_quality=compute_quality,
             per_element_quality=per_element_quality,
+            mesh_strategy=mesh_strategy,
+            through_thickness_elements=through_thickness_elements,
+            through_thickness_distribution=through_thickness_distribution,
+            through_thickness_element_ratio=through_thickness_element_ratio,
+            through_thickness_symmetric=through_thickness_symmetric,
+            sweep_face_meshing=sweep_face_meshing,
         )
 
     def configure(
@@ -436,6 +455,12 @@ class GeometryMeshHandle:
         narrow_region_resolution: float | None = None,
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
+        mesh_strategy: str | None = None,
+        through_thickness_elements: int | None = None,
+        through_thickness_distribution: str | None = None,
+        through_thickness_element_ratio: float | None = None,
+        through_thickness_symmetric: bool | None = None,
+        sweep_face_meshing: str | None = None,
     ) -> "GeometryMeshHandle":
         """Configure mesh generation parameters.
 
@@ -535,6 +560,18 @@ class GeometryMeshHandle:
             spec.compute_quality = compute_quality
         if per_element_quality is not None:
             spec.per_element_quality = per_element_quality
+        if mesh_strategy is not None:
+            spec.mesh_strategy = mesh_strategy
+        if through_thickness_elements is not None:
+            spec.through_thickness_elements = through_thickness_elements
+        if through_thickness_distribution is not None:
+            spec.through_thickness_distribution = through_thickness_distribution
+        if through_thickness_element_ratio is not None:
+            spec.through_thickness_element_ratio = through_thickness_element_ratio
+        if through_thickness_symmetric is not None:
+            spec.through_thickness_symmetric = through_thickness_symmetric
+        if sweep_face_meshing is not None:
+            spec.sweep_face_meshing = sweep_face_meshing
         return self
 
     def algorithm(self, *, dim2: int | None = None, dim3: int | None = None) -> "GeometryMeshHandle":
@@ -596,6 +633,38 @@ class GeometryMeshHandle:
         self._owner._mesh_spec.operations.append(
             _MeshOperationSpec(kind="smooth", params={"iterations": iterations})
         )
+        return self
+
+    def swept(
+        self,
+        elements: int = 6,
+        distribution: str = "fixed",
+        element_ratio: float = 1.0,
+        symmetric: bool = False,
+        face_meshing: str = "triangular",
+    ) -> "GeometryMeshHandle":
+        """Configure swept (through-thickness) meshing for thin-film geometries.
+
+        Parameters
+        ----------
+        elements : int
+            Number of element layers through the thin dimension.
+        distribution : str
+            Layer height distribution: ``"fixed"``, ``"linear"``, or ``"exponential"``.
+        element_ratio : float
+            Ratio of last to first layer height for non-uniform distributions.
+        symmetric : bool
+            Mirror the distribution about the mid-plane.
+        face_meshing : str
+            Source face mesh type: ``"triangular"`` or ``"quadrilateral"``.
+        """
+        spec = self._owner._mesh_spec
+        spec.mesh_strategy = "swept_prism" if face_meshing == "triangular" else "swept_hex"
+        spec.through_thickness_elements = elements
+        spec.through_thickness_distribution = distribution
+        spec.through_thickness_element_ratio = element_ratio
+        spec.through_thickness_symmetric = symmetric
+        spec.sweep_face_meshing = face_meshing
         return self
 
     def quality(self) -> object | None:
@@ -2617,6 +2686,18 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_options["per_element_quality"] = True
     if primary_spec.size_fields:
         mesh_options["size_fields"] = list(primary_spec.size_fields)
+    if primary_spec.mesh_strategy is not None:
+        mesh_options["mesh_strategy"] = primary_spec.mesh_strategy
+    if primary_spec.through_thickness_elements is not None:
+        mesh_options["through_thickness_elements"] = primary_spec.through_thickness_elements
+    if primary_spec.through_thickness_distribution is not None:
+        mesh_options["through_thickness_distribution"] = primary_spec.through_thickness_distribution
+    if primary_spec.through_thickness_element_ratio is not None:
+        mesh_options["through_thickness_element_ratio"] = primary_spec.through_thickness_element_ratio
+    if primary_spec.through_thickness_symmetric:
+        mesh_options["through_thickness_symmetric"] = True
+    if primary_spec.sweep_face_meshing is not None:
+        mesh_options["sweep_face_meshing"] = primary_spec.sweep_face_meshing
 
     per_geometry = []
     for handle in _state._magnets:

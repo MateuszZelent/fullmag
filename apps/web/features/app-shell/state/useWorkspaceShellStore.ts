@@ -85,8 +85,12 @@ export const useWorkspaceShellStore = create<WorkspaceShellState>((set) => ({
     set((s) => ({ stageLayouts: updateLayout(s, stage, { rightDock: dock }) })),
   setBottomDock: (stage, dock) =>
     set((s) => ({ stageLayouts: updateLayout(s, stage, { bottomDock: dock }) })),
-  setActiveCoreTab: (activeCoreTab) => set({ activeCoreTab }),
-  setActiveContextualTab: (activeContextualTab) => set({ activeContextualTab }),
+  setActiveCoreTab: (activeCoreTab) =>
+    set((state) => (state.activeCoreTab === activeCoreTab ? state : { activeCoreTab })),
+  setActiveContextualTab: (activeContextualTab) =>
+    set((state) =>
+      state.activeContextualTab === activeContextualTab ? state : { activeContextualTab },
+    ),
   setRightInspectorOpen: (rightInspectorOpen) => set({ rightInspectorOpen }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   setPhysicsDocsOpen: (physicsDocsOpen, topic = null) =>

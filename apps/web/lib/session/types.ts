@@ -656,6 +656,13 @@ export interface ScriptBuilderPerGeometryMeshEntry {
   boundary_layer_count: number | null;
   boundary_layer_thickness: string | null;   // SI metres as string (matches hmax/hmin pattern)
   boundary_layer_stretching: number | null;
+  // Swept / through-thickness meshing
+  mesh_strategy: string | null;
+  through_thickness_elements: number | null;
+  through_thickness_distribution: string | null;
+  through_thickness_element_ratio: number | null;
+  through_thickness_symmetric: boolean;
+  sweep_face_meshing: string | null;
   size_fields: ScriptBuilderMeshSizeFieldEntry[];
   operations: ScriptBuilderMeshOperationEntry[];
   build_requested: boolean;

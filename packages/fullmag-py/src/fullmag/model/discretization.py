@@ -395,6 +395,14 @@ class PerObjectMeshRecipe:
     boundary_layer_thickness: float | None = None   # SI metres
     boundary_layer_stretching: float | None = None  # growth ratio (1.0–2.0)
 
+    # ── swept mesh / through-thickness control ──
+    mesh_strategy: str | None = None  # "auto" | "free_tetrahedral" | "swept_prism" | "swept_hex"
+    through_thickness_elements: int | None = None
+    through_thickness_distribution: str | None = None  # "fixed" | "linear" | "exponential"
+    through_thickness_element_ratio: float | None = None
+    through_thickness_symmetric: bool = False
+    sweep_face_meshing: str | None = None  # "triangular" | "quadrilateral"
+
     # ── quality assessment ──
     compute_quality: bool = False
     per_element_quality: bool = False
@@ -427,6 +435,12 @@ class PerObjectMeshRecipe:
             "boundary_layer_count": self.boundary_layer_count,
             "boundary_layer_thickness": self.boundary_layer_thickness,
             "boundary_layer_stretching": self.boundary_layer_stretching,
+            "mesh_strategy": self.mesh_strategy,
+            "through_thickness_elements": self.through_thickness_elements,
+            "through_thickness_distribution": self.through_thickness_distribution,
+            "through_thickness_element_ratio": self.through_thickness_element_ratio,
+            "through_thickness_symmetric": self.through_thickness_symmetric,
+            "sweep_face_meshing": self.sweep_face_meshing,
             "compute_quality": self.compute_quality,
             "per_element_quality": self.per_element_quality,
             "size_fields": list(self.size_fields),

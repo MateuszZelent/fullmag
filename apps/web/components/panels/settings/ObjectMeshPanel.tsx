@@ -92,6 +92,12 @@ function createInheritedMeshState(): ScriptBuilderPerGeometryMeshEntry {
     boundary_layer_count: null,
     boundary_layer_thickness: null,
     boundary_layer_stretching: null,
+    mesh_strategy: null,
+    through_thickness_elements: null,
+    through_thickness_distribution: null,
+    through_thickness_element_ratio: null,
+    through_thickness_symmetric: false,
+    sweep_face_meshing: null,
     size_fields: [],
     operations: [],
     build_requested: false,
@@ -196,6 +202,12 @@ function buildCustomMeshState(
     boundaryLayerCount?: number | null;
     boundaryLayerThickness?: string | null;
     boundaryLayerStretching?: number | null;
+    meshStrategy?: string | null;
+    throughThicknessElements?: number | null;
+    throughThicknessDistribution?: string | null;
+    throughThicknessElementRatio?: number | null;
+    throughThicknessSymmetric?: boolean | null;
+    sweepFaceMeshing?: string | null;
   },
 ): ScriptBuilderPerGeometryMeshEntry {
   return {
@@ -235,6 +247,12 @@ function buildCustomMeshState(
     boundary_layer_count: extras.boundaryLayerCount ?? current?.boundary_layer_count ?? null,
     boundary_layer_thickness: extras.boundaryLayerThickness ?? current?.boundary_layer_thickness ?? null,
     boundary_layer_stretching: extras.boundaryLayerStretching ?? current?.boundary_layer_stretching ?? null,
+    mesh_strategy: extras.meshStrategy ?? current?.mesh_strategy ?? null,
+    through_thickness_elements: extras.throughThicknessElements ?? current?.through_thickness_elements ?? null,
+    through_thickness_distribution: extras.throughThicknessDistribution ?? current?.through_thickness_distribution ?? null,
+    through_thickness_element_ratio: extras.throughThicknessElementRatio ?? current?.through_thickness_element_ratio ?? null,
+    through_thickness_symmetric: extras.throughThicknessSymmetric ?? current?.through_thickness_symmetric ?? false,
+    sweep_face_meshing: extras.sweepFaceMeshing ?? current?.sweep_face_meshing ?? null,
     size_fields: options.refinementZones.map((field: SizeFieldSpec) => ({
       kind: field.kind,
       params: { ...field.params },
@@ -662,6 +680,78 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                       disabled={mesh.mode !== "custom"}
                       placeholder="1.2"
                       tooltip="Layer growth ratio between successive boundary layer rows (1.0–2.0)."
+                    />
+                  </div>
+                </div>
+
+                {/* ── Swept / Through-Thickness ── */}
+                <div className="flex flex-col gap-2">
+                  <div className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground">
+                    Swept / Through-Thickness
+                  </div>
+                  <div className="rounded-lg border border-border/30 bg-background/40 p-3 text-[0.72rem] text-muted-foreground">
+                    Extruded mesh for thin-film geometries. Set layer count to enable.
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <TextField
+                      label="Layers"
+                      defaultValue={mesh.through_thickness_elements != null ? String(mesh.through_thickness_elements) : ""}
+                      onchange={(e) => {
+                        const raw = e.target.value.trim();
+                        const layers = raw.length > 0 ? Math.max(1, Math.round(Number(raw) || 1)) : null;
+                        updateGeo((cur) =>
+                          buildCustomMeshState(effectiveOptions, cur, {
+                            order: cur?.order ?? model.meshFeOrder ?? null,
+                            source: cur?.source ?? model.meshSource ?? null,
+                            buildRequested: cur?.build_requested ?? false,
+                            throughThicknessElements: layers,
+                            meshStrategy: layers != null ? (cur?.mesh_strategy ?? "swept_prism") : null,
+                          }),
+                        );
+                      }}
+                      mono
+                      disabled={mesh.mode !== "custom"}
+                      placeholder="6"
+                      tooltip="Number of element layers through the thin dimension."
+                    />
+                    <SelectField
+                      label="Distribution"
+                      value={mesh.through_thickness_distribution ?? "fixed"}
+                      onchange={(val) =>
+                        updateGeo((cur) =>
+                          buildCustomMeshState(effectiveOptions, cur, {
+                            order: cur?.order ?? model.meshFeOrder ?? null,
+                            source: cur?.source ?? model.meshSource ?? null,
+                            buildRequested: cur?.build_requested ?? false,
+                            throughThicknessDistribution: val,
+                          }),
+                        )
+                      }
+                      options={[
+                        { label: "Fixed", value: "fixed" },
+                        { label: "Linear", value: "linear" },
+                        { label: "Exponential", value: "exponential" },
+                      ]}
+                      disabled={mesh.mode !== "custom"}
+                    />
+                    <TextField
+                      label="Ratio"
+                      defaultValue={mesh.through_thickness_element_ratio != null ? String(mesh.through_thickness_element_ratio) : ""}
+                      onchange={(e) => {
+                        const raw = e.target.value.trim();
+                        updateGeo((cur) =>
+                          buildCustomMeshState(effectiveOptions, cur, {
+                            order: cur?.order ?? model.meshFeOrder ?? null,
+                            source: cur?.source ?? model.meshSource ?? null,
+                            buildRequested: cur?.build_requested ?? false,
+                            throughThicknessElementRatio: raw.length > 0 ? Number(raw) || null : null,
+                          }),
+                        );
+                      }}
+                      mono
+                      disabled={mesh.mode !== "custom"}
+                      placeholder="1.0"
+                      tooltip="Ratio of last to first layer height for non-uniform distributions."
                     />
                   </div>
                 </div>

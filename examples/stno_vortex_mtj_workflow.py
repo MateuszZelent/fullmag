@@ -54,6 +54,14 @@ body.mesh(
     compute_quality=True,
     per_element_quality=False,
 )
+# Alternative: swept mesh for structured through-thickness control
+# body.mesh(
+#     maximum_element_size=10e-09,
+#     minimum_element_size=2e-09,
+#     order=1,
+#     compute_quality=True,
+# )
+# body.mesh.swept(elements=6, distribution="fixed")
 study.build_domain_mesh()
 
 # Solver

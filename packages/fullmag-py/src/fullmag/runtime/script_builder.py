@@ -904,6 +904,30 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
             f"per_element_quality={_py_literal(bool(mesh_config['per_element_quality']))}"
         )
 
+    # Swept / through-thickness parameters
+    mesh_strategy_value = mesh_config.get("mesh_strategy")
+    if isinstance(mesh_strategy_value, str) and mesh_strategy_value.strip():
+        kwargs.append(f"mesh_strategy={_py_repr(mesh_strategy_value)}")
+
+    through_thickness_elements_value = mesh_config.get("through_thickness_elements")
+    if isinstance(through_thickness_elements_value, (int, float)):
+        kwargs.append(f"through_thickness_elements={int(through_thickness_elements_value)}")
+
+    through_thickness_distribution_value = mesh_config.get("through_thickness_distribution")
+    if isinstance(through_thickness_distribution_value, str) and through_thickness_distribution_value.strip():
+        kwargs.append(f"through_thickness_distribution={_py_repr(through_thickness_distribution_value)}")
+
+    through_thickness_element_ratio_value = _number_or_none(mesh_config.get("through_thickness_element_ratio"))
+    if through_thickness_element_ratio_value is not None:
+        kwargs.append(f"through_thickness_element_ratio={_py_number(through_thickness_element_ratio_value)}")
+
+    if mesh_config.get("through_thickness_symmetric"):
+        kwargs.append("through_thickness_symmetric=True")
+
+    sweep_face_meshing_value = mesh_config.get("sweep_face_meshing")
+    if isinstance(sweep_face_meshing_value, str) and sweep_face_meshing_value.strip():
+        kwargs.append(f"sweep_face_meshing={_py_repr(sweep_face_meshing_value)}")
+
     return kwargs
 
 
@@ -956,6 +980,24 @@ def _render_mesh_operations(target_var: str, mesh_config: dict[str, object]) -> 
                 lines.append(f"{target_var}.mesh.smooth()")
             else:
                 lines.append(f"{target_var}.mesh.smooth(iterations={iterations})")
+        elif kind == "swept":
+            swept_kwargs: list[str] = []
+            elements = params.get("through_thickness_elements")
+            if isinstance(elements, (int, float)):
+                swept_kwargs.append(f"elements={int(elements)}")
+            distribution = params.get("through_thickness_distribution")
+            if isinstance(distribution, str) and distribution != "fixed":
+                swept_kwargs.append(f"distribution={_py_repr(distribution)}")
+            element_ratio = _number_or_none(params.get("through_thickness_element_ratio"))
+            if element_ratio is not None and element_ratio != 1.0:
+                swept_kwargs.append(f"element_ratio={_py_number(element_ratio)}")
+            if params.get("through_thickness_symmetric"):
+                swept_kwargs.append("symmetric=True")
+            face_meshing = params.get("sweep_face_meshing")
+            if isinstance(face_meshing, str) and face_meshing != "triangular":
+                swept_kwargs.append(f"face_meshing={_py_repr(face_meshing)}")
+            suffix = f"({', '.join(swept_kwargs)})" if swept_kwargs else "()"
+            lines.append(f"{target_var}.mesh.swept{suffix}")
     return lines
 
 

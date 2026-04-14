@@ -46,6 +46,7 @@ from ._gmsh_extraction import (
 )
 from ._gmsh_fields import _apply_mesh_options, _apply_post_mesh_options
 from ._gmsh_airbox import _add_airbox_and_fragment, _add_airbox_geo
+from ._gmsh_swept import should_use_swept, generate_swept_mesh, classify_sweepability
 
 
 def generate_mesh(
@@ -71,6 +72,25 @@ def generate_mesh(
         AirboxOptions(padding_factor=air_padding) if air_padding > 0 else None
     )
     opts = options or MeshOptions()
+
+    # ── Swept mesh dispatch ──
+    if should_use_swept(geometry, opts):
+        n_layers = opts.through_thickness_elements or 6
+        distribution = opts.through_thickness_distribution or "fixed"
+        element_ratio = opts.through_thickness_element_ratio or 1.0
+        symmetric = opts.through_thickness_symmetric
+        recombine = opts.sweep_face_meshing == "quadrilateral"
+        emit_progress(
+            f"Mesh strategy: swept ({n_layers} layers, {distribution}) "
+            f"for '{getattr(geometry, 'geometry_name', type(geometry).__name__)}'"
+        )
+        return generate_swept_mesh(
+            geometry, hmax, n_layers,
+            order=order, distribution=distribution,
+            element_ratio=element_ratio, symmetric=symmetric,
+            recombine=recombine, airbox=resolved_airbox, options=opts,
+        )
+
     if isinstance(geometry, Box):
         return generate_box_mesh(geometry.size, hmax=hmax, order=order, airbox=resolved_airbox, options=opts)
     if isinstance(geometry, Cylinder):
