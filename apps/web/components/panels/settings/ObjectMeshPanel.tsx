@@ -167,6 +167,22 @@ function mapObjectMeshToOptions(
       mesh.resolved_growth_rate?.trim().length
         ? mesh.resolved_growth_rate
         : effective.resolvedGrowthRate,
+    interfaceHMax:
+      mesh.interface_hmax?.trim().length
+        ? mesh.interface_hmax
+        : effective.interfaceHMax,
+    interfaceThickness:
+      mesh.interface_thickness?.trim().length
+        ? mesh.interface_thickness
+        : effective.interfaceThickness,
+    transitionDistance:
+      mesh.transition_distance?.trim().length
+        ? mesh.transition_distance
+        : effective.transitionDistance,
+    transitionGrowth:
+      mesh.transition_growth?.trim().length
+        ? mesh.transition_growth
+        : effective.transitionGrowth,
     smoothingSteps: mesh.smoothing_steps ?? effective.smoothingSteps,
     optimize: mesh.optimize ?? effective.optimize,
     optimizeIters: mesh.optimize_iterations ?? effective.optimizeIters,
@@ -240,10 +256,13 @@ function buildCustomMeshState(
     per_element_quality: options.perElementQuality,
     bulk_hmax: current?.bulk_hmax ?? null,
     bulk_hmin: current?.bulk_hmin ?? null,
-    interface_hmax: current?.interface_hmax ?? null,
-    interface_thickness: current?.interface_thickness ?? null,
-    transition_distance: current?.transition_distance ?? null,
-    transition_growth: current?.transition_growth ?? null,
+    interface_hmax: options.interfaceHMax.trim().length > 0 ? options.interfaceHMax : null,
+    interface_thickness:
+      options.interfaceThickness.trim().length > 0 ? options.interfaceThickness : null,
+    transition_distance:
+      options.transitionDistance.trim().length > 0 ? options.transitionDistance : null,
+    transition_growth:
+      options.transitionGrowth.trim().length > 0 ? options.transitionGrowth : null,
     boundary_layer_count: extras.boundaryLayerCount ?? current?.boundary_layer_count ?? null,
     boundary_layer_thickness: extras.boundaryLayerThickness ?? current?.boundary_layer_thickness ?? null,
     boundary_layer_stretching: extras.boundaryLayerStretching ?? current?.boundary_layer_stretching ?? null,
