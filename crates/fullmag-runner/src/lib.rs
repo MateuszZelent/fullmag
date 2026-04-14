@@ -203,7 +203,7 @@ pub fn fem_observables_for_magnetization(
 ///
 /// The callback receives a `StepUpdate` after each simulation step and returns
 /// `StepAction::Continue` to keep running or `StepAction::Stop` to cancel.
-/// Magnetization data is included every `field_every_n` steps (default: 10).
+/// Magnetization data is included every `field_every_n` steps.
 pub fn run_problem_with_callback(
     problem: &ProblemIR,
     until_seconds: f64,

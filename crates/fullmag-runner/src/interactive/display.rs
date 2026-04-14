@@ -42,7 +42,7 @@ impl Default for DisplaySelection {
             all_layers: false,
             x_chosen_size: 0,
             y_chosen_size: 0,
-            every_n: 10,
+            every_n: 50,
             max_points: 16_384,
             auto_scale_enabled: true,
         }

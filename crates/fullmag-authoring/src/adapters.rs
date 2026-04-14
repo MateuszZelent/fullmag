@@ -1,10 +1,10 @@
 use crate::{
-    validate_scene_document, MagnetizationAsset, SceneCurrentModulesState,
-    SceneDocument, SceneDocumentValidationError, SceneEditorState, SceneGeometry,
-    SceneMaterialAsset, SceneMetadata, SceneObject, SceneOutputsState, SceneStudyState,
-    ScriptBuilderGeometryEntry, ScriptBuilderMagneticInteractionEntry,
-    ScriptBuilderMagneticInteractionKind, ScriptBuilderMagnetizationState,
-    ScriptBuilderPerGeometryMeshState, ScriptBuilderState, Transform3D,
+    validate_scene_document, MagnetizationAsset, SceneCurrentModulesState, SceneDocument,
+    SceneDocumentValidationError, SceneEditorState, SceneGeometry, SceneMaterialAsset,
+    SceneMetadata, SceneObject, SceneOutputsState, SceneStudyState, ScriptBuilderGeometryEntry,
+    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
+    ScriptBuilderMagnetizationState, ScriptBuilderPerGeometryMeshState, ScriptBuilderState,
+    Transform3D,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -204,23 +204,41 @@ pub fn scene_document_to_script_builder_overrides(
         "mesh": {
             "algorithm_2d": builder.mesh.algorithm_2d,
             "algorithm_3d": builder.mesh.algorithm_3d,
+            "size_mode": builder.mesh.size_mode.as_ref().map(|value| Value::String(value.clone())).unwrap_or(Value::Null),
             "hmax": parse_optional_text_f64_or_auto(&builder.mesh.hmax),
             "hmin": parse_optional_text_f64(&builder.mesh.hmin),
+            "maximum_element_size": builder.mesh.maximum_element_size.as_deref().map(parse_optional_text_f64_or_auto).unwrap_or(Value::Null),
+            "minimum_element_size": builder.mesh.minimum_element_size.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
+            "calibrate_for": builder.mesh.calibrate_for.as_ref().map(|value| Value::String(value.clone())).unwrap_or(Value::Null),
+            "size_preset": builder.mesh.size_preset.as_ref().map(|value| Value::String(value.clone())).unwrap_or(Value::Null),
             "size_factor": builder.mesh.size_factor,
             "size_from_curvature": builder.mesh.size_from_curvature,
+            "curvature_factor": builder.mesh.curvature_factor.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
             "growth_rate": parse_optional_text_f64(&builder.mesh.growth_rate),
+            "maximum_element_growth_rate": builder.mesh.maximum_element_growth_rate.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
             "narrow_regions": builder.mesh.narrow_regions,
+            "narrow_region_resolution": builder.mesh.narrow_region_resolution.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
+            "resolved_size_from_curvature": builder.mesh.resolved_size_from_curvature.map(Value::from).unwrap_or(Value::Null),
+            "resolved_narrow_regions": builder.mesh.resolved_narrow_regions.map(Value::from).unwrap_or(Value::Null),
+            "resolved_growth_rate": builder.mesh.resolved_growth_rate.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
             "smoothing_steps": builder.mesh.smoothing_steps,
             "optimize": string_or_null(&builder.mesh.optimize),
             "optimize_iterations": builder.mesh.optimize_iterations,
             "compute_quality": builder.mesh.compute_quality,
             "per_element_quality": builder.mesh.per_element_quality,
+            "interface_hmax": builder.mesh.interface_hmax.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
+            "interface_thickness": builder.mesh.interface_thickness.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
+            "transition_distance": builder.mesh.transition_distance.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
+            "transition_growth": builder.mesh.transition_growth.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
             "adaptive_mesh": if !builder.mesh.adaptive_enabled {
                 Value::Null
             } else {
                 serde_json::json!({
                     "enabled": builder.mesh.adaptive_enabled,
                     "policy": builder.mesh.adaptive_policy,
+                    "indicator": builder.mesh.adaptive_indicator.as_ref(),
+                    "target_quantity": builder.mesh.adaptive_target_quantity.as_ref(),
+                    "convergence_metric": builder.mesh.adaptive_convergence_metric.as_ref(),
                     "theta": builder.mesh.adaptive_theta,
                     "h_min": parse_optional_text_f64(&builder.mesh.adaptive_h_min),
                     "h_max": parse_optional_text_f64(&builder.mesh.adaptive_h_max),
@@ -381,10 +399,45 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
     let mut map = Map::new();
     map.insert("mode".to_string(), Value::String(mesh.mode.clone()));
     map.insert(
+        "size_mode".to_string(),
+        mesh.size_mode
+            .as_ref()
+            .map(|value| Value::String(value.clone()))
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
         "hmax".to_string(),
         parse_optional_text_f64_or_auto(&mesh.hmax),
     );
     map.insert("hmin".to_string(), parse_optional_text_f64(&mesh.hmin));
+    map.insert(
+        "maximum_element_size".to_string(),
+        mesh.maximum_element_size
+            .as_deref()
+            .map(parse_optional_text_f64_or_auto)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "minimum_element_size".to_string(),
+        mesh.minimum_element_size
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "calibrate_for".to_string(),
+        mesh.calibrate_for
+            .as_ref()
+            .map(|value| Value::String(value.clone()))
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "size_preset".to_string(),
+        mesh.size_preset
+            .as_ref()
+            .map(|value| Value::String(value.clone()))
+            .unwrap_or(Value::Null),
+    );
     map.insert(
         "order".to_string(),
         serde_json::to_value(mesh.order).unwrap_or(Value::Null),
@@ -413,12 +466,52 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
         serde_json::to_value(mesh.size_from_curvature).unwrap_or(Value::Null),
     );
     map.insert(
+        "curvature_factor".to_string(),
+        mesh.curvature_factor
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
         "growth_rate".to_string(),
         parse_optional_text_f64(&mesh.growth_rate),
     );
     map.insert(
+        "maximum_element_growth_rate".to_string(),
+        mesh.maximum_element_growth_rate
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
         "narrow_regions".to_string(),
         serde_json::to_value(mesh.narrow_regions).unwrap_or(Value::Null),
+    );
+    map.insert(
+        "narrow_region_resolution".to_string(),
+        mesh.narrow_region_resolution
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "resolved_size_from_curvature".to_string(),
+        mesh.resolved_size_from_curvature
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "resolved_narrow_regions".to_string(),
+        mesh.resolved_narrow_regions
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "resolved_growth_rate".to_string(),
+        mesh.resolved_growth_rate
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
     );
     map.insert(
         "smoothing_steps".to_string(),
@@ -442,6 +535,31 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
     map.insert(
         "per_element_quality".to_string(),
         serde_json::to_value(mesh.per_element_quality).unwrap_or(Value::Null),
+    );
+    map.insert(
+        "interface_hmax".to_string(),
+        mesh.interface_hmax
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "interface_thickness".to_string(),
+        mesh.interface_thickness
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "transition_distance".to_string(),
+        mesh.transition_distance
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "transition_growth".to_string(),
+        serde_json::to_value(mesh.transition_growth).unwrap_or(Value::Null),
     );
     map.insert(
         "size_fields".to_string(),
@@ -824,19 +942,37 @@ mod tests {
             mesh: ScriptBuilderMeshState {
                 algorithm_2d: 6,
                 algorithm_3d: 1,
+                size_mode: Some("predefined".to_string()),
                 hmax: "20e-9".to_string(),
                 hmin: String::new(),
+                maximum_element_size: Some("20e-9".to_string()),
+                minimum_element_size: Some(String::new()),
+                calibrate_for: Some("general_physics".to_string()),
+                size_preset: Some("normal".to_string()),
                 size_factor: 1.0,
                 size_from_curvature: 0,
+                curvature_factor: Some(String::new()),
                 growth_rate: String::new(),
+                maximum_element_growth_rate: Some(String::new()),
                 narrow_regions: 0,
+                narrow_region_resolution: Some(String::new()),
+                resolved_size_from_curvature: None,
+                resolved_narrow_regions: None,
+                resolved_growth_rate: None,
                 smoothing_steps: 1,
                 optimize: "Netgen".to_string(),
                 optimize_iterations: 2,
                 compute_quality: true,
                 per_element_quality: false,
+                interface_hmax: None,
+                interface_thickness: None,
+                transition_distance: None,
+                transition_growth: None,
                 adaptive_enabled: false,
                 adaptive_policy: "auto".to_string(),
+                adaptive_indicator: Some("geometric_only".to_string()),
+                adaptive_target_quantity: Some("auto".to_string()),
+                adaptive_convergence_metric: Some("energy_delta".to_string()),
                 adaptive_theta: 0.3,
                 adaptive_h_min: String::new(),
                 adaptive_h_max: String::new(),
@@ -972,16 +1108,27 @@ mod tests {
                 ],
                 mesh: Some(ScriptBuilderPerGeometryMeshState {
                     mode: "custom".to_string(),
+                    size_mode: Some("custom".to_string()),
                     hmax: "10e-9".to_string(),
                     hmin: String::new(),
+                    maximum_element_size: Some("10e-9".to_string()),
+                    minimum_element_size: Some(String::new()),
+                    calibrate_for: Some("general_physics".to_string()),
+                    size_preset: Some("normal".to_string()),
                     order: Some(1),
                     source: None,
                     algorithm_2d: Some(6),
                     algorithm_3d: Some(10),
                     size_factor: Some(0.8),
                     size_from_curvature: Some(16),
+                    curvature_factor: Some(String::new()),
                     growth_rate: "1.6".to_string(),
+                    maximum_element_growth_rate: Some("1.6".to_string()),
                     narrow_regions: Some(2),
+                    narrow_region_resolution: Some(String::new()),
+                    resolved_size_from_curvature: None,
+                    resolved_narrow_regions: None,
+                    resolved_growth_rate: None,
                     smoothing_steps: Some(3),
                     optimize: Some("Netgen".to_string()),
                     optimize_iterations: Some(4),

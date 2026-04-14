@@ -87,8 +87,8 @@ export const PANEL_SIZES = {
   sidebarMax: "38%",
 } as const;
 
-export const PREVIEW_EVERY_N_DEFAULT = 10;
-export const PREVIEW_EVERY_N_PRESETS = [1, 2, 5, 10, 25, 50, 100] as const;
+export const PREVIEW_EVERY_N_DEFAULT = 50;
+export const PREVIEW_EVERY_N_PRESETS = [10, 25, 50, 100, 200, 500] as const;
 export const PREVIEW_MAX_POINTS_DEFAULT = 16_384;
 export const PREVIEW_MAX_POINTS_PRESETS = [4_096, 16_384, 65_536, 262_144, 1_048_576, 0] as const;
 

@@ -348,7 +348,7 @@ pub struct LivePreviewRequest {
 }
 
 const fn default_preview_every_n() -> u32 {
-    10
+    50
 }
 
 impl Default for LivePreviewRequest {

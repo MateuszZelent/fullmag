@@ -2498,11 +2498,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
     fs::create_dir_all(&workspace_dir)
         .with_context(|| format!("failed to create workspace dir {}", workspace_dir.display()))?;
-    // When 3D preview is disabled, set field_every_n to infinity to skip expensive computations
-    let field_every_n = if crate::live_workspace::feature_flags().disable_preview_3d {
+    // When 3D preview is disabled, set field_every_n to infinity to skip expensive computations.
+    // For FEM backends, use a much higher default because each observe/preview cycle is much more
+    // expensive (sparse CG demag solve) than FDM (FFT).
+    let field_every_n: u64 = if crate::live_workspace::feature_flags().disable_preview_3d {
         u64::MAX
+    } else if requested_backend_name == "fem" {
+        300
     } else {
-        10
+        50
     };
     let current_live_publisher = CurrentLivePublisher::spawn(&session_id);
     let bootstrapping_runtime = requested_runtime_selection(

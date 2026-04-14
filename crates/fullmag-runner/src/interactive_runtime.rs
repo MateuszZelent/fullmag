@@ -805,14 +805,15 @@ impl CpuInteractiveFdmPreviewRuntime {
                 dt = next;
             }
 
-            let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
-            current_observables = observables.clone();
-            let total_stats = make_step_stats(
+            // Build lightweight StepStats from the StepReport (no redundant
+            // observe).  Full observe_state is deferred until we know that
+            // preview or cached-preview data is actually needed.
+            let total_stats = make_step_stats_from_report(
                 self.total_steps,
                 self.state.time_seconds,
-                report.dt_used,
+                &report,
                 wall_elapsed,
-                &observables,
+                self.state.magnetization(),
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -830,11 +831,22 @@ impl CpuInteractiveFdmPreviewRuntime {
                 local_stats.step,
                 field_every_n,
             );
+
+            // Only run the expensive full observe when vector-field data is
+            // actually needed (preview refresh or cached preview refresh).
+            let needs_observables = (preview_due && !display_is_global_scalar(&display_state))
+                || cached_preview_due;
+
+            if needs_observables {
+                let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
+                current_observables = observables;
+            }
+
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
                 Some(build_grid_preview_field(
                     &preview_cfg,
-                    select_observables(&observables, &preview_cfg.quantity)?,
+                    select_observables(&current_observables, &preview_cfg.quantity)?,
                     grid,
                     self.plan_signature.active_mask.as_deref(),
                 ))
@@ -844,7 +856,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let cached_preview_fields = if cached_preview_due {
                 build_cached_grid_preview_fields(
                     &display_state,
-                    &observables,
+                    &current_observables,
                     grid,
                     self.plan_signature.active_mask.as_deref(),
                 )
@@ -1111,14 +1123,15 @@ impl CpuInteractiveFdmPreviewRuntime {
                 dt = next;
             }
 
-            let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
-            current_observables = observables.clone();
-            let total_stats = make_step_stats(
+            // Build lightweight StepStats from the StepReport (no redundant
+            // observe).  Full observe_state is deferred until we know that
+            // outputs, preview, or field data is actually needed.
+            let total_stats = make_step_stats_from_report(
                 self.total_steps,
                 self.state.time_seconds,
-                report.dt_used,
+                &report,
                 wall_elapsed,
-                &observables,
+                self.state.magnetization(),
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -1126,17 +1139,16 @@ impl CpuInteractiveFdmPreviewRuntime {
             current_local_stats = local_stats.clone();
             latest_local_stats = Some(local_stats.clone());
 
-            record_due_cpu_outputs(
-                &observables,
-                local_stats.step,
-                local_stats.time,
-                report.dt_used,
-                wall_elapsed,
-                scalar_schedules,
-                field_schedules,
-                steps,
-                artifacts,
-            )?;
+            // Determine what outputs are due BEFORE deciding whether to run
+            // the expensive observe_state.
+            let scalar_output_due = scalar_schedules
+                .iter()
+                .any(|schedule| is_due(local_stats.time, schedule.next_time));
+            let due_field_names: Vec<String> = field_schedules
+                .iter()
+                .filter(|schedule| is_due(local_stats.time, schedule.next_time))
+                .map(|schedule| schedule.name.clone())
+                .collect();
 
             let display_state = (checkpoint.display_selection)();
             let preview_due = display_refresh_due(
@@ -1144,11 +1156,35 @@ impl CpuInteractiveFdmPreviewRuntime {
                 &display_state,
                 local_stats.step,
             );
+            let needs_observables = scalar_output_due
+                || !due_field_names.is_empty()
+                || (preview_due && !display_is_global_scalar(&display_state));
+
+            // Only run the expensive full observe when actually needed.
+            if needs_observables {
+                let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
+                current_observables = observables;
+            }
+
+            if scalar_output_due || !due_field_names.is_empty() {
+                record_due_cpu_outputs(
+                    &current_observables,
+                    local_stats.step,
+                    local_stats.time,
+                    report.dt_used,
+                    wall_elapsed,
+                    scalar_schedules,
+                    field_schedules,
+                    steps,
+                    artifacts,
+                )?;
+            }
+
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
                 Some(build_grid_preview_field(
                     &preview_cfg,
-                    select_observables(&observables, &preview_cfg.quantity)?,
+                    select_observables(&current_observables, &preview_cfg.quantity)?,
                     grid,
                     self.plan_signature.active_mask.as_deref(),
                 ))
@@ -2045,28 +2081,15 @@ impl CpuInteractiveFemPreviewRuntime {
                 dt = next;
             }
 
-            let observe_start = std::time::Instant::now();
-            let observables =
-                fem_reference::observe_state(&self.problem, &self.state, &self.antenna_field)?;
-            let observe_us = observe_start.elapsed().as_micros();
-            current_observables = observables.clone();
-
-            // Per-step telemetry: log every 100 steps if observe overhead is significant.
-            if self.total_steps % 100 == 0 && (observe_us > 100 || step_wall_us > 5000) {
-                eprintln!(
-                    "[fullmag-runner] FEM CPU step {} telemetry: integrate={:.1}ms observe={:.1}ms",
-                    self.total_steps,
-                    step_wall_us as f64 / 1000.0,
-                    observe_us as f64 / 1000.0,
-                );
-            }
-
-            let total_stats = make_step_stats(
+            // Build lightweight StepStats from the StepReport (no redundant
+            // demag / observe).  Full observe_state is deferred until we know
+            // that preview or cached-preview data is actually needed.
+            let total_stats = make_step_stats_from_report(
                 self.total_steps,
                 self.state.time_seconds,
-                report.dt_used,
+                &report,
                 wall_elapsed,
-                &observables,
+                self.state.magnetization(),
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -2084,11 +2107,34 @@ impl CpuInteractiveFemPreviewRuntime {
                 local_stats.step,
                 field_every_n,
             );
+
+            // Only run the expensive full observe when vector-field data is
+            // actually needed (preview refresh or cached preview refresh).
+            let needs_observables =
+                (preview_due && !display_is_global_scalar(&display_state)) || cached_preview_due;
+
+            if needs_observables {
+                let observe_start = std::time::Instant::now();
+                let observables =
+                    fem_reference::observe_state(&self.problem, &self.state, &self.antenna_field)?;
+                let observe_us = observe_start.elapsed().as_micros();
+                current_observables = observables;
+
+                if self.total_steps % 100 == 0 && (observe_us > 100 || step_wall_us > 5000) {
+                    eprintln!(
+                        "[fullmag-runner] FEM CPU step {} telemetry: integrate={:.1}ms observe={:.1}ms",
+                        self.total_steps,
+                        step_wall_us as f64 / 1000.0,
+                        observe_us as f64 / 1000.0,
+                    );
+                }
+            }
+
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
                 Some(build_mesh_preview_field_with_active_mask(
                     &preview_cfg,
-                    select_observables(&observables, &preview_cfg.quantity)?,
+                    select_observables(&current_observables, &preview_cfg.quantity)?,
                     mesh_quantity_active_mask(&preview_cfg.quantity, &self.plan_signature.mesh),
                 ))
             } else {
@@ -2097,7 +2143,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let cached_preview_fields = if cached_preview_due {
                 build_cached_mesh_preview_fields(
                     &display_state,
-                    &observables,
+                    &current_observables,
                     &self.plan_signature.mesh,
                 )
             } else {

@@ -39,18 +39,40 @@ pub struct ScriptBuilderMeshState {
     pub algorithm_2d: i64,
     #[serde(default = "default_mesh_algo_3d")]
     pub algorithm_3d: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_mode: Option<String>,
     #[serde(default)]
     pub hmax: String,
     #[serde(default)]
     pub hmin: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_element_size: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_element_size: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibrate_for: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_preset: Option<String>,
     #[serde(default = "default_mesh_size_factor")]
     pub size_factor: f64,
     #[serde(default)]
     pub size_from_curvature: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curvature_factor: Option<String>,
     #[serde(default)]
     pub growth_rate: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_element_growth_rate: Option<String>,
     #[serde(default)]
     pub narrow_regions: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narrow_region_resolution: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_size_from_curvature: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_narrow_regions: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_growth_rate: Option<String>,
     #[serde(default = "default_mesh_smoothing")]
     pub smoothing_steps: i64,
     #[serde(default)]
@@ -61,10 +83,24 @@ pub struct ScriptBuilderMeshState {
     pub compute_quality: bool,
     #[serde(default)]
     pub per_element_quality: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_hmax: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_thickness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_distance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_growth: Option<String>,
     #[serde(default)]
     pub adaptive_enabled: bool,
     #[serde(default = "default_adaptive_mesh_policy")]
     pub adaptive_policy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_indicator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_target_quantity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_convergence_metric: Option<String>,
     #[serde(default = "default_adaptive_mesh_theta")]
     pub adaptive_theta: f64,
     #[serde(default)]
@@ -82,19 +118,37 @@ impl Default for ScriptBuilderMeshState {
         Self {
             algorithm_2d: default_mesh_algo_2d(),
             algorithm_3d: default_mesh_algo_3d(),
+            size_mode: None,
             hmax: String::new(),
             hmin: String::new(),
+            maximum_element_size: None,
+            minimum_element_size: None,
+            calibrate_for: None,
+            size_preset: None,
             size_factor: default_mesh_size_factor(),
             size_from_curvature: 0,
+            curvature_factor: None,
             growth_rate: String::new(),
+            maximum_element_growth_rate: None,
             narrow_regions: 0,
+            narrow_region_resolution: None,
+            resolved_size_from_curvature: None,
+            resolved_narrow_regions: None,
+            resolved_growth_rate: None,
             smoothing_steps: default_mesh_smoothing(),
             optimize: String::new(),
             optimize_iterations: default_mesh_opt_iters(),
             compute_quality: false,
             per_element_quality: false,
+            interface_hmax: None,
+            interface_thickness: None,
+            transition_distance: None,
+            transition_growth: None,
             adaptive_enabled: false,
             adaptive_policy: default_adaptive_mesh_policy(),
+            adaptive_indicator: None,
+            adaptive_target_quantity: None,
+            adaptive_convergence_metric: None,
             adaptive_theta: default_adaptive_mesh_theta(),
             adaptive_h_min: String::new(),
             adaptive_h_max: String::new(),
@@ -383,10 +437,20 @@ pub struct ScriptBuilderMagnetizationState {
 pub struct ScriptBuilderPerGeometryMeshState {
     #[serde(default = "default_inherit_mesh_mode")]
     pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_mode: Option<String>,
     #[serde(default)]
     pub hmax: String,
     #[serde(default)]
     pub hmin: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_element_size: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_element_size: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibrate_for: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_preset: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -399,10 +463,22 @@ pub struct ScriptBuilderPerGeometryMeshState {
     pub size_factor: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_from_curvature: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curvature_factor: Option<String>,
     #[serde(default)]
     pub growth_rate: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_element_growth_rate: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub narrow_regions: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narrow_region_resolution: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_size_from_curvature: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_narrow_regions: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_growth_rate: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoothing_steps: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

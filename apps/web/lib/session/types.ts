@@ -454,6 +454,10 @@ export interface ScriptBuilderMeshState {
   optimize_iterations: number;
   compute_quality: boolean;
   per_element_quality: boolean;
+  interface_hmax?: string;
+  interface_thickness?: string;
+  transition_distance?: string;
+  transition_growth?: string;
   adaptive_enabled: boolean;
   adaptive_policy: string;
   adaptive_indicator?: string;

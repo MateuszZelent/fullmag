@@ -879,6 +879,22 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
             f"narrow_region_resolution={_py_number(narrow_region_resolution_value)}"
         )
 
+    interface_hmax_value = _number_or_none(mesh_config.get("interface_hmax"))
+    if interface_hmax_value is not None:
+        kwargs.append(f"interface_hmax={_py_number(interface_hmax_value)}")
+
+    interface_thickness_value = _number_or_none(mesh_config.get("interface_thickness"))
+    if interface_thickness_value is not None:
+        kwargs.append(f"interface_thickness={_py_number(interface_thickness_value)}")
+
+    transition_distance_value = _number_or_none(mesh_config.get("transition_distance"))
+    if transition_distance_value is not None:
+        kwargs.append(f"transition_distance={_py_number(transition_distance_value)}")
+
+    transition_growth_value = _number_or_none(mesh_config.get("transition_growth"))
+    if transition_growth_value is not None:
+        kwargs.append(f"transition_growth={_py_number(transition_growth_value)}")
+
     if mesh_config.get("optimize") is not None:
         kwargs.append(f"optimize={_py_repr(str(mesh_config['optimize']))}")
     if mesh_config.get("compute_quality") is not None:
@@ -1867,6 +1883,16 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
         "narrow_region_resolution": _text_number(
             _number_or_none(mesh_options.get("narrow_region_resolution"))
         ),
+        "interface_hmax": _text_number(_number_or_none(mesh_options.get("interface_hmax"))),
+        "interface_thickness": _text_number(
+            _number_or_none(mesh_options.get("interface_thickness"))
+        ),
+        "transition_distance": _text_number(
+            _number_or_none(mesh_options.get("transition_distance"))
+        ),
+        "transition_growth": _text_number(
+            _number_or_none(mesh_options.get("transition_growth"))
+        ),
         "resolved_size_from_curvature": (
             int(mesh_options.get("resolved_size_from_curvature"))
             if isinstance(mesh_options.get("resolved_size_from_curvature"), (int, float))
@@ -1948,6 +1974,16 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "narrow_region_resolution": _text_number(
                 _number_or_none(mesh_entry.get("narrow_region_resolution"))
             ),
+            "interface_hmax": _text_number(_number_or_none(mesh_entry.get("interface_hmax"))),
+            "interface_thickness": _text_number(
+                _number_or_none(mesh_entry.get("interface_thickness"))
+            ),
+            "transition_distance": _text_number(
+                _number_or_none(mesh_entry.get("transition_distance"))
+            ),
+            "transition_growth": _text_number(
+                _number_or_none(mesh_entry.get("transition_growth"))
+            ),
             "resolved_size_from_curvature": (
                 int(mesh_entry["resolved_size_from_curvature"])
                 if isinstance(mesh_entry.get("resolved_size_from_curvature"), (int, float))
@@ -1988,6 +2024,10 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "maximum_element_growth_rate": "",
             "narrow_regions": None,
             "narrow_region_resolution": "",
+            "interface_hmax": "",
+            "interface_thickness": "",
+            "transition_distance": "",
+            "transition_growth": "",
             "resolved_size_from_curvature": None,
             "resolved_narrow_regions": None,
             "resolved_growth_rate": "",

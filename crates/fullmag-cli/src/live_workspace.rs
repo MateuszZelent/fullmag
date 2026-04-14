@@ -166,7 +166,7 @@ pub(crate) struct CurrentLivePublisher {
     wake_tx: mpsc::SyncSender<()>,
 }
 
-const CURRENT_LIVE_MIN_PUBLISH_INTERVAL: Duration = Duration::from_millis(50);
+const CURRENT_LIVE_MIN_PUBLISH_INTERVAL: Duration = Duration::from_millis(1500);
 
 impl CurrentLivePublisher {
     pub fn spawn(session_id: &str) -> Self {
