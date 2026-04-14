@@ -156,18 +156,11 @@ const RIBBON_TAB_TO_ID: Record<RibbonTab, RibbonTabId> = {
   Automation: "automation",
 };
 
-function tabsForMode(_mode: WorkspaceMode | undefined): RibbonTab[] {
-  return [
-    "Home",
-    "Definitions",
-    "Geometry",
-    "Materials",
-    "Physics",
-    "Mesh",
-    "Study",
-    "Results",
-    "Automation",
-  ];
+function tabsForMode(mode: WorkspaceMode | undefined): RibbonTab[] {
+  const common: RibbonTab[] = ["Home", "Definitions", "Geometry", "Materials", "Physics", "Mesh"];
+  if (mode === "build") return common;
+  if (mode === "study") return [...common, "Study"];
+  return [...common, "Study", "Results", "Automation"];
 }
 
 interface ContextualRibbonTab {

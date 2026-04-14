@@ -225,7 +225,7 @@ export function useFemViewportCommands({
     hasMeshParts,
     onMeshPartViewStatePatch,
     onRenderModeChange,
-    selectionScope.kind,
+    selectionScope,
     setInternalRenderMode,
     setOpenPopover,
     toolbarStylePartIds,
@@ -258,7 +258,7 @@ export function useFemViewportCommands({
   }, [
     hasMeshParts,
     onMeshPartViewStatePatch,
-    selectionScope.kind,
+    selectionScope,
     setField,
     toolbarColorPartIds,
   ]);

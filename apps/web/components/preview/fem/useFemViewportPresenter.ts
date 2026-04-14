@@ -124,21 +124,31 @@ export function useFemViewportPresenter(args: UseFemViewportPresenterArgs): {
   handleContextToggleClip: () => void;
   handleContextClearSelection: () => void;
 } {
-  useEffect(() => {
-    args.qualityProfileRef.current = args.qualityProfile;
-  }, [args.qualityProfile, args.qualityProfileRef]);
+  const {
+    qualityProfileRef,
+    qualityProfile,
+    interactionActive,
+    setHoveredFace,
+    activeTransformScope,
+    textureGizmoDragging,
+    setTextureGizmoDragging,
+  } = args;
 
   useEffect(() => {
-    if (args.interactionActive) {
-      args.setHoveredFace(null);
-    }
-  }, [args.interactionActive, args.setHoveredFace]);
+    qualityProfileRef.current = qualityProfile;
+  }, [qualityProfile, qualityProfileRef]);
 
   useEffect(() => {
-    if (args.activeTransformScope === "object" && args.textureGizmoDragging) {
-      args.setTextureGizmoDragging(false);
+    if (interactionActive) {
+      setHoveredFace(null);
     }
-  }, [args.activeTransformScope, args.textureGizmoDragging, args.setTextureGizmoDragging]);
+  }, [interactionActive, setHoveredFace]);
+
+  useEffect(() => {
+    if (activeTransformScope === "object" && textureGizmoDragging) {
+      setTextureGizmoDragging(false);
+    }
+  }, [activeTransformScope, textureGizmoDragging, setTextureGizmoDragging]);
 
   const faceAspectRatios = useMemo(
     () => computeFaceAspectRatios(args.meshData.nodes, args.meshData.boundaryFaces),
@@ -261,29 +271,36 @@ export function useFemViewportPresenter(args: UseFemViewportPresenterArgs): {
     viewCubeSceneRef: args.viewCubeSceneRef,
   });
 
+  const {
+    setSelectedFaces,
+    setCtxMenu,
+    applyToolbarColorField,
+    toggleClip,
+  } = args;
+
   const onPointerMissed = useCallback(() => {
-    args.setSelectedFaces([]);
-  }, [args.setSelectedFaces]);
+    setSelectedFaces([]);
+  }, [setSelectedFaces]);
 
   const handleContextInspectFace = useCallback((faceIdx: number) => {
-    args.setSelectedFaces([faceIdx]);
-    args.setCtxMenu(null);
-  }, [args.setCtxMenu, args.setSelectedFaces]);
+    setSelectedFaces([faceIdx]);
+    setCtxMenu(null);
+  }, [setCtxMenu, setSelectedFaces]);
 
   const handleContextShowQuality = useCallback(() => {
-    args.applyToolbarColorField("quality");
-    args.setCtxMenu(null);
-  }, [args.applyToolbarColorField, args.setCtxMenu]);
+    applyToolbarColorField("quality");
+    setCtxMenu(null);
+  }, [applyToolbarColorField, setCtxMenu]);
 
   const handleContextToggleClip = useCallback(() => {
-    args.toggleClip();
-    args.setCtxMenu(null);
-  }, [args.setCtxMenu, args.toggleClip]);
+    toggleClip();
+    setCtxMenu(null);
+  }, [setCtxMenu, toggleClip]);
 
   const handleContextClearSelection = useCallback(() => {
-    args.setSelectedFaces([]);
-    args.setCtxMenu(null);
-  }, [args.setCtxMenu, args.setSelectedFaces]);
+    setSelectedFaces([]);
+    setCtxMenu(null);
+  }, [setCtxMenu, setSelectedFaces]);
 
   return {
     overlayItems,

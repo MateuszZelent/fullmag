@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import type { Route } from 'next';
 import { usePathname } from 'next/navigation';
 import { type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
@@ -72,18 +73,20 @@ export function Sidebar({ items, collapsed, mobileOpen, onCloseMobile, onToggleC
                   pathname === item.href ||
                   (item.href !== '/' && pathname.startsWith(item.href));
                   
+                const navItemClassName = cn(
+                  "group flex items-center gap-3 rounded-md border px-3 py-2 text-sm font-medium transition-colors",
+                  isActive
+                    ? "border-primary/20 bg-primary/10 text-primary shadow-sm"
+                    : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                );
+
                 return (
                   <Link
                     key={item.href}
-                    href={item.href as any}
+                    href={item.href as Route}
                     onClick={onCloseMobile}
                     title={collapsed ? item.label : undefined}
-                    className={cn(
-                      "group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors border",
-                      isActive 
-                        ? "bg-primary/10 text-primary border-primary/20 shadow-sm" 
-                        : "text-muted-foreground hover:bg-muted/50 hover:text-foreground border-transparent"
-                    )}
+                    className={navItemClassName}
                   >
                     <span className={cn("shrink-0", isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground")}>
                       {item.icon}

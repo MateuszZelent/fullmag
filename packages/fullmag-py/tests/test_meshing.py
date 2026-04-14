@@ -523,9 +523,10 @@ class MeshScaffoldTests(unittest.TestCase):
         )
 
         kinds = [field["kind"] for field in mesh_options.size_fields]
+        # No auto-generated interface field — only bulk + transition
         self.assertEqual(
             kinds,
-            ["ComponentVolumeConstant", "InterfaceShellThreshold", "TransitionShellThreshold"],
+            ["ComponentVolumeConstant", "TransitionShellThreshold"],
         )
         self.assertEqual(mesh_options.size_fields[0]["params"]["GeometryName"], "left_geom")
         self.assertAlmostEqual(mesh_options.size_fields[0]["params"]["VIn"], 5e-9)
@@ -1753,16 +1754,16 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(fields[0]["params"]["GeometryName"], "left")
         self.assertAlmostEqual(fields[0]["params"]["VIn"], 5e-9)
 
-    def test_interface_field_defaults_to_sixty_percent_of_bulk(self) -> None:
+    def test_interface_field_skipped_when_not_explicitly_set(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")
         fields = _build_interface_fields(
             [left],
             default_hmax=20e-9,
             override_by_name={"left": {"bulk_hmax": "10e-9"}},
         )
-        self.assertEqual(len(fields), 1)
-        self.assertEqual(fields[0]["kind"], "BoundsSurfaceThreshold")
-        self.assertAlmostEqual(fields[0]["params"]["SizeMin"], 10e-9 * 0.6)
+        # Interface field is no longer auto-generated when user doesn't
+        # explicitly set interface_hmax.
+        self.assertEqual(len(fields), 0)
 
     def test_interface_field_explicit_params_override_defaults(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -1847,7 +1848,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                     "interface_thickness": "12e-9",
                     "transition_distance": "24e-9",
                 },
-                {"geometry": "right", "bulk_hmax": "6e-9"},
+                {"geometry": "right", "bulk_hmax": "6e-9", "interface_hmax": "3e-9"},
             ],
         )
         kinds = [f["kind"] for f in fields]
