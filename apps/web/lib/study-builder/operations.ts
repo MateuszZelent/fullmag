@@ -115,7 +115,7 @@ function primitiveDefaults(kind: StudyPrimitiveStageKind): {
           entrypoint_kind: kind,
           integrator: "rk45",
           relax_algorithm: "llg_overdamped",
-          torque_tolerance: "1e-6",
+          torque_tolerance: "1e-4",
           energy_tolerance: "",
           max_steps: "5000",
         },

@@ -1030,22 +1030,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     }
   }, []);
 
-  const handleStageChange = useCallback((stage: WorkspaceMode) => {
-    ctx.setWorkspaceMode(stage);
-    setActiveContextualTab(null);
-    if (stage === "build") setActiveCoreTab("Geometry");
-    else if (stage === "study") setActiveCoreTab("Study");
-    else setActiveCoreTab("Results");
-    const targetPath = `/${stage}`;
-    if (pathname !== targetPath) {
-      recordFrontendDebugEvent("run-control-room", "router_push_stage_change", {
-        stage,
-        targetPath,
-      });
-      router.push(targetPath as Route);
-    }
-  }, [ctx, pathname, router, setActiveContextualTab, setActiveCoreTab]);
-
   const hasEigenArtifacts = useMemo(
     () =>
       ctx.artifacts.some(
@@ -1171,9 +1155,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         canSyncScriptBuilder={Boolean(ctx.sessionFooter.scriptPath)}
         scriptSyncBusy={ctx.scriptSyncBusy}
         onSyncScriptBuilder={() => void ctx.syncScriptBuilder()}
-        workspaceMode={ctx.workspaceMode}
-        resultsAvailable={hasResultsAvailable}
-        onPerspectiveChange={handleStageChange}
       />
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showRibbonBar ? <RibbonBar
         workspaceMode={ctx.workspaceMode}

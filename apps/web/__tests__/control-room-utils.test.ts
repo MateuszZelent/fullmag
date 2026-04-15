@@ -15,6 +15,7 @@ import {
   asVec3,
   combineBounds,
 } from "../components/runs/control-room/shared";
+import { buildExecutionMapStatus } from "../lib/study-builder/execution-map";
 
 /* ═══════════════════════════════════════════════════════════════
  * controlRoomUtils
@@ -341,6 +342,7 @@ describe("resolveStudyStageExecutionState", () => {
         stageExecution: {
           total_stages: 3,
           completed_stage_indexes: [0],
+          stage_statuses: ["completed", "running", "pending"],
           active_stage_index: 1,
           active_stage_kind: "relax",
           runtime_state: "running",
@@ -353,6 +355,7 @@ describe("resolveStudyStageExecutionState", () => {
       declaredTotal: 3,
       activeStageIndex: 1,
       completedStageIndexes: [0],
+      stageStatuses: ["completed", "running", "pending"],
       activeStageKind: "relax",
       source: "contract",
     });
@@ -370,6 +373,7 @@ describe("resolveStudyStageExecutionState", () => {
       declaredTotal: 2,
       activeStageIndex: 0,
       completedStageIndexes: [],
+      stageStatuses: ["running", "pending"],
       activeStageKind: "relax",
       source: "fallback",
     });
@@ -381,6 +385,7 @@ describe("resolveStudyStageExecutionState", () => {
         stageExecution: {
           total_stages: 2,
           completed_stage_indexes: [0, 1],
+          stage_statuses: ["completed", "completed"],
           active_stage_index: null,
           active_stage_kind: null,
           runtime_state: "awaiting_command",
@@ -390,6 +395,21 @@ describe("resolveStudyStageExecutionState", () => {
         activityLabel: null,
       }).completedStageIndexes,
     ).toEqual([0, 1]);
+  });
+});
+
+describe("buildExecutionMapStatus", () => {
+  it("maps explicit stage statuses into done / failed / skipped", () => {
+    const entries = buildExecutionMapStatus(
+      [
+        { nodeId: "relax", nodeLabel: "Relax", stageIndexes: [0], childEntries: [] },
+        { nodeId: "pair", nodeLabel: "Relax -> Eigen", stageIndexes: [1, 2], childEntries: [] },
+        { nodeId: "skip", nodeLabel: "Skipped", stageIndexes: [3], childEntries: [] },
+      ],
+      ["completed", "completed", "failed", "skipped"],
+    );
+
+    expect(entries.map((entry) => entry.status)).toEqual(["done", "failed", "skipped"]);
   });
 });
 

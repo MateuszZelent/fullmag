@@ -338,7 +338,7 @@ mod tests {
                 "integrator": "rk45",
                 "fixed_timestep": "",
                 "relax_algorithm": "llg_overdamped",
-                "torque_tolerance": "1e-6",
+                "torque_tolerance": "1e-4",
                 "energy_tolerance": "",
                 "max_relax_steps": "1000"
             },

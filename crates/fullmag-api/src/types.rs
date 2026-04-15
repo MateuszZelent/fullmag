@@ -928,6 +928,8 @@ pub(crate) struct StageExecutionState {
     #[serde(default)]
     pub completed_stage_indexes: Vec<usize>,
     #[serde(default)]
+    pub stage_statuses: Vec<String>,
+    #[serde(default)]
     pub active_stage_index: Option<usize>,
     #[serde(default)]
     pub active_stage_kind: Option<String>,
@@ -1042,7 +1044,7 @@ mod tests {
                 integrator: "rk45".to_string(),
                 fixed_timestep: String::new(),
                 relax_algorithm: String::new(),
-                torque_tolerance: "1e-6".to_string(),
+                torque_tolerance: "1e-4".to_string(),
                 energy_tolerance: String::new(),
                 max_relax_steps: "1000".to_string(),
             },

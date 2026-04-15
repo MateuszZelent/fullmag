@@ -42,6 +42,7 @@ interface StudyBuilderWorkspaceProps {
   pipeline: StudyPipelineDocumentState | null;
   activeStageIndex: number | null;
   completedStageCount: number;
+  stageStatuses?: string[];
   onChangeStages: (next: ScriptBuilderStageState[]) => void;
   onChangePipeline: (next: StudyPipelineDocumentState | null) => void;
 }
@@ -62,6 +63,7 @@ export default function StudyBuilderWorkspace({
   pipeline,
   activeStageIndex,
   completedStageCount,
+  stageStatuses = [],
   onChangeStages,
   onChangePipeline,
 }: StudyBuilderWorkspaceProps) {
@@ -90,8 +92,20 @@ export default function StudyBuilderWorkspace({
     [document.nodes, effectiveSelectedNodeId],
   );
   const executionEntries = useMemo(
-    () => buildExecutionMapStatus(materialized.map, activeStageIndex, completedStageCount),
-    [activeStageIndex, completedStageCount, materialized.map],
+    () =>
+      buildExecutionMapStatus(
+        materialized.map,
+        stageStatuses.length > 0
+          ? stageStatuses
+          : Array.from({ length: materialized.stages.length }, (_, index) =>
+              activeStageIndex === index
+                ? "running"
+                : index < completedStageCount
+                  ? "completed"
+                  : "pending",
+            ),
+      ),
+    [activeStageIndex, completedStageCount, materialized.map, materialized.stages.length, stageStatuses],
   );
   const selectedMaterializedEntry = useMemo(
     () => findMaterializedEntry(materialized.map, effectiveSelectedNodeId),

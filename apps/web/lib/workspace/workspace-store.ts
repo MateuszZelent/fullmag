@@ -352,7 +352,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
   const dockingState = mergedDockingStateFromDefaults();
 
   return {
-    currentStage: "analyze",
+    currentStage: "study",
     activeCoreTab: "Home",
     activeContextualTab: null,
     stageLayouts: DEFAULT_STAGE_LAYOUTS,
@@ -649,7 +649,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       const currentStage: WorkspaceMode =
         currentStageRaw === "build" || currentStageRaw === "study" || currentStageRaw === "analyze"
           ? currentStageRaw
-          : "analyze";
+          : "study";
       const rightInspectorOpen =
         typeof rightInspectorOpenRaw === "boolean" ? rightInspectorOpenRaw : false;
       const rightInspectorTab: RightInspectorTab =

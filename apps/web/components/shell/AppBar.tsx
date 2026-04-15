@@ -15,7 +15,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import FullmagLogo from "../brand/FullmagLogo";
-import type { WorkspaceMode } from "../runs/control-room/context-hooks";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import { useRouter } from "next/navigation";
 
@@ -32,9 +31,6 @@ export interface AppBarProps {
   canSyncScriptBuilder?: boolean;
   scriptSyncBusy?: boolean;
   onSyncScriptBuilder?: () => void;
-  workspaceMode: WorkspaceMode;
-  resultsAvailable?: boolean;
-  onPerspectiveChange?: (mode: WorkspaceMode) => void;
 }
 
 interface MenuItem {
@@ -43,12 +39,6 @@ interface MenuItem {
   disabled?: boolean;
   action?: () => void;
 }
-
-const PERSPECTIVE_ENTRIES: Array<{ id: WorkspaceMode; label: string }> = [
-  { id: "build", label: "Model" },
-  { id: "study", label: "Study" },
-  { id: "analyze", label: "Results" },
-];
 
 function quickSyncBadge(
   canSyncScriptBuilder: boolean | undefined,
@@ -109,8 +99,8 @@ export default function AppBar(props: AppBarProps) {
   ] as const;
 
   return (
-    <div className="flex w-full shrink-0 items-center gap-3 border-b border-white/5 bg-background/70 px-3 py-1.5 backdrop-blur-xl z-[60]">
-      <div className="flex min-w-0 items-center gap-3">
+    <div className="z-[60] flex w-full shrink-0 flex-wrap items-center gap-2 border-b border-white/5 bg-background/70 px-3 py-1.5 backdrop-blur-xl">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
         <span className="flex items-center gap-2 whitespace-nowrap pr-1">
           <FullmagLogo size={22} className="opacity-90 drop-shadow-sm" />
           <span className="text-[0.8rem] font-semibold tracking-tight text-foreground/90">{props.problemName}</span>
@@ -171,32 +161,7 @@ export default function AppBar(props: AppBarProps) {
         </label>
       </div>
 
-      <div className="mx-auto hidden items-center gap-1 rounded-lg border border-border/35 bg-card/30 p-1 md:flex">
-        {PERSPECTIVE_ENTRIES.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            onClick={() => props.onPerspectiveChange?.(entry.id)}
-            disabled={entry.id === "analyze" && props.resultsAvailable === false}
-            title={
-              entry.id === "analyze" && props.resultsAvailable === false
-                ? "Results become available after the first completed solve."
-                : undefined
-            }
-            className={cn(
-              "rounded-md px-2.5 py-1 text-[0.67rem] font-semibold tracking-wide transition-colors",
-              props.workspaceMode === entry.id
-                ? "bg-primary/15 text-primary border border-primary/30"
-                : "text-muted-foreground border border-transparent hover:bg-muted/40 hover:text-foreground",
-              entry.id === "analyze" && props.resultsAvailable === false && "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
-            )}
-          >
-            {entry.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-2">
         <div className="hidden items-center gap-2 border-r border-border/40 pr-3 h-5 md:flex">
           <span className="text-[0.62rem] font-medium tracking-wider text-muted-foreground uppercase mr-1">
             {props.backend}

@@ -1678,6 +1678,9 @@ function normalizeStageExecutionState(raw: any) {
           .map((value: unknown) => Number(value ?? -1))
           .filter((value: number) => Number.isFinite(value) && value >= 0)
       : [],
+    stage_statuses: Array.isArray(raw.stage_statuses)
+      ? raw.stage_statuses.filter((value: unknown) => typeof value === "string")
+      : [],
     active_stage_index:
       typeof raw.active_stage_index === "number" && Number.isFinite(raw.active_stage_index)
         ? Math.max(0, Math.trunc(raw.active_stage_index))

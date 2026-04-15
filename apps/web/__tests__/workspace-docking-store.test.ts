@@ -34,7 +34,7 @@ function resetDockingStore() {
       study: null,
       analyze: null,
     },
-    currentStage: "analyze",
+    currentStage: "study",
   });
 }
 
@@ -112,5 +112,26 @@ describe("workspace docking store", () => {
     const stored = memoryStorage.getItem(getDefaultDockingStorageKey());
     expect(stored).toBeTruthy();
     expect(stored).toContain("splitterSize");
+  });
+
+  it("imports invalid snapshot stage using study as the safe default", () => {
+    const imported = useWorkspaceStore.getState().importUiStateSnapshot({
+      version: 1,
+      docking: {
+        workspaceTabsByStage: getDefaultWorkspaceTabsByStage(),
+        activeWorkspaceTabByStage: getDefaultActiveWorkspaceTabByStage(),
+        dockLayoutByStage: {
+          build: null,
+          study: null,
+          analyze: null,
+        },
+      },
+      currentStage: "results",
+      rightInspectorOpen: false,
+      rightInspectorTab: "console",
+    });
+
+    expect(imported).toBe(true);
+    expect(useWorkspaceStore.getState().currentStage).toBe("study");
   });
 });

@@ -10,30 +10,45 @@ export interface ExecutionMapEntryStatus {
   children: ExecutionMapEntryStatus[];
 }
 
+function normalizeStageStatus(status: string | undefined): ExecutionStatus | "completed" {
+  if (status === "running" || status === "paused") return "running";
+  if (status === "failed" || status === "error") return "failed";
+  if (status === "skipped") return "skipped";
+  if (status === "done") return "done";
+  if (status === "completed") return "completed";
+  return "pending";
+}
+
 function statusFromIndexes(
   indexes: number[],
-  activeIndex: number | null,
-  completedCount: number,
+  stageStatuses: string[],
 ): { status: ExecutionStatus; progress: number } {
   if (indexes.length === 0) return { status: "skipped", progress: 100 };
-  const done = indexes.filter((index) => index < completedCount).length;
-  const hasActive = activeIndex != null && indexes.includes(activeIndex);
-  if (done === indexes.length) return { status: "done", progress: 100 };
-  if (hasActive) {
-    const progress = (done / indexes.length) * 100;
-    return { status: "running", progress };
+  const statuses = indexes.map((index) => normalizeStageStatus(stageStatuses[index]));
+  const completed = statuses.filter((status) => status === "completed" || status === "done").length;
+  const skipped = statuses.filter((status) => status === "skipped").length;
+  const running = statuses.some((status) => status === "running");
+  const failed = statuses.some((status) => status === "failed");
+  const terminal = completed + skipped;
+
+  if (failed) {
+    return { status: "failed", progress: (terminal / indexes.length) * 100 };
   }
-  if (done > 0) return { status: "running", progress: (done / indexes.length) * 100 };
+  if (running) {
+    return { status: "running", progress: (terminal / indexes.length) * 100 };
+  }
+  if (completed === indexes.length) return { status: "done", progress: 100 };
+  if (skipped === indexes.length) return { status: "skipped", progress: 100 };
+  if (terminal > 0) return { status: "running", progress: (terminal / indexes.length) * 100 };
   return { status: "pending", progress: 0 };
 }
 
 export function buildExecutionMapStatus(
   map: MaterializedStageMapEntry[],
-  activeStageIndex: number | null,
-  completedStageCount: number,
+  stageStatuses: string[],
 ): ExecutionMapEntryStatus[] {
   return map.map((entry) => {
-    const base = statusFromIndexes(entry.stageIndexes, activeStageIndex, completedStageCount);
+    const base = statusFromIndexes(entry.stageIndexes, stageStatuses);
     return {
       nodeId: entry.nodeId,
       nodeLabel: entry.nodeLabel,
@@ -41,10 +56,8 @@ export function buildExecutionMapStatus(
       progress: base.progress,
       children: buildExecutionMapStatus(
         entry.childEntries ?? [],
-        activeStageIndex,
-        completedStageCount,
+        stageStatuses,
       ),
     };
   });
 }
-

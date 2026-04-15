@@ -241,6 +241,17 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     : (ctx.workspaceStatus === "completed" || ctx.workspaceStatus === "awaiting_command")
       ? ctx.studyStages.length
       : 0;
+  const stageStatuses = useMemo(
+    () =>
+      Array.from({ length: ctx.studyStages.length }, (_, index) =>
+        activeStageIndex === index
+          ? "running"
+          : index < completedStageCount
+            ? "completed"
+            : "pending",
+      ),
+    [activeStageIndex, completedStageCount, ctx.studyStages.length],
+  );
 
   const authoringDocument = builtAuthoringDocument(
     (ctx.studyPipeline as StudyPipelineDocument | null) ?? null,
@@ -539,6 +550,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
             pipeline={ctx.studyPipeline}
             activeStageIndex={activeStageIndex}
             completedStageCount={completedStageCount}
+            stageStatuses={stageStatuses}
             onChangeStages={(next) => {
               ctx.setStudyStages(next);
               syncCompatibilityState(ctx, next);

@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Route } from "next";
 import AppBar from "@/components/shell/AppBar";
 import {
   applyFrontendDiagnosticFlags,
@@ -164,11 +163,8 @@ export default function FrontendDiagnosticSettingsPage() {
         backend="local"
         status="settings"
         connection="connected"
-        workspaceMode="study"
         canSyncScriptBuilder={false}
         scriptSyncBusy={false}
-        resultsAvailable={true}
-        onPerspectiveChange={(mode) => router.push(`/${mode}` as Route)}
       />
 
       <div className="mx-auto flex w-full max-w-[1500px] gap-0 px-4 py-4">

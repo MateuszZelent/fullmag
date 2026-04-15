@@ -430,6 +430,7 @@ export interface CommandStatus {
 export interface StageExecutionState {
   total_stages: number;
   completed_stage_indexes: number[];
+  stage_statuses: string[];
   active_stage_index: number | null;
   active_stage_kind: string | null;
   runtime_state: string;

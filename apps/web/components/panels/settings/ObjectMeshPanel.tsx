@@ -185,8 +185,8 @@ function mapObjectMeshToOptions(
         ? mesh.transition_distance
         : effective.transitionDistance,
     transitionGrowth:
-      mesh.transition_growth?.trim().length
-        ? mesh.transition_growth
+      transitionGrowthText.trim().length > 0
+        ? transitionGrowthText
         : effective.transitionGrowth,
     smoothingSteps: mesh.smoothing_steps ?? effective.smoothingSteps,
     optimize: mesh.optimize ?? effective.optimize,
@@ -273,8 +273,7 @@ function buildCustomMeshState(
       options.interfaceThickness.trim().length > 0 ? options.interfaceThickness : null,
     transition_distance:
       options.transitionDistance.trim().length > 0 ? options.transitionDistance : null,
-    transition_growth:
-      options.transitionGrowth.trim().length > 0 ? options.transitionGrowth : null,
+    transition_growth: transitionGrowthParsed,
     boundary_layer_count: extras.boundaryLayerCount ?? current?.boundary_layer_count ?? null,
     boundary_layer_thickness: extras.boundaryLayerThickness ?? current?.boundary_layer_thickness ?? null,
     boundary_layer_stretching: extras.boundaryLayerStretching ?? current?.boundary_layer_stretching ?? null,

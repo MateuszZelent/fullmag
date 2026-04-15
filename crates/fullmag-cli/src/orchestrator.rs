@@ -687,36 +687,90 @@ fn overlay_mesh_workspace(
     );
 }
 
-fn stage_execution_completed_indexes(active_stage_1based: usize) -> Vec<usize> {
-    (0..active_stage_1based.saturating_sub(1)).collect()
+fn completed_stage_indexes_from_statuses(stage_statuses: &[String]) -> Vec<usize> {
+    stage_statuses
+        .iter()
+        .enumerate()
+        .filter_map(|(index, status)| (status == "completed").then_some(index))
+        .collect()
 }
 
-fn active_sequence_stage_execution(
-    total_stages: usize,
-    active_stage_1based: usize,
-    active_stage_kind: &str,
+fn stage_execution_from_statuses(
+    stage_statuses: &[String],
+    active_stage_index: Option<usize>,
+    active_stage_kind: Option<&str>,
     runtime_state: &str,
 ) -> CurrentLiveStageExecutionState {
+    let total_stages = stage_statuses.len();
+    let mut published_statuses = if stage_statuses.is_empty() {
+        vec![]
+    } else {
+        stage_statuses.to_vec()
+    };
+    if let Some(active_index) = active_stage_index.filter(|index| *index < total_stages) {
+        published_statuses[active_index] = runtime_state.to_string();
+    }
     CurrentLiveStageExecutionState {
         total_stages,
-        completed_stage_indexes: stage_execution_completed_indexes(active_stage_1based),
-        active_stage_index: Some(active_stage_1based.saturating_sub(1)),
-        active_stage_kind: Some(active_stage_kind.to_string()),
+        completed_stage_indexes: completed_stage_indexes_from_statuses(&published_statuses),
+        stage_statuses: published_statuses,
+        active_stage_index,
+        active_stage_kind: active_stage_kind.map(|kind| kind.to_string()),
         runtime_state: runtime_state.to_string(),
     }
 }
 
-fn completed_sequence_stage_execution(
-    total_stages: usize,
-    completed_stage_count: usize,
-    runtime_state: &str,
-) -> CurrentLiveStageExecutionState {
-    CurrentLiveStageExecutionState {
-        total_stages,
-        completed_stage_indexes: (0..completed_stage_count.min(total_stages)).collect(),
-        active_stage_index: None,
-        active_stage_kind: None,
-        runtime_state: runtime_state.to_string(),
+#[derive(Clone)]
+struct ActiveSequenceState {
+    remaining_stages: Vec<fullmag_runner::SequenceStage>,
+    current_stage_1based: usize,
+    stage_statuses: Vec<String>,
+}
+
+impl ActiveSequenceState {
+    fn new(stages: Vec<fullmag_runner::SequenceStage>) -> Self {
+        let total_stages = stages.len();
+        Self {
+            remaining_stages: stages,
+            current_stage_1based: 1,
+            stage_statuses: vec!["pending".to_string(); total_stages],
+        }
+    }
+
+    fn total_stages(&self) -> usize {
+        self.stage_statuses.len()
+    }
+
+    fn current_stage_index(&self) -> usize {
+        self.current_stage_1based.saturating_sub(1)
+    }
+
+    fn mark_current(&mut self, status: &str) {
+        let current_index = self.current_stage_index();
+        if current_index < self.stage_statuses.len() {
+            self.stage_statuses[current_index] = status.to_string();
+        }
+    }
+
+    fn advance(&mut self) {
+        self.current_stage_1based += 1;
+    }
+
+    fn stage_execution(
+        &self,
+        active_stage_kind: Option<&str>,
+        runtime_state: &str,
+    ) -> CurrentLiveStageExecutionState {
+        stage_execution_from_statuses(
+            &self.stage_statuses,
+            active_stage_kind.map(|_| self.current_stage_index()),
+            active_stage_kind,
+            runtime_state,
+        )
+    }
+
+    fn completed_stage_execution(&self, runtime_state: &str) -> CurrentLiveStageExecutionState {
+        stage_execution_from_statuses(&self.stage_statuses, None, None, runtime_state)
     }
 }
 
@@ -3878,7 +3932,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         // ── Sequence runner state ──
         // When a `run_sequence` command is active, this holds the remaining stages.
         // Each completed/skipped stage pops from the front. Break aborts the whole sequence.
-        let mut active_sequence: Option<(Vec<fullmag_runner::SequenceStage>, usize, usize)> = None; // (remaining_stages, current_1based, total)
+        let mut active_sequence: Option<ActiveSequenceState> = None;
         loop {
             let Some(command) =
                 interactive_runtime_host.wait_next_command_coalesced(Duration::from_millis(250))
@@ -4072,7 +4126,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         "system",
                         format!("Starting execution sequence with {} stage(s)", total),
                     );
-                    active_sequence = Some((stages, 1, total));
+                    active_sequence = Some(ActiveSequenceState::new(stages));
                 } else {
                     live_workspace
                         .push_log("error", "run_sequence command is missing stages payload");
@@ -4085,24 +4139,31 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 typed_cmd,
                 Some(fullmag_runner::LiveControlCommand::SkipStage)
             ) {
-                if let Some((ref mut remaining, ref mut current, total)) = active_sequence {
-                    if !remaining.is_empty() {
-                        let skipped_label = remaining[0].label();
-                        remaining.remove(0);
+                if let Some(sequence) = active_sequence.as_mut() {
+                    if !sequence.remaining_stages.is_empty() {
+                        let skipped_label = sequence.remaining_stages[0].label();
+                        sequence.remaining_stages.remove(0);
+                        sequence.mark_current("skipped");
                         live_workspace.push_log(
                             "system",
                             format!(
                                 "Skipped stage {}/{} ({}) while idle",
-                                current, total, skipped_label,
+                                sequence.current_stage_1based,
+                                sequence.total_stages(),
+                                skipped_label,
                             ),
                         );
-                        *current += 1;
+                        sequence.advance();
                     }
-                    if remaining.is_empty() {
+                    if sequence.remaining_stages.is_empty() {
                         live_workspace.push_log(
                             "success",
                             "Execution sequence completed (all stages skipped)",
                         );
+                        live_workspace.update(|state| {
+                            state.stage_execution =
+                                Some(sequence.completed_stage_execution("awaiting_command"));
+                        });
                         active_sequence = None;
                         continue;
                     }
@@ -4113,15 +4174,21 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
 
             // ── If an active sequence has pending stages, pop the next one as the command ──
-            let (command, command_kind_label) = if let Some((ref mut remaining, current, total)) =
-                active_sequence
-            {
-                if !remaining.is_empty() && command.kind == "run_sequence" {
-                    let stage_def = remaining.remove(0);
+            let (command, command_kind_label) = if let Some(sequence) = active_sequence.as_mut() {
+                if !sequence.remaining_stages.is_empty() && command.kind == "run_sequence" {
+                    let stage_def = sequence.remaining_stages.remove(0);
                     let stage_label = stage_def.label().to_string();
-                    let synthetic_cmd =
-                        sequence_stage_to_session_command(&stage_def, &command.command_id, current);
-                    let label = format!("sequence {}/{}: {}", current, total, stage_label);
+                    let synthetic_cmd = sequence_stage_to_session_command(
+                        &stage_def,
+                        &command.command_id,
+                        sequence.current_stage_1based,
+                    );
+                    let label = format!(
+                        "sequence {}/{}: {}",
+                        sequence.current_stage_1based,
+                        sequence.total_stages(),
+                        stage_label
+                    );
                     (synthetic_cmd, label)
                 } else {
                     let kind = resume_label_hint.unwrap_or_else(|| command.kind.clone());
@@ -4215,13 +4282,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     current_mesh_quality.as_ref(),
                     &current_mesh_history,
                 );
-                state.stage_execution = active_sequence.as_ref().map(|(_, current, total)| {
-                    active_sequence_stage_execution(
-                        *total,
-                        *current,
-                        &stage.entrypoint_kind,
-                        "running",
-                    )
+                state.stage_execution = active_sequence.as_ref().map(|sequence| {
+                    sequence.stage_execution(Some(&stage.entrypoint_kind), "running")
                 });
                 state.live_state = live_state_manifest_from_update(&stage_initial_update);
                 clear_cached_preview_fields(state);
@@ -4401,18 +4463,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 Ok(result) => result,
                 Err(error) => {
                     let failed_ready_at_unix_ms = unix_time_millis().unwrap_or(awaiting_at_unix_ms);
-                    let failed_stage_execution =
-                        active_sequence.as_ref().map(|(_, current, total)| {
-                            CurrentLiveStageExecutionState {
-                                total_stages: *total,
-                                completed_stage_indexes: stage_execution_completed_indexes(
-                                    *current,
-                                ),
-                                active_stage_index: Some(current.saturating_sub(1)),
-                                active_stage_kind: Some(stage.entrypoint_kind.clone()),
-                                runtime_state: "failed".to_string(),
-                            }
-                        });
+                    let failed_stage_execution = active_sequence.as_mut().map(|sequence| {
+                        sequence.mark_current("failed");
+                        sequence.stage_execution(Some(&stage.entrypoint_kind), "failed")
+                    });
+                    if let Some(sequence) = active_sequence.as_ref() {
+                        let stage_message = format!(
+                            "Stage {}/{} ({}) failed",
+                            sequence.current_stage_1based,
+                            sequence.total_stages(),
+                            stage.entrypoint_kind
+                        );
+                        eprintln!("[fullmag] {}", stage_message);
+                        live_workspace.push_log("error", stage_message);
+                    }
                     if active_sequence.is_some() {
                         live_workspace
                             .push_log("warning", "Execution sequence halted on failed stage");
@@ -4476,15 +4540,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         );
                         state.run = ctx.build_run("paused", &aggregated_steps);
                         set_live_state_status(&mut state.live_state, "paused", Some(false));
-                        state.stage_execution =
-                            active_sequence.as_ref().map(|(_, current, total)| {
-                                active_sequence_stage_execution(
-                                    *total,
-                                    *current,
-                                    &stage.entrypoint_kind,
-                                    "paused",
-                                )
-                            });
+                        state.stage_execution = active_sequence.as_ref().map(|sequence| {
+                            sequence.stage_execution(Some(&stage.entrypoint_kind), "paused")
+                        });
                     });
                     interactive_runtime_host
                         .enter_paused(continuation_magnetization.clone(), &live_workspace);
@@ -4590,14 +4648,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 "awaiting_command",
                                 Some(false),
                             );
-                            state.stage_execution =
-                                aborted_sequence.as_ref().map(|(_, current, total)| {
-                                    completed_sequence_stage_execution(
-                                        *total,
-                                        current.saturating_sub(1),
-                                        "awaiting_command",
-                                    )
-                                });
+                            state.stage_execution = aborted_sequence.as_ref().map(|sequence| {
+                                sequence.completed_stage_execution("awaiting_command")
+                            });
                         });
                         interactive_runtime_host.enter_awaiting_command(
                             continuation_magnetization.clone(),
@@ -4628,6 +4681,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
                     crate::interactive_runtime_host::InteractiveStageInterrupt::Skip => {
                         // Skip = interrupt current stage but continue sequence
+                        if let Some(sequence) = active_sequence.as_ref() {
+                            let stage_message = format!(
+                                "Stage {}/{} skipped",
+                                sequence.current_stage_1based,
+                                sequence.total_stages()
+                            );
+                            eprintln!("[fullmag] {}", stage_message);
+                            live_workspace.push_log("warning", stage_message);
+                        }
                         live_workspace.push_log(
                             "system",
                             format!(
@@ -4635,30 +4697,30 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 command_kind_label,
                             ),
                         );
-                        if let Some((ref mut remaining, ref mut current, total)) = active_sequence {
-                            *current += 1;
-                            if !remaining.is_empty() {
-                                let next_stage = remaining.remove(0);
+                        if let Some(sequence) = active_sequence.as_mut() {
+                            sequence.mark_current("skipped");
+                            sequence.advance();
+                            if !sequence.remaining_stages.is_empty() {
+                                let next_stage = sequence.remaining_stages.remove(0);
                                 let stage_label = next_stage.label().to_string();
                                 live_workspace.push_log(
                                     "system",
                                     format!(
                                         "Sequence: advancing to stage {}/{} ({})",
-                                        current, total, stage_label
+                                        sequence.current_stage_1based,
+                                        sequence.total_stages(),
+                                        stage_label
                                     ),
                                 );
                                 let synthetic_cmd = sequence_stage_to_session_command(
                                     &next_stage,
                                     &format!("seq_{}", session_id),
-                                    *current,
+                                    sequence.current_stage_1based,
                                 );
                                 live_workspace.update(|state| {
-                                    state.stage_execution = Some(active_sequence_stage_execution(
-                                        total,
-                                        *current,
-                                        &stage_label,
-                                        "running",
-                                    ));
+                                    state.stage_execution = Some(
+                                        sequence.stage_execution(Some(&stage_label), "running"),
+                                    );
                                 });
                                 interactive_runtime_host.push_command_front(synthetic_cmd);
                                 paused_stage = None;
@@ -4666,8 +4728,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             } else {
                                 live_workspace.push_log(
                                     "success",
-                                    format!("Execution sequence completed ({} stages)", total),
+                                    format!(
+                                        "Execution sequence completed ({} stages)",
+                                        sequence.total_stages()
+                                    ),
                                 );
+                                live_workspace.update(|state| {
+                                    state.stage_execution = Some(
+                                        sequence.completed_stage_execution("awaiting_command"),
+                                    );
+                                });
                                 active_sequence = None;
                             }
                         }
@@ -4786,33 +4856,42 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 "success",
                 format!("Interactive command {} completed", command_kind_label),
             );
+            if let Some(sequence) = active_sequence.as_ref() {
+                let stage_message = format!(
+                    "Stage {}/{} ({}) completed",
+                    sequence.current_stage_1based,
+                    sequence.total_stages(),
+                    stage.entrypoint_kind
+                );
+                eprintln!("[fullmag] {}", stage_message);
+                live_workspace.push_log("success", stage_message);
+            }
 
             // ── Sequence continuation: if there are more stages, advance ──
-            if let Some((ref mut remaining, ref mut current, total)) = active_sequence {
-                *current += 1;
-                if !remaining.is_empty() {
-                    let next_stage = remaining.remove(0);
+            if let Some(sequence) = active_sequence.as_mut() {
+                sequence.mark_current("completed");
+                sequence.advance();
+                if !sequence.remaining_stages.is_empty() {
+                    let next_stage = sequence.remaining_stages.remove(0);
                     let stage_label = next_stage.label().to_string();
                     live_workspace.push_log(
                         "system",
                         format!(
                             "Sequence: advancing to stage {}/{} ({})",
-                            current, total, stage_label
+                            sequence.current_stage_1based,
+                            sequence.total_stages(),
+                            stage_label
                         ),
                     );
                     // Push synthetic command to internal queue front so the loop picks it up next
                     let synthetic_cmd = sequence_stage_to_session_command(
                         &next_stage,
                         &format!("seq_{}", session_id),
-                        *current,
+                        sequence.current_stage_1based,
                     );
                     live_workspace.update(|state| {
-                        state.stage_execution = Some(active_sequence_stage_execution(
-                            total,
-                            *current,
-                            &stage_label,
-                            "running",
-                        ));
+                        state.stage_execution =
+                            Some(sequence.stage_execution(Some(&stage_label), "running"));
                     });
                     interactive_runtime_host.push_command_front(synthetic_cmd);
                     // Keep running status — don't enter_awaiting_command
@@ -4821,14 +4900,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 } else {
                     live_workspace.push_log(
                         "success",
-                        format!("Execution sequence completed ({} stages)", total),
+                        format!(
+                            "Execution sequence completed ({} stages)",
+                            sequence.total_stages()
+                        ),
                     );
                     live_workspace.update(|state| {
-                        state.stage_execution = Some(completed_sequence_stage_execution(
-                            total,
-                            total,
-                            "awaiting_command",
-                        ));
+                        state.stage_execution =
+                            Some(sequence.completed_stage_execution("awaiting_command"));
                     });
                     active_sequence = None;
                 }

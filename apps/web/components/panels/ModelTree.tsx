@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { CheckCircle2, Circle, LoaderCircle, MinusCircle, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
   ModelBuilderGraphV2,
@@ -28,7 +29,15 @@ import TreeNodeIcon from "@/features/iconography/TreeNodeIcon";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
 
-export type NodeStatus = "ready" | "active" | "pending" | "error";
+export type NodeStatus =
+  | "ready"
+  | "active"
+  | "pending"
+  | "error"
+  | "completed"
+  | "running"
+  | "failed"
+  | "skipped";
 
 export type NodeDomain = "build" | "study" | "analyze" | "results";
 
@@ -154,23 +163,29 @@ function buildStageDetailChildren(
 function resolveStageStatus(
   stageIndexes: number[],
   enabled: boolean,
-  activeStageIndex: number | null,
-  completedStageIndexes: ReadonlySet<number>,
+  stageStatuses: readonly string[],
 ): NodeStatus {
   if (!enabled) {
     return "pending";
   }
-  if (
-    activeStageIndex != null &&
-    stageIndexes.some((stageIndex) => stageIndex === activeStageIndex)
-  ) {
-    return "active";
+  if (stageIndexes.length === 0) {
+    return "pending";
   }
-  if (
-    stageIndexes.length > 0 &&
-    stageIndexes.every((stageIndex) => completedStageIndexes.has(stageIndex))
-  ) {
-    return "ready";
+  const statuses = stageIndexes.map((stageIndex) => stageStatuses[stageIndex] ?? "pending");
+  if (statuses.some((status) => status === "failed" || status === "error")) {
+    return "failed";
+  }
+  if (statuses.some((status) => status === "running" || status === "paused")) {
+    return "running";
+  }
+  if (statuses.every((status) => status === "skipped")) {
+    return "skipped";
+  }
+  if (statuses.every((status) => status === "completed" || status === "done")) {
+    return "completed";
+  }
+  if (statuses.some((status) => status === "completed" || status === "done" || status === "skipped")) {
+    return "running";
   }
   return "pending";
 }
@@ -178,17 +193,11 @@ function resolveStageStatus(
 function buildStudyPipelineTreeNodes(
   nodes: StudyPipelineNodeState[],
   stageIndexesByNodeId: ReadonlyMap<string, number[]>,
-  activeStageIndex: number | null,
-  completedStageIndexes: ReadonlySet<number>,
+  stageStatuses: readonly string[],
 ): TreeNodeData[] {
   return nodes.map((node, index) => {
     const stageIndexes = stageIndexesByNodeId.get(node.id) ?? [];
-    const nodeStatus = resolveStageStatus(
-      stageIndexes,
-      node.enabled,
-      activeStageIndex,
-      completedStageIndexes,
-    );
+    const nodeStatus = resolveStageStatus(stageIndexes, node.enabled, stageStatuses);
     if (node.node_kind === "group") {
       const baseId = buildPipelineStudyStageNodeId(node.id);
       return {
@@ -201,8 +210,7 @@ function buildStudyPipelineTreeNodes(
         children: buildStudyPipelineTreeNodes(
           node.children,
           stageIndexesByNodeId,
-          activeStageIndex,
-          completedStageIndexes,
+          stageStatuses,
         ),
       };
     }
@@ -280,17 +288,11 @@ function buildStudyPipelineTreeNodes(
 
 function buildFlatStudyStageTreeNodes(
   stages: ScriptBuilderStageState[],
-  activeStageIndex: number | null,
-  completedStageIndexes: ReadonlySet<number>,
+  stageStatuses: readonly string[],
 ): TreeNodeData[] {
   return stages.map((stage, index) => {
     const baseId = buildFlatStudyStageNodeId(index);
-    const stageStatus = resolveStageStatus(
-      [index],
-      true,
-      activeStageIndex,
-      completedStageIndexes,
-    );
+    const stageStatus = resolveStageStatus([index], true, stageStatuses);
     const detailChildren =
       stage.kind === "run"
         ? buildStageDetailChildren(baseId, [
@@ -334,6 +336,53 @@ interface ModelTreeProps {
   onNodeClick?: (id: string) => void;
   onContextAction?: (nodeId: string, action: string) => void;
   className?: string;
+}
+
+function nodeStatusTone(status: NodeStatus | undefined, isActive: boolean): string {
+  if (isActive) {
+    return "bg-primary/12 text-primary-foreground border border-primary/20 shadow-sm";
+  }
+  if (status === "running") {
+    return "bg-sky-500/10 text-sky-300 border border-sky-500/20";
+  }
+  if (status === "failed") {
+    return "bg-rose-500/10 text-rose-300 border border-rose-500/20";
+  }
+  if (status === "completed") {
+    return "bg-emerald-500/10 text-emerald-300 border border-emerald-500/20";
+  }
+  if (status === "skipped") {
+    return "bg-muted/30 text-muted-foreground border border-border/40";
+  }
+  if (status === "active") {
+    return "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+  }
+  return "hover:bg-muted/30 text-foreground/85 hover:text-foreground border border-transparent hover:border-border/50";
+}
+
+function StatusIcon({ status }: { status: NodeStatus }) {
+  if (status === "completed") {
+    return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />;
+  }
+  if (status === "running") {
+    return <LoaderCircle className="h-3.5 w-3.5 animate-spin text-sky-400" aria-hidden="true" />;
+  }
+  if (status === "failed") {
+    return <XCircle className="h-3.5 w-3.5 text-rose-400" aria-hidden="true" />;
+  }
+  if (status === "skipped") {
+    return <MinusCircle className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />;
+  }
+  if (status === "active") {
+    return <Circle className="h-3.5 w-3.5 fill-current text-primary" aria-hidden="true" />;
+  }
+  if (status === "error") {
+    return <XCircle className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />;
+  }
+  if (status === "ready") {
+    return <Circle className="h-3.5 w-3.5 fill-current text-emerald-500 opacity-80" aria-hidden="true" />;
+  }
+  return <Circle className="h-3.5 w-3.5 text-muted-foreground/40" aria-hidden="true" />;
 }
 
 /* ── Constants for tree geometry are now defined in globals.css ── */
@@ -429,11 +478,7 @@ function TreeNode({
         <div
           className={cn(
             "flex-1 flex items-center gap-1.5 pr-2.5 rounded-lg transition-all duration-200 overflow-hidden relative min-w-0",
-            isActive
-              ? "bg-primary/12 text-primary-foreground border border-primary/20 shadow-sm"
-              : node.status === "active"
-                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                : "hover:bg-muted/30 text-foreground/85 hover:text-foreground border border-transparent hover:border-border/50"
+            nodeStatusTone(node.status, isActive),
           )}
         >
           {/* Active indicator bar - glowing effect */}
@@ -477,17 +522,11 @@ function TreeNode({
             {node.label}
           </span>
 
-          {/* Status dot */}
+          {/* Status icon */}
           {node.status && (
-            <span
-              className={cn(
-                "h-1.5 w-1.5 shrink-0 rounded-full ml-1 opacity-85",
-                node.status === "ready" ? "bg-emerald-500/80" :
-                node.status === "active" ? "bg-primary animate-pulse" :
-                node.status === "error" ? "bg-destructive" :
-                "bg-muted-foreground/30"
-              )}
-            />
+            <span className="ml-1 shrink-0 opacity-90">
+              <StatusIcon status={node.status} />
+            </span>
           )}
 
           {/* Badge */}
@@ -736,6 +775,7 @@ export function buildFullmagModelTree(opts: {
   activeVisualizationPresetRef?: VisualizationPresetRef | null;
   activeStudyStageIndex?: number | null;
   completedStudyStageIndexes?: number[];
+  studyStageStatuses?: string[];
   pipelineStageIndexesByNodeId?: Record<string, number[]>;
 }): TreeNodeData[] {
   const graph = opts.graph ?? null;
@@ -825,6 +865,16 @@ export function buildFullmagModelTree(opts: {
   const studyPipeline = graph?.study.study_pipeline ?? null;
   const activeStudyStageIndex = opts.activeStudyStageIndex ?? null;
   const completedStudyStageIndexes = new Set(opts.completedStudyStageIndexes ?? []);
+  const studyStageStatuses =
+    opts.studyStageStatuses && opts.studyStageStatuses.length > 0
+      ? opts.studyStageStatuses
+      : Array.from({ length: studyStages.length }, (_, index) =>
+          activeStudyStageIndex === index
+            ? "running"
+            : completedStudyStageIndexes.has(index)
+              ? "completed"
+              : "pending",
+        );
   const pipelineStageIndexesByNodeId = new Map(
     Object.entries(opts.pipelineStageIndexesByNodeId ?? {}),
   );
@@ -991,13 +1041,11 @@ export function buildFullmagModelTree(opts: {
       ? buildStudyPipelineTreeNodes(
           studyPipeline.nodes,
           pipelineStageIndexesByNodeId,
-          activeStudyStageIndex,
-          completedStudyStageIndexes,
+          studyStageStatuses,
         )
       : buildFlatStudyStageTreeNodes(
           studyStages,
-          activeStudyStageIndex,
-          completedStudyStageIndexes,
+          studyStageStatuses,
         );
   const authoringStageCount = studyPipeline?.nodes.length ?? studyStages.length;
   const hasRunStage = studyStages.some((stage) => stage.kind === "run");

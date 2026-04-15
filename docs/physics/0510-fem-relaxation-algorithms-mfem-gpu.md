@@ -3,7 +3,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-03-24
+- Last updated: 2026-04-15
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -133,11 +133,22 @@ preview cadence, or stage materialization, that budget should be seeded from
 the same rule as FDM:
 
 1. `fixed_timestep` when explicitly provided,
-2. otherwise `adaptive_timestep.dt_initial` when provided,
+2. otherwise `adaptive_timestep.dt_initial` when explicitly provided by the
+   authoring surface,
 3. otherwise fallback `1e-13 s`.
 
 This pseudo-time is a runtime-control quantity only; convergence remains driven
 by torque and optional energy criteria rather than physical simulation time.
+
+Current authoring note: the embedded Python DSL currently serializes omitted
+adaptive seeds as `dt_initial = dt_min`. The CLI/runtime layer must therefore
+interpret `dt_initial == dt_min` as "no explicit seed supplied" for relaxation
+pseudo-time budgeting, rather than as a request to use the minimum adaptive
+step as the whole stage budget.
+
+Canonical authoring defaults must also remain aligned across Python and UI.
+For `Relaxation`, the public default `torque_tolerance` is `1e-4 A/m`; UI and
+script-builder defaults are product debt if they diverge from that value.
 
 Pros:
 

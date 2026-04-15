@@ -442,6 +442,7 @@ export default function RunSidebar() {
         activeVisualizationPresetRef: model.activeVisualizationPresetRef,
         activeStudyStageIndex: stageExecutionState.activeStageIndex,
         completedStudyStageIndexes: stageExecutionState.completedStageIndexes,
+        studyStageStatuses: stageExecutionState.stageStatuses,
         pipelineStageIndexesByNodeId,
       }),
     [
@@ -454,7 +455,7 @@ export default function RunSidebar() {
       launchIntent?.displayName, model.airPart?.element_count, model.airPart?.node_count,
       model.visualizationProjectPresets, model.visualizationLocalPresets, model.activeVisualizationPresetRef,
       model.studyPipeline, model.studyStages.length, cmd.activity.label, cmd.workspaceStatus,
-      stageExecutionState.activeStageIndex, stageExecutionState.completedStageIndexes, pipelineStageIndexesByNodeId,
+      stageExecutionState.activeStageIndex, stageExecutionState.completedStageIndexes, stageExecutionState.stageStatuses, pipelineStageIndexesByNodeId,
     ],
   );
 
