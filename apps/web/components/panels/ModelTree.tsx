@@ -340,7 +340,7 @@ interface ModelTreeProps {
 
 function nodeStatusTone(status: NodeStatus | undefined, isActive: boolean): string {
   if (isActive) {
-    return "bg-primary/12 text-primary-foreground border border-primary/20 shadow-sm";
+    return "bg-primary/12 text-primary border border-primary/20 shadow-sm";
   }
   if (status === "running") {
     return "bg-sky-500/10 text-sky-300 border border-sky-500/20";

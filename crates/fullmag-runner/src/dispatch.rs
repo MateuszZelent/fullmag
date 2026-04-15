@@ -2116,7 +2116,7 @@ fn execute_native_fem(
     ));
     let node_count = plan.mesh.nodes.len();
     let initial_magnetization = backend.copy_m(node_count)?;
-    let dt = plan
+    let mut dt = plan
         .fixed_timestep
         .or_else(|| {
             plan.adaptive_timestep
@@ -2124,6 +2124,7 @@ fn execute_native_fem(
                 .and_then(|adaptive| adaptive.dt_initial)
         })
         .unwrap_or(1e-13);
+    let dt_is_fixed = plan.fixed_timestep.is_some();
 
     let mut steps = Vec::new();
     // FEM-013 fix: serialize resolved demag realization and integrator in provenance.
@@ -2439,6 +2440,15 @@ fn execute_native_fem(
             }
         }
     } else {
+        eprintln!(
+            "[fullmag-runner] native-fem LLG loop: until={:.4e} dt_initial={:.4e} \
+             max_steps={} torque_tol={:.4e} adaptive={}",
+            until_seconds,
+            dt,
+            plan.relaxation.as_ref().map_or(0, |c| c.max_steps),
+            plan.relaxation.as_ref().map_or(0.0, |c| c.torque_tolerance),
+            !dt_is_fixed,
+        );
         while current_time < until_seconds {
             if let Some(live) = live.as_mut() {
                 if let Some(display_selection) = live.display_selection.map(|get| get()) {
@@ -2490,6 +2500,15 @@ fn execute_native_fem(
             };
             ensure_fem_object_scalars(&mut stats, plan);
             current_time = stats.time;
+            // Feed back the suggested next dt so the adaptive stepper can grow/shrink
+            // across outer loop iterations (mirrors fem_reference.rs behaviour).
+            if !dt_is_fixed {
+                if let Some(s) = stats.dt_suggested {
+                    dt = s;
+                } else if stats.dt > 0.0 {
+                    dt = stats.dt;
+                }
+            }
             latest_stats = Some(stats.clone());
             current_stats = stats.clone();
             if let Some(live) = live.as_mut() {
@@ -2558,20 +2577,43 @@ fn execute_native_fem(
             }
             let latest = steps.last().expect("just pushed stats");
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                latest.step >= control.max_steps
-                    || relaxation_converged(
-                        control,
-                        latest,
-                        previous_total_energy,
-                        plan.gyromagnetic_ratio,
-                        plan.material.damping,
-                        false,
-                    )
+                let max_steps_hit = latest.step >= control.max_steps;
+                let converged = relaxation_converged(
+                    control,
+                    latest,
+                    previous_total_energy,
+                    plan.gyromagnetic_ratio,
+                    plan.material.damping,
+                    false,
+                );
+                if max_steps_hit || converged {
+                    eprintln!(
+                        "[fullmag-runner] native-fem relaxation stop at step {}: \
+                         max_steps_hit={max_steps_hit} (step={} >= max_steps={}), \
+                         converged={converged} \
+                         (max_torque_T={:.4e} torque_tol={:.4e} energy_tol={:?})",
+                        latest.step,
+                        latest.step,
+                        control.max_steps,
+                        latest.max_torque_T,
+                        control.torque_tolerance,
+                        control.energy_tolerance,
+                    );
+                }
+                max_steps_hit || converged
             });
             previous_total_energy = Some(latest.e_total);
             if stop_for_relaxation {
                 break;
             }
+        }
+        if !cancelled {
+            eprintln!(
+                "[fullmag-runner] native-fem loop exited: time={:.4e} until={:.4e} (time_limit_reached={})",
+                current_time,
+                until_seconds,
+                current_time >= until_seconds,
+            );
         }
     }
 

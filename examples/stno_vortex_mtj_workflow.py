@@ -11,7 +11,7 @@ study = fm.study("stno_vortex_mtj_workflow")
 # Engine
 study.engine("fem")
 study.device("cpu", precision="double")
-study.universe(mode="auto", size=(2.5e-07, 2.5e-07, 6e-08), center=(0, 0, 0), padding=(0, 0, 0),    maximum_element_size=100e-09,
+study.universe(mode="auto", size=(2.5e-07, 2.5e-07, 6e-08), center=(0, 0, 0), padding=(0, 0, 0),    maximum_element_size=80e-09,
     minimum_element_size=10e-09)
 study.interactive(True)
 
@@ -76,7 +76,7 @@ study.tableautosave(1e-14, quantities=("time", "mx", "E_total"))
 # study.save("max_h_eff", every=1e-11)
 
 # Stages
-study.stages.add_relax(max_steps=8000, tol=1e-6, algorithm="llg_overdamped")
+study.stages.add_relax(max_steps=8000, tol=1e-6, algorithm="llg_overdamped", max_error=1e-6)
 study.stages.add_eigenmodes(
     count=20,
     target="lowest",

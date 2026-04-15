@@ -14,57 +14,8 @@ import {
 } from "@/lib/study-builder/summaries";
 import type { StudyPipelineDiagnostic, StudyPipelineNode } from "@/lib/study-builder/types";
 import StageSummaryChip from "./StageSummaryChip";
+import { InspectorSection, ToggleRow } from "@/components/panels/settings/primitives";
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="rounded-md border border-border/30 bg-background/45">
-      <div className="border-b border-border/30 px-3 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-        {title}
-      </div>
-      <div className="p-3">{children}</div>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1.5 text-[0.68rem] text-muted-foreground">
-      <span>{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function Input(props: InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      {...props}
-      className={`rounded border border-border/40 bg-background px-2.5 py-1.5 text-[0.74rem] text-foreground outline-none focus:border-primary/60 ${props.className ?? ""}`}
-    />
-  );
-}
-
-function Checkbox({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="flex items-center gap-2 text-[0.72rem] text-foreground">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        className="size-4 rounded border-border/40 bg-background"
-      />
-      {label}
-    </label>
-  );
-}
 
 const INTEGRATOR_OPTIONS = Object.entries(INTEGRATOR_PROFILES).map(([value, profile]) => ({
   value,
@@ -186,34 +137,24 @@ export default function StageInspector({
         </div>
       </div>
 
-      <Section title="Selection">
+      <InspectorSection title="Selection">
         <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
           <Field label="Label">
             <Input value={node.label} onChange={(event) => onRename(event.target.value)} />
           </Field>
-          <Field label="Status">
-            <div className="flex h-[2.15rem] items-center">
-              <button
-                type="button"
-                onClick={onToggleEnabled}
-                className="rounded border border-border/40 px-2.5 py-1.5 text-[0.72rem]"
-              >
-                {node.enabled ? "Disable node" : "Enable node"}
-              </button>
-            </div>
-          </Field>
+          <ToggleRow
+            label="Node enabled status"
+            checked={Boolean(node.enabled)}
+            onChange={onToggleEnabled}
+          />
         </div>
-      </Section>
+      </InspectorSection>
 
       {node.node_kind === "primitive" ? (
-        <Section title="Stage Parameters">
+        <InspectorSection title="Stage Parameters">
           <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
-            <Field label="Stage kind">
-              <Input value={humanizeToken(node.stage_kind)} readOnly />
-            </Field>
-            <Field label="Entrypoint">
-              <Input value={String(node.payload.entrypoint_kind ?? node.stage_kind)} readOnly />
-            </Field>
+            <TextField label="Stage kind" value={humanizeToken(node.stage_kind)} readOnly  />
+            <TextField label="Entrypoint" value={String(node.payload.entrypoint_kind ?? node.stage_kind)} readOnly  />
 
             {(node.stage_kind === "relax" || node.stage_kind === "run") && (
               <div className="md:col-span-2">
@@ -336,7 +277,7 @@ export default function StageInspector({
                   }
                 />
                 <div className="md:col-span-2">
-                  <Checkbox
+                  <ToggleRow
                     label="Include demag in eigenproblem"
                     checked={Boolean(node.payload.eigen_include_demag)}
                     onChange={(checked) => onPatchConfig({ eigen_include_demag: checked })}
@@ -405,11 +346,11 @@ export default function StageInspector({
               </>
             ) : null}
           </div>
-        </Section>
+        </InspectorSection>
       ) : null}
 
       {node.node_kind === "macro" ? (
-        <Section title="Macro Parameters">
+        <InspectorSection title="Macro Parameters">
           <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             {node.macro_kind === "field_sweep_relax" || node.macro_kind === "field_sweep_relax_snapshot" ? (
               <>
@@ -442,14 +383,14 @@ export default function StageInspector({
                   />
                 </Field>
                 <div className="md:col-span-2">
-                  <Checkbox
+                  <ToggleRow
                     label="Relax after each field step"
                     checked={node.config.relax_each !== false}
                     onChange={(checked) => onPatchConfig({ relax_each: checked })}
                   />
                 </div>
                 <div className="md:col-span-2">
-                  <Checkbox
+                  <ToggleRow
                     label="Save snapshot at each step"
                     checked={Boolean(node.config.save_point_state ?? (node.macro_kind === "field_sweep_relax_snapshot"))}
                     onChange={(checked) => onPatchConfig({ save_point_state: checked })}
@@ -495,14 +436,14 @@ export default function StageInspector({
                   />
                 </Field>
                 <div className="md:col-span-2">
-                  <Checkbox
+                  <ToggleRow
                     label="Relax after each sweep point"
                     checked={node.config.relax_each !== false}
                     onChange={(checked) => onPatchConfig({ relax_each: checked })}
                   />
                 </div>
                 <div className="md:col-span-2">
-                  <Checkbox
+                  <ToggleRow
                     label="Save a state snapshot at each point"
                     checked={Boolean(node.config.save_point_state)}
                     onChange={(checked) => onPatchConfig({ save_point_state: checked })}
@@ -529,7 +470,7 @@ export default function StageInspector({
                   />
                 </Field>
                 <div className="md:col-span-2">
-                  <Checkbox
+                  <ToggleRow
                     label="Include demag in eigenproblem"
                     checked={Boolean(node.config.eigen_include_demag ?? true)}
                     onChange={(checked) => onPatchConfig({ eigen_include_demag: checked })}
@@ -585,7 +526,7 @@ export default function StageInspector({
                   />
                 </Field>
                 <div className="md:col-span-2">
-                  <Checkbox
+                  <ToggleRow
                     label="Save a state snapshot at each point"
                     checked={Boolean(node.config.save_point_state)}
                     onChange={(checked) => onPatchConfig({ save_point_state: checked })}
@@ -594,19 +535,19 @@ export default function StageInspector({
               </>
             ) : null}
           </div>
-        </Section>
+        </InspectorSection>
       ) : null}
 
-      <Section title="Notes">
+      <InspectorSection title="Notes">
         <textarea
           value={node.notes ?? ""}
           onChange={(event) => onPatchNotes(event.target.value)}
           className="min-h-24 w-full rounded border border-border/40 bg-background px-2.5 py-2 text-[0.74rem] text-foreground outline-none focus:border-primary/60"
           placeholder="Optional design notes for this stage..."
         />
-      </Section>
+      </InspectorSection>
 
-      <Section title="Compiled Expansion Preview">
+      <InspectorSection title="Compiled Expansion Preview">
         {compiledStages.length === 0 ? (
           <div className="text-[0.72rem] text-muted-foreground">
             This node currently does not materialize to backend stages.
@@ -631,9 +572,9 @@ export default function StageInspector({
             ))}
           </div>
         )}
-      </Section>
+      </InspectorSection>
 
-      <Section title="Warnings">
+      <InspectorSection title="Warnings">
         {diagnostics.length === 0 ? (
           <div className="flex items-center gap-2 text-[0.72rem] text-emerald-400">
             <CheckCircle2 className="size-4" />
@@ -659,7 +600,7 @@ export default function StageInspector({
             ))}
           </div>
         )}
-      </Section>
+      </InspectorSection>
     </div>
   );
 }

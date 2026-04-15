@@ -20,6 +20,8 @@ export interface SolverSettingsState {
   maxRelaxSteps: string;
   /** Gilbert damping parameter α for relaxation (overrides material α). */
   relaxAlpha: string;
+  /** Adaptive timestep error tolerance (atol) for RK23/RK45 relax. Empty = default (1e-6). */
+  maxError: string;
 }
 
 export const DEFAULT_SOLVER_SETTINGS: SolverSettingsState = {
@@ -30,6 +32,7 @@ export const DEFAULT_SOLVER_SETTINGS: SolverSettingsState = {
   energyTolerance: "",
   maxRelaxSteps: "5000",
   relaxAlpha: "1.0",
+  maxError: "1e-6",
 };
 
 /** Canonical numeric fallback for convergence comparisons across the UI. */
@@ -219,6 +222,23 @@ export function RelaxationSettingsPanel({ settings, onChange, solverRunning = fa
               value={settings.energyTolerance}
               onChange={(e) => update({ energyTolerance: e.target.value })}
               placeholder="disabled"
+              disabled={solverRunning}
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+            Max Error
+            <HelpTip text="Adaptive timestep absolute error tolerance (atol) for RK23/RK45 integrators. Controls accuracy vs. speed tradeoff. Ignored for fixed-timestep methods." />
+          </span>
+          <div className="flex-1 max-w-[150px]">
+            <Input
+              className="h-8 w-full border-border/50 bg-card px-2 py-1 text-xs font-mono text-right placeholder:text-muted-foreground/30 disabled:opacity-50"
+              type="text"
+              value={settings.maxError}
+              onChange={(e) => update({ maxError: e.target.value })}
+              placeholder="1e-6"
               disabled={solverRunning}
             />
           </div>

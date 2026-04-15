@@ -18,6 +18,8 @@ export interface Polygon2D {
   points: Point2[];
   value: number;
   partId: string | null;
+  worldPoint: Point3 | null;
+  worldVector: Point3 | null;
 }
 
 export interface SliceArrow2D {
@@ -25,6 +27,8 @@ export interface SliceArrow2D {
   vector: Point2;
   magnitude: number;
   partId: string | null;
+  worldPoint: Point3;
+  worldVector: Point3;
 }
 
 export interface SliceCollection {
@@ -416,6 +420,12 @@ function collectTetraSegments(
     let avgV = 0;
     let avgVectorU = 0;
     let avgVectorV = 0;
+    let avgWorldX = 0;
+    let avgWorldY = 0;
+    let avgWorldZ = 0;
+    let avgVectorX = 0;
+    let avgVectorY = 0;
+    let avgVectorZ = 0;
     const pts: Point2[] = [];
     let minVal = unique[0].value;
     let maxVal = unique[0].value;
@@ -425,8 +435,14 @@ function collectTetraSegments(
       pts.push(projected);
       avgU += projected[0];
       avgV += projected[1];
+      avgWorldX += entry.point[0];
+      avgWorldY += entry.point[1];
+      avgWorldZ += entry.point[2];
       avgVectorU += entry.vector[u];
       avgVectorV += entry.vector[v];
+      avgVectorX += entry.vector[0];
+      avgVectorY += entry.vector[1];
+      avgVectorZ += entry.vector[2];
       intersectionBounds = includePointInBounds(intersectionBounds, projected);
       if (entry.value < minVal) minVal = entry.value;
       if (entry.value > maxVal) maxVal = entry.value;
@@ -434,20 +450,30 @@ function collectTetraSegments(
     avgValue /= unique.length;
     avgU /= unique.length;
     avgV /= unique.length;
+    avgWorldX /= unique.length;
+    avgWorldY /= unique.length;
+    avgWorldZ /= unique.length;
     avgVectorU /= unique.length;
     avgVectorV /= unique.length;
+    avgVectorX /= unique.length;
+    avgVectorY /= unique.length;
+    avgVectorZ /= unique.length;
     valueMin = Math.min(valueMin, minVal);
     valueMax = Math.max(valueMax, maxVal);
     polygons.push({
       points: pts,
       value: avgValue,
       partId: visibility?.elementPartIds[elementIndex] ?? null,
+      worldPoint: [avgWorldX, avgWorldY, avgWorldZ],
+      worldVector: [avgVectorX, avgVectorY, avgVectorZ],
     });
     arrows.push({
       origin: [avgU, avgV],
       vector: [avgVectorU, avgVectorV],
       magnitude: Math.hypot(avgVectorU, avgVectorV),
       partId: visibility?.elementPartIds[elementIndex] ?? null,
+      worldPoint: [avgWorldX, avgWorldY, avgWorldZ],
+      worldVector: [avgVectorX, avgVectorY, avgVectorZ],
     });
   }
   const bounds = chooseRenderBounds({

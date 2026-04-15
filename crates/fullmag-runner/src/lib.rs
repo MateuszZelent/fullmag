@@ -37,6 +37,23 @@ mod types;
 // ── Shared runner defaults (FEM-040) ─────────────────────────────────────
 /// Default maximum timestep for adaptive stepping when the user provides none.
 const DEFAULT_ADAPTIVE_DT_MAX: f64 = 1e-10;
+/// Default initial timestep seed when adaptive stepping is enabled but no
+/// meaningful `dt_initial` was provided.
+pub(crate) const DEFAULT_ADAPTIVE_DT_INITIAL: f64 = 1e-13;
+
+pub(crate) fn resolve_initial_timestep(
+    fixed_timestep: Option<f64>,
+    adaptive_timestep: Option<&fullmag_ir::AdaptiveTimeStepIR>,
+) -> Option<f64> {
+    fixed_timestep.or_else(|| {
+        adaptive_timestep.map(|adaptive| {
+            adaptive
+                .dt_initial
+                .filter(|dt_initial| (*dt_initial - adaptive.dt_min).abs() > f64::EPSILON)
+                .unwrap_or(DEFAULT_ADAPTIVE_DT_INITIAL)
+        })
+    })
+}
 
 // Public re-exports (unchanged API surface).
 pub use capabilities::{BackendCapabilities, RuntimeEngineId};
@@ -94,6 +111,79 @@ fn explicit_selection_from_problem(problem: &ProblemIR) -> bool {
         .and_then(|selection| selection.get("explicit_selection"))
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_initial_timestep;
+
+    #[test]
+    fn resolve_initial_timestep_prefers_fixed_value() {
+        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
+            atol: 1e-6,
+            rtol: 1e-3,
+            dt_initial: Some(5e-14),
+            dt_min: 1e-15,
+            dt_max: None,
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        };
+        assert_eq!(resolve_initial_timestep(Some(2e-13), Some(&adaptive)), Some(2e-13));
+    }
+
+    #[test]
+    fn resolve_initial_timestep_uses_adaptive_seed_when_meaningful() {
+        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
+            atol: 1e-6,
+            rtol: 1e-3,
+            dt_initial: Some(5e-14),
+            dt_min: 1e-15,
+            dt_max: None,
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        };
+        assert_eq!(resolve_initial_timestep(None, Some(&adaptive)), Some(5e-14));
+    }
+
+    #[test]
+    fn resolve_initial_timestep_falls_back_when_seed_matches_dt_min() {
+        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
+            atol: 1e-6,
+            rtol: 1e-3,
+            dt_initial: Some(1e-15),
+            dt_min: 1e-15,
+            dt_max: None,
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        };
+        assert_eq!(resolve_initial_timestep(None, Some(&adaptive)), Some(1e-13));
+    }
+
+    #[test]
+    fn resolve_initial_timestep_falls_back_when_seed_missing() {
+        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
+            atol: 1e-6,
+            rtol: 1e-3,
+            dt_initial: None,
+            dt_min: 1e-15,
+            dt_max: None,
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        };
+        assert_eq!(resolve_initial_timestep(None, Some(&adaptive)), Some(1e-13));
+    }
 }
 
 pub fn is_native_fdm_cuda_available() -> bool {

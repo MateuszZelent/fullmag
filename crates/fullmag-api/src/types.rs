@@ -866,6 +866,8 @@ pub(crate) struct SessionCommandRequest {
     #[serde(default)]
     pub fixed_timestep: Option<f64>,
     #[serde(default)]
+    pub max_error: Option<f64>,
+    #[serde(default)]
     pub relax_algorithm: Option<String>,
     #[serde(default)]
     pub relax_alpha: Option<f64>,
@@ -963,6 +965,8 @@ pub(crate) struct SessionCommand {
     pub integrator: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixed_timestep: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_error: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relax_algorithm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

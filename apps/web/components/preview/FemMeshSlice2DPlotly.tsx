@@ -11,7 +11,6 @@ import type { ObjectViewMode } from "../runs/control-room/shared";
 import {
   buildSliceVisibilityState,
   clipAxisToPlane,
-  getSmartColorScale,
   normalizedClipToWorld,
   planeToClipAxis,
 } from "./fem/femSliceUtils";
@@ -30,7 +29,12 @@ import {
   GLYPH_BUDGET_STEP,
   PREVIEW_MAX_POINTS_DEFAULT,
 } from "./fem/vectorDensityBudget";
-import { DIVERGING_PALETTE, POSITIVE_PALETTE, SEQUENTIAL_BLUE_PALETTE } from "../../lib/colorPalettes";
+import { POSITIVE_PALETTE } from "../../lib/colorPalettes";
+import {
+  paletteForMode,
+  smartAutoScale,
+  type ResolvedColorScale,
+} from "./fem/femSliceColorScale";
 import { ViewportToolbar3D } from "./ViewportToolbar3D";
 import { ViewportToolGroup, ViewportToolSeparator } from "./ViewportToolGroup";
 import { ViewportIconAction } from "./ViewportIconAction";
@@ -72,9 +76,12 @@ interface Props {
 }
 
 interface SliceProbe {
+  worldPoint: [number, number, number];
   u: number;
   v: number;
   value: number | null;
+  worldVector: [number, number, number] | null;
+  inPlaneMagnitude: number | null;
   source: "volume" | "boundary" | "vector" | null;
 }
 
@@ -90,9 +97,7 @@ const BORDER = "#313244";
 const TEXT = "#a6adc8";
 const TEXT_STRONG = "#cdd6f4";
 const GRID = "rgba(108, 112, 134, 0.08)";
-const DIVERGING = [...DIVERGING_PALETTE];
 const POSITIVE = [...POSITIVE_PALETTE];
-const NEGATIVE = [...SEQUENTIAL_BLUE_PALETTE];
 const COOLWARM = [
   "#3b4cc0",
   "#6f92f3",
@@ -134,21 +139,13 @@ function paletteColor(t: number, palette: string[]): string {
 
 function colorForValue(
   value: number,
-  min: number,
-  max: number,
-  quantityId: string | undefined,
-  component: VectorComponent,
+  scale: ResolvedColorScale,
+  palette: string[],
 ): string {
-  const isMagnetization = !quantityId || quantityId === "m";
-  if (isMagnetization && component !== "magnitude") {
-    const t = max > min ? (value - min) / (max - min) : 0.5;
-    return paletteColor(t, [...COOLWARM]);
-  }
-  if (isMagnetization && min === 0 && max === 1) {
+  if (scale.min === 0 && scale.max === 1 && palette === POSITIVE) {
     return paletteColor(value, POSITIVE);
   }
-  const palette = min < 0 && max > 0 ? DIVERGING : max <= 0 ? NEGATIVE : POSITIVE;
-  const t = max > min ? (value - min) / (max - min) : 0.5;
+  const t = scale.max > scale.min ? (value - scale.min) / (scale.max - scale.min) : 0.5;
   return paletteColor(t, palette);
 }
 
@@ -171,6 +168,94 @@ function formatProbeValue(value: number | null): string {
     return value.toExponential(2);
   }
   return value.toFixed(4);
+}
+
+function worldSymbolBase(quantityId: string | undefined, quantityLabel: string): string {
+  if (!quantityId || quantityId === "m") return "m";
+  if (/^H[_A-Za-z0-9]*$/i.test(quantityId)) return "H";
+  if (/field/i.test(quantityLabel)) return "H";
+  if (/^B[_A-Za-z0-9]*$/i.test(quantityId)) return "B";
+  return "v";
+}
+
+function worldComponentSymbol(
+  quantityId: string | undefined,
+  quantityLabel: string,
+  component: VectorComponent,
+): string {
+  if (component === "magnitude") {
+    return `|${worldSymbolBase(quantityId, quantityLabel)}|`;
+  }
+  return `${worldSymbolBase(quantityId, quantityLabel)}_${component}`;
+}
+
+function quantityHeading(
+  quantityId: string | undefined,
+  quantityLabel: string,
+  component: VectorComponent,
+): string {
+  return `${quantityLabel} · ${worldComponentSymbol(quantityId, quantityLabel, component)}`;
+}
+
+function axisValue(
+  plane: SlicePlane,
+  planeCoord: number,
+  axis: "x" | "y" | "z",
+  uValue: number,
+  vValue: number,
+): number {
+  switch (plane) {
+    case "xy":
+      if (axis === "x") return uValue;
+      if (axis === "y") return vValue;
+      return planeCoord;
+    case "xz":
+      if (axis === "x") return uValue;
+      if (axis === "y") return planeCoord;
+      return vValue;
+    case "yz":
+      if (axis === "x") return planeCoord;
+      if (axis === "y") return uValue;
+      return vValue;
+  }
+}
+
+function buildProbeFromPoint(
+  point: PlotMouseEvent["points"][number] | PlotHoverEvent["points"][number],
+  plane: SlicePlane,
+  planeCoord: number,
+): SliceProbe {
+  const pointData = point as typeof point & { fullData?: { hovertemplate?: string } };
+  const source =
+    pointData.fullData?.hovertemplate?.includes("<extra>vector</extra>")
+      ? "vector"
+      : pointData.fullData?.hovertemplate?.includes("<extra>volume</extra>")
+        ? "volume"
+        : "boundary";
+  const u = Number(point.x);
+  const v = Number(point.y);
+  const custom = Array.isArray(point.customdata) ? point.customdata : [];
+  const value = typeof custom[6] === "number" ? custom[6] : null;
+  const worldVector =
+    typeof custom[3] === "number" &&
+    typeof custom[4] === "number" &&
+    typeof custom[5] === "number"
+      ? [custom[3], custom[4], custom[5]] as [number, number, number]
+      : null;
+  const inPlaneMagnitude = typeof custom[7] === "number" ? custom[7] : null;
+  return {
+    worldPoint: [
+      axisValue(plane, planeCoord, "x", u, v),
+      axisValue(plane, planeCoord, "y", u, v),
+      axisValue(plane, planeCoord, "z", u, v),
+    ],
+    u,
+    v,
+    value,
+    worldVector,
+    inPlaneMagnitude,
+    source,
+  };
 }
 
 function collectAntennaRects(
@@ -208,7 +293,13 @@ function collectAntennaRects(
 }
 
 function sampleArrows(
-  arrows: Array<{ origin: Point2; vector: Point2; magnitude: number }>,
+  arrows: Array<{
+    origin: Point2;
+    vector: Point2;
+    magnitude: number;
+    worldPoint: [number, number, number];
+    worldVector: [number, number, number];
+  }>,
   target: number,
 ) {
   if (target <= 0 || arrows.length <= target) {
@@ -345,8 +436,21 @@ export default function FemMeshSlice2DPlotly({
   );
 
   const colorScale = useMemo(
-    () => getSmartColorScale(slice.valueRange.min, slice.valueRange.max, quantityId, effectiveComponent),
+    () => smartAutoScale(slice.valueRange.min, slice.valueRange.max, quantityId, effectiveComponent),
     [effectiveComponent, quantityId, slice.valueRange.max, slice.valueRange.min],
+  );
+  const resolvedPalette = useMemo(
+    () =>
+      isMagnetizationQuantity && effectiveComponent !== "magnitude"
+        ? [...COOLWARM]
+        : colorScale.mode === "diverging"
+          ? [...COOLWARM]
+          : paletteForMode(colorScale.mode),
+    [colorScale.mode, effectiveComponent, isMagnetizationQuantity],
+  );
+  const quantityTitle = useMemo(
+    () => quantityHeading(quantityId, quantityLabel, effectiveComponent),
+    [effectiveComponent, quantityId, quantityLabel],
   );
 
   const antennaRects = useMemo(
@@ -365,6 +469,12 @@ export default function FemMeshSlice2DPlotly({
     for (const polygon of slice.polygons) {
       if (polygon.points.length < 3) continue;
       const closed = [...polygon.points, polygon.points[0]];
+      const polygonWorldPoint = polygon.worldPoint ?? [
+        axisValue(effectivePlane, slice.planeCoord, "x", closed[0][0], closed[0][1]),
+        axisValue(effectivePlane, slice.planeCoord, "y", closed[0][0], closed[0][1]),
+        axisValue(effectivePlane, slice.planeCoord, "z", closed[0][0], closed[0][1]),
+      ];
+      const polygonWorldVector = polygon.worldVector ?? null;
       items.push({
         type: "scatter",
         mode: "lines",
@@ -372,21 +482,40 @@ export default function FemMeshSlice2DPlotly({
         y: closed.map((point) => point[1]),
         fill: "toself",
         fillcolor: hasField
-          ? colorForValue(
-              polygon.value,
-              colorScale.min,
-              colorScale.max,
-              quantityId,
-              effectiveComponent,
-            )
+          ? colorForValue(polygon.value, colorScale, resolvedPalette)
           : colorForDomain(polygon.partId),
         line: {
           color: hasField ? "rgba(0,0,0,0.18)" : "rgba(166,173,200,0.55)",
           width: hasField ? 0.7 : 1.1,
         },
         hovertemplate:
-          `${slice.uLabel} %{x:.3e} m<br>${slice.vLabel} %{y:.3e} m<br>${hasField ? quantityLabel : "value"} %{customdata:.4e} ${hasField && quantityUnit ? quantityUnit : ""}<extra>volume</extra>`,
-        customdata: closed.map(() => polygon.value),
+          [
+            `<b>${quantityTitle}</b>`,
+            `x %{customdata[0]:.3e} m`,
+            `y %{customdata[1]:.3e} m`,
+            `z %{customdata[2]:.3e} m`,
+            `${slice.uLabel} %{x:.3e} m`,
+            `${slice.vLabel} %{y:.3e} m`,
+            `${worldComponentSymbol(quantityId, quantityLabel, effectiveComponent)} %{customdata[6]:.4e}${quantityUnit ? ` ${quantityUnit}` : ""}`,
+            polygonWorldVector
+              ? `world vector [%{customdata[3]:.3e}, %{customdata[4]:.3e}, %{customdata[5]:.3e}]${quantityUnit ? ` ${quantityUnit}` : ""}`
+              : null,
+            "<extra>volume</extra>",
+          ]
+            .filter(Boolean)
+            .join("<br>"),
+        customdata: closed.map(() => [
+          polygonWorldPoint[0],
+          polygonWorldPoint[1],
+          polygonWorldPoint[2],
+          polygonWorldVector?.[0] ?? null,
+          polygonWorldVector?.[1] ?? null,
+          polygonWorldVector?.[2] ?? null,
+          polygon.value,
+          polygonWorldVector
+            ? Math.hypot(polygonWorldVector[axisIndices(effectivePlane).u], polygonWorldVector[axisIndices(effectivePlane).v])
+            : null,
+        ]),
         showlegend: false,
       } as Plotly.Data);
     }
@@ -445,22 +574,16 @@ export default function FemMeshSlice2DPlotly({
         marker: {
           size: 0.1,
           color: [colorScale.min, colorScale.max],
-          colorscale:
-            isMagnetizationQuantity && effectiveComponent !== "magnitude"
-              ? [...COOLWARM]
-              : colorScale.mode === "diverging"
-              ? DIVERGING
-              : colorScale.mode === "negative"
-                ? NEGATIVE
-                : POSITIVE,
+          colorscale: resolvedPalette,
           cmin: colorScale.min,
           cmax: colorScale.max,
           colorbar: {
-            title: { text: quantityLabel, side: "top" },
-            thickness: 10,
+            title: { text: quantityTitle, side: "right" },
+            thickness: 12,
             tickfont: { color: TEXT, family: "IBM Plex Mono, monospace", size: 10 },
             titlefont: { color: TEXT_STRONG, family: "IBM Plex Mono, monospace", size: 11 },
             outlinecolor: BORDER,
+            outlinewidth: 1.25,
           },
           showscale: true,
         },
@@ -516,8 +639,29 @@ export default function FemMeshSlice2DPlotly({
           color: "rgba(137,180,250,0.9)",
           line: { color: "rgba(17,17,27,0.9)", width: 0.5 },
         },
-        hovertemplate: `${slice.uLabel} %{x:.3e} m<br>${slice.vLabel} %{y:.3e} m<br>|v_${slice.uLabel}${slice.vLabel}| %{customdata:.4e} ${quantityUnit ?? ""}<extra>vector</extra>`,
-        customdata: sampledArrows.map((arrow) => arrow.magnitude),
+        hovertemplate: [
+          `<b>${quantityTitle} vector</b>`,
+          `x %{customdata[0]:.3e} m`,
+          `y %{customdata[1]:.3e} m`,
+          `z %{customdata[2]:.3e} m`,
+          `${slice.uLabel} %{x:.3e} m`,
+          `${slice.vLabel} %{y:.3e} m`,
+          `world vector [%{customdata[3]:.3e}, %{customdata[4]:.3e}, %{customdata[5]:.3e}]${quantityUnit ? ` ${quantityUnit}` : ""}`,
+          `in-plane |${worldSymbolBase(quantityId, quantityLabel)}_${slice.uLabel}${slice.vLabel}| %{customdata[7]:.4e}${quantityUnit ? ` ${quantityUnit}` : ""}`,
+          "<extra>vector</extra>",
+        ].join("<br>"),
+        customdata: sampledArrows.map((arrow) => [
+          arrow.worldPoint[0],
+          arrow.worldPoint[1],
+          arrow.worldPoint[2],
+          arrow.worldVector[0],
+          arrow.worldVector[1],
+          arrow.worldVector[2],
+          effectiveComponent === "magnitude"
+            ? Math.hypot(...arrow.worldVector)
+            : arrow.worldVector[effectiveComponent === "x" ? 0 : effectiveComponent === "y" ? 1 : 2],
+          arrow.magnitude,
+        ]),
         showlegend: false,
       } as Plotly.Data);
     }
@@ -536,6 +680,8 @@ export default function FemMeshSlice2DPlotly({
     quantityId,
     quantityLabel,
     quantityUnit,
+    quantityTitle,
+    resolvedPalette,
     sampledArrows,
     slice,
   ]);
@@ -544,7 +690,7 @@ export default function FemMeshSlice2DPlotly({
     (): Partial<Plotly.Layout> => ({
       paper_bgcolor: BG,
       plot_bgcolor: "rgba(17,17,27,0.72)",
-      margin: { l: 68, r: hasField ? 88 : 20, t: 88, b: 84 },
+      margin: { l: 68, r: hasField ? 104 : 20, t: 92, b: 84 },
       font: {
         family: "IBM Plex Mono, monospace",
         size: 11,
@@ -586,7 +732,7 @@ export default function FemMeshSlice2DPlotly({
           y: 1.03,
           xanchor: "left",
           yanchor: "bottom",
-          text: `<b>${hasField ? `${quantityLabel}${fieldNComp >= 3 ? `.${effectiveComponent}` : ""}` : "mesh"}</b><br>plane ${slice.normalLabel} = ${slice.planeCoord.toExponential(3)} m`,
+          text: `<b>${hasField ? quantityTitle : "mesh"}</b><br>plane ${slice.normalLabel} = ${slice.planeCoord.toExponential(3)} m`,
           showarrow: false,
           align: "left",
           font: { family: "IBM Plex Mono, monospace", size: 11, color: TEXT_STRONG },
@@ -615,7 +761,7 @@ export default function FemMeshSlice2DPlotly({
       fieldNComp,
       hasField,
       quantityId,
-      quantityLabel,
+      quantityTitle,
       slice,
     ],
   );
@@ -649,49 +795,13 @@ export default function FemMeshSlice2DPlotly({
         onHover={(event: Readonly<PlotHoverEvent>) => {
           const point = event.points?.[0];
           if (!point) return;
-          const pointData = point as typeof point & { fullData?: { hovertemplate?: string } };
-          const source =
-            pointData.fullData?.hovertemplate?.includes("vector")
-              ? "vector"
-              : pointData.fullData?.hovertemplate?.includes("volume")
-                ? "volume"
-                : "boundary";
-          const value =
-            typeof point.customdata === "number"
-              ? point.customdata
-              : Array.isArray(point.customdata) && typeof point.customdata[0] === "number"
-                ? point.customdata[0]
-                : null;
-          setHoverProbe({
-            u: Number(point.x),
-            v: Number(point.y),
-            value,
-            source,
-          });
+          setHoverProbe(buildProbeFromPoint(point, effectivePlane, slice.planeCoord));
         }}
         onUnhover={() => setHoverProbe(null)}
         onClick={(event: Readonly<PlotMouseEvent>) => {
           const point = event.points?.[0];
           if (!point) return;
-          const pointData = point as typeof point & { fullData?: { hovertemplate?: string } };
-          const source =
-            pointData.fullData?.hovertemplate?.includes("vector")
-              ? "vector"
-              : pointData.fullData?.hovertemplate?.includes("volume")
-                ? "volume"
-                : "boundary";
-          const value =
-            typeof point.customdata === "number"
-              ? point.customdata
-              : Array.isArray(point.customdata) && typeof point.customdata[0] === "number"
-                ? point.customdata[0]
-                : null;
-          setPinnedProbe({
-            u: Number(point.x),
-            v: Number(point.y),
-            value,
-            source,
-          });
+          setPinnedProbe(buildProbeFromPoint(point, effectivePlane, slice.planeCoord));
         }}
       />
       <ViewportOverlayLayout>
@@ -918,12 +1028,29 @@ export default function FemMeshSlice2DPlotly({
                     <div className="text-[0.56rem] font-semibold uppercase tracking-[0.12em] text-slate-500">
                       {label}
                     </div>
-                    <div>u {probe!.u.toExponential(3)} m</div>
-                    <div>v {probe!.v.toExponential(3)} m</div>
+                    <div>x {probe!.worldPoint[0].toExponential(3)} m</div>
+                    <div>y {probe!.worldPoint[1].toExponential(3)} m</div>
+                    <div>z {probe!.worldPoint[2].toExponential(3)} m</div>
                     <div>
-                      value {formatProbeValue(probe!.value)}
+                      {slice.uLabel} {probe!.u.toExponential(3)} m
+                    </div>
+                    <div>
+                      {slice.vLabel} {probe!.v.toExponential(3)} m
+                    </div>
+                    <div>
+                      {worldComponentSymbol(quantityId, quantityLabel, effectiveComponent)} {formatProbeValue(probe!.value)}
                       {probe!.source ? ` (${probe!.source})` : ""}
                     </div>
+                    {probe!.worldVector && (
+                      <div>
+                        vector [{probe!.worldVector[0].toExponential(2)}, {probe!.worldVector[1].toExponential(2)}, {probe!.worldVector[2].toExponential(2)}]
+                      </div>
+                    )}
+                    {probe!.inPlaneMagnitude != null && (
+                      <div>
+                        in-plane {formatProbeValue(probe!.inPlaneMagnitude)}
+                      </div>
+                    )}
                   </div>
                 ))}
             </div>
@@ -932,7 +1059,7 @@ export default function FemMeshSlice2DPlotly({
 
         <ViewportOverlayLayout.BottomCenter>
           <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/40 bg-card/60 px-4 py-2 text-[0.68rem] font-mono text-slate-300 shadow-sm backdrop-blur-md pointer-events-none">
-            <span>{quantityLabel}{fieldNComp >= 3 ? `.${effectiveComponent}` : ""}</span>
+            <span>{quantityTitle}</span>
             <span>{effectivePlane.toUpperCase()}</span>
             <span>{slice.normalLabel} = {slice.planeCoord.toExponential(2)} m</span>
             {hasVectorField ? <span>vectors {arrowsVisible ? "on" : "off"}</span> : <span>scalar slice</span>}

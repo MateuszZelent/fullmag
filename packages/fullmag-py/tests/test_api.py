@@ -2054,6 +2054,28 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn('solver="rk45"', rewritten)
         self.assertIn("dt=2e-13", rewritten)
 
+    def test_study_stage_builder_add_minimize_maps_to_relaxation_algorithm(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_minimize")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        study.stages.add_minimize(method="ncg", max_steps=30)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_stage_minimize.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 1)
+        self.assertEqual(loaded.stages[0].problem.study.to_ir()["algorithm"], "nonlinear_cg")
+
     def test_builder_draft_uses_final_flat_problem_materials_for_stage_sequences(self) -> None:
         script = """
         import fullmag as fm
@@ -2266,6 +2288,92 @@ class ProblemApiTests(unittest.TestCase):
             path = Path(tmp_dir) / "script_flat_relax_invalid_solver.py"
             path.write_text(textwrap.dedent(script), encoding="utf-8")
             with self.assertRaises(TypeError):
+                fm.load_problem_from_script(path)
+
+    def test_flat_minimize_alias_defaults_to_projected_gradient_bb(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        fm.minimize(max_steps=100)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_flat_minimize_default.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        self.assertEqual(loaded.entrypoint_kind, "flat_relax")
+        study_ir = loaded.problem.study.to_ir()
+        self.assertEqual(study_ir["kind"], "relaxation")
+        self.assertEqual(study_ir["algorithm"], "projected_gradient_bb")
+
+    def test_flat_minimize_alias_supports_ncg_method(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        fm.minimize(method="ncg", max_steps=120)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_flat_minimize_ncg.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        self.assertEqual(loaded.problem.study.to_ir()["algorithm"], "nonlinear_cg")
+
+    def test_study_minimize_alias_works_in_builder_surface(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("minimize_surface")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        study.minimize(method="ncg", max_steps=55)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_study_minimize_alias.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        self.assertEqual(loaded.problem.study.to_ir()["algorithm"], "nonlinear_cg")
+
+    def test_minimize_rejects_unknown_method(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        fm.minimize(method="bogus")
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_minimize_invalid_method.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            with self.assertRaises(ValueError):
                 fm.load_problem_from_script(path)
 
     def test_flat_solver_max_error_lowers_to_adaptive_timestep(self) -> None:

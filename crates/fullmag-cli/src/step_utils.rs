@@ -1655,6 +1655,7 @@ pub(crate) fn build_interactive_command_stage(
             let fullmag_ir::DynamicsIR::Llg {
                 ref mut integrator,
                 ref mut fixed_timestep,
+                ref mut adaptive_timestep,
                 ..
             } = dynamics;
             if let Some(ref int_str) = command.integrator {
@@ -1669,10 +1670,46 @@ pub(crate) fn build_interactive_command_stage(
             }
             if let Some(ft) = command.fixed_timestep {
                 *fixed_timestep = Some(ft);
+                *adaptive_timestep = None;
+            } else if let Some(atol) = command.max_error {
+                *fixed_timestep = None;
+                *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+                    atol,
+                    rtol: 1e-3,
+                    dt_initial: None,
+                    dt_min: 1e-15,
+                    dt_max: None,
+                    safety: 0.9,
+                    growth_limit: 2.0,
+                    shrink_limit: 0.2,
+                    max_spin_rotation: None,
+                    norm_tolerance: None,
+                });
             } else if command.integrator.as_deref() == Some("rk45")
                 || command.integrator.as_deref() == Some("rk23")
             {
                 *fixed_timestep = None;
+            }
+            // Ensure that adaptive integrators always have a valid adaptive_timestep
+            // (either from command.max_error above or inherited from base_problem).
+            // If neither fixed_timestep nor adaptive_timestep is set, use defaults.
+            let is_adaptive_integrator = matches!(
+                integrator.as_str(),
+                "rk23" | "rk45"
+            );
+            if fixed_timestep.is_none() && adaptive_timestep.is_none() && is_adaptive_integrator {
+                *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+                    atol: 1e-6,
+                    rtol: 1e-3,
+                    dt_initial: None,
+                    dt_min: 1e-15,
+                    dt_max: None,
+                    safety: 0.9,
+                    growth_limit: 2.0,
+                    shrink_limit: 0.2,
+                    max_spin_rotation: None,
+                    norm_tolerance: None,
+                });
             }
             let sampling = ir.study.sampling().clone();
             let max_steps = command.max_steps.unwrap_or(50_000);
@@ -1778,6 +1815,7 @@ pub(crate) fn sequence_stage_to_session_command(
             energy_tolerance: None,
             integrator: None,
             fixed_timestep: None,
+            max_error: None,
             relax_algorithm: None,
             relax_alpha: None,
             mesh_options: None,
@@ -1807,6 +1845,7 @@ pub(crate) fn sequence_stage_to_session_command(
             energy_tolerance: *energy_tolerance,
             integrator: None,
             fixed_timestep: None,
+            max_error: None,
             relax_algorithm: None,
             relax_alpha: None,
             mesh_options: None,

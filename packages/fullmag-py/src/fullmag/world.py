@@ -100,6 +100,13 @@ _MESH_SIZE_PRESETS = (
     "extremely_coarse",
 )
 
+_MINIMIZE_METHOD_TO_ALGORITHM = {
+    "bb": "projected_gradient_bb",
+    "projected_gradient_bb": "projected_gradient_bb",
+    "ncg": "nonlinear_cg",
+    "nonlinear_cg": "nonlinear_cg",
+}
+
 
 def _normalize_mesh_calibration(value: str | None) -> str | None:
     if value is None:
@@ -1599,6 +1606,22 @@ class StudyStagesBuilder:
     def add_run(self, until: float) -> "StudyStagesBuilder":
         return self.add_stage(run_stage(until))
 
+    def add_minimize(
+        self,
+        *,
+        method: str = "bb",
+        tol: float = 1e-6,
+        max_steps: int = 50_000,
+        energy_tolerance: float | None = None,
+    ) -> "StudyStagesBuilder":
+        return self.add_relax(
+            tol=tol,
+            max_steps=max_steps,
+            algorithm=_resolve_minimize_algorithm(method),
+            energy_tolerance=energy_tolerance,
+            relax_alpha=None,
+        )
+
     def add_eigenmodes(
         self,
         *,
@@ -2048,6 +2071,21 @@ class StudyBuilder:
             solver=solver,
             dt=dt,
             max_error=max_error,
+        )
+
+    def minimize(
+        self,
+        *,
+        method: str = "bb",
+        tol: float = 1e-6,
+        max_steps: int = 50_000,
+        energy_tolerance: float | None = None,
+    ) -> Any:
+        return minimize(
+            method=method,
+            tol=tol,
+            max_steps=max_steps,
+            energy_tolerance=energy_tolerance,
         )
 
     def eigenmodes(
@@ -3259,6 +3297,17 @@ def _resolve_relax_solver(solver: str | None) -> str:
     return canonical
 
 
+def _resolve_minimize_algorithm(method: str) -> str:
+    normalized = str(method).strip().lower()
+    if not normalized:
+        raise ValueError("minimize method must be a non-empty string")
+    algorithm = _MINIMIZE_METHOD_TO_ALGORITHM.get(normalized)
+    if algorithm is None:
+        supported = ", ".join(sorted(_MINIMIZE_METHOD_TO_ALGORITHM))
+        raise ValueError(f"minimize method must be one of: {supported}")
+    return algorithm
+
+
 def _build_relax_llg_dynamics(
     *,
     algorithm: str,
@@ -3287,6 +3336,11 @@ def _build_relax_llg_dynamics(
                 "max_error requires an adaptive relax solver (rk23 or rk45)"
             )
         adaptive_timestep = AdaptiveTimestep(atol=max_error)
+    elif dt_is_auto and integrator in ADAPTIVE_INTEGRATORS:
+        # dt=None (default) with an adaptive integrator: use default adaptive
+        # stepping so the runner receives a valid AdaptiveTimeStepIR rather than
+        # both fixed_timestep=None and adaptive_timestep=None.
+        adaptive_timestep = AdaptiveTimestep()
 
     if dt_is_auto and integrator not in ADAPTIVE_INTEGRATORS:
         raise ValueError(
@@ -3728,6 +3782,51 @@ def relax(
     result = Simulation(problem).run(until=until_seconds)
     _record_result(result)
     return result
+
+
+def minimize(
+    *,
+    method: str = "bb",
+    tol: float = 1e-6,
+    max_steps: int = 50_000,
+    energy_tolerance: float | None = None,
+) -> Any:
+    """Run direct energy minimization (mumax-style Minimize alias).
+
+    Parameters
+    ----------
+    method : str
+        ``"bb"``/``"projected_gradient_bb"`` or ``"ncg"``/``"nonlinear_cg"``.
+    tol : float
+        Torque convergence tolerance (A/m).
+    max_steps : int
+        Maximum minimization iterations.
+    energy_tolerance : float, optional
+        Optional energy-delta convergence threshold.
+    """
+    algorithm = _resolve_minimize_algorithm(method)
+    return relax(
+        tol=tol,
+        max_steps=max_steps,
+        algorithm=algorithm,
+        energy_tolerance=energy_tolerance,
+        relax_alpha=None,
+    )
+
+
+def Minimize(
+    *,
+    method: str = "bb",
+    tol: float = 1e-6,
+    max_steps: int = 50_000,
+    energy_tolerance: float | None = None,
+) -> Any:
+    return minimize(
+        method=method,
+        tol=tol,
+        max_steps=max_steps,
+        energy_tolerance=energy_tolerance,
+    )
 
 
 def eigenmodes(

@@ -371,6 +371,8 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
         energy_tolerance: parseOptionalNumber(solverSettings.energyTolerance),
         relax_algorithm: solverSettings.relaxAlgorithm,
         relax_alpha: parseOptionalNumber(solverSettings.relaxAlpha),
+        fixed_timestep: parseOptionalNumber(solverSettings.fixedTimestep),
+        max_error: parseOptionalNumber(solverSettings.maxError),
       });
       return;
     }

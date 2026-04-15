@@ -324,6 +324,8 @@ pub(crate) struct SessionCommand {
     #[serde(default)]
     pub fixed_timestep: Option<f64>,
     #[serde(default)]
+    pub max_error: Option<f64>,
+    #[serde(default)]
     pub relax_algorithm: Option<String>,
     #[serde(default)]
     pub relax_alpha: Option<f64>,

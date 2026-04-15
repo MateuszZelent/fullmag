@@ -444,6 +444,15 @@ fn execute_reference_fem_impl(
         &plan.object_segments,
     );
 
+    eprintln!(
+        "[fullmag-runner] cpu-fem LLG loop: until={:.4e} dt_initial={:.4e} \
+         max_steps={} torque_tol={:.4e}",
+        until_seconds,
+        dt,
+        plan.relaxation.as_ref().map_or(0, |c| c.max_steps),
+        plan.relaxation.as_ref().map_or(0.0, |c| c.torque_tolerance),
+    );
+
     while state.time_seconds < until_seconds {
         if let Some(live) = live.as_mut() {
             if let Some(display_selection) = live.display_selection.map(|get| get()) {
@@ -686,20 +695,44 @@ fn execute_reference_fem_impl(
         }
 
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-            step_count >= control.max_steps
-                || relaxation_converged(
-                    control,
-                    &latest_stats,
-                    previous_total_energy,
-                    plan.gyromagnetic_ratio,
-                    plan.material.damping,
-                    pure_damping_relax,
-                )
+            let max_steps_hit = step_count >= control.max_steps;
+            let converged = relaxation_converged(
+                control,
+                &latest_stats,
+                previous_total_energy,
+                plan.gyromagnetic_ratio,
+                plan.material.damping,
+                pure_damping_relax,
+            );
+            if max_steps_hit || converged {
+                eprintln!(
+                    "[fullmag-runner] cpu-fem relaxation stop at step {}: \
+                     max_steps_hit={max_steps_hit} (step={} >= max_steps={}), \
+                     converged={converged} \
+                     (max_torque_T={:.4e} torque_tol={:.4e} energy_tol={:?})",
+                    step_count,
+                    step_count,
+                    control.max_steps,
+                    latest_stats.max_torque_T,
+                    control.torque_tolerance,
+                    control.energy_tolerance,
+                );
+            }
+            max_steps_hit || converged
         });
         previous_total_energy = Some(latest_stats.e_total);
         if stop_for_relaxation {
             break;
         }
+    }
+    if !cancelled {
+        eprintln!(
+            "[fullmag-runner] cpu-fem loop exited: step={} time={:.4e} until={:.4e} (time_limit_reached={})",
+            step_count,
+            state.time_seconds,
+            until_seconds,
+            state.time_seconds >= until_seconds,
+        );
     }
 
     let final_ant = antenna_field_at(&problem, state.magnetization().len());
