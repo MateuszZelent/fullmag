@@ -1,386 +1,580 @@
 # Fullmag
 
-Fullmag is a micromagnetics platform built around one contract:
+Fullmag is a micromagnetics platform being built around one simple contract:
 
-> the shared interface describes a physical problem, not a numerical mesh layout
+> **the shared interface describes a physical problem, not a numerical mesh layout**
 
-Officially, the user-facing product is still intended to feel like **one application**:
+It aims to become a **best-in-class micromagnetics application** with:
 
-- one public launcher: `fullmag`
-- one local control room in the browser
-- managed compute runtimes under the hood
+- one public launcher,
+- one canonical Python DSL,
+- one browser control room,
+- one semantic core,
+- multiple execution backends,
+- one reproducible provenance chain.
 
-For lightweight paths this can mean bundled binaries/libraries.
-For heavyweight GPU paths, especially FEM on `MFEM + libCEED + hypre`, the canonical direction is a
-managed runtime container rather than one giant monolithic executable.
+This document is the public-facing architectural map of the project.
 
-For HPC, the primary assumption is **external dispatch**:
+---
 
-- systems such as Microlab may place one task on one node,
-- and the node-local executable is still simply:
-  - `fullmag task1.py`
+## What Fullmag is trying to become
 
-The public authoring surface is an embedded, declarative Python DSL in `packages/fullmag-py`.
-Users write ordinary Python scripts and notebooks, but those objects serialize into a canonical `ProblemIR` that Rust validates, normalizes, and lowers into backend-specific plans.
+Fullmag is being built to give users one coherent experience:
 
-## Backend Authority Policy
+1. author a simulation in Python,
+2. inspect and refine it in a browser control room,
+3. run it locally or through managed compute runtimes,
+4. stream live fields, meshes, and artifacts,
+5. export the exact same simulation back to canonical Python,
+6. reproduce the full run and execution choices later.
 
-Each solver method has one **authoritative production backend** and one **reference/validation backend**.
+The design goal is not “many tools around a solver”.
+The design goal is **one application with one physics-first model**.
 
-### FDM (Finite-Difference Method)
-| Role | Backend | Location |
-|---|---|---|
-| **Production CPU/HPC** | Rust engine (SoA, threaded FFT, NUMA-aware) | `crates/fullmag-engine` |
-| **Production GPU** | Native CUDA FDM | `native/backends/fdm` |
-| **Reference/validation** | Rust CPU reference (sequential) | `crates/fullmag-engine` |
+---
 
-### FEM (Finite-Element Method)
-| Role | Backend | Location |
-|---|---|---|
-| **Production CPU/GPU** | MFEM-native (hypre, libCEED) | `native/backends/fem` |
-| **Reference/validation** | Rust CPU FEM reference | `crates/fullmag-engine/src/fem.rs` |
+## Core idea
 
-The Rust FEM reference is **not** the production CPU path. It serves as:
-- golden baseline for regression tests,
-- validation oracle for FDM↔FEM parity checks,
-- lightweight development/debugging tool.
+Fullmag separates:
 
-All production FEM workloads dispatch to MFEM-native.
+- **physical problem definition**
+- **execution planning**
+- **native compute**
+- **live observability**
+- **artifact/provenance**
 
-### FEM Demag Policy
-| Realization | Role | Notes |
-|---|---|---|
-| **Poisson (Robin/Dirichlet)** | Production demag | Authoritative open-boundary solve |
-| **Transfer-grid** | Bootstrap / preview / parity | Not production for HPC |
+That separation is deliberate.
 
-### Dispatch Names
-Runtime dispatch uses explicit backend identifiers:
-- `fdm_cpu_reference` — Rust FDM sequential reference
-- `fdm_cpu_hpc` — Rust FDM production (SoA + threaded FFT + NUMA)
-- `fem_cpu_reference` — Rust FEM reference
-- `fem_cpu_native` — MFEM-native CPU production
-- `fem_gpu_native` — MFEM-native GPU production
+It lets Fullmag support:
+
+- FDM and FEM,
+- CPU and GPU,
+- local and managed runtimes,
+- time-domain and frequency-domain workflows,
+- reference solvers and production solvers,
+- rich browser observability,
+
+without inventing a different semantic model for each path.
+
+---
+
+## Product principles
+
+### 1. Physics-first, not backend-first
+Users describe magnetism, geometry, materials, boundary conditions, stages, outputs, and mesh intent.
+They do not describe CUDA pointers, MFEM objects, or internal memory layouts.
+
+### 2. One canonical scripting surface
+The public authoring surface is the embedded Python DSL in `packages/fullmag-py`.
+
+### 3. One semantic core
+All public flows must converge to a canonical `ProblemIR`.
+
+### 4. One round-trip rule
+The browser must be able to emit a canonical Python representation of the same simulation it edits.
+
+### 5. Explicit execution
+Requested backend/device/precision intent and resolved execution reality must both be visible.
+
+### 6. Honest status
+Bootstrap, transitional, reference, and production states must be clearly distinguished.
+
+---
+
+## The application model
+
+```mermaid
+flowchart TD
+  PY[Python DSL] --> IR[ProblemIR]
+  UI[Browser authoring / control room] --> IR
+  IR --> PLAN[Validation + planning + capability checks]
+  PLAN --> RUN[Session / run / stage runtime]
+  RUN --> FDM[FDM backends]
+  RUN --> FEM[FEM backends]
+  RUN --> HYB[Hybrid paths]
+  RUN --> ART[Artifacts + provenance + live fields]
+  ART --> UI2[Browser observability / export]
+```
+
+### The practical meaning of this design
+
+- the Python DSL is canonical,
+- the browser is first-class,
+- Rust is the control plane,
+- native backends are execution realizations,
+- provenance sits above backends, not inside them,
+- live previews must remain consistent with solved data.
+
+---
+
+## Canonical public surfaces
+
+### Public launcher
+```bash
+fullmag script.py
+```
+
+### Canonical public authoring
+- embedded Python DSL in `packages/fullmag-py`
+
+### Control room
+- local browser UI for:
+  - authoring assistance,
+  - live monitoring,
+  - mesh inspection,
+  - stage execution,
+  - artifact inspection,
+  - script export,
+  - future advanced analysis workflows
+
+---
 
 ## Architecture
 
-- `packages/fullmag-py` — embedded Python DSL and runtime scaffolding
-- `crates/fullmag-ir` — typed `ProblemIR`, validation, and planning summaries
-- `crates/fullmag-cli` — Rust-hosted local launcher, validation, planning, and session bootstrap
-- `crates/fullmag-api` — control-plane HTTP API
-- `crates/fullmag-py-core` — private PyO3 bridge for Python/Rust integration
-- `apps/web` — Next.js control room
-- `native/` — native FDM/FEM/hybrid backend seams behind C ABI
-- `external_solvers/` — reference solver codebases (gitignored): mumax3, mumax+, BORIS, tetmag, tetrax
-- `docs/` — specs, ADRs, and publication-style physics notes
+## 1. Semantic layers
 
-### FEM mesh contract
+| Layer | Role |
+|---|---|
+| Python DSL | public authoring surface |
+| UI authoring | interactive authoring companion |
+| `ProblemIR` | canonical lowered semantic model |
+| Rust validation/planning | capability checks, backend resolution, session bootstrap |
+| session/run runtime | command, stage, field, artifact, and lifecycle orchestration |
+| native backends | high-performance compute |
+| control room | observability, editing, export, and diagnostics |
 
-For FEM, Fullmag is expected to preserve three separate semantic layers:
+---
 
-1. `Universe mesh config` — meshing policy for the study-level air/domain region
-2. `Per-object mesh config` — independent meshing policy for each magnetic object
-3. `Final shared-domain solver mesh` — one conforming mesh assembled from Universe + objects
+## 2. Repository map
 
-This means:
+| Path | Role |
+|---|---|
+| `packages/fullmag-py` | public Python DSL and runtime scaffolding |
+| `crates/fullmag-ir` | canonical typed semantic model |
+| `crates/fullmag-plan` | planner and capability logic |
+| `crates/fullmag-cli` | launcher and orchestration |
+| `crates/fullmag-api` | control-plane API |
+| `crates/fullmag-runner` | runner / stage execution |
+| `crates/fullmag-engine` | trusted CPU/reference solvers |
+| `crates/fullmag-py-core` | Python/Rust bridge |
+| `apps/web` | browser control room |
+| `native/` | native production backends |
+| `docs/` | specs, ADRs, physics notes |
 
-- users must be able to inspect and tune the mesh of `Universe` and of each object separately,
-- the final solver mesh must still be one shared-domain FEM mesh,
-- UI visibility or isolate mode must never change the physical solver domain,
-- air/domain meshing is expected to be coarser than object/interfacial meshing where appropriate.
+---
 
-## Execution chain
+## 3. Backend authority policy
 
-```text
-fullmag script.py
-        |
-        +--> Rust host
-        |      |
-        |      +--> spawn Python helper in the active environment
-        |             |
-        |             +--> load script + build canonical ProblemIR
-        |
-        v
-Rust validation + normalization + planning + session bootstrap
-        |
-        +--> FDM backend
-        +--> FEM backend
-        +--> Hybrid backend
+Each solver family has:
+
+- one **authoritative production path**
+- one **reference/validation path**
+
+### FDM
+
+| Role | Backend |
+|---|---|
+| Reference | Rust CPU reference |
+| Production CPU/HPC | Rust production FDM |
+| Production GPU | native CUDA FDM |
+
+### FEM
+
+| Role | Backend |
+|---|---|
+| Reference | Rust FEM reference |
+| Production CPU | native MFEM/hypre/libCEED |
+| Production GPU | native MFEM/libCEED/CUDA |
+
+### Important consequence
+
+Reference backends are not “fallback production”.
+They are:
+
+- oracles,
+- regression baselines,
+- debug paths,
+- parity tools.
+
+---
+
+## Execution model
+
+Execution is chosen in terms the user can understand:
+
+- **discretization**: `fdm | fem | auto | hybrid (future)`
+- **device**: `cpu | gpu | auto`
+- **precision**: `single | double`
+- **mode**: `strict | extended | hybrid`
+
+Fullmag must preserve:
+
+- what the user **asked for**
+- what the planner **resolved**
+- what the runtime **actually executed**
+
+That distinction is part of the product.
+
+---
+
+## Full execution chain
+
+```mermaid
+flowchart LR
+  A[fullmag task.py] --> B[Rust host]
+  B --> C[Python helper loads script]
+  C --> D[Canonical ProblemIR]
+  D --> E[Validation + normalization]
+  E --> F[Planning + capability checks]
+  F --> G[Session bootstrap]
+  G --> H[Runner]
+  H --> I[Native backend]
+  H --> J[Artifacts + live fields + logs]
+  J --> K[Control room]
 ```
 
-In the current bootstrap shell, the normal local workflow is:
+---
 
+## FEM mesh contract
+
+Fullmag does **not** model FEM meshing as one anonymous blob.
+
+It must preserve three levels:
+
+1. **Universe mesh config**
+   - meshing policy for air / outer domain
+
+2. **Per-object mesh config**
+   - independent meshing policy for each magnetic object
+
+3. **Final shared-domain solver mesh**
+   - one conforming mesh assembled from universe + objects
+
+### Why this matters
+
+It is the only way to support all of the following at once:
+
+- object-specific refinement,
+- airbox grading,
+- interface refinement,
+- transition regions,
+- adaptive remesh,
+- shared-domain conforming solve,
+- honest UI inspection,
+- canonical script round-trip.
+
+### Important rule
+
+Visibility, isolate mode, and viewport preview scope are **rendering concerns only**.
+They must never silently change the physical FEM domain.
+
+---
+
+## Solver families
+
+## Time-domain micromagnetics
+
+Time-domain is the core execution path for:
+
+- relaxation,
+- driven dynamics,
+- switching,
+- thermal/stochastic workflows,
+- initial-value evolution,
+- coupled magnetostatic workflows.
+
+### Design principles
+- one canonical stage model,
+- explicit relax semantics,
+- explicit stop criteria and stop reasons,
+- explicit stage completion status,
+- honest logs and UI lifecycle,
+- backend-specific performance hidden behind stable contracts.
+
+---
+
+## Frequency-domain and eigensolve
+
+Frequency-domain is a first-class target, not an afterthought.
+
+The long-term goal is:
+
+- matrix-free eigensolve,
+- linear response solver,
+- reduced-order modal response,
+- explicit support for:
+  - eigenmodes,
+  - frequency response,
+  - periodic/Floquet problems,
+  - surface-anisotropy BCs,
+  - equilibrium import from time-domain solutions.
+
+Dense O(n³) eigensolvers are acceptable only for:
+
+- tiny bootstrap cases,
+- debugging,
+- parity checks.
+
+They are not the long-term architecture.
+
+---
+
+## Control room architecture
+
+The browser is a first-class control room.
+
+### It must support
+- live session state,
+- stage lifecycle,
+- mesh workspace,
+- quantity switching,
+- artifact browsing,
+- per-stage diagnostics,
+- canonical script export,
+- viewport-based inspection for both FDM and FEM.
+
+### It must not do
+- invent UI-only physics semantics,
+- hide backend limitations,
+- treat already-computed fields as slow preview commands,
+- silently drift from the Python / `ProblemIR` model.
+
+---
+
+## Data-plane doctrine
+
+For live visualization, Fullmag should increasingly use a **field-store architecture**.
+
+### Required direction
+- solver publishes live fields,
+- API exposes a field catalog,
+- topology and field values are separated,
+- field revisions are independent from mesh revisions,
+- warm quantity switching is local and cheap,
+- large payloads use binary transport where appropriate.
+
+This is essential for responsive FEM/FDM control-room behavior.
+
+---
+
+## Performance strategy
+
+Fullmag wants to be computationally serious.
+That requires discipline in three places.
+
+## 1. Native compute
+- zero-alloc hot loops,
+- workspace reuse,
+- cache-friendly data layouts,
+- CPU threading and NUMA awareness,
+- validated GPU `double`,
+- careful qualification of GPU `single`.
+
+## 2. Heavy operators
+- cache expensive magnetostatic / demag operators where valid,
+- separate solver step from field refresh policies when useful,
+- avoid rebuilding expensive operators when topology is unchanged.
+
+## 3. Browser/runtime transport
+- no giant JSON payloads for heavy vector fields,
+- no accidental topology rebuilds on quantity changes,
+- no preview-control path where a field-store read is enough.
+
+---
+
+## External reference solvers
+
+Fullmag studies other solvers, but does not copy them.
+
+### Used for architectural learning
+- **mumax3 / mumax+**
+  - GPU-first FDM
+  - relaxed scripting ergonomics
+  - practical relax/minimize semantics
+  - FFT-centered demag structure
+
+- **BORIS**
+  - modular multiphysics
+  - CUDA decomposition
+  - large-scale runtime engineering
+
+- **tetmag / tetrax**
+  - FEM operator design
+  - matrix-free ideas
+  - frequency-domain architecture
+  - demag/operator caching
+
+### Policy
+External solvers are **reference material only**.
+
+---
+
+## Current reality
+
+The repo already contains strong foundations, but not every target is fully mature yet.
+
+### The architecture already present
+- canonical Python DSL,
+- Rust validation/planning shell,
+- local launcher,
+- control-room application shell,
+- production/reference backend split,
+- FEM three-level mesh doctrine,
+- growing live-session and mesh workspace contracts,
+- strong docs-first / physics-first intent.
+
+### Areas still under active evolution
+- relaxation lifecycle polish,
+- FEM demag production depth,
+- live field-store fast paths,
+- full COMSOL-like mesh round-trip,
+- swept / advanced meshing workflows,
+- matrix-free eigensolve and linear response,
+- final production qualification across all backends.
+
+Fullmag should always describe this status honestly.
+
+---
+
+## Getting started
+
+## 1. Environment
+```bash
+cp .env.example .env
+# then edit credentials/settings as needed
+```
+
+## 2. Bring up the dev environment
+```bash
+make up
+make shell
+```
+
+## 3. Canonical build entrypoints
+```bash
+just build fullmag
+just build fem-gpu-runtime-host
+just package fullmag
+```
+
+## 4. Canonical run entrypoints
 ```bash
 fullmag examples/exchange_relax.py
 fullmag examples/exchange_demag_zeeman.py
 fullmag -i examples/exchange_relax.py
 ```
 
-By default this attempts to:
-
-- run the simulation,
-- create or update the singleton local live workspace under `.fullmag/local-live/`,
-- start the current-live control room,
-- open the browser to `/`.
-
-The control room now reuses one local web server URL when possible, instead of allocating a new
-port for every run.
-
-Use `--headless` to suppress the UI bootstrap.
-Use `-i` / `--interactive` to keep the CLI open after the run completes.
-
-## Golden rule
-
-Before implementing any new physics or numerics feature, create or update a publication-style note in `docs/physics/`.
-The note must cover equations, symbols, SI units, assumptions, backend interpretation, `ProblemIR` impact, validation strategy, completeness, and deferred work.
-
-## Current bootstrap state
-
-The repository now includes:
-
-- a real Python package scaffold in `packages/fullmag-py`,
-- `Model + Study + Runtime` public API with `TimeEvolution`,
-- typed `ProblemIR` and `StudyIR` sections in Rust,
-- a Rust-hosted `fullmag script.py` launcher path with a spawned Python helper,
-- a singleton local current-live workspace API with `session_state` streaming,
-- binary WebSocket preview transport for heavy live vector payloads,
-- a canonical Python example in `examples/dw_track.py`,
-- mirrored agent instructions between `.agents` and `.github`,
-- repo consistency checks and a hard `docs/physics` gate in CI.
-
-This is still a foundation milestone. The shell of the application now exists, but live control-room
-behavior and GPU/FEM depth are still in progress.
-
-The currently honest executable physics slice is:
-
-- `Box + Exchange + Demag + Zeeman + TimeEvolution(LLG-Heun) + FDM`
-- CPU reference in `double`
-- native CUDA FDM in `double`
-- native CUDA `single` implementation exists but is not yet public-qualified
-
-### FEM solver maturity (Etap A4 — TRANSITIONAL)
-
-The FEM backend (`native/backends/fem/`) is functional but carries known limitations:
-
-- **Demag**: only `transfer_grid` (uniform FFT tensor) is implemented; direct Poisson and BEM paths are planned.
-- **CUDA kernels**: `double` precision only — `float` kernels are not yet available.
-- **Eigensolver**: dense O(n³) path via cuSolverDN Dsygvd; practical for ≲ 3 000 DOF. A sparse/Krylov path is planned.
-- **GPU selection**: controlled via `gpu_device_index` in `FemPlanIR` or the `FULLMAG_FEM_GPU_INDEX` / `FULLMAG_CUDA_DEVICE_INDEX` environment variables.
-- **MFEM device string**: controlled via the `FULLMAG_FEM_MFEM_DEVICE` environment variable (process-global singleton).
-
-These constraints are enforced at plan-validation time; unsupported configurations are rejected with clear error messages rather than silently degraded.
-
-## Quick start
-
-### 1. Set up environment
-
+## 5. Control room
 ```bash
-cp .env.example .env
-# Edit .env and set POSTGRES_PASSWORD, MINIO_ROOT_USER, MINIO_ROOT_PASSWORD
-```
-
-### 2. Bring up the dev container
-
-```bash
-make up
-make shell
-```
-
-### 3. Verify the bootstrap in the container
-
-```bash
-cargo check --workspace
-cargo test --workspace
-/usr/local/cargo/bin/cargo build -p fullmag-cli --bin fullmag
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e 'packages/fullmag-py[meshing]'
-PYTHONPATH=packages/fullmag-py/src python -m unittest discover -s packages/fullmag-py/tests -v
-python3 scripts/check_repo_consistency.py
-python scripts/run_python_ir_smoke.py --cli target/debug/fullmag
-/usr/local/cargo/bin/cargo run -p fullmag-cli --bin fullmag -- reference-exchange-demo --steps 10 --dt 1e-13
-/usr/local/cargo/bin/cargo run -p fullmag-cli --bin fullmag -- examples/exchange_relax.py --json
-/usr/local/cargo/bin/cargo run -p fullmag-cli --bin fullmag --features cuda -- examples/exchange_demag_zeeman.py --json
-```
-
-### 3b. Build the production-style FEM GPU runtime container
-
-```bash
-make fem-gpu-build
-make fem-gpu-check
-make fem-gpu-test
-```
-
-This uses the dedicated `fem-gpu` container with:
-
-- CUDA toolkit
-- MFEM
-- libCEED
-- hypre
-- Rust nightly
-- Node 22 + pnpm 10 for the control room stack
-
-and builds the native FEM backend with `FULLMAG_USE_MFEM_STACK=ON`.
-
-### 4. Install the local launcher on your PATH
-
-```bash
-make install-cli
-export PATH="$PWD/.fullmag/local/bin:$PATH"
-fullmag --help
-```
-
-Alternative task entrypoint via `just`:
-
-```bash
-just build fullmag
-export PATH="$PWD/.fullmag/local/bin:$PATH"
-just run-py-layer-hole
-```
-
-Heavy runtime build in container, exported back to the host:
-
-```bash
-just build fem-gpu-runtime-host
-just package fullmag
-```
-
-This keeps the heavyweight FEM GPU toolchain in the managed build container while producing a
-host-side runtime bundle under `.fullmag/runtimes/` and a host package staging directory under
-`.fullmag/dist/`.
-
-### 5. Run the current-live control room manually
-
-```bash
+just control-room
+# or
 ./scripts/dev-control-room.sh
-# or for a specific completed session:
-./scripts/dev-control-room.sh session-1234567890-12345
-# stop stale local control-room processes if needed:
-make control-room-stop
 ```
 
-This starts:
+---
 
-- `fullmag-api` on `http://localhost:8080`
-- the Next.js control room on `http://localhost:3000`
+## Development rules
 
-The current local browser flow targets the singleton workspace at `/`.
-Live control data is streamed through `/ws/live/current`, and heavy preview vectors are delivered as
-binary WebSocket frames instead of inline JSON arrays.
+### Physics-first
+Every serious physics/numerics feature must start with a note in `docs/physics/`.
 
-### 6. Inspect the canonical example
+### Round-trip-first
+If the browser can author it, Python must be able to express it.
 
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e packages/fullmag-py
-python - <<'PY'
-from fullmag import load_problem_from_script
-loaded = load_problem_from_script("examples/dw_track.py")
-print(loaded.problem.to_ir())
-PY
-```
+### Explicit execution
+Do not hide requested vs resolved backend/runtime.
 
-## Key documents
+### Honest maturity
+Document bootstrap, transitional, and production states clearly.
 
-- `docs/1_project_scope.md`
-- `docs/2_repo_blueprint.md`
-- `docs/adr/0001-physics-first-python-api.md`
+### Modularity
+Avoid giant files and semantic god-objects.
+Split by responsibility.
+
+---
+
+## What “done” means in Fullmag
+
+A feature is only done when all relevant layers are done:
+
+- physics note,
+- Python API,
+- IR,
+- planner,
+- runtime/session,
+- backend execution,
+- artifacts/provenance,
+- UI/control room,
+- docs,
+- tests.
+
+If only the backend works, the feature is not done.
+
+---
+
+## Near-term architecture priorities
+
+## P1 — correctness and canonicalization
+- remove semantic drift between Python, UI, IR, and session state,
+- harden relaxation and stage lifecycle,
+- make stop reasons and completion states explicit,
+- finish first-class mesh semantics round-trip.
+
+## P2 — production execution quality
+- GPU-first FDM qualification,
+- operator caching and runtime efficiency,
+- strong mesh build diagnostics,
+- field-store fast path,
+- better artifact and provenance surfaces.
+
+## P3 — advanced FEM and frequency-domain depth
+- production FEM demag depth,
+- swept / adaptive / gradient meshing maturity,
+- matrix-free eigensolve,
+- linear response and reduced-order response,
+- stronger multiphysics couplings.
+
+---
+
+## Documentation map
+
+Start here:
+
+- `AGENTS.md`
+- `docs/specs/fullmag-application-architecture-v2.md`
+- `docs/specs/session-run-api-v1.md`
 - `docs/specs/runtime-distribution-and-managed-backends-v1.md`
-- `docs/specs/hpc-cluster-execution-v1.md`
-- `docs/specs/problem-ir-v0.md`
-- `docs/specs/capability-matrix-v0.md`
 - `docs/physics/README.md`
-- `docs/physics/0000-physics-documentation-standard.md`
 
-## Near-term priorities
+For contributors, the most important habit is:
 
-1. Expand the Python DSL and keep it backend-neutral.
-2. Keep `ProblemIR` typed and planner-ready.
-3. Grow capability checks before backend feature sprawl.
-4. Add planning-depth smoke coverage before solver-depth implementation.
-5. Maintain the physics-first publication workflow as a hard gate.
-6. Auto-render `docs/physics/` notes into frontend documentation pages.
+> update the scientific intent and the semantic contract before changing compute code.
 
-## HPC Build Profiles (E1)
+---
 
-| Profile | Contents |
-|---|---|
-| `fullmag-cpu-reference` | Rust engine only, sequential, no MPI |
-| `fullmag-fdm-cpu-hpc` | Rust FDM + Rayon + threaded FFT + NUMA |
-| `fullmag-fem-cpu-native` | MFEM-native CPU (hypre, libCEED) |
-| `fullmag-fem-gpu-native` | MFEM-native GPU (CUDA, libCEED-CUDA) |
-| `fullmag-mpi` | Distributed: MPI + distributed FFT |
+## Contribution standard
 
-### Build matrix dependencies
+A good Fullmag change:
 
-- Rust toolchain (see `rust-toolchain.toml`)
-- CMake ≥ 3.20
-- MFEM + hypre + libCEED (FEM profiles)
-- MPI implementation (OpenMPI or MPICH)
-- FFT backend: rustfft (default), FFTW, MKL (optional)
-- Optional: BLAS/LAPACK for dense kernels
+- improves correctness,
+- improves architectural clarity,
+- reduces semantic drift,
+- preserves canonical round-trip,
+- makes execution more explicit,
+- strengthens reproducibility,
+- improves performance without cheating.
 
-### Reproducible builds
+---
 
-- Container runtimes: Docker / Apptainer (Singularity)
-- Module files for cluster environments
-- Locked Rust toolchain via `rust-toolchain.toml`
+## Final note
 
-## Scheduler Integration (E2)
+Fullmag is ambitious by design.
 
-### SLURM launch templates
+The goal is not merely to “have a solver”.
+The goal is to build a micromagnetics platform that is:
 
-```bash
-# Single-node multi-threaded FDM
-srun --ntasks=1 --cpus-per-task=$NTHREADS fullmag task.py
-
-# Multi-node MPI FDM
-srun --ntasks=$NRANKS --cpus-per-task=$THREADS_PER_RANK fullmag-mpi task.py
-```
-
-### Environment variables
-
-| Variable | Purpose |
-|---|---|
-| `FULLMAG_NUM_THREADS` | Worker thread count (0 = auto) |
-| `FULLMAG_NUMA_NODE` | NUMA node affinity hint |
-| `FULLMAG_FFT_BACKEND` | FFT backend selection (rustfft, fftw, mkl) |
-| `OMP_NUM_THREADS` | OpenMP threads (for MFEM/hypre) |
-| `OMP_PLACES` | Thread placement (cores, threads) |
-| `OMP_PROC_BIND` | Thread binding (close, spread) |
-
-### CPU binding policy
-
-- Rayon workers: one per physical core, bound to core
-- MFEM/hypre threads: inherit from `OMP_PLACES=cores` + `OMP_PROC_BIND=close`
-- MPI ranks: one per NUMA domain, `--bind-to socket`
-
-## Production Acceptance Matrix (E3)
-
-### FDM CPU/HPC
-- [x] Zero hot-loop allocations (B1)
-- [x] SoA internal state type (B2)
-- [x] Threaded FFT backend abstraction (B4)
-- [x] Multi-socket scaling infrastructure (B8)
-- [x] Domain decomposition + halo exchange (B9)
-- [x] Distributed FFT backend abstraction (B10)
-- [x] Benchmark suite (A0)
-- [x] Physics guardrails (A2)
-
-### FEM CPU/HPC
-- [x] Authoritative backend decision documented (C1)
-- [x] Reference semantics validated (C2)
-- [x] No-alloc integrator workspace (C3)
-- [x] Assembly improvement (C4)
-- [x] CG workspace (C5)
-- [x] Demag realization policy (C6)
-- [x] Transfer-grid cache (C7)
-- [x] Operator mode dispatch (C8)
-- [x] Data-flow audit (C9)
-- [x] Production backend IDs (C10)
-
-### Distributed HPC
-- [x] Common runtime layer (D1)
-- [x] FDM distributed path types (D2)
-- [x] FEM distributed path types (D3)
-- [x] Distributed I/O / checkpointing (D4)
+- scientifically credible,
+- computationally serious,
+- operationally explicit,
+- architecturally clean,
+- and genuinely pleasant to use.
