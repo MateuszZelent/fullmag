@@ -1035,7 +1035,7 @@ pub fn resolve_runtime_engine(problem: &ProblemIR) -> Result<RuntimeEngineInfo, 
         BackendPlanIR::Fem(_) => {
             let engine = dispatch::resolve_fem_engine_with_trail(problem)?.engine;
             let (engine_id, engine_label, accelerator) = match engine {
-                dispatch::FemEngine::CpuReference => ("fem_cpu_reference", "CPU FEM", "cpu"),
+                dispatch::FemEngine::CpuReference => ("fem_cpu_native", "CPU FEM (MFEM)", "cpu"),
                 dispatch::FemEngine::NativeGpu => ("fem_native_gpu", "GPU FEM", "gpu"),
             };
             Ok(RuntimeEngineInfo {
@@ -1167,11 +1167,9 @@ pub fn resolve_session_runtime_with_registry(
         (BackendPlanIR::Fem(_), dispatch::DispatchEngine::Fem(engine))
         | (BackendPlanIR::FemEigen(_), dispatch::DispatchEngine::Fem(engine)) => {
             let (default_family, engine_id, default_worker) = match engine {
-                dispatch::FemEngine::CpuReference => (
-                    "cpu-reference",
-                    "fem_cpu_reference",
-                    "../../bin/fullmag-bin",
-                ),
+                dispatch::FemEngine::CpuReference => {
+                    ("fem-cpu-native", "fem_cpu_native", "../../bin/fullmag-bin")
+                }
                 dispatch::FemEngine::NativeGpu => {
                     ("fem-gpu", "fem_native_gpu", "bin/fullmag-fem-gpu-bin")
                 }

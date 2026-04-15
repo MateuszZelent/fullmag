@@ -60,7 +60,7 @@ without inventing a different semantic model for each path.
 
 ## Product principles
 
-### 1. Physics-first, not backend-first
+### 1. Physics-first, not backend-first 
 Users describe magnetism, geometry, materials, boundary conditions, stages, outputs, and mesh intent.
 They do not describe CUDA pointers, MFEM objects, or internal memory layouts.
 

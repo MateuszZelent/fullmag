@@ -132,7 +132,12 @@ run-nanoflower-interactive:
     just build fullmag-dev
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag --dev -i examples/nanoflower_fem.py
 
-run-stno-interactive cpu_only="1":
+run-stno-interactive cpu_only="0":
+    if [ "{{cpu_only}}" = "1" ]; then \
+        echo "run-stno-interactive requires MFEM-native FEM runtime; cpu_only=1 is incompatible." >&2; \
+        echo "Use: just run-stno-interactive 0" >&2; \
+        exit 2; \
+    fi
     just ensure-python
     just build fullmag-dev {{cpu_only}}
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION=cpu fullmag --dev -i examples/stno_vortex_mtj_workflow.py

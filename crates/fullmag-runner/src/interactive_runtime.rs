@@ -153,6 +153,7 @@ pub struct InteractiveFemPreviewRuntime {
 }
 
 enum InteractiveFemPreviewRuntimeInner {
+    #[allow(dead_code)]
     Cpu(CpuInteractiveFemPreviewRuntime),
     #[cfg(feature = "fem-gpu")]
     Gpu(GpuInteractiveFemPreviewRuntime),
@@ -400,58 +401,38 @@ impl InteractiveFemPreviewRuntime {
     }
 
     fn from_fem_plan(plan: &FemPlanIR, engine: FemEngine) -> Result<Self, RunError> {
-        let mesh = crate::types::FemMeshPayload::from(plan);
-        let inner = match engine {
-            FemEngine::CpuReference => {
-                if plan.precision != fullmag_ir::ExecutionPrecision::Double {
-                    return Err(RunError {
-                        message:
-                            "execution_precision='single' is not executable in the FEM CPU reference runner; use 'double'"
-                                .to_string(),
-                    });
-                }
-                let (problem, state) = fem_reference::build_problem_and_state(plan)?;
-                let antenna_field = crate::antenna_fields::compute_antenna_field(plan)?;
-                let n_nodes = state.magnetization().len();
-                InteractiveFemPreviewRuntimeInner::Cpu(CpuInteractiveFemPreviewRuntime {
-                    problem,
-                    state,
-                    integrator_ws: FemIntegratorWorkspace::new(n_nodes),
-                    antenna_field,
-                    mesh,
-                    plan_signature: normalize_fem_plan_signature(plan),
-                    provenance: fem_reference::execution_provenance(plan),
-                    total_steps: 0,
-                })
-            }
-            FemEngine::NativeGpu => {
-                #[cfg(feature = "fem-gpu")]
-                {
-                    let backend = NativeFemBackend::create(plan)?;
-                    let device_info = backend.device_info()?;
-                    let antenna_field = crate::antenna_fields::compute_antenna_field(plan)?;
-                    InteractiveFemPreviewRuntimeInner::Gpu(GpuInteractiveFemPreviewRuntime {
-                        backend,
-                        mesh,
-                        node_count: plan.mesh.nodes.len(),
-                        plan_signature: normalize_fem_plan_signature(plan),
-                        provenance: fem_gpu_execution_provenance(plan, &device_info),
-                        total_steps: 0,
-                        total_time: 0.0,
-                        antenna_field,
-                    })
-                }
-                #[cfg(not(feature = "fem-gpu"))]
-                {
-                    return Err(RunError {
-                        message:
-                            "interactive native FEM runtime requested but the runner was built without fem-gpu"
-                                .to_string(),
-                    });
-                }
-            }
-        };
-        Ok(Self { inner })
+        #[cfg(not(feature = "fem-gpu"))]
+        {
+            let _ = (plan, engine);
+            return Err(RunError {
+                message:
+                    "interactive native FEM runtime requested but the runner was built without fem-gpu"
+                        .to_string(),
+            });
+        }
+
+        #[cfg(feature = "fem-gpu")]
+        {
+            let effective_plan = match engine {
+                FemEngine::CpuReference => fem_plan_for_cpu_native(plan),
+                FemEngine::NativeGpu => plan.clone(),
+            };
+            let mesh = crate::types::FemMeshPayload::from(&effective_plan);
+            let backend = NativeFemBackend::create(&effective_plan)?;
+            let device_info = backend.device_info()?;
+            let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
+            let inner = InteractiveFemPreviewRuntimeInner::Gpu(GpuInteractiveFemPreviewRuntime {
+                backend,
+                mesh,
+                node_count: effective_plan.mesh.nodes.len(),
+                plan_signature: normalize_fem_plan_signature(&effective_plan),
+                provenance: fem_gpu_execution_provenance(&effective_plan, &device_info),
+                total_steps: 0,
+                total_time: 0.0,
+                antenna_field,
+            });
+            Ok(Self { inner })
+        }
     }
 
     pub fn matches_plan(&self, plan: &FemPlanIR) -> bool {
@@ -2988,6 +2969,15 @@ fn normalize_fem_plan_signature(plan: &FemPlanIR) -> FemPlanIR {
     normalized
 }
 
+#[cfg(feature = "fem-gpu")]
+fn fem_plan_for_cpu_native(plan: &FemPlanIR) -> FemPlanIR {
+    let mut native = plan.clone();
+    if native.mfem_device_string.is_none() {
+        native.mfem_device_string = Some("cpu".to_string());
+    }
+    native
+}
+
 fn record_due_cpu_outputs(
     observables: &StateObservables,
     step: u64,
@@ -3544,8 +3534,13 @@ fn fem_gpu_execution_provenance(
     } else {
         Some("fallback".to_string())
     };
+    let execution_engine = if plan.mfem_device_string.as_deref() == Some("cpu") {
+        "native_fem_cpu"
+    } else {
+        "native_fem_gpu"
+    };
     ExecutionProvenance {
-        execution_engine: "native_fem_gpu".to_string(),
+        execution_engine: execution_engine.to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
             fullmag_ir::ExecutionPrecision::Double => "double".to_string(),

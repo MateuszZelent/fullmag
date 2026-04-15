@@ -47,6 +47,12 @@ pub(crate) fn init_api_port() -> Result<()> {
         .map_err(|_| anyhow::anyhow!("API port already resolved"))
 }
 
+pub(crate) fn init_api_port_explicit(port: u16) -> Result<()> {
+    RESOLVED_API_PORT
+        .set(port)
+        .map_err(|_| anyhow::anyhow!("API port already resolved"))
+}
+
 pub(crate) struct ControlRoomGuard {
     web_port: Option<u16>,
     api_child: Option<std::process::Child>,

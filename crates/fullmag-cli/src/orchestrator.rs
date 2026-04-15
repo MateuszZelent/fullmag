@@ -1770,11 +1770,13 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
     }
     let runtime_engine = fullmag_runner::resolve_runtime_engine(&stage.ir)
         .map_err(|error| anyhow!(error.message))?;
-    if runtime_engine.engine_id != "fem_cpu_reference" {
+    if runtime_engine.engine_id != "fem_cpu_native"
+        && runtime_engine.engine_id != "fem_cpu_reference"
+    {
         live_workspace.push_log(
             "warning",
             format!(
-                "Adaptive mesh auto policy is currently limited to FEM CPU reference; current engine is {}",
+                "Adaptive mesh auto policy is currently limited to FEM CPU-native runtime; current engine is {}",
                 runtime_engine.engine_label
             ),
         );
@@ -2764,7 +2766,12 @@ fn execute_synthetic_stage(
 // ── main orchestration entry point ───────────────────────────────────────────
 
 pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
-    init_api_port()?;
+    let args = ScriptCli::parse_from(raw_args);
+    if args.headless {
+        init_api_port_explicit(0)?;
+    } else {
+        init_api_port()?;
+    }
 
     // Eagerly configure the global Rayon pool so that ALL par_iter calls
     // (including those inside the interactive runtime) use all available cores.
@@ -2798,7 +2805,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     }
     crate::live_workspace::init_feature_flags(feature_flags);
 
-    let args = ScriptCli::parse_from(raw_args);
     let started_at_unix_ms = unix_time_millis()?;
     let script_path = args
         .script

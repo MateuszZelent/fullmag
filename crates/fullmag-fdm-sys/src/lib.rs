@@ -224,6 +224,7 @@ pub struct fullmag_fdm_plan_desc {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+#[allow(non_snake_case)]
 pub struct fullmag_fdm_step_stats {
     pub step: u64,
     pub time_seconds: f64,

@@ -234,7 +234,7 @@ install-cli install-cli-dev install-cli-static:
 			'  done <<< "$$RESOLVE_RUNTIME_OUTPUT"' \
 			'fi' \
 			'if [ "$$PREFERRED_RUNTIME_FAMILY" = "fem-gpu" ]; then' \
-			'  if [ "$$REQUIRES_MANAGED_RUNTIME" = "1" ] || [ "$$RESOLVED_RUNTIME_FAMILY" != "fem-gpu" ] || [ "$$LOCAL_ENGINE_ID" = "fem_cpu_reference" ]; then' \
+			'  if [ "$$REQUIRES_MANAGED_RUNTIME" = "1" ] || [ "$$RESOLVED_RUNTIME_FAMILY" != "fem-gpu" ] || [ "$$LOCAL_ENGINE_ID" = "fem_cpu_native" ]; then' \
 			'    SHOULD_USE_MANAGED_RUNTIME="1"' \
 			'  fi' \
 			'fi' \

@@ -7,6 +7,7 @@ use crate::types::RunError;
 const FIELD_EPSILON2: f64 = 1e-30;
 
 /// Returns `true` if any antenna drive uses a time-varying waveform.
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 pub(crate) fn has_time_varying_antenna(plan: &FemPlanIR) -> bool {
     plan.current_modules.iter().any(|m| {
         matches!(
@@ -116,6 +117,7 @@ pub(crate) fn combined_antenna_field_at_time(
     total
 }
 
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 pub(crate) fn compute_antenna_field(plan: &FemPlanIR) -> Result<Vec<[f64; 3]>, RunError> {
     if plan.current_modules.is_empty() {
         return Ok(vec![[0.0, 0.0, 0.0]; plan.mesh.nodes.len()]);

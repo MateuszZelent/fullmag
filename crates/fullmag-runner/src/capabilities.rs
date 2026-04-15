@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub enum RuntimeEngineId {
     FdmCpuReference,
     FdmCuda,
-    FemCpuReference,
+    FemCpuNative,
     FemNativeGpu,
 }
 
@@ -16,7 +16,7 @@ impl RuntimeEngineId {
         match self {
             Self::FdmCpuReference => "fdm_cpu_reference",
             Self::FdmCuda => "fdm_cuda",
-            Self::FemCpuReference => "fem_cpu_reference",
+            Self::FemCpuNative => "fem_cpu_native",
             Self::FemNativeGpu => "fem_native_gpu",
         }
     }
@@ -139,7 +139,7 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
 pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilities {
     match engine {
         FemEngine::CpuReference => BackendCapabilities {
-            engine_id: RuntimeEngineId::FemCpuReference,
+            engine_id: RuntimeEngineId::FemCpuNative,
             capability_profile_version: "2026-04-04".to_string(),
             supported_terms: vec![
                 "exchange".to_string(),
@@ -147,6 +147,12 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "demag_transfer_grid".to_string(),
                 "demag_poisson_robin".to_string(),
                 "demag_poisson_dirichlet".to_string(),
+                "uniaxial_anisotropy".to_string(),
+                "cubic_anisotropy".to_string(),
+                "interfacial_dmi".to_string(),
+                "magnetoelastic".to_string(),
+                "thermal".to_string(),
+                "oersted".to_string(),
             ],
             supported_demag_realizations: vec![
                 "transfer_grid".to_string(),
@@ -158,16 +164,20 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 QuantityId::HEx,
                 QuantityId::HDemag,
                 QuantityId::HExt,
-                QuantityId::HAnt,
                 QuantityId::HEff,
+                QuantityId::HAni,
+                QuantityId::HDmi,
+                QuantityId::HMel,
             ]),
             snapshot_quantities: quantity_names(&[
                 QuantityId::M,
                 QuantityId::HEx,
                 QuantityId::HDemag,
                 QuantityId::HExt,
-                QuantityId::HAnt,
                 QuantityId::HEff,
+                QuantityId::HAni,
+                QuantityId::HDmi,
+                QuantityId::HMel,
             ]),
             scalar_outputs: vec![
                 "E_ex".to_string(),
@@ -176,7 +186,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "E_total".to_string(),
             ],
             approximate_operators: vec!["transfer_grid".to_string()],
-            supports_lossy_fallback_override: true,
+            supports_lossy_fallback_override: false,
         },
         FemEngine::NativeGpu => BackendCapabilities {
             engine_id: RuntimeEngineId::FemNativeGpu,

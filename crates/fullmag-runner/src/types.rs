@@ -858,6 +858,7 @@ pub(crate) struct StateObservables {
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
     pub max_h_demag: f64,
+    #[allow(dead_code)]
     pub max_torque_Apm: f64,
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
 }

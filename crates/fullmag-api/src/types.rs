@@ -201,6 +201,7 @@ pub(crate) struct EigenDispersionResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(non_snake_case)]
 pub(crate) struct ScalarRow {
     pub step: u64,
     pub time: f64,
@@ -240,6 +241,7 @@ pub(crate) struct EngineLogEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(non_snake_case)]
 pub(crate) struct StepUpdateView {
     pub step: u64,
     pub time: f64,

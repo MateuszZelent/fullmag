@@ -112,6 +112,7 @@ pub(crate) struct LiveFieldVectorResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct FieldVectorQuery {
     #[serde(default)]
+    #[allow(dead_code)]
     pub format: Option<String>, // "json" (default) | "bin" (future)
 }
 

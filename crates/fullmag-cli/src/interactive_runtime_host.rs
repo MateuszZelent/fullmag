@@ -872,7 +872,8 @@ fn runtime_engine_metadata_from_provenance(
     let (backend_family, engine_id, engine_label, accelerator) =
         match provenance.execution_engine.as_str() {
             "native_fem_gpu" => ("fem", "fem_native_gpu", "GPU FEM", "gpu"),
-            "cpu_reference_fem" => ("fem", "fem_cpu_reference", "CPU FEM", "cpu"),
+            "native_fem_cpu" => ("fem", "fem_cpu_native", "CPU FEM (MFEM)", "cpu"),
+            "cpu_reference_fem" => ("fem", "fem_cpu_native", "CPU FEM (MFEM)", "cpu"),
             "cuda_fdm" => ("fdm", "fdm_cuda", "CUDA FDM", "cuda"),
             "cpu_reference_multilayer" => (
                 "fdm_multilayer",
@@ -891,7 +892,7 @@ fn runtime_engine_metadata_from_provenance(
                 ("fem", "fem_native_gpu", "GPU FEM", "gpu")
             }
             other if other.contains("fem") && other.contains("cpu") => {
-                ("fem", "fem_cpu_reference", "CPU FEM", "cpu")
+                ("fem", "fem_cpu_native", "CPU FEM (MFEM)", "cpu")
             }
             other if other.contains("cuda") => ("fdm", "fdm_cuda", "CUDA FDM", "cuda"),
             _ => ("unknown", "unknown", "Runtime", "unknown"),

@@ -2,6 +2,7 @@ use crate::schedules::{is_due, OutputSchedule};
 use crate::types::StepStats;
 use std::collections::HashMap;
 
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 const ENERGY_KEYS: [&str; 6] = ["e_ex", "e_demag", "e_ext", "e_ani", "e_dmi", "e_total"];
 
 pub(crate) fn average_magnetization_components(values: &[[f64; 3]]) -> [f64; 3] {
@@ -61,6 +62,7 @@ pub(crate) fn single_object_scalars(
     out
 }
 
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 pub(crate) fn weighted_object_scalars(
     stats: &StepStats,
     weights: &[(String, f64)],
@@ -105,6 +107,7 @@ pub(crate) fn weighted_object_scalars(
     out
 }
 
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 pub(crate) fn set_object_average_m(
     per_object: &mut HashMap<String, HashMap<String, f64>>,
     object_id: &str,
@@ -126,6 +129,7 @@ pub(crate) fn set_object_average_m(
     entry.insert("mz".to_string(), mz);
 }
 
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 fn normalized_weights(weights: &[(String, f64)]) -> Vec<(String, f64)> {
     let mut filtered = Vec::new();
     for (name, weight) in weights {

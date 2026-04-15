@@ -2881,13 +2881,16 @@ impl FemLlgProblem {
                 let m2 = dot(*m, c2);
                 let m3 = dot(*m, c3);
                 let pf = 2.0 / (MU0 * ms);
-                let g1 = -pf
-                    * (cub.kc1 * m1 * (m2 * m2 + m3 * m3) + cub.kc2 * m1 * m2 * m2 * m3 * m3);
-                let g2 = -pf
-                    * (cub.kc1 * m2 * (m1 * m1 + m3 * m3) + cub.kc2 * m2 * m1 * m1 * m3 * m3);
-                let g3 = -pf
-                    * (cub.kc1 * m3 * (m1 * m1 + m2 * m2) + cub.kc2 * m3 * m1 * m1 * m2 * m2);
-                h_eff[i] = add(h_eff[i], add(add(scale(c1, g1), scale(c2, g2)), scale(c3, g3)));
+                let g1 =
+                    -pf * (cub.kc1 * m1 * (m2 * m2 + m3 * m3) + cub.kc2 * m1 * m2 * m2 * m3 * m3);
+                let g2 =
+                    -pf * (cub.kc1 * m2 * (m1 * m1 + m3 * m3) + cub.kc2 * m2 * m1 * m1 * m3 * m3);
+                let g3 =
+                    -pf * (cub.kc1 * m3 * (m1 * m1 + m2 * m2) + cub.kc2 * m3 * m1 * m1 * m2 * m2);
+                h_eff[i] = add(
+                    h_eff[i],
+                    add(add(scale(c1, g1), scale(c2, g2)), scale(c3, g3)),
+                );
             }
         }
     }

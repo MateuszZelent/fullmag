@@ -629,8 +629,8 @@ fn local_engine_resolution(
                 )
             } else {
                 (
-                    Some("fem_cpu_reference".to_string()),
-                    Some("CPU FEM".to_string()),
+                    Some("fem_cpu_native".to_string()),
+                    Some("CPU FEM (MFEM)".to_string()),
                     explicit_selection,
                 )
             }
@@ -652,8 +652,8 @@ fn local_engine_resolution(
         }
         _ => match resolved_backend {
             BackendTarget::Fem => (
-                Some("fem_cpu_reference".to_string()),
-                Some("CPU FEM".to_string()),
+                Some("fem_cpu_native".to_string()),
+                Some("CPU FEM (MFEM)".to_string()),
                 false,
             ),
             _ => (

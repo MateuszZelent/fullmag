@@ -6,8 +6,8 @@
 //! - `cuda`: force CUDA, fail if unavailable
 //!
 //! Reads `FULLMAG_FEM_EXECUTION` env var:
-//! - `auto` (default): use native FEM GPU if compiled and available, else CPU reference
-//! - `cpu`: force CPU reference
+//! - `auto` (default): use native FEM GPU when available, else native FEM CPU
+//! - `cpu`: force native FEM CPU
 //! - `gpu`: force native FEM GPU, fail if unavailable
 
 use fullmag_ir::{
@@ -23,7 +23,6 @@ use crate::artifact_pipeline::ArtifactPipelineSender;
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::cpu_reference;
 use crate::fem_eigen;
-use crate::fem_reference;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 #[cfg(feature = "cuda")]
@@ -76,9 +75,9 @@ pub(crate) enum FdmEngine {
 /// Which execution engine to use for FEM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FemEngine {
-    /// CPU reference engine (fullmag-engine).
+    /// Native CPU FEM backend (MFEM stack on host device).
     CpuReference,
-    /// Native GPU FEM backend scaffold / future MFEM backend.
+    /// Native GPU FEM backend (MFEM stack on CUDA device).
     NativeGpu,
 }
 
@@ -114,7 +113,7 @@ fn fdm_engine_id(engine: FdmEngine) -> &'static str {
 
 fn fem_engine_id(engine: FemEngine) -> &'static str {
     match engine {
-        FemEngine::CpuReference => "fem_cpu_reference",
+        FemEngine::CpuReference => "fem_cpu_native",
         FemEngine::NativeGpu => "fem_native_gpu",
     }
 }
@@ -191,39 +190,6 @@ fn runtime_info_once(message: &str) {
     runtime_log_once("info", message);
 }
 
-fn unsupported_cpu_reference_terms(plan: &FemPlanIR) -> Vec<&'static str> {
-    let mut unsupported = Vec::new();
-    if plan.material.uniaxial_anisotropy.is_some()
-        || plan.material.uniaxial_anisotropy_k2.is_some()
-        || plan.material.ku_field.is_some()
-        || plan.material.ku2_field.is_some()
-    {
-        unsupported.push("uniaxial_anisotropy");
-    }
-    if plan.material.cubic_anisotropy_kc1.is_some()
-        || plan.material.cubic_anisotropy_kc2.is_some()
-        || plan.material.cubic_anisotropy_kc3.is_some()
-    {
-        unsupported.push("cubic_anisotropy");
-    }
-    if plan.dind_field.is_some() {
-        unsupported.push("dind_field");
-    }
-    if plan.dbulk_field.is_some() {
-        unsupported.push("dbulk_field");
-    }
-    if plan.magnetoelastic.is_some() {
-        unsupported.push("magnetoelastic");
-    }
-    if plan.has_oersted_cylinder {
-        unsupported.push("oersted");
-    }
-    if plan.temperature.is_some_and(|t| t > 0.0) {
-        unsupported.push("thermal");
-    }
-    unsupported
-}
-
 fn unsupported_cpu_fdm_terms(plan: &FdmPlanIR, outputs: &[OutputIR]) -> Vec<&'static str> {
     let mut unsupported = Vec::new();
     if plan.has_oersted_cylinder {
@@ -254,13 +220,6 @@ fn unsupported_cpu_fdm_terms(plan: &FdmPlanIR, outputs: &[OutputIR]) -> Vec<&'st
     unsupported.sort_unstable();
     unsupported.dedup();
     unsupported
-}
-
-fn allow_unsupported_cpu_reference_terms() -> bool {
-    matches!(
-        std::env::var("FULLMAG_FEM_ALLOW_UNSUPPORTED_CPU_REFERENCE").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
-    )
 }
 
 fn magnetic_markers_from_object_segments(plan: &FemPlanIR) -> BTreeSet<u32> {
@@ -607,7 +566,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
                         .to_string(),
             });
         }
-        let message = "FEM engine falling back to CPU reference — native FEM GPU does not support active current_modules (fallback_reason=current_modules_force_cpu)".to_string();
+        let message = "FEM engine falling back to native FEM CPU — native FEM GPU does not support active current_modules (fallback_reason=current_modules_force_cpu)".to_string();
         runtime_warn_once(&message);
         return Ok(EngineResolution {
             engine: FemEngine::CpuReference,
@@ -638,7 +597,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
                     })
                 } else {
                     let message = format!(
-                        "script requested FEM GPU execution, but the native FEM GPU backend is not available: {} — falling back to CPU reference engine",
+                        "script requested FEM GPU execution, but the native FEM GPU backend is not available: {} — falling back to native FEM CPU engine",
                         availability.reason
                     );
                     runtime_warn_once(&message);
@@ -664,7 +623,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
                     })
                 } else {
                     let message = format!(
-                        "native FEM GPU backend currently supports fe_order=1 only; falling back to CPU for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
+                        "native FEM GPU backend currently supports fe_order=1 only; falling back to native FEM CPU for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
                         fe_order
                     );
                     runtime_warn_once(&message);
@@ -694,7 +653,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
             } else {
                 if availability.available && fe_order != 1 {
                     let message = format!(
-                        "native FEM GPU backend currently supports fe_order=1 only; falling back to CPU for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
+                        "native FEM GPU backend currently supports fe_order=1 only; falling back to native FEM CPU for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
                         fe_order
                     );
                     runtime_warn_once(&message);
@@ -709,7 +668,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
                     })
                 } else if !availability.available {
                     let message = format!(
-                        "native FEM GPU backend is not available — using CPU reference engine (fallback_reason=native_fem_gpu_unavailable; reason={})",
+                        "native FEM GPU backend is not available — using native FEM CPU engine (fallback_reason=native_fem_gpu_unavailable; reason={})",
                         availability.reason
                     );
                     runtime_info_once(&message);
@@ -786,7 +745,7 @@ fn resolve_fem_engine_with_registry(
                     .to_string(),
             }
                     })?;
-            let message = "FEM engine falling back to CPU reference — native FEM GPU does not support active current_modules (fallback_reason=current_modules_force_cpu)".to_string();
+            let message = "FEM engine falling back to native FEM CPU — native FEM GPU does not support active current_modules (fallback_reason=current_modules_force_cpu)".to_string();
             fallback = Some(runtime_fallback(
                 fem_engine_id(FemEngine::NativeGpu),
                 fem_engine_id(FemEngine::CpuReference),
@@ -823,7 +782,7 @@ fn resolve_fem_engine_with_registry(
             }
                     })?;
             let message = format!(
-                "native FEM GPU backend currently supports fe_order=1 only; falling back to CPU for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
+                "native FEM GPU backend currently supports fe_order=1 only; falling back to native FEM CPU for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
                 fe_order
             );
             fallback = Some(runtime_fallback(
@@ -866,7 +825,7 @@ fn resolve_fem_engine_with_registry(
                             .to_string(),
                 })?;
                 let message = format!(
-                    "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to CPU reference engine",
+                    "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to native FEM CPU engine",
                     fem_plan.mesh.nodes.len(),
                     min_nodes
                 );
@@ -976,7 +935,7 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     if resolution.engine == FemEngine::NativeGpu {
         if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(plan) {
             let message = format!(
-                "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to CPU reference engine",
+                "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to native FEM CPU engine",
                 plan.mesh.nodes.len(),
                 min_nodes
             );
@@ -1021,7 +980,10 @@ pub(crate) fn snapshot_fem_preview(
     request: &LivePreviewRequest,
 ) -> Result<crate::LivePreviewField, RunError> {
     match engine {
-        FemEngine::CpuReference => fem_reference::snapshot_preview(plan, request),
+        FemEngine::CpuReference => {
+            let cpu_plan = fem_plan_for_cpu_native(plan);
+            snapshot_native_fem_preview(&cpu_plan, request)
+        }
         FemEngine::NativeGpu => snapshot_native_fem_preview(plan, request),
     }
 }
@@ -1033,9 +995,20 @@ pub(crate) fn snapshot_fem_vector_fields(
     request: &LivePreviewRequest,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     match engine {
-        FemEngine::CpuReference => fem_reference::snapshot_vector_fields(plan, quantities, request),
+        FemEngine::CpuReference => {
+            let cpu_plan = fem_plan_for_cpu_native(plan);
+            snapshot_native_fem_vector_fields(&cpu_plan, quantities, request)
+        }
         FemEngine::NativeGpu => snapshot_native_fem_vector_fields(plan, quantities, request),
     }
+}
+
+fn fem_plan_for_cpu_native(plan: &FemPlanIR) -> FemPlanIR {
+    let mut cpu_plan = plan.clone();
+    if cpu_plan.mfem_device_string.is_none() {
+        cpu_plan.mfem_device_string = Some("cpu".to_string());
+    }
+    cpu_plan
 }
 
 #[cfg(feature = "cuda")]
@@ -1442,60 +1415,38 @@ pub(crate) fn execute_fem<'a>(
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
+    if normalized_plan.current_density.is_some()
+        || normalized_plan.stt_degree.is_some()
+        || normalized_plan.stt_beta.is_some()
+        || normalized_plan.stt_spin_polarization.is_some()
+        || normalized_plan.stt_lambda.is_some()
+        || normalized_plan.stt_epsilon_prime.is_some()
+    {
+        return Err(RunError {
+            message:
+                "FEM STT is not executable yet; refusing to run a semantically misleading fallback"
+                    .to_string(),
+        });
+    }
     match engine {
         FemEngine::CpuReference => {
-            let unsupported = unsupported_cpu_reference_terms(&normalized_plan);
-            if !unsupported.is_empty() {
-                if allow_unsupported_cpu_reference_terms() {
-                    eprintln!(
-                        "warning: CPU reference FEM engine does not support these plan terms: [{}]. \
-                         They will be IGNORED during this run because \
-                         FULLMAG_FEM_ALLOW_UNSUPPORTED_CPU_REFERENCE is enabled.",
-                        unsupported.join(", ")
-                    );
-                } else {
-                    return Err(RunError {
-                        message: format!(
-                            "CPU reference FEM engine cannot execute this plan faithfully; unsupported terms: [{}]. \
-                             Rerun with the native FEM backend or set FULLMAG_FEM_ALLOW_UNSUPPORTED_CPU_REFERENCE=1 \
-                             to force a lossy fallback.",
-                            unsupported.join(", ")
-                        ),
-                    });
-                }
-            }
-            fem_reference::execute_reference_fem(
-                &normalized_plan,
-                until_seconds,
-                outputs,
-                live,
-                artifact_writer,
-            )
+            let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
+            execute_native_fem(&cpu_plan, until_seconds, outputs, live, artifact_writer)
         }
         FemEngine::NativeGpu => {
-            if normalized_plan.current_density.is_some()
-                || normalized_plan.stt_degree.is_some()
-                || normalized_plan.stt_beta.is_some()
-                || normalized_plan.stt_spin_polarization.is_some()
-                || normalized_plan.stt_lambda.is_some()
-                || normalized_plan.stt_epsilon_prime.is_some()
-            {
-                return Err(RunError {
-                    message: "FEM STT is not executable yet; refusing to run a semantically misleading fallback".to_string(),
-                });
-            }
             if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(&normalized_plan) {
                 eprintln!(
                     "warning: FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — \
-                     falling back to CPU reference engine \
+                     falling back to native FEM CPU engine \
                      (fallback_reason=fem_gpu_small_mesh_policy; \
                      set FULLMAG_FEM_EXECUTION=gpu to force GPU or \
                      FULLMAG_FEM_GPU_MIN_NODES=0 to disable this policy)",
                     normalized_plan.mesh.nodes.len(),
                     min_nodes
                 );
-                return fem_reference::execute_reference_fem(
-                    &normalized_plan,
+                let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
+                return execute_native_fem(
+                    &cpu_plan,
                     until_seconds,
                     outputs,
                     live,
@@ -2085,6 +2036,15 @@ fn build_fem_cached_preview_fields(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn native_fem_execution_engine(plan: &FemPlanIR) -> &'static str {
+    if plan.mfem_device_string.as_deref() == Some("cpu") {
+        "native_fem_cpu"
+    } else {
+        "native_fem_gpu"
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 fn execute_native_fem(
     plan: &FemPlanIR,
     until_seconds: f64,
@@ -2100,8 +2060,10 @@ fn execute_native_fem(
 
     let mut backend = NativeFemBackend::create(plan)?;
     let device_info = backend.device_info()?;
+    let execution_engine = native_fem_execution_engine(plan);
     runtime_info_once(&format!(
-        "native FEM GPU backend active: device='{}' cc={} driver={} runtime={} mfem_device={}",
+        "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={}",
+        execution_engine,
         device_info.name,
         device_info.compute_capability,
         device_info.driver_version,
@@ -2121,7 +2083,7 @@ fn execute_native_fem(
         .demag_realization
         .unwrap_or(fullmag_ir::ResolvedFemDemagIR::TransferGrid);
     let provenance = ExecutionProvenance {
-        execution_engine: "native_fem_gpu".to_string(),
+        execution_engine: execution_engine.to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
             fullmag_ir::ExecutionPrecision::Double => "double".to_string(),
@@ -2676,7 +2638,7 @@ fn execute_native_fem(
 ) -> Result<ExecutedRun, RunError> {
     Err(RunError {
         message:
-            "native FEM GPU backend requested but fullmag-runner was built without the 'fem-gpu' feature"
+            "native FEM backend requested but fullmag-runner was built without the 'fem-gpu' feature"
                 .to_string(),
     })
 }
@@ -3132,7 +3094,7 @@ mod tests {
         let fallback = resolution.fallback.expect("fallback should be present");
         assert!(fallback.occurred);
         assert_eq!(fallback.original_engine, "fem_native_gpu");
-        assert_eq!(fallback.fallback_engine, "fem_cpu_reference");
+        assert_eq!(fallback.fallback_engine, "fem_cpu_native");
         assert_eq!(fallback.reason, "native_fem_gpu_unavailable");
     }
 

@@ -6,6 +6,8 @@
 //! - `LLG(heun)`
 //! - `double` precision
 
+#![allow(dead_code)]
+
 use fullmag_engine::fem::{FemIntegratorWorkspace, FemLlgProblem, FemLlgState, MeshTopology};
 use fullmag_engine::{
     AdaptiveStepConfig, EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator,
