@@ -1411,6 +1411,15 @@ def _render_stages(
                 or _override_string(relax_override, "algorithm", study.algorithm)
                 or study.algorithm
             )
+            relax_solver = (
+                _override_string(stage_override, "integrator", None)
+                or study.dynamics.integrator
+            )
+            relax_fixed_timestep = _override_number(
+                stage_override,
+                "fixed_timestep",
+                study.dynamics.fixed_timestep,
+            )
             torque_tolerance = _override_number(
                 stage_override,
                 "torque_tolerance",
@@ -1441,6 +1450,11 @@ def _render_stages(
             ]
             if energy_tolerance is not None:
                 call_parts.append(f"energy_tolerance={_py_number(energy_tolerance)}")
+            if algorithm == "llg_overdamped":
+                if relax_solver and relax_solver not in {"auto", "rk23"}:
+                    call_parts.append(f"solver={_py_repr(relax_solver)}")
+                if relax_fixed_timestep is not None:
+                    call_parts.append(f"dt={_py_number(relax_fixed_timestep)}")
             if is_study_surface:
                 lines.append(f"study.stages.add_relax({', '.join(call_parts)})")
             else:

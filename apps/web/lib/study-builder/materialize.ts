@@ -15,10 +15,11 @@ function toStringOr(value: unknown, fallback: string): string {
 
 function primitivePayloadToStage(node: PrimitiveStageNode): ScriptBuilderStageState {
   const payload = node.payload;
+  const integratorFallback = node.stage_kind === "relax" ? "auto" : "rk45";
   return {
     kind: toStringOr(payload.kind, node.stage_kind),
     entrypoint_kind: toStringOr(payload.entrypoint_kind, node.stage_kind),
-    integrator: toStringOr(payload.integrator, "rk45"),
+    integrator: toStringOr(payload.integrator, integratorFallback),
     fixed_timestep: toStringOr(payload.fixed_timestep, ""),
     until_seconds: toStringOr(payload.until_seconds, ""),
     relax_algorithm: toStringOr(payload.relax_algorithm, "llg_overdamped"),
@@ -42,10 +43,11 @@ function primitivePayloadToStage(node: PrimitiveStageNode): ScriptBuilderStageSt
 }
 
 function stage(kind: ScriptBuilderStageState["kind"], patch?: Partial<ScriptBuilderStageState>): ScriptBuilderStageState {
+  const defaultIntegrator = kind === "relax" ? "auto" : "rk45";
   return {
     kind,
     entrypoint_kind: kind,
-    integrator: "rk45",
+    integrator: defaultIntegrator,
     fixed_timestep: "",
     until_seconds: "",
     relax_algorithm: "llg_overdamped",

@@ -150,8 +150,11 @@ class QuantityApiTests(unittest.TestCase):
             algorithm: str = "llg_overdamped",
             energy_tolerance: float | None = None,
             relax_alpha: float | None = 1.0,
+            solver: str | None = None,
+            dt: float | str | None = None,
+            max_error: float | None = None,
         ):
-            del tol, algorithm, energy_tolerance, relax_alpha
+            del tol, algorithm, energy_tolerance, relax_alpha, solver, dt, max_error
             step_limits.append(max_steps)
             energy = energies[min(len(step_limits) - 1, len(energies) - 1)]
             result = _result(_step(step=len(step_limits), time=1e-12, e_total=energy))

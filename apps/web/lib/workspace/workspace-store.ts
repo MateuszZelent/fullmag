@@ -58,7 +58,7 @@ interface StageLayoutState {
 }
 
 const STAGES: WorkspaceMode[] = ["build", "study", "analyze"];
-const DOCKING_STORAGE_KEY = "fullmag.workspace.docking.v1";
+const DOCKING_STORAGE_KEY = "fullmag.workspace.docking.v2";
 
 function defaultCoreTabs(): WorkspaceTab[] {
   return [

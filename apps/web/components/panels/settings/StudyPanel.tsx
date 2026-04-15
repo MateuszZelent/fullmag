@@ -606,9 +606,10 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
           <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             <SelectField
               label="Integrator"
-              value={String(node.payload.integrator ?? "rk45")}
+              value={String(node.payload.integrator ?? (node.stage_kind === "relax" ? "auto" : "rk45"))}
               onchange={(value) => patchSelectedNode({ integrator: value })}
               options={[
+                { value: "auto", label: "Auto (RK23 for relax)" },
                 { value: "heun", label: "Heun" },
                 { value: "rk4", label: "RK4" },
                 { value: "rk23", label: "RK23" },
@@ -678,7 +679,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
             />
             <TextField
               label="Torque tolerance"
-              value={String(node.payload.torque_tolerance ?? "1e-6")}
+              value={String(node.payload.torque_tolerance ?? "1e-4")}
               onchange={(event) => patchSelectedNode({ torque_tolerance: event.target.value })}
               mono
             />

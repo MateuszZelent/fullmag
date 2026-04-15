@@ -2031,6 +2031,29 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("study.stages.add_relax(tol=1e-05, max_steps=25, algorithm=\"llg_overdamped\")", rewritten)
         self.assertIn("study.stages.add_run(4e-12)", rewritten)
 
+    def test_study_builder_relax_stage_roundtrips_solver_and_dt(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_authoring")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        study.stages.add_relax(max_steps=25, solver="rk45", dt=2e-13)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_study_stage_relax_solver_dt.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn('solver="rk45"', rewritten)
+        self.assertIn("dt=2e-13", rewritten)
+
     def test_builder_draft_uses_final_flat_problem_materials_for_stage_sequences(self) -> None:
         script = """
         import fullmag as fm
@@ -2198,6 +2221,52 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(loaded.entrypoint_kind, "flat_relax")
         self.assertIsNone(loaded.default_until_seconds)
         self.assertEqual(loaded.problem.study.to_ir()["kind"], "relaxation")
+        dynamics = loaded.problem.study.to_ir()["dynamics"]
+        self.assertEqual(dynamics["integrator"], "rk23")
+        self.assertIsNone(dynamics["fixed_timestep"])
+
+    def test_flat_relax_accepts_solver_and_dt_overrides(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        fm.relax(max_steps=250, solver="rk45", dt=2e-13)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_flat_relax_solver_dt.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        dynamics = loaded.problem.study.to_ir()["dynamics"]
+        self.assertEqual(dynamics["integrator"], "rk45")
+        self.assertEqual(dynamics["fixed_timestep"], 2e-13)
+
+    def test_flat_relax_rejects_solver_for_minimizer_algorithms(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        fm.relax(max_steps=250, algorithm="nonlinear_cg", solver="rk23")
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_flat_relax_invalid_solver.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            with self.assertRaises(TypeError):
+                fm.load_problem_from_script(path)
 
     def test_flat_solver_max_error_lowers_to_adaptive_timestep(self) -> None:
         script = """

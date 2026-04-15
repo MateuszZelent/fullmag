@@ -1223,7 +1223,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         </div>
       ) : null}
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.useDockingShell ? (
-        <WorkspaceDockingShell />
+        <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
+          <WorkspaceDockingShell />
+        </div>
       ) : (
         <PanelGroup
           orientation="horizontal"

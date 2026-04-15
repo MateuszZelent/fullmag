@@ -34,7 +34,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 from fullmag._progress import emit_progress
 from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive
@@ -45,7 +45,14 @@ from fullmag.model.antenna import (
     SpinWaveExcitationAnalysis,
 )
 from fullmag.model.energy import Demag, Exchange, InterfacialDMI, Zeeman
-from fullmag.model.dynamics import AdaptiveTimestep, DEFAULT_GAMMA, LLG
+from fullmag.model.dynamics import (
+    ADAPTIVE_INTEGRATORS,
+    INTEGRATOR_ALIASES,
+    SUPPORTED_INTEGRATORS,
+    AdaptiveTimestep,
+    DEFAULT_GAMMA,
+    LLG,
+)
 from fullmag.model.outputs import SaveField, SaveScalar, SaveSpectrum, SaveMode, SaveDispersion, Snapshot, parse_snapshot_quantity
 from fullmag.model.study import Eigenmodes, Relaxation, TimeEvolution
 from fullmag.model.structure import Ferromagnet, Material, Region
@@ -831,6 +838,9 @@ class RelaxStageSpec:
     algorithm: str = "llg_overdamped"
     energy_tolerance: float | None = None
     relax_alpha: float | None = 1.0
+    solver: str | None = None
+    dt: float | Literal["auto"] | None = None
+    max_error: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1047,13 +1057,25 @@ def relax_stage(
     algorithm: str = "llg_overdamped",
     energy_tolerance: float | None = None,
     relax_alpha: float | None = 1.0,
+    solver: str | None = None,
+    dt: float | Literal["auto"] | None = None,
+    max_error: float | None = None,
 ) -> RelaxStageSpec:
+    _build_relax_llg_dynamics(
+        algorithm=algorithm,
+        solver=solver,
+        dt=dt,
+        max_error=max_error,
+    )
     return RelaxStageSpec(
         tol=tol,
         max_steps=max_steps,
         algorithm=algorithm,
         energy_tolerance=energy_tolerance,
         relax_alpha=relax_alpha,
+        solver=solver,
+        dt=dt,
+        max_error=max_error,
     )
 
 
@@ -1091,12 +1113,19 @@ def eigenmodes_stage(
 
 
 def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
+    relax_dynamics = _build_relax_llg_dynamics(
+        algorithm=spec.algorithm,
+        solver=spec.solver,
+        dt=spec.dt,
+        max_error=spec.max_error,
+    )
     problem = _build_problem(
         study_kind="relaxation",
         relax_algorithm=spec.algorithm,
         relax_torque_tolerance=spec.tol,
         relax_energy_tolerance=spec.energy_tolerance,
         relax_max_steps=spec.max_steps,
+        relax_dynamics=relax_dynamics,
     )
     if spec.relax_alpha is None:
         return problem
@@ -1550,6 +1579,9 @@ class StudyStagesBuilder:
         algorithm: str = "llg_overdamped",
         energy_tolerance: float | None = None,
         relax_alpha: float | None = 1.0,
+        solver: str | None = None,
+        dt: float | Literal["auto"] | None = None,
+        max_error: float | None = None,
     ) -> "StudyStagesBuilder":
         return self.add_stage(
             relax_stage(
@@ -1558,6 +1590,9 @@ class StudyStagesBuilder:
                 algorithm=algorithm,
                 energy_tolerance=energy_tolerance,
                 relax_alpha=relax_alpha,
+                solver=solver,
+                dt=dt,
+                max_error=max_error,
             )
         )
 
@@ -2000,6 +2035,9 @@ class StudyBuilder:
         algorithm: str = "llg_overdamped",
         energy_tolerance: float | None = None,
         relax_alpha: float | None = 1.0,
+        solver: str | None = None,
+        dt: float | Literal["auto"] | None = None,
+        max_error: float | None = None,
     ) -> Any:
         return relax(
             tol=tol,
@@ -2007,6 +2045,9 @@ class StudyBuilder:
             algorithm=algorithm,
             energy_tolerance=energy_tolerance,
             relax_alpha=relax_alpha,
+            solver=solver,
+            dt=dt,
+            max_error=max_error,
         )
 
     def eigenmodes(
@@ -3192,6 +3233,75 @@ def name(problem_name: str) -> None:
     _state._name = problem_name
 
 
+def _coerce_relax_dt(
+    dt: float | Literal["auto"] | None,
+) -> tuple[float | None, bool]:
+    if dt is None or dt == "auto":
+        return None, True
+    dt_value = float(dt)
+    if not math.isfinite(dt_value) or dt_value <= 0.0:
+        raise ValueError("relax dt must be a positive finite float or 'auto'")
+    return dt_value, False
+
+
+def _resolve_relax_solver(solver: str | None) -> str:
+    if solver is None:
+        return "rk23"
+    normalized = str(solver).strip().lower()
+    if not normalized:
+        return "rk23"
+    canonical = INTEGRATOR_ALIASES.get(normalized, normalized)
+    if canonical == "auto":
+        return "rk23"
+    if canonical not in SUPPORTED_INTEGRATORS:
+        supported = ", ".join(sorted(SUPPORTED_INTEGRATORS))
+        raise ValueError(f"relax solver must be one of: {supported}")
+    return canonical
+
+
+def _build_relax_llg_dynamics(
+    *,
+    algorithm: str,
+    solver: str | None,
+    dt: float | Literal["auto"] | None,
+    max_error: float | None,
+) -> LLG | None:
+    if algorithm != "llg_overdamped":
+        if solver is not None or dt is not None or max_error is not None:
+            raise TypeError(
+                "solver/dt/max_error are supported only for algorithm='llg_overdamped'"
+            )
+        return None
+
+    integrator = _resolve_relax_solver(solver)
+    fixed_timestep, dt_is_auto = _coerce_relax_dt(dt)
+
+    adaptive_timestep = None
+    if max_error is not None:
+        if max_error <= 0.0:
+            raise ValueError("max_error must be positive when provided")
+        if fixed_timestep is not None:
+            raise ValueError("max_error requires dt='auto' for relax()")
+        if integrator not in ADAPTIVE_INTEGRATORS:
+            raise ValueError(
+                "max_error requires an adaptive relax solver (rk23 or rk45)"
+            )
+        adaptive_timestep = AdaptiveTimestep(atol=max_error)
+
+    if dt_is_auto and integrator not in ADAPTIVE_INTEGRATORS:
+        raise ValueError(
+            "dt='auto' requires an adaptive relax solver (rk23 or rk45)"
+        )
+
+    gamma = _state._gamma if _state._gamma is not None else DEFAULT_GAMMA
+    return LLG(
+        gamma=gamma,
+        integrator=integrator,
+        fixed_timestep=fixed_timestep,
+        adaptive_timestep=adaptive_timestep,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Build Problem from accumulated state
 # ---------------------------------------------------------------------------
@@ -3203,6 +3313,7 @@ def _build_problem(
     relax_torque_tolerance: float = 1e-6,
     relax_energy_tolerance: float | None = None,
     relax_max_steps: int = 50_000,
+    relax_dynamics: LLG | None = None,
     eigen_count: int = 10,
     eigen_target: str = "lowest",
     eigen_target_frequency: float | None = None,
@@ -3308,7 +3419,7 @@ def _build_problem(
             torque_tolerance=relax_torque_tolerance,
             energy_tolerance=relax_energy_tolerance,
             max_steps=relax_max_steps,
-            dynamics=dynamics,
+            dynamics=relax_dynamics or dynamics,
         )
     elif study_kind == "eigenmodes":
         if not eigen_outputs:
@@ -3398,7 +3509,15 @@ def run_while(
     relax_fn = globals()["relax"]
     if kwargs:
         if relax:
-            allowed = {"tol", "algorithm", "energy_tolerance", "relax_alpha"}
+            allowed = {
+                "tol",
+                "algorithm",
+                "energy_tolerance",
+                "relax_alpha",
+                "solver",
+                "dt",
+                "max_error",
+            }
             unsupported = sorted(set(kwargs) - allowed)
             if unsupported:
                 names = ", ".join(unsupported)
@@ -3427,6 +3546,9 @@ def run_while(
                 algorithm=str(relax_kwargs.get("algorithm", "llg_overdamped")),
                 energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
                 relax_alpha=relax_kwargs.get("relax_alpha", 1.0),  # type: ignore[arg-type]
+                solver=relax_kwargs.get("solver"),  # type: ignore[arg-type]
+                dt=relax_kwargs.get("dt"),  # type: ignore[arg-type]
+                max_error=relax_kwargs.get("max_error"),  # type: ignore[arg-type]
             )
         until = cfg.max_time if cfg.max_time is not None else cfg.chunk_time * float(cfg.max_steps)
         return run(until)
@@ -3466,6 +3588,9 @@ def run_while(
                 algorithm=str(relax_kwargs.get("algorithm", "llg_overdamped")),
                 energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
                 relax_alpha=relax_kwargs.get("relax_alpha", 1.0),  # type: ignore[arg-type]
+                solver=relax_kwargs.get("solver"),  # type: ignore[arg-type]
+                dt=relax_kwargs.get("dt"),  # type: ignore[arg-type]
+                max_error=relax_kwargs.get("max_error"),  # type: ignore[arg-type]
             )
         else:
             last_result = run(chunk)
@@ -3519,6 +3644,9 @@ def relax(
     algorithm: str = "llg_overdamped",
     energy_tolerance: float | None = None,
     relax_alpha: float | None = 1.0,
+    solver: str | None = None,
+    dt: float | Literal["auto"] | None = None,
+    max_error: float | None = None,
 ) -> Any:
     """Build the problem and run a relaxation study.
 
@@ -3538,7 +3666,23 @@ def relax(
         Default ``1.0`` gives optimal convergence for overdamped LLG.
         Set to ``None`` to keep each magnet's own material α.
         The original material α is automatically restored after relaxation.
+    solver : str, optional
+        Relaxation solver for ``algorithm="llg_overdamped"``.
+        ``"auto"`` maps to ``"rk23"`` (mumax-like default).
+    dt : float or "auto", optional
+        Relaxation time-step policy for ``algorithm="llg_overdamped"``.
+        ``"auto"`` enables adaptive/default stepping, while a numeric value
+        enforces fixed timestep.
+    max_error : float, optional
+        Adaptive error tolerance for ``algorithm="llg_overdamped"``.
+        Only meaningful with adaptive-capable solvers (``rk23``/``rk45``).
     """
+    relax_dynamics = _build_relax_llg_dynamics(
+        algorithm=algorithm,
+        solver=solver,
+        dt=dt,
+        max_error=max_error,
+    )
     from fullmag.runtime import Simulation
     problem = _build_problem(
         study_kind="relaxation",
@@ -3546,6 +3690,7 @@ def relax(
         relax_torque_tolerance=tol,
         relax_energy_tolerance=energy_tolerance,
         relax_max_steps=max_steps,
+        relax_dynamics=relax_dynamics,
     )
 
     # Override damping for relaxation (does not affect subsequent fm.run()

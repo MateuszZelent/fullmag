@@ -113,7 +113,7 @@ function primitiveDefaults(kind: StudyPrimitiveStageKind): {
         payload: {
           kind,
           entrypoint_kind: kind,
-          integrator: "rk45",
+          integrator: "auto",
           relax_algorithm: "llg_overdamped",
           torque_tolerance: "1e-4",
           energy_tolerance: "",

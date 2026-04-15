@@ -966,7 +966,7 @@ export default function RunSidebar() {
   }, []);
 
   return (
-    <div className="flex w-full h-full border-l border-border/10 bg-background/80 z-30">
+    <div className="flex h-full w-full border-l border-border/10 bg-background/80">
       <PanelGroup
         orientation="horizontal"
         className="flex w-full h-full"

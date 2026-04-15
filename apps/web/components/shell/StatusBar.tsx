@@ -274,12 +274,6 @@ export default function StatusBar({
             <span className="flex items-center gap-1.5"><Clock size={11} />{simTime}</span>
             <span className="h-3 w-px bg-border/50" />
             <span>Step {stepDisplay ?? step.toLocaleString()}</span>
-            {wallTime !== "—" && (
-              <>
-                <span className="h-3 w-px bg-border/50" />
-                <span>Elapsed {wallTime}</span>
-              </>
-            )}
           </div>
 
           <div className="flex items-center gap-2">

@@ -3,7 +3,7 @@
 
 - Status: implemented
 - Owners: Fullmag core
-- Last updated: 2026-03-27
+- Last updated: 2026-04-15
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -173,6 +173,15 @@ This removes the orbiting/overshoot behavior associated with time evolution and
 makes `relax()` behave as an energy descent rather than a damped precessional
 run. The material damping $\alpha$ still scales the descent rate, but the user
 does **not** need to inflate $\alpha$ merely to suppress visible precession.
+
+Public API semantics for this path are intentionally mumax-like:
+
+1. `relax(..., algorithm="llg_overdamped", solver="auto")` maps to RK23.
+2. `dt="auto"` means no fixed timestep (adaptive/default step policy).
+3. Numeric `dt` means fixed timestep.
+4. Solver/time-step controls are valid only for `llg_overdamped`.
+   Direct minimizers (`projected_gradient_bb`, `nonlinear_cg`) reject
+   `solver`/`dt`/`max_error` as non-applicable controls.
 
 Fullmag currently still uses the runner's pseudo-time and output cadence during
 `llg_overdamped` relaxation, so reported stage time is an execution-control

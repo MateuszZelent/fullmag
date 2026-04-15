@@ -186,7 +186,7 @@ export default function WorkspaceDockingShell() {
   );
 
   return (
-    <div className="relative h-full min-h-0 min-w-0 overflow-hidden bg-background">
+    <div className="relative h-full w-full min-h-0 min-w-0 overflow-hidden bg-background">
       <FlexLayout
         key={modelKey}
         model={model}
