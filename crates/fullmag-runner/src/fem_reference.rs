@@ -6,7 +6,7 @@
 //! - `LLG(heun)`
 //! - `double` precision
 
-use fullmag_engine::fem::{FemLlgProblem, FemLlgState, MeshTopology};
+use fullmag_engine::fem::{FemIntegratorWorkspace, FemLlgProblem, FemLlgState, MeshTopology};
 use fullmag_engine::{
     AdaptiveStepConfig, EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator,
 };
@@ -448,6 +448,9 @@ fn execute_reference_fem_impl(
         plan.relaxation.as_ref().map_or(0.0, |c| c.torque_tolerance),
     );
 
+    let n_nodes = state.magnetization().len();
+    let mut integrator_ws = FemIntegratorWorkspace::new(n_nodes);
+
     while state.time_seconds < until_seconds {
         if let Some(live) = live.as_mut() {
             if let Some(display_selection) = live.display_selection.map(|get| get()) {
@@ -498,9 +501,11 @@ fn execute_reference_fem_impl(
             ));
         }
         let wall_start = Instant::now();
-        let report = problem.step(&mut state, dt_step).map_err(|e| RunError {
-            message: format!("FEM step {}: {}", step_count, e),
-        })?;
+        let report = problem
+            .step_with_workspace(&mut state, dt_step, &mut integrator_ws)
+            .map_err(|e| RunError {
+                message: format!("FEM step {}: {}", step_count, e),
+            })?;
         let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
         step_count += 1;
         if let Some(next) = report.suggested_next_dt {

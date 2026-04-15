@@ -1,7 +1,7 @@
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use std::collections::HashSet;
 
-use fullmag_engine::fem::{FemLlgProblem, FemLlgState};
+use fullmag_engine::fem::{FemIntegratorWorkspace, FemLlgProblem, FemLlgState};
 use fullmag_engine::{ExchangeLlgProblem, ExchangeLlgState, FftWorkspace, IntegratorBuffers};
 use fullmag_ir::{BackendPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR, RelaxationAlgorithmIR};
 
@@ -161,6 +161,7 @@ enum InteractiveFemPreviewRuntimeInner {
 struct CpuInteractiveFemPreviewRuntime {
     problem: FemLlgProblem,
     state: FemLlgState,
+    integrator_ws: FemIntegratorWorkspace,
     antenna_field: Vec<[f64; 3]>,
     mesh: crate::types::FemMeshPayload,
     plan_signature: FemPlanIR,
@@ -411,9 +412,11 @@ impl InteractiveFemPreviewRuntime {
                 }
                 let (problem, state) = fem_reference::build_problem_and_state(plan)?;
                 let antenna_field = crate::antenna_fields::compute_antenna_field(plan)?;
+                let n_nodes = state.magnetization().len();
                 InteractiveFemPreviewRuntimeInner::Cpu(CpuInteractiveFemPreviewRuntime {
                     problem,
                     state,
+                    integrator_ws: FemIntegratorWorkspace::new(n_nodes),
                     antenna_field,
                     mesh,
                     plan_signature: normalize_fem_plan_signature(plan),
@@ -2034,7 +2037,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let wall_start = std::time::Instant::now();
             let report = self
                 .problem
-                .step(&mut self.state, dt_step)
+                .step_with_workspace(&mut self.state, dt_step, &mut self.integrator_ws)
                 .map_err(|error| RunError {
                     message: format!("interactive FEM CPU step failed: {}", error),
                 })?;
@@ -2305,7 +2308,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let wall_start = std::time::Instant::now();
             let report = self
                 .problem
-                .step(&mut self.state, dt_step)
+                .step_with_workspace(&mut self.state, dt_step, &mut self.integrator_ws)
                 .map_err(|error| RunError {
                     message: format!("interactive FEM CPU step failed: {}", error),
                 })?;
