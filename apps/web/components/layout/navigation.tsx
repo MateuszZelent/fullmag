@@ -24,5 +24,5 @@ function WorkspaceIcon(): ReactNode {
  * longer renders AppLayout, so it's effectively unused.
  */
 export const navigationItems: NavItem[] = [
-  { href: '/analyze', label: 'Workspace', icon: <WorkspaceIcon /> },
+  { href: '/workspace', label: 'Workspace', icon: <WorkspaceIcon /> },
 ];

@@ -20,6 +20,11 @@ import {
   findSceneObjectByNodeId,
 } from "./objectSelection";
 import {
+  defaultSceneMagnetizationAsset,
+  defaultSceneMaterialAsset,
+  makeUniqueSceneObjectName,
+} from "@/lib/session/sceneObjectFactory";
+import {
   SidebarSection,
   SubSectionHeader,
   PropertyRow,
@@ -69,23 +74,6 @@ function defaultGeometryParams(kind: string, name: string): Record<string, unkno
     default:
       return { size: [20e-9, 20e-9, 10e-9], name };
   }
-}
-
-function makeUniqueName(baseName: string, objects: SceneObject[], skipIndex = -1): string {
-  const normalized = baseName.trim() || "body";
-  const existing = new Set(
-    objects
-      .map((object, index) => (index === skipIndex ? null : object.name))
-      .filter((value): value is string => Boolean(value)),
-  );
-  if (!existing.has(normalized)) {
-    return normalized;
-  }
-  let counter = 2;
-  while (existing.has(`${normalized}_${counter}`)) {
-    counter += 1;
-  }
-  return `${normalized}_${counter}`;
 }
 
 function readTranslation(object: SceneObject): [number, number, number] {
@@ -191,48 +179,6 @@ function cloneSceneObject(source: SceneObject, nextName: string): SceneObject {
         name: nextName,
       },
     },
-  };
-}
-
-function defaultMaterialAsset(name: string): SceneMaterialAsset {
-  return {
-    id: defaultSceneMaterialId(name),
-    name: `${name} material`,
-    properties: {
-      Ms: null,
-      Aex: null,
-      alpha: 0.01,
-      Dind: null,
-    },
-  };
-}
-
-function defaultMagnetizationAsset(name: string): MagnetizationAsset {
-  return {
-    id: defaultSceneMagnetizationId(name),
-    name: `${name} magnetization`,
-    kind: "uniform",
-    value: [0, 0, 1],
-    seed: null,
-    source_path: null,
-    source_format: null,
-    dataset: null,
-    sample_index: null,
-    mapping: {
-      space: "object",
-      projection: "object_local",
-      clamp_mode: "clamp",
-    },
-    texture_transform: {
-      translation: [0, 0, 0],
-      rotation_quat: [0, 0, 0, 1],
-      scale: [1, 1, 1],
-      pivot: [0, 0, 0],
-    },
-    preset_kind: null,
-    preset_params: null,
-    preset_version: null,
-    ui_label: null,
   };
 }
 
@@ -531,15 +477,15 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
                   if (!prev) return prev;
                   const source = prev.objects[objectIndex];
                   if (!source) return prev;
-                  const nextDuplicateName = makeUniqueName(`${source.name}_copy`, prev.objects);
+                  const nextDuplicateName = makeUniqueSceneObjectName(`${source.name}_copy`, prev.objects);
                   duplicateName = nextDuplicateName;
                   const sourceMaterial =
                     prev.materials.find((entry) => entry.id === source.material_ref) ??
-                    defaultMaterialAsset(source.name);
+                    defaultSceneMaterialAsset(source.name);
                   const sourceMagnetization =
                     prev.magnetization_assets.find(
                       (entry) => entry.id === source.magnetization_ref,
-                    ) ?? defaultMagnetizationAsset(source.name);
+                    ) ?? defaultSceneMagnetizationAsset(source.name);
                   const nextObjects = [...prev.objects];
                   nextObjects.splice(objectIndex + 1, 0, cloneSceneObject(source, nextDuplicateName));
                   return {

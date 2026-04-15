@@ -5,13 +5,7 @@
  * Components migrating away from useControlRoom() import from here.
  */
 
-/* Layer A: App Shell & Route Model */
-export {
-  parseWorkspaceRoute,
-  buildWorkspaceHref,
-  type WorkspaceStage,
-  type WorkspaceRouteParams,
-} from "./app-shell/route-model";
+/* Layer A: App Shell */
 export {
   useWorkspaceShellStore,
   useStageLayout,

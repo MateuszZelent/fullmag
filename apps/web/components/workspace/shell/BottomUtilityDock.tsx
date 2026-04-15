@@ -22,10 +22,26 @@ interface BottomTelemetryDockProps {
   eTotal: number;
   /** Activity detail or solver stage label */
   activityDetail: string | null;
+  solverIntegrator?: string | null;
+  solverMaxError?: number | null;
 }
 
 function fmtTimeOrDash(v: number, enabled: boolean): string {
   return enabled ? fmtTime(v) : "—";
+}
+
+function fmtSolverIntegrator(v: string | null | undefined): string {
+  if (!v) return "—";
+  const normalized = v.trim().toLowerCase();
+  if (!normalized) return "—";
+  const alias: Record<string, string> = {
+    heun: "Heun (RK2)",
+    rk4: "RK4",
+    rk23: "RK23",
+    rk45: "RK45",
+    abm3: "ABM3",
+  };
+  return alias[normalized] ?? v;
 }
 
 export default function BottomTelemetryDock({
@@ -43,6 +59,8 @@ export default function BottomTelemetryDock({
   convergenceThreshold: convergenceThresholdProp,
   eTotal,
   activityDetail,
+  solverIntegrator,
+  solverMaxError,
 }: BottomTelemetryDockProps) {
   const convergenceThreshold = convergenceThresholdProp ?? DEFAULT_CONVERGENCE_THRESHOLD;
 
@@ -92,6 +110,18 @@ export default function BottomTelemetryDock({
       hint: "Bieżący krok czasowy używany przez solver.",
       accent: "border-l-[--chart-amber]",
       value: fmtSIOrDash(effectiveDt, "s", hasSolverTelemetry),
+    },
+    {
+      label: "Solver",
+      hint: "Aktualny integrator czasowy (np. Heun, RK23, RK45).",
+      accent: "border-l-[--chart-violet]",
+      value: fmtSolverIntegrator(solverIntegrator),
+    },
+    {
+      label: "Max error",
+      hint: "Adaptacyjna tolerancja błędu (atol) dla RK23/RK45.",
+      accent: "border-l-[--chart-amber]",
+      value: fmtExpOrDash(solverMaxError ?? 0, solverMaxError != null),
     },
     {
       label: "max dm/dt",

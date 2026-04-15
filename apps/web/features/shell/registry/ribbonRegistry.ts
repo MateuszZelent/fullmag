@@ -75,7 +75,6 @@ export type RibbonTabId =
   | "automation";
 
 export type ContextualTabId =
-  | "selected-ferromagnet"
   | "interface"
   | "work-plane"
   | "mesh-quality"
@@ -241,7 +240,6 @@ export function resolveRibbonGroups(
  */
 export function resolveContextualGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   const contextualTabs: ContextualTabId[] = [
-    "selected-ferromagnet",
     "interface",
     "work-plane",
     "mesh-quality",

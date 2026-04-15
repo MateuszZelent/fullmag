@@ -10,7 +10,7 @@ import {
   type IJsonModel,
 } from "flexlayout-react";
 
-import { useCommand, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
+import { useCommand, useModel, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
 import RunSidebar from "@/components/runs/control-room/RunSidebar";
 import BottomUtilityDock from "@/components/workspace/shell/BottomUtilityDock";
 import ChartsDock from "@/components/workspace/docks/ChartsDock";
@@ -61,6 +61,7 @@ export default function WorkspaceDockingShell() {
   const setDockLayout = useWorkspaceStore((state) => state.setDockLayout);
 
   const cmd = useCommand();
+  const modelState = useModel();
   const tp = useTransport();
 
   const [viewportWidth, setViewportWidth] = useState(1920);
@@ -126,6 +127,14 @@ export default function WorkspaceDockingShell() {
         );
       }
       if (component === "dock-bottom") {
+        const solverIntegrator =
+          modelState.solverPlan?.integrator ?? modelState.solverSettings.integrator;
+        const solverMaxError = (() => {
+          const planAtol = modelState.solverPlan?.adaptive?.atol;
+          if (typeof planAtol === "number" && Number.isFinite(planAtol)) return planAtol;
+          const parsed = Number.parseFloat(modelState.solverSettings.maxError);
+          return Number.isFinite(parsed) ? parsed : null;
+        })();
         return (
           <div className="flex h-full divide-x divide-border/20 overflow-hidden">
             <div className="flex-1 min-w-0 overflow-hidden">
@@ -143,6 +152,8 @@ export default function WorkspaceDockingShell() {
                 hasSolverTelemetry={tp.hasSolverTelemetry}
                 eTotal={tp.effectiveETotal}
                 activityDetail={cmd.activity?.detail ?? null}
+                solverIntegrator={solverIntegrator}
+                solverMaxError={solverMaxError}
               />
             </div>
             <div className="w-52 shrink-0 overflow-hidden">
@@ -166,6 +177,10 @@ export default function WorkspaceDockingShell() {
     [
       cmd.activity,
       cmd.workspaceStatus,
+      modelState.solverPlan?.adaptive?.atol,
+      modelState.solverPlan?.integrator,
+      modelState.solverSettings.integrator,
+      modelState.solverSettings.maxError,
       tp.effectiveDmDt,
       tp.effectiveDt,
       tp.effectiveStep,

@@ -94,8 +94,6 @@ export function resolveLaunchIntentFromSearchParams(
 }
 
 export function targetPathForLaunchIntent(intent: LaunchIntent): string {
-  const stage = intent.targetStage ?? "build";
-  if (stage === "build") return "/build";
-  if (stage === "study") return "/study";
-  return "/analyze";
+  void intent;
+  return "/workspace";
 }

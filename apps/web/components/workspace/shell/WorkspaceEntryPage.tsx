@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import WorkspaceShell from "./WorkspaceShell";
 import type { WorkspaceMode } from "@/components/runs/control-room/context-hooks";
@@ -15,13 +15,18 @@ interface WorkspaceEntryPageProps {
 
 export default function WorkspaceEntryPage({ stage }: WorkspaceEntryPageProps) {
   const searchParams = useSearchParams();
+  const queryString = searchParams.toString();
+  const intent = useMemo(
+    () => resolveLaunchIntentFromSearchParams(new URLSearchParams(queryString)),
+    [queryString],
+  );
+  const effectiveStage = intent.targetStage ?? stage;
   const setLaunchIntent = useWorkspaceStore((state) => state.setLaunchIntent);
   const setActiveProjectId = useWorkspaceStore((state) => state.setActiveProjectId);
   const setCurrentStage = useWorkspaceStore((state) => state.setCurrentStage);
   const setLauncherVisible = useWorkspaceStore((state) => state.setLauncherVisible);
 
   useEffect(() => {
-    const intent = resolveLaunchIntentFromSearchParams(searchParams);
     const stagedAsset = readStagedLaunchAsset(intent.launchAssetId);
     const enrichedIntent = stagedAsset
       ? {
@@ -42,9 +47,17 @@ export default function WorkspaceEntryPage({ stage }: WorkspaceEntryPageProps) {
     });
     setLaunchIntent(enrichedIntent);
     setActiveProjectId(enrichedIntent.resumeProjectId ?? enrichedIntent.entryPath ?? null);
-    setCurrentStage(stage);
+    setCurrentStage(effectiveStage);
     setLauncherVisible(false);
-  }, [searchParams, setActiveProjectId, setCurrentStage, setLaunchIntent, setLauncherVisible, stage]);
+  }, [
+    effectiveStage,
+    intent,
+    setActiveProjectId,
+    setCurrentStage,
+    setLaunchIntent,
+    setLauncherVisible,
+    stage,
+  ]);
 
-  return <WorkspaceShell initialStage={stage} />;
+  return <WorkspaceShell initialStage={effectiveStage} />;
 }

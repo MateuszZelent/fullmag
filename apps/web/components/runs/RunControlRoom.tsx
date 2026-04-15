@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import type { Route } from "next";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import AppBar from "../shell/AppBar";
 import RibbonBar from "../shell/RibbonBar";
@@ -19,6 +18,7 @@ import {
   MAGNETIC_PRESET_CATALOG,
   type MagneticPresetKind,
 } from "../../lib/magnetizationPresetCatalog";
+import type { GeometryPresetKind } from "../../lib/geometryPresetCatalog";
 import {
   ensureObjectPhysicsStack,
   upsertObjectInteraction,
@@ -26,6 +26,7 @@ import {
 import {
   assignMagneticPreset,
 } from "../../lib/session/magnetizationAssetActions";
+import { createSceneObjectFromGeometryPreset } from "../../lib/session/sceneObjectFactory";
 import {
   ControlRoomProvider,
 } from "./control-room/ControlRoomContext";
@@ -91,6 +92,8 @@ import type {
   StudyPipelineDocument,
   StudyPrimitiveStageKind,
 } from "@/lib/study-builder/types";
+
+const ANALYZE_WORKSPACE_HREF = "/workspace?stage=analyze";
 
 function launchDisplayName(intent: ReturnType<typeof useWorkspaceStore.getState>["launchIntent"]): string | null {
   if (!intent) return null;
@@ -325,12 +328,12 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       setActiveCoreTab("Results");
       setActiveContextualTab(null);
       ctx.openAnalyze(analyzeTarget);
-      if (pathname !== "/analyze") {
+      if (pathname !== "/workspace") {
         recordFrontendDebugEvent("run-control-room", "router_push_analyze_from_tree", {
           nodeId,
           source: "analyze_target",
         });
-        router.push("/analyze");
+        router.push(ANALYZE_WORKSPACE_HREF);
       }
       return;
     }
@@ -340,12 +343,12 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       setActiveCoreTab("Results");
       setActiveContextualTab(null);
       ctx.openResultWorkspaceEntry(nodeId.replace("res-analysis-", ""));
-      if (pathname !== "/analyze") {
+      if (pathname !== "/workspace") {
         recordFrontendDebugEvent("run-control-room", "router_push_analyze_from_tree", {
           nodeId,
           source: "result_workspace",
         });
-        router.push("/analyze");
+        router.push(ANALYZE_WORKSPACE_HREF);
       }
       return;
     }
@@ -362,12 +365,12 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       ctx.setWorkspaceMode("analyze");
       setActiveCoreTab("Results");
       setActiveContextualTab(null);
-      if (pathname !== "/analyze") {
+      if (pathname !== "/workspace") {
         recordFrontendDebugEvent("run-control-room", "router_push_analyze_from_tree", {
           nodeId,
           source: "results_node",
         });
-        router.push("/analyze");
+        router.push(ANALYZE_WORKSPACE_HREF);
       }
       return;
     }
@@ -403,6 +406,30 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     handleSelectModelNode(nodeId);
     ctx.applyVisualizationPreset(ref);
   }, [ctx, handleSelectModelNode]);
+
+  const handleAddGeometryPreset = useCallback((preset: GeometryPresetKind) => {
+    let nextObjectId: string | null = null;
+    ctx.setSceneDocument((prev) => {
+      if (!prev) return prev;
+      const created = createSceneObjectFromGeometryPreset(preset, prev.objects);
+      nextObjectId = created.object.id;
+      return {
+        ...prev,
+        revision: prev.revision + 1,
+        objects: [...prev.objects, created.object],
+        materials: [...prev.materials, created.material],
+        magnetization_assets: [...prev.magnetization_assets, created.magnetization],
+      };
+    });
+    if (!nextObjectId) return;
+    if (ctx.sidebarCollapsed) {
+      ctx.setSidebarCollapsed(false);
+    }
+    ctx.setWorkspaceMode("build");
+    ctx.setSelectedObjectId(nextObjectId);
+    ctx.setSelectedSidebarNodeId(`obj-${nextObjectId}`);
+    ctx.setObjectViewMode("context");
+  }, [ctx]);
 
   const handleObjectAddInteraction = useCallback(
     (objectId: string, kind: ScriptBuilderMagneticInteractionKind) => {
@@ -945,8 +972,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       ctx.setWorkspaceMode("analyze");
       setActiveCoreTab("Results");
       setActiveContextualTab(null);
-      if (pathname !== "/analyze") {
-        router.push("/analyze");
+      if (pathname !== "/workspace") {
+        router.push(ANALYZE_WORKSPACE_HREF);
       }
     },
     [ctx, pathname, router, setActiveContextualTab, setActiveCoreTab],
@@ -1067,12 +1094,12 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     if (hasEigenArtifacts) {
       ctx.openAnalyze({ tab: "spectrum", selectedModeIndex: null });
     }
-    if (pathname !== "/analyze") {
+    if (pathname !== "/workspace") {
       recordFrontendDebugEvent("run-control-room", "router_push_auto_results", {
         hasEigenArtifacts,
         currentResultsEntryKey,
       });
-      router.push("/analyze");
+      router.push(ANALYZE_WORKSPACE_HREF);
     }
   }, [
     ctx,
@@ -1200,6 +1227,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onOpenMeshMethodSettings={handleOpenMeshMethod}
         onOpenMeshPipeline={handleOpenMeshPipeline}
         selectedObjectId={ctx.selectedObjectId}
+        onAddGeometryPreset={handleAddGeometryPreset}
         onRequestObjectFocus={ctx.requestFocusObject}
         hasSharedAirboxDomain={hasSharedAirboxDomain}
         canSyncScriptBuilder={Boolean(ctx.sessionFooter.scriptPath)}

@@ -17,6 +17,7 @@ import {
   type RibbonCommand,
 } from "./ribbon/command-registry";
 import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
+import type { GeometryPresetKind } from "@/lib/geometryPresetCatalog";
 import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
 import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
 
@@ -92,6 +93,7 @@ interface RibbonBarProps {
   onOpenMeshMethodSettings?: () => void;
   onOpenMeshPipeline?: () => void;
   selectedObjectId?: string | null;
+  onAddGeometryPreset?: (preset: GeometryPresetKind) => void;
   onRequestObjectFocus?: (objectId: string) => void;
   hasSharedAirboxDomain?: boolean;
   canSyncScriptBuilder?: boolean;
@@ -179,9 +181,6 @@ interface ContextualRibbonTab {
 function contextualTabsForSelection(p: RibbonBarProps): ContextualRibbonTab[] {
   const nodeId = p.selectedNodeId ?? "";
   const tabs: ContextualRibbonTab[] = [];
-  if (p.selectedObjectId) {
-    tabs.push({ id: "selected-ferromagnet", label: "Selected Ferromagnet" });
-  }
   if (nodeId.includes("interface") || nodeId.includes("boundary")) {
     tabs.push({ id: "interface", label: "Interface" });
   }
@@ -353,7 +352,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     () => contextualTabsForSelection(props),
     // Only the fields contextualTabsForSelection actually reads:
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [props.selectedNodeId, props.selectedObjectId, props.viewMode],
+    [props.selectedNodeId, props.viewMode],
   );
   const activeTab = activeCoreTab && visibleTabs.includes(activeCoreTab as RibbonTab)
     ? (activeCoreTab as RibbonTab)
@@ -426,6 +425,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.canSyncScriptBuilder,
     props.scriptSyncBusy,
     props.selectedObjectId,
+    props.onAddGeometryPreset,
     props.onStudyAddPrimitive,
     props.onStudyAddMacro,
     props.onStudyDuplicateSelected,

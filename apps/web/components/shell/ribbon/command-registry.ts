@@ -1,6 +1,7 @@
 import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
 import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
 import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
+import type { GeometryPresetKind } from "@/lib/geometryPresetCatalog";
 
 export type ResultAnalysisKind =
   | "spectrum"
@@ -26,6 +27,7 @@ export interface RibbonCommandContext {
   canSyncScriptBuilder?: boolean;
   scriptSyncBusy?: boolean;
   selectedObjectId?: string | null;
+  onAddGeometryPreset?: (preset: GeometryPresetKind) => void;
   onViewChange?: (mode: string) => void;
   onSidebarToggle?: () => void;
   onCreateVisualizationPreset?: () => void;
@@ -79,6 +81,7 @@ export interface RibbonCommandContext {
 }
 
 export type RibbonCommand =
+  | { id: "geometry.add-preset"; preset: GeometryPresetKind }
   | { id: "navigation.select-node"; nodeId: string }
   | { id: "viewport.set-mode"; mode: string }
   | { id: "visualization.create-preset" }
@@ -140,6 +143,8 @@ export function canExecuteRibbonCommand(
   command: RibbonCommand,
 ): boolean {
   switch (command.id) {
+    case "geometry.add-preset":
+      return typeof ctx.onAddGeometryPreset === "function";
     case "navigation.select-node":
       return typeof ctx.onSelectModelNode === "function";
     case "viewport.set-mode":
@@ -210,6 +215,9 @@ export function executeRibbonCommand(
     return;
   }
   switch (command.id) {
+    case "geometry.add-preset":
+      ctx.onAddGeometryPreset?.(command.preset);
+      return;
     case "navigation.select-node":
       ctx.onSelectModelNode?.(command.nodeId);
       return;
