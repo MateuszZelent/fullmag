@@ -11,7 +11,7 @@ study = fm.study("stno_vortex_mtj_workflow")
 # Engine
 study.engine("fem")
 study.device("cpu", precision="double")
-study.universe(mode="auto", size=(2.5e-07, 2.5e-07, 6e-08), center=(0, 0, 0), padding=(0, 0, 0),    maximum_element_size=80e-09,
+study.universe(mode="auto", size=(1.0e-07, 1.0e-07, 3e-08), center=(0, 0, 0), padding=(0, 0, 0),    maximum_element_size=50e-09,
     minimum_element_size=10e-09)
 study.interactive(True)
 
@@ -45,7 +45,7 @@ study.object_mesh_defaults(
 body.mesh(
     # 10 nm thickness -> target ~4 elements through thickness.
     maximum_element_size=20e-09,
-    minimum_element_size=6e-09,  # lowered: hmin=5nm conflicted with narrow-region field targets
+    minimum_element_size=5e-09,  # lowered: hmin=5nm conflicted with narrow-region field targets
     order=1,
     compute_quality=True,
     per_element_quality=False,

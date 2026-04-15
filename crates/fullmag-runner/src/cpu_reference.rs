@@ -697,7 +697,9 @@ pub(crate) fn execute_reference_fdm(
                 } else {
                     None
                 };
-                let due_scalar_row = scalar_row_due(&scalar_schedules, state.time_seconds)
+                let due_scalar_row = step_count <= 1
+                    || step_count % heavy_payload_every == 0
+                    || scalar_row_due(&scalar_schedules, state.time_seconds)
                     || (preview_due && preview_targets_global_scalar);
                 let mut update_stats = make_step_stats(
                     step_count,

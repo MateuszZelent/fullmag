@@ -4581,16 +4581,26 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let interrupt_signal = running_control.running_interrupt_signal();
                     let mut on_step = |update| {
                         let adjusted = offset_step_update(&update, step_offset, time_offset, false);
+                        if let Some(heartbeat) = stage_heartbeat.as_mut() {
+                            heartbeat.record(&adjusted);
+                        }
                         if is_control_checkpoint_only(&adjusted) {
+                            if live_cadence.should_publish(&adjusted) {
+                                publish_live_step_update(
+                                    &live_workspace,
+                                    &run_id,
+                                    &session_id,
+                                    &artifact_dir,
+                                    &adjusted,
+                                    false,
+                                );
+                            }
                             if let Some(action) = running_control.process_running_control() {
                                 return action;
                             }
                             return fullmag_runner::StepAction::Continue;
                         }
                         let s = &adjusted.stats;
-                        if let Some(heartbeat) = stage_heartbeat.as_mut() {
-                            heartbeat.record(&adjusted);
-                        }
                         if live_cadence.should_log(s.step, adjusted.finished) {
                             eprintln!(
                                 "{}",
@@ -4604,17 +4614,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
 
                         if live_cadence.should_publish(&adjusted) {
-                            live_workspace.update(|state| {
-                                state.session.status = "running".to_string();
-                                state.run = running_run_manifest_from_update(
-                                    &run_id,
-                                    &session_id,
-                                    &artifact_dir,
-                                    &adjusted,
-                                );
-                                state.live_state = live_state_manifest_from_update(&adjusted);
-                                set_latest_scalar_row_if_due(state, &adjusted);
-                            });
+                            publish_live_step_update(
+                                &live_workspace,
+                                &run_id,
+                                &session_id,
+                                &artifact_dir,
+                                &adjusted,
+                                true,
+                            );
                         }
 
                         if let Some(action) = running_control.process_running_control() {

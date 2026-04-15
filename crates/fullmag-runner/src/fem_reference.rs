@@ -589,7 +589,9 @@ fn execute_reference_fem_impl(
                 } else {
                     None
                 };
-                let due_scalar_row = scalar_row_due(&scalar_schedules, state.time_seconds)
+                let due_scalar_row = step_count <= 1
+                    || step_count % heavy_payload_every == 0
+                    || scalar_row_due(&scalar_schedules, state.time_seconds)
                     || (preview_due && preview_targets_global_scalar);
                 let mut update_stats = latest_stats.clone();
                 if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
@@ -652,7 +654,9 @@ fn execute_reference_fem_impl(
             } else {
                 None
             };
-            let due_scalar_row = scalar_row_due(&scalar_schedules, state.time_seconds)
+            let due_scalar_row = step_count <= 1
+                || step_count % heavy_payload_every == 0
+                || scalar_row_due(&scalar_schedules, state.time_seconds)
                 || (preview_due && preview_targets_global_scalar);
             let mut update_stats = latest_stats.clone();
             if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
