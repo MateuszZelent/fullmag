@@ -25,7 +25,7 @@ class AdaptiveTimestep:
     atol: float = 1e-6
     rtol: float = 1e-3
     dt_initial: float | None = None
-    dt_min: float = 1e-16
+    dt_min: float = 1e-15
     dt_max: float | None = None
     safety: float = 0.9
     growth_limit: float = 2.0

@@ -66,7 +66,8 @@ pub fn reduce_vector_field(data: &[f64], reduction: QuantityReduction) -> Option
                 sy += data[3 * i + 1];
                 sz += data[3 * i + 2];
             }
-            let inv_n = 1.0 / n as             Some(
+            let inv_n = 1.0 / n as f64;
+            Some(
                 (sx * inv_n * sx * inv_n + sy * inv_n * sy * inv_n + sz * inv_n * sz * inv_n)
                     .sqrt(),
             )
