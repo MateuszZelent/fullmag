@@ -1936,7 +1936,7 @@ fn execute_cuda_fdm(
             );
         }
         if let Some(live) = live.as_mut() {
-            let emit_every = live.field_every_n.max(1);
+            let heavy_payload_every = live.field_every_n.max(1);
             let display_selection = live.display_selection.map(|get| get());
             let preview_due = display_selection
                 .as_ref()
@@ -1945,19 +1945,19 @@ fn execute_cuda_fdm(
             let preview_targets_global_scalar = display_selection
                 .as_ref()
                 .is_some_and(display_is_global_scalar);
-            let magnetization = if live.display_selection.is_none() && stats.step % emit_every == 0
-            {
-                if magnetization_cache.is_none() {
-                    magnetization_cache = Some(backend.copy_m(cell_count)?);
-                }
-                Some(flatten_vectors(
-                    magnetization_cache
-                        .as_deref()
-                        .expect("magnetization cache initialized"),
-                ))
-            } else {
-                None
-            };
+            let magnetization =
+                if live.display_selection.is_none() && stats.step % heavy_payload_every == 0 {
+                    if magnetization_cache.is_none() {
+                        magnetization_cache = Some(backend.copy_m(cell_count)?);
+                    }
+                    Some(flatten_vectors(
+                        magnetization_cache
+                            .as_deref()
+                            .expect("magnetization cache initialized"),
+                    ))
+                } else {
+                    None
+                };
             let preview_field = if preview_due && !preview_targets_global_scalar {
                 let selection = display_selection.as_ref().expect("checked preview_due");
                 let request = selection.preview_request();
@@ -2501,7 +2501,7 @@ fn execute_native_fem(
             latest_stats = Some(stats.clone());
             current_stats = stats.clone();
             if let Some(live) = live.as_mut() {
-                let emit_every = live.field_every_n.max(1);
+                let heavy_payload_every = live.field_every_n.max(1);
                 let display_selection = live.display_selection.map(|get| get());
                 let preview_due = display_selection
                     .as_ref()
@@ -2513,7 +2513,7 @@ fn execute_native_fem(
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
                 let magnetization =
-                    if live.display_selection.is_none() && stats.step % emit_every == 0 {
+                    if live.display_selection.is_none() && stats.step % heavy_payload_every == 0 {
                         Some(flatten_vectors(&backend.copy_m(node_count)?))
                     } else {
                         None

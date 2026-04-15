@@ -274,7 +274,10 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
   const nextLogTs = lastLogTimestamp(next.engine_log);
   if (nextLogTs < prevLogTs) {
     merged.engine_log = prev.engine_log;
-  } else if (next.engine_log.length === prev.engine_log.length) {
+  } else if (
+    next.engine_log.length === prev.engine_log.length &&
+    nextLogTs === prevLogTs
+  ) {
     merged.engine_log = prev.engine_log;
   }
 

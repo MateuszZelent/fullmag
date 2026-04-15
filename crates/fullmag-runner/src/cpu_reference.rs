@@ -668,7 +668,7 @@ pub(crate) fn execute_reference_fdm(
             if let Some(live) = live.as_mut() {
                 let observables = observe_state(&problem, &state)?;
                 current_observables = observables.clone();
-                let emit_every = live.field_every_n.max(1);
+                let heavy_payload_every = live.field_every_n.max(1);
                 let display_selection = live.display_selection.map(|get| get());
                 let preview_due = display_selection
                     .as_ref()
@@ -680,7 +680,7 @@ pub(crate) fn execute_reference_fdm(
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
                 let magnetization =
-                    if live.display_selection.is_none() && step_count % emit_every == 0 {
+                    if live.display_selection.is_none() && step_count % heavy_payload_every == 0 {
                         Some(flatten_vectors(&observables.magnetization))
                     } else {
                         None

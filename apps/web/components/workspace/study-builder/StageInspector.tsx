@@ -1,11 +1,12 @@
 "use client";
 
-import type { InputHTMLAttributes, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, Settings2 } from "lucide-react";
 import { humanizeToken } from "@/components/panels/settings/helpers";
 import { INTEGRATOR_PROFILES, RELAXATION_PROFILES } from "@/components/panels/settings/profiles";
 import SelectField from "@/components/ui/SelectField";
 import TextField from "@/components/ui/TextField";
+import { Input } from "@/components/ui/input";
 import type { ScriptBuilderStageState } from "@/lib/session/types";
 import {
   humanizeStudyPipelineNodeKind,
@@ -14,7 +15,11 @@ import {
 } from "@/lib/study-builder/summaries";
 import type { StudyPipelineDiagnostic, StudyPipelineNode } from "@/lib/study-builder/types";
 import StageSummaryChip from "./StageSummaryChip";
-import { InspectorSection, ToggleRow } from "@/components/panels/settings/primitives";
+import {
+  InspectorField,
+  InspectorSection,
+  ToggleRow,
+} from "@/components/panels/settings/primitives";
 
 
 const INTEGRATOR_OPTIONS = Object.entries(INTEGRATOR_PROFILES).map(([value, profile]) => ({
@@ -91,6 +96,16 @@ interface StageInspectorProps {
   onPatchNotes: (value: string) => void;
   compiledStages: ScriptBuilderStageState[];
   diagnostics: StudyPipelineDiagnostic[];
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return <InspectorField label={label} control={children} />;
 }
 
 export default function StageInspector({

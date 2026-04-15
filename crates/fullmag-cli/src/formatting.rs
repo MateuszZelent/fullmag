@@ -118,6 +118,24 @@ pub(crate) fn push_engine_log(
     }
 }
 
+pub(crate) fn upsert_engine_log_tail(
+    entries: &mut Vec<EngineLogEntry>,
+    level: &str,
+    message_prefix: &str,
+    message: impl Into<String>,
+) {
+    let timestamp_unix_ms = unix_time_millis().unwrap_or(0);
+    let message = message.into();
+    if let Some(last) = entries.last_mut() {
+        if last.level == level && last.message.starts_with(message_prefix) {
+            last.timestamp_unix_ms = timestamp_unix_ms;
+            last.message = message;
+            return;
+        }
+    }
+    push_engine_log(entries, level, message);
+}
+
 pub(crate) fn execution_plan_log_lines(
     stage_index: usize,
     stage_count: usize,

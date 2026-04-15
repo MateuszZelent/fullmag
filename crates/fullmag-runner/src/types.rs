@@ -824,6 +824,7 @@ pub(crate) struct AuxiliaryArtifact {
 
 pub(crate) struct LiveStepConsumer<'a> {
     pub grid: [u32; 3],
+    /// Cadence for heavier live payloads such as full magnetization snapshots.
     pub field_every_n: u64,
     pub display_selection: Option<&'a (dyn Fn() -> crate::DisplaySelectionState + Send + Sync)>,
     #[cfg_attr(not(any(feature = "cuda", feature = "fem-gpu")), allow(dead_code))]

@@ -77,9 +77,9 @@ study.tableautosave(1e-14, quantities=("time", "mx", "E_total"))
 
 # Stages
 study.stages.add_relax(max_steps=8000, tol=1e-6, algorithm="llg_overdamped", max_error=1e-6)
-study.stages.add_eigenmodes(
-    count=20,
-    target="lowest",
-    include_demag=True,
-    equilibrium_source="relax",
-)
+# study.stages.add_eigenmodes(
+#     count=20,
+#     target="lowest",
+#     include_demag=True,
+#     equilibrium_source="relax",
+# )

@@ -7,8 +7,9 @@ use fullmag_ir::{
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use crate::args::*;
 use crate::control_room::*;
@@ -165,6 +166,262 @@ fn estimate_max_torque_from_step(max_dm_dt: f64, mode: Option<TorqueDisplayMode>
             }
             Some(max_dm_dt * (1.0 + damping * damping).sqrt() / gyromagnetic_ratio)
         }
+    }
+}
+
+const LIVE_PROGRESS_PUBLISH_INTERVAL: Duration = Duration::from_secs(5);
+const TERMINAL_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5);
+const STAGE_HEARTBEAT_LOG_PREFIX: &str = "[heartbeat] ";
+
+#[derive(Debug, Clone)]
+struct LiveProgressCadence {
+    last_publish_at: Option<Instant>,
+    last_log_at: Option<Instant>,
+    publish_interval: Duration,
+    log_interval: Duration,
+}
+
+impl Default for LiveProgressCadence {
+    fn default() -> Self {
+        Self {
+            last_publish_at: None,
+            last_log_at: None,
+            publish_interval: LIVE_PROGRESS_PUBLISH_INTERVAL,
+            log_interval: TERMINAL_PROGRESS_LOG_INTERVAL,
+        }
+    }
+}
+
+impl LiveProgressCadence {
+    fn should_publish(&mut self, update: &fullmag_runner::StepUpdate) -> bool {
+        if update.stats.step <= 1 || update.finished || has_heavy_live_payload(update) {
+            self.last_publish_at = Some(Instant::now());
+            return true;
+        }
+        let should_publish = self
+            .last_publish_at
+            .is_none_or(|last_publish_at| last_publish_at.elapsed() >= self.publish_interval);
+        if should_publish {
+            self.last_publish_at = Some(Instant::now());
+        }
+        should_publish
+    }
+
+    fn should_log(&mut self, step: u64, finished: bool) -> bool {
+        if finished || is_step_progress_milestone(step) {
+            self.last_log_at = Some(Instant::now());
+            return true;
+        }
+        let should_log = self
+            .last_log_at
+            .is_none_or(|last_log_at| last_log_at.elapsed() >= self.log_interval);
+        if should_log {
+            self.last_log_at = Some(Instant::now());
+        }
+        should_log
+    }
+}
+
+fn is_step_progress_milestone(step: u64) -> bool {
+    step <= 10
+        || (step <= 100 && step % 10 == 0)
+        || (step <= 1000 && step % 100 == 0)
+        || step % 1000 == 0
+}
+
+fn has_heavy_live_payload(update: &fullmag_runner::StepUpdate) -> bool {
+    update.magnetization.is_some()
+        || update.preview_field.is_some()
+        || update
+            .cached_preview_fields
+            .as_ref()
+            .is_some_and(|fields| !fields.is_empty())
+}
+
+fn publish_live_step_update(
+    live_workspace: &LocalLiveWorkspace,
+    run_id: &str,
+    session_id: &str,
+    artifact_dir: &Path,
+    update: &fullmag_runner::StepUpdate,
+    include_scalar_row: bool,
+) {
+    live_workspace.update(|state| {
+        state.session.status = if update.finished {
+            "completed".to_string()
+        } else {
+            "running".to_string()
+        };
+        state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, update);
+        state.live_state = live_state_manifest_from_update(update);
+        if include_scalar_row {
+            set_latest_scalar_row_if_due(state, update);
+        }
+    });
+}
+
+fn saturating_nanos_u64(duration: Duration) -> u64 {
+    duration.as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+fn format_stage_progress_line(
+    prefix: &str,
+    stats: &fullmag_runner::StepStats,
+    torque_mode: Option<TorqueDisplayMode>,
+    heartbeat_age: Option<Duration>,
+) -> String {
+    let wall_ms = stats.wall_time_ns as f64 / 1e6;
+    let torque_t = if stats.max_torque_T > 0.0 {
+        stats.max_torque_T
+    } else {
+        estimate_max_torque_from_step(stats.max_dm_dt, torque_mode).unwrap_or(0.0)
+    };
+    if let Some(age) = heartbeat_age {
+        format!(
+            "{prefix}  heartbeat  step {:>6}  t={:.4e}  dt={:.3e}  max_dm_dt={:.4e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  idle={:.1}s  [{:.0}ms]",
+            stats.step,
+            stats.time,
+            stats.dt,
+            stats.max_dm_dt,
+            torque_t,
+            stats.e_total,
+            stats.max_h_eff,
+            age.as_secs_f64(),
+            wall_ms,
+        )
+    } else {
+        format!(
+            "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_dm_dt={:.4e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
+            stats.step,
+            stats.time,
+            stats.dt,
+            stats.max_dm_dt,
+            torque_t,
+            stats.e_total,
+            stats.max_h_eff,
+            wall_ms,
+        )
+    }
+}
+
+#[derive(Clone)]
+struct StageHeartbeatSnapshot {
+    latest_update: fullmag_runner::StepUpdate,
+    last_step_at: Instant,
+    stage_started_at: Instant,
+}
+
+struct StageProgressHeartbeat {
+    snapshot: Arc<Mutex<StageHeartbeatSnapshot>>,
+    stop_tx: Option<mpsc::Sender<()>>,
+    join_handle: Option<JoinHandle<()>>,
+}
+
+impl StageProgressHeartbeat {
+    fn spawn(
+        initial_update: fullmag_runner::StepUpdate,
+        live_workspace: LocalLiveWorkspace,
+        run_id: String,
+        session_id: String,
+        artifact_dir: PathBuf,
+        terminal_prefix: String,
+        ui_label: String,
+        torque_mode: Option<TorqueDisplayMode>,
+    ) -> Self {
+        let stage_started_at = Instant::now();
+        let snapshot = Arc::new(Mutex::new(StageHeartbeatSnapshot {
+            latest_update: initial_update,
+            last_step_at: stage_started_at,
+            stage_started_at,
+        }));
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let thread_snapshot = Arc::clone(&snapshot);
+        let join_handle = std::thread::Builder::new()
+            .name(format!(
+                "fullmag-stage-heartbeat-{}",
+                run_id.chars().take(24).collect::<String>()
+            ))
+            .spawn(move || {
+                loop {
+                    match stop_rx.recv_timeout(LIVE_PROGRESS_PUBLISH_INTERVAL) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                    let snapshot = match thread_snapshot.lock() {
+                        Ok(snapshot) => snapshot.clone(),
+                        Err(_) => break,
+                    };
+                    if snapshot.latest_update.finished
+                        || snapshot.last_step_at.elapsed() < LIVE_PROGRESS_PUBLISH_INTERVAL
+                    {
+                        continue;
+                    }
+
+                    let mut heartbeat_update = snapshot.latest_update.clone();
+                    heartbeat_update.stats.wall_time_ns = heartbeat_update
+                        .stats
+                        .wall_time_ns
+                        .max(saturating_nanos_u64(snapshot.stage_started_at.elapsed()));
+                    let idle_for = snapshot.last_step_at.elapsed();
+                    let terminal_line = format_stage_progress_line(
+                        &terminal_prefix,
+                        &heartbeat_update.stats,
+                        torque_mode,
+                        Some(idle_for),
+                    );
+                    eprintln!("{terminal_line}");
+                    let heartbeat_message = format!(
+                        "{STAGE_HEARTBEAT_LOG_PREFIX}{ui_label}: last completed step {} at t={:.4e}, waiting {:.1}s for the next solver update",
+                        heartbeat_update.stats.step,
+                        heartbeat_update.stats.time,
+                        idle_for.as_secs_f64(),
+                    );
+                    live_workspace.update(|state| {
+                        state.session.status = "running".to_string();
+                        state.run = running_run_manifest_from_update(
+                            &run_id,
+                            &session_id,
+                            &artifact_dir,
+                            &heartbeat_update,
+                        );
+                        state.live_state = live_state_manifest_from_update(&heartbeat_update);
+                        upsert_engine_log_tail(
+                            &mut state.engine_log,
+                            "info",
+                            STAGE_HEARTBEAT_LOG_PREFIX,
+                            heartbeat_message,
+                        );
+                    });
+                }
+            })
+            .expect("stage heartbeat thread should spawn");
+        Self {
+            snapshot,
+            stop_tx: Some(stop_tx),
+            join_handle: Some(join_handle),
+        }
+    }
+
+    fn record(&mut self, update: &fullmag_runner::StepUpdate) {
+        if let Ok(mut snapshot) = self.snapshot.lock() {
+            snapshot.latest_update = update.clone();
+            snapshot.last_step_at = Instant::now();
+        }
+    }
+
+    fn finish(&mut self) {
+        if let Some(stop_tx) = self.stop_tx.take() {
+            let _ = stop_tx.send(());
+        }
+        if let Some(join_handle) = self.join_handle.take() {
+            let _ = join_handle.join();
+        }
+    }
+}
+
+impl Drop for StageProgressHeartbeat {
+    fn drop(&mut self) {
+        self.finish();
     }
 }
 
@@ -1541,6 +1798,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         .unwrap_or(0.0);
     let mut mutated = false;
     let mut previous_solve_summary: Option<RelaxationSolveSummary> = None;
+    let torque_mode = torque_display_mode(&stage.ir);
     let indicator_effective = match settings.indicator.as_str() {
         "geometric_only" | "micromagnetics_hybrid" | "magnetostatic_potential" => {
             settings.indicator.clone()
@@ -1887,6 +2145,23 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         let pass_output_dir =
             current_stage_artifact_dir.join(format!("adaptive_pass_{:02}", remesh_pass_count));
         fs::create_dir_all(&pass_output_dir)?;
+        let adaptive_pass_label = format!("adaptive remesh pass {}", remesh_pass_count);
+        let mut stage_heartbeat = Some(StageProgressHeartbeat::spawn(
+            offset_step_update(
+                &initial_step_update(&execution_plan.backend_plan),
+                global_step_offset + local_step_offset,
+                global_time_offset + local_time_offset,
+                false,
+            ),
+            live_workspace.clone(),
+            run_id.to_string(),
+            session_id.to_string(),
+            artifact_dir.to_path_buf(),
+            adaptive_pass_label.clone(),
+            adaptive_pass_label,
+            torque_mode,
+        ));
+        let mut live_cadence = LiveProgressCadence::default();
         let pass_result = fullmag_runner::run_problem_with_callback(
             &stage.ir,
             stage.until_seconds,
@@ -1899,7 +2174,10 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                     global_time_offset + local_time_offset,
                     false,
                 );
-                if adjusted.stats.step <= 1 || adjusted.stats.step % field_every_n == 0 {
+                if let Some(heartbeat) = stage_heartbeat.as_mut() {
+                    heartbeat.record(&adjusted);
+                }
+                if live_cadence.should_publish(&adjusted) {
                     live_workspace.update(|state| {
                         state.session.status = "running".to_string();
                         state.run = running_run_manifest_from_update(
@@ -1923,8 +2201,11 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                 }
                 fullmag_runner::StepAction::Continue
             },
-        )
-        .map_err(|error| anyhow!(error.message))?;
+        );
+        if let Some(mut heartbeat) = stage_heartbeat.take() {
+            heartbeat.finish();
+        }
+        let pass_result = pass_result.map_err(|error| anyhow!(error.message))?;
 
         let pass_steps =
             offset_step_stats(&pass_result.steps, local_step_offset, local_time_offset);
@@ -3508,8 +3789,27 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
 
         let torque_mode = torque_display_mode(&stage.ir);
+        let stage_progress_label = format!(
+            "stage {}/{} ({})",
+            stage_index + 1,
+            stage_count,
+            stage.entrypoint_kind
+        );
+        let mut stage_heartbeat = use_live_callback.then(|| {
+            StageProgressHeartbeat::spawn(
+                stage_initial_update.clone(),
+                live_workspace.clone(),
+                run_id.clone(),
+                session_id.clone(),
+                artifact_dir.clone(),
+                stage_progress_label.clone(),
+                stage_progress_label.clone(),
+                torque_mode,
+            )
+        });
         let mut stage_result = match if use_live_callback {
             if supports_dynamic_live_preview(&execution_plan.backend_plan) {
+                let mut live_cadence = LiveProgressCadence::default();
                 let display_selection = || display_selection_handle.display_selection_snapshot();
                 let interrupt_signal = display_selection_handle.running_interrupt_signal();
                 fullmag_runner::run_problem_with_live_preview_interruptible(
@@ -3526,7 +3826,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             time_offset,
                             update.finished && is_session_final_stage,
                         );
+                        if let Some(heartbeat) = stage_heartbeat.as_mut() {
+                            heartbeat.record(&adjusted);
+                        }
                         if is_control_checkpoint_only(&adjusted) {
+                            if live_cadence.should_publish(&adjusted) {
+                                publish_live_step_update(
+                                    &live_workspace,
+                                    &run_id,
+                                    &session_id,
+                                    &artifact_dir,
+                                    &adjusted,
+                                    false,
+                                );
+                            }
                             if let Some(action) = display_selection_handle.process_running_control()
                             {
                                 return action;
@@ -3534,55 +3847,27 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             return fullmag_runner::StepAction::Continue;
                         }
                         let s = &adjusted.stats;
-                        let print_step = s.step <= 10
-                            || (s.step <= 100 && s.step % 10 == 0)
-                            || (s.step <= 1000 && s.step % 100 == 0)
-                            || s.step % 1000 == 0
-                            || adjusted.finished;
-                        if print_step {
-                            let wall_ms = s.wall_time_ns as f64 / 1e6;
-                            let torque_t = if s.max_torque_T > 0.0 {
-                                s.max_torque_T
-                            } else {
-                                estimate_max_torque_from_step(s.max_dm_dt, torque_mode)
-                                    .unwrap_or(0.0)
-                            };
+                        if live_cadence.should_log(s.step, adjusted.finished) {
                             eprintln!(
-                                "stage {}/{} ({})  step {:>6}  t={:.4e}  dt={:.3e}  max_dm_dt={:.4e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
-                                stage_index + 1,
-                                stage_count,
-                                stage.entrypoint_kind,
-                                s.step,
-                                s.time,
-                                s.dt,
-                                s.max_dm_dt,
-                                torque_t,
-                                s.e_total,
-                                s.max_h_eff,
-                                wall_ms
+                                "{}",
+                                format_stage_progress_line(
+                                    &stage_progress_label,
+                                    s,
+                                    torque_mode,
+                                    None,
+                                )
                             );
                         }
 
-                        if adjusted.stats.step <= 1
-                            || adjusted.stats.step % field_every_n == 0
-                            || adjusted.preview_field.is_some()
-                            || adjusted.finished
-                        {
-                            live_workspace.update(|state| {
-                                state.session.status = if adjusted.finished {
-                                    "completed".to_string()
-                                } else {
-                                    "running".to_string()
-                                };
-                                state.run = running_run_manifest_from_update(
-                                    &run_id,
-                                    &session_id,
-                                    &artifact_dir,
-                                    &adjusted,
-                                );
-                                state.live_state = live_state_manifest_from_update(&adjusted);
-                                set_latest_scalar_row_if_due(state, &adjusted);
-                            });
+                        if live_cadence.should_publish(&adjusted) {
+                            publish_live_step_update(
+                                &live_workspace,
+                                &run_id,
+                                &session_id,
+                                &artifact_dir,
+                                &adjusted,
+                                true,
+                            );
                         }
                         if let Some(action) = display_selection_handle.process_running_control() {
                             return action;
@@ -3591,6 +3876,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     },
                 )
             } else {
+                let mut live_cadence = LiveProgressCadence::default();
                 fullmag_runner::run_problem_with_callback(
                     &stage.ir,
                     stage.until_seconds,
@@ -3604,39 +3890,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             update.finished && is_session_final_stage,
                         );
                         let s = &adjusted.stats;
-                        let print_step = s.step <= 10
-                            || (s.step <= 100 && s.step % 10 == 0)
-                            || (s.step <= 1000 && s.step % 100 == 0)
-                            || s.step % 1000 == 0
-                            || adjusted.finished;
-                        if print_step {
-                            let wall_ms = s.wall_time_ns as f64 / 1e6;
-                            let torque_t = if s.max_torque_T > 0.0 {
-                                s.max_torque_T
-                            } else {
-                                estimate_max_torque_from_step(s.max_dm_dt, torque_mode)
-                                    .unwrap_or(0.0)
-                            };
+                        if let Some(heartbeat) = stage_heartbeat.as_mut() {
+                            heartbeat.record(&adjusted);
+                        }
+                        if live_cadence.should_log(s.step, adjusted.finished) {
                             eprintln!(
-                                "stage {}/{} ({})  step {:>6}  t={:.4e}  dt={:.3e}  max_dm_dt={:.4e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
-                                stage_index + 1,
-                                stage_count,
-                                stage.entrypoint_kind,
-                                s.step,
-                                s.time,
-                                s.dt,
-                                s.max_dm_dt,
-                                torque_t,
-                                s.e_total,
-                                s.max_h_eff,
-                                wall_ms
+                                "{}",
+                                format_stage_progress_line(
+                                    &stage_progress_label,
+                                    s,
+                                    torque_mode,
+                                    None,
+                                )
                             );
                         }
 
-                        if adjusted.stats.step <= 1
-                            || adjusted.stats.step % field_every_n == 0
-                            || adjusted.finished
-                        {
+                        if live_cadence.should_publish(&adjusted) {
                             live_workspace.update(|state| {
                                 state.session.status = if adjusted.finished {
                                     "completed".to_string()
@@ -3662,6 +3931,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         } {
             Ok(result) => result,
             Err(error) => {
+                if let Some(mut heartbeat) = stage_heartbeat.take() {
+                    heartbeat.finish();
+                }
                 let failed_at_unix_ms = unix_time_millis()?;
                 let mut snapshot = live_workspace.snapshot();
                 let failed_runtime = session_runtime_selection_for_problem(
@@ -3752,6 +4024,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
                 BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
             };
+            let mut live_cadence = LiveProgressCadence::default();
             for (index, stats) in stage_result.steps.iter().enumerate() {
                 let is_final_step = index + 1 == stage_result.steps.len();
                 let update = fullmag_runner::StepUpdate {
@@ -3774,10 +4047,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     scalar_row_due: true,
                     finished: is_final_step && is_session_final_stage,
                 };
-                if update.stats.step <= 1
-                    || update.stats.step % field_every_n == 0
-                    || update.finished
-                {
+                if live_cadence.should_publish(&update) {
                     live_workspace.update(|state| {
                         state.session.status = if update.finished {
                             "completed".to_string()
@@ -4290,9 +4560,23 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             });
 
             let torque_mode = torque_display_mode(&stage.ir);
+            let interactive_progress_label = format!("interactive {}", stage.entrypoint_kind);
+            let mut stage_heartbeat = use_live_callback.then(|| {
+                StageProgressHeartbeat::spawn(
+                    stage_initial_update.clone(),
+                    live_workspace.clone(),
+                    run_id.clone(),
+                    session_id.clone(),
+                    artifact_dir.clone(),
+                    interactive_progress_label.clone(),
+                    format!("interactive command {}", command_kind_label),
+                    torque_mode,
+                )
+            });
             let stage_result = match if use_live_callback {
                 let running_control = interactive_runtime_host.control();
                 if supports_dynamic_live_preview(&execution_plan.backend_plan) {
+                    let mut live_cadence = LiveProgressCadence::default();
                     let display_selection = || running_control.display_selection_snapshot();
                     let interrupt_signal = running_control.running_interrupt_signal();
                     let mut on_step = |update| {
@@ -4304,36 +4588,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             return fullmag_runner::StepAction::Continue;
                         }
                         let s = &adjusted.stats;
-                        let print_step = s.step <= 10
-                            || (s.step <= 100 && s.step % 10 == 0)
-                            || (s.step <= 1000 && s.step % 100 == 0)
-                            || s.step % 1000 == 0;
-                        if print_step {
-                            let wall_ms = s.wall_time_ns as f64 / 1e6;
-                            let torque_t = if s.max_torque_T > 0.0 {
-                                s.max_torque_T
-                            } else {
-                                estimate_max_torque_from_step(s.max_dm_dt, torque_mode)
-                                    .unwrap_or(0.0)
-                            };
+                        if let Some(heartbeat) = stage_heartbeat.as_mut() {
+                            heartbeat.record(&adjusted);
+                        }
+                        if live_cadence.should_log(s.step, adjusted.finished) {
                             eprintln!(
-                                "interactive {}  step {:>6}  t={:.4e}  dt={:.3e}  max_dm_dt={:.4e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
-                                stage.entrypoint_kind,
-                                s.step,
-                                s.time,
-                                s.dt,
-                                s.max_dm_dt,
-                                torque_t,
-                                s.e_total,
-                                s.max_h_eff,
-                                wall_ms
+                                "{}",
+                                format_stage_progress_line(
+                                    &interactive_progress_label,
+                                    s,
+                                    torque_mode,
+                                    None,
+                                )
                             );
                         }
 
-                        if adjusted.stats.step <= 1
-                            || adjusted.stats.step % field_every_n == 0
-                            || adjusted.preview_field.is_some()
-                        {
+                        if live_cadence.should_publish(&adjusted) {
                             live_workspace.update(|state| {
                                 state.session.status = "running".to_string();
                                 state.run = running_run_manifest_from_update(
@@ -4396,6 +4666,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         )
                     }
                 } else {
+                    let mut live_cadence = LiveProgressCadence::default();
                     fullmag_runner::run_problem_with_callback(
                         &stage.ir,
                         stage.until_seconds,
@@ -4405,34 +4676,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             let adjusted =
                                 offset_step_update(&update, step_offset, time_offset, false);
                             let s = &adjusted.stats;
-                            let print_step = s.step <= 10
-                                || (s.step <= 100 && s.step % 10 == 0)
-                                || (s.step <= 1000 && s.step % 100 == 0)
-                                || s.step % 1000 == 0;
-                            if print_step {
-                                let wall_ms = s.wall_time_ns as f64 / 1e6;
-                                let torque_t = if s.max_torque_T > 0.0 {
-                                    s.max_torque_T
-                                } else {
-                                    estimate_max_torque_from_step(s.max_dm_dt, torque_mode)
-                                        .unwrap_or(0.0)
-                                };
+                            if let Some(heartbeat) = stage_heartbeat.as_mut() {
+                                heartbeat.record(&adjusted);
+                            }
+                            if live_cadence.should_log(s.step, adjusted.finished) {
                                 eprintln!(
-                                    "interactive {}  step {:>6}  t={:.4e}  dt={:.3e}  max_dm_dt={:.4e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
-                                    stage.entrypoint_kind,
-                                    s.step,
-                                    s.time,
-                                    s.dt,
-                                    s.max_dm_dt,
-                                    torque_t,
-                                    s.e_total,
-                                    s.max_h_eff,
-                                    wall_ms
+                                    "{}",
+                                    format_stage_progress_line(
+                                        &interactive_progress_label,
+                                        s,
+                                        torque_mode,
+                                        None,
+                                    )
                                 );
                             }
 
-                            if adjusted.stats.step <= 1 || adjusted.stats.step % field_every_n == 0
-                            {
+                            if live_cadence.should_publish(&adjusted) {
                                 live_workspace.update(|state| {
                                     state.session.status = "running".to_string();
                                     state.run = running_run_manifest_from_update(
@@ -4462,6 +4721,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             } {
                 Ok(result) => result,
                 Err(error) => {
+                    if let Some(mut heartbeat) = stage_heartbeat.take() {
+                        heartbeat.finish();
+                    }
                     let failed_ready_at_unix_ms = unix_time_millis().unwrap_or(awaiting_at_unix_ms);
                     let failed_stage_execution = active_sequence.as_mut().map(|sequence| {
                         sequence.mark_current("failed");
@@ -4512,6 +4774,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     continue;
                 }
             };
+            if let Some(mut heartbeat) = stage_heartbeat.take() {
+                heartbeat.finish();
+            }
+            if let Some(mut heartbeat) = stage_heartbeat.take() {
+                heartbeat.finish();
+            }
 
             // Handle mid-stage pause (first-class RunStatus::Paused from runner)
             if stage_result.status == fullmag_runner::RunStatus::Paused {
@@ -4783,6 +5051,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
                     BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
                 };
+                let mut live_cadence = LiveProgressCadence::default();
                 for stats in &stage_result.steps {
                     let update = fullmag_runner::StepUpdate {
                         stats: offset_step_stats(
@@ -4801,7 +5070,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         scalar_row_due: true,
                         finished: false,
                     };
-                    if update.stats.step <= 1 || update.stats.step % field_every_n == 0 {
+                    if live_cadence.should_publish(&update) {
                         live_workspace.update(|state| {
                             state.session.status = "running".to_string();
                             state.run = running_run_manifest_from_update(
@@ -5148,7 +5417,8 @@ pub(crate) fn prepare_live_workspace_for_ui(
 mod tests {
     use super::{
         apply_current_fem_overrides, default_domain_region_markers, execute_synthetic_stage,
-        fem_mesh_payload_from_backend_plan, wait_for_solve_prompt, wait_for_solve_supported,
+        fem_mesh_payload_from_backend_plan, has_heavy_live_payload, wait_for_solve_prompt,
+        wait_for_solve_supported, LiveProgressCadence, LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::types::ResolvedScriptStageAction;
     use fullmag_ir::{
@@ -5158,10 +5428,68 @@ mod tests {
         GeometryEntryIR, GeometryIR, GridDimensions, IntegratorChoice, MaterialIR, MeshIR,
         ProblemIR, ProblemMeta, SamplingIR, StudyIR, ValidationProfileIR,
     };
+    use fullmag_runner::{LivePreviewField, StepStats, StepUpdate};
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+    fn test_step_update(step: u64) -> StepUpdate {
+        StepUpdate {
+            stats: StepStats {
+                step,
+                ..StepStats::default()
+            },
+            grid: [1, 1, 1],
+            fem_mesh: None,
+            magnetization: None,
+            preview_field: None,
+            cached_preview_fields: None,
+            scalar_row_due: false,
+            finished: false,
+        }
+    }
+
+    #[test]
+    fn heavy_live_payload_forces_publish_without_waiting_for_heartbeat() {
+        let mut cadence = LiveProgressCadence::default();
+        let baseline = test_step_update(2);
+        assert!(cadence.should_publish(&baseline));
+
+        let mut heavy = test_step_update(3);
+        heavy.preview_field = Some(LivePreviewField {
+            config_revision: 1,
+            quantity: "m".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "vector".to_string(),
+            preview_grid: [1, 1, 1],
+            original_grid: [1, 1, 1],
+            vector_field_values: vec![0.0, 0.0, 1.0],
+            x_chosen_size: 1,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 1,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+
+        assert!(has_heavy_live_payload(&heavy));
+        assert!(cadence.should_publish(&heavy));
+    }
+
+    #[test]
+    fn heartbeat_publish_triggers_after_wall_clock_interval() {
+        let mut cadence = LiveProgressCadence::default();
+        let update = test_step_update(2);
+        cadence.last_publish_at = Some(Instant::now());
+        assert!(!cadence.should_publish(&update));
+
+        cadence.last_publish_at = Some(Instant::now() - LIVE_PROGRESS_PUBLISH_INTERVAL);
+        assert!(cadence.should_publish(&update));
+    }
 
     fn tiny_fdm_plan() -> BackendPlanIR {
         BackendPlanIR::Fdm(FdmPlanIR {
