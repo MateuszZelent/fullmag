@@ -87,10 +87,18 @@ if [ -d "${OPENMPI_ROOT}/share/openmpi" ]; then
   export OMPI_MCA_mca_base_component_path="${OPENMPI_ROOT}/lib/openmpi3"
   export OMPI_MCA_orte_launch_agent="${OPENMPI_ROOT}/bin/orted"
   export OMPI_MCA_reachable="${OMPI_MCA_reachable:-weighted}"
+  export OMPI_MCA_mca_base_component_show_load_errors="${OMPI_MCA_mca_base_component_show_load_errors:-0}"
 fi
 if [ -d "${RUNTIME_ROOT}/lib/pmix2/share/pmix" ]; then
   export PMIX_PREFIX="${RUNTIME_ROOT}/lib/pmix2"
   export PMIX_EXEC_PREFIX="${RUNTIME_ROOT}/lib/pmix2"
+  export PMIX_MCA_pcompress_base_silence_warning="${PMIX_MCA_pcompress_base_silence_warning:-1}"
+fi
+if [ -n "${FULLMAG_CPU_THREADS:-}" ] && [ -z "${OMP_NUM_THREADS:-}" ]; then
+  export OMP_NUM_THREADS="${FULLMAG_CPU_THREADS}"
+fi
+if [ -z "${OMP_NUM_THREADS:-}" ] && command -v nproc >/dev/null 2>&1; then
+  export OMP_NUM_THREADS="$(nproc)"
 fi
 export FULLMAG_FEM_EXECUTION="${FULLMAG_FEM_EXECUTION:-gpu}"
 export FULLMAG_FEM_GPU_INDEX="${FULLMAG_FEM_GPU_INDEX:-0}"
@@ -101,10 +109,14 @@ EOF
 chmod +x "${RUNTIME_ROOT}/bin/fullmag-fem-gpu"
 
 cat > "${RUNTIME_ROOT}/README.md" <<EOF
-# FEM GPU host runtime bundle
+# Managed FEM host runtime bundle
 
-This directory contains a host-usable runtime bundle exported from the managed \`fem-gpu\` build
-container.
+This directory contains a host-usable managed FEM runtime bundle exported from the \`fem-gpu\`
+build container.
+
+The bundle supports both:
+- FEM CPU execution (\`FULLMAG_FEM_EXECUTION=cpu\`)
+- FEM GPU execution (\`FULLMAG_FEM_EXECUTION=gpu\`)
 
 Run directly with:
 

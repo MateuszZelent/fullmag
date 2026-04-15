@@ -54,6 +54,7 @@ RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hyp
     ./configure \
       --prefix=${INSTALL_PREFIX} \
       --enable-shared \
+      --with-openmp \
       --with-cuda \
       --with-gpu-arch="60 70 80 90" \
       --without-umpire && \
@@ -67,6 +68,7 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -DBUILD_SHARED_LIBS=ON \
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
       -DMFEM_USE_MPI=YES \
+      -DMFEM_USE_OPENMP=YES \
       -DMFEM_USE_METIS=NO \
       -DMFEM_USE_CUDA=YES \
       -DMFEM_USE_CEED=YES \

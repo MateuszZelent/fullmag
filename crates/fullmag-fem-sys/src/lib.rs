@@ -219,6 +219,7 @@ pub struct fullmag_fem_plan_desc {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+#[allow(non_snake_case)]
 pub struct fullmag_fem_step_stats {
     pub step: u64,
     pub time_seconds: f64,

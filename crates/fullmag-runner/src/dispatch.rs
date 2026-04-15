@@ -23,6 +23,8 @@ use crate::artifact_pipeline::ArtifactPipelineSender;
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::cpu_reference;
 use crate::fem_eigen;
+#[cfg(feature = "fem-gpu")]
+use crate::interactive_runtime::cached_preview_quantities_for;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 #[cfg(feature = "cuda")]
@@ -2011,7 +2013,7 @@ fn execute_cuda_fdm(
 #[cfg(feature = "fem-gpu")]
 fn build_fem_cached_preview_fields(
     backend: &NativeFemBackend,
-    display_selection: &crate::types::DisplaySelectionState,
+    display_selection: &crate::DisplaySelectionState,
     node_count: usize,
 ) -> Option<Vec<crate::LivePreviewField>> {
     let quantities = cached_preview_quantities_for(display_selection);
@@ -2154,7 +2156,6 @@ fn execute_native_fem(
         let mut g = tangent_gradient_from_field(&m, &h_eff);
         let mut energy = current_stats.e_total;
         let mut p: Vec<[f64; 3]> = g.iter().map(|gi| scale_vec3(*gi, -1.0)).collect();
-        let mut g_norm_sq = global_dot_vec3(&g, &g);
 
         let mut lambda: f64 = 1e-6;
         let lambda_min: f64 = 1e-15;
@@ -2210,7 +2211,7 @@ fn execute_native_fem(
             if max_torque <= control.torque_tolerance {
                 break;
             }
-            g_norm_sq = global_dot_vec3(&g, &g);
+            let g_norm_sq = global_dot_vec3(&g, &g);
             if g_norm_sq < 1e-30 {
                 break;
             }
@@ -2218,26 +2219,25 @@ fn execute_native_fem(
             let mut trial_lambda = lambda;
             let mut backtracks = 0u32;
             let mut m_trial = m.clone();
-            let mut trial_stats = current_stats.clone();
-            match control.algorithm {
+            let trial_stats = match control.algorithm {
                 fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
-                    loop {
+                    let trial_stats = loop {
                         for i in 0..m.len() {
                             m_trial[i] =
                                 normalized_vec3(sub_vec3(m[i], scale_vec3(g[i], trial_lambda)));
                         }
                         backend.upload_magnetization(&m_trial)?;
-                        trial_stats = backend.snapshot_step_stats(node_count)?;
-                        ensure_fem_object_scalars(&mut trial_stats, plan);
-                        let e_trial = trial_stats.e_total;
+                        let mut stats = backend.snapshot_step_stats(node_count)?;
+                        ensure_fem_object_scalars(&mut stats, plan);
+                        let e_trial = stats.e_total;
                         if e_trial <= energy - c_armijo * trial_lambda * g_norm_sq
                             || backtracks >= max_backtrack
                         {
-                            break;
+                            break stats;
                         }
                         trial_lambda *= 0.5;
                         backtracks += 1;
-                    }
+                    };
 
                     let h_eff_new = backend.copy_h_eff(node_count)?;
                     let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
@@ -2283,6 +2283,7 @@ fn execute_native_fem(
 
                     h_eff = h_eff_new;
                     g = g_new;
+                    trial_stats
                 }
                 fullmag_ir::RelaxationAlgorithmIR::NonlinearCg => {
                     let mut p_dot_g = global_dot_vec3(&p, &g);
@@ -2298,27 +2299,26 @@ fn execute_native_fem(
                     };
                     let max_backtrack_ncg = 30u32;
 
-                    loop {
+                    let trial_stats = loop {
                         for i in 0..m.len() {
                             m_trial[i] =
                                 normalized_vec3(add_vec3(m[i], scale_vec3(p[i], trial_lambda)));
                         }
                         backend.upload_magnetization(&m_trial)?;
-                        trial_stats = backend.snapshot_step_stats(node_count)?;
-                        ensure_fem_object_scalars(&mut trial_stats, plan);
-                        let e_trial = trial_stats.e_total;
+                        let mut stats = backend.snapshot_step_stats(node_count)?;
+                        ensure_fem_object_scalars(&mut stats, plan);
+                        let e_trial = stats.e_total;
                         if e_trial <= energy + c_armijo * trial_lambda * p_dot_g
                             || backtracks >= max_backtrack_ncg
                         {
-                            break;
+                            break stats;
                         }
                         trial_lambda *= 0.5;
                         backtracks += 1;
-                    }
+                    };
 
                     let h_eff_new = backend.copy_h_eff(node_count)?;
                     let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
-                    let g_new_norm_sq = global_dot_vec3(&g_new, &g_new);
                     let g_old_transported = project_tangent(&m_trial, &g);
                     let y_pr: Vec<[f64; 3]> = (0..m.len())
                         .map(|i| sub_vec3(g_new[i], g_old_transported[i]))
@@ -2346,13 +2346,13 @@ fn execute_native_fem(
                     }
 
                     p = p_new;
-                    g_norm_sq = g_new_norm_sq;
                     h_eff = h_eff_new;
                     g = g_new;
                     lambda = trial_lambda;
+                    trial_stats
                 }
                 _ => break,
-            }
+            };
 
             let prev_energy = energy;
             m = m_trial;

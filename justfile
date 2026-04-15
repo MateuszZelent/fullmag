@@ -157,6 +157,19 @@ run-nanoflower-interactive-quadro-gpu:
     just build fullmag-dev
     FULLMAG_PYTHON="{{repo_python}}" '{{gpu_runtime_bin}}' --dev -i examples/nanoflower_fem_quadro.py
 
+run-stno-interactive-managed fem_execution="gpu" cpu_threads="auto":
+    just ensure-python
+    if [ ! -x '{{gpu_runtime_bin}}' ]; then \
+        echo "Managed FEM runtime bundle is missing (used for both FEM CPU and FEM GPU)." >&2; \
+        echo "Run: just rebuild-fem-runtime" >&2; \
+        exit 2; \
+    fi
+    if [ "{{cpu_threads}}" = "auto" ]; then \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" '{{gpu_runtime_bin}}' --dev -i examples/stno_vortex_mtj_workflow.py; \
+    else \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS="{{cpu_threads}}" '{{gpu_runtime_bin}}' --dev -i examples/stno_vortex_mtj_workflow.py; \
+    fi
+
 run-nanoflower-quadro-gpu-headless:
     just ensure-python
     just build fullmag-dev
@@ -197,10 +210,15 @@ fem-gpu-headless script:
 fem-gpu-py-layer-hole-headless:
     just fem-gpu-headless examples/py_layer_hole_relax_150nm.py
 
-# Rebuild the managed FEM GPU host runtime bundle (MFEM + CUDA) inside the fem-gpu Docker container.
+# Rebuild the managed FEM host runtime bundle (MFEM + HYPRE + CUDA-enabled build stack).
+# This bundle is used for both FEM CPU and FEM GPU execution paths.
 # Required after source changes to fullmag-plan, fullmag-runner, fullmag-fem-sys, or native/backends/fem.
-rebuild-gpu-runtime:
+rebuild-fem-runtime:
     ./scripts/export_fem_gpu_runtime.sh
+
+# Backward-compatible alias.
+rebuild-gpu-runtime:
+    just rebuild-fem-runtime
 
 # ── Benchmarks ──────────────────────────────────────────────────────────
 
