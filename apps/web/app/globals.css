@@ -151,8 +151,8 @@
     --footer-height: 3rem;
     
     /* Tree Geometry Constants */
-    --tree-indent: 0.875rem;      /* 14px */
-    --tree-node-height: 1.875rem; /* 30px */
+    --tree-indent: 0.75rem;       /* 12px */
+    --tree-node-height: 1.75rem;  /* 28px */
     
     /* Status Colors (Catppuccin Mocha) */
     --status-running: 115 54% 76%;   /* Green */

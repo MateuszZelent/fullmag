@@ -309,7 +309,7 @@ pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
         Some("user".to_string())
     } else {
         // No fallback: execute_reference_fem_impl returns an error
-        // if neither fixed_timestep nor adaptive.dt_initial is set.
+        // if neither fixed nor adaptive timestep is configured.
         None
     };
     ExecutionProvenance {
@@ -369,18 +369,13 @@ fn execute_reference_fem_impl(
     };
     let initial_magnetization = state.magnetization().to_vec();
 
-    let mut dt = plan
-        .fixed_timestep
-        .or_else(|| {
-            plan.adaptive_timestep
-                .as_ref()
-                .map(|a| a.dt_initial.unwrap_or(a.dt_min))
-        })
-        .ok_or_else(|| RunError {
-            message: "no fixed_timestep or adaptive_timestep specified; \
+    let mut dt =
+        crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+            .ok_or_else(|| RunError {
+                message: "no fixed_timestep or adaptive_timestep specified; \
                       please set an explicit timestep in your dynamics configuration"
-                .to_string(),
-        })?;
+                    .to_string(),
+            })?;
     let mut steps = Vec::new();
     let mut step_count = 0u64;
     let provenance = execution_provenance(plan);

@@ -1827,14 +1827,8 @@ fn execute_cuda_fdm(
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);
     let initial_magnetization = backend.copy_m(cell_count)?;
-    let dt = plan
-        .fixed_timestep
-        .or_else(|| {
-            plan.adaptive_timestep
-                .as_ref()
-                .and_then(|adaptive| adaptive.dt_initial)
-        })
-        .unwrap_or(1e-13);
+    let dt = crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+        .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
 
     let mut steps = Vec::new();
     let provenance = ExecutionProvenance {
@@ -2116,14 +2110,9 @@ fn execute_native_fem(
     ));
     let node_count = plan.mesh.nodes.len();
     let initial_magnetization = backend.copy_m(node_count)?;
-    let mut dt = plan
-        .fixed_timestep
-        .or_else(|| {
-            plan.adaptive_timestep
-                .as_ref()
-                .and_then(|adaptive| adaptive.dt_initial)
-        })
-        .unwrap_or(1e-13);
+    let mut dt =
+        crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+            .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
     let dt_is_fixed = plan.fixed_timestep.is_some();
 
     let mut steps = Vec::new();

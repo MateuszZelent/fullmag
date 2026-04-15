@@ -57,7 +57,7 @@ function RightInspectorPanel() {
 
 export default function WorkspaceDockingShell() {
   const currentStage = useWorkspaceStore((state) => state.currentStage);
-  const stageLayout = useWorkspaceStore((state) => state.dockLayoutByStage[state.currentStage]);
+  const stageLayouts = useWorkspaceStore((state) => state.dockLayoutByStage[state.currentStage]);
   const setDockLayout = useWorkspaceStore((state) => state.setDockLayout);
 
   const cmd = useCommand();
@@ -65,6 +65,7 @@ export default function WorkspaceDockingShell() {
 
   const [viewportWidth, setViewportWidth] = useState(1920);
   const responsivePreset = resolveDockResponsivePreset(viewportWidth);
+  const stageLayout = stageLayouts[responsivePreset];
 
   const stageRef = useRef<WorkspaceMode>(currentStage);
   const presetRef = useRef<DockResponsivePreset>(responsivePreset);
@@ -84,7 +85,7 @@ export default function WorkspaceDockingShell() {
   useEffect(() => {
     const stageChanged = stageRef.current !== currentStage;
     const presetChanged = presetRef.current !== responsivePreset;
-    if (stageChanged || (!stageLayout && presetChanged)) {
+    if (stageChanged || presetChanged) {
       setModel(Model.fromJson(parseDockLayout(stageLayout, responsivePreset)));
       stageRef.current = currentStage;
       presetRef.current = responsivePreset;
@@ -95,9 +96,9 @@ export default function WorkspaceDockingShell() {
     (nextModel: Model, action: Action) => {
       void action;
       const serialized: DockLayoutModel = { ...nextModel.toJson() };
-      setDockLayout(currentStage, serialized);
+      setDockLayout(currentStage, responsivePreset, serialized);
     },
-    [currentStage, setDockLayout],
+    [currentStage, responsivePreset, setDockLayout],
   );
 
   const factory = useCallback(

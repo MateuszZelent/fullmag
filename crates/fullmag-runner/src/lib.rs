@@ -114,7 +114,7 @@ fn explicit_selection_from_problem(problem: &ProblemIR) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+mod initial_timestep_tests {
     use super::resolve_initial_timestep;
 
     #[test]
@@ -131,7 +131,10 @@ mod tests {
             max_spin_rotation: None,
             norm_tolerance: None,
         };
-        assert_eq!(resolve_initial_timestep(Some(2e-13), Some(&adaptive)), Some(2e-13));
+        assert_eq!(
+            resolve_initial_timestep(Some(2e-13), Some(&adaptive)),
+            Some(2e-13)
+        );
     }
 
     #[test]

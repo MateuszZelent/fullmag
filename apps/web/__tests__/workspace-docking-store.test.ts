@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getDefaultActiveWorkspaceTabByStage,
@@ -30,9 +30,9 @@ function resetDockingStore() {
     workspaceTabsByStage: getDefaultWorkspaceTabsByStage(),
     activeWorkspaceTabByStage: getDefaultActiveWorkspaceTabByStage(),
     dockLayoutByStage: {
-      build: null,
-      study: null,
-      analyze: null,
+      build: { desktop: null, tablet: null, mobile: null },
+      study: { desktop: null, tablet: null, mobile: null },
+      analyze: { desktop: null, tablet: null, mobile: null },
     },
     currentStage: "study",
   });
@@ -40,6 +40,7 @@ function resetDockingStore() {
 
 describe("workspace docking store", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     (globalThis as { window?: { localStorage: MemoryStorage } }).window = {
       localStorage: memoryStorage,
     };
@@ -105,9 +106,11 @@ describe("workspace docking store", () => {
       borders: [],
     } as Record<string, unknown>;
 
-    useWorkspaceStore.getState().setDockLayout("study", model);
+    useWorkspaceStore.getState().setDockLayout("study", "desktop", model);
 
-    expect(useWorkspaceStore.getState().dockLayoutByStage.study).toEqual(model);
+    expect(useWorkspaceStore.getState().dockLayoutByStage.study.desktop).toEqual(model);
+
+    vi.runAllTimers();
 
     const stored = memoryStorage.getItem(getDefaultDockingStorageKey());
     expect(stored).toBeTruthy();
@@ -121,14 +124,14 @@ describe("workspace docking store", () => {
         workspaceTabsByStage: getDefaultWorkspaceTabsByStage(),
         activeWorkspaceTabByStage: getDefaultActiveWorkspaceTabByStage(),
         dockLayoutByStage: {
-          build: null,
-          study: null,
-          analyze: null,
+          build: { desktop: null, tablet: null, mobile: null },
+          study: { desktop: null, tablet: null, mobile: null },
+          analyze: { desktop: null, tablet: null, mobile: null },
         },
       },
       currentStage: "results",
       rightInspectorOpen: false,
-      rightInspectorTab: "console",
+      rightInspectorTab: "properties",
     });
 
     expect(imported).toBe(true);

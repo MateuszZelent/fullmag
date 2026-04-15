@@ -446,14 +446,9 @@ pub(crate) fn execute_reference_fdm(
         })?;
     let initial_magnetization = state.magnetization().to_vec();
 
-    let mut dt = plan
-        .fixed_timestep
-        .or_else(|| {
-            plan.adaptive_timestep
-                .as_ref()
-                .map(|a| a.dt_initial.unwrap_or(a.dt_min))
-        })
-        .unwrap_or(1e-13);
+    let mut dt =
+        crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+            .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
     let mut last_solver_dt = 0.0;
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count: u64 = 0;

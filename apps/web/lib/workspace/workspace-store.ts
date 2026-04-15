@@ -1,8 +1,9 @@
 import { create } from "zustand";
+import type { DockResponsivePreset } from "@/components/workspace/docking/dockLayoutDefaults";
 import type { LaunchIntent } from "./launch-intent";
 
 export type WorkspaceMode = "build" | "study" | "analyze";
-export type RightInspectorTab = "selected-submeshes" | "tools" | "console";
+export type RightInspectorTab = "properties" | "selected-submeshes" | "tools" | "console";
 
 export type WorkspaceTabKind =
   | "viewport-3d"
@@ -49,6 +50,7 @@ export interface WorkspaceTabInput {
 }
 
 export type DockLayoutModel = Record<string, unknown>;
+export type DockLayoutByPreset = Record<DockResponsivePreset, DockLayoutModel | null>;
 
 interface StageLayoutState {
   leftDock: string | null;
@@ -58,7 +60,7 @@ interface StageLayoutState {
 }
 
 const STAGES: WorkspaceMode[] = ["build", "study", "analyze"];
-const DOCKING_STORAGE_KEY = "fullmag.workspace.docking.v2";
+const DOCKING_STORAGE_KEY = "fullmag.workspace.docking.v3";
 
 function defaultCoreTabs(): WorkspaceTab[] {
   return [
@@ -156,16 +158,16 @@ const DEFAULT_ACTIVE_WORKSPACE_TAB: Record<WorkspaceMode, string | null> = {
   analyze: "core:analyze",
 };
 
-const DEFAULT_DOCK_LAYOUTS: Record<WorkspaceMode, DockLayoutModel | null> = {
-  build: null,
-  study: null,
-  analyze: null,
+const DEFAULT_DOCK_LAYOUT_BY_PRESET: DockLayoutByPreset = {
+  desktop: null,
+  tablet: null,
+  mobile: null,
 };
 
 interface PersistedDockingState {
   workspaceTabsByStage: Record<WorkspaceMode, WorkspaceTab[]>;
   activeWorkspaceTabByStage: Record<WorkspaceMode, string | null>;
-  dockLayoutByStage: Record<WorkspaceMode, DockLayoutModel | null>;
+  dockLayoutByStage: Record<WorkspaceMode, DockLayoutByPreset>;
 }
 
 export interface WorkspaceUiStateSnapshot {
@@ -178,6 +180,18 @@ export interface WorkspaceUiStateSnapshot {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseDockLayoutByPreset(value: unknown): DockLayoutByPreset {
+  if (!isPlainObject(value)) {
+    return { ...DEFAULT_DOCK_LAYOUT_BY_PRESET };
+  }
+
+  return {
+    desktop: isPlainObject(value.desktop) ? (value.desktop as DockLayoutModel) : null,
+    tablet: isPlainObject(value.tablet) ? (value.tablet as DockLayoutModel) : null,
+    mobile: isPlainObject(value.mobile) ? (value.mobile as DockLayoutModel) : null,
+  };
 }
 
 function parsePersistedDockingState(raw: string | null): PersistedDockingState | null {
@@ -206,10 +220,10 @@ function parsePersistedDockingState(raw: string | null): PersistedDockingState |
       analyze: typeof active.analyze === "string" ? (active.analyze as string) : DEFAULT_ACTIVE_WORKSPACE_TAB.analyze,
     };
 
-    const dockLayoutByStage: Record<WorkspaceMode, DockLayoutModel | null> = {
-      build: isPlainObject(dock.build) ? (dock.build as DockLayoutModel) : null,
-      study: isPlainObject(dock.study) ? (dock.study as DockLayoutModel) : null,
-      analyze: isPlainObject(dock.analyze) ? (dock.analyze as DockLayoutModel) : null,
+    const dockLayoutByStage: Record<WorkspaceMode, DockLayoutByPreset> = {
+      build: parseDockLayoutByPreset(dock.build),
+      study: parseDockLayoutByPreset(dock.study),
+      analyze: parseDockLayoutByPreset(dock.analyze),
     };
 
     return {
@@ -236,12 +250,25 @@ function persistDockingState(payload: PersistedDockingState): void {
   window.localStorage.setItem(DOCKING_STORAGE_KEY, JSON.stringify(payload));
 }
 
+let pendingDockingPersist: number | null = null;
+
 function persistDockingFromState(state: WorkspaceStoreState): void {
-  persistDockingState({
-    workspaceTabsByStage: state.workspaceTabsByStage,
-    activeWorkspaceTabByStage: state.activeWorkspaceTabByStage,
-    dockLayoutByStage: state.dockLayoutByStage,
-  });
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (pendingDockingPersist != null) {
+    window.clearTimeout(pendingDockingPersist);
+  }
+
+  pendingDockingPersist = window.setTimeout(() => {
+    pendingDockingPersist = null;
+    persistDockingState({
+      workspaceTabsByStage: state.workspaceTabsByStage,
+      activeWorkspaceTabByStage: state.activeWorkspaceTabByStage,
+      dockLayoutByStage: state.dockLayoutByStage,
+    });
+  }, 160);
 }
 
 interface WorkspaceStoreState {
@@ -261,7 +288,7 @@ interface WorkspaceStoreState {
 
   workspaceTabsByStage: Record<WorkspaceMode, WorkspaceTab[]>;
   activeWorkspaceTabByStage: Record<WorkspaceMode, string | null>;
-  dockLayoutByStage: Record<WorkspaceMode, DockLayoutModel | null>;
+  dockLayoutByStage: Record<WorkspaceMode, DockLayoutByPreset>;
 
   setCurrentStage: (mode: WorkspaceMode) => void;
   setActiveCoreTab: (tab: string) => void;
@@ -284,7 +311,11 @@ interface WorkspaceStoreState {
   activateTab: (stage: WorkspaceMode, tabId: string | null) => void;
   pinTab: (stage: WorkspaceMode, tabId: string, pinned: boolean) => void;
   syncTabsFromArtifacts: (stage: WorkspaceMode, artifactPaths: string[]) => void;
-  setDockLayout: (stage: WorkspaceMode, model: DockLayoutModel | null) => void;
+  setDockLayout: (
+    stage: WorkspaceMode,
+    preset: DockResponsivePreset,
+    model: DockLayoutModel | null,
+  ) => void;
   resetDockingState: () => void;
   exportUiStateSnapshot: () => WorkspaceUiStateSnapshot;
   importUiStateSnapshot: (snapshot: unknown) => boolean;
@@ -342,8 +373,9 @@ function mergedDockingStateFromDefaults(): PersistedDockingState {
     workspaceTabsByStage,
     activeWorkspaceTabByStage,
     dockLayoutByStage: {
-      ...DEFAULT_DOCK_LAYOUTS,
-      ...(persistedDockingState?.dockLayoutByStage ?? {}),
+      build: parseDockLayoutByPreset(persistedDockingState?.dockLayoutByStage.build),
+      study: parseDockLayoutByPreset(persistedDockingState?.dockLayoutByStage.study),
+      analyze: parseDockLayoutByPreset(persistedDockingState?.dockLayoutByStage.analyze),
     },
   };
 }
@@ -360,8 +392,8 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
     activeProjectId: null,
     launcherVisible: false,
     launchIntent: null,
-    rightInspectorOpen: false,
-    rightInspectorTab: "console",
+    rightInspectorOpen: true,
+    rightInspectorTab: "properties",
     settingsOpen: false,
     physicsDocsOpen: false,
     physicsDocsTopic: null,
@@ -593,12 +625,15 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         return nextState;
       }),
 
-    setDockLayout: (stage, model) =>
+    setDockLayout: (stage, preset, model) =>
       set((state) => {
         const nextState = {
           dockLayoutByStage: {
             ...state.dockLayoutByStage,
-            [stage]: model,
+            [stage]: {
+              ...state.dockLayoutByStage[stage],
+              [preset]: model,
+            },
           },
         };
         persistDockingFromState({ ...state, ...nextState });
@@ -610,7 +645,11 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         const nextState = {
           workspaceTabsByStage: cloneTabsByStage(DEFAULT_WORKSPACE_TABS),
           activeWorkspaceTabByStage: { ...DEFAULT_ACTIVE_WORKSPACE_TAB },
-          dockLayoutByStage: { ...DEFAULT_DOCK_LAYOUTS },
+          dockLayoutByStage: {
+            build: { ...DEFAULT_DOCK_LAYOUT_BY_PRESET },
+            study: { ...DEFAULT_DOCK_LAYOUT_BY_PRESET },
+            analyze: { ...DEFAULT_DOCK_LAYOUT_BY_PRESET },
+          },
         };
         persistDockingFromState({ ...state, ...nextState });
         return nextState;
@@ -651,19 +690,24 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
           ? currentStageRaw
           : "study";
       const rightInspectorOpen =
-        typeof rightInspectorOpenRaw === "boolean" ? rightInspectorOpenRaw : false;
+        typeof rightInspectorOpenRaw === "boolean" ? rightInspectorOpenRaw : true;
       const rightInspectorTab: RightInspectorTab =
+        rightInspectorTabRaw === "properties" ||
         rightInspectorTabRaw === "selected-submeshes" ||
         rightInspectorTabRaw === "tools" ||
         rightInspectorTabRaw === "console"
           ? rightInspectorTabRaw
-          : "console";
+          : "properties";
 
       set((state) => {
         const nextState = {
           workspaceTabsByStage: cloneTabsByStage(persistedDockingState.workspaceTabsByStage),
           activeWorkspaceTabByStage: { ...persistedDockingState.activeWorkspaceTabByStage },
-          dockLayoutByStage: { ...persistedDockingState.dockLayoutByStage },
+          dockLayoutByStage: {
+            build: { ...persistedDockingState.dockLayoutByStage.build },
+            study: { ...persistedDockingState.dockLayoutByStage.study },
+            analyze: { ...persistedDockingState.dockLayoutByStage.analyze },
+          },
           currentStage,
           rightInspectorOpen,
           rightInspectorTab,

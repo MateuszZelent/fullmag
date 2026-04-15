@@ -6,7 +6,7 @@ function leftTabset(): IJsonTabSetNode {
   return {
     type: "tabset",
     id: "dock-left-tabset",
-    weight: 22,
+    weight: 18,
     enableClose: false,
     children: [
       {
@@ -25,7 +25,7 @@ function centerTopTabset(): IJsonTabSetNode {
   return {
     type: "tabset",
     id: "dock-center-tabset",
-    weight: 78,
+    weight: 100,
     enableClose: false,
     children: [
       {
@@ -44,7 +44,7 @@ function rightTabset(): IJsonTabSetNode {
   return {
     type: "tabset",
     id: "dock-right-tabset",
-    weight: 22,
+    weight: 20,
     enableClose: false,
     children: [
       {
@@ -63,7 +63,7 @@ function bottomTabset(): IJsonTabSetNode {
   return {
     type: "tabset",
     id: "dock-bottom-tabset",
-    weight: 22,
+    weight: 18,
     enableClose: false,
     children: [
       {
@@ -88,7 +88,7 @@ function desktopLayout(): IJsonModel {
       tabSetEnableClose: false,
       tabSetEnableTabStrip: true,
       tabSetEnableDrag: true,
-      tabSetMinWidth: 220,
+      tabSetMinWidth: 180,
       tabSetMinHeight: 150,
       enableEdgeDock: true,
     },
@@ -101,7 +101,7 @@ function desktopLayout(): IJsonModel {
         {
           type: "row",
           id: "dock-main-column",
-          weight: 56,
+          weight: 62,
           children: [centerTopTabset(), bottomTabset()],
         },
         rightTabset(),
@@ -120,19 +120,19 @@ function tabletLayout(): IJsonModel {
       tabSetEnableClose: false,
       tabSetEnableTabStrip: true,
       tabSetEnableDrag: true,
-      tabSetMinWidth: 200,
+      tabSetMinWidth: 180,
       tabSetMinHeight: 140,
       enableEdgeDock: true,
       borderAutoSelectTabWhenOpen: true,
       borderEnableDrop: true,
       borderEnableAutoHide: false,
-      borderSize: 300,
+      borderSize: 320,
     },
     borders: [
       {
         type: "border",
         location: "right",
-        size: 320,
+        size: 360,
         children: [
           {
             type: "tab",
@@ -147,7 +147,7 @@ function tabletLayout(): IJsonModel {
       {
         type: "border",
         location: "bottom",
-        size: 280,
+        size: 300,
         children: [
           {
             type: "tab",
@@ -178,7 +178,7 @@ function mobileLayout(): IJsonModel {
       tabSetEnableClose: false,
       tabSetEnableTabStrip: true,
       tabSetEnableDrag: true,
-      tabSetMinWidth: 180,
+      tabSetMinWidth: 160,
       tabSetMinHeight: 130,
       enableEdgeDock: true,
       borderAutoSelectTabWhenOpen: true,

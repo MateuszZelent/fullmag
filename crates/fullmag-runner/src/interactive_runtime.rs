@@ -682,14 +682,9 @@ impl CpuInteractiveFdmPreviewRuntime {
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
-        let mut dt = plan
-            .fixed_timestep
-            .or_else(|| {
-                plan.adaptive_timestep
-                    .as_ref()
-                    .and_then(|adaptive| adaptive.dt_initial)
-            })
-            .unwrap_or(1e-13);
+        let mut dt =
+            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
         let mut previous_total_energy =
             Some(cpu_reference::observe_state(&self.problem, &self.state)?.total_energy);
         let mut checkpoint = crate::interactive::CheckpointContext {
@@ -1021,14 +1016,9 @@ impl CpuInteractiveFdmPreviewRuntime {
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
-        let mut dt = plan
-            .fixed_timestep
-            .or_else(|| {
-                plan.adaptive_timestep
-                    .as_ref()
-                    .and_then(|adaptive| adaptive.dt_initial)
-            })
-            .unwrap_or(1e-13);
+        let mut dt =
+            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
         let mut previous_total_energy =
             Some(cpu_reference::observe_state(&self.problem, &self.state)?.total_energy);
         let mut checkpoint = crate::interactive::CheckpointContext {
@@ -1373,14 +1363,9 @@ impl CudaInteractiveFdmPreviewRuntime {
         }
         let base_step = self.total_steps;
         let base_time = self.total_time;
-        let mut dt = plan
-            .fixed_timestep
-            .or_else(|| {
-                plan.adaptive_timestep
-                    .as_ref()
-                    .and_then(|adaptive| adaptive.dt_initial)
-            })
-            .unwrap_or(1e-13);
+        let mut dt =
+            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
         let mut previous_total_energy: Option<f64> = None;
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -1631,14 +1616,9 @@ impl CudaInteractiveFdmPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
-        let mut dt = plan
-            .fixed_timestep
-            .or_else(|| {
-                plan.adaptive_timestep
-                    .as_ref()
-                    .and_then(|adaptive| adaptive.dt_initial)
-            })
-            .unwrap_or(1e-13);
+        let mut dt =
+            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
         let mut previous_total_energy: Option<f64> = None;
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -1961,14 +1941,9 @@ impl CpuInteractiveFemPreviewRuntime {
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
-        let mut dt = plan
-            .fixed_timestep
-            .or_else(|| {
-                plan.adaptive_timestep
-                    .as_ref()
-                    .and_then(|adaptive| adaptive.dt_initial)
-            })
-            .unwrap_or(1e-13);
+        let mut dt =
+            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
         let mut previous_total_energy = Some(
             fem_reference::observe_state(&self.problem, &self.state, &self.antenna_field)?
                 .total_energy,
@@ -2257,14 +2232,9 @@ impl CpuInteractiveFemPreviewRuntime {
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
-        let mut dt = plan
-            .fixed_timestep
-            .or_else(|| {
-                plan.adaptive_timestep
-                    .as_ref()
-                    .and_then(|adaptive| adaptive.dt_initial)
-            })
-            .unwrap_or(1e-13);
+        let mut dt =
+            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
         let mut previous_total_energy = Some(
             fem_reference::observe_state(&self.problem, &self.state, &self.antenna_field)?
                 .total_energy,
@@ -2602,14 +2572,9 @@ impl GpuInteractiveFemPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
-        let mut dt = plan
-            .fixed_timestep
-            .or_else(|| {
-                plan.adaptive_timestep
-                    .as_ref()
-                    .and_then(|adaptive| adaptive.dt_initial)
-            })
-            .unwrap_or(1e-13);
+        let mut dt =
+            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
         let mut previous_total_energy: Option<f64> = None;
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -2833,14 +2798,9 @@ impl GpuInteractiveFemPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
-        let mut dt = plan
-            .fixed_timestep
-            .or_else(|| {
-                plan.adaptive_timestep
-                    .as_ref()
-                    .and_then(|adaptive| adaptive.dt_initial)
-            })
-            .unwrap_or(1e-13);
+        let mut dt =
+            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
         let mut previous_total_energy: Option<f64> = None;
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,

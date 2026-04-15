@@ -3,6 +3,7 @@
 import { useCallback, useMemo } from "react";
 
 import EngineConsole from "@/components/panels/EngineConsole";
+import SettingsPanel from "@/components/panels/SettingsPanel";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
@@ -37,6 +38,7 @@ function WorkspaceRightToolbox() {
   const rightInspectorTab = useWorkspaceStore((state) => state.rightInspectorTab);
   const setRightInspectorTab = useWorkspaceStore((state) => state.setRightInspectorTab);
   const capabilitySummary = useMemo(() => summarizeCapabilityCoverage(), []);
+  const selectedNodeId = model.selectedSidebarNodeId ?? "study-root";
 
   const snapshot = model.visibleSubmeshSnapshot;
   const meshParts = model.meshParts;
@@ -165,9 +167,12 @@ function WorkspaceRightToolbox() {
         onValueChange={(value) => setRightInspectorTab(value as RightInspectorTab)}
       >
         <div className="border-b border-border/30 px-3 py-2.5">
-          <TabsList className="grid h-8 w-full grid-cols-3">
+          <TabsList className="grid h-8 w-full grid-cols-4">
+            <TabsTrigger value="properties" className="text-[0.63rem] uppercase tracking-[0.08em]">
+              Properties
+            </TabsTrigger>
             <TabsTrigger value="selected-submeshes" className="text-[0.68rem] uppercase tracking-[0.08em]">
-              Selected Submeshes
+              Submeshes
             </TabsTrigger>
             <TabsTrigger value="tools" className="text-[0.68rem] uppercase tracking-[0.08em]">
               Tools
@@ -177,6 +182,14 @@ function WorkspaceRightToolbox() {
             </TabsTrigger>
           </TabsList>
         </div>
+
+        <TabsContent value="properties" className="mt-0 flex min-h-0 flex-1 flex-col">
+          <ScrollArea className="flex-1">
+            <div className="p-1">
+              <SettingsPanel nodeId={selectedNodeId} />
+            </div>
+          </ScrollArea>
+        </TabsContent>
 
         <TabsContent value="selected-submeshes" className="mt-0 flex min-h-0 flex-1 flex-col px-0 py-0">
           {snapshot && snapshot.items.length > 0 ? (
@@ -193,7 +206,7 @@ function WorkspaceRightToolbox() {
                 selectedEntityId={model.selectedEntityId}
                 focusedEntityId={model.focusedEntityId}
                 visiblePartsCount={snapshot.visiblePartsCount}
-                onClose={() => setRightInspectorTab("tools")}
+                onClose={() => setRightInspectorTab("properties")}
                 onPartSelect={handlePartSelect}
                 onEntityFocus={model.setFocusedEntityId}
                 onPatchPart={(partId, patch) => patchMeshPartViewState([partId], patch)}

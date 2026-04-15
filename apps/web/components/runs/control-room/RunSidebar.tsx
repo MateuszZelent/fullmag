@@ -1,21 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Panel,
-  Group as PanelGroup,
-  Separator as PanelResizeHandle,
-  usePanelRef,
-  type PanelSize,
-} from "react-resizable-panels";
 import ModelTree, { buildFullmagModelTree } from "../../panels/ModelTree";
-import SettingsPanel from "../../panels/SettingsPanel";
 import { useCommand, useModel, useTransport, useViewport } from "./ControlRoomContext";
 import { parseAnalyzeTreeNode } from "./analyzeSelection";
 import {
-  findTreeNodeById,
   previewQuantityForTreeNode,
-  resolveAntennaNodeName,
   resolveStudyStageExecutionState,
   resolveSelectedObjectId,
 } from "./shared";
@@ -111,11 +101,8 @@ function uniqueSortedModeIndices(artifactPaths: string[]): number[] {
 }
 
 /**
- * RunSidebar — horizontal two-column Master-Detail layout.
- * Column 1 (narrow): Model Builder tree — always visible, serves as the
- *   navigation spine of the project.
- * Column 2 (wider):  Inspector / SettingsPanel — shows contextual properties
- *   for whichever tree node is selected.
+ * RunSidebar — single-column explorer for the left dock.
+ * Properties live in the right inspector to keep navigation width usable.
  */
 export default function RunSidebar() {
   const model = useModel();
@@ -124,10 +111,7 @@ export default function RunSidebar() {
   const vp = useViewport();
   const activeStageLayout = useActiveStageLayout();
   const launchIntent = useWorkspaceStore((state) => state.launchIntent);
-  const treePanelRef = usePanelRef();
-  const inspectorPanelRef = usePanelRef();
   const [treeOpen, setTreeOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
   const [treeQuery, setTreeQuery] = useState("");
   const [treeFilterScope, setTreeFilterScope] = useState<TreeFilterScope>("all");
   const universeRole = useMemo(() => {
@@ -454,7 +438,6 @@ export default function RunSidebar() {
       universeRole, hasResultsSection, resultQuantityTree.field, resultQuantityTree.scalar, resultWorkspaceEntriesForTree, eigenModeCount, eigenModeSummaries, hasEigenDispersionArtifact,
       launchIntent?.displayName, model.airPart?.element_count, model.airPart?.node_count,
       model.visualizationProjectPresets, model.visualizationLocalPresets, model.activeVisualizationPresetRef,
-      model.studyPipeline, model.studyStages.length, cmd.activity.label, cmd.workspaceStatus,
       stageExecutionState.activeStageIndex, stageExecutionState.completedStageIndexes, stageExecutionState.stageStatuses, pipelineStageIndexesByNodeId,
     ],
   );
@@ -493,10 +476,6 @@ export default function RunSidebar() {
       cmd.isFemBackend, model.modelBuilderGraph, model.sceneDocument, vp.previewControlsActive]);
 
   const activeNodeId = (graphEnabled ? graphSelection.activeNodeId : null) ?? model.selectedSidebarNodeId ?? fallbackNodeId;
-  const activeNode = useMemo(
-    () => findTreeNodeById(modelTreeNodes, activeNodeId),
-    [activeNodeId, modelTreeNodes],
-  );
   const filteredModelTreeNodes = useMemo(
     () => filterTreeNodes(modelTreeNodes, treeQuery, treeFilterScope),
     [modelTreeNodes, treeFilterScope, treeQuery],
@@ -505,25 +484,6 @@ export default function RunSidebar() {
     () => countTreeNodes(filteredModelTreeNodes),
     [filteredModelTreeNodes],
   );
-  const activeAntennaName = useMemo(
-    () =>
-      resolveAntennaNodeName(
-        activeNodeId,
-        model.scriptBuilderCurrentModules.map((module) => module.name),
-      ),
-    [activeNodeId, model.scriptBuilderCurrentModules],
-  );
-  const activeNodeLabel =
-    activeNode?.label ??
-    (activeNodeId === "session"
-      ? "Session"
-      : activeNodeId === "script-builder"
-        ? "Script Builder"
-        :
-    (activeNodeId === "antennas"
-      ? "Antenna / RF Source"
-      : activeAntennaName ?? "Workspace"));
-
   const selectModelNode = useCallback((id: string) => {
     if (graphEnabled) {
       const resultContext = parseResultNodeContext(id);
@@ -702,12 +662,6 @@ export default function RunSidebar() {
     ) {
       return;
     }
-    // Ensure inspector is visible when a node is clicked
-    const panel = inspectorPanelRef.current;
-    if (panel?.isCollapsed()) {
-      panel.expand();
-      setInspectorOpen(true);
-    }
     const selectedObjectId = resolveSelectedObjectId(
       id,
       model.sceneDocument ?? model.modelBuilderGraph,
@@ -790,7 +744,7 @@ export default function RunSidebar() {
         }
       }
     }
-  }, [cmd.isFemBackend, model, vp, inspectorPanelRef, selectModelNode]);
+  }, [cmd.isFemBackend, model, vp, selectModelNode]);
 
   const handleTreeContextAction = useCallback((nodeId: string, action: string) => {
     if (nodeId.startsWith("res-analysis-")) {
@@ -934,176 +888,101 @@ export default function RunSidebar() {
   }, [cmd.isFemBackend, model, selectModelNode, vp]);
 
   const handleTreeToggle = useCallback(() => {
-    const panel = treePanelRef.current;
-    if (!panel) return;
-    if (panel.isCollapsed()) {
-      panel.expand();
-      setTreeOpen(true);
-    } else {
-      panel.collapse();
-      setTreeOpen(false);
-    }
-  }, [treePanelRef]);
-
-  const handleInspectorToggle = useCallback(() => {
-    const panel = inspectorPanelRef.current;
-    if (!panel) return;
-    if (panel.isCollapsed()) {
-      panel.expand();
-      setInspectorOpen(true);
-    } else {
-      panel.collapse();
-      setInspectorOpen(false);
-    }
-  }, [inspectorPanelRef]);
-
-  const handleTreeResize = useCallback((panelSize: PanelSize) => {
-    setTreeOpen(panelSize.inPixels > 68);
-  }, []);
-
-  const handleInspectorResize = useCallback((panelSize: PanelSize) => {
-    setInspectorOpen(panelSize.inPixels > 68);
+    setTreeOpen((prev) => !prev);
   }, []);
 
   return (
     <div className="flex h-full w-full border-l border-border/10 bg-background/80">
-      <PanelGroup
-        orientation="horizontal"
-        className="flex w-full h-full"
-        resizeTargetMinimumSize={{ coarse: 32, fine: 10 }}
-      >
-        {/* ── Column 1: Model Builder Tree ── */}
-        <Panel
-          id="sidebar-model-tree"
-          defaultSize={44}
-          minSize={22}
-          collapsible
-          collapsedSize={4}
-          panelRef={treePanelRef}
-          onResize={handleTreeResize}
+      <section className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background/55">
+        <button
+          type="button"
+          className="flex w-full items-center border-b border-border/10 px-3 py-2 text-left transition-colors hover:bg-muted/20"
+          onClick={handleTreeToggle}
+          aria-expanded={treeOpen}
         >
-          <section className="flex flex-col h-full bg-background/55 border-r border-border/10">
-            <button
-              type="button"
-              className="flex items-center w-full px-3 py-2 text-left transition-all hover:bg-muted/20 border-b border-border/10 z-10 shrink-0 relative group"
-              onClick={handleTreeToggle}
-              aria-expanded={treeOpen}
-            >
-              <span className={cn("text-primary/60 mr-2 transition-transform duration-200 flex items-center justify-center w-4 h-4 text-[10px]", treeOpen && "rotate-90")}>▸</span>
-              <span className="text-[0.72rem] font-semibold tracking-wide text-foreground/90 group-hover:text-foreground transition-colors">Model</span>
-              <span className="ml-auto flex items-center gap-2">
-                <span className="text-[0.58rem] font-mono font-bold tracking-tight text-primary-foreground bg-primary/80 px-1.5 py-0.5 rounded-sm shadow-sm">{cmd.isFemBackend ? "FEM" : "FDM"}</span>
-              </span>
-            </button>
-            {treeOpen && (
-              <div className="flex-1 min-h-0 min-w-0 pr-1 overflow-hidden isolate relative">
-                <ScrollArea className="h-full w-full">
-                  <div className="p-2 select-none space-y-2">
-                    <div className="space-y-2 rounded-lg border border-border/15 bg-background/40 p-2">
-                      <Input
-                        value={treeQuery}
-                        onChange={(event) => setTreeQuery(event.target.value)}
-                        placeholder="Search tree…"
-                        className="h-9 bg-background/60 text-[0.78rem]"
-                        aria-label="Search model tree"
-                      />
-                      <div className="flex flex-wrap gap-1.5">
-                        {(
-                          [
-                            ["all", "All"],
-                            ["objects", "Objects"],
-                            ["mesh", "Mesh"],
-                            ["physics", "Physics"],
-                            ["results", "Results"],
-                          ] as const
-                        ).map(([value, label]) => (
-                          <button
-                            key={value}
-                            type="button"
-                            className={cn(
-                              "rounded-md border px-2.5 py-1 text-[0.68rem] font-medium transition-colors",
-                              treeFilterScope === value
-                                ? "border-primary/30 bg-primary/12 text-primary"
-                                : "border-border/20 bg-background/30 text-muted-foreground hover:bg-muted/40 hover:text-foreground",
-                            )}
-                            onClick={() => setTreeFilterScope(value)}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="flex items-center justify-between text-[0.66rem] text-muted-foreground">
-                        <span>
-                          {filteredTreeNodeCount.toLocaleString()} visible node
-                          {filteredTreeNodeCount === 1 ? "" : "s"}
-                        </span>
-                        {(treeQuery.length > 0 || treeFilterScope !== "all") && (
-                          <button
-                            type="button"
-                            className="rounded px-1.5 py-0.5 text-[0.62rem] font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-                            onClick={() => {
-                              setTreeQuery("");
-                              setTreeFilterScope("all");
-                            }}
-                          >
-                            Reset
-                          </button>
+          <span
+            className={cn(
+              "mr-2 flex h-4 w-4 items-center justify-center text-[10px] text-primary/60 transition-transform duration-200",
+              treeOpen && "rotate-90",
+            )}
+          >
+            ▸
+          </span>
+          <span className="text-[0.72rem] font-semibold tracking-wide text-foreground/90">
+            Explorer
+          </span>
+          <span className="ml-auto rounded-sm bg-primary/80 px-1.5 py-0.5 text-[0.58rem] font-mono font-bold tracking-tight text-primary-foreground shadow-sm">
+            {cmd.isFemBackend ? "FEM" : "FDM"}
+          </span>
+        </button>
+        {treeOpen ? (
+          <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+            <ScrollArea className="h-full w-full">
+              <div className="space-y-2 p-2 select-none">
+                <div className="space-y-2 rounded-lg border border-border/15 bg-background/40 p-2">
+                  <Input
+                    value={treeQuery}
+                    onChange={(event) => setTreeQuery(event.target.value)}
+                    placeholder="Search tree…"
+                    className="h-9 bg-background/60 text-[0.78rem]"
+                    aria-label="Search model tree"
+                  />
+                  <div className="flex flex-wrap gap-1">
+                    {(
+                      [
+                        ["all", "All"],
+                        ["objects", "Objects"],
+                        ["mesh", "Mesh"],
+                        ["physics", "Physics"],
+                        ["results", "Results"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={cn(
+                          "rounded-md border px-2 py-1 text-[0.65rem] font-medium transition-colors",
+                          treeFilterScope === value
+                            ? "border-primary/30 bg-primary/12 text-primary"
+                            : "border-border/20 bg-background/30 text-muted-foreground hover:bg-muted/40 hover:text-foreground",
                         )}
-                      </div>
-                    </div>
-                    <ModelTree
-                      nodes={filteredModelTreeNodes}
-                      activeId={activeNodeId}
-                      onNodeClick={handleTreeClick}
-                      onContextAction={handleTreeContextAction}
-                    />
+                        onClick={() => setTreeFilterScope(value)}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
-                </ScrollArea>
-              </div>
-            )}
-          </section>
-        </Panel>
-
-        {/* ── Resize handle (vertical divider) ── */}
-        <PanelResizeHandle className="flex shrink-0 items-center justify-center bg-transparent w-1.5 cursor-col-resize relative z-10 hover:bg-primary/15 transition-colors after:absolute after:inset-y-0 after:left-1/2 after:-translate-x-1/2 after:w-px after:h-8 after:my-auto after:bg-border/40 hover:after:bg-primary/60" />
-
-        {/* ── Column 2: Inspector / SettingsPanel ── */}
-        <Panel
-          id="sidebar-inspector"
-          defaultSize={52}
-          minSize={20}
-          collapsible
-          collapsedSize={4}
-          panelRef={inspectorPanelRef}
-          onResize={handleInspectorResize}
-        >
-          <section className="flex flex-col h-full bg-background/35 @container">
-            <button
-              type="button"
-              className="flex items-center w-full px-3 py-2 text-left transition-all hover:bg-muted/20 border-b border-border/10 z-10 shrink-0 relative group"
-              onClick={handleInspectorToggle}
-              aria-expanded={inspectorOpen}
-            >
-              <span className={cn("text-primary/60 mr-2 transition-transform duration-200 flex items-center justify-center w-4 h-4 text-[10px]", inspectorOpen && "rotate-90")}>▸</span>
-              <span className="text-[0.72rem] font-semibold tracking-wide text-foreground/90 group-hover:text-foreground transition-colors">
-                Properties
-              </span>
-              <span className="ml-auto text-[0.62rem] font-medium tracking-tight text-muted-foreground bg-background/45 px-2 py-0.5 rounded-md border border-border/20 max-w-[140px] truncate">
-                {activeNodeLabel}
-              </span>
-            </button>
-            {inspectorOpen && (
-              <div className="flex-1 min-h-0 min-w-0 overflow-hidden isolate relative">
-                <ScrollArea className="h-full w-full">
-                  <div className="p-1 select-none">
-                    <SettingsPanel nodeId={activeNodeId} />
+                  <div className="flex items-center justify-between gap-2 text-[0.66rem] text-muted-foreground">
+                    <span className="truncate">
+                      {filteredTreeNodeCount.toLocaleString()} visible node
+                      {filteredTreeNodeCount === 1 ? "" : "s"}
+                    </span>
+                    {(treeQuery.length > 0 || treeFilterScope !== "all") ? (
+                      <button
+                        type="button"
+                        className="rounded px-1.5 py-0.5 text-[0.62rem] font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                        onClick={() => {
+                          setTreeQuery("");
+                          setTreeFilterScope("all");
+                        }}
+                      >
+                        Reset
+                      </button>
+                    ) : null}
                   </div>
-                </ScrollArea>
+                </div>
+                <ModelTree
+                  nodes={filteredModelTreeNodes}
+                  activeId={activeNodeId}
+                  onNodeClick={handleTreeClick}
+                  onContextAction={handleTreeContextAction}
+                  compact
+                />
               </div>
-            )}
-          </section>
-        </Panel>
-      </PanelGroup>
+            </ScrollArea>
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 }

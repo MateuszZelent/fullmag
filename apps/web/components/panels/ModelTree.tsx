@@ -336,6 +336,7 @@ interface ModelTreeProps {
   onNodeClick?: (id: string) => void;
   onContextAction?: (nodeId: string, action: string) => void;
   className?: string;
+  compact?: boolean;
 }
 
 function nodeStatusTone(status: NodeStatus | undefined, isActive: boolean): string {
@@ -399,6 +400,7 @@ function TreeNode({
   parentGuides = [],
   forceExpandToken = 0,
   forceExpandValue,
+  compact = false,
 }: {
   node: TreeNodeData;
   depth: number;
@@ -409,6 +411,7 @@ function TreeNode({
   parentGuides?: boolean[];
   forceExpandToken?: number;
   forceExpandValue?: boolean;
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(node.defaultOpen ?? depth < 2);
   const hasChildren = node.children && node.children.length > 0;
@@ -429,6 +432,9 @@ function TreeNode({
     onNodeClick?.(node.id);
   }, [hasChildren, node, onNodeClick]);
 
+  const indentStyle = compact ? { width: "0.625rem" } : undefined;
+  const showBadge = Boolean(node.badge) && (!compact || depth < 2);
+
   /* Guides to pass to children: add current level's continuation */
   const childGuides = depth > 0
     ? [...parentGuides, !isLast]
@@ -443,12 +449,20 @@ function TreeNode({
         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextMenu?.(e, node.id, node.label); }}
         role="treeitem"
         aria-expanded={hasChildren ? open : undefined}
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            handleClick();
+          }
+        }}
       >
         {/* ─── LEFT: Guide columns (never clipped) ─── */}
         {parentGuides.map((showLine, idx) => (
           <div
             key={`g-${idx}`}
             className="shrink-0 flex justify-center w-tree-indent"
+            style={indentStyle}
           >
             {showLine && (
               <div className="w-px h-full bg-border/25" />
@@ -460,6 +474,7 @@ function TreeNode({
         {depth > 0 && (
           <div
             className="shrink-0 relative w-tree-indent"
+            style={indentStyle}
           >
             {/* Vertical segment: top → center (last child) or top → bottom */}
             <div
@@ -477,7 +492,7 @@ function TreeNode({
         {/* ─── RIGHT: Interactive content (overflow-clipped) ─── */}
         <div
           className={cn(
-            "flex-1 flex items-center gap-1.5 pr-2.5 rounded-lg transition-all duration-200 overflow-hidden relative min-w-0",
+            "flex-1 flex items-center gap-1 pr-2 rounded-lg transition-[background-color,border-color,color,box-shadow] duration-200 overflow-hidden relative min-w-0",
             nodeStatusTone(node.status, isActive),
           )}
         >
@@ -490,8 +505,8 @@ function TreeNode({
           )}
 
           {/* Expand/collapse chevron */}
-          <span className="flex items-center justify-center shrink-0 ml-0.5" style={{ width: '16px', height: '16px' }}>
-            {hasChildren ? (
+          {hasChildren ? (
+            <span className="ml-0.5 flex h-4 w-3 shrink-0 items-center justify-center">
               <svg
                 width="8" height="8" viewBox="0 0 8 8" fill="none"
                 className={cn(
@@ -501,8 +516,8 @@ function TreeNode({
               >
                 <path d="M2 1L6 4L2 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-            ) : null}
-          </span>
+            </span>
+          ) : null}
 
           {/* Icon */}
           {node.icon && (
@@ -516,7 +531,7 @@ function TreeNode({
 
           {/* Label */}
           <span className={cn(
-            "flex-1 truncate text-[0.80rem] pl-0.5 tracking-wide",
+            "flex-1 truncate text-[0.78rem] tracking-wide",
             isActive ? "font-semibold" : "font-normal"
           )}>
             {node.label}
@@ -530,16 +545,16 @@ function TreeNode({
           )}
 
           {/* Badge */}
-          {node.badge && (
+          {showBadge ? (
             <span className={cn(
-              "shrink-0 rounded px-1.5 py-[1px] text-[0.55rem] font-medium font-mono ml-1 opacity-80",
+              "ml-1 shrink-0 rounded px-1.5 py-[1px] text-[0.55rem] font-medium font-mono opacity-80",
               isActive
                 ? "bg-primary/10 text-primary border border-primary/10"
                 : "bg-background/45 text-muted-foreground/70 border border-border/10"
             )}>
               {node.badge}
             </span>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -558,6 +573,7 @@ function TreeNode({
               parentGuides={childGuides}
               forceExpandToken={forceExpandToken}
               forceExpandValue={forceExpandValue}
+              compact={compact}
             />
           ))}
         </div>
@@ -574,6 +590,7 @@ export default function ModelTree({
   onNodeClick,
   onContextAction,
   className,
+  compact = false,
 }: ModelTreeProps) {
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId: string; label: string } | null>(null);
   const [forceExpandToken, setForceExpandToken] = useState(0);
@@ -642,6 +659,7 @@ export default function ModelTree({
           parentGuides={[]}
           forceExpandToken={forceExpandToken}
           forceExpandValue={forceExpandValue}
+          compact={compact}
         />
       ))}
 

@@ -1693,10 +1693,7 @@ pub(crate) fn build_interactive_command_stage(
             // Ensure that adaptive integrators always have a valid adaptive_timestep
             // (either from command.max_error above or inherited from base_problem).
             // If neither fixed_timestep nor adaptive_timestep is set, use defaults.
-            let is_adaptive_integrator = matches!(
-                integrator.as_str(),
-                "rk23" | "rk45"
-            );
+            let is_adaptive_integrator = matches!(integrator.as_str(), "rk23" | "rk45");
             if fixed_timestep.is_none() && adaptive_timestep.is_none() && is_adaptive_integrator {
                 *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
                     atol: 1e-6,

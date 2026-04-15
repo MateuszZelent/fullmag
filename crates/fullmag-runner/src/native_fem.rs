@@ -344,17 +344,13 @@ impl NativeFemBackend {
                 .map_or(0, |kernels| kernels.n_xx.len() as u64),
             initial_magnetization_xyz: m_flat.as_ptr(),
             initial_magnetization_len: m_flat.len() as u64,
-            dt_seconds: plan
-                .fixed_timestep
-                .or_else(|| {
-                    plan.adaptive_timestep
-                        .as_ref()
-                        .map(|a| a.dt_initial.unwrap_or(a.dt_min))
-                })
-                .ok_or_else(|| RunError {
-                    message: "native FEM: no fixed_timestep or adaptive_timestep specified"
-                        .to_string(),
-                })?,
+            dt_seconds: crate::resolve_initial_timestep(
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+            )
+            .ok_or_else(|| RunError {
+                message: "native FEM: no fixed_timestep or adaptive_timestep specified".to_string(),
+            })?,
             adaptive_config: std::ptr::null(),
             // F-05 fix: enable uniaxial anisotropy when ANY of the relevant
             // parameters are set (Ku, Ku2, Ku_field, Ku2_field).
@@ -572,7 +568,8 @@ impl NativeFemBackend {
                 Ok(ffi::fullmag_fem_adaptive_config {
                     atol: a.atol,
                     rtol: a.rtol,
-                    dt_initial: a.dt_initial.or(plan.fixed_timestep).unwrap_or(a.dt_min),
+                    dt_initial: crate::resolve_initial_timestep(plan.fixed_timestep, Some(a))
+                        .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL),
                     dt_min: a.dt_min,
                     dt_max: a.dt_max.unwrap_or(crate::DEFAULT_ADAPTIVE_DT_MAX),
                     safety: a.safety,
