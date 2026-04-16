@@ -38,7 +38,12 @@ pub(crate) fn resolve_api_port() -> Result<u16> {
             return Ok(port);
         }
     }
-    bail!("no free API port found in {:?}", CANDIDATE_API_PORTS)
+    allocate_ephemeral_api_port().with_context(|| {
+        format!(
+            "no free API port found in {:?}, and ephemeral loopback port allocation failed",
+            CANDIDATE_API_PORTS
+        )
+    })
 }
 
 pub(crate) fn init_api_port() -> Result<()> {
@@ -424,6 +429,15 @@ pub(crate) fn port_is_listening(port: u16) -> bool {
 
 pub(crate) fn port_is_bindable(port: u16) -> bool {
     std::net::TcpListener::bind((std::net::Ipv4Addr::from(LOOPBACK_V4_OCTETS), port)).is_ok()
+}
+
+fn allocate_ephemeral_api_port() -> Result<u16> {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::from(LOOPBACK_V4_OCTETS), 0))?;
+    let port = listener.local_addr()?.port();
+    if port == 0 {
+        bail!("kernel returned port 0 for loopback API listener probe");
+    }
+    Ok(port)
 }
 
 fn frontend_is_ready(port: u16) -> bool {

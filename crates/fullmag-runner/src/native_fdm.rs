@@ -592,6 +592,10 @@ impl NativeFdmBackend {
             .ok_or_else(|| self.last_error_or("step interrupted without an interrupt signal"))
     }
 
+    pub fn stage_completion(&self) -> Result<Option<fullmag_ir::StageCompletionIR>, RunError> {
+        Ok(None)
+    }
+
     /// Copy a field observable from device to host as [f64; 3] AoS.
     pub fn copy_field(
         &self,

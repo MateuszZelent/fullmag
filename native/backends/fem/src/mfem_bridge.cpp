@@ -1564,18 +1564,16 @@ bool compute_effective_fields_for_magnetization_impl(
         }
         if (refresh_demag) {
             if ((ctx.demag_realization == 1 || ctx.demag_realization == 2) && ctx.poisson_ready) {
-                // Native FEM demag: Poisson–Dirichlet (1) or Poisson–Robin (2)
+                // Native FEM demag: Poisson-Dirichlet (1) or Poisson-Robin (2)
                 if (!context_compute_demag_poisson(
                         ctx, m_xyz, h_demag_xyz, demag, allow_interrupt, error)) {
                     return false;
                 }
             } else {
-                // Bootstrap transfer-grid demag: FEM→FDM rasterisation + tensor-FFT
-                if (!compute_demag_for_magnetization(
-                        ctx, m_xyz, h_demag_xyz, demag, allow_interrupt, error))
-                {
-                    return false;
-                }
+                error =
+                    "Native FEM demag requires a Poisson airbox realization, but the Poisson "
+                    "demag operator is not ready";
+                return false;
             }
             ctx.h_demag_cached_xyz = h_demag_xyz;
             ctx.h_demag_cached_visual_xyz = ctx.h_demag_visual_xyz;

@@ -20,8 +20,18 @@ echo "[export_fem_gpu_runtime] building fullmag-cli with cuda fem-gpu release fe
 FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -p fullmag-cli --features "cuda fem-gpu" --release >/tmp/fullmag-build.log
 echo "[export_fem_gpu_runtime] copying launcher binary"
 cp -f target/release/fullmag .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin
-FEM_LIB=$(dirname "$(find target/release/build -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" | head -n1)")
-FDM_LIB=$(dirname "$(find target/release/build -path "*fullmag-fdm-sys*/out/native-build/backends/fdm/libfullmag_fdm.so.0" | head -n1)")
+latest_native_lib_dir() {
+  local pattern="$1"
+  local selected
+  selected="$(find target/release/build -path "$pattern" -printf "%T@ %p\n" | sort -nr | head -n1 | cut -d" " -f2-)"
+  if [ -z "$selected" ]; then
+    echo "[export_fem_gpu_runtime] failed to locate native library matching pattern: $pattern" >&2
+    exit 1
+  fi
+  dirname "$selected"
+}
+FEM_LIB="$(latest_native_lib_dir "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0")"
+FDM_LIB="$(latest_native_lib_dir "*fullmag-fdm-sys*/out/native-build/backends/fdm/libfullmag_fdm.so.0")"
 echo "[export_fem_gpu_runtime] bundling FEM and FDM native libraries"
 cp -a "$FEM_LIB"/libfullmag_fem.so* .fullmag/runtimes/fem-gpu-host/lib/
 cp -a "$FDM_LIB"/libfullmag_fdm.so* .fullmag/runtimes/fem-gpu-host/lib/
