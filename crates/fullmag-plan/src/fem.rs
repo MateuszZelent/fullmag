@@ -705,10 +705,21 @@ pub(crate) fn plan_fem(
         .map(|frame| frame.with_mesh_bounds(mesh_bounds(&mesh)))
         .and_then(DomainFrameIR::finalized);
 
-    // S07: Auto-resolve demag realization (Poisson-only contract).
+    // S07: Auto-resolve demag realization.
+    // Phase-1A: normalize legacy variants and reject unimplemented models.
+    let demag_realization = demag_realization.normalized();
+    if !demag_realization.is_implemented() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "Demag model '{}' is not yet implemented. Currently supported: airbox.",
+                demag_realization.model_name(),
+            )],
+        });
+    }
+
     let resolved_demag_realization: Option<fullmag_ir::ResolvedFemDemagIR> = if enable_demag {
         let has_air_elements = mesh.element_markers.iter().any(|&m| m == 0);
-        if !has_air_elements {
+        if demag_realization.requires_airbox() && !has_air_elements {
             return Err(PlanError {
                 reasons: vec![format!(
                     "{} The resolved FEM mesh has no air elements.",
@@ -724,6 +735,16 @@ pub(crate) fn plan_fem(
                 fullmag_ir::ResolvedFemDemagIR::PoissonRobin
             }
             fullmag_ir::RequestedFemDemagIR::Auto => fullmag_ir::ResolvedFemDemagIR::PoissonRobin,
+            // Unimplemented models are already rejected above.
+            fullmag_ir::RequestedFemDemagIR::Bem => {
+                fullmag_ir::ResolvedFemDemagIR::Bem
+            }
+            fullmag_ir::RequestedFemDemagIR::FredkinKoehler => {
+                fullmag_ir::ResolvedFemDemagIR::FredkinKoehler
+            }
+            fullmag_ir::RequestedFemDemagIR::Fmm => {
+                fullmag_ir::ResolvedFemDemagIR::Fmm
+            }
         })
     } else {
         None
@@ -740,6 +761,21 @@ pub(crate) fn plan_fem(
         resolved_demag_realization,
         air_box_config.as_ref(),
     );
+
+    // Phase-0C: enforce P1-only constraint.
+    // The native FEM backend currently supports only first-order (P1) H1
+    // finite elements (it asserts GetNDofs() == n_nodes).  Reject higher
+    // orders at the planner level with a clear error.
+    if fem_hints.order != 1 {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "FEM backend currently supports only first-order (P1) elements \
+                 (fe_order = 1). Requested fe_order = {}. Higher-order support is \
+                 planned but not yet implemented.",
+                fem_hints.order,
+            )],
+        });
+    }
 
     let mut fem_plan = FemPlanIR {
         mesh_name: mesh_name.clone(),
@@ -1450,9 +1486,20 @@ pub(crate) fn plan_fem_eigen(
         .map(|frame| frame.with_mesh_bounds(mesh_bounds(&mesh)))
         .and_then(DomainFrameIR::finalized);
 
+    // Phase-1A: normalize and reject unimplemented models (eigen path).
+    let demag_realization = demag_realization.normalized();
+    if !demag_realization.is_implemented() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "Demag model '{}' is not yet implemented. Currently supported: airbox.",
+                demag_realization.model_name(),
+            )],
+        });
+    }
+
     let resolved_demag_realization: Option<fullmag_ir::ResolvedFemDemagIR> = if enable_demag {
         let has_air_elements = mesh.element_markers.iter().any(|&m| m == 0);
-        if !has_air_elements {
+        if demag_realization.requires_airbox() && !has_air_elements {
             return Err(PlanError {
                 reasons: vec![format!(
                     "{} The resolved FEM mesh has no air elements.",
@@ -1468,12 +1515,33 @@ pub(crate) fn plan_fem_eigen(
                 fullmag_ir::ResolvedFemDemagIR::PoissonRobin
             }
             fullmag_ir::RequestedFemDemagIR::Auto => fullmag_ir::ResolvedFemDemagIR::PoissonRobin,
+            fullmag_ir::RequestedFemDemagIR::Bem => {
+                fullmag_ir::ResolvedFemDemagIR::Bem
+            }
+            fullmag_ir::RequestedFemDemagIR::FredkinKoehler => {
+                fullmag_ir::ResolvedFemDemagIR::FredkinKoehler
+            }
+            fullmag_ir::RequestedFemDemagIR::Fmm => {
+                fullmag_ir::ResolvedFemDemagIR::Fmm
+            }
         })
     } else {
         None
     };
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
+    }
+
+    // Phase-0C: enforce P1-only constraint (eigen path).
+    if fem_hints.order != 1 {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "FEM backend currently supports only first-order (P1) elements \
+                 (fe_order = 1). Requested fe_order = {}. Higher-order support is \
+                 planned but not yet implemented.",
+                fem_hints.order,
+            )],
+        });
     }
 
     let fem_plan = FemEigenPlanIR {

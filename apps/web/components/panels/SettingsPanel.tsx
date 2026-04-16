@@ -147,7 +147,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
       : null;
 
   const showFullFemContext = () => {
-    viewport.setViewMode("3D");
+    viewport.handleViewModeChange("3D");
     model.setObjectViewMode("context");
     model.setMeshEntityViewState((prev) => {
       const next = { ...prev };
@@ -162,7 +162,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
 
   const isolateSelectedObject = () => {
     if (!model.selectedObjectId) return;
-    viewport.setViewMode("3D");
+    viewport.handleViewModeChange("3D");
     model.setObjectViewMode("isolate");
     model.setMeshEntityViewState((prev) => {
       const next = { ...prev };
@@ -183,7 +183,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
 
   const isolateAirbox = () => {
     const airPartId = model.airPart?.id ?? null;
-    viewport.setViewMode("3D");
+    viewport.handleViewModeChange("3D");
     model.setObjectViewMode("isolate");
     model.setSelectedEntityId(airPartId);
     model.setFocusedEntityId(airPartId);
@@ -284,12 +284,12 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
               </div>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              <Button
-                size="sm"
-                variant="outline"
-                type="button"
-                onClick={() => {
-                  viewport.setViewMode("3D");
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  onClick={() => {
+                  viewport.handleViewModeChange("3D");
                   model.requestFocusObject(model.selectedObjectId!);
                 }}
               >

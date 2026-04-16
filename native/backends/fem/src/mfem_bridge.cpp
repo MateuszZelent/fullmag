@@ -144,20 +144,45 @@ const char *configured_mfem_device_string(const Context &ctx) {
     return configured_mfem_device_string();
 }
 
-bool mfem_device_requests_gpu() {
-    const char *device = configured_mfem_device_string();
+// Phase-0B fix: classify MFEM device strings into GPU-like and CPU-like
+// families instead of treating everything ≠ "cpu" as GPU.
+bool is_gpu_device_string(const char *device) {
     if (device == nullptr || *device == '\0') {
+        return true; // default: GPU
+    }
+    // Known GPU-like device strings
+    if (std::strcmp(device, "cuda") == 0 ||
+        std::strcmp(device, "hip") == 0 ||
+        std::strncmp(device, "raja-cuda", 9) == 0 ||
+        std::strncmp(device, "raja-hip", 8) == 0 ||
+        std::strncmp(device, "occa-cuda", 9) == 0 ||
+        std::strncmp(device, "ceed-cuda", 9) == 0 ||
+        std::strncmp(device, "ceed/cuda", 9) == 0 ||
+        std::strstr(device, "/gpu/") != nullptr) {
         return true;
     }
-    return std::strcmp(device, "cpu") != 0;
+    // Known CPU-like device strings
+    if (std::strcmp(device, "cpu") == 0 ||
+        std::strcmp(device, "omp") == 0 ||
+        std::strncmp(device, "ceed-cpu", 8) == 0 ||
+        std::strncmp(device, "ceed/cpu", 8) == 0 ||
+        std::strncmp(device, "ceed-omp", 8) == 0 ||
+        std::strncmp(device, "ceed/omp", 8) == 0 ||
+        std::strncmp(device, "raja-omp", 8) == 0) {
+        return false;
+    }
+    // Unknown device string — assume GPU to preserve existing behavior.
+    return true;
+}
+
+bool mfem_device_requests_gpu() {
+    const char *device = configured_mfem_device_string();
+    return is_gpu_device_string(device);
 }
 
 bool mfem_device_requests_gpu(const Context &ctx) {
     const char *device = configured_mfem_device_string(ctx);
-    if (device == nullptr || *device == '\0') {
-        return true;
-    }
-    return std::strcmp(device, "cpu") != 0;
+    return is_gpu_device_string(device);
 }
 
 bool env_flag_enabled(const char *name) {
@@ -1588,6 +1613,11 @@ bool compute_effective_fields_for_magnetization_impl(
                 ctx.h_demag_visual_xyz.clear();
             }
             demag = demag_energy_from_field(ctx, m_xyz, h_demag_xyz);
+            // Phase-0A fix: include the cached Robin boundary energy term
+            // so that E_demag is energetically consistent between fresh and
+            // frozen-field steps.  The potential u is frozen together with
+            // H_demag, so the boundary integral is also frozen.
+            demag += ctx.cached_robin_boundary_energy;
         }
         if (allow_interrupt && poll_interrupt(ctx)) {
             return false;
@@ -2215,6 +2245,9 @@ bool recover_demag_field(
     // Robin BC correction: E_bdr = (μ₀/2) · β · ∫_Γ u² dS
     // This additional term accounts for the potential energy stored at the
     // open boundary when using the Robin approximation.
+    // Cache it separately so that frozen-field energy updates (when
+    // field_refresh skips a Poisson solve) can include this term.
+    ctx.cached_robin_boundary_energy = 0.0;
     if (ctx.demag_realization == 2 /* AIRBOX_ROBIN */ &&
         ctx.robin_effective_beta > 0.0 &&
         ctx.mfem_boundary_mass != nullptr) {
@@ -2222,7 +2255,9 @@ bool recover_demag_field(
             static_cast<mfem::BilinearForm *>(ctx.mfem_boundary_mass);
         mfem::Vector Bu(gf_u.Size());
         bdr_mass->SpMat().Mult(gf_u, Bu);
-        demag_energy += 0.5 * kMu0 * ctx.robin_effective_beta * (gf_u * Bu);
+        ctx.cached_robin_boundary_energy =
+            0.5 * kMu0 * ctx.robin_effective_beta * (gf_u * Bu);
+        demag_energy += ctx.cached_robin_boundary_energy;
     }
 
     debug_checkpoint("context_compute_demag_poisson:recover_done");
@@ -2267,8 +2302,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
 #if FULLMAG_HAS_CUDA_RUNTIME
         // FEM-030: use plan override > env var > compiled default.
         const char *device_config = configured_mfem_device_string(ctx);
-        const bool use_gpu_device = (device_config != nullptr &&
-                                     std::strcmp(device_config, "cpu") != 0);
+        const bool use_gpu_device = is_gpu_device_string(device_config);
         if (use_gpu_device) {
             // FEM-029: honour explicit gpu_device_index from the plan; fall
             // back to the env-var path, then to device 0.
@@ -2309,8 +2343,12 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
             ctx.compute_event = reinterpret_cast<void *>(ev);
         } else {
             configure_cpu_openmp_runtime(ctx);
-            std::call_once(s_mfem_device_once, [&ctx]() {
-                ctx.mfem_device = new mfem::Device("cpu");
+            // Phase-0B fix: pass the original host device string (e.g. "omp",
+            // "ceed-cpu") to MFEM instead of hard-coding "cpu".
+            const char *host_device = (device_config != nullptr && *device_config != '\0')
+                ? device_config : "cpu";
+            std::call_once(s_mfem_device_once, [&ctx, host_device]() {
+                ctx.mfem_device = new mfem::Device(host_device);
             });
             ctx.mfem_selected_device_index = -1;
             log_cpu_runtime_selection(ctx);

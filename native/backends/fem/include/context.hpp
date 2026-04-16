@@ -162,6 +162,12 @@ struct Context {
     bool demag_cache_valid = false;
     double demag_last_refresh_time = -1.0;
 
+    // Cached Robin boundary energy term: +μ₀/2 β ∫_Γ u² dS.
+    // Stored during each fresh Poisson solve so that frozen-field energy
+    // updates (when field_refresh skips a solve) can include this term
+    // without re-solving the Poisson system.
+    double cached_robin_boundary_energy = 0.0;
+
     // ── Oersted field (cylindrical conductor) ──
     bool has_oersted_cylinder = false;
     double oersted_current = 0.0;
@@ -331,6 +337,14 @@ const ExplicitTableau &tableau_for_integrator(fullmag_fem_integrator integrator)
 void stepper_workspace_allocate(StepperWorkspace &ws, size_t dof_len, int stages);
 bool context_initialize_poisson(Context &ctx, std::string &error);
 void context_destroy_poisson(Context &ctx);
+
+// MFEM device classification helpers (defined in mfem_bridge.cpp)
+const char *configured_mfem_device_string();
+const char *configured_mfem_device_string(const Context &ctx);
+bool is_gpu_device_string(const char *device);
+bool mfem_device_requests_gpu();
+bool mfem_device_requests_gpu(const Context &ctx);
+
 bool context_compute_demag_poisson(
     Context &ctx,
     const std::vector<double> &m_xyz,

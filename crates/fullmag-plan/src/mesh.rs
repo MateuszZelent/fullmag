@@ -936,6 +936,8 @@ pub(crate) fn build_air_box_config(
     let bc_kind = match resolved_demag_realization {
         Some(fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet) => "dirichlet",
         Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin) => "robin",
+        // Non-airbox models (BEM/FK/FMM) don't need an air-box config.
+        Some(r) if !r.requires_airbox() => return Ok(None),
         _ => return Ok(None),
     };
 

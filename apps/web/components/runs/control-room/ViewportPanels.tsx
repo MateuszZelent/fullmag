@@ -395,6 +395,50 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     } as typeof ctx.femMeshData;
   }, [ctx.femMeshData, scaleFactor]);
 
+  const viewportFitSeed = useMemo(() => {
+    const sampleKey = scaledFemMeshData
+      ? `${scaledFemMeshData.nNodes}:${scaledFemMeshData.nElements}:${scaledFemMeshData.boundaryFaces.length}`
+      : "none";
+    return [
+      effectiveViewMode,
+      ctx.femTopologyKey ?? "no-topology",
+      sampleKey,
+      ctx.objectViewMode,
+      ctx.selectedObjectId ?? "none",
+      ctx.focusedEntityId ?? "none",
+      ctx.airMeshVisible ? "air:on" : "air:off",
+      String(ctx.airMeshOpacity),
+      ctx.selectedSidebarNodeId ?? "none",
+      ctx.worldExtent ? ctx.worldExtent.join("|") : "no-extent",
+      ctx.worldCenter ? ctx.worldCenter.join("|") : "no-center",
+      ctx.focusObjectRequest?.objectId ?? "none",
+      String(ctx.focusObjectRequest?.revision ?? 0),
+      selectedSubmeshesToolboxOpen ? "submesh-open" : "submesh-closed",
+      selectedFemObjectId ?? "none",
+      ctx.requestedPreviewQuantity ?? "none",
+      String(ctx.previewGrid?.[0] ?? 0),
+      String(ctx.previewGrid?.[1] ?? 0),
+      String(ctx.previewGrid?.[2] ?? 0),
+    ].join("|");
+  }, [
+    scaledFemMeshData,
+    effectiveViewMode,
+    ctx.airMeshOpacity,
+    ctx.airMeshVisible,
+    ctx.femTopologyKey,
+    ctx.focusedEntityId,
+    ctx.objectViewMode,
+    ctx.focusObjectRequest,
+    ctx.previewGrid,
+    ctx.requestedPreviewQuantity,
+    ctx.selectedObjectId,
+    ctx.selectedSidebarNodeId,
+    ctx.worldCenter,
+    ctx.worldExtent,
+    selectedFemObjectId,
+    selectedSubmeshesToolboxOpen,
+  ]);
+
 
   /* ── Determine which viewport is active ── */
   const isFdm3DActive =
@@ -422,8 +466,9 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         <ViewportErrorBoundary label="Minimal FEM Wireframe Viewport">
           <FemMeshView3D
             topologyKey={ctx.femTopologyKey ?? undefined}
-            meshData={ctx.femMeshData}
+            meshData={scaledFemMeshData ?? ctx.femMeshData}
             selectedSidebarNodeId={ctx.selectedSidebarNodeId}
+            viewportFitSeed={viewportFitSeed}
             colorField="none"
             toolbarMode={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showToolbar ? "visible" : "hidden"}
             renderMode={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe ? "wireframe" : ctx.meshRenderMode}
@@ -557,6 +602,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         topologyKey={ctx.femTopologyKey ?? undefined}
         meshData={scaledFemMeshData!}
         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
+        viewportFitSeed={viewportFitSeed}
         quantityId={ctx.requestedPreviewQuantity}
         quantityOptions={femQuantityOptions}
         colorField="none"
@@ -621,6 +667,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         topologyKey={ctx.femTopologyKey ?? undefined}
         meshData={scaledFemMeshData!}
         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
+        viewportFitSeed={viewportFitSeed}
         fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
         quantityId={ctx.requestedPreviewQuantity}
         quantityOptions={femQuantityOptions}
@@ -872,6 +919,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                         topologyKey={ctx.femTopologyKey ?? undefined}
                         meshData={scaledFemMeshData!}
                         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
+                        viewportFitSeed={viewportFitSeed}
                         quantityId={ctx.requestedPreviewQuantity}
                         quantityOptions={femQuantityOptions}
                         colorField="none"
@@ -935,6 +983,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                         topologyKey={ctx.femTopologyKey ?? undefined}
                         meshData={scaledFemMeshData!}
                         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
+                        viewportFitSeed={viewportFitSeed}
                         fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
                         quantityId={ctx.requestedPreviewQuantity}
                         quantityOptions={femQuantityOptions}
@@ -1111,7 +1160,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
               type="button"
               className="pointer-events-auto rounded-full border border-warning/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-warning shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md transition-colors hover:bg-warning/20"
               onClick={() => {
-                ctx.setViewMode("3D");
+                ctx.handleViewModeChange("3D");
                 ctx.requestFocusObject(selectedFemObjectId);
               }}
             >
@@ -1142,7 +1191,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             type="button"
             className="pointer-events-auto rounded-full border border-warning/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-warning shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md transition-colors hover:bg-warning/20"
             onClick={() => {
-              ctx.setViewMode("3D");
+              ctx.handleViewModeChange("3D");
               ctx.requestFocusObject(ctx.selectedObjectId!);
             }}
           >

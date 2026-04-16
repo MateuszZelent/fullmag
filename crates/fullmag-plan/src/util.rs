@@ -43,11 +43,8 @@ pub(crate) fn shared_domain_mesh_requested(
         return true;
     }
 
-    if matches!(
-        requested_demag_realization,
-        fullmag_ir::RequestedFemDemagIR::PoissonDirichlet
-            | fullmag_ir::RequestedFemDemagIR::PoissonRobin
-    ) {
+    // Phase-1A: use the `requires_airbox()` method for the canonical check.
+    if requested_demag_realization.requires_airbox() {
         return true;
     }
 

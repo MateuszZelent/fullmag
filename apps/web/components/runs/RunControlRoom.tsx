@@ -540,7 +540,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 
   const handleAssignMagnetizationPreset = useCallback(
     (objectId: string, kind: MagneticPresetKind) => {
-      ctx.setViewMode("3D");
+      ctx.handleViewModeChange("3D");
       ctx.setSelectedObjectId(objectId);
       ctx.setSelectedSidebarNodeId(`mag-${objectId}`);
       ctx.setActiveTransformScope("texture");
@@ -572,7 +572,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 
   const handleSetTextureTransformMode = useCallback(
     (objectId: string, mode: "translate" | "rotate" | "scale") => {
-      ctx.setViewMode("3D");
+      ctx.handleViewModeChange("3D");
       ctx.setSelectedObjectId(objectId);
       ctx.setSelectedSidebarNodeId(`mag-${objectId}-transform`);
       ctx.setActiveTransformScope("texture");

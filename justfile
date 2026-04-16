@@ -17,10 +17,19 @@ ensure-python:
 
 build target="fullmag" cpu_only="0":
     target="{{target}}"
-    if [[ "$target" == target=* ]]; then target="${target#target=}"; fi
-    if [ "$target" = "fullmag" ]; then FULLMAG_BUILD_CPU_ONLY="{{cpu_only}}" make install-cli; \
-    elif [ "$target" = "fullmag-static" ]; then FULLMAG_BUILD_CPU_ONLY="{{cpu_only}}" make install-cli-static; \
-    elif [ "$target" = "fullmag-dev" ]; then FULLMAG_BUILD_CPU_ONLY="{{cpu_only}}" make install-cli-dev; \
+    cpu_only="{{cpu_only}}"
+    case "$target" in
+      target=*) target="${target#target=}" ;;
+      --target=*) target="${target#--target=}" ;;
+    esac
+    case "$cpu_only" in
+      1|true|TRUE|on|ON|yes|YES|y|Y) cpu_only="1" ;;
+      0|false|FALSE|off|OFF|no|NO|n|N|"") cpu_only="0" ;;
+      *) cpu_only="0" ;;
+    esac
+    if [ "$target" = "fullmag" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli; \
+    elif [ "$target" = "fullmag-static" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-static; \
+    elif [ "$target" = "fullmag-dev" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-dev; \
     elif [ "$target" = "fullmag-host" ]; then make install-cli; \
     elif [ "$target" = "dev-image" ]; then docker compose build dev; \
     elif [ "$target" = "fem-gpu-runtime" ]; then docker compose --profile fem-gpu build fem-gpu; \

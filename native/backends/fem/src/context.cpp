@@ -917,20 +917,25 @@ int context_upload_magnetization_f64(
 void context_populate_device_info(Context &ctx) {
     std::memset(&ctx.device_info_cache, 0, sizeof(ctx.device_info_cache));
 #if FULLMAG_HAS_MFEM_STACK
-    // FND-007: backend name reflects the actual demag realization in use
+    // FND-007: backend name reflects the actual demag realization in use.
+    // Phase-0D fix: use device-aware prefix instead of hard-coding "cuda".
+    const char *mfem_dev = configured_mfem_device_string(ctx);
+    const bool on_gpu = is_gpu_device_string(mfem_dev);
+    const char *dev_tag = on_gpu ? "gpu" : "cpu";
+
     std::string backend_name;
     if (ctx.mfem_exchange_ready) {
         if (!ctx.enable_demag) {
-            backend_name = "mfem_cuda_exchange_ready";
+            backend_name = std::string("mfem_") + dev_tag + "_exchange_ready";
         } else if (ctx.demag_realization == 1) {
-            backend_name = "mfem_cuda_native_poisson_dirichlet_demag";
+            backend_name = std::string("mfem_") + dev_tag + "_native_poisson_dirichlet_demag";
         } else if (ctx.demag_realization == 2) {
-            backend_name = "mfem_cuda_native_poisson_robin_demag";
+            backend_name = std::string("mfem_") + dev_tag + "_native_poisson_robin_demag";
         } else {
-            backend_name = "mfem_cuda_unknown_demag_realization";
+            backend_name = std::string("mfem_") + dev_tag + "_unknown_demag_realization";
         }
     } else if (ctx.mfem_ready) {
-        backend_name = "mfem_cuda_mesh_ready";
+        backend_name = std::string("mfem_") + dev_tag + "_mesh_ready";
     } else {
         backend_name = "mfem_stack_uninitialized";
     }
@@ -956,7 +961,7 @@ void context_populate_device_info(Context &ctx) {
         ctx.device_info_cache.name,
         backend_name.c_str(),
         sizeof(ctx.device_info_cache.name) - 1);
-    ctx.device_info_cache.is_gpu_enabled = 1;
+    ctx.device_info_cache.is_gpu_enabled = on_gpu ? 1 : 0;
 #else
     std::strncpy(
         ctx.device_info_cache.name,

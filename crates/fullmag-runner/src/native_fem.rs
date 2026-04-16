@@ -295,6 +295,16 @@ impl NativeFemBackend {
                 fullmag_ir::ResolvedFemDemagIR::PoissonRobin => {
                     ffi::fullmag_fem_demag_realization::FULLMAG_FEM_DEMAG_AIRBOX_ROBIN
                 }
+                fullmag_ir::ResolvedFemDemagIR::Bem
+                | fullmag_ir::ResolvedFemDemagIR::FredkinKoehler
+                | fullmag_ir::ResolvedFemDemagIR::Fmm => {
+                    return Err(RunError {
+                        message: format!(
+                            "native FEM runner: demag model '{}' is not yet implemented in the backend",
+                            resolved_demag_realization.model_name(),
+                        ),
+                    });
+                }
             },
             poisson_boundary_marker: plan
                 .air_box_config

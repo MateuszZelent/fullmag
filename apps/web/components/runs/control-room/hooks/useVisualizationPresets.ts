@@ -64,6 +64,7 @@ export interface UseVisualizationPresetsParams {
 
   /* Data-plane cache for fast-path quantity switching */
   cachedFieldQuantities: ReadonlySet<string>;
+  handleViewModeChange: (mode: string) => void;
 
   /* Preset data */
   projectVisualizationPresets: VisualizationPreset[];
@@ -83,7 +84,6 @@ export interface UseVisualizationPresetsParams {
 
   /* Setters for apply */
   setSelectedQuantity: Dispatch<SetStateAction<string>>;
-  setViewMode: Dispatch<SetStateAction<ViewportMode>>;
   setComponent: Dispatch<SetStateAction<VectorComponent>>;
   setPlane: Dispatch<SetStateAction<SlicePlane>>;
   setSliceIndex: Dispatch<SetStateAction<number>>;
@@ -139,6 +139,7 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
     sliceIndex,
     selectedQuantity,
     cachedFieldQuantities,
+    handleViewModeChange,
     projectVisualizationPresets,
     localVisualizationPresets,
     activeVisualizationPresetRef,
@@ -148,7 +149,6 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
     setLocalVisualizationPresets,
     setActiveVisualizationPresetRef,
     setSelectedQuantity,
-    setViewMode,
     setComponent,
     setPlane,
     setSliceIndex,
@@ -460,12 +460,12 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
         }
       }
       if (preset.mode === "2D") {
-        setViewMode("2D");
+        handleViewModeChange("2D");
         setComponent(preset.two_d.component);
         setPlane(preset.two_d.plane);
         setSliceIndex(Math.max(0, Math.trunc(preset.two_d.slice_index)));
       } else {
-        setViewMode("3D");
+        handleViewModeChange("3D");
       }
 
       if (isFemBackend && preset.domain === "fem") {
@@ -520,7 +520,9 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
     [
       isFemBackend,
       localVisualizationPresets,
+      handleViewModeChange,
       previewControlsActive,
+      cachedFieldQuantities,
       projectVisualizationPresets,
       requestedPreviewMaxPoints,
       selectedQuantity,

@@ -80,6 +80,34 @@ export interface RibbonCommandContext {
   onAddResultAnalysis?: (kind: ResultAnalysisKind) => void;
 }
 
+type CanonicalViewportMode = "3D" | "2D" | "Mesh" | "Analyze" | "charts";
+
+function normalizeViewportMode(mode: string | undefined | null): CanonicalViewportMode | null {
+  if (typeof mode !== "string") {
+    return null;
+  }
+  const normalized = mode.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "3d") {
+    return "3D";
+  }
+  if (normalized === "2d") {
+    return "2D";
+  }
+  if (normalized === "mesh") {
+    return "Mesh";
+  }
+  if (normalized === "analyze") {
+    return "Analyze";
+  }
+  if (normalized === "charts" || normalized === "chart") {
+    return "charts";
+  }
+  return null;
+}
+
 export type RibbonCommand =
   | { id: "geometry.add-preset"; preset: GeometryPresetKind }
   | { id: "navigation.select-node"; nodeId: string }
@@ -148,7 +176,7 @@ export function canExecuteRibbonCommand(
     case "navigation.select-node":
       return typeof ctx.onSelectModelNode === "function";
     case "viewport.set-mode":
-      return typeof ctx.onViewChange === "function";
+      return typeof ctx.onViewChange === "function" && normalizeViewportMode(command.mode) !== null;
     case "visualization.create-preset":
       return typeof ctx.onCreateVisualizationPreset === "function";
     case "viewport.toggle-sidebar":
@@ -222,7 +250,7 @@ export function executeRibbonCommand(
       ctx.onSelectModelNode?.(command.nodeId);
       return;
     case "viewport.set-mode":
-      ctx.onViewChange?.(command.mode);
+      ctx.onViewChange?.(normalizeViewportMode(command.mode) ?? "Analyze");
       return;
     case "visualization.create-preset":
       ctx.onCreateVisualizationPreset?.();

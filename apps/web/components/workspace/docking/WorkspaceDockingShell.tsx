@@ -166,9 +166,11 @@ export default function WorkspaceDockingShell() {
       }
       if (component === "dock-center") {
         return (
-          <div className="h-full min-h-0 min-w-0 overflow-hidden">
-            <DockCenterTabs />
-          </div>
+          <TooltipProvider delayDuration={250}>
+            <div className="h-full min-h-0 min-w-0 overflow-hidden">
+              <DockCenterTabs />
+            </div>
+          </TooltipProvider>
         );
       }
       if (component === "dock-right") {

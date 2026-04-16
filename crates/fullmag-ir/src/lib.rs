@@ -2258,15 +2258,66 @@ pub enum FemDomainMeshModeIR {
 ///
 /// `Auto` lets the planner choose a Poisson realization based on
 /// shared-domain mesh metadata and explicit boundary policy.
+///
+/// Phase-1A: extended to multi-model hierarchy. The serde representation
+/// stays as simple strings for backward compatibility with existing Python
+/// scripts. The model concept (airbox/BEM/FK/FMM) is expressed through the
+/// variant names. BEM/FK/FMM are new variants that will be rejected by the
+/// planner as unimplemented.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestedFemDemagIR {
     #[default]
     Auto,
+    /// Airbox Poisson with u=0 BC (COMSOL Dirichlet style).
     #[serde(alias = "airbox_dirichlet")]
     PoissonDirichlet,
-    #[serde(alias = "poisson_airbox", alias = "airbox_robin")]
+    /// Airbox Poisson with Robin BC (default airbox variant).
+    #[serde(alias = "poisson_airbox", alias = "airbox_robin", alias = "airbox")]
     PoissonRobin,
+    /// Boundary Element Method (tetmag-style). Body-only mesh.
+    /// Not yet implemented — planner will reject.
+    Bem,
+    /// Fredkin–Koehler FEM/BEM hybrid (TetraX-style). Body-only mesh.
+    /// Not yet implemented — planner will reject.
+    FredkinKoehler,
+    /// Fast Multipole Method. Body-only mesh.
+    /// Not yet implemented — planner will reject.
+    Fmm,
+}
+
+impl RequestedFemDemagIR {
+    /// Whether this request requires a shared-domain mesh with air elements.
+    pub fn requires_airbox(&self) -> bool {
+        match self {
+            Self::Auto | Self::PoissonDirichlet | Self::PoissonRobin => true,
+            Self::Bem | Self::FredkinKoehler | Self::Fmm => false,
+        }
+    }
+
+    /// Whether this demag model is currently implemented.
+    pub fn is_implemented(&self) -> bool {
+        match self {
+            Self::Auto | Self::PoissonDirichlet | Self::PoissonRobin => true,
+            Self::Bem | Self::FredkinKoehler | Self::Fmm => false,
+        }
+    }
+
+    /// User-facing model name.
+    pub fn model_name(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::PoissonDirichlet | Self::PoissonRobin => "airbox",
+            Self::Bem => "bem",
+            Self::FredkinKoehler => "fredkin_koehler",
+            Self::Fmm => "fmm",
+        }
+    }
+
+    /// Normalize: identity (no legacy aliases to collapse in the flat enum).
+    pub fn normalized(self) -> Self {
+        self
+    }
 }
 
 /// Planner-resolved FEM demagnetization realization. No `Auto` variant —
@@ -2278,6 +2329,12 @@ pub enum ResolvedFemDemagIR {
     PoissonDirichlet,
     #[serde(alias = "poisson_airbox", alias = "airbox_robin")]
     PoissonRobin,
+    /// Future: BEM-resolved (not yet implemented).
+    Bem,
+    /// Future: Fredkin–Koehler-resolved (not yet implemented).
+    FredkinKoehler,
+    /// Future: FMM-resolved (not yet implemented).
+    Fmm,
 }
 
 impl ResolvedFemDemagIR {
@@ -2286,17 +2343,40 @@ impl ResolvedFemDemagIR {
         match self {
             Self::PoissonDirichlet => "fem_poisson_dirichlet",
             Self::PoissonRobin => "fem_poisson_robin",
+            Self::Bem => "fem_bem",
+            Self::FredkinKoehler => "fem_fredkin_koehler",
+            Self::Fmm => "fem_fmm",
         }
     }
 
     /// Whether this realization uses a Poisson-based airbox solver.
     pub fn is_poisson(&self) -> bool {
-        true
+        matches!(self, Self::PoissonDirichlet | Self::PoissonRobin)
     }
 
     /// Whether this realization uses Robin boundary conditions.
     pub fn is_robin(&self) -> bool {
         matches!(self, Self::PoissonRobin)
+    }
+
+    /// Whether this realization requires a shared-domain mesh with air.
+    pub fn requires_airbox(&self) -> bool {
+        matches!(self, Self::PoissonDirichlet | Self::PoissonRobin)
+    }
+
+    /// Whether this realization is currently implemented in the backend.
+    pub fn is_implemented(&self) -> bool {
+        matches!(self, Self::PoissonDirichlet | Self::PoissonRobin)
+    }
+
+    /// User-facing model name.
+    pub fn model_name(&self) -> &'static str {
+        match self {
+            Self::PoissonDirichlet | Self::PoissonRobin => "airbox",
+            Self::Bem => "bem",
+            Self::FredkinKoehler => "fredkin_koehler",
+            Self::Fmm => "fmm",
+        }
     }
 }
 

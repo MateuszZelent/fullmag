@@ -681,7 +681,7 @@ export default function RunSidebar() {
         vp.requestPreviewQuantity(defaultFieldQuantity);
       }
       if (cmd.isFemBackend && vp.effectiveViewMode === "Mesh") {
-        vp.setViewMode("3D");
+        vp.handleViewModeChange("3D");
       }
       return;
     }
@@ -718,7 +718,7 @@ export default function RunSidebar() {
       case "geometry":
       case "objects":
         if (cmd.isFemBackend && !model.effectiveFemMesh) model.openFemMeshWorkspace("mesh");
-        else vp.setViewMode("3D");
+        else vp.handleViewModeChange("3D");
         return;
       case "mesh":
       case "mesh-view":
@@ -746,7 +746,7 @@ export default function RunSidebar() {
         return;
       }
       case "results": case "res-fields":
-        if (cmd.isFemBackend && vp.effectiveViewMode === "Mesh") vp.setViewMode("3D");
+        if (cmd.isFemBackend && vp.effectiveViewMode === "Mesh") vp.handleViewModeChange("3D");
         return;
       case "antennas":
         // Show the inspector with AntennaPanel
@@ -758,7 +758,7 @@ export default function RunSidebar() {
           if (vp.quickPreviewTargets.some((t) => t.id === "H_ant" && t.available)) {
             vp.requestPreviewQuantity("H_ant");
           }
-          vp.setViewMode("3D");
+          vp.handleViewModeChange("3D");
           return;
         }
         // Per-object mesh nodes (e.g. "geo-nanoflower-mesh") → open mesh workspace
@@ -767,13 +767,13 @@ export default function RunSidebar() {
           if (cmd.isFemBackend) {
             model.openFemMeshWorkspace("mesh");
           } else {
-            vp.setViewMode("Mesh");
+            vp.handleViewModeChange("Mesh");
           }
           return;
         }
         if (isUniverseNode || isGeometryScopedNode) {
           if (cmd.isFemBackend && !model.effectiveFemMesh) model.openFemMeshWorkspace("mesh");
-          else vp.setViewMode("3D");
+          else vp.handleViewModeChange("3D");
           return;
         }
         const previewTarget = previewQuantityForTreeNode(id);
@@ -921,7 +921,7 @@ export default function RunSidebar() {
         model.openFemMeshWorkspace("mesh");
         return;
       }
-      vp.setViewMode("3D");
+      vp.handleViewModeChange("3D");
       model.requestFocusObject(objectId);
       return;
     }

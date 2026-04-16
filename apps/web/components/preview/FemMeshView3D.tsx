@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, memo } from "react";
+import { useEffect, useMemo, useRef, useState, memo } from "react";
 import { FemClipPlanes, CameraAutoFit } from "./fem/FemR3FHelpers";
 import { useFemViewportModel } from "./fem/useFemViewportModel";
 import { useFemViewportCommands } from "./fem/useFemViewportCommands";
@@ -60,8 +60,6 @@ import type {
   FemFerromagnetVisibilityMode,
 } from "./fem/femMeshTypes";
 
-const STABLE_ORIGIN: [number, number, number] = [0, 0, 0];
-
 /* ── Opacity constants (extracted from hardcoded values) ── */
 const DIMMED_MIN_MAGNETIC = 14;
 const DIMMED_MIN_AIR = 8;
@@ -99,6 +97,7 @@ interface Props {
   showOrientationLegend?: boolean;
   qualityPerFace?: number[] | null;
   shrinkFactor?: number;
+  viewportFitSeed?: string | number;
   onRenderModeChange?: (value: RenderMode) => void;
   onOpacityChange?: (value: number) => void;
   onClipEnabledChange?: (value: boolean) => void;
@@ -180,6 +179,7 @@ function FemMeshView3DInner({
   showOrientationLegend = false,
   qualityPerFace,
   topologyKey,
+  viewportFitSeed,
   shrinkFactor: controlledShrinkFactor,
   onRenderModeChange,
   onOpacityChange,
@@ -514,6 +514,7 @@ function FemMeshView3DInner({
     selectedObjectOverlay,
     objectOverlays,
     focusObjectRequest,
+    viewportFitSeed,
     viewCubeSceneRef,
     canvasRef,
     qualityProfileRef,
@@ -524,6 +525,14 @@ function FemMeshView3DInner({
     setCaptureActive,
     setQualityProfile,
   });
+  const shellTarget = useMemo(
+    () => [dynamicGeomCenter.x, dynamicGeomCenter.y, dynamicGeomCenter.z] as [
+      number,
+      number,
+      number,
+    ],
+    [dynamicGeomCenter.x, dynamicGeomCenter.y, dynamicGeomCenter.z],
+  );
   const {
     overlayItems,
     hoveredFaceInfo,
@@ -650,7 +659,7 @@ function FemMeshView3DInner({
           interactionActive,
         }}
         onInteractionChange={setInteractionActive}
-        target={STABLE_ORIGIN}
+        target={shellTarget}
         bridgeRef={viewCubeSceneRef}
         controlsRef={controlsRef}
         onViewCubeRotate={handleViewCubeRotate}
@@ -673,6 +682,7 @@ function FemMeshView3DInner({
             <CameraAutoFit
               maxDim={dynamicMaxDim}
               generation={cameraFitGeneration}
+              targetCenter={dynamicGeomCenter}
               controlsRef={controlsRef}
             />
           ) : null}

@@ -9,6 +9,7 @@ import ChartsViewport from "@/components/runs/control-room/ChartsViewport";
 import { ViewportBar, ViewportCanvasArea } from "@/components/runs/control-room/ViewportPanels";
 import { useModel, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
 import EmptyState from "@/components/ui/EmptyState";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
@@ -122,7 +123,7 @@ function applyWorkspaceTabSelection(
       api.requestPreviewQuantity(tab.payload.quantityId);
     }
     if (api.effectiveViewMode !== "3D") {
-      api.setViewMode("3D");
+      api.handleViewModeChange("3D");
     }
     return;
   }
@@ -202,7 +203,7 @@ export default function DockCenterTabs() {
       requestPreviewQuantity: vp.requestPreviewQuantity,
       model,
     });
-  }, [activeTab?.id, currentStage]);
+  }, [activeTab?.id, currentStage, vp.effectiveViewMode]);
 
   const spatialPreview = tp.preview?.kind === "spatial" ? tp.preview : null;
   const previewNoticesVisible = FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices;
@@ -262,11 +263,12 @@ export default function DockCenterTabs() {
         </>
       )}
 
-      <Tabs
-        value={activeTab?.id}
-        onValueChange={(nextId) => activateTab(currentStage, nextId)}
-        className="flex min-h-0 min-w-0 flex-1 flex-col"
-      >
+      <TooltipProvider delayDuration={300}>
+        <Tabs
+          value={activeTab?.id}
+          onValueChange={(nextId) => activateTab(currentStage, nextId)}
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
+        >
         <div className="shrink-0 border-b border-border bg-card/40 px-2 pt-1.5">
           <TabsList className="h-8 w-full justify-start gap-1 overflow-x-auto bg-transparent p-0 pb-0">
             {tabs.map((tab) => (
@@ -359,7 +361,8 @@ export default function DockCenterTabs() {
             </TabsContent>
           );
         })}
-      </Tabs>
+        </Tabs>
+      </TooltipProvider>
     </div>
   );
 }

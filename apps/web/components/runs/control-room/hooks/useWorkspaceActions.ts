@@ -48,6 +48,20 @@ import {
   type WorkspaceTabInput,
 } from "@/lib/workspace/workspace-store";
 
+type NormalizedViewportMode = ViewportMode | "charts";
+
+const CHARTS_VIEW_MODE = "charts";
+
+function normalizeViewportMode(mode: string): NormalizedViewportMode | null {
+  const normalized = mode.trim().toLowerCase();
+  if (normalized === "3d") return "3D";
+  if (normalized === "2d") return "2D";
+  if (normalized === "mesh") return "Mesh";
+  if (normalized === "analyze") return "Analyze";
+  if (normalized === "chart" || normalized === "charts") return CHARTS_VIEW_MODE;
+  return null;
+}
+
 type LiveApiClient = ReturnType<typeof currentLiveApiClient>;
 type BuilderAutoSync = ReturnType<typeof useBuilderAutoSync>;
 
@@ -214,6 +228,32 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
   const openWorkspaceTab = useWorkspaceStore((state) => state.openTab);
   const activateWorkspaceTab = useWorkspaceStore((state) => state.activateTab);
 
+  const transitionToViewMode = useCallback((
+    nextMode: ViewportMode,
+    options?: {
+      force?: boolean;
+      femDockTab?: FemDockTab;
+      beforeTransition?: () => void;
+    },
+  ) => {
+    if (!options?.force && nextMode === effectiveViewMode && !options?.beforeTransition) {
+      return;
+    }
+    startTransition(() => {
+      options?.beforeTransition?.();
+      if (!options?.force && nextMode === effectiveViewMode) {
+        return;
+      }
+      if (nextMode === "3D" || nextMode === "2D" || nextMode === "Mesh" || nextMode === "Analyze") {
+        activateWorkspaceTab(currentStage, coreTabIdForViewMode(nextMode));
+      }
+      setViewMode(nextMode);
+      if (nextMode === "Mesh" && options?.femDockTab) {
+        setFemDockTab(options.femDockTab);
+      }
+    });
+  }, [activateWorkspaceTab, currentStage, effectiveViewMode, setFemDockTab, setViewMode]);
+
   /* ── handleCompute ── */
   const handleCompute = useCallback(() => {
     void enqueueCommand({ kind: "solve" });
@@ -221,12 +261,12 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
 
   /* ── openFemMeshWorkspace ── */
   const openFemMeshWorkspace = useCallback((tab: FemDockTab = "mesh") => {
-    startTransition(() => {
-      setViewMode("Mesh");
-      setFemDockTab(tab);
+    transitionToViewMode("Mesh", {
+      force: true,
+      femDockTab: tab,
     });
     setMeshRenderMode((c) => (c === "surface" ? "surface+edges" : c));
-  }, []);
+  }, [setMeshRenderMode, transitionToViewMode]);
 
   /* ── requestFocusObject ── */
   const requestFocusObject = useCallback((objectId: string) => {
@@ -291,46 +331,73 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     const preset = MESH_WORKSPACE_PRESETS.find((entry) => entry.id === presetId);
     if (!preset) return;
 
-    startTransition(() => {
-      if (preset.viewMode === "2D") {
-        setComponent((prev) => (prev === "magnitude" ? "x" : prev));
-      }
-      setViewMode(preset.viewMode);
-      setFemDockTab(preset.dockTab);
-      setSelectedSidebarNodeId(
-        preset.dockTab === "quality"
-          ? "universe-mesh-quality"
-          : preset.dockTab === "mesher"
-            ? "universe-mesh-size"
-            : preset.dockTab === "pipeline"
-              ? "universe-mesh-pipeline"
-              : "universe-mesh-view",
-      );
+    transitionToViewMode(preset.viewMode, {
+      force: true,
+      femDockTab: preset.dockTab,
+      beforeTransition: () => {
+        if (preset.viewMode === "2D") {
+          setComponent((prev) => (prev === "magnitude" ? "x" : prev));
+        }
+        setSelectedSidebarNodeId(
+          preset.dockTab === "quality"
+            ? "universe-mesh-quality"
+            : preset.dockTab === "mesher"
+              ? "universe-mesh-size"
+              : preset.dockTab === "pipeline"
+                ? "universe-mesh-pipeline"
+                : "universe-mesh-view",
+        );
+      },
     });
 
     setMeshRenderMode(preset.renderMode);
     if (preset.clipEnabled !== undefined) setMeshClipEnabled(preset.clipEnabled);
     if (preset.opacity != null) setMeshOpacity(preset.opacity);
-  }, []);
+  }, [
+    setComponent,
+    setMeshClipEnabled,
+    setMeshOpacity,
+    setSelectedSidebarNodeId,
+    transitionToViewMode,
+  ]);
 
   /* ── handleViewModeChange ── */
   const handleViewModeChange = useCallback((mode: string) => {
-    if (mode === effectiveViewMode) {
+    const normalizedMode = normalizeViewportMode(mode);
+    if (!normalizedMode) {
       return;
     }
-    if (mode === "Mesh") { if (isFemBackend) openFemMeshWorkspace("mesh"); startTransition(() => setViewMode("Mesh")); return; }
-    if (mode === "2D") {
-      startTransition(() => {
-        setComponent((prev) => prev === "magnitude" ? "x" : prev);
-      });
+    if (normalizedMode === effectiveViewMode) {
+      return;
     }
-    startTransition(() => {
-      setViewMode(mode as ViewportMode);
+      if (normalizedMode === CHARTS_VIEW_MODE) {
+      activateWorkspaceTab(currentStage, "core:charts");
+      return;
+    }
+    if (normalizedMode === "Mesh") {
+      if (isFemBackend) openFemMeshWorkspace("mesh");
+      else {
+        transitionToViewMode("3D");
+      }
+      return;
+    }
+    transitionToViewMode(normalizedMode, {
+      force: normalizedMode !== effectiveViewMode,
+      beforeTransition: () => {
+        if (normalizedMode === "2D") {
+          setComponent((prev) => (prev === "magnitude" ? "x" : prev));
+        }
+      },
     });
-    if (mode === "3D" || mode === "2D" || mode === "Mesh" || mode === "Analyze") {
-      activateWorkspaceTab(currentStage, coreTabIdForViewMode(mode as "3D" | "2D" | "Mesh" | "Analyze"));
-    }
-  }, [activateWorkspaceTab, currentStage, effectiveViewMode, isFemBackend, openFemMeshWorkspace]);
+  }, [
+    activateWorkspaceTab,
+    currentStage,
+    effectiveViewMode,
+    isFemBackend,
+    openFemMeshWorkspace,
+    setComponent,
+    transitionToViewMode,
+  ]);
 
   /* ── handleSimulationAction ── */
   const handleSimulationAction = useCallback((action: string) => {
@@ -667,7 +734,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
   /* ── requestPreviewQuantity ── */
   const requestPreviewQuantity = useCallback((nextQuantity: string) => {
     startTransition(() => {
-      if (isFemBackend && effectiveViewMode === "Mesh") setViewMode("3D");
+      if (isFemBackend && effectiveViewMode === "Mesh") handleViewModeChange("3D");
       setSelectedQuantity(nextQuantity);
     });
     // Data-plane fast path: if the field buffer is already cached locally,
@@ -760,16 +827,14 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       }
       if (entry.kind === "table") {
         setWorkspaceMode("analyze");
-        startTransition(() => {
-          setViewMode("Analyze");
-        });
+        handleViewModeChange("Analyze");
         return;
       }
       if (entry.quantityId) {
         requestPreviewQuantity(entry.quantityId);
       }
       if (isFemBackend && effectiveViewMode === "Mesh") {
-        setViewMode("3D");
+        handleViewModeChange("3D");
       }
     },
     [
@@ -781,6 +846,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       requestPreviewQuantity,
       resultWorkspaceEntries,
       setWorkspaceMode,
+      handleViewModeChange,
     ],
   );
 
@@ -826,19 +892,6 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       prev.map((entry) => (entry.id === id ? { ...entry, pinned } : entry)),
     );
   }, []);
-
-  /* ── Keyboard shortcuts ── */
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === "1") setViewMode("3D");
-      else if (e.key === "2") setViewMode("2D");
-      else if (e.key === "3") handleViewModeChange("Mesh");
-      else if (e.key === "`" && e.ctrlKey) { e.preventDefault(); setConsoleCollapsed((v) => !v); }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [handleViewModeChange]);
 
   return {
     handleCompute,

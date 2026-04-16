@@ -92,7 +92,19 @@ export default function UniversePanel() {
   const cmd = useCommand();
   const model = useModel();
   /* Compose a backward-compatible ctx alias from granular hooks */
-  const ctx = { ...model, setViewMode: viewport.setViewMode, metadata: cmd.metadata, isFemBackend: cmd.isFemBackend, commandStatus: cmd.commandStatus, session: cmd.session, commandMessage: cmd.commandMessage, scriptSyncBusy: cmd.scriptSyncBusy, scriptSyncMessage: cmd.scriptSyncMessage, syncScriptBuilder: cmd.syncScriptBuilder };
+  const ctx = {
+    ...model,
+    setViewMode: viewport.setViewMode,
+    handleViewModeChange: viewport.handleViewModeChange,
+    metadata: cmd.metadata,
+    isFemBackend: cmd.isFemBackend,
+    commandStatus: cmd.commandStatus,
+    session: cmd.session,
+    commandMessage: cmd.commandMessage,
+    scriptSyncBusy: cmd.scriptSyncBusy,
+    scriptSyncMessage: cmd.scriptSyncMessage,
+    syncScriptBuilder: cmd.syncScriptBuilder,
+  };
   const selectedNodeId = ctx.selectedSidebarNodeId ?? "universe";
   const builderContract = useMemo(() => readBuilderContract(ctx.metadata), [ctx.metadata]);
   const runtimeUniverse = useMemo<ScriptBuilderUniverseState | null>(() => {
@@ -215,7 +227,7 @@ export default function UniversePanel() {
     ),
   );
   const handleIsolateAirboxView = useCallback(() => {
-    ctx.setViewMode("3D");
+    ctx.handleViewModeChange("3D");
     ctx.setSelectedSidebarNodeId("universe-airbox");
     ctx.setSelectedObjectId(null);
     ctx.setViewportScope("universe");
@@ -235,7 +247,7 @@ export default function UniversePanel() {
     });
   }, [ctx]);
   const handleShowFullDomainView = useCallback(() => {
-    ctx.setViewMode("3D");
+    ctx.handleViewModeChange("3D");
     ctx.setSelectedSidebarNodeId("universe-airbox");
     ctx.setSelectedObjectId(null);
     ctx.setViewportScope("universe");
@@ -274,7 +286,7 @@ export default function UniversePanel() {
     ctx.meshParts.length > 0;
   const handleIsolateMeshPart = useCallback(
     (partId: string) => {
-      ctx.setViewMode("3D");
+      ctx.handleViewModeChange("3D");
       ctx.setSelectedSidebarNodeId("universe-airbox");
       ctx.setSelectedObjectId(null);
       ctx.setViewportScope("universe");
@@ -297,7 +309,7 @@ export default function UniversePanel() {
     [ctx],
   );
   const handleShowAllMeshParts = useCallback(() => {
-    ctx.setViewMode("3D");
+    ctx.handleViewModeChange("3D");
     ctx.setSelectedSidebarNodeId("universe-airbox");
     ctx.setSelectedObjectId(null);
     ctx.setViewportScope("universe");

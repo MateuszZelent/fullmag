@@ -31,6 +31,7 @@ interface UseFemSceneGeometryArgs {
   enableCameraFitEffect: boolean;
   enableScreenshotCapture: boolean;
   activeTextureTransform: TextureTransform3D | null;
+  viewportFitSeed?: string | number;
   selectedObjectOverlay: BuilderObjectOverlay | null;
   objectOverlays: BuilderObjectOverlay[];
   focusObjectRequest: FocusObjectRequest | null;
@@ -78,6 +79,7 @@ export function useFemSceneGeometry({
   selectedObjectOverlay,
   objectOverlays,
   focusObjectRequest,
+  viewportFitSeed,
   viewCubeSceneRef,
   canvasRef,
   qualityProfileRef,
@@ -313,12 +315,19 @@ export function useFemSceneGeometry({
     }
     const m = dynamicMaxDim;
     const c = dynamicGeomCenter;
-    const sig = `${m.toFixed(4)}_${c.x.toFixed(4)}_${c.y.toFixed(4)}_${c.z.toFixed(4)}`;
+    const fitSeed = viewportFitSeed == null ? "default" : String(viewportFitSeed);
+    const sig = `${m.toFixed(6)}_${c.x.toFixed(6)}_${c.y.toFixed(6)}_${c.z.toFixed(6)}_${fitSeed}`;
     if (lastFittedGeomRef.current !== sig) {
       lastFittedGeomRef.current = sig;
       setCameraFitGeneration((g) => g + 1);
     }
-  }, [dynamicMaxDim, dynamicGeomCenter, enableCameraFitEffect, setCameraFitGeneration]);
+  }, [
+    dynamicMaxDim,
+    dynamicGeomCenter,
+    enableCameraFitEffect,
+    setCameraFitGeneration,
+    viewportFitSeed,
+  ]);
 
   // ── Derived scene constants ───────────────────────────────────────
   const axesWorldExtent = dynamicGeomSize;

@@ -275,6 +275,14 @@ pub(crate) fn build_problem_and_state(
                 topology, material, dynamics, terms, true, None,
             )
         }
+        Some(r) => {
+            return Err(RunError {
+                message: format!(
+                    "FEM reference runner: demag model '{}' is not yet implemented",
+                    r.model_name(),
+                ),
+            });
+        }
         None => FemLlgProblem::with_terms(topology, material, dynamics, terms),
     };
     if let Some(normal) = plan.dmi_interface_normal {

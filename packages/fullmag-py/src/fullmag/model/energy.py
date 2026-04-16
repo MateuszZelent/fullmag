@@ -30,22 +30,90 @@ _DEMAG_TRANSFER_GRID_REMOVAL_MESSAGE = (
     "Zbuduj shared_domain_mesh_with_air i użyj Poisson Robin/Dirichlet."
 )
 
+# Phase-1C: canonical demag model vocabulary.
+_DEMAG_MODELS = frozenset({"airbox", "bem", "fredkin_koehler", "fmm"})
+_DEMAG_AIRBOX_VARIANTS = frozenset({"auto", "dirichlet", "robin"})
+
+# Map (model, variant) → IR realization string.
+# The IR uses the existing "poisson_robin"/"poisson_dirichlet" serde names
+# for airbox variants. New models map to their own serde names.
+_MODEL_TO_IR: dict[tuple[str, str], str] = {
+    ("airbox", "auto"): "poisson_robin",
+    ("airbox", "dirichlet"): "poisson_dirichlet",
+    ("airbox", "robin"): "poisson_robin",
+    ("bem", "auto"): "bem",
+    ("fredkin_koehler", "auto"): "fredkin_koehler",
+    ("fmm", "auto"): "fmm",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class Demag:
+    """Demagnetization energy term.
+
+    New canonical API::
+
+        Demag(model="airbox")                       # default airbox + Robin
+        Demag(model="airbox", variant="dirichlet")  # explicit Dirichlet
+        Demag(model="bem")                          # future: BEM
+
+    Legacy API (still works, deprecated)::
+
+        Demag(realization="poisson_robin")
+    """
+
+    model: str | None = None
+    variant: str | None = None
     realization: str | None = None
 
     def __post_init__(self) -> None:
-        if self.realization == "transfer_grid":
-            raise ValueError(_DEMAG_TRANSFER_GRID_REMOVAL_MESSAGE)
-        if self.realization not in _DEMAG_ALLOWED:
+        # Disallow mixing old and new API
+        if self.model is not None and self.realization is not None:
             raise ValueError(
-                f"Demag realization must be one of {sorted(r for r in _DEMAG_ALLOWED if r is not None)!r} "
-                f"or None, got {self.realization!r}"
+                "Cannot specify both 'model' and 'realization'. "
+                "Use model= (new) or realization= (legacy), not both."
+            )
+
+        if self.model is not None:
+            # New model= API
+            if self.model not in _DEMAG_MODELS:
+                raise ValueError(
+                    f"Demag model must be one of {sorted(_DEMAG_MODELS)!r}, "
+                    f"got {self.model!r}"
+                )
+            effective_variant = self.variant or "auto"
+            if self.model == "airbox":
+                if effective_variant not in _DEMAG_AIRBOX_VARIANTS:
+                    raise ValueError(
+                        f"Airbox variant must be one of {sorted(_DEMAG_AIRBOX_VARIANTS)!r}, "
+                        f"got {effective_variant!r}"
+                    )
+            elif self.variant is not None:
+                raise ValueError(
+                    f"Demag model '{self.model}' does not accept a 'variant' parameter."
+                )
+        elif self.realization is not None:
+            # Legacy realization= API
+            if self.realization == "transfer_grid":
+                raise ValueError(_DEMAG_TRANSFER_GRID_REMOVAL_MESSAGE)
+            if self.realization not in _DEMAG_ALLOWED:
+                raise ValueError(
+                    f"Demag realization must be one of "
+                    f"{sorted(r for r in _DEMAG_ALLOWED if r is not None)!r} "
+                    f"or None, got {self.realization!r}"
+                )
+        elif self.variant is not None:
+            raise ValueError(
+                "'variant' requires 'model' to be specified (e.g. model='airbox')."
             )
 
     def _resolved_realization(self) -> str:
-        """Return the canonical realization string, normalizing legacy aliases."""
+        """Return the canonical IR realization string."""
+        if self.model is not None:
+            effective_variant = self.variant or "auto"
+            return _MODEL_TO_IR.get(
+                (self.model, effective_variant), self.model
+            )
         if self.realization is None:
             return "auto"
         return _DEMAG_LEGACY_ALIASES.get(self.realization, self.realization)

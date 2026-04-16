@@ -16,22 +16,24 @@ const EPS = 1e-9;
 
 export const CAMERA_CONTROL_PROFILES: Record<CameraControlProfileId, CameraControlProfile> = {
   fem: {
-    rotateSpeed: 0.68,
-    zoomSpeed: 0.96,
-    panSpeed: 0.72,
-    dampingFactor: 0.075,
-    minRotationStep: 0.0035,
-    minPanStep: 0.0012,
-    minZoomStep: 0.0012,
+    // Preciser 3D CAD-style handling for FEM scenes.
+    rotateSpeed: 0.62,
+    zoomSpeed: 0.82,
+    panSpeed: 0.65,
+    dampingFactor: 0.12,
+    minRotationStep: 0.0030,
+    minPanStep: 0.0010,
+    minZoomStep: 0.0014,
   },
   fdm: {
+    // Preciser navigation profile for FDM scenes (slightly slower pan/rotate).
     rotateSpeed: 0.58,
-    zoomSpeed: 0.9,
-    panSpeed: 0.68,
-    dampingFactor: 0.06,
-    minRotationStep: 0.002,
-    minPanStep: 0.0008,
-    minZoomStep: 0.001,
+    zoomSpeed: 0.74,
+    panSpeed: 0.58,
+    dampingFactor: 0.10,
+    minRotationStep: 0.0034,
+    minPanStep: 0.0012,
+    minZoomStep: 0.0018,
   },
 };
 

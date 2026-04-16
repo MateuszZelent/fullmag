@@ -626,6 +626,14 @@ fn materialize_equilibrium(
                 topology, material, dynamics, terms, true, None,
             )
         }
+        Some(r) => {
+            return Err(RunError {
+                message: format!(
+                    "FEM eigen runner: demag model '{}' is not yet implemented",
+                    r.model_name(),
+                ),
+            });
+        }
         None => FemLlgProblem::with_terms(topology, material, dynamics, terms),
     };
     if let Some(normal) = plan.dmi_interface_normal {
@@ -2134,6 +2142,15 @@ fn solver_capabilities(
             fullmag_ir::ResolvedFemDemagIR::PoissonRobin => {
                 capabilities.push("demag_poisson_robin")
             }
+            fullmag_ir::ResolvedFemDemagIR::Bem => {
+                capabilities.push("demag_bem")
+            }
+            fullmag_ir::ResolvedFemDemagIR::FredkinKoehler => {
+                capabilities.push("demag_fredkin_koehler")
+            }
+            fullmag_ir::ResolvedFemDemagIR::Fmm => {
+                capabilities.push("demag_fmm")
+            }
         }
     }
     if plan.external_field.is_some() {
@@ -2196,10 +2213,7 @@ fn resolved_demag_realization(plan: &FemEigenPlanIR) -> Option<fullmag_ir::Resol
 }
 
 fn demag_realization_label(realization: fullmag_ir::ResolvedFemDemagIR) -> &'static str {
-    match realization {
-        fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet => "poisson_dirichlet",
-        fullmag_ir::ResolvedFemDemagIR::PoissonRobin => "poisson_robin",
-    }
+    realization.provenance_name()
 }
 
 fn equilibrium_source_json(equilibrium: &EquilibriumSourceIR) -> serde_json::Value {

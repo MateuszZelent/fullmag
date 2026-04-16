@@ -1375,7 +1375,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setLocalVisualizationPresets,
     setActiveVisualizationPresetRef,
     setSelectedQuantity,
-    setViewMode,
+    handleViewModeChange,
     setComponent,
     setPlane,
     setSliceIndex,

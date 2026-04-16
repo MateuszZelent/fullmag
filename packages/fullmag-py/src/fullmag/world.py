@@ -2109,8 +2109,14 @@ class StudyBuilder:
         )
         return self
 
-    def demag(self, *, realization: str | None = None) -> "StudyBuilder":
-        demag(realization=realization)
+    def demag(
+        self,
+        *,
+        model: str | None = None,
+        variant: str | None = None,
+        realization: str | None = None,
+    ) -> "StudyBuilder":
+        demag(model=model, variant=variant, realization=realization)
         return self
 
     def airbox(self, *, hmax: float | None = None) -> "StudyBuilder":
@@ -2346,11 +2352,26 @@ def study(problem_name: str | None = None) -> StudyBuilder:
     return StudyBuilder(problem_name)
 
 
-def demag(*, realization: str | None = None) -> None:
-    """Configure the demag realization / outer-boundary policy for the flat API."""
-    if realization is not None:
-        Demag(realization=realization)
-    _state._demag_realization = realization
+def demag(
+    *,
+    model: str | None = None,
+    variant: str | None = None,
+    realization: str | None = None,
+) -> None:
+    """Configure the demag model / realization for the flat API.
+
+    New API::
+
+        demag(model="airbox")
+        demag(model="airbox", variant="robin")
+
+    Legacy API (still works)::
+
+        demag(realization="poisson_robin")
+    """
+    # Validate by constructing a Demag instance
+    d = Demag(model=model, variant=variant, realization=realization)
+    _state._demag_realization = d._resolved_realization()
 
 
 # ---------------------------------------------------------------------------

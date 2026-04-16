@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useEffect, useCallback } from "react";
+import React, { useMemo, useEffect, useCallback, useRef } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Tooltip, TooltipTrigger, TooltipContent, TooltipProvider,
@@ -264,12 +264,24 @@ const RibbonActionTrigger = React.forwardRef<
 >(({ action, previewPending, ...props }, ref) => {
   const propsOnClick = props.onClick;
   const isPrimaryAction = action.accent && !action.disabled;
+  const isHandlingRef = useRef(false);
+
   const handleClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    propsOnClick?.(e);
-    if (e.defaultPrevented) {
+    if (isHandlingRef.current) {
       return;
     }
-    action.action?.();
+    isHandlingRef.current = true;
+    try {
+      propsOnClick?.(e);
+      if (e.defaultPrevented) {
+        return;
+      }
+      action.action?.();
+    } finally {
+      queueMicrotask(() => {
+        isHandlingRef.current = false;
+      });
+    }
   }, [action, propsOnClick]);
   return (
     <button
