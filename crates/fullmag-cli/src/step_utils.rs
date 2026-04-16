@@ -1040,16 +1040,25 @@ fn inject_relax_stop_payload(
     stop: &fullmag_ir::RelaxStopIR,
 ) {
     if let Some(value) = stop.torque_tolerance_apm {
-        payload.insert("torque_tolerance_apm".to_string(), Value::String(value.to_string()));
+        payload.insert(
+            "torque_tolerance_apm".to_string(),
+            Value::String(value.to_string()),
+        );
     }
     if let Some(value) = stop.energy_tolerance_j {
-        payload.insert("energy_tolerance_j".to_string(), Value::String(value.to_string()));
+        payload.insert(
+            "energy_tolerance_j".to_string(),
+            Value::String(value.to_string()),
+        );
     }
     if let Some(value) = stop.max_steps {
         payload.insert("max_steps".to_string(), Value::String(value.to_string()));
     }
     if let Some(value) = stop.max_pseudotime_s {
-        payload.insert("max_pseudotime_s".to_string(), Value::String(value.to_string()));
+        payload.insert(
+            "max_pseudotime_s".to_string(),
+            Value::String(value.to_string()),
+        );
     }
     if let Some(value) = stop.max_physical_time_s {
         payload.insert(
@@ -1084,23 +1093,24 @@ fn materialize_pipeline_hysteresis_branch(
     let save_dataset = payload_string(config, "save_dataset");
     let settle_stop = hysteresis_settle_stop(config, default_until_seconds)?;
 
-    let sweep_values_t = if let Some(explicit_values_t) = payload_f64_array(config, "field_values_t")? {
-        if explicit_values_t.is_empty() {
-            bail!("study pipeline hysteresis_loop requires field_values_t to be non-empty");
-        }
-        explicit_values_t
-    } else {
-        let start_mt = payload_f64(config, "start_mT")?.unwrap_or(-100.0);
-        let stop_mt = payload_f64(config, "stop_mT")?.unwrap_or(100.0);
-        let steps = payload_u64(config, "steps")?.unwrap_or(21);
-        if steps == 0 {
-            bail!("study pipeline hysteresis_loop requires steps >= 1");
-        }
-        linear_sweep_values(start_mt, stop_mt, steps)?
-            .into_iter()
-            .map(|value_mt| value_mt * 1e-3)
-            .collect::<Vec<_>>()
-    };
+    let sweep_values_t =
+        if let Some(explicit_values_t) = payload_f64_array(config, "field_values_t")? {
+            if explicit_values_t.is_empty() {
+                bail!("study pipeline hysteresis_loop requires field_values_t to be non-empty");
+            }
+            explicit_values_t
+        } else {
+            let start_mt = payload_f64(config, "start_mT")?.unwrap_or(-100.0);
+            let stop_mt = payload_f64(config, "stop_mT")?.unwrap_or(100.0);
+            let steps = payload_u64(config, "steps")?.unwrap_or(21);
+            if steps == 0 {
+                bail!("study pipeline hysteresis_loop requires steps >= 1");
+            }
+            linear_sweep_values(start_mt, stop_mt, steps)?
+                .into_iter()
+                .map(|value_mt| value_mt * 1e-3)
+                .collect::<Vec<_>>()
+        };
 
     let mut stages = Vec::with_capacity(sweep_values_t.len() * (1 + usize::from(save_point_state)));
     for (point_index, amplitude_t) in sweep_values_t.iter().enumerate() {
@@ -1527,8 +1537,8 @@ fn payload_relax_stop(
     payload: &BTreeMap<String, Value>,
     apply_legacy_defaults: bool,
 ) -> Result<fullmag_ir::RelaxStopIR> {
-    let torque_tolerance_apm = payload_f64(payload, "torque_tolerance_apm")?
-        .or(payload_f64(payload, "torque_tolerance")?);
+    let torque_tolerance_apm =
+        payload_f64(payload, "torque_tolerance_apm")?.or(payload_f64(payload, "torque_tolerance")?);
     let energy_tolerance_j =
         payload_f64(payload, "energy_tolerance_j")?.or(payload_f64(payload, "energy_tolerance")?);
     let max_steps = payload_u64(payload, "max_steps")?;
@@ -2668,7 +2678,8 @@ mod tests {
             stages: vec![explicit_stage],
         };
 
-        let stages = materialize_script_stages(config).expect("explicit save_state should materialize");
+        let stages =
+            materialize_script_stages(config).expect("explicit save_state should materialize");
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].entrypoint_kind, "explicit_save_state");
         assert_eq!(stages[0].until_seconds, 0.0);

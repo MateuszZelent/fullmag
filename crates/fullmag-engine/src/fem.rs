@@ -2248,7 +2248,6 @@ impl FemLlgProblem {
                  normal is zero — DMI contribution will be zero."
             );
         }
-
     }
 
     #[allow(non_snake_case)]
@@ -3139,7 +3138,6 @@ impl FemLlgProblem {
         };
         scale(add(precession_term, scale(damping, alpha)), -gamma_bar)
     }
-
 }
 
 fn inverse_transpose_3x3(columns: [[f64; 3]; 3], det: f64) -> [[f64; 3]; 3] {
@@ -3318,9 +3316,7 @@ fn max_norm(values: &[Vector3]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        CubicAnisotropyConfig, EffectiveFieldTerms, DEFAULT_GYROMAGNETIC_RATIO,
-    };
+    use crate::{CubicAnisotropyConfig, EffectiveFieldTerms, DEFAULT_GYROMAGNETIC_RATIO};
 
     fn unit_tet_problem() -> FemLlgProblem {
         let mesh = MeshIR {

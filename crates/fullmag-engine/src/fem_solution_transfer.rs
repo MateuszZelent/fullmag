@@ -328,6 +328,117 @@ pub fn transfer_vector_field(
 }
 
 // ---------------------------------------------------------------------------
+// FEM → FDM grid transfer
+// ---------------------------------------------------------------------------
+
+/// Result of transferring a vector field from FEM mesh nodes to FDM grid cell centers.
+#[derive(Debug, Clone)]
+pub struct GridTransferResult {
+    /// Interpolated vector field at grid cell centers, in row-major order
+    /// (x varies fastest: index = iz * ny * nx + iy * nx + ix).
+    pub values: Vec<Vector3>,
+    /// Number of cell centers successfully located inside the FEM mesh.
+    pub n_located: usize,
+    /// Number of cell centers outside the FEM mesh (set to zero vector).
+    pub n_outside: usize,
+    /// Total number of grid cells.
+    pub n_total: usize,
+}
+
+/// Transfer a vector field (e.g. magnetization **m**) from FEM mesh nodes to
+/// FDM grid cell centers.
+///
+/// For each FDM cell center, locates the containing tetrahedron via BVH and
+/// interpolates using P1 barycentric coordinates.  Cell centers outside all
+/// elements receive the zero vector (suitable for inactive FDM cells).
+///
+/// The returned vectors are **not** renormalized — callers that need unit
+/// vectors should call [`normalize_unit_vectors`] on the result.
+pub fn transfer_fem_field_to_grid(
+    topo: &MeshTopology,
+    field: &[Vector3],
+    grid_origin: [f64; 3],
+    cell_size: [f64; 3],
+    grid_dims: [usize; 3],
+) -> GridTransferResult {
+    assert_eq!(
+        field.len(),
+        topo.n_nodes,
+        "field length must match mesh node count"
+    );
+
+    let [nx, ny, nz] = grid_dims;
+    let n_total = nx * ny * nz;
+    let mut values = vec![[0.0; 3]; n_total];
+    let mut n_located = 0usize;
+    let mut n_outside = 0usize;
+
+    if n_total == 0 || topo.elements.is_empty() {
+        return GridTransferResult {
+            values,
+            n_located,
+            n_outside: n_total,
+            n_total,
+        };
+    }
+
+    let margin = compute_margin(&topo.coords, &topo.elements);
+    let bvh = ElementBvh::build(&topo.coords, &topo.elements, margin);
+
+    for iz in 0..nz {
+        for iy in 0..ny {
+            for ix in 0..nx {
+                let center = [
+                    grid_origin[0] + (ix as f64 + 0.5) * cell_size[0],
+                    grid_origin[1] + (iy as f64 + 0.5) * cell_size[1],
+                    grid_origin[2] + (iz as f64 + 0.5) * cell_size[2],
+                ];
+                let idx = iz * ny * nx + iy * nx + ix;
+                if let Some((elem_idx, bary)) = bvh.locate(&center, &topo.coords, &topo.elements) {
+                    let elem = &topo.elements[elem_idx];
+                    let v0 = field[elem[0] as usize];
+                    let v1 = field[elem[1] as usize];
+                    let v2 = field[elem[2] as usize];
+                    let v3 = field[elem[3] as usize];
+                    for d in 0..3 {
+                        values[idx][d] =
+                            bary[0] * v0[d] + bary[1] * v1[d] + bary[2] * v2[d] + bary[3] * v3[d];
+                    }
+                    n_located += 1;
+                } else {
+                    // Cell center outside FEM mesh — leave as zero
+                    n_outside += 1;
+                }
+            }
+        }
+    }
+
+    GridTransferResult {
+        values,
+        n_located,
+        n_outside,
+        n_total,
+    }
+}
+
+/// Normalize all vectors in place to unit length.
+///
+/// Zero vectors (magnitude below `epsilon`) are left unchanged.
+/// This is intended for post-transfer normalization of magnetization,
+/// where interpolation of unit vectors may produce non-unit results.
+pub fn normalize_unit_vectors(vectors: &mut [[f64; 3]], epsilon: f64) {
+    for v in vectors.iter_mut() {
+        let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if mag > epsilon {
+            let inv = 1.0 / mag;
+            v[0] *= inv;
+            v[1] *= inv;
+            v[2] *= inv;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -633,5 +744,405 @@ mod tests {
         assert!(m > 0.0);
         // For a unit tet, max diameter ≈ sqrt(2), margin ≈ 0.01 * sqrt(2)
         assert!(m < 0.1);
+    }
+
+    // -----------------------------------------------------------------------
+    // FEM → FDM grid transfer tests
+    // -----------------------------------------------------------------------
+
+    /// Build a unit cube meshed into 5 tetrahedra.
+    fn unit_cube_topo() -> MeshTopology {
+        let coords = vec![
+            [0.0, 0.0, 0.0], // 0
+            [1.0, 0.0, 0.0], // 1
+            [0.0, 1.0, 0.0], // 2
+            [1.0, 1.0, 0.0], // 3
+            [0.0, 0.0, 1.0], // 4
+            [1.0, 0.0, 1.0], // 5
+            [0.0, 1.0, 1.0], // 6
+            [1.0, 1.0, 1.0], // 7
+        ];
+        let elements = vec![
+            [0, 1, 3, 5],
+            [0, 3, 2, 6],
+            [0, 5, 4, 6],
+            [3, 5, 6, 7],
+            [0, 3, 5, 6],
+        ];
+        make_topo(coords, elements)
+    }
+
+    #[test]
+    fn grid_transfer_uniform_field() {
+        let topo = unit_cube_topo();
+        let uniform = vec![[1.0, 0.0, 0.0]; topo.n_nodes];
+
+        // 2×2×2 grid covering [0,1]^3, cell_size = 0.5
+        let result = transfer_fem_field_to_grid(
+            &topo,
+            &uniform,
+            [0.0, 0.0, 0.0],
+            [0.5, 0.5, 0.5],
+            [2, 2, 2],
+        );
+
+        assert_eq!(result.n_total, 8);
+        assert_eq!(result.n_located, 8);
+        assert_eq!(result.n_outside, 0);
+        for v in &result.values {
+            assert!((v[0] - 1.0).abs() < 1e-10, "expected [1,0,0], got {:?}", v);
+            assert!(v[1].abs() < 1e-10);
+            assert!(v[2].abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn grid_transfer_linear_field() {
+        let topo = unit_cube_topo();
+        // m(x,y,z) = (x, y, z) — linear, so P1 interpolation should be exact.
+        let field: Vec<Vector3> = topo.coords.iter().map(|c| [c[0], c[1], c[2]]).collect();
+
+        let result =
+            transfer_fem_field_to_grid(&topo, &field, [0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [2, 2, 2]);
+
+        assert_eq!(result.n_located, 8);
+        for iz in 0..2 {
+            for iy in 0..2 {
+                for ix in 0..2 {
+                    let idx = iz * 4 + iy * 2 + ix;
+                    let expected = [
+                        (ix as f64 + 0.5) * 0.5,
+                        (iy as f64 + 0.5) * 0.5,
+                        (iz as f64 + 0.5) * 0.5,
+                    ];
+                    for d in 0..3 {
+                        assert!(
+                            (result.values[idx][d] - expected[d]).abs() < 1e-9,
+                            "cell ({},{},{}) dim {}: expected {}, got {}",
+                            ix,
+                            iy,
+                            iz,
+                            d,
+                            expected[d],
+                            result.values[idx][d]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grid_transfer_outside_cells_are_zero() {
+        let topo = unit_cube_topo();
+        let field = vec![[1.0, 0.0, 0.0]; topo.n_nodes];
+
+        // Grid shifted so half the cells are outside the mesh
+        let result = transfer_fem_field_to_grid(
+            &topo,
+            &field,
+            [-1.0, 0.0, 0.0], // origin at x=-1
+            [0.5, 0.5, 0.5],
+            [4, 2, 2],
+        );
+
+        assert_eq!(result.n_total, 16);
+        // First 2 columns (x centers at -0.75, -0.25) are outside
+        assert!(result.n_outside > 0);
+        // Last 2 columns (x centers at 0.25, 0.75) should be inside
+        assert!(result.n_located > 0);
+        assert_eq!(result.n_located + result.n_outside, 16);
+
+        // Verify outside cells are zero
+        for iz in 0..2 {
+            for iy in 0..2 {
+                for ix in 0..2 {
+                    let idx = iz * 2 * 4 + iy * 4 + ix;
+                    let center_x = -1.0 + (ix as f64 + 0.5) * 0.5;
+                    if center_x < 0.0 {
+                        assert_eq!(
+                            result.values[idx],
+                            [0.0, 0.0, 0.0],
+                            "outside cell at x={} should be zero",
+                            center_x
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grid_transfer_empty_grid() {
+        let topo = unit_cube_topo();
+        let field = vec![[1.0, 0.0, 0.0]; topo.n_nodes];
+
+        let result =
+            transfer_fem_field_to_grid(&topo, &field, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [0, 0, 0]);
+
+        assert_eq!(result.n_total, 0);
+        assert!(result.values.is_empty());
+    }
+
+    #[test]
+    fn normalize_unit_vectors_basic() {
+        let mut vecs = vec![
+            [2.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0], // zero → stays zero
+        ];
+        normalize_unit_vectors(&mut vecs, 1e-12);
+
+        assert!((vecs[0][0] - 1.0).abs() < 1e-14);
+        assert!(vecs[0][1].abs() < 1e-14);
+        assert!((vecs[1][1] - 1.0).abs() < 1e-14);
+        let inv_sqrt3 = 1.0 / 3.0f64.sqrt();
+        for d in 0..3 {
+            assert!((vecs[2][d] - inv_sqrt3).abs() < 1e-14);
+        }
+        // Zero vector untouched
+        assert_eq!(vecs[3], [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn normalize_preserves_direction() {
+        let mut vecs = vec![[0.6, 0.8, 0.0]];
+        normalize_unit_vectors(&mut vecs, 1e-12);
+        let mag = (vecs[0][0].powi(2) + vecs[0][1].powi(2) + vecs[0][2].powi(2)).sqrt();
+        assert!((mag - 1.0).abs() < 1e-14);
+        assert!((vecs[0][0] - 0.6).abs() < 1e-14);
+        assert!((vecs[0][1] - 0.8).abs() < 1e-14);
+    }
+
+    #[test]
+    fn grid_transfer_then_normalize_produces_unit_vectors() {
+        let topo = unit_cube_topo();
+        // Assign unit vectors at nodes that are not aligned
+        let field: Vec<Vector3> = topo
+            .coords
+            .iter()
+            .map(|c| {
+                let v = [c[0] + 0.1, c[1] + 0.2, c[2] + 0.3];
+                let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                [v[0] / mag, v[1] / mag, v[2] / mag]
+            })
+            .collect();
+
+        let mut result =
+            transfer_fem_field_to_grid(&topo, &field, [0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [2, 2, 2]);
+
+        assert_eq!(result.n_located, 8);
+        normalize_unit_vectors(&mut result.values, 1e-12);
+
+        for (i, v) in result.values.iter().enumerate() {
+            let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            assert!(
+                (mag - 1.0).abs() < 1e-12,
+                "cell {}: |m| = {} (expected 1.0)",
+                i,
+                mag
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // FEM → FDM grid transfer tests
+    // -----------------------------------------------------------------------
+
+    /// Build a unit cube meshed into 5 tetrahedra.
+    fn unit_cube_topo() -> MeshTopology {
+        let coords = vec![
+            [0.0, 0.0, 0.0], // 0
+            [1.0, 0.0, 0.0], // 1
+            [0.0, 1.0, 0.0], // 2
+            [1.0, 1.0, 0.0], // 3
+            [0.0, 0.0, 1.0], // 4
+            [1.0, 0.0, 1.0], // 5
+            [0.0, 1.0, 1.0], // 6
+            [1.0, 1.0, 1.0], // 7
+        ];
+        let elements = vec![
+            [0, 1, 3, 5],
+            [0, 3, 2, 6],
+            [0, 5, 4, 6],
+            [3, 5, 6, 7],
+            [0, 3, 5, 6],
+        ];
+        make_topo(coords, elements)
+    }
+
+    #[test]
+    fn grid_transfer_uniform_field() {
+        let topo = unit_cube_topo();
+        let uniform = vec![[1.0, 0.0, 0.0]; topo.n_nodes];
+
+        // 2×2×2 grid covering [0,1]^3, cell_size = 0.5
+        let result = transfer_fem_field_to_grid(
+            &topo,
+            &uniform,
+            [0.0, 0.0, 0.0],
+            [0.5, 0.5, 0.5],
+            [2, 2, 2],
+        );
+
+        assert_eq!(result.n_total, 8);
+        assert_eq!(result.n_located, 8);
+        assert_eq!(result.n_outside, 0);
+        for v in &result.values {
+            assert!((v[0] - 1.0).abs() < 1e-10, "expected [1,0,0], got {:?}", v);
+            assert!(v[1].abs() < 1e-10);
+            assert!(v[2].abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn grid_transfer_linear_field() {
+        let topo = unit_cube_topo();
+        // m(x,y,z) = (x, y, z) — linear, so P1 interpolation should be exact.
+        let field: Vec<Vector3> = topo.coords.iter().map(|c| [c[0], c[1], c[2]]).collect();
+
+        let result =
+            transfer_fem_field_to_grid(&topo, &field, [0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [2, 2, 2]);
+
+        assert_eq!(result.n_located, 8);
+        for iz in 0..2 {
+            for iy in 0..2 {
+                for ix in 0..2 {
+                    let idx = iz * 4 + iy * 2 + ix;
+                    let expected = [
+                        (ix as f64 + 0.5) * 0.5,
+                        (iy as f64 + 0.5) * 0.5,
+                        (iz as f64 + 0.5) * 0.5,
+                    ];
+                    for d in 0..3 {
+                        assert!(
+                            (result.values[idx][d] - expected[d]).abs() < 1e-9,
+                            "cell ({},{},{}) dim {}: expected {}, got {}",
+                            ix,
+                            iy,
+                            iz,
+                            d,
+                            expected[d],
+                            result.values[idx][d]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grid_transfer_outside_cells_are_zero() {
+        let topo = unit_cube_topo();
+        let field = vec![[1.0, 0.0, 0.0]; topo.n_nodes];
+
+        // Grid shifted so half the cells are outside the mesh
+        let result = transfer_fem_field_to_grid(
+            &topo,
+            &field,
+            [-1.0, 0.0, 0.0], // origin at x=-1
+            [0.5, 0.5, 0.5],
+            [4, 2, 2],
+        );
+
+        assert_eq!(result.n_total, 16);
+        // First 2 columns (x centers at -0.75, -0.25) are outside
+        assert!(result.n_outside > 0);
+        // Last 2 columns (x centers at 0.25, 0.75) should be inside
+        assert!(result.n_located > 0);
+        assert_eq!(result.n_located + result.n_outside, 16);
+
+        // Verify outside cells are zero
+        for iz in 0..2 {
+            for iy in 0..2 {
+                for ix in 0..2 {
+                    let idx = iz * 2 * 4 + iy * 4 + ix;
+                    let center_x = -1.0 + (ix as f64 + 0.5) * 0.5;
+                    if center_x < 0.0 {
+                        assert_eq!(
+                            result.values[idx],
+                            [0.0, 0.0, 0.0],
+                            "outside cell at x={} should be zero",
+                            center_x
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grid_transfer_empty_grid() {
+        let topo = unit_cube_topo();
+        let field = vec![[1.0, 0.0, 0.0]; topo.n_nodes];
+
+        let result =
+            transfer_fem_field_to_grid(&topo, &field, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [0, 0, 0]);
+
+        assert_eq!(result.n_total, 0);
+        assert!(result.values.is_empty());
+    }
+
+    #[test]
+    fn normalize_unit_vectors_basic() {
+        let mut vecs = vec![
+            [2.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0], // zero → stays zero
+        ];
+        normalize_unit_vectors(&mut vecs, 1e-12);
+
+        assert!((vecs[0][0] - 1.0).abs() < 1e-14);
+        assert!(vecs[0][1].abs() < 1e-14);
+        assert!((vecs[1][1] - 1.0).abs() < 1e-14);
+        let inv_sqrt3 = 1.0 / 3.0f64.sqrt();
+        for d in 0..3 {
+            assert!((vecs[2][d] - inv_sqrt3).abs() < 1e-14);
+        }
+        // Zero vector untouched
+        assert_eq!(vecs[3], [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn normalize_preserves_direction() {
+        let mut vecs = vec![[0.6, 0.8, 0.0]];
+        normalize_unit_vectors(&mut vecs, 1e-12);
+        let mag = (vecs[0][0].powi(2) + vecs[0][1].powi(2) + vecs[0][2].powi(2)).sqrt();
+        assert!((mag - 1.0).abs() < 1e-14);
+        assert!((vecs[0][0] - 0.6).abs() < 1e-14);
+        assert!((vecs[0][1] - 0.8).abs() < 1e-14);
+    }
+
+    #[test]
+    fn grid_transfer_then_normalize_produces_unit_vectors() {
+        let topo = unit_cube_topo();
+        // Assign unit vectors at nodes that are not aligned
+        let field: Vec<Vector3> = topo
+            .coords
+            .iter()
+            .map(|c| {
+                let v = [c[0] + 0.1, c[1] + 0.2, c[2] + 0.3];
+                let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                [v[0] / mag, v[1] / mag, v[2] / mag]
+            })
+            .collect();
+
+        let mut result =
+            transfer_fem_field_to_grid(&topo, &field, [0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [2, 2, 2]);
+
+        assert_eq!(result.n_located, 8);
+        normalize_unit_vectors(&mut result.values, 1e-12);
+
+        for (i, v) in result.values.iter().enumerate() {
+            let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            assert!(
+                (mag - 1.0).abs() < 1e-12,
+                "cell {}: |m| = {} (expected 1.0)",
+                i,
+                mag
+            );
+        }
     }
 }

@@ -378,13 +378,17 @@ impl NativeFemBackend {
                         0
                     },
                     max_pseudotime_s: stop.and_then(|cfg| cfg.max_pseudotime_s).unwrap_or(0.0),
-                    has_max_physical_time_s: if stop.and_then(|cfg| cfg.max_physical_time_s).is_some()
+                    has_max_physical_time_s: if stop
+                        .and_then(|cfg| cfg.max_physical_time_s)
+                        .is_some()
                     {
                         1
                     } else {
                         0
                     },
-                    max_physical_time_s: stop.and_then(|cfg| cfg.max_physical_time_s).unwrap_or(0.0),
+                    max_physical_time_s: stop
+                        .and_then(|cfg| cfg.max_physical_time_s)
+                        .unwrap_or(0.0),
                 }
             },
             // F-05 fix: enable uniaxial anisotropy when ANY of the relevant
@@ -1094,7 +1098,11 @@ impl NativeFemBackend {
             let value = unsafe { CStr::from_ptr(completion.metric_name.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
-            if value.is_empty() { None } else { Some(value) }
+            if value.is_empty() {
+                None
+            } else {
+                Some(value)
+            }
         } else {
             None
         };

@@ -131,8 +131,7 @@ pub(crate) fn infer_stage_completion(
         };
     };
 
-    let max_torque =
-        effective_max_torque_apm(last, gyromagnetic_ratio, damping, pure_damping_rhs);
+    let max_torque = effective_max_torque_apm(last, gyromagnetic_ratio, damping, pure_damping_rhs);
     let previous_total_energy = steps.iter().rev().nth(1).map(|step| step.e_total);
     let energy_delta = previous_total_energy.map(|previous| (previous - last.e_total).abs());
 
