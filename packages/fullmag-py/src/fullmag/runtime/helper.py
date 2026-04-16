@@ -194,6 +194,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             ),
                             "default_until_seconds": stage.default_until_seconds,
                             "entrypoint_kind": stage.entrypoint_kind,
+                            "action": stage.action,
                         }
                         for stage in (loaded.stages or ())
                     ],

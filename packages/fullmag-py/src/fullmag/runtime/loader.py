@@ -14,6 +14,7 @@ class LoadedStage:
     problem: Problem
     entrypoint_kind: str
     default_until_seconds: float | None = None
+    action: dict[str, object] | None = None
 
     def to_ir(
         self,
@@ -126,6 +127,7 @@ def load_problem_from_script(
                     problem=stage.problem,
                     entrypoint_kind=stage.entrypoint_kind,
                     default_until_seconds=stage.default_until_seconds,
+                    action=stage.action,
                 )
                 for stage in captured_stages
             )
@@ -147,6 +149,7 @@ def load_problem_from_script(
                     problem=stage.problem,
                     entrypoint_kind=stage.entrypoint_kind,
                     default_until_seconds=stage.default_until_seconds,
+                    action=stage.action,
                 )
                 for stage in declared_stages
             )

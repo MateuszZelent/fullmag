@@ -1678,6 +1678,23 @@ function normalizeStageExecutionState(raw: any) {
           .map((value: unknown) => Number(value ?? -1))
           .filter((value: number) => Number.isFinite(value) && value >= 0)
       : [],
+    stages: Array.isArray(raw.stages)
+      ? raw.stages
+          .filter((value: unknown) => value && typeof value === "object")
+          .map((value: any) => ({
+            status: typeof value.status === "string" ? value.status : "pending",
+            reason: typeof value.reason === "string" ? value.reason : null,
+            metric_name: typeof value.metric_name === "string" ? value.metric_name : null,
+            metric_value:
+              typeof value.metric_value === "number" && Number.isFinite(value.metric_value)
+                ? value.metric_value
+                : null,
+            threshold:
+              typeof value.threshold === "number" && Number.isFinite(value.threshold)
+                ? value.threshold
+                : null,
+          }))
+      : [],
     stage_statuses: Array.isArray(raw.stage_statuses)
       ? raw.stage_statuses.filter((value: unknown) => typeof value === "string")
       : [],

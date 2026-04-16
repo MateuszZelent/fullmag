@@ -687,6 +687,8 @@ pub enum DynamicsIR {
         fixed_timestep: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         adaptive_timestep: Option<AdaptiveTimeStepIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field_refresh: Option<FieldRefreshPolicyIR>,
         /// Optional mechanical coupling mode.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mechanics: Option<MechanicsIR>,
@@ -710,6 +712,51 @@ pub struct AdaptiveTimeStepIR {
     pub max_spin_rotation: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub norm_tolerance: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FieldRefreshPolicyIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_interval_s: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RelaxStopIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torque_tolerance_apm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_tolerance_j: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_steps: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_pseudotime_s: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_physical_time_s: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StageStopReason {
+    Torque,
+    Energy,
+    MaxSteps,
+    MaxPseudotime,
+    MaxPhysicalTime,
+    UserCancelled,
+    BackendError,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StageCompletionIR {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<StageStopReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric_value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f64>,
 }
 
 // ── Capability matrix for backend/device/precision/integrator/demag mode ──
@@ -946,10 +993,7 @@ pub enum StudyIR {
     Relaxation {
         algorithm: RelaxationAlgorithmIR,
         dynamics: DynamicsIR,
-        torque_tolerance: f64,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        energy_tolerance: Option<f64>,
-        max_steps: u64,
+        stop: RelaxStopIR,
         sampling: SamplingIR,
     },
     Eigenmodes {
@@ -993,15 +1037,11 @@ impl StudyIR {
             StudyIR::TimeEvolution { .. } | StudyIR::Eigenmodes { .. } => None,
             StudyIR::Relaxation {
                 algorithm,
-                torque_tolerance,
-                energy_tolerance,
-                max_steps,
+                stop,
                 ..
             } => Some(RelaxationControlIR {
                 algorithm: *algorithm,
-                torque_tolerance: *torque_tolerance,
-                energy_tolerance: *energy_tolerance,
-                max_steps: *max_steps,
+                stop: stop.clone(),
             }),
         }
     }
@@ -1138,6 +1178,8 @@ pub struct FdmMultilayerPlanIR {
     pub periodicity: Option<FdmPeriodicityIR>,
     pub integrator: IntegratorChoice,
     pub fixed_timestep: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_refresh: Option<FieldRefreshPolicyIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relaxation: Option<RelaxationControlIR>,
     pub planner_summary: FdmMultilayerSummaryIR,
@@ -1969,6 +2011,8 @@ pub struct FdmPlanIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_timestep: Option<AdaptiveTimeStepIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_refresh: Option<FieldRefreshPolicyIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relaxation: Option<RelaxationControlIR>,
     /// Boundary correction tier: "none" | "volume" (T0) | "full" (T1)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2212,15 +2256,13 @@ pub enum FemDomainMeshModeIR {
 
 /// What the user/script requested for FEM demagnetization realization.
 ///
-/// `Auto` lets the planner choose based on mesh topology:
-/// - shared-domain mesh with air → `PoissonRobin`
-/// - magnetic-only mesh → `TransferGrid`
+/// `Auto` lets the planner choose a Poisson realization based on
+/// shared-domain mesh metadata and explicit boundary policy.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestedFemDemagIR {
     #[default]
     Auto,
-    TransferGrid,
     #[serde(alias = "airbox_dirichlet")]
     PoissonDirichlet,
     #[serde(alias = "poisson_airbox", alias = "airbox_robin")]
@@ -2232,7 +2274,6 @@ pub enum RequestedFemDemagIR {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResolvedFemDemagIR {
-    TransferGrid,
     #[serde(alias = "airbox_dirichlet")]
     PoissonDirichlet,
     #[serde(alias = "poisson_airbox", alias = "airbox_robin")]
@@ -2243,7 +2284,6 @@ impl ResolvedFemDemagIR {
     /// Canonical provenance name for artifact metadata.
     pub fn provenance_name(&self) -> &'static str {
         match self {
-            Self::TransferGrid => "fem_transfer_grid_tensor_fft_newell",
             Self::PoissonDirichlet => "fem_poisson_dirichlet",
             Self::PoissonRobin => "fem_poisson_robin",
         }
@@ -2251,7 +2291,7 @@ impl ResolvedFemDemagIR {
 
     /// Whether this realization uses a Poisson-based airbox solver.
     pub fn is_poisson(&self) -> bool {
-        matches!(self, Self::PoissonDirichlet | Self::PoissonRobin)
+        true
     }
 
     /// Whether this realization uses Robin boundary conditions.
@@ -2293,6 +2333,8 @@ pub struct FemPlanIR {
     pub fixed_timestep: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_timestep: Option<AdaptiveTimeStepIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_refresh: Option<FieldRefreshPolicyIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relaxation: Option<RelaxationControlIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2382,11 +2424,6 @@ pub struct FemPlanIR {
     /// `None` means use env var `FULLMAG_FEM_MFEM_DEVICE` or compiled-in default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mfem_device_string: Option<String>,
-
-    /// FEM-039 fix: explicit transfer-grid cell size for demag, independent of FE hmax.
-    /// `None` means fall back to `hmax`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub demag_transfer_cell_size: Option<f64>,
 
     /// FND-013: use consistent (full) mass matrix for exchange instead of lumped.
     /// `None` or `false` = lumped (default), `true` = consistent (CG solve).
@@ -2509,10 +2546,21 @@ pub struct AirBoxPolicyIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RelaxationControlIR {
     pub algorithm: RelaxationAlgorithmIR,
-    pub torque_tolerance: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub energy_tolerance: Option<f64>,
-    pub max_steps: u64,
+    pub stop: RelaxStopIR,
+}
+
+impl RelaxationControlIR {
+    pub fn torque_tolerance_apm(&self) -> Option<f64> {
+        self.stop.torque_tolerance_apm
+    }
+
+    pub fn energy_tolerance_j(&self) -> Option<f64> {
+        self.stop.energy_tolerance_j
+    }
+
+    pub fn max_steps(&self) -> Option<u64> {
+        self.stop.max_steps
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2590,6 +2638,7 @@ impl ProblemIR {
                     integrator: "heun".to_string(),
                     fixed_timestep: Some(1e-13),
                     adaptive_timestep: None,
+                    field_refresh: None,
                     mechanics: None,
                 },
                 sampling: SamplingIR {
@@ -2806,22 +2855,42 @@ impl ProblemIR {
             }
             StudyIR::Relaxation {
                 dynamics,
-                torque_tolerance,
-                energy_tolerance,
-                max_steps,
+                stop,
                 ..
             } => {
                 validate_study_dynamics(dynamics, &mut errors);
-                if *torque_tolerance <= 0.0 {
-                    errors.push("relaxation.torque_tolerance must be positive".to_string());
+                if stop.torque_tolerance_apm.is_some_and(|value| value <= 0.0) {
+                    errors.push("relaxation.stop.torque_tolerance_apm must be positive".to_string());
                 }
-                if energy_tolerance.is_some_and(|value| value <= 0.0) {
+                if stop.energy_tolerance_j.is_some_and(|value| value <= 0.0) {
                     errors.push(
-                        "relaxation.energy_tolerance must be positive when provided".to_string(),
+                        "relaxation.stop.energy_tolerance_j must be positive when provided".to_string(),
                     );
                 }
-                if *max_steps == 0 {
-                    errors.push("relaxation.max_steps must be > 0".to_string());
+                if stop.max_steps.is_some_and(|value| value == 0) {
+                    errors.push("relaxation.stop.max_steps must be > 0".to_string());
+                }
+                if stop.max_pseudotime_s.is_some_and(|value| value <= 0.0) {
+                    errors.push(
+                        "relaxation.stop.max_pseudotime_s must be positive when provided"
+                            .to_string(),
+                    );
+                }
+                if stop.max_physical_time_s.is_some_and(|value| value <= 0.0) {
+                    errors.push(
+                        "relaxation.stop.max_physical_time_s must be positive when provided"
+                            .to_string(),
+                    );
+                }
+                if stop.torque_tolerance_apm.is_none()
+                    && stop.energy_tolerance_j.is_none()
+                    && stop.max_steps.is_none()
+                    && stop.max_pseudotime_s.is_none()
+                    && stop.max_physical_time_s.is_none()
+                {
+                    errors.push(
+                        "relaxation.stop requires at least one stop criterion".to_string(),
+                    );
                 }
                 for output in &self.study.sampling().outputs {
                     if matches!(
@@ -3341,6 +3410,7 @@ fn validate_study_dynamics(dynamics: &DynamicsIR, errors: &mut Vec<String>) {
             gyromagnetic_ratio,
             integrator,
             fixed_timestep,
+            field_refresh,
             ..
         } => {
             if *gyromagnetic_ratio <= 0.0 {
@@ -3355,6 +3425,16 @@ fn validate_study_dynamics(dynamics: &DynamicsIR, errors: &mut Vec<String>) {
             }
             if fixed_timestep.is_some_and(|value| value <= 0.0) {
                 errors.push("llg.fixed_timestep must be positive when provided".to_string());
+            }
+            if field_refresh
+                .as_ref()
+                .and_then(|policy| policy.demag_interval_s)
+                .is_some_and(|value| value <= 0.0)
+            {
+                errors.push(
+                    "llg.field_refresh.demag_interval_s must be positive when provided"
+                        .to_string(),
+                );
             }
         }
     }
@@ -3435,6 +3515,7 @@ mod tests {
                 integrator: "bogus".to_string(),
                 fixed_timestep: None,
                 adaptive_timestep: None,
+                field_refresh: None,
                 mechanics: None,
             },
             sampling: ir.study.sampling().clone(),

@@ -980,32 +980,37 @@ fn overlay_mesh_workspace(
     );
 }
 
-fn completed_stage_indexes_from_statuses(stage_statuses: &[String]) -> Vec<usize> {
-    stage_statuses
+fn completed_stage_indexes_from_records(stages: &[CurrentLiveStageExecutionRecord]) -> Vec<usize> {
+    stages
         .iter()
         .enumerate()
-        .filter_map(|(index, status)| (status == "completed").then_some(index))
+        .filter_map(|(index, stage)| (stage.status == "completed").then_some(index))
         .collect()
 }
 
-fn stage_execution_from_statuses(
-    stage_statuses: &[String],
+fn stage_execution_from_records(
+    stages: &[CurrentLiveStageExecutionRecord],
     active_stage_index: Option<usize>,
     active_stage_kind: Option<&str>,
     runtime_state: &str,
 ) -> CurrentLiveStageExecutionState {
-    let total_stages = stage_statuses.len();
-    let mut published_statuses = if stage_statuses.is_empty() {
+    let total_stages = stages.len();
+    let mut published_stages = if stages.is_empty() {
         vec![]
     } else {
-        stage_statuses.to_vec()
+        stages.to_vec()
     };
     if let Some(active_index) = active_stage_index.filter(|index| *index < total_stages) {
-        published_statuses[active_index] = runtime_state.to_string();
+        published_stages[active_index].status = runtime_state.to_string();
     }
+    let published_statuses = published_stages
+        .iter()
+        .map(|stage| stage.status.clone())
+        .collect::<Vec<_>>();
     CurrentLiveStageExecutionState {
         total_stages,
-        completed_stage_indexes: completed_stage_indexes_from_statuses(&published_statuses),
+        completed_stage_indexes: completed_stage_indexes_from_records(&published_stages),
+        stages: published_stages,
         stage_statuses: published_statuses,
         active_stage_index,
         active_stage_kind: active_stage_kind.map(|kind| kind.to_string()),
@@ -1017,7 +1022,7 @@ fn stage_execution_from_statuses(
 struct ActiveSequenceState {
     remaining_stages: Vec<fullmag_runner::SequenceStage>,
     current_stage_1based: usize,
-    stage_statuses: Vec<String>,
+    stages: Vec<CurrentLiveStageExecutionRecord>,
 }
 
 impl ActiveSequenceState {
@@ -1026,22 +1031,41 @@ impl ActiveSequenceState {
         Self {
             remaining_stages: stages,
             current_stage_1based: 1,
-            stage_statuses: vec!["pending".to_string(); total_stages],
+            stages: vec![
+                CurrentLiveStageExecutionRecord {
+                    status: "pending".to_string(),
+                    reason: None,
+                    metric_name: None,
+                    metric_value: None,
+                    threshold: None,
+                };
+                total_stages
+            ],
         }
     }
 
     fn total_stages(&self) -> usize {
-        self.stage_statuses.len()
+        self.stages.len()
     }
 
     fn current_stage_index(&self) -> usize {
         self.current_stage_1based.saturating_sub(1)
     }
 
-    fn mark_current(&mut self, status: &str) {
+    fn mark_current(
+        &mut self,
+        status: &str,
+        completion: Option<&fullmag_ir::StageCompletionIR>,
+    ) {
         let current_index = self.current_stage_index();
-        if current_index < self.stage_statuses.len() {
-            self.stage_statuses[current_index] = status.to_string();
+        if current_index < self.stages.len() {
+            self.stages[current_index] = CurrentLiveStageExecutionRecord {
+                status: status.to_string(),
+                reason: completion.and_then(|value| value.reason),
+                metric_name: completion.and_then(|value| value.metric_name.clone()),
+                metric_value: completion.and_then(|value| value.metric_value),
+                threshold: completion.and_then(|value| value.threshold),
+            };
         }
     }
 
@@ -1054,8 +1078,8 @@ impl ActiveSequenceState {
         active_stage_kind: Option<&str>,
         runtime_state: &str,
     ) -> CurrentLiveStageExecutionState {
-        stage_execution_from_statuses(
-            &self.stage_statuses,
+        stage_execution_from_records(
+            &self.stages,
             active_stage_kind.map(|_| self.current_stage_index()),
             active_stage_kind,
             runtime_state,
@@ -1063,7 +1087,7 @@ impl ActiveSequenceState {
     }
 
     fn completed_stage_execution(&self, runtime_state: &str) -> CurrentLiveStageExecutionState {
-        stage_execution_from_statuses(&self.stage_statuses, None, None, runtime_state)
+        stage_execution_from_records(&self.stages, None, None, runtime_state)
     }
 }
 
@@ -4475,7 +4499,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     if !sequence.remaining_stages.is_empty() {
                         let skipped_label = sequence.remaining_stages[0].label();
                         sequence.remaining_stages.remove(0);
-                        sequence.mark_current("skipped");
+                        sequence.mark_current("skipped", None);
                         live_workspace.push_log(
                             "system",
                             format!(
@@ -4794,8 +4818,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         heartbeat.finish();
                     }
                     let failed_ready_at_unix_ms = unix_time_millis().unwrap_or(awaiting_at_unix_ms);
+                    let backend_error_completion = fullmag_ir::StageCompletionIR {
+                        status: "failed".to_string(),
+                        reason: Some(fullmag_ir::StageStopReason::BackendError),
+                        metric_name: None,
+                        metric_value: None,
+                        threshold: None,
+                    };
                     let failed_stage_execution = active_sequence.as_mut().map(|sequence| {
-                        sequence.mark_current("failed");
+                        sequence.mark_current("failed", Some(&backend_error_completion));
                         sequence.stage_execution(Some(&stage.entrypoint_kind), "failed")
                     });
                     if let Some(sequence) = active_sequence.as_ref() {
@@ -5035,7 +5066,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             ),
                         );
                         if let Some(sequence) = active_sequence.as_mut() {
-                            sequence.mark_current("skipped");
+                            sequence.mark_current("skipped", None);
                             sequence.advance();
                             if !sequence.remaining_stages.is_empty() {
                                 let next_stage = sequence.remaining_stages.remove(0);
@@ -5207,7 +5238,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
             // ── Sequence continuation: if there are more stages, advance ──
             if let Some(sequence) = active_sequence.as_mut() {
-                sequence.mark_current("completed");
+                sequence.mark_current("completed", stage_result.completion.as_ref());
                 sequence.advance();
                 if !sequence.remaining_stages.is_empty() {
                     let next_stage = sequence.remaining_stages.remove(0);
@@ -5672,6 +5703,7 @@ mod tests {
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
             relaxation: None,
+            field_refresh: None,
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
@@ -5703,7 +5735,6 @@ mod tests {
             oersted_realization: None,
             gpu_device_index: None,
             mfem_device_string: None,
-            demag_transfer_cell_size: None,
             use_consistent_mass: None,
         })
     }
@@ -5794,6 +5825,7 @@ mod tests {
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
             relaxation: None,
+            field_refresh: None,
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
@@ -5825,7 +5857,6 @@ mod tests {
             oersted_realization: None,
             gpu_device_index: None,
             mfem_device_string: None,
-            demag_transfer_cell_size: None,
             use_consistent_mass: None,
         })
     }
@@ -5888,6 +5919,7 @@ mod tests {
                     integrator: "heun".to_string(),
                     fixed_timestep: Some(1e-13),
                     adaptive_timestep: None,
+                    field_refresh: None,
                     mechanics: None,
                 },
                 sampling: SamplingIR {

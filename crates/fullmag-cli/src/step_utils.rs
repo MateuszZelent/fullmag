@@ -9,7 +9,7 @@ use crate::formatting::unix_time_millis;
 use crate::live_workspace::LocalLiveWorkspace;
 use crate::types::{
     LiveStateManifest, LiveStepView, ResolvedScriptStage, ResolvedScriptStageAction, RunManifest,
-    ScriptExecutionConfig, StudyPipelineDocument, StudyPipelineNode,
+    ScriptExecutionConfig, ScriptExecutionStageAction, StudyPipelineDocument, StudyPipelineNode,
 };
 
 pub(crate) fn emit_initial_state_warnings(
@@ -329,11 +329,9 @@ pub(crate) fn resolve_script_until_seconds(
     }
 
     match &ir.study {
-        fullmag_ir::StudyIR::Relaxation {
-            dynamics,
-            max_steps,
-            ..
-        } => Ok(resolve_relaxation_pseudo_time_seconds(dynamics, *max_steps)),
+        fullmag_ir::StudyIR::Relaxation { dynamics, stop, .. } => {
+            Ok(resolve_relaxation_until_seconds(dynamics, stop))
+        }
         fullmag_ir::StudyIR::TimeEvolution { .. } => bail!(
             "no stop time provided. Define DEFAULT_UNTIL in the script for time-evolution runs"
         ),
@@ -364,6 +362,19 @@ fn resolve_relaxation_pseudo_time_seconds(
             .unwrap_or(1e-13),
     };
     dt * (max_steps as f64)
+}
+
+fn resolve_relaxation_until_seconds(
+    dynamics: &fullmag_ir::DynamicsIR,
+    stop: &fullmag_ir::RelaxStopIR,
+) -> f64 {
+    stop.max_physical_time_s
+        .or(stop.max_pseudotime_s)
+        .or_else(|| {
+            stop.max_steps
+                .map(|max_steps| resolve_relaxation_pseudo_time_seconds(dynamics, max_steps))
+        })
+        .unwrap_or_else(|| resolve_relaxation_pseudo_time_seconds(dynamics, 50_000))
 }
 
 pub(crate) fn materialize_script_stages(
@@ -412,15 +423,80 @@ pub(crate) fn materialize_script_stages(
             if stage.ir.geometry_assets.is_none() {
                 stage.ir.geometry_assets = shared_geometry_assets.clone();
             }
-            let until_seconds =
-                resolve_script_until_seconds(&stage.ir, stage.default_until_seconds)?;
-            Ok(ResolvedScriptStage::solver(
-                stage.ir,
-                until_seconds,
-                stage.entrypoint_kind,
-            ))
+            if let Some(action) = stage.action {
+                Ok(resolve_explicit_stage_action(
+                    stage.ir,
+                    stage.entrypoint_kind,
+                    action,
+                ))
+            } else {
+                let until_seconds =
+                    resolve_script_until_seconds(&stage.ir, stage.default_until_seconds)?;
+                Ok(ResolvedScriptStage::solver(
+                    stage.ir,
+                    until_seconds,
+                    stage.entrypoint_kind,
+                ))
+            }
         })
         .collect()
+}
+
+fn resolve_explicit_stage_action(
+    ir: ProblemIR,
+    entrypoint_kind: String,
+    action: ScriptExecutionStageAction,
+) -> ResolvedScriptStage {
+    let (entrypoint_fallback, resolved_action) = match action {
+        ScriptExecutionStageAction::SaveState {
+            artifact_name,
+            format,
+            dataset,
+        } => (
+            "study_pipeline_save_state",
+            ResolvedScriptStageAction::SaveState {
+                artifact_name,
+                format,
+                dataset,
+            },
+        ),
+        ScriptExecutionStageAction::LoadState {
+            artifact_name,
+            state_path,
+            format,
+            dataset,
+            sample_index,
+        } => (
+            "study_pipeline_load_state",
+            ResolvedScriptStageAction::LoadState {
+                artifact_name,
+                state_path,
+                format,
+                dataset,
+                sample_index,
+            },
+        ),
+        ScriptExecutionStageAction::Export {
+            artifact_name,
+            quantity,
+            format,
+            dataset,
+        } => (
+            "study_pipeline_export",
+            ResolvedScriptStageAction::Export {
+                artifact_name,
+                quantity,
+                format,
+                dataset,
+            },
+        ),
+    };
+    let entrypoint = if entrypoint_kind.trim().is_empty() {
+        entrypoint_fallback.to_string()
+    } else {
+        entrypoint_kind
+    };
+    ResolvedScriptStage::synthetic(ir, entrypoint, resolved_action)
 }
 
 fn materialize_study_pipeline(
@@ -599,19 +675,7 @@ fn materialize_pipeline_macro(
             normalized_kind.as_str(),
         ),
         "hysteresis_loop" => {
-            let quantity = payload_string(config, "quantity").unwrap_or_else(|| "b_ext".to_string());
-            if quantity != "b_ext" && quantity != "external_field" {
-                bail!(
-                    "study pipeline hysteresis_loop currently supports only quantity='b_ext', got '{}'",
-                    quantity
-                );
-            }
-            materialize_pipeline_field_sweep(
-                current_ir,
-                config,
-                default_until_seconds,
-                "hysteresis_loop",
-            )
+            materialize_pipeline_hysteresis_branch(current_ir, config, default_until_seconds)
         }
         "parameter_sweep" => {
             materialize_pipeline_parameter_sweep(current_ir, config, default_until_seconds)
@@ -665,9 +729,7 @@ fn materialize_pipeline_relax(
         algorithm: payload_relaxation_algorithm(payload)?
             .unwrap_or(fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped),
         dynamics,
-        torque_tolerance: payload_f64(payload, "torque_tolerance")?.unwrap_or(1e-4),
-        energy_tolerance: payload_f64(payload, "energy_tolerance")?,
-        max_steps: payload_u64(payload, "max_steps")?.unwrap_or(50_000),
+        stop: payload_relax_stop(payload, true)?,
         sampling,
     };
     let until_seconds = resolve_script_until_seconds(&ir, None)?;
@@ -915,6 +977,162 @@ fn materialize_pipeline_field_sweep(
             save_payload.insert(
                 "artifact_name".to_string(),
                 Value::String(format!("{}_point_{:03}", macro_kind, point_index + 1)),
+            );
+            if let Some(format) = save_format.as_ref() {
+                save_payload.insert("format".to_string(), Value::String(format.clone()));
+            }
+            if let Some(dataset) = save_dataset.as_ref() {
+                save_payload.insert("dataset".to_string(), Value::String(dataset.clone()));
+            }
+            stages.push(materialize_pipeline_save_state(&point_ir, &save_payload)?);
+        }
+    }
+
+    Ok(stages)
+}
+
+fn hysteresis_settle_stop(
+    config: &BTreeMap<String, Value>,
+    default_until_seconds: Option<f64>,
+) -> Result<fullmag_ir::RelaxStopIR> {
+    let mut settle_payload = match config.get("settle") {
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
+        Some(Value::Null) | None => BTreeMap::new(),
+        Some(_) => {
+            bail!("study pipeline hysteresis_loop expects config.settle to be an object")
+        }
+    };
+
+    for key in [
+        "torque_tolerance_apm",
+        "torque_tolerance",
+        "energy_tolerance_j",
+        "energy_tolerance",
+        "max_steps",
+        "max_pseudotime_s",
+        "max_physical_time_s",
+    ] {
+        if !settle_payload.contains_key(key) {
+            if let Some(value) = config.get(key) {
+                settle_payload.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    if !settle_payload.contains_key("max_physical_time_s") {
+        if let Some(settle_until_seconds) =
+            payload_f64(config, "settle_until_seconds")?.or(default_until_seconds)
+        {
+            settle_payload.insert(
+                "max_physical_time_s".to_string(),
+                Value::String(settle_until_seconds.to_string()),
+            );
+        }
+    }
+
+    payload_relax_stop(&settle_payload, true)
+}
+
+fn inject_relax_stop_payload(
+    payload: &mut BTreeMap<String, Value>,
+    stop: &fullmag_ir::RelaxStopIR,
+) {
+    if let Some(value) = stop.torque_tolerance_apm {
+        payload.insert("torque_tolerance_apm".to_string(), Value::String(value.to_string()));
+    }
+    if let Some(value) = stop.energy_tolerance_j {
+        payload.insert("energy_tolerance_j".to_string(), Value::String(value.to_string()));
+    }
+    if let Some(value) = stop.max_steps {
+        payload.insert("max_steps".to_string(), Value::String(value.to_string()));
+    }
+    if let Some(value) = stop.max_pseudotime_s {
+        payload.insert("max_pseudotime_s".to_string(), Value::String(value.to_string()));
+    }
+    if let Some(value) = stop.max_physical_time_s {
+        payload.insert(
+            "max_physical_time_s".to_string(),
+            Value::String(value.to_string()),
+        );
+    }
+}
+
+fn materialize_pipeline_hysteresis_branch(
+    current_ir: &mut ProblemIR,
+    config: &BTreeMap<String, Value>,
+    default_until_seconds: Option<f64>,
+) -> Result<Vec<ResolvedScriptStage>> {
+    let quantity = payload_string(config, "quantity").unwrap_or_else(|| "b_ext".to_string());
+    if quantity != "b_ext" && quantity != "external_field" {
+        bail!(
+            "study pipeline hysteresis_loop currently supports only quantity='b_ext', got '{}'",
+            quantity
+        );
+    }
+
+    let axis = if config.contains_key("direction") {
+        payload_axis(config, "direction", [0.0, 0.0, 1.0])?
+    } else {
+        payload_axis(config, "axis", [0.0, 0.0, 1.0])?
+    };
+    let save_point_state = payload_bool(config, "save_state")?
+        .or(payload_bool(config, "save_point_state")?)
+        .unwrap_or(false);
+    let save_format = payload_string(config, "save_format");
+    let save_dataset = payload_string(config, "save_dataset");
+    let settle_stop = hysteresis_settle_stop(config, default_until_seconds)?;
+
+    let sweep_values_t = if let Some(explicit_values_t) = payload_f64_array(config, "field_values_t")? {
+        if explicit_values_t.is_empty() {
+            bail!("study pipeline hysteresis_loop requires field_values_t to be non-empty");
+        }
+        explicit_values_t
+    } else {
+        let start_mt = payload_f64(config, "start_mT")?.unwrap_or(-100.0);
+        let stop_mt = payload_f64(config, "stop_mT")?.unwrap_or(100.0);
+        let steps = payload_u64(config, "steps")?.unwrap_or(21);
+        if steps == 0 {
+            bail!("study pipeline hysteresis_loop requires steps >= 1");
+        }
+        linear_sweep_values(start_mt, stop_mt, steps)?
+            .into_iter()
+            .map(|value_mt| value_mt * 1e-3)
+            .collect::<Vec<_>>()
+    };
+
+    let mut stages = Vec::with_capacity(sweep_values_t.len() * (1 + usize::from(save_point_state)));
+    for (point_index, amplitude_t) in sweep_values_t.iter().enumerate() {
+        let field_t = scaled_axis(axis, *amplitude_t);
+        apply_pipeline_external_field(current_ir, field_t);
+
+        let mut point_ir = current_ir.clone();
+        apply_pipeline_external_field(&mut point_ir, field_t);
+
+        let mut relax_payload = config.clone();
+        relax_payload.insert(
+            "entrypoint_kind".to_string(),
+            Value::String(format!(
+                "study_pipeline_hysteresis_branch_point_{:03}_relax",
+                point_index + 1
+            )),
+        );
+        inject_relax_stop_payload(&mut relax_payload, &settle_stop);
+        stages.push(materialize_pipeline_relax(&point_ir, &relax_payload)?);
+
+        if save_point_state {
+            let mut save_payload = BTreeMap::<String, Value>::new();
+            save_payload.insert(
+                "entrypoint_kind".to_string(),
+                Value::String(format!(
+                    "study_pipeline_hysteresis_branch_point_{:03}_save_state",
+                    point_index + 1
+                )),
+            );
+            save_payload.insert(
+                "artifact_name".to_string(),
+                Value::String(format!("hysteresis_branch_point_{:03}", point_index + 1)),
             );
             if let Some(format) = save_format.as_ref() {
                 save_payload.insert("format".to_string(), Value::String(format.clone()));
@@ -1243,6 +1461,57 @@ fn payload_bool(payload: &BTreeMap<String, Value>, key: &str) -> Result<Option<b
     }
 }
 
+fn payload_f64_array(payload: &BTreeMap<String, Value>, key: &str) -> Result<Option<Vec<f64>>> {
+    let Some(raw_value) = payload.get(key) else {
+        return Ok(None);
+    };
+    match raw_value {
+        Value::Null => Ok(None),
+        Value::Array(values) => {
+            let mut parsed = Vec::with_capacity(values.len());
+            for (index, value) in values.iter().enumerate() {
+                let component = match value {
+                    Value::Number(number) => number.as_f64().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "invalid numeric component at payload field '{key}[{index}]'"
+                        )
+                    })?,
+                    Value::String(text) => text.trim().parse::<f64>().with_context(|| {
+                        format!(
+                            "invalid floating-point component at payload field '{key}[{index}]'"
+                        )
+                    })?,
+                    _ => {
+                        bail!(
+                            "payload field '{key}' must contain numeric values (array index {index})"
+                        )
+                    }
+                };
+                parsed.push(component);
+            }
+            Ok(Some(parsed))
+        }
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            trimmed
+                .split(',')
+                .map(|component| {
+                    component.trim().parse::<f64>().with_context(|| {
+                        format!(
+                            "invalid floating-point component in comma-separated payload field '{key}'"
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+                .map(Some)
+        }
+        _ => bail!("payload field '{key}' must be an array or comma-separated string"),
+    }
+}
+
 fn payload_relaxation_algorithm(
     payload: &BTreeMap<String, Value>,
 ) -> Result<Option<fullmag_ir::RelaxationAlgorithmIR>> {
@@ -1252,6 +1521,41 @@ fn payload_relaxation_algorithm(
             .map(Some),
         None => Ok(None),
     }
+}
+
+fn payload_relax_stop(
+    payload: &BTreeMap<String, Value>,
+    apply_legacy_defaults: bool,
+) -> Result<fullmag_ir::RelaxStopIR> {
+    let torque_tolerance_apm = payload_f64(payload, "torque_tolerance_apm")?
+        .or(payload_f64(payload, "torque_tolerance")?);
+    let energy_tolerance_j =
+        payload_f64(payload, "energy_tolerance_j")?.or(payload_f64(payload, "energy_tolerance")?);
+    let max_steps = payload_u64(payload, "max_steps")?;
+    let max_pseudotime_s = payload_f64(payload, "max_pseudotime_s")?;
+    let max_physical_time_s = payload_f64(payload, "max_physical_time_s")?;
+
+    let any_explicit = torque_tolerance_apm.is_some()
+        || energy_tolerance_j.is_some()
+        || max_steps.is_some()
+        || max_pseudotime_s.is_some()
+        || max_physical_time_s.is_some();
+
+    Ok(fullmag_ir::RelaxStopIR {
+        torque_tolerance_apm: if apply_legacy_defaults && !any_explicit {
+            Some(1e-4)
+        } else {
+            torque_tolerance_apm
+        },
+        energy_tolerance_j,
+        max_steps: if apply_legacy_defaults && !any_explicit {
+            Some(50_000)
+        } else {
+            max_steps
+        },
+        max_pseudotime_s,
+        max_physical_time_s,
+    })
 }
 
 fn payload_eigen_target(
@@ -1709,8 +2013,13 @@ pub(crate) fn build_interactive_command_stage(
                 });
             }
             let sampling = ir.study.sampling().clone();
-            let max_steps = command.max_steps.unwrap_or(50_000);
-            let torque_tolerance = command.torque_tolerance.unwrap_or(1e-4);
+            let stop = fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(command.torque_tolerance.unwrap_or(1e-4)),
+                energy_tolerance_j: command.energy_tolerance,
+                max_steps: Some(command.max_steps.unwrap_or(50_000)),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            };
 
             // Default relax_alpha = 1.0 for optimal overdamped convergence
             // (user can still override to any value via command.relax_alpha)
@@ -1729,13 +2038,11 @@ pub(crate) fn build_interactive_command_stage(
             ir.study = fullmag_ir::StudyIR::Relaxation {
                 algorithm,
                 dynamics: dynamics.clone(),
-                torque_tolerance,
-                energy_tolerance: command.energy_tolerance,
-                max_steps,
+                stop: stop.clone(),
                 sampling,
             };
 
-            let until_seconds = resolve_relaxation_pseudo_time_seconds(&dynamics, max_steps);
+            let until_seconds = resolve_relaxation_until_seconds(&dynamics, &stop);
 
             Ok(Some(ResolvedScriptStage::solver(
                 ir,
@@ -2109,7 +2416,13 @@ mod tests {
         assert_eq!(stages[1].entrypoint_kind, "pipeline_relax");
         assert!(matches!(
             stages[1].ir.study,
-            fullmag_ir::StudyIR::Relaxation { max_steps: 25, .. }
+            fullmag_ir::StudyIR::Relaxation {
+                stop: fullmag_ir::RelaxStopIR {
+                    max_steps: Some(25),
+                    ..
+                },
+                ..
+            }
         ));
         assert!((stages[1].until_seconds - (25.0 * 2e-13)).abs() < 1e-24);
     }
@@ -2303,6 +2616,7 @@ mod tests {
             ir: sample_problem_ir(),
             default_until_seconds: Some(7e-12),
             entrypoint_kind: "explicit_run".to_string(),
+            action: None,
         };
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
@@ -2332,6 +2646,42 @@ mod tests {
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].entrypoint_kind, "explicit_run");
         assert!((stages[0].until_seconds - 7e-12).abs() < 1e-24);
+    }
+
+    #[test]
+    fn materialize_script_stages_supports_explicit_synthetic_save_state_action() {
+        let explicit_stage = crate::types::ScriptExecutionStage {
+            ir: sample_problem_ir(),
+            default_until_seconds: None,
+            entrypoint_kind: "explicit_save_state".to_string(),
+            action: Some(crate::types::ScriptExecutionStageAction::SaveState {
+                artifact_name: "snapshot_point_001".to_string(),
+                format: Some("json".to_string()),
+                dataset: Some("values".to_string()),
+            }),
+        };
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: None,
+            stages: vec![explicit_stage],
+        };
+
+        let stages = materialize_script_stages(config).expect("explicit save_state should materialize");
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].entrypoint_kind, "explicit_save_state");
+        assert_eq!(stages[0].until_seconds, 0.0);
+        assert!(matches!(
+            &stages[0].action,
+            Some(ResolvedScriptStageAction::SaveState {
+                artifact_name,
+                format,
+                dataset,
+            }) if artifact_name == "snapshot_point_001"
+                && format.as_deref() == Some("json")
+                && dataset.as_deref() == Some("values")
+        ));
     }
 
     #[test]
@@ -2503,8 +2853,14 @@ mod tests {
         assert_eq!(stages[0].entrypoint_kind, "study_pipeline_relax_run_relax");
         assert!(matches!(
             stages[0].ir.study,
-            fullmag_ir::StudyIR::Relaxation { max_steps: 40, torque_tolerance, .. }
-                if (torque_tolerance - 5e-7).abs() < 1e-24
+            fullmag_ir::StudyIR::Relaxation {
+                stop: fullmag_ir::RelaxStopIR {
+                    max_steps: Some(40),
+                    torque_tolerance_apm: Some(torque_tolerance),
+                    ..
+                },
+                ..
+            } if (torque_tolerance - 5e-7).abs() < 1e-24
         ));
         assert_eq!(stages[1].entrypoint_kind, "study_pipeline_relax_run_run");
         assert!((stages[1].until_seconds - 9e-12).abs() < 1e-24);
@@ -2573,11 +2929,13 @@ mod tests {
                     macro_kind: "hysteresis_loop".to_string(),
                     config: serde_json::from_value(json!({
                         "quantity": "b_ext",
-                        "axis": "x",
-                        "start_mT": -20,
-                        "stop_mT": 20,
-                        "steps": 2,
-                        "relax_each": false
+                        "direction": [1.0, 0.0, 0.0],
+                        "field_values_t": [-0.02, 0.02],
+                        "settle": {
+                            "torque_tolerance_apm": 5e-7,
+                            "max_steps": 40,
+                            "max_physical_time_s": 2e-12
+                        }
                     }))
                     .expect("config"),
                 }],
@@ -2591,12 +2949,25 @@ mod tests {
         assert_eq!(zeeman_field(&stages[1].ir), Some([0.02, 0.0, 0.0]));
         assert_eq!(
             stages[0].entrypoint_kind,
-            "study_pipeline_hysteresis_loop_point_001_run"
+            "study_pipeline_hysteresis_branch_point_001_relax"
         );
         assert_eq!(
             stages[1].entrypoint_kind,
-            "study_pipeline_hysteresis_loop_point_002_run"
+            "study_pipeline_hysteresis_branch_point_002_relax"
         );
+        assert!(matches!(
+            stages[0].ir.study,
+            fullmag_ir::StudyIR::Relaxation {
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(torque_tolerance_apm),
+                    max_steps: Some(40),
+                    max_physical_time_s: Some(max_physical_time_s),
+                    ..
+                },
+                ..
+            } if (torque_tolerance_apm - 5e-7).abs() < 1e-24
+                && (max_physical_time_s - 2e-12).abs() < 1e-24
+        ));
     }
 
     #[test]
@@ -2661,7 +3032,6 @@ mod tests {
                         "start_mT": -5,
                         "stop_mT": 5,
                         "steps": 2,
-                        "relax_each": false,
                         "save_point_state": true
                     }))
                     .expect("config"),
@@ -2672,6 +3042,14 @@ mod tests {
 
         let stages = materialize_script_stages(config).expect("hysteresis should materialize");
         assert_eq!(stages.len(), 4);
+        assert_eq!(
+            stages[0].entrypoint_kind,
+            "study_pipeline_hysteresis_branch_point_001_relax"
+        );
+        assert_eq!(
+            stages[2].entrypoint_kind,
+            "study_pipeline_hysteresis_branch_point_002_relax"
+        );
         assert!(matches!(
             &stages[1].action,
             Some(ResolvedScriptStageAction::SaveState { .. })

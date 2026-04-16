@@ -108,7 +108,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         resolved_demag_realization: None,
         dt_policy: None,
         mfem_device: None,
-        demag_transfer_cell_size: None,
+        demag_refresh_interval_s: None,
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
@@ -193,7 +193,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         }
 
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-            latest_stats.step >= control.max_steps
+            latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                 || relaxation_converged(
                     control,
                     &latest_stats,
@@ -243,14 +243,23 @@ pub(crate) fn execute_reference_fdm_multilayer(
     }
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let status = if cancelled {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
+    let completion = crate::relaxation::infer_stage_completion(
+        status,
+        plan.relaxation.as_ref(),
+        &steps,
+        plan.gyromagnetic_ratio,
+        average_damping(&contexts),
+        pure_damping_relax,
+    );
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization: flatten_layers(
                 &states
@@ -258,6 +267,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
                     .map(|state| state.magnetization().to_vec())
                     .collect::<Vec<_>>(),
             ),
+            completion: Some(completion),
         },
         initial_magnetization,
         field_snapshots,
@@ -1030,11 +1040,16 @@ mod tests {
             periodicity: None,
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
+            field_refresh: None,
             relaxation: Some(RelaxationControlIR {
                 algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
-                torque_tolerance: 1e-4,
-                energy_tolerance: None,
-                max_steps: 10,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-4),
+                    energy_tolerance_j: None,
+                    max_steps: Some(10),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
             }),
             planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
                 requested_strategy: "multilayer_convolution".to_string(),

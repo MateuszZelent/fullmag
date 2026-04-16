@@ -38,7 +38,7 @@ use crate::native_fem;
 use crate::native_fem::NativeFemBackend;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::quantities::normalized_quantity_name;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::relaxation_converged;
@@ -1756,6 +1756,14 @@ fn execute_fem_eigen_path(
             status: crate::types::RunStatus::Completed,
             steps: vec![],
             final_magnetization: plan.equilibrium_magnetization.clone(),
+            completion: Some(crate::relaxation::infer_stage_completion(
+                crate::types::RunStatus::Completed,
+                None,
+                &[],
+                0.0,
+                0.0,
+                false,
+            )),
         },
         initial_magnetization: plan.equilibrium_magnetization.clone(),
         field_snapshots: Vec::new(),
@@ -1966,7 +1974,7 @@ fn execute_cuda_fdm(
             &mut artifacts,
         )?;
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-            stats.step >= control.max_steps
+            stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                 || relaxation_converged(
                     control,
                     &stats,
@@ -1995,16 +2003,26 @@ fn execute_cuda_fdm(
 
     let final_magnetization = backend.copy_m(cell_count)?;
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let status = if cancelled {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
+    let completion = crate::relaxation::infer_stage_completion(
+        status,
+        plan.relaxation.as_ref(),
+        &steps,
+        plan.gyromagnetic_ratio,
+        plan.material.damping,
+        llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
+    );
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization,
+            completion: Some(completion),
         },
         initial_magnetization,
         field_snapshots,
@@ -2092,7 +2110,7 @@ fn execute_native_fem(
     // FEM-013 fix: serialize resolved demag realization and integrator in provenance.
     let resolved_demag = plan
         .demag_realization
-        .unwrap_or(fullmag_ir::ResolvedFemDemagIR::TransferGrid);
+        .unwrap_or(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
     let provenance = ExecutionProvenance {
         execution_engine: execution_engine.to_string(),
         precision: match plan.precision {
@@ -2131,7 +2149,10 @@ fn execute_native_fem(
             Some("fallback".to_string())
         },
         mfem_device: plan.mfem_device_string.clone(),
-        demag_transfer_cell_size: plan.demag_transfer_cell_size,
+        demag_refresh_interval_s: plan
+            .field_refresh
+            .as_ref()
+            .and_then(|policy| policy.demag_interval_s),
         ..Default::default()
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
@@ -2146,6 +2167,7 @@ fn execute_native_fem(
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
     let mut previous_total_energy: Option<f64> = None;
+    let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
     let mut current_stats = backend.snapshot_step_stats(node_count)?;
@@ -2175,7 +2197,7 @@ fn execute_native_fem(
         let mut reset_consecutive: u64 = 0;
         let mut direct_step: u64 = 0;
 
-        while direct_step < control.max_steps {
+        while direct_step < control.stop.max_steps.unwrap_or(u64::MAX) {
             if let Some(live) = live.as_mut() {
                 if let Some(display_selection) = live.display_selection.map(|get| get()) {
                     let preview_due = display_refresh_due(
@@ -2217,7 +2239,11 @@ fn execute_native_fem(
             }
 
             let max_torque = max_torque_from_field(&m, &h_eff);
-            if max_torque <= control.torque_tolerance {
+            if control
+                .stop
+                .torque_tolerance_apm
+                .is_some_and(|threshold| max_torque <= threshold)
+            {
                 break;
             }
             let g_norm_sq = global_dot_vec3(&g, &g);
@@ -2391,10 +2417,15 @@ fn execute_native_fem(
                 break;
             }
 
-            if let Some(etol) = control.energy_tolerance {
+            if let Some(etol) = control.stop.energy_tolerance_j {
                 let energy_delta = (prev_energy - energy).abs();
                 let torque = max_torque_from_field(&m, &h_eff);
-                if torque <= control.torque_tolerance && energy_delta <= etol {
+                if control
+                    .stop
+                    .torque_tolerance_apm
+                    .is_some_and(|threshold| torque <= threshold)
+                    && energy_delta <= etol
+                {
                     break;
                 }
             }
@@ -2405,8 +2436,14 @@ fn execute_native_fem(
              max_steps={} torque_tol={:.4e} adaptive={}",
             until_seconds,
             dt,
-            plan.relaxation.as_ref().map_or(0, |c| c.max_steps),
-            plan.relaxation.as_ref().map_or(0.0, |c| c.torque_tolerance),
+            plan.relaxation
+                .as_ref()
+                .and_then(|c| c.stop.max_steps)
+                .unwrap_or(0),
+            plan.relaxation
+                .as_ref()
+                .and_then(|c| c.stop.torque_tolerance_apm)
+                .unwrap_or(0.0),
             !dt_is_fixed,
         );
         while current_time < until_seconds {
@@ -2536,32 +2573,51 @@ fn execute_native_fem(
                 steps.push(stats);
             }
             let latest = steps.last().expect("just pushed stats");
-            let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                let max_steps_hit = latest.step >= control.max_steps;
-                let converged = relaxation_converged(
-                    control,
-                    latest,
-                    previous_total_energy,
-                    plan.gyromagnetic_ratio,
-                    plan.material.damping,
-                    false,
-                );
-                if max_steps_hit || converged {
-                    eprintln!(
-                        "[fullmag-runner] native-fem relaxation stop at step {}: \
-                         max_steps_hit={max_steps_hit} (step={} >= max_steps={}), \
-                         converged={converged} \
-                         (max_torque_T={:.4e} torque_tol={:.4e} energy_tol={:?})",
-                        latest.step,
-                        latest.step,
-                        control.max_steps,
-                        latest.max_torque_T,
-                        control.torque_tolerance,
-                        control.energy_tolerance,
+            let stop_for_relaxation = if let Some(control) = plan.relaxation.as_ref() {
+                if let Some(completion) = backend.stage_completion()? {
+                    backend_completion = Some(completion);
+                    true
+                } else {
+                    let max_steps_hit = latest.step >= control.stop.max_steps.unwrap_or(u64::MAX);
+                    let converged = relaxation_converged(
+                        control,
+                        latest,
+                        previous_total_energy,
+                        plan.gyromagnetic_ratio,
+                        plan.material.damping,
+                        false,
                     );
+                    if max_steps_hit || converged {
+                        eprintln!(
+                            "[fullmag-runner] native-fem relaxation stop at step {}: \
+                             max_steps_hit={max_steps_hit} (step={} >= max_steps={}), \
+                             converged={converged} \
+                             (max_torque_T={:.4e} torque_tol={} energy_tol={})",
+                            latest.step,
+                            latest.step,
+                            control
+                                .stop
+                                .max_steps
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "none".to_string()),
+                            latest.max_torque_T,
+                            control
+                                .stop
+                                .torque_tolerance_apm
+                                .map(|value| format!("{value:.4e}"))
+                                .unwrap_or_else(|| "none".to_string()),
+                            control
+                                .stop
+                                .energy_tolerance_j
+                                .map(|value| format!("{value:.4e}"))
+                                .unwrap_or_else(|| "none".to_string()),
+                        );
+                    }
+                    max_steps_hit || converged
                 }
-                max_steps_hit || converged
-            });
+            } else {
+                false
+            };
             previous_total_energy = Some(latest.e_total);
             if stop_for_relaxation {
                 break;
@@ -2618,16 +2674,37 @@ fn execute_native_fem(
 
     let final_magnetization = backend.copy_m(node_count)?;
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let status = if cancelled {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
+    let completion = if let Some(mut completion) = backend_completion {
+        completion.status = match status {
+            RunStatus::Completed => "completed",
+            RunStatus::Cancelled => "cancelled",
+            RunStatus::Paused => "paused",
+            RunStatus::Failed => "failed",
+        }
+        .to_string();
+        completion
+    } else {
+        crate::relaxation::infer_stage_completion(
+            status,
+            plan.relaxation.as_ref(),
+            &steps,
+            plan.gyromagnetic_ratio,
+            plan.material.damping,
+            llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
+        )
+    };
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization,
+            completion: Some(completion),
         },
         initial_magnetization,
         field_snapshots,
@@ -3063,7 +3140,6 @@ mod tests {
             oersted_realization: None,
             gpu_device_index: None,
             mfem_device_string: None,
-            demag_transfer_cell_size: None,
             dmi_interface_normal: None,
             use_consistent_mass: None,
         }

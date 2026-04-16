@@ -14,7 +14,6 @@ class Exchange:
 
 _DEMAG_CANONICAL = frozenset({
     "auto",
-    "transfer_grid",
     "poisson_dirichlet",
     "poisson_robin",
 })
@@ -26,6 +25,10 @@ _DEMAG_LEGACY_ALIASES: dict[str, str] = {
 }
 
 _DEMAG_ALLOWED = frozenset({None}) | _DEMAG_CANONICAL | frozenset(_DEMAG_LEGACY_ALIASES)
+_DEMAG_TRANSFER_GRID_REMOVAL_MESSAGE = (
+    "FEM transfer_grid został usunięty. "
+    "Zbuduj shared_domain_mesh_with_air i użyj Poisson Robin/Dirichlet."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +36,8 @@ class Demag:
     realization: str | None = None
 
     def __post_init__(self) -> None:
+        if self.realization == "transfer_grid":
+            raise ValueError(_DEMAG_TRANSFER_GRID_REMOVAL_MESSAGE)
         if self.realization not in _DEMAG_ALLOWED:
             raise ValueError(
                 f"Demag realization must be one of {sorted(r for r in _DEMAG_ALLOWED if r is not None)!r} "

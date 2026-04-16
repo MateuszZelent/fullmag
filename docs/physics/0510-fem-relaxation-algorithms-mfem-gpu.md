@@ -14,6 +14,7 @@
   - `docs/physics/0410-fem-exchange-demag-zeeman-mfem-gpu.md`
   - `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`
   - `docs/physics/0490-fem-higher-order-and-adaptive-time-integrators-mfem-gpu.md`
+  - `docs/physics/0530-shared-relaxation-stop-and-field-refresh-semantics.md`
   - `docs/physics/0500-fdm-relaxation-algorithms.md`
 
 ## 1. Problem statement
@@ -31,6 +32,10 @@ Current repo status relevant to this note:
   `llg_overdamped`, `projected_gradient_bb`, and `nonlinear_cg`
   (see `0500-fdm-relaxation-algorithms.md` for full specification),
 - higher-order FEM relaxation methods remain defined but not yet public-executable.
+
+Shared stop/refresh semantics now live in
+`0530-shared-relaxation-stop-and-field-refresh-semantics.md`. This note focuses
+on how those shared controls are interpreted by the FEM stack.
 
 For FEM, relaxation is especially important because:
 

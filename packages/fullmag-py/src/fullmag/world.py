@@ -51,10 +51,11 @@ from fullmag.model.dynamics import (
     SUPPORTED_INTEGRATORS,
     AdaptiveTimestep,
     DEFAULT_GAMMA,
+    FieldRefreshPolicy,
     LLG,
 )
 from fullmag.model.outputs import SaveField, SaveScalar, SaveSpectrum, SaveMode, SaveDispersion, Snapshot, parse_snapshot_quantity
-from fullmag.model.study import Eigenmodes, Relaxation, TimeEvolution
+from fullmag.model.study import Eigenmodes, RelaxStop, Relaxation, TimeEvolution
 from fullmag.model.structure import Ferromagnet, Material, Region
 from fullmag.model.problem import (
     BackendTarget,
@@ -801,6 +802,7 @@ class _WorldState:
     _max_error: float | None = None
     _integrator: str | None = None
     _gamma: float | None = None
+    _demag_interval_s: float | None = None
     _interactive: bool = False
     _wait_for_solve: bool = False
     _adaptive_mesh: dict[str, object] | None = None
@@ -822,7 +824,7 @@ class _WorldState:
     _geometry_asset_cache: dict[str, dict[str, object] | None] = field(default_factory=dict)
     _default_mesh_spec: _MeshSpecState = field(default_factory=_MeshSpecState)
     _script_source_root: Path | None = None
-    _declared_stages: list[object] = field(default_factory=list)
+    _declared_stages: list[CapturedStage] = field(default_factory=list)
 
 
 # Module-level singleton
@@ -836,6 +838,7 @@ class CapturedStage:
     problem: Problem
     entrypoint_kind: str
     default_until_seconds: float | None = None
+    action: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -844,10 +847,14 @@ class RelaxStageSpec:
     max_steps: int = 50_000
     algorithm: str = "llg_overdamped"
     energy_tolerance: float | None = None
+    max_pseudotime_s: float | None = None
+    max_physical_time_s: float | None = None
     relax_alpha: float | None = 1.0
     solver: str | None = None
     dt: float | Literal["auto"] | None = None
     max_error: float | None = None
+    field_refresh: FieldRefreshPolicy | None = None
+    stop: RelaxStop | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -867,6 +874,13 @@ class EigenmodesStageSpec:
     damping_policy: str = "ignore"
     k_vector: tuple[float, float, float] | None = None
     bc: str | dict[str, object] = "free"
+
+
+@dataclass(frozen=True, slots=True)
+class SaveStateStageSpec:
+    artifact_name: str = "state_snapshot"
+    format: str | None = None
+    dataset: str | None = None
 
 
 _captured_stages: list[CapturedStage] = []
@@ -1057,32 +1071,107 @@ def _set_magnetization_continuation_from_result(result: object) -> None:
     _state._magnets[0].m = SampledMagnetization(final_m)
 
 
+def _resolve_flat_relax_stop(
+    *,
+    stop: RelaxStop | None,
+    tol: float,
+    energy_tolerance: float | None,
+    max_steps: int,
+    max_pseudotime_s: float | None,
+    max_physical_time_s: float | None,
+) -> tuple[RelaxStop | None, float, float | None, int, float | None, float | None]:
+    if stop is None:
+        return (
+            None,
+            tol,
+            energy_tolerance,
+            max_steps,
+            max_pseudotime_s,
+            max_physical_time_s,
+        )
+    resolved_stop = RelaxStop(
+        torque_tolerance_apm=(
+            stop.torque_tolerance_apm
+            if stop.torque_tolerance_apm is not None
+            else tol
+        ),
+        energy_tolerance_j=(
+            stop.energy_tolerance_j
+            if stop.energy_tolerance_j is not None
+            else energy_tolerance
+        ),
+        max_steps=stop.max_steps if stop.max_steps is not None else max_steps,
+        max_pseudotime_s=(
+            stop.max_pseudotime_s
+            if stop.max_pseudotime_s is not None
+            else max_pseudotime_s
+        ),
+        max_physical_time_s=(
+            stop.max_physical_time_s
+            if stop.max_physical_time_s is not None
+            else max_physical_time_s
+        ),
+    )
+    return (
+        resolved_stop,
+        resolved_stop.torque_tolerance_apm or tol,
+        resolved_stop.energy_tolerance_j,
+        resolved_stop.max_steps or max_steps,
+        resolved_stop.max_pseudotime_s,
+        resolved_stop.max_physical_time_s,
+    )
+
+
 def relax_stage(
     *,
     tol: float = 1e-6,
     max_steps: int = 50_000,
     algorithm: str = "llg_overdamped",
     energy_tolerance: float | None = None,
+    max_pseudotime_s: float | None = None,
+    max_physical_time_s: float | None = None,
     relax_alpha: float | None = 1.0,
     solver: str | None = None,
     dt: float | Literal["auto"] | None = None,
     max_error: float | None = None,
+    field_refresh: FieldRefreshPolicy | None = None,
+    stop: RelaxStop | None = None,
 ) -> RelaxStageSpec:
+    (
+        resolved_stop,
+        tol,
+        energy_tolerance,
+        max_steps,
+        max_pseudotime_s,
+        max_physical_time_s,
+    ) = _resolve_flat_relax_stop(
+        stop=stop,
+        tol=tol,
+        energy_tolerance=energy_tolerance,
+        max_steps=max_steps,
+        max_pseudotime_s=max_pseudotime_s,
+        max_physical_time_s=max_physical_time_s,
+    )
     _build_relax_llg_dynamics(
         algorithm=algorithm,
         solver=solver,
         dt=dt,
         max_error=max_error,
+        field_refresh=field_refresh,
     )
     return RelaxStageSpec(
         tol=tol,
         max_steps=max_steps,
         algorithm=algorithm,
         energy_tolerance=energy_tolerance,
+        max_pseudotime_s=max_pseudotime_s,
+        max_physical_time_s=max_physical_time_s,
         relax_alpha=relax_alpha,
         solver=solver,
         dt=dt,
         max_error=max_error,
+        field_refresh=field_refresh,
+        stop=resolved_stop,
     )
 
 
@@ -1119,12 +1208,26 @@ def eigenmodes_stage(
     )
 
 
+def save_state_stage(
+    *,
+    artifact_name: str = "state_snapshot",
+    format: str | None = None,
+    dataset: str | None = None,
+) -> SaveStateStageSpec:
+    return SaveStateStageSpec(
+        artifact_name=require_non_empty(artifact_name, "artifact_name"),
+        format=str(format) if format is not None else None,
+        dataset=str(dataset) if dataset is not None else None,
+    )
+
+
 def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
     relax_dynamics = _build_relax_llg_dynamics(
         algorithm=spec.algorithm,
         solver=spec.solver,
         dt=spec.dt,
         max_error=spec.max_error,
+        field_refresh=spec.field_refresh,
     )
     problem = _build_problem(
         study_kind="relaxation",
@@ -1132,6 +1235,9 @@ def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
         relax_torque_tolerance=spec.tol,
         relax_energy_tolerance=spec.energy_tolerance,
         relax_max_steps=spec.max_steps,
+        relax_max_pseudotime_s=spec.max_pseudotime_s,
+        relax_max_physical_time_s=spec.max_physical_time_s,
+        relax_stop=spec.stop,
         relax_dynamics=relax_dynamics,
     )
     if spec.relax_alpha is None:
@@ -1180,8 +1286,20 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
             entrypoint_kind="flat_eigenmodes",
             default_until_seconds=None,
         )
+    if isinstance(stage_spec, SaveStateStageSpec):
+        return CapturedStage(
+            problem=_build_problem(),
+            entrypoint_kind="flat_save_state",
+            default_until_seconds=None,
+            action={
+                "kind": "save_state",
+                "artifact_name": stage_spec.artifact_name,
+                "format": stage_spec.format,
+                "dataset": stage_spec.dataset,
+            },
+        )
     raise TypeError(
-        "study.stages.add_stage(...) expects fm.relax_stage(...), fm.run_stage(...), or fm.eigenmodes_stage(...)"
+        "study.stages.add_stage(...) expects fm.relax_stage(...), fm.run_stage(...), fm.eigenmodes_stage(...), or fm.save_state_stage(...)"
     )
 
 
@@ -1565,15 +1683,15 @@ def capture_workspace_problem() -> Problem | None:
 def capture_declared_stages() -> list[CapturedStage]:
     if not _capture_enabled:
         return []
-    return [_capture_stage(stage_spec) for stage_spec in _state._declared_stages]
+    return list(_state._declared_stages)
 
 
 class StudyStagesBuilder:
     """Declarative stage authoring facade for the flat study builder."""
 
     def add_stage(self, stage_spec: object) -> "StudyStagesBuilder":
-        _capture_stage(stage_spec)
-        _state._declared_stages.append(stage_spec)
+        captured_stage = _capture_stage(stage_spec)
+        _state._declared_stages.append(captured_stage)
         if _state._interactive:
             _state._wait_for_solve = True
         return self
@@ -1585,10 +1703,14 @@ class StudyStagesBuilder:
         max_steps: int = 50_000,
         algorithm: str = "llg_overdamped",
         energy_tolerance: float | None = None,
+        max_pseudotime_s: float | None = None,
+        max_physical_time_s: float | None = None,
         relax_alpha: float | None = 1.0,
         solver: str | None = None,
         dt: float | Literal["auto"] | None = None,
         max_error: float | None = None,
+        field_refresh: FieldRefreshPolicy | None = None,
+        stop: RelaxStop | None = None,
     ) -> "StudyStagesBuilder":
         return self.add_stage(
             relax_stage(
@@ -1596,10 +1718,14 @@ class StudyStagesBuilder:
                 max_steps=max_steps,
                 algorithm=algorithm,
                 energy_tolerance=energy_tolerance,
+                max_pseudotime_s=max_pseudotime_s,
+                max_physical_time_s=max_physical_time_s,
                 relax_alpha=relax_alpha,
                 solver=solver,
                 dt=dt,
                 max_error=max_error,
+                field_refresh=field_refresh,
+                stop=stop,
             )
         )
 
@@ -1650,6 +1776,61 @@ class StudyStagesBuilder:
                 bc=bc,
             )
         )
+
+    def add_save_state(
+        self,
+        *,
+        artifact_name: str = "state_snapshot",
+        format: str | None = None,
+        dataset: str | None = None,
+    ) -> "StudyStagesBuilder":
+        return self.add_stage(
+            save_state_stage(
+                artifact_name=artifact_name,
+                format=format,
+                dataset=dataset,
+            )
+        )
+
+    def add_hysteresis_branch(
+        self,
+        *,
+        field_values_t: Sequence[float],
+        direction: Sequence[float] = (0.0, 0.0, 1.0),
+        settle: RelaxStop | None = None,
+        save_state: bool = False,
+    ) -> "StudyStagesBuilder":
+        """Add a branch sweep that settles each field point with relaxation."""
+        values = [float(value) for value in field_values_t]
+        if not values:
+            raise ValueError("field_values_t must not be empty")
+
+        axis = as_vector3(direction, "direction")
+        axis_norm = math.sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2])
+        if axis_norm <= 0.0:
+            raise ValueError("direction must not be the zero vector")
+        direction_unit = (
+            axis[0] / axis_norm,
+            axis[1] / axis_norm,
+            axis[2] / axis_norm,
+        )
+
+        settle_stop = settle if settle is not None else RelaxStop()
+        for point_index, magnitude_t in enumerate(values):
+            b_ext(
+                magnitude_t * direction_unit[0],
+                magnitude_t * direction_unit[1],
+                magnitude_t * direction_unit[2],
+            )
+            self.add_relax(
+                algorithm="llg_overdamped",
+                stop=settle_stop,
+            )
+            if save_state:
+                self.add_save_state(
+                    artifact_name=f"hysteresis_branch_point_{point_index + 1:03d}"
+                )
+        return self
 
 
 def _configure_study_universe(
@@ -1931,8 +2112,16 @@ class StudyBuilder:
         integrator: str | None = None,
         gamma: float | None = None,
         g: float | None = None,
+        demag_interval_s: float | None = None,
     ) -> "StudyBuilder":
-        solver(dt=dt, max_error=max_error, integrator=integrator, gamma=gamma, g=g)
+        solver(
+            dt=dt,
+            max_error=max_error,
+            integrator=integrator,
+            gamma=gamma,
+            g=g,
+            demag_interval_s=demag_interval_s,
+        )
         return self
 
     def b_ext(
@@ -2057,20 +2246,28 @@ class StudyBuilder:
         max_steps: int = 50_000,
         algorithm: str = "llg_overdamped",
         energy_tolerance: float | None = None,
+        max_pseudotime_s: float | None = None,
+        max_physical_time_s: float | None = None,
         relax_alpha: float | None = 1.0,
         solver: str | None = None,
         dt: float | Literal["auto"] | None = None,
         max_error: float | None = None,
+        field_refresh: FieldRefreshPolicy | None = None,
+        stop: RelaxStop | None = None,
     ) -> Any:
         return relax(
             tol=tol,
             max_steps=max_steps,
             algorithm=algorithm,
             energy_tolerance=energy_tolerance,
+            max_pseudotime_s=max_pseudotime_s,
+            max_physical_time_s=max_physical_time_s,
             relax_alpha=relax_alpha,
             solver=solver,
             dt=dt,
             max_error=max_error,
+            field_refresh=field_refresh,
+            stop=stop,
         )
 
     def minimize(
@@ -2999,6 +3196,7 @@ def solver(
     integrator: str | None = None,
     gamma: float | None = None,
     g: float | None = None,
+    demag_interval_s: float | None = None,
 ) -> None:
     """Configure the time integrator.
 
@@ -3025,6 +3223,10 @@ def solver(
         _state._max_error = max_error
     if integrator is not None:
         _state._integrator = integrator
+    if demag_interval_s is not None:
+        if demag_interval_s <= 0.0:
+            raise ValueError("demag_interval_s must be positive")
+        _state._demag_interval_s = demag_interval_s
     if gamma is not None:
         if gamma <= 0.0:
             raise ValueError("gamma must be positive")
@@ -3314,6 +3516,7 @@ def _build_relax_llg_dynamics(
     solver: str | None,
     dt: float | Literal["auto"] | None,
     max_error: float | None,
+    field_refresh: FieldRefreshPolicy | None = None,
 ) -> LLG | None:
     if algorithm != "llg_overdamped":
         if solver is not None or dt is not None or max_error is not None:
@@ -3353,6 +3556,7 @@ def _build_relax_llg_dynamics(
         integrator=integrator,
         fixed_timestep=fixed_timestep,
         adaptive_timestep=adaptive_timestep,
+        field_refresh=field_refresh,
     )
 
 
@@ -3367,6 +3571,9 @@ def _build_problem(
     relax_torque_tolerance: float = 1e-6,
     relax_energy_tolerance: float | None = None,
     relax_max_steps: int = 50_000,
+    relax_max_pseudotime_s: float | None = None,
+    relax_max_physical_time_s: float | None = None,
+    relax_stop: RelaxStop | None = None,
     relax_dynamics: LLG | None = None,
     eigen_count: int = 10,
     eigen_target: str = "lowest",
@@ -3418,6 +3625,10 @@ def _build_problem(
         llg_kwargs["integrator"] = s._integrator
     if s._gamma is not None and not math.isclose(s._gamma, DEFAULT_GAMMA):
         llg_kwargs["gamma"] = s._gamma
+    if s._demag_interval_s is not None:
+        llg_kwargs["field_refresh"] = FieldRefreshPolicy(
+            demag_interval_s=s._demag_interval_s
+        )
     dynamics = LLG(**llg_kwargs)
 
     # Discretization
@@ -3470,9 +3681,12 @@ def _build_problem(
                 SaveScalar(scalar="E_total", every=1e-12),
             ],
             algorithm=relax_algorithm,
+            stop=relax_stop,
             torque_tolerance=relax_torque_tolerance,
             energy_tolerance=relax_energy_tolerance,
             max_steps=relax_max_steps,
+            max_pseudotime_s=relax_max_pseudotime_s,
+            max_physical_time_s=relax_max_physical_time_s,
             dynamics=relax_dynamics or dynamics,
         )
     elif study_kind == "eigenmodes":
@@ -3697,10 +3911,14 @@ def relax(
     max_steps: int = 50_000,
     algorithm: str = "llg_overdamped",
     energy_tolerance: float | None = None,
+    max_pseudotime_s: float | None = None,
+    max_physical_time_s: float | None = None,
     relax_alpha: float | None = 1.0,
     solver: str | None = None,
     dt: float | Literal["auto"] | None = None,
     max_error: float | None = None,
+    field_refresh: FieldRefreshPolicy | None = None,
+    stop: RelaxStop | None = None,
 ) -> Any:
     """Build the problem and run a relaxation study.
 
@@ -3731,11 +3949,28 @@ def relax(
         Adaptive error tolerance for ``algorithm="llg_overdamped"``.
         Only meaningful with adaptive-capable solvers (``rk23``/``rk45``).
     """
+    (
+        stop,
+        tol,
+        energy_tolerance,
+        max_steps,
+        max_pseudotime_s,
+        max_physical_time_s,
+    ) = _resolve_flat_relax_stop(
+        stop=stop,
+        tol=tol,
+        energy_tolerance=energy_tolerance,
+        max_steps=max_steps,
+        max_pseudotime_s=max_pseudotime_s,
+        max_physical_time_s=max_physical_time_s,
+    )
+
     relax_dynamics = _build_relax_llg_dynamics(
         algorithm=algorithm,
         solver=solver,
         dt=dt,
         max_error=max_error,
+        field_refresh=field_refresh,
     )
     from fullmag.runtime import Simulation
     problem = _build_problem(
@@ -3744,6 +3979,9 @@ def relax(
         relax_torque_tolerance=tol,
         relax_energy_tolerance=energy_tolerance,
         relax_max_steps=max_steps,
+        relax_max_pseudotime_s=max_pseudotime_s,
+        relax_max_physical_time_s=max_physical_time_s,
+        relax_stop=stop,
         relax_dynamics=relax_dynamics,
     )
 
@@ -3771,17 +4009,25 @@ def relax(
         return problem
 
     if isinstance(problem.study, Relaxation):
-        fixed_timestep = problem.study.dynamics.fixed_timestep
-        adaptive_timestep = problem.study.dynamics.adaptive_timestep
-        initial_timestep = fixed_timestep
-        if initial_timestep is None and adaptive_timestep is not None:
-            initial_timestep = adaptive_timestep.dt_initial
-        until_seconds = (initial_timestep or 1e-13) * max_steps
+        until_seconds = _relaxation_default_until_seconds(problem.study)
     else:
         until_seconds = 1e-13 * max_steps
     result = Simulation(problem).run(until=until_seconds)
     _record_result(result)
     return result
+
+
+def _relaxation_default_until_seconds(study: Relaxation) -> float:
+    if study.max_physical_time_s is not None:
+        return study.max_physical_time_s
+    if study.max_pseudotime_s is not None:
+        return study.max_pseudotime_s
+    fixed_timestep = study.dynamics.fixed_timestep
+    adaptive_timestep = study.dynamics.adaptive_timestep
+    initial_timestep = fixed_timestep
+    if initial_timestep is None and adaptive_timestep is not None:
+        initial_timestep = adaptive_timestep.dt_initial
+    return (initial_timestep or 1e-13) * float(study.max_steps or 50_000)
 
 
 def minimize(

@@ -427,7 +427,7 @@ fn execute_cuda_assisted_multilayer_double(
         }
 
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-            latest_stats.step >= control.max_steps
+            latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                 || relaxation_converged(
                     control,
                     &latest_stats,
@@ -482,14 +482,23 @@ fn execute_cuda_assisted_multilayer_double(
     }
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let status = if cancelled {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
+    let completion = crate::relaxation::infer_stage_completion(
+        status,
+        plan.relaxation.as_ref(),
+        &steps,
+        plan.gyromagnetic_ratio,
+        average_damping(&contexts),
+        pure_damping_relax,
+    );
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization: flatten_layers(
                 &states
@@ -497,6 +506,7 @@ fn execute_cuda_assisted_multilayer_double(
                     .map(|state| state.magnetization().to_vec())
                     .collect::<Vec<_>>(),
             ),
+            completion: Some(completion),
         },
         initial_magnetization,
         field_snapshots,
@@ -626,7 +636,7 @@ fn execute_cuda_assisted_multilayer_single(
         }
 
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-            latest_stats.step >= control.max_steps
+            latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                 || relaxation_converged(
                     control,
                     &latest_stats,
@@ -681,16 +691,26 @@ fn execute_cuda_assisted_multilayer_single(
     }
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let status = if cancelled {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
+    let completion = crate::relaxation::infer_stage_completion(
+        status,
+        plan.relaxation.as_ref(),
+        &steps,
+        plan.gyromagnetic_ratio,
+        average_damping(&contexts),
+        pure_damping_relax,
+    );
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization: flatten_layers_single(&states),
+            completion: Some(completion),
         },
         initial_magnetization,
         field_snapshots,
@@ -1053,7 +1073,7 @@ fn execute_native_stacked_cuda_multilayer(
         }
 
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-            stats.step >= control.max_steps
+            stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                 || relaxation_converged(
                     control,
                     &stats,
@@ -1098,16 +1118,26 @@ fn execute_native_stacked_cuda_multilayer(
     }
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let status = if cancelled {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
+    let completion = crate::relaxation::infer_stage_completion(
+        status,
+        plan.relaxation.as_ref(),
+        &steps,
+        plan.gyromagnetic_ratio,
+        native.combined_plan.material.damping,
+        pure_damping_relax,
+    );
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization: final_observables.magnetization.clone(),
+            completion: Some(completion),
         },
         initial_magnetization,
         field_snapshots,
@@ -2542,11 +2572,16 @@ mod tests {
             periodicity: None,
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
+            field_refresh: None,
             relaxation: Some(RelaxationControlIR {
                 algorithm: RelaxationAlgorithmIR::LlgOverdamped,
-                torque_tolerance: 1e-4,
-                energy_tolerance: None,
-                max_steps: 10,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-4),
+                    energy_tolerance_j: None,
+                    max_steps: Some(10),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
             }),
             planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
                 requested_strategy: "multilayer_convolution".to_string(),

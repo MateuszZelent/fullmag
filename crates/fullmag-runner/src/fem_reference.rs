@@ -223,7 +223,7 @@ pub(crate) fn build_problem_and_state(
             return Err(RunError {
                 message: format!(
                     "CPU reference FEM engine does not support the following interaction terms: {}; \
-                     supported: exchange, demag (transfer_grid/poisson), zeeman, interfacial_dmi, bulk_dmi. \
+                     supported: exchange, demag (poisson), zeeman, interfacial_dmi, bulk_dmi. \
                      Use the native FEM GPU backend for these interactions.",
                     unsupported_terms.join(", ")
                 ),
@@ -258,17 +258,6 @@ pub(crate) fn build_problem_and_state(
         plan.demag_realization
     };
     let mut problem = match resolved_demag_realization {
-        Some(fullmag_ir::ResolvedFemDemagIR::TransferGrid) => {
-            // FEM-039: use dedicated demag cell size if set, otherwise fall back to hmax.
-            let cell = plan.demag_transfer_cell_size.unwrap_or(plan.hmax);
-            FemLlgProblem::with_terms_and_demag_transfer_grid(
-                topology,
-                material,
-                dynamics,
-                terms,
-                Some([cell, cell, cell]),
-            )
-        }
         Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin) => {
             FemLlgProblem::with_terms_and_demag_airbox(
                 topology,
@@ -286,7 +275,7 @@ pub(crate) fn build_problem_and_state(
                 topology, material, dynamics, terms, true, None,
             )
         }
-        _ => FemLlgProblem::with_terms(topology, material, dynamics, terms),
+        None => FemLlgProblem::with_terms(topology, material, dynamics, terms),
     };
     if let Some(normal) = plan.dmi_interface_normal {
         problem.set_dmi_interface_normal(normal);
@@ -326,7 +315,6 @@ pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
             .map(|r| r.provenance_name().to_string()),
         resolved_demag_realization,
         dt_policy,
-        demag_transfer_cell_size: plan.demag_transfer_cell_size,
         ..Default::default()
     }
 }
@@ -450,11 +438,18 @@ fn execute_reference_fem_impl(
 
     eprintln!(
         "[fullmag-runner] reference-fem LLG loop: until={:.4e} dt_initial={:.4e} \
-         max_steps={} torque_tol={:.4e}",
+         max_steps={} torque_tol={}",
         until_seconds,
         dt,
-        plan.relaxation.as_ref().map_or(0, |c| c.max_steps),
-        plan.relaxation.as_ref().map_or(0.0, |c| c.torque_tolerance),
+        plan.relaxation
+            .as_ref()
+            .and_then(|c| c.stop.max_steps)
+            .unwrap_or(0),
+        plan.relaxation
+            .as_ref()
+            .and_then(|c| c.stop.torque_tolerance_apm)
+            .map(|value| format!("{value:.4e}"))
+            .unwrap_or_else(|| "none".to_string()),
     );
 
     let n_nodes = state.magnetization().len();
@@ -709,7 +704,7 @@ fn execute_reference_fem_impl(
         }
 
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-            let max_steps_hit = step_count >= control.max_steps;
+            let max_steps_hit = step_count >= control.stop.max_steps.unwrap_or(u64::MAX);
             let converged = relaxation_converged(
                 control,
                 &latest_stats,
@@ -723,13 +718,25 @@ fn execute_reference_fem_impl(
                     "[fullmag-runner] reference-fem relaxation stop at step {}: \
                      max_steps_hit={max_steps_hit} (step={} >= max_steps={}), \
                      converged={converged} \
-                     (max_torque_T={:.4e} torque_tol={:.4e} energy_tol={:?})",
+                     (max_torque_T={:.4e} torque_tol={} energy_tol={})",
                     step_count,
                     step_count,
-                    control.max_steps,
+                    control
+                        .stop
+                        .max_steps
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
                     latest_stats.max_torque_T,
-                    control.torque_tolerance,
-                    control.energy_tolerance,
+                    control
+                        .stop
+                        .torque_tolerance_apm
+                        .map(|value| format!("{value:.4e}"))
+                        .unwrap_or_else(|| "none".to_string()),
+                    control
+                        .stop
+                        .energy_tolerance_j
+                        .map(|value| format!("{value:.4e}"))
+                        .unwrap_or_else(|| "none".to_string()),
                 );
             }
             max_steps_hit || converged
@@ -765,16 +772,26 @@ fn execute_reference_fem_impl(
     )?;
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let status = if cancelled {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
+    let completion = crate::relaxation::infer_stage_completion(
+        status,
+        plan.relaxation.as_ref(),
+        &steps,
+        plan.gyromagnetic_ratio,
+        plan.material.damping,
+        pure_damping_relax,
+    );
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization: state.magnetization().to_vec(),
+            completion: Some(completion),
         },
         initial_magnetization,
         field_snapshots,
@@ -1213,7 +1230,6 @@ mod tests {
             oersted_realization: None,
             gpu_device_index: None,
             mfem_device_string: None,
-            demag_transfer_cell_size: None,
             dmi_interface_normal: None,
             use_consistent_mass: None,
         }
@@ -1334,7 +1350,6 @@ mod tests {
             oersted_realization: None,
             gpu_device_index: None,
             mfem_device_string: None,
-            demag_transfer_cell_size: None,
             dmi_interface_normal: None,
             use_consistent_mass: None,
         }
@@ -1517,7 +1532,6 @@ mod tests {
             oersted_realization: None,
             gpu_device_index: None,
             mfem_device_string: None,
-            demag_transfer_cell_size: None,
             dmi_interface_normal: None,
             use_consistent_mass: None,
         }
@@ -1617,10 +1631,6 @@ mod tests {
             .expect("shared-domain FEM airbox problem should build in reference runner");
         let provenance = execution_provenance(&plan);
 
-        assert!(
-            problem.demag_transfer_cell_size_hint.is_none(),
-            "shared-domain airbox FEM should not silently downgrade to transfer-grid in CPU reference runner",
-        );
         assert_eq!(
             provenance.demag_operator_kind.as_deref(),
             Some("fem_poisson_robin"),
@@ -1687,9 +1697,13 @@ mod tests {
         let plan = FemPlanIR {
             relaxation: Some(RelaxationControlIR {
                 algorithm: RelaxationAlgorithmIR::LlgOverdamped,
-                torque_tolerance: 1e-6,
-                energy_tolerance: None,
-                max_steps: 1000,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-6),
+                    energy_tolerance_j: None,
+                    max_steps: Some(1000),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
             }),
             ..make_test_plan(false)
         };

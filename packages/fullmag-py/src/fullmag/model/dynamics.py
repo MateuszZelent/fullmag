@@ -74,11 +74,29 @@ class AdaptiveTimestep:
 
 
 @dataclass(frozen=True, slots=True)
+class FieldRefreshPolicy:
+    """Cadence controls for expensive field/operator refreshes."""
+
+    demag_interval_s: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.demag_interval_s is not None:
+            require_positive(self.demag_interval_s, "demag_interval_s")
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {}
+        if self.demag_interval_s is not None:
+            payload["demag_interval_s"] = self.demag_interval_s
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class LLG:
     gamma: float = DEFAULT_GAMMA
     integrator: str = "auto"
     fixed_timestep: float | None = None
     adaptive_timestep: AdaptiveTimestep | None = None
+    field_refresh: FieldRefreshPolicy | None = None
 
     def __post_init__(self) -> None:
         require_positive(self.gamma, "gamma")
@@ -114,6 +132,8 @@ class LLG:
         }
         if self.adaptive_timestep is not None:
             d["adaptive_timestep"] = self.adaptive_timestep.to_ir()
+        if self.field_refresh is not None:
+            d["field_refresh"] = self.field_refresh.to_ir()
         return d
 
 
@@ -187,4 +207,3 @@ class Elastodynamics:
 
 
 MechanicsMode = PrescribedStrain | QuasistaticElasticity | Elastodynamics
-

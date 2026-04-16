@@ -128,9 +128,7 @@ export default function UniversePanel() {
       ? "Dirichlet"
       : outerBoundaryPolicy === "poisson_robin" || outerBoundaryPolicy === "airbox_robin"
         ? "Robin"
-        : outerBoundaryPolicy === "transfer_grid"
-          ? "Transfer Grid"
-          : "Auto";
+        : "Auto";
   const mode = builderUniverse?.mode ?? (worldExtent ? "derived" : null);
   const role = ctx.isFemBackend
     ? "Declared universe / workspace framing"
@@ -668,7 +666,6 @@ export default function UniversePanel() {
                   { value: "auto", label: "Auto" },
                   { value: "poisson_dirichlet", label: "Dirichlet" },
                   { value: "poisson_robin", label: "Robin" },
-                  { value: "transfer_grid", label: "Transfer Grid" },
                 ]}
               />
               <MetricField
@@ -678,7 +675,7 @@ export default function UniversePanel() {
               <MetricField label="Effective" value={outerBoundaryLabel} />
               <div className="rounded-lg border border-border/30 bg-card/30 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
                 `Dirichlet` and `Robin` keep the solve on the shared airbox FEM path.
-                `Transfer Grid` skips the outer airbox boundary solve and uses the FFT transfer-grid demag path instead.
+                FEM `transfer_grid` has been removed; use a shared-domain mesh with air.
               </div>
             </div>
           </InspectorSection>

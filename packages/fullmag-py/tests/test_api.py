@@ -1172,9 +1172,9 @@ class ProblemApiTests(unittest.TestCase):
         ir = problem.to_ir()
         self.assertEqual(ir["study"]["kind"], "relaxation")
         self.assertEqual(ir["study"]["algorithm"], "llg_overdamped")
-        self.assertEqual(ir["study"]["torque_tolerance"], 1e-3)
-        self.assertEqual(ir["study"]["energy_tolerance"], 1e-12)
-        self.assertEqual(ir["study"]["max_steps"], 500)
+        self.assertEqual(ir["study"]["stop"]["torque_tolerance_apm"], 1e-3)
+        self.assertEqual(ir["study"]["stop"]["energy_tolerance_j"], 1e-12)
+        self.assertEqual(ir["study"]["stop"]["max_steps"], 500)
         self.assertEqual(ir["study"]["dynamics"]["fixed_timestep"], 2e-13)
 
     def test_relaxation_requires_supported_algorithm_and_positive_limits(self) -> None:
@@ -1184,7 +1184,7 @@ class ProblemApiTests(unittest.TestCase):
                 outputs=[fm.SaveField("m", every=1e-12)],
             )
 
-        with self.assertRaisesRegex(ValueError, "torque_tolerance"):
+        with self.assertRaisesRegex(ValueError, "torque_tolerance_apm"):
             fm.Relaxation(
                 torque_tolerance=0.0,
                 outputs=[fm.SaveField("m", every=1e-12)],
@@ -1988,6 +1988,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(draft["stages"][0]["kind"], "relax")
         self.assertEqual(draft["stages"][0]["max_steps"], "25")
         self.assertEqual(draft["stages"][0]["torque_tolerance"], "1e-05")
+        self.assertEqual(draft["stages"][0]["demag_interval_s"], "")
         self.assertEqual(draft["stages"][1]["kind"], "run")
         self.assertEqual(draft["stages"][1]["until_seconds"], "4e-12")
         self.assertEqual(draft["study_pipeline"]["version"], "study_pipeline.v1")
@@ -2028,7 +2029,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(loaded.stages[1].default_until_seconds, 4e-12)
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn("study.stages.add_relax(tol=1e-05, max_steps=25, algorithm=\"llg_overdamped\")", rewritten)
+        self.assertIn("study.stages.add_relax(", rewritten)
+        self.assertIn("algorithm=\"llg_overdamped\"", rewritten)
+        self.assertIn("tol=1e-05", rewritten)
+        self.assertIn("max_steps=25", rewritten)
         self.assertIn("study.stages.add_run(4e-12)", rewritten)
 
     def test_study_builder_relax_stage_roundtrips_solver_and_dt(self) -> None:
@@ -2075,6 +2079,99 @@ class ProblemApiTests(unittest.TestCase):
 
         self.assertEqual(len(loaded.stages), 1)
         self.assertEqual(loaded.stages[0].problem.study.to_ir()["algorithm"], "nonlinear_cg")
+
+    def test_study_stage_builder_add_hysteresis_branch_materializes_relax_stages(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        study.stages.add_hysteresis_branch(
+            field_values_t=[-20e-3, 0.0, 20e-3],
+            direction=(1.0, 0.0, 0.0),
+            settle=fm.RelaxStop(torque_tolerance_apm=5e-6, max_steps=40),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_stage_hysteresis_branch.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 3)
+        for stage in loaded.stages:
+            self.assertEqual(stage.entrypoint_kind, "flat_relax")
+            self.assertEqual(stage.problem.study.to_ir()["kind"], "relaxation")
+            self.assertEqual(stage.problem.study.to_ir()["stop"]["max_steps"], 40)
+            self.assertEqual(
+                stage.problem.study.to_ir()["stop"]["torque_tolerance_apm"],
+                5e-6,
+            )
+
+        zeeman_fields = []
+        for stage in loaded.stages:
+            ir = stage.problem.to_ir()
+            zeeman = next(
+                term["B"] for term in ir["energy_terms"] if term.get("kind") == "zeeman"
+            )
+            zeeman_fields.append(zeeman)
+
+        self.assertEqual(zeeman_fields[0], [-20e-3, 0.0, 0.0])
+        self.assertEqual(zeeman_fields[1], [0.0, 0.0, 0.0])
+        self.assertEqual(zeeman_fields[2], [20e-3, 0.0, 0.0])
+
+    def test_study_stage_builder_hysteresis_branch_save_state_emits_synthetic_actions(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis_save_state")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        study.stages.add_hysteresis_branch(
+            field_values_t=[-10e-3, 10e-3],
+            direction=(0.0, 0.0, 1.0),
+            settle=fm.RelaxStop(torque_tolerance_apm=1e-5, max_steps=25),
+            save_state=True,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_stage_hysteresis_branch_save_state.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 4)
+        self.assertEqual(loaded.stages[0].entrypoint_kind, "flat_relax")
+        self.assertEqual(loaded.stages[1].entrypoint_kind, "flat_save_state")
+        self.assertEqual(loaded.stages[2].entrypoint_kind, "flat_relax")
+        self.assertEqual(loaded.stages[3].entrypoint_kind, "flat_save_state")
+        self.assertEqual(
+            loaded.stages[1].action,
+            {
+                "kind": "save_state",
+                "artifact_name": "hysteresis_branch_point_001",
+                "format": None,
+                "dataset": None,
+            },
+        )
+        self.assertEqual(
+            loaded.stages[3].action,
+            {
+                "kind": "save_state",
+                "artifact_name": "hysteresis_branch_point_002",
+                "format": None,
+                "dataset": None,
+            },
+        )
 
     def test_builder_draft_uses_final_flat_problem_materials_for_stage_sequences(self) -> None:
         script = """
@@ -2192,6 +2289,73 @@ class ProblemApiTests(unittest.TestCase):
 
         self.assertIn('fm.relax(tol=2e-06, max_steps=250, algorithm="nonlinear_cg", energy_tolerance=3e-12)', rewritten)
         self.assertIn("fm.run(9e-12)", rewritten)
+
+    def test_relaxation_stop_and_field_refresh_serialize_to_ir(self) -> None:
+        geometry = fm.Box(size=(100e-9, 20e-9, 5e-9), name="track")
+        material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.1)
+        magnet = fm.Ferromagnet(name="track", geometry=geometry, material=material)
+
+        problem = fm.Problem(
+            name="relax_stop_refresh_problem",
+            magnets=[magnet],
+            energy=[fm.Exchange(), fm.Demag()],
+            study=fm.Relaxation(
+                algorithm="llg_overdamped",
+                stop=fm.RelaxStop(
+                    torque_tolerance_apm=1e-3,
+                    max_pseudotime_s=4e-12,
+                    max_physical_time_s=6e-12,
+                ),
+                dynamics=fm.LLG(
+                    fixed_timestep=2e-13,
+                    field_refresh=fm.FieldRefreshPolicy(demag_interval_s=8e-13),
+                ),
+                outputs=[fm.SaveField("m", every=1e-12)],
+            ),
+        )
+
+        ir = problem.to_ir()
+        self.assertEqual(ir["study"]["stop"]["torque_tolerance_apm"], 1e-3)
+        self.assertEqual(ir["study"]["stop"]["max_pseudotime_s"], 4e-12)
+        self.assertEqual(ir["study"]["stop"]["max_physical_time_s"], 6e-12)
+        self.assertEqual(
+            ir["study"]["dynamics"]["field_refresh"]["demag_interval_s"],
+            8e-13,
+        )
+
+    def test_script_builder_renders_relax_stop_and_demag_refresh(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fem")
+        fm.device("cpu")
+        fm.solver(dt=2e-13, demag_interval_s=8e-13)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        fm.save("m", every=1e-12)
+        fm.relax(
+            algorithm="llg_overdamped",
+            stop=fm.RelaxStop(
+                torque_tolerance_apm=1e-5,
+                max_pseudotime_s=4e-12,
+            ),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_relax_stop_refresh.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn("fm.solver(dt=2e-13, demag_interval_s=8e-13)", rewritten)
+        self.assertIn(
+            'fm.relax(algorithm="llg_overdamped", stop=fm.RelaxStop(torque_tolerance_apm=1e-05, max_steps=50000, max_pseudotime_s=4e-12))',
+            rewritten,
+        )
 
     def test_flat_run_entrypoint_is_supported(self) -> None:
         script = """
@@ -3747,6 +3911,62 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             payload["stages"][1]["ir"]["problem_meta"]["runtime_metadata"]["model_builder"]["study_pipeline"]["version"],
             "study_pipeline.v1",
+        )
+
+    def test_helper_exports_run_config_with_stage_actions(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("run_config_stage_actions")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.uniform(1, 0, 0)
+        study.stages.add_hysteresis_branch(
+            field_values_t=[-5e-3, 5e-3],
+            settle=fm.RelaxStop(torque_tolerance_apm=1e-5, max_steps=20),
+            save_state=True,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_run_config_stage_actions.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = runtime_helper.main(
+                    [
+                        "export-run-config",
+                        "--script",
+                        str(path),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["ir"]["problem_meta"]["entrypoint_kind"], "flat_workspace")
+        self.assertEqual(len(payload["stages"]), 4)
+        self.assertIsNone(payload["stages"][0]["action"])
+        self.assertEqual(
+            payload["stages"][1]["action"],
+            {
+                "kind": "save_state",
+                "artifact_name": "hysteresis_branch_point_001",
+                "format": None,
+                "dataset": None,
+            },
+        )
+        self.assertEqual(
+            payload["stages"][3]["action"],
+            {
+                "kind": "save_state",
+                "artifact_name": "hysteresis_branch_point_002",
+                "format": None,
+                "dataset": None,
+            },
         )
 
 

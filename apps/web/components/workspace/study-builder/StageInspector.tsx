@@ -125,6 +125,13 @@ export default function StageInspector({
     );
   }
 
+  const hysteresisSettle =
+    node.node_kind === "macro"
+      && node.config.settle
+      && typeof node.config.settle === "object"
+      ? (node.config.settle as Record<string, unknown>)
+      : null;
+
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-background/35 p-3">
       <div className="flex items-start justify-between gap-3">
@@ -450,18 +457,54 @@ export default function StageInspector({
                     onChange={(event) => onPatchConfig({ steps: Math.max(2, Number(event.target.value)) })}
                   />
                 </Field>
-                <div className="md:col-span-2">
-                  <ToggleRow
-                    label="Relax after each sweep point"
-                    checked={node.config.relax_each !== false}
-                    onChange={(checked) => onPatchConfig({ relax_each: checked })}
+                <Field label="Settle torque tolerance [A/m]">
+                  <Input
+                    value={String(
+                      hysteresisSettle?.torque_tolerance_apm
+                        ?? hysteresisSettle?.torque_tolerance
+                        ?? "1e-4",
+                    )}
+                    onChange={(event) =>
+                      onPatchConfig({
+                        settle: {
+                          ...(hysteresisSettle ?? {}),
+                          torque_tolerance_apm: event.target.value,
+                        },
+                      })
+                    }
                   />
-                </div>
+                </Field>
+                <Field label="Settle max steps">
+                  <Input
+                    value={String(hysteresisSettle?.max_steps ?? "50000")}
+                    onChange={(event) =>
+                      onPatchConfig({
+                        settle: {
+                          ...(hysteresisSettle ?? {}),
+                          max_steps: event.target.value,
+                        },
+                      })
+                    }
+                  />
+                </Field>
+                <Field label="Settle max physical time [s]">
+                  <Input
+                    value={String(hysteresisSettle?.max_physical_time_s ?? "")}
+                    onChange={(event) =>
+                      onPatchConfig({
+                        settle: {
+                          ...(hysteresisSettle ?? {}),
+                          max_physical_time_s: event.target.value,
+                        },
+                      })
+                    }
+                  />
+                </Field>
                 <div className="md:col-span-2">
                   <ToggleRow
                     label="Save a state snapshot at each point"
-                    checked={Boolean(node.config.save_point_state)}
-                    onChange={(checked) => onPatchConfig({ save_point_state: checked })}
+                    checked={Boolean(node.config.save_state ?? node.config.save_point_state)}
+                    onChange={(checked) => onPatchConfig({ save_state: checked, save_point_state: checked })}
                   />
                 </div>
               </>

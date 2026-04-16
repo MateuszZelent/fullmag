@@ -148,7 +148,6 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
             supported_terms: vec![
                 "exchange".to_string(),
                 "zeeman".to_string(),
-                "demag_transfer_grid".to_string(),
                 "demag_poisson_robin".to_string(),
                 "demag_poisson_dirichlet".to_string(),
                 "uniaxial_anisotropy".to_string(),
@@ -159,7 +158,6 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "oersted".to_string(),
             ],
             supported_demag_realizations: vec![
-                "transfer_grid".to_string(),
                 "poisson_robin".to_string(),
                 "poisson_dirichlet".to_string(),
             ],
@@ -189,7 +187,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "E_ext".to_string(),
                 "E_total".to_string(),
             ],
-            approximate_operators: vec!["transfer_grid".to_string()],
+            approximate_operators: Vec::new(),
             supports_lossy_fallback_override: false,
         },
         FemEngine::NativeGpu => BackendCapabilities {
@@ -198,7 +196,6 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
             supported_terms: vec![
                 "exchange".to_string(),
                 "zeeman".to_string(),
-                "demag_transfer_grid".to_string(),
                 "demag_poisson_robin".to_string(),
                 "demag_poisson_dirichlet".to_string(),
                 "uniaxial_anisotropy".to_string(),
@@ -209,7 +206,6 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "oersted".to_string(),
             ],
             supported_demag_realizations: vec![
-                "transfer_grid".to_string(),
                 "poisson_robin".to_string(),
                 "poisson_dirichlet".to_string(),
             ],
@@ -239,7 +235,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "E_ext".to_string(),
                 "E_total".to_string(),
             ],
-            approximate_operators: vec!["transfer_grid".to_string()],
+            approximate_operators: Vec::new(),
             supports_lossy_fallback_override: false,
         },
     }

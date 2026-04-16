@@ -30,6 +30,19 @@ pub(crate) fn shared_domain_mesh_requested(
     problem: &ProblemIR,
     requested_demag_realization: fullmag_ir::RequestedFemDemagIR,
 ) -> bool {
+    let demag_requested = problem
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, fullmag_ir::EnergyTermIR::Demag { .. }));
+
+    if matches!(
+        requested_demag_realization,
+        fullmag_ir::RequestedFemDemagIR::Auto
+            if demag_requested
+    ) {
+        return true;
+    }
+
     if matches!(
         requested_demag_realization,
         fullmag_ir::RequestedFemDemagIR::PoissonDirichlet

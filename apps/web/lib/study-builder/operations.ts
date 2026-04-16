@@ -247,7 +247,10 @@ export function createMacroNode(
             start_mT: -100,
             stop_mT: 100,
             steps: 21,
-            relax_each: true,
+            settle: {
+              torque_tolerance_apm: 1e-4,
+              max_steps: 50000,
+            },
             save_point_state: false,
           }
         : kind === "field_sweep_relax_snapshot"

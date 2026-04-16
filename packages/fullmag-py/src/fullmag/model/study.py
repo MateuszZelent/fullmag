@@ -16,6 +16,8 @@ from fullmag.model.outputs import (
 )
 from fullmag._validation import require_non_empty, require_positive
 
+_UNSET = object()
+
 TimeOutputSpec = SaveField | SaveScalar | Snapshot
 EigenOutputSpec = SaveSpectrum | SaveMode | SaveDispersion | SaveEigenDiagnostics
 OutputSpec = TimeOutputSpec | EigenOutputSpec
@@ -51,6 +53,49 @@ class TimeEvolution:
 
 
 @dataclass(frozen=True, slots=True)
+class RelaxStop:
+    torque_tolerance_apm: float | None = 1e-4
+    energy_tolerance_j: float | None = None
+    max_steps: int | None = 50_000
+    max_pseudotime_s: float | None = None
+    max_physical_time_s: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.torque_tolerance_apm is not None:
+            require_positive(self.torque_tolerance_apm, "torque_tolerance_apm")
+        if self.energy_tolerance_j is not None:
+            require_positive(self.energy_tolerance_j, "energy_tolerance_j")
+        if self.max_steps is not None and self.max_steps <= 0:
+            raise ValueError("max_steps must be positive")
+        if self.max_pseudotime_s is not None:
+            require_positive(self.max_pseudotime_s, "max_pseudotime_s")
+        if self.max_physical_time_s is not None:
+            require_positive(self.max_physical_time_s, "max_physical_time_s")
+        if (
+            self.torque_tolerance_apm is None
+            and self.energy_tolerance_j is None
+            and self.max_steps is None
+            and self.max_pseudotime_s is None
+            and self.max_physical_time_s is None
+        ):
+            raise ValueError("RelaxStop requires at least one stop criterion")
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {}
+        if self.torque_tolerance_apm is not None:
+            payload["torque_tolerance_apm"] = self.torque_tolerance_apm
+        if self.energy_tolerance_j is not None:
+            payload["energy_tolerance_j"] = self.energy_tolerance_j
+        if self.max_steps is not None:
+            payload["max_steps"] = self.max_steps
+        if self.max_pseudotime_s is not None:
+            payload["max_pseudotime_s"] = self.max_pseudotime_s
+        if self.max_physical_time_s is not None:
+            payload["max_physical_time_s"] = self.max_physical_time_s
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class Relaxation:
     """Energy minimization study that drives the system toward a (meta)stable
     equilibrium satisfying m × H_eff ≈ 0 under the constraint |m| = 1.
@@ -83,15 +128,10 @@ class Relaxation:
     algorithm : str, default ``"llg_overdamped"``
         Relaxation algorithm identifier.  Must be one of the strings listed
         above.
-    torque_tolerance : float, default ``1e-4``
-        Maximum torque convergence threshold in A/m.
-        The algorithm stops when max_i |m_i × H_eff,i| ≤ torque_tolerance.
-    energy_tolerance : float or None, default ``None``
-        Optional energy-change convergence threshold in Joules.  When set,
-        convergence requires *both* torque and energy criteria to be met.
-    max_steps : int, default ``50_000``
-        Hard cap on the number of iterations.  The algorithm stops
-        unconditionally after this many steps, regardless of convergence.
+    stop : RelaxStop, optional
+        Canonical stop contract for relaxation. Legacy scalar arguments
+        (``torque_tolerance``, ``energy_tolerance``, ``max_steps``) remain
+        supported as compatibility aliases and lower into ``RelaxStop``.
     dynamics : LLG, default ``LLG()``
         LLG parameters (damping, gyromagnetic ratio).  Used by the
         ``"llg_overdamped"`` algorithm and for material parameter specification
@@ -100,10 +140,51 @@ class Relaxation:
 
     outputs: Sequence[TimeOutputSpec]
     algorithm: str = "llg_overdamped"
-    torque_tolerance: float = 1e-4
-    energy_tolerance: float | None = None
-    max_steps: int = 50_000
+    stop: RelaxStop = field(default_factory=RelaxStop)
     dynamics: LLG = field(default_factory=LLG)
+    torque_tolerance: float | None = field(init=False)
+    energy_tolerance: float | None = field(init=False)
+    max_steps: int | None = field(init=False)
+
+    def __init__(
+        self,
+        outputs: Sequence[TimeOutputSpec],
+        algorithm: str = "llg_overdamped",
+        stop: RelaxStop | None = None,
+        torque_tolerance: object = _UNSET,
+        energy_tolerance: object = _UNSET,
+        max_steps: object = _UNSET,
+        max_pseudotime_s: object = _UNSET,
+        max_physical_time_s: object = _UNSET,
+        dynamics: LLG = LLG(),
+    ) -> None:
+        object.__setattr__(self, "outputs", outputs)
+        object.__setattr__(self, "algorithm", algorithm)
+        object.__setattr__(
+            self,
+            "stop",
+            _resolve_relax_stop(
+                stop=stop,
+                torque_tolerance=torque_tolerance,
+                energy_tolerance=energy_tolerance,
+                max_steps=max_steps,
+                max_pseudotime_s=max_pseudotime_s,
+                max_physical_time_s=max_physical_time_s,
+            ),
+        )
+        object.__setattr__(self, "dynamics", dynamics)
+        object.__setattr__(self, "torque_tolerance", self.stop.torque_tolerance_apm)
+        object.__setattr__(self, "energy_tolerance", self.stop.energy_tolerance_j)
+        object.__setattr__(self, "max_steps", self.stop.max_steps)
+        self.__post_init__()
+
+    @property
+    def max_pseudotime_s(self) -> float | None:
+        return self.stop.max_pseudotime_s
+
+    @property
+    def max_physical_time_s(self) -> float | None:
+        return self.stop.max_physical_time_s
 
     def __post_init__(self) -> None:
         if not self.outputs:
@@ -111,11 +192,6 @@ class Relaxation:
         if self.algorithm not in SUPPORTED_RELAXATION_ALGORITHMS:
             supported = ", ".join(sorted(SUPPORTED_RELAXATION_ALGORITHMS))
             raise ValueError(f"algorithm must be one of: {supported}")
-        require_positive(self.torque_tolerance, "torque_tolerance")
-        if self.energy_tolerance is not None:
-            require_positive(self.energy_tolerance, "energy_tolerance")
-        if self.max_steps <= 0:
-            raise ValueError("max_steps must be positive")
 
     def to_ir(self) -> dict[str, object]:
         """Serialize to ProblemIR-compatible dictionary."""
@@ -123,11 +199,85 @@ class Relaxation:
             "kind": "relaxation",
             "algorithm": self.algorithm,
             "dynamics": self.dynamics.to_ir(),
-            "torque_tolerance": self.torque_tolerance,
-            "energy_tolerance": self.energy_tolerance,
-            "max_steps": self.max_steps,
+            "stop": self.stop.to_ir(),
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
         }
+
+
+def _resolve_relax_stop(
+    *,
+    stop: RelaxStop | None,
+    torque_tolerance: object,
+    energy_tolerance: object,
+    max_steps: object,
+    max_pseudotime_s: object,
+    max_physical_time_s: object,
+) -> RelaxStop:
+    def maybe_float(value: object) -> float | None:
+        if value is _UNSET or value is None:
+            return None
+        return float(value)
+
+    def maybe_int(value: object) -> int | None:
+        if value is _UNSET or value is None:
+            return None
+        return int(value)
+
+    alias_torque = maybe_float(torque_tolerance)
+    alias_energy = maybe_float(energy_tolerance)
+    alias_max_steps = maybe_int(max_steps)
+    alias_max_pseudotime = maybe_float(max_pseudotime_s)
+    alias_max_physical_time = maybe_float(max_physical_time_s)
+
+    if stop is None:
+        return RelaxStop(
+            torque_tolerance_apm=1e-4 if torque_tolerance is _UNSET else alias_torque,
+            energy_tolerance_j=alias_energy,
+            max_steps=50_000 if max_steps is _UNSET else alias_max_steps,
+            max_pseudotime_s=alias_max_pseudotime,
+            max_physical_time_s=alias_max_physical_time,
+        )
+
+    resolved_torque = stop.torque_tolerance_apm
+    resolved_energy = stop.energy_tolerance_j
+    resolved_max_steps = stop.max_steps
+    resolved_max_pseudotime = stop.max_pseudotime_s
+    resolved_max_physical_time = stop.max_physical_time_s
+
+    if alias_torque is not None:
+        if resolved_torque is not None and resolved_torque != alias_torque:
+            raise ValueError("torque_tolerance conflicts with stop.torque_tolerance_apm")
+        resolved_torque = alias_torque
+    if energy_tolerance is not _UNSET:
+        if resolved_energy is not None and resolved_energy != alias_energy:
+            raise ValueError("energy_tolerance conflicts with stop.energy_tolerance_j")
+        resolved_energy = alias_energy
+    if alias_max_steps is not None:
+        if resolved_max_steps is not None and resolved_max_steps != alias_max_steps:
+            raise ValueError("max_steps conflicts with stop.max_steps")
+        resolved_max_steps = alias_max_steps
+    if max_pseudotime_s is not _UNSET:
+        if (
+            resolved_max_pseudotime is not None
+            and resolved_max_pseudotime != alias_max_pseudotime
+        ):
+            raise ValueError("max_pseudotime_s conflicts with stop.max_pseudotime_s")
+        resolved_max_pseudotime = alias_max_pseudotime
+    if max_physical_time_s is not _UNSET:
+        if (
+            resolved_max_physical_time is not None
+            and resolved_max_physical_time != alias_max_physical_time
+        ):
+            raise ValueError("max_physical_time_s conflicts with stop.max_physical_time_s")
+        resolved_max_physical_time = alias_max_physical_time
+
+    return RelaxStop(
+        torque_tolerance_apm=resolved_torque,
+        energy_tolerance_j=resolved_energy,
+        max_steps=resolved_max_steps,
+        max_pseudotime_s=resolved_max_pseudotime,
+        max_physical_time_s=resolved_max_physical_time,
+    )
 
 
 @dataclass(frozen=True, slots=True)

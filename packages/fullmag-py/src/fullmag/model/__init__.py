@@ -9,6 +9,7 @@ from .antenna import (
 from .dynamics import (
     AdaptiveTimestep,
     Elastodynamics,
+    FieldRefreshPolicy,
     LLG,
     PrescribedStrain,
     QuasistaticElasticity,
@@ -60,7 +61,7 @@ from .problem import (
 )
 from .spin_torque import SlonczewskiSTT, SpinTorque, ZhangLiSTT
 from .structure import Ferromagnet, Material, Region
-from .study import Eigenmodes, FrequencyResponse, Relaxation, TimeEvolution
+from .study import Eigenmodes, FrequencyResponse, RelaxStop, Relaxation, TimeEvolution
 from .eigen import KPath, KPoint, ModeTracking
 
 __all__ = [
@@ -92,6 +93,7 @@ __all__ = [
     "Exchange",
     "ExecutionMode",
     "ExecutionPrecision",
+    "FieldRefreshPolicy",
     "FDM",
     "FDMDemag",
     "FDMGrid",
@@ -114,6 +116,7 @@ __all__ = [
     "PrescribedStrain",
     "Problem",
     "QuasistaticElasticity",
+    "RelaxStop",
     "RfDrive",
     "Region",
     "Relaxation",

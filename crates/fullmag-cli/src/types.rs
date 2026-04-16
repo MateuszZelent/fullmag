@@ -215,10 +215,49 @@ pub(crate) struct ScriptExecutionConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ScriptExecutionStageAction {
+    SaveState {
+        #[serde(default = "default_stage_action_artifact_name")]
+        artifact_name: String,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default)]
+        dataset: Option<String>,
+    },
+    LoadState {
+        #[serde(default)]
+        artifact_name: Option<String>,
+        #[serde(default)]
+        state_path: Option<String>,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default)]
+        dataset: Option<String>,
+        #[serde(default)]
+        sample_index: Option<i64>,
+    },
+    Export {
+        #[serde(default)]
+        artifact_name: Option<String>,
+        quantity: String,
+        format: String,
+        #[serde(default)]
+        dataset: Option<String>,
+    },
+}
+
+fn default_stage_action_artifact_name() -> String {
+    "state_snapshot".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ScriptExecutionStage {
     pub ir: ProblemIR,
     pub default_until_seconds: Option<f64>,
     pub entrypoint_kind: String,
+    #[serde(default)]
+    pub action: Option<ScriptExecutionStageAction>,
 }
 
 #[derive(Debug, Serialize)]
@@ -375,10 +414,25 @@ pub(crate) struct CurrentLiveScalarRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub(crate) struct CurrentLiveStageExecutionRecord {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<fullmag_ir::StageStopReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric_value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct CurrentLiveStageExecutionState {
     pub total_stages: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub completed_stage_indexes: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<CurrentLiveStageExecutionRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stage_statuses: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

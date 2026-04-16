@@ -206,5 +206,4 @@ pub mod sections {
     pub const FEM_ASSEMBLY: &str = "fem.assembly";
     pub const FEM_SPMV: &str = "fem.spmv";
     pub const FEM_CG: &str = "fem.cg";
-    pub const FEM_TRANSFER_GRID: &str = "fem.transfer_grid";
 }

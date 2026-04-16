@@ -225,8 +225,7 @@ To będzie najtrudniejszy element. Tu rekomendacja jest następująca:
 
 Dla eigenmodes zastosować **ten sam kanoniczny model demag**, jaki Fullmag uzna za poprawny dla stanu bazowego FEM, najlepiej z jedną jawną polityką:
 
-- `transfer_grid` jako bootstrap/public reference, albo
-- `poisson_airbox` jako docelowy kanoniczny solver FEM.
+- `poisson_airbox` jako kanoniczny solver FEM (Dirichlet/Robin na shared-domain mesh z airboxem).
 
 #### Wersja 2
 

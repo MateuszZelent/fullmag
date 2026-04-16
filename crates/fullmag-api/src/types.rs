@@ -927,10 +927,25 @@ pub(crate) struct CurrentLivePublishRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StageExecutionRecord {
+    pub status: String,
+    #[serde(default)]
+    pub reason: Option<fullmag_ir::StageStopReason>,
+    #[serde(default)]
+    pub metric_name: Option<String>,
+    #[serde(default)]
+    pub metric_value: Option<f64>,
+    #[serde(default)]
+    pub threshold: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StageExecutionState {
     pub total_stages: usize,
     #[serde(default)]
     pub completed_stage_indexes: Vec<usize>,
+    #[serde(default)]
+    pub stages: Vec<StageExecutionRecord>,
     #[serde(default)]
     pub stage_statuses: Vec<String>,
     #[serde(default)]

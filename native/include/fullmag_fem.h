@@ -65,10 +65,19 @@ typedef enum {
 } fullmag_fem_preconditioner;
 
 typedef enum {
-    FULLMAG_FEM_DEMAG_TRANSFER_GRID    = 0,
     FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET = 1,
     FULLMAG_FEM_DEMAG_AIRBOX_ROBIN     = 2,
 } fullmag_fem_demag_realization;
+
+typedef enum {
+    FULLMAG_FEM_STAGE_STOP_REASON_TORQUE = 1,
+    FULLMAG_FEM_STAGE_STOP_REASON_ENERGY = 2,
+    FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS = 3,
+    FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME = 4,
+    FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME = 5,
+    FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED = 6,
+    FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR = 7,
+} fullmag_fem_stage_stop_reason;
 
 typedef int (*fullmag_fem_interrupt_poll_fn)(void *user_data);
 
@@ -100,6 +109,33 @@ typedef struct {
 } fullmag_fem_solver_config;
 
 typedef struct {
+    int has_demag_interval_s;
+    double demag_interval_s;
+} fullmag_fem_field_refresh_policy;
+
+typedef struct {
+    int has_torque_tolerance_apm;
+    double torque_tolerance_apm;
+    int has_energy_tolerance_j;
+    double energy_tolerance_j;
+    int has_max_steps;
+    uint64_t max_steps;
+    int has_max_pseudotime_s;
+    double max_pseudotime_s;
+    int has_max_physical_time_s;
+    double max_physical_time_s;
+} fullmag_fem_relax_stop;
+
+typedef struct {
+    int has_reason;
+    fullmag_fem_stage_stop_reason reason;
+    int has_metric_name;
+    char metric_name[64];
+    double metric_value;
+    double threshold;
+} fullmag_fem_stage_completion;
+
+typedef struct {
     fullmag_fem_mesh_desc mesh;
     fullmag_fem_material_desc material;
     uint32_t fe_order;
@@ -116,17 +152,12 @@ typedef struct {
     int poisson_boundary_marker;
     int robin_beta_mode;        /* 0=off(Dirichlet), 1=legacy(c=1), 2=dipole(c=2), 3=user */
     double robin_beta_factor;   /* user c in β = c/R* */
-    const double *demag_kernel_xx_spectrum;
-    const double *demag_kernel_yy_spectrum;
-    const double *demag_kernel_zz_spectrum;
-    const double *demag_kernel_xy_spectrum;
-    const double *demag_kernel_xz_spectrum;
-    const double *demag_kernel_yz_spectrum;
-    uint64_t demag_kernel_spectrum_len;
     const double *initial_magnetization_xyz;
     uint64_t initial_magnetization_len;
     double dt_seconds;
     const fullmag_fem_adaptive_config *adaptive_config;
+    fullmag_fem_field_refresh_policy field_refresh;
+    fullmag_fem_relax_stop relax_stop;
     int has_uniaxial_anisotropy;
     double uniaxial_anisotropy_constant;
     double uniaxial_anisotropy_k2;
@@ -184,8 +215,6 @@ typedef struct {
     uint64_t                   thermal_seed;
     /* FEM-030: explicit MFEM device string (null = env / compiled default) */
     const char                *mfem_device_string;
-    /* FEM-039: explicit transfer-grid cell size for demag (0.0 = hmax) */
-    double                     demag_transfer_cell_size;
     /* FND-013: use consistent (full) mass matrix instead of lumped for exchange.
        0 = lumped (default), 1 = consistent (CG solve). */
     int                        use_consistent_mass;
@@ -278,6 +307,11 @@ int fullmag_fem_backend_upload_magnetization_f64(
 int fullmag_fem_backend_snapshot_stats(
     fullmag_fem_backend *handle,
     fullmag_fem_step_stats *out_stats
+);
+
+int fullmag_fem_backend_stage_completion(
+    fullmag_fem_backend *handle,
+    fullmag_fem_stage_completion *out_completion
 );
 
 int fullmag_fem_backend_get_device_info(

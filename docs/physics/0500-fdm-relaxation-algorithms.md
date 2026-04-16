@@ -14,6 +14,7 @@
   - `docs/physics/0400-fdm-exchange-demag-zeeman.md`
   - `docs/physics/0420-fdm-dipolar-demag-foundations.md`
   - `docs/physics/0480-fdm-higher-order-and-adaptive-time-integrators.md`
+  - `docs/physics/0530-shared-relaxation-stop-and-field-refresh-semantics.md`
   - `docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md`
 
 ## 1. Problem statement
@@ -216,6 +217,10 @@ $$
 
 This estimate is exact for the continuous pure-damping LLG form above. The
 discrete-time integrator still introduces the usual $O(\Delta t)$ step error.
+
+Shared product semantics for stop contracts and demag refresh cadence now live
+in `0530-shared-relaxation-stop-and-field-refresh-semantics.md`. The FDM note
+below describes the executable algorithm details on top of that shared contract.
 
 **Stop criteria** (implemented in `relaxation_converged`):
 1. $\tau_{\max} \le \epsilon_\tau$ (torque tolerance),

@@ -256,15 +256,6 @@ pub(crate) fn diagnose_initial_fem_plan(plan: &FemPlanIR) -> Result<InitialState
         FemLlgProblem::with_terms(topology, material, dynamics, terms)
     } else {
         match plan.demag_realization {
-            Some(fullmag_ir::ResolvedFemDemagIR::TransferGrid) => {
-                FemLlgProblem::with_terms_and_demag_transfer_grid(
-                    topology,
-                    material,
-                    dynamics,
-                    terms,
-                    Some([plan.hmax, plan.hmax, plan.hmax]),
-                )
-            }
             Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin) => {
                 FemLlgProblem::with_terms_and_demag_airbox(
                     topology,
@@ -282,12 +273,8 @@ pub(crate) fn diagnose_initial_fem_plan(plan: &FemPlanIR) -> Result<InitialState
                     topology, material, dynamics, terms, true, None,
                 )
             }
-            None => FemLlgProblem::with_terms_and_demag_transfer_grid(
-                topology,
-                material,
-                dynamics,
-                terms,
-                Some([plan.hmax, plan.hmax, plan.hmax]),
+            None => FemLlgProblem::with_terms_and_demag_airbox(
+                topology, material, dynamics, terms, false, None,
             ),
         }
     };

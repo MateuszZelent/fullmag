@@ -427,9 +427,27 @@ export interface CommandStatus {
   mesh_reason?: string | null;
 }
 
+export type StageStopReason =
+  | "torque"
+  | "energy"
+  | "max_steps"
+  | "max_pseudotime"
+  | "max_physical_time"
+  | "user_cancelled"
+  | "backend_error";
+
+export interface StageExecutionRecord {
+  status: string;
+  reason: StageStopReason | null;
+  metric_name: string | null;
+  metric_value: number | null;
+  threshold: number | null;
+}
+
 export interface StageExecutionState {
   total_stages: number;
   completed_stage_indexes: number[];
+  stages: StageExecutionRecord[];
   stage_statuses: string[];
   active_stage_index: number | null;
   active_stage_kind: string | null;

@@ -227,12 +227,19 @@ pub struct DomainFrameState {
 pub struct ScriptBuilderStageState {
     pub kind: String,
     pub entrypoint_kind: String,
+    #[serde(default)]
     pub integrator: String,
+    #[serde(default)]
     pub fixed_timestep: String,
+    #[serde(default)]
     pub until_seconds: String,
+    #[serde(default)]
     pub relax_algorithm: String,
+    #[serde(default)]
     pub torque_tolerance: String,
+    #[serde(default)]
     pub energy_tolerance: String,
+    #[serde(default)]
     pub max_steps: String,
     /// Eigenmode fields — only meaningful when kind == "eigenmodes"
     #[serde(default)]

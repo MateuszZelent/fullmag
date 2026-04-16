@@ -1,6 +1,6 @@
 //! Public and internal types for the runner.
 
-use fullmag_ir::{FemMeshPartRole, FemMeshPartSelector, MeshQualityIR};
+use fullmag_ir::{FemMeshPartRole, FemMeshPartSelector, MeshQualityIR, StageCompletionIR};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -58,6 +58,8 @@ pub struct RunResult {
     pub status: RunStatus,
     pub steps: Vec<StepStats>,
     pub final_magnetization: Vec<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<StageCompletionIR>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -784,9 +786,9 @@ pub struct ExecutionProvenance {
     /// FEM-030: MFEM device string used for this run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mfem_device: Option<String>,
-    /// FEM-039: explicit demag transfer-grid cell size (if overridden from hmax).
+    /// Canonical demag refresh cadence in seconds, if explicitly configured.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub demag_transfer_cell_size: Option<f64>,
+    pub demag_refresh_interval_s: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

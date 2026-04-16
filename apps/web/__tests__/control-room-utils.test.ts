@@ -342,6 +342,11 @@ describe("resolveStudyStageExecutionState", () => {
         stageExecution: {
           total_stages: 3,
           completed_stage_indexes: [0],
+          stages: [
+            { status: "completed", reason: null, metric_name: null, metric_value: null, threshold: null },
+            { status: "running", reason: null, metric_name: null, metric_value: null, threshold: null },
+            { status: "pending", reason: null, metric_name: null, metric_value: null, threshold: null },
+          ],
           stage_statuses: ["completed", "running", "pending"],
           active_stage_index: 1,
           active_stage_kind: "relax",
@@ -385,6 +390,10 @@ describe("resolveStudyStageExecutionState", () => {
         stageExecution: {
           total_stages: 2,
           completed_stage_indexes: [0, 1],
+          stages: [
+            { status: "completed", reason: null, metric_name: null, metric_value: null, threshold: null },
+            { status: "completed", reason: null, metric_name: null, metric_value: null, threshold: null },
+          ],
           stage_statuses: ["completed", "completed"],
           active_stage_index: null,
           active_stage_kind: null,

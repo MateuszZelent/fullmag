@@ -1019,8 +1019,8 @@ pub(crate) fn build_air_box_config(
 
 pub(crate) fn study_universe_planner_note(
     problem: &ProblemIR,
-    mesh: &MeshIR,
-    resolved_demag_realization: Option<fullmag_ir::ResolvedFemDemagIR>,
+    _mesh: &MeshIR,
+    _resolved_demag_realization: Option<fullmag_ir::ResolvedFemDemagIR>,
     air_box_config: Option<&AirBoxConfigIR>,
 ) -> Option<String> {
     let study_universe = study_universe_metadata(problem)?;
@@ -1039,18 +1039,6 @@ pub(crate) fn study_universe_planner_note(
             config.boundary_marker,
             airbox_hmax_note,
         ));
-    }
-
-    if mesh_has_air_elements(mesh)
-        && matches!(
-            resolved_demag_realization,
-            Some(fullmag_ir::ResolvedFemDemagIR::TransferGrid)
-        )
-    {
-        return Some(
-            "study_universe metadata present and the FEM mesh already contains air elements, but demag realization remains transfer_grid; the air-box solve is not selected"
-                .to_string(),
-        );
     }
 
     if problem.magnets.len() > 1 {

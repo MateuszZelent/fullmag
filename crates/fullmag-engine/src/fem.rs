@@ -1,7 +1,7 @@
 use crate::{
-    add, cross, dot, max_cross_norm, norm, normalized, scale, sub, AbmHistory, CellSize,
-    EffectiveFieldObservables, EffectiveFieldTerms, EngineError, ExchangeLlgProblem, GridShape,
-    LlgConfig, MaterialParameters, Result, RhsEvaluation, StepReport, TimeIntegrator, Vector3, MU0,
+    add, cross, dot, max_cross_norm, norm, normalized, scale, sub, AbmHistory,
+    EffectiveFieldObservables, EffectiveFieldTerms, EngineError, LlgConfig, MaterialParameters,
+    Result, RhsEvaluation, StepReport, TimeIntegrator, Vector3, MU0,
 };
 use fullmag_ir::MeshIR;
 #[cfg(feature = "parallel")]
@@ -18,10 +18,6 @@ const ZERO_THRESHOLD: f64 = 1e-30;
 const SPARSE_CG_TOL: f64 = 1e-10;
 /// Default maximum CG iterations for the sparse demag solver.
 const SPARSE_CG_MAX_ITER: usize = 1000;
-/// Floor for bounding-box extents to avoid zero-size axes.
-const MIN_EXTENT_FLOOR: f64 = 1e-12;
-/// Fraction of smallest axis extent used as cell-size lower bound.
-const CELL_SIZE_EXTENT_FRACTION: f64 = 0.25;
 /// Tolerance for barycentric coordinate inclusion test.
 const BARYCENTRIC_INCLUSION_EPS: f64 = 1e-9;
 
@@ -973,20 +969,11 @@ impl FemLlgState {
 
 /// FEM demagnetization realization policy.
 ///
-/// # Production
 /// `Poisson` — Robin (or Dirichlet) open-boundary Poisson solve on the FEM
-/// mesh.  Authoritative for accuracy; CG solver is the hot path.
-///
-/// # Bootstrap / Preview
-/// `TransferGrid` — rasterize magnetization onto a regular FDM grid, compute
-/// demag via FFT, then interpolate back.  Faster for quick previews but
-/// introduces projection error.  Not recommended for production accuracy.
+/// mesh. Authoritative for accuracy; CG solver is the hot path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FemDemagRealization {
-    /// Production path: Poisson solve on the FEM mesh (Robin / Dirichlet BC).
     Poisson,
-    /// Bootstrap / preview: rasterize → FFT → interpolate back.
-    TransferGrid,
 }
 
 // ── C8: FEM operator assembly mode ─────────────────────────────────────
@@ -1093,7 +1080,6 @@ pub struct FemLlgProblem {
     /// Interface normal used by interfacial DMI in FEM reference path.
     /// Defaults to +z and is normalized internally before use.
     pub dmi_interface_normal: Vector3,
-    pub demag_transfer_cell_size_hint: Option<[f64; 3]>,
     /// FND-012: Override the default sparse CG tolerance (default: 1e-10).
     pub sparse_cg_tol: Option<f64>,
     /// FND-012: Override the default sparse CG max iterations (default: 1000).
@@ -1123,7 +1109,6 @@ impl Clone for FemLlgProblem {
             dynamics: self.dynamics.clone(),
             terms: self.terms.clone(),
             dmi_interface_normal: self.dmi_interface_normal,
-            demag_transfer_cell_size_hint: self.demag_transfer_cell_size_hint,
             sparse_cg_tol: self.sparse_cg_tol,
             sparse_cg_max_iter: self.sparse_cg_max_iter,
             cell_size_extent_fraction: self.cell_size_extent_fraction,
@@ -1144,7 +1129,6 @@ impl PartialEq for FemLlgProblem {
             && self.dynamics == other.dynamics
             && self.terms == other.terms
             && self.dmi_interface_normal == other.dmi_interface_normal
-            && self.demag_transfer_cell_size_hint == other.demag_transfer_cell_size_hint
             && self.sparse_cg_tol == other.sparse_cg_tol
             && self.sparse_cg_max_iter == other.sparse_cg_max_iter
             && self.cell_size_extent_fraction == other.cell_size_extent_fraction
@@ -1170,7 +1154,6 @@ impl FemLlgProblem {
             dynamics,
             terms,
             dmi_interface_normal: [0.0, 0.0, 1.0],
-            demag_transfer_cell_size_hint: None,
             sparse_cg_tol: None,
             sparse_cg_max_iter: None,
             cell_size_extent_fraction: None,
@@ -1179,35 +1162,6 @@ impl FemLlgProblem {
             demag_dirichlet_boundary: false,
             demag_cache: Mutex::new(None),
             demag_ws: Mutex::new(DemagWorkspace::new(n)),
-            demag_inv_diag,
-        }
-    }
-
-    pub fn with_terms_and_demag_transfer_grid(
-        topology: MeshTopology,
-        material: MaterialParameters,
-        dynamics: LlgConfig,
-        terms: EffectiveFieldTerms,
-        demag_transfer_cell_size_hint: Option<[f64; 3]>,
-    ) -> Self {
-        let demag_csr = topology.demag_csr.clone();
-        let n_nodes = topology.n_nodes;
-        let demag_inv_diag = compute_jacobi_inv_diag(&demag_csr);
-        Self {
-            topology,
-            material,
-            dynamics,
-            terms,
-            dmi_interface_normal: [0.0, 0.0, 1.0],
-            demag_transfer_cell_size_hint,
-            sparse_cg_tol: None,
-            sparse_cg_max_iter: None,
-            cell_size_extent_fraction: None,
-            operator_mode: FemOperatorMode::default(),
-            demag_csr,
-            demag_dirichlet_boundary: false,
-            demag_cache: Mutex::new(None),
-            demag_ws: Mutex::new(DemagWorkspace::new(n_nodes)),
             demag_inv_diag,
         }
     }
@@ -1236,7 +1190,6 @@ impl FemLlgProblem {
             dynamics,
             terms,
             dmi_interface_normal: [0.0, 0.0, 1.0],
-            demag_transfer_cell_size_hint: None,
             sparse_cg_tol: None,
             sparse_cg_max_iter: None,
             cell_size_extent_fraction: None,
@@ -1260,11 +1213,7 @@ impl FemLlgProblem {
 
     /// Which demag realization this problem will use at runtime.
     pub fn demag_realization(&self) -> FemDemagRealization {
-        if self.demag_transfer_cell_size_hint.is_some() {
-            FemDemagRealization::TransferGrid
-        } else {
-            FemDemagRealization::Poisson
-        }
+        FemDemagRealization::Poisson
     }
 
     pub fn new_state(&self, magnetization: Vec<Vector3>) -> Result<FemLlgState> {
@@ -2300,13 +2249,6 @@ impl FemLlgProblem {
             );
         }
 
-        // C2: Transfer-grid demag is a preview approximation.
-        if self.demag_realization() == FemDemagRealization::TransferGrid && self.terms.demag {
-            eprintln!(
-                "[fullmag::fem::reference] NOTE: using transfer-grid demag (bootstrap/preview). \
-                 For production accuracy, use Poisson demag."
-            );
-        }
     }
 
     #[allow(non_snake_case)]
@@ -2641,11 +2583,7 @@ impl FemLlgProblem {
         &self,
         magnetization: &[Vector3],
     ) -> Result<(Vec<Vector3>, f64)> {
-        let result = if self.demag_transfer_cell_size_hint.is_some() {
-            self.transfer_grid_demag_observables_from_vectors(magnetization)?
-        } else {
-            self.robin_demag_observables_from_vectors(magnetization)?
-        };
+        let result = self.robin_demag_observables_from_vectors(magnetization)?;
         // Cache the result so step_report_from_vectors can skip the redundant
         // CG solve / FFT demag after the integrator step.
         *self.demag_cache.lock().unwrap() = Some(result.clone());
@@ -2693,105 +2631,6 @@ impl FemLlgProblem {
                 .map(|(u, b)| u * b)
                 .sum::<f64>();
         Ok((field[..n].to_vec(), energy))
-    }
-
-    fn transfer_grid_demag_observables_from_vectors(
-        &self,
-        magnetization: &[Vector3],
-    ) -> Result<(Vec<Vector3>, f64)> {
-        let Some((bbox_min, bbox_max)) = self.magnetic_bbox() else {
-            return Ok((vec![[0.0, 0.0, 0.0]; self.topology.n_nodes], 0.0));
-        };
-
-        let requested = self
-            .demag_transfer_cell_size_hint
-            .unwrap_or_else(|| self.default_demag_transfer_cell_size_hint(bbox_min, bbox_max));
-        let grid_desc = TransferGridDesc::from_bbox(bbox_min, bbox_max, requested)?;
-
-        // One-time diagnostic: warn about per-step FFT workspace allocation
-        {
-            use std::sync::Once;
-            static WARN: Once = Once::new();
-            WARN.call_once(|| {
-                eprintln!(
-                    "[fullmag::fem] Transfer-grid demag active — grid {}×{}×{} ({} cells). \
-                     FFT workspace will be cached across evaluations.",
-                    grid_desc.grid.nx,
-                    grid_desc.grid.ny,
-                    grid_desc.grid.nz,
-                    grid_desc.grid.cell_count()
-                );
-            });
-        }
-
-        let rasterized =
-            self.rasterize_magnetization_to_transfer_grid(magnetization, &grid_desc)?;
-        if !rasterized.active_mask.iter().any(|is_active| *is_active) {
-            return Ok((vec![[0.0, 0.0, 0.0]; self.topology.n_nodes], 0.0));
-        }
-
-        // Cache the FDM problem + FFT workspace so we don't rebuild per call.
-        use std::cell::RefCell;
-        thread_local! {
-            static CACHED: RefCell<Option<(GridShape, CellSize, ExchangeLlgProblem, crate::FftWorkspace)>> =
-                const { RefCell::new(None) };
-        }
-
-        let cell_demag_field = CACHED.with(|cached| {
-            let mut slot = cached.borrow_mut();
-            // Check if the cached workspace matches the current grid
-            let need_rebuild = match slot.as_ref() {
-                Some((g, cs, _, _)) => *g != grid_desc.grid || *cs != grid_desc.cell_size,
-                None => true,
-            };
-            if need_rebuild {
-                let fdm_problem = ExchangeLlgProblem::with_terms_and_mask(
-                    grid_desc.grid,
-                    grid_desc.cell_size,
-                    self.material,
-                    self.dynamics,
-                    EffectiveFieldTerms {
-                        exchange: false,
-                        demag: true,
-                        external_field: None,
-                        per_node_field: None,
-                        magnetoelastic: None,
-                        ..Default::default()
-                    },
-                    Some(rasterized.active_mask.clone()),
-                )?;
-                let ws = fdm_problem.create_workspace();
-                *slot = Some((grid_desc.grid, grid_desc.cell_size, fdm_problem, ws));
-            }
-            let (_, _, ref fdm_problem, ref mut ws) = slot.as_mut().unwrap();
-            let fdm_state = fdm_problem.new_state(rasterized.magnetization)?;
-            Ok(fdm_problem.demag_field_from_vectors_ws(fdm_state.magnetization(), ws))
-        })?;
-
-        let mut node_demag_field = vec![[0.0, 0.0, 0.0]; self.topology.n_nodes];
-        for (node_index, value) in node_demag_field.iter_mut().enumerate() {
-            *value = sample_cell_centered_vector_field(
-                &cell_demag_field,
-                grid_desc.grid,
-                grid_desc.bbox_min,
-                grid_desc.cell_size,
-                self.topology.coords[node_index],
-            );
-        }
-
-        let demag_energy_joules = magnetization
-            .iter()
-            .zip(node_demag_field.iter())
-            .zip(self.topology.magnetic_node_volumes.iter())
-            .map(|((m, h_demag), node_volume)| {
-                -0.5 * MU0
-                    * self.material.saturation_magnetisation
-                    * dot(*m, *h_demag)
-                    * node_volume
-            })
-            .sum();
-
-        Ok((node_demag_field, demag_energy_joules))
     }
 
     fn demag_rhs_from_vectors_into(&self, magnetization: &[Vector3], rhs: &mut [f64]) {
@@ -3301,350 +3140,6 @@ impl FemLlgProblem {
         scale(add(precession_term, scale(damping, alpha)), -gamma_bar)
     }
 
-    fn magnetic_bbox(&self) -> Option<(Vector3, Vector3)> {
-        let mut min_corner = [f64::INFINITY, f64::INFINITY, f64::INFINITY];
-        let mut max_corner = [f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
-        let mut found = false;
-
-        for (node_index, point) in self.topology.coords.iter().enumerate() {
-            if self.topology.magnetic_node_volumes[node_index] <= 0.0 {
-                continue;
-            }
-            found = true;
-            for axis in 0..3 {
-                min_corner[axis] = min_corner[axis].min(point[axis]);
-                max_corner[axis] = max_corner[axis].max(point[axis]);
-            }
-        }
-
-        found.then_some((min_corner, max_corner))
-    }
-
-    fn default_demag_transfer_cell_size_hint(
-        &self,
-        bbox_min: Vector3,
-        bbox_max: Vector3,
-    ) -> [f64; 3] {
-        let extent = [
-            (bbox_max[0] - bbox_min[0]).abs().max(MIN_EXTENT_FLOOR),
-            (bbox_max[1] - bbox_min[1]).abs().max(MIN_EXTENT_FLOOR),
-            (bbox_max[2] - bbox_min[2]).abs().max(MIN_EXTENT_FLOOR),
-        ];
-        let characteristic_volume = (self.topology.magnetic_total_volume.max(ZERO_THRESHOLD)
-            / self.topology.n_nodes.max(1) as f64)
-            .cbrt();
-        // FND-012: use overridable cell-size extent fraction
-        let frac = self
-            .cell_size_extent_fraction
-            .unwrap_or(CELL_SIZE_EXTENT_FRACTION);
-        let h = characteristic_volume.max(extent[2].min(extent[0].min(extent[1])) * frac);
-        [h, h, h]
-    }
-
-    fn rasterize_magnetization_to_transfer_grid(
-        &self,
-        magnetization: &[Vector3],
-        desc: &TransferGridDesc,
-    ) -> Result<RasterizedTransferGrid> {
-        let n_cells = desc.grid.cell_count();
-        let mut active_mask = vec![false; n_cells];
-        let mut cell_magnetization = vec![[0.0, 0.0, 0.0]; n_cells];
-        // FND-002 fix: conservative accumulation instead of last-write-wins.
-        let mut cell_hit_count = vec![0u32; n_cells];
-
-        for (element_index, element) in self.topology.elements.iter().enumerate() {
-            if !self.topology.magnetic_element_mask[element_index] {
-                continue;
-            }
-
-            let vertices = [
-                self.topology.coords[element[0] as usize],
-                self.topology.coords[element[1] as usize],
-                self.topology.coords[element[2] as usize],
-                self.topology.coords[element[3] as usize],
-            ];
-            let local_m = [
-                magnetization[element[0] as usize],
-                magnetization[element[1] as usize],
-                magnetization[element[2] as usize],
-                magnetization[element[3] as usize],
-            ];
-            // Per-node Ms scaling.  The CPU reference currently only uses
-            // uniform Ms so every scale factor is 1.0, but the structure is
-            // kept for parity with the C++ native backend.
-            let ms_scale: [f64; 4] = [1.0; 4];
-
-            let (ix0, ix1) = cell_index_range_for_tet(
-                desc.bbox_min[0],
-                desc.cell_size.dx,
-                desc.grid.nx,
-                vertices,
-                0,
-            );
-            let (iy0, iy1) = cell_index_range_for_tet(
-                desc.bbox_min[1],
-                desc.cell_size.dy,
-                desc.grid.ny,
-                vertices,
-                1,
-            );
-            let (iz0, iz1) = cell_index_range_for_tet(
-                desc.bbox_min[2],
-                desc.cell_size.dz,
-                desc.grid.nz,
-                vertices,
-                2,
-            );
-
-            for iz in iz0..=iz1 {
-                for iy in iy0..=iy1 {
-                    for ix in ix0..=ix1 {
-                        let point = [
-                            desc.bbox_min[0] + (ix as f64 + 0.5) * desc.cell_size.dx,
-                            desc.bbox_min[1] + (iy as f64 + 0.5) * desc.cell_size.dy,
-                            desc.bbox_min[2] + (iz as f64 + 0.5) * desc.cell_size.dz,
-                        ];
-                        if let Some(barycentric) = barycentric_coordinates_tet(point, vertices) {
-                            let index = desc.grid.index(ix, iy, iz);
-                            active_mask[index] = true;
-                            for c in 0..3 {
-                                cell_magnetization[index][c] +=
-                                    barycentric[0] * local_m[0][c] * ms_scale[0]
-                                        + barycentric[1] * local_m[1][c] * ms_scale[1]
-                                        + barycentric[2] * local_m[2][c] * ms_scale[2]
-                                        + barycentric[3] * local_m[3][c] * ms_scale[3];
-                            }
-                            cell_hit_count[index] += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Normalize cells that received contributions from multiple tetrahedra
-        for cell in 0..n_cells {
-            if cell_hit_count[cell] > 1 {
-                let inv = 1.0 / cell_hit_count[cell] as f64;
-                for c in 0..3 {
-                    cell_magnetization[cell][c] *= inv;
-                }
-            }
-        }
-
-        Ok(RasterizedTransferGrid {
-            active_mask,
-            magnetization: cell_magnetization,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct TransferGridDesc {
-    grid: GridShape,
-    cell_size: CellSize,
-    bbox_min: Vector3,
-}
-
-impl TransferGridDesc {
-    fn from_bbox(bbox_min: Vector3, bbox_max: Vector3, requested_cell: [f64; 3]) -> Result<Self> {
-        let extent = [
-            (bbox_max[0] - bbox_min[0]).abs(),
-            (bbox_max[1] - bbox_min[1]).abs(),
-            (bbox_max[2] - bbox_min[2]).abs(),
-        ];
-
-        let nx = transfer_axis_cells(extent[0], requested_cell[0])?;
-        let ny = transfer_axis_cells(extent[1], requested_cell[1])?;
-        let nz = transfer_axis_cells(extent[2], requested_cell[2])?;
-        let grid = GridShape::new(nx, ny, nz)?;
-        let cell_size = CellSize::new(
-            (extent[0] / nx as f64).max(MIN_EXTENT_FLOOR),
-            (extent[1] / ny as f64).max(MIN_EXTENT_FLOOR),
-            (extent[2] / nz as f64).max(MIN_EXTENT_FLOOR),
-        )?;
-        Ok(Self {
-            grid,
-            cell_size,
-            bbox_min,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RasterizedTransferGrid {
-    active_mask: Vec<bool>,
-    magnetization: Vec<Vector3>,
-}
-
-// ── C7: Precomputed transfer-grid overlap map ──────────────────────────
-
-/// Record of which grid cells a single tetrahedron overlaps,
-/// together with the barycentric interpolation weights.
-#[derive(Debug, Clone)]
-struct TetGridOverlap {
-    /// Element (tet) index in `topology.elements`.
-    element_index: usize,
-    /// Pairs of (grid_cell_flat_index, barycentric_weights).
-    cells: Vec<(usize, [f64; 4])>,
-}
-
-/// Pre-computed mapping from every magnetic tet to the grid cells it
-/// overlaps.  This structure is built once per grid configuration and
-/// reused across all rasterization calls (C7).
-#[derive(Debug, Clone)]
-pub struct TransferGridCache {
-    #[allow(dead_code)]
-    desc: TransferGridDesc,
-    overlaps: Vec<TetGridOverlap>,
-    /// Number of grid cells.
-    n_cells: usize,
-}
-
-impl TransferGridCache {
-    /// Build the overlap map for a given mesh topology and grid descriptor.
-    #[allow(dead_code)]
-    pub(crate) fn build(topology: &MeshTopology, desc: &TransferGridDesc) -> Self {
-        let mut overlaps = Vec::new();
-
-        for (element_index, element) in topology.elements.iter().enumerate() {
-            if !topology.magnetic_element_mask[element_index] {
-                continue;
-            }
-
-            let vertices = [
-                topology.coords[element[0] as usize],
-                topology.coords[element[1] as usize],
-                topology.coords[element[2] as usize],
-                topology.coords[element[3] as usize],
-            ];
-
-            let (ix0, ix1) = cell_index_range_for_tet(
-                desc.bbox_min[0],
-                desc.cell_size.dx,
-                desc.grid.nx,
-                vertices,
-                0,
-            );
-            let (iy0, iy1) = cell_index_range_for_tet(
-                desc.bbox_min[1],
-                desc.cell_size.dy,
-                desc.grid.ny,
-                vertices,
-                1,
-            );
-            let (iz0, iz1) = cell_index_range_for_tet(
-                desc.bbox_min[2],
-                desc.cell_size.dz,
-                desc.grid.nz,
-                vertices,
-                2,
-            );
-
-            let mut cells = Vec::new();
-            for iz in iz0..=iz1 {
-                for iy in iy0..=iy1 {
-                    for ix in ix0..=ix1 {
-                        let point = [
-                            desc.bbox_min[0] + (ix as f64 + 0.5) * desc.cell_size.dx,
-                            desc.bbox_min[1] + (iy as f64 + 0.5) * desc.cell_size.dy,
-                            desc.bbox_min[2] + (iz as f64 + 0.5) * desc.cell_size.dz,
-                        ];
-                        if let Some(bary) = barycentric_coordinates_tet(point, vertices) {
-                            let index = desc.grid.index(ix, iy, iz);
-                            cells.push((index, bary));
-                        }
-                    }
-                }
-            }
-
-            if !cells.is_empty() {
-                overlaps.push(TetGridOverlap {
-                    element_index,
-                    cells,
-                });
-            }
-        }
-
-        Self {
-            desc: desc.clone(),
-            overlaps,
-            n_cells: desc.grid.cell_count(),
-        }
-    }
-
-    /// Rasterize magnetization using the precomputed overlap map (zero per-step allocation).
-    ///
-    /// `out_mag` and `out_active` must be pre-allocated to `n_cells` length.
-    pub fn rasterize_into(
-        &self,
-        magnetization: &[Vector3],
-        topology: &MeshTopology,
-        out_mag: &mut [Vector3],
-        out_active: &mut [bool],
-    ) {
-        // Clear
-        for m in out_mag.iter_mut() {
-            *m = [0.0, 0.0, 0.0];
-        }
-        for a in out_active.iter_mut() {
-            *a = false;
-        }
-        let mut hit_count = vec![0u32; self.n_cells];
-
-        for overlap in &self.overlaps {
-            let element = &topology.elements[overlap.element_index];
-            let local_m = [
-                magnetization[element[0] as usize],
-                magnetization[element[1] as usize],
-                magnetization[element[2] as usize],
-                magnetization[element[3] as usize],
-            ];
-
-            for &(cell_idx, bary) in &overlap.cells {
-                out_active[cell_idx] = true;
-                for c in 0..3 {
-                    out_mag[cell_idx][c] += bary[0] * local_m[0][c]
-                        + bary[1] * local_m[1][c]
-                        + bary[2] * local_m[2][c]
-                        + bary[3] * local_m[3][c];
-                }
-                hit_count[cell_idx] += 1;
-            }
-        }
-
-        // Normalize cells with multiple contributions
-        for cell in 0..self.n_cells {
-            if hit_count[cell] > 1 {
-                let inv = 1.0 / hit_count[cell] as f64;
-                for c in 0..3 {
-                    out_mag[cell][c] *= inv;
-                }
-            }
-        }
-    }
-
-    /// Grid descriptor (for accessing cell_size, grid shape, etc.).
-    #[allow(dead_code)]
-    pub(crate) fn desc(&self) -> &TransferGridDesc {
-        &self.desc
-    }
-
-    /// Number of grid cells.
-    pub fn n_cells(&self) -> usize {
-        self.n_cells
-    }
-}
-
-fn transfer_axis_cells(extent: f64, requested_cell: f64) -> Result<usize> {
-    if requested_cell <= 0.0 {
-        return Err(EngineError::new(
-            "transfer-grid cell size hint must be positive",
-        ));
-    }
-    if extent <= 1e-18 {
-        return Ok(1);
-    }
-    Ok(((extent / requested_cell).ceil() as usize).max(1))
 }
 
 fn inverse_transpose_3x3(columns: [[f64; 3]; 3], det: f64) -> [[f64; 3]; 3] {
@@ -3759,31 +3254,6 @@ fn equivalent_radius(volume: f64) -> f64 {
     ((3.0 * volume) / (4.0 * PI)).cbrt()
 }
 
-fn cell_index_range_for_tet(
-    bbox_min_axis: f64,
-    cell_size_axis: f64,
-    n_cells_axis: usize,
-    vertices: [Vector3; 4],
-    axis: usize,
-) -> (usize, usize) {
-    let mut tet_min = f64::INFINITY;
-    let mut tet_max = f64::NEG_INFINITY;
-    for vertex in &vertices {
-        tet_min = tet_min.min(vertex[axis]);
-        tet_max = tet_max.max(vertex[axis]);
-    }
-    let start = (((tet_min - bbox_min_axis) / cell_size_axis) - 0.5).ceil() as isize;
-    let end = (((tet_max - bbox_min_axis) / cell_size_axis) - 0.5).floor() as isize;
-    let upper = n_cells_axis.saturating_sub(1) as isize;
-    let start = start.clamp(0, upper) as usize;
-    let end = end.clamp(0, upper) as usize;
-    if start <= end {
-        (start, end)
-    } else {
-        (end, start)
-    }
-}
-
 pub(crate) fn barycentric_coordinates_tet(
     point: Vector3,
     vertices: [Vector3; 4],
@@ -3841,50 +3311,6 @@ pub(crate) fn inverse_3x3_columns(columns: [[f64; 3]; 3], det: f64) -> [[f64; 3]
     ]
 }
 
-fn sample_cell_centered_vector_field(
-    values: &[Vector3],
-    grid: GridShape,
-    bbox_min: Vector3,
-    cell_size: CellSize,
-    point: Vector3,
-) -> Vector3 {
-    let axis_sample = |coord: f64, min_coord: f64, h: f64, n: usize| -> (usize, usize, f64) {
-        if n <= 1 {
-            return (0, 0, 0.0);
-        }
-        let u = ((coord - min_coord) / h) - 0.5;
-        let u = u.clamp(0.0, n as f64 - 1.0);
-        let i0 = u.floor() as usize;
-        let i1 = (i0 + 1).min(n - 1);
-        let t = if i0 == i1 { 0.0 } else { u - i0 as f64 };
-        (i0, i1, t)
-    };
-
-    let (x0, x1, tx) = axis_sample(point[0], bbox_min[0], cell_size.dx, grid.nx);
-    let (y0, y1, ty) = axis_sample(point[1], bbox_min[1], cell_size.dy, grid.ny);
-    let (z0, z1, tz) = axis_sample(point[2], bbox_min[2], cell_size.dz, grid.nz);
-
-    let sample = |ix: usize, iy: usize, iz: usize| values[grid.index(ix, iy, iz)];
-
-    let c000 = sample(x0, y0, z0);
-    let c100 = sample(x1, y0, z0);
-    let c010 = sample(x0, y1, z0);
-    let c110 = sample(x1, y1, z0);
-    let c001 = sample(x0, y0, z1);
-    let c101 = sample(x1, y0, z1);
-    let c011 = sample(x0, y1, z1);
-    let c111 = sample(x1, y1, z1);
-
-    let lerp = |a: Vector3, b: Vector3, t: f64| add(scale(a, 1.0 - t), scale(b, t));
-    let c00 = lerp(c000, c100, tx);
-    let c10 = lerp(c010, c110, tx);
-    let c01 = lerp(c001, c101, tx);
-    let c11 = lerp(c011, c111, tx);
-    let c0 = lerp(c00, c10, ty);
-    let c1 = lerp(c01, c11, ty);
-    lerp(c0, c1, tz)
-}
-
 fn max_norm(values: &[Vector3]) -> f64 {
     values.iter().map(|value| norm(*value)).fold(0.0, f64::max)
 }
@@ -3893,8 +3319,7 @@ fn max_norm(values: &[Vector3]) -> f64 {
 mod tests {
     use super::*;
     use crate::{
-        CellSize, CubicAnisotropyConfig, EffectiveFieldTerms, ExchangeLlgProblem, GridShape,
-        DEFAULT_GYROMAGNETIC_RATIO,
+        CubicAnisotropyConfig, EffectiveFieldTerms, DEFAULT_GYROMAGNETIC_RATIO,
     };
 
     fn unit_tet_problem() -> FemLlgProblem {
@@ -3984,64 +3409,6 @@ mod tests {
                 magnetoelastic: None,
                 ..Default::default()
             },
-        )
-    }
-
-    fn coarse_box_problem_transfer_grid(demag: bool) -> FemLlgProblem {
-        let mesh = MeshIR {
-            mesh_name: "box_40x20x10_coarse".to_string(),
-            nodes: vec![
-                [-20e-9, -10e-9, -5e-9],
-                [20e-9, -10e-9, -5e-9],
-                [20e-9, 10e-9, -5e-9],
-                [-20e-9, 10e-9, -5e-9],
-                [-20e-9, -10e-9, 5e-9],
-                [20e-9, -10e-9, 5e-9],
-                [20e-9, 10e-9, 5e-9],
-                [-20e-9, 10e-9, 5e-9],
-            ],
-            elements: vec![
-                [0, 1, 2, 6],
-                [0, 2, 3, 6],
-                [0, 3, 7, 6],
-                [0, 7, 4, 6],
-                [0, 4, 5, 6],
-                [0, 5, 1, 6],
-            ],
-            element_markers: vec![1, 1, 1, 1, 1, 1],
-            boundary_faces: vec![
-                [0, 1, 2],
-                [0, 1, 5],
-                [1, 2, 6],
-                [0, 2, 3],
-                [2, 3, 6],
-                [0, 3, 7],
-                [3, 6, 7],
-                [0, 4, 7],
-                [4, 6, 7],
-                [0, 4, 5],
-                [4, 5, 6],
-                [1, 5, 6],
-            ],
-            boundary_markers: vec![1; 12],
-            periodic_boundary_pairs: Vec::new(),
-            periodic_node_pairs: Vec::new(),
-            per_domain_quality: std::collections::HashMap::new(),
-        };
-        let topology = MeshTopology::from_ir(&mesh).expect("coarse box topology");
-        FemLlgProblem::with_terms_and_demag_transfer_grid(
-            topology,
-            MaterialParameters::new(800e3, 13e-12, 0.5).expect("material"),
-            LlgConfig::new(DEFAULT_GYROMAGNETIC_RATIO, TimeIntegrator::Heun).expect("llg"),
-            EffectiveFieldTerms {
-                exchange: true,
-                demag,
-                external_field: None,
-                per_node_field: None,
-                magnetoelastic: None,
-                ..Default::default()
-            },
-            Some([10e-9, 10e-9, 10e-9]),
         )
     }
 
@@ -4197,47 +3564,6 @@ mod tests {
     }
 
     #[test]
-    fn transfer_grid_fem_demag_tracks_fdm_demag_for_uniform_thin_box() {
-        let fem_problem = coarse_box_problem_transfer_grid(true);
-        let fem_state = fem_problem
-            .new_state(vec![[0.0, 0.0, 1.0]; fem_problem.topology.n_nodes])
-            .expect("fem state");
-        let fem_obs = fem_problem.observe(&fem_state).expect("fem observables");
-
-        let fdm_problem = ExchangeLlgProblem::with_terms(
-            GridShape::new(4, 2, 1).expect("fdm grid"),
-            CellSize::new(10e-9, 10e-9, 10e-9).expect("fdm cell"),
-            MaterialParameters::new(800e3, 13e-12, 0.5).expect("material"),
-            LlgConfig::new(DEFAULT_GYROMAGNETIC_RATIO, TimeIntegrator::Heun).expect("llg"),
-            EffectiveFieldTerms {
-                exchange: false,
-                demag: true,
-                external_field: None,
-                per_node_field: None,
-                magnetoelastic: None,
-                ..Default::default()
-            },
-        );
-        let fdm_state = fdm_problem
-            .new_state(vec![[0.0, 0.0, 1.0]; 8])
-            .expect("fdm state");
-        let fdm_obs = fdm_problem.observe(&fdm_state).expect("fdm observables");
-
-        let rel_gap = ((fem_obs.demag_energy_joules - fdm_obs.demag_energy_joules).abs())
-            / fdm_obs.demag_energy_joules.abs().max(1e-30);
-        assert!(
-            rel_gap < 0.35,
-            "transfer-grid FEM demag should stay reasonably close to FDM on a thin box; rel_gap={rel_gap} fem={} fdm={}",
-            fem_obs.demag_energy_joules,
-            fdm_obs.demag_energy_joules,
-        );
-        assert!(
-            fem_obs.max_demag_field_amplitude > 0.0,
-            "transfer-grid FEM demag should produce nonzero field",
-        );
-    }
-
-    #[test]
     fn shared_domain_airbox_demag_field_reaches_air_nodes() {
         let (problem, air_only_node) = shared_domain_airbox_problem_dirichlet(true);
         let state = problem
@@ -4274,96 +3600,6 @@ mod tests {
         assert_eq!(
             magnetic_element_mask_from_markers(&[1, 0, 7]),
             vec![true, false, true],
-        );
-    }
-
-    // ── FND-001/002: Rasterization order-independence test ──
-
-    #[test]
-    fn rasterization_is_order_independent() {
-        // Build a problem with transfer-grid demag
-        let problem = coarse_box_problem_transfer_grid(true);
-        let n = problem.topology.n_nodes;
-
-        // Uniform magnetization along x
-        let mag: Vec<Vector3> = vec![[1.0, 0.0, 0.0]; n];
-        let state_a = problem.new_state(mag.clone()).expect("state a");
-        let obs_a = problem.observe(&state_a).expect("obs a");
-
-        // Build the same problem but with permuted element order
-        let mut mesh_perm = MeshIR {
-            mesh_name: "box_40x20x10_perm".to_string(),
-            nodes: vec![
-                [-20e-9, -10e-9, -5e-9],
-                [20e-9, -10e-9, -5e-9],
-                [20e-9, 10e-9, -5e-9],
-                [-20e-9, 10e-9, -5e-9],
-                [-20e-9, -10e-9, 5e-9],
-                [20e-9, -10e-9, 5e-9],
-                [20e-9, 10e-9, 5e-9],
-                [-20e-9, 10e-9, 5e-9],
-            ],
-            elements: vec![
-                [0, 5, 1, 6], // element 4 moved to front
-                [0, 1, 2, 6], // element 0
-                [0, 7, 4, 6], // element 3
-                [0, 2, 3, 6], // element 1
-                [0, 4, 5, 6], // element 4 (original)
-                [0, 3, 7, 6], // element 2
-            ],
-            element_markers: vec![1, 1, 1, 1, 1, 1],
-            boundary_faces: vec![
-                [0, 1, 2],
-                [0, 1, 5],
-                [1, 2, 6],
-                [0, 2, 3],
-                [2, 3, 6],
-                [0, 3, 7],
-                [3, 6, 7],
-                [0, 4, 7],
-                [4, 6, 7],
-                [0, 4, 5],
-                [4, 5, 6],
-                [1, 5, 6],
-            ],
-            boundary_markers: vec![1; 12],
-            periodic_boundary_pairs: Vec::new(),
-            periodic_node_pairs: Vec::new(),
-            per_domain_quality: std::collections::HashMap::new(),
-        };
-        let topo_perm = MeshTopology::from_ir(&mesh_perm).expect("perm topology");
-        let problem_perm = FemLlgProblem::with_terms_and_demag_transfer_grid(
-            topo_perm,
-            MaterialParameters::new(800e3, 13e-12, 0.5).expect("material"),
-            LlgConfig::new(DEFAULT_GYROMAGNETIC_RATIO, TimeIntegrator::Heun).expect("llg"),
-            EffectiveFieldTerms {
-                exchange: true,
-                demag: true,
-                external_field: None,
-                per_node_field: None,
-                magnetoelastic: None,
-                ..Default::default()
-            },
-            Some([10e-9, 10e-9, 10e-9]),
-        );
-        let state_b = problem_perm.new_state(mag).expect("state b");
-        let obs_b = problem_perm.observe(&state_b).expect("obs b");
-
-        // Exchange and demag energies should be identical regardless of element order.
-        // Use absolute tolerance since uniform states produce near-zero energies
-        // where relative comparisons are meaningless.
-        let abs_tol = 1e-25;
-        assert!(
-            (obs_a.exchange_energy_joules - obs_b.exchange_energy_joules).abs() < abs_tol,
-            "exchange energy differs: {} vs {}",
-            obs_a.exchange_energy_joules,
-            obs_b.exchange_energy_joules
-        );
-        assert!(
-            (obs_a.demag_energy_joules - obs_b.demag_energy_joules).abs() < abs_tol,
-            "demag energy differs: {} vs {}",
-            obs_a.demag_energy_joules,
-            obs_b.demag_energy_joules
         );
     }
 

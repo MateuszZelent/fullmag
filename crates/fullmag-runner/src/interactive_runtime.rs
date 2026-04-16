@@ -866,7 +866,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             }
 
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                local_stats.step >= control.max_steps
+                local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
@@ -882,16 +882,27 @@ impl CpuInteractiveFdmPreviewRuntime {
             }
         }
 
+        let status = if paused {
+            RunStatus::Paused
+        } else if cancelled {
+            RunStatus::Cancelled
+        } else {
+            RunStatus::Completed
+        };
+        let completion = crate::relaxation::infer_stage_completion(
+            status,
+            plan.relaxation.as_ref(),
+            &steps,
+            plan.gyromagnetic_ratio,
+            plan.material.damping,
+            pure_damping_relax,
+        );
+
         Ok(RunResult {
-            status: if paused {
-                RunStatus::Paused
-            } else if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization: self.state.magnetization().to_vec(),
+            completion: Some(completion),
         })
     }
 
@@ -1192,7 +1203,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             }
 
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                local_stats.step >= control.max_steps
+                local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
@@ -1222,16 +1233,27 @@ impl CpuInteractiveFdmPreviewRuntime {
             )?;
         }
 
+        let status = if paused {
+            RunStatus::Paused
+        } else if cancelled {
+            RunStatus::Cancelled
+        } else {
+            RunStatus::Completed
+        };
+        let completion = crate::relaxation::infer_stage_completion(
+            status,
+            plan.relaxation.as_ref(),
+            steps,
+            plan.gyromagnetic_ratio,
+            plan.material.damping,
+            pure_damping_relax,
+        );
+
         Ok(RunResult {
-            status: if paused {
-                RunStatus::Paused
-            } else if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps: steps.clone(),
             final_magnetization: self.state.magnetization().to_vec(),
+            completion: Some(completion),
         })
     }
 }
@@ -1353,6 +1375,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
         let mut previous_total_energy: Option<f64> = None;
+        let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -1526,33 +1549,62 @@ impl CudaInteractiveFdmPreviewRuntime {
                 _ => {}
             }
 
-            let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                local_stats.step >= control.max_steps
-                    || relaxation_converged(
-                        control,
-                        &total_stats,
-                        previous_total_energy,
-                        plan.gyromagnetic_ratio,
-                        plan.material.damping,
-                        pure_damping_relax,
-                    )
-            });
+            let stop_for_relaxation = if let Some(control) = plan.relaxation.as_ref() {
+                if let Some(completion) = self.backend.stage_completion()? {
+                    backend_completion = Some(completion);
+                    true
+                } else {
+                    local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
+                        || relaxation_converged(
+                            control,
+                            &total_stats,
+                            previous_total_energy,
+                            plan.gyromagnetic_ratio,
+                            plan.material.damping,
+                            pure_damping_relax,
+                        )
+                }
+            } else {
+                false
+            };
             previous_total_energy = Some(total_stats.e_total);
             if stop_for_relaxation {
                 break;
             }
         }
 
+        let status = if paused {
+            RunStatus::Paused
+        } else if cancelled {
+            RunStatus::Cancelled
+        } else {
+            RunStatus::Completed
+        };
+        let completion = if let Some(mut completion) = backend_completion {
+            completion.status = match status {
+                RunStatus::Completed => "completed",
+                RunStatus::Cancelled => "cancelled",
+                RunStatus::Paused => "paused",
+                RunStatus::Failed => "failed",
+            }
+            .to_string();
+            completion
+        } else {
+            crate::relaxation::infer_stage_completion(
+                status,
+                plan.relaxation.as_ref(),
+                &steps,
+                plan.gyromagnetic_ratio,
+                plan.material.damping,
+                pure_damping_relax,
+            )
+        };
+
         Ok(RunResult {
-            status: if paused {
-                RunStatus::Paused
-            } else if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization: self.backend.copy_m(cell_count)?,
+            completion: Some(completion),
         })
     }
 
@@ -1788,7 +1840,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             )?;
 
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                local_stats.step >= control.max_steps
+                local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
@@ -1817,17 +1869,27 @@ impl CudaInteractiveFdmPreviewRuntime {
 
         let final_magnetization = self.backend.copy_m(cell_count)?;
         let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+        let status = if paused {
+            RunStatus::Paused
+        } else if cancelled {
+            RunStatus::Cancelled
+        } else {
+            RunStatus::Completed
+        };
+        let completion = crate::relaxation::infer_stage_completion(
+            status,
+            plan.relaxation.as_ref(),
+            &steps,
+            plan.gyromagnetic_ratio,
+            plan.material.damping,
+            pure_damping_relax,
+        );
         Ok(ExecutedRun {
             result: RunResult {
-                status: if paused {
-                    RunStatus::Paused
-                } else if cancelled {
-                    RunStatus::Cancelled
-                } else {
-                    RunStatus::Completed
-                },
+                status,
                 steps,
                 final_magnetization,
+                completion: Some(completion),
             },
             initial_magnetization,
             field_snapshots,
@@ -2132,7 +2194,7 @@ impl CpuInteractiveFemPreviewRuntime {
             }
 
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                local_stats.step >= control.max_steps
+                local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
@@ -2148,16 +2210,27 @@ impl CpuInteractiveFemPreviewRuntime {
             }
         }
 
+        let status = if paused {
+            RunStatus::Paused
+        } else if cancelled {
+            RunStatus::Cancelled
+        } else {
+            RunStatus::Completed
+        };
+        let completion = crate::relaxation::infer_stage_completion(
+            status,
+            plan.relaxation.as_ref(),
+            &steps,
+            plan.gyromagnetic_ratio,
+            plan.material.damping,
+            pure_damping_relax,
+        );
+
         Ok(RunResult {
-            status: if paused {
-                RunStatus::Paused
-            } else if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization: self.state.magnetization().to_vec(),
+            completion: Some(completion),
         })
     }
 
@@ -2420,7 +2493,7 @@ impl CpuInteractiveFemPreviewRuntime {
             }
 
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                local_stats.step >= control.max_steps
+                local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
@@ -2452,17 +2525,27 @@ impl CpuInteractiveFemPreviewRuntime {
         }
 
         let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+        let status = if paused {
+            RunStatus::Paused
+        } else if cancelled {
+            RunStatus::Cancelled
+        } else {
+            RunStatus::Completed
+        };
+        let completion = crate::relaxation::infer_stage_completion(
+            status,
+            plan.relaxation.as_ref(),
+            &steps,
+            plan.gyromagnetic_ratio,
+            plan.material.damping,
+            pure_damping_relax,
+        );
         Ok(ExecutedRun {
             result: RunResult {
-                status: if paused {
-                    RunStatus::Paused
-                } else if cancelled {
-                    RunStatus::Cancelled
-                } else {
-                    RunStatus::Completed
-                },
+                status,
                 steps,
                 final_magnetization: self.state.magnetization().to_vec(),
+                completion: Some(completion),
             },
             initial_magnetization,
             field_snapshots,
@@ -2713,7 +2796,7 @@ impl GpuInteractiveFemPreviewRuntime {
             }
 
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                local_stats.step >= control.max_steps
+                local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
@@ -2729,16 +2812,27 @@ impl GpuInteractiveFemPreviewRuntime {
             }
         }
 
+        let status = if paused {
+            RunStatus::Paused
+        } else if cancelled {
+            RunStatus::Cancelled
+        } else {
+            RunStatus::Completed
+        };
+        let completion = crate::relaxation::infer_stage_completion(
+            status,
+            plan.relaxation.as_ref(),
+            &steps,
+            plan.gyromagnetic_ratio,
+            plan.material.damping,
+            pure_damping_relax,
+        );
+
         Ok(RunResult {
-            status: if paused {
-                RunStatus::Paused
-            } else if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization: self.backend.copy_m(self.node_count)?,
+            completion: Some(completion),
         })
     }
 
@@ -2909,7 +3003,7 @@ impl GpuInteractiveFemPreviewRuntime {
             )?;
 
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                local_stats.step >= control.max_steps
+                local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
@@ -2938,17 +3032,27 @@ impl GpuInteractiveFemPreviewRuntime {
 
         let final_magnetization = self.backend.copy_m(self.node_count)?;
         let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+        let status = if paused {
+            RunStatus::Paused
+        } else if cancelled {
+            RunStatus::Cancelled
+        } else {
+            RunStatus::Completed
+        };
+        let completion = crate::relaxation::infer_stage_completion(
+            status,
+            plan.relaxation.as_ref(),
+            &steps,
+            plan.gyromagnetic_ratio,
+            plan.material.damping,
+            pure_damping_relax,
+        );
         Ok(ExecutedRun {
             result: RunResult {
-                status: if paused {
-                    RunStatus::Paused
-                } else if cancelled {
-                    RunStatus::Cancelled
-                } else {
-                    RunStatus::Completed
-                },
+                status,
                 steps,
                 final_magnetization,
+                completion: Some(completion),
             },
             initial_magnetization,
             field_snapshots,
@@ -3474,7 +3578,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> ExecutionProvenance {
         resolved_demag_realization: None,
         dt_policy: None,
         mfem_device: None,
-        demag_transfer_cell_size: None,
+        demag_refresh_interval_s: None,
     }
 }
 
@@ -3520,7 +3624,7 @@ fn cuda_execution_provenance(
         resolved_demag_realization: None,
         dt_policy,
         mfem_device: None,
-        demag_transfer_cell_size: None,
+        demag_refresh_interval_s: None,
     }
 }
 
@@ -3546,11 +3650,7 @@ fn fem_gpu_execution_provenance(
         },
         demag_operator_kind: resolved_demag_realization
             .map(|realization| realization.provenance_name().to_string()),
-        fft_backend: if resolved_demag_realization.is_some_and(|r| !r.is_poisson()) {
-            Some("cuFFT".to_string())
-        } else {
-            None
-        },
+        fft_backend: None,
         device_name: Some(device_info.name.clone()),
         compute_capability: Some(device_info.compute_capability.clone()),
         cuda_driver_version: Some(device_info.driver_version),
@@ -3568,7 +3668,10 @@ fn fem_gpu_execution_provenance(
             .map(|realization| realization.provenance_name().to_string()),
         dt_policy,
         mfem_device: plan.mfem_device_string.clone(),
-        demag_transfer_cell_size: plan.demag_transfer_cell_size,
+        demag_refresh_interval_s: plan
+            .field_refresh
+            .as_ref()
+            .and_then(|policy| policy.demag_interval_s),
     }
 }
 
@@ -3586,7 +3689,7 @@ fn resolved_native_fem_demag(plan: &FemPlanIR) -> Option<fullmag_ir::ResolvedFem
     if plan.enable_demag {
         Some(
             plan.demag_realization
-                .unwrap_or(fullmag_ir::ResolvedFemDemagIR::TransferGrid),
+                .unwrap_or(fullmag_ir::ResolvedFemDemagIR::PoissonRobin),
         )
     } else {
         None

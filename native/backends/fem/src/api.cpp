@@ -58,6 +58,31 @@ void set_reason(fullmag_fem_availability_info &info, const std::string &message)
     std::snprintf(info.reason, sizeof(info.reason), "%s", message.c_str());
 }
 
+void set_stage_completion_reason(
+    fullmag::fem::Context &ctx,
+    fullmag_fem_stage_stop_reason reason,
+    const char *metric_name = nullptr,
+    double metric_value = 0.0,
+    double threshold = 0.0)
+{
+    if (ctx.stage_completion.has_reason != 0) {
+        return;
+    }
+    ctx.stage_completion = {};
+    ctx.stage_completion.has_reason = 1;
+    ctx.stage_completion.reason = reason;
+    if (metric_name != nullptr && metric_name[0] != '\0') {
+        ctx.stage_completion.has_metric_name = 1;
+        std::snprintf(
+            ctx.stage_completion.metric_name,
+            sizeof(ctx.stage_completion.metric_name),
+            "%s",
+            metric_name);
+    }
+    ctx.stage_completion.metric_value = metric_value;
+    ctx.stage_completion.threshold = threshold;
+}
+
 bool mfem_device_request_needs_ceed() {
     const char *raw = std::getenv("FULLMAG_FEM_MFEM_DEVICE");
     return raw != nullptr && std::strncmp(raw, "ceed-", 5) == 0;
@@ -213,15 +238,24 @@ int fullmag_fem_backend_step(
             ctx, tab, dt_seconds, *out_stats, handle->last_error);
     }
     if (!ok) {
+        set_stage_completion_reason(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
         fullmag_fem_set_handle_error(handle, handle->last_error);
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }
     if (ctx.step_interrupted) {
         if (!fullmag::fem::context_snapshot_stats_mfem(
                 ctx, *out_stats, handle->last_error)) {
+            set_stage_completion_reason(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
             fullmag_fem_set_handle_error(handle, handle->last_error);
             return FULLMAG_FEM_ERR_UNAVAILABLE;
         }
+        set_stage_completion_reason(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED);
         out_stats->dt_seconds = 0.0;
         return FULLMAG_FEM_ERR_INTERRUPTED;
     }
@@ -310,6 +344,24 @@ int fullmag_fem_backend_snapshot_stats(
     fullmag_fem_set_handle_error(handle, kUnavailableMessage);
     return FULLMAG_FEM_ERR_UNAVAILABLE;
 #endif
+}
+
+int fullmag_fem_backend_stage_completion(
+    fullmag_fem_backend *handle,
+    fullmag_fem_stage_completion *out_completion
+) {
+    if (out_completion == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_stage_completion received null out_completion");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_stage_completion received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_completion = handle->context.stage_completion;
+    return FULLMAG_FEM_OK;
 }
 
 int fullmag_fem_backend_get_device_info(

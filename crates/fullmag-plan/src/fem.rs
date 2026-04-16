@@ -18,6 +18,9 @@ use crate::validate::{
     planned_study_controls, validate_eigen_outputs, validate_executable_outputs,
 };
 
+const FEM_TRANSFER_GRID_REMOVAL_MESSAGE: &str =
+    "FEM transfer_grid został usunięty. Zbuduj shared_domain_mesh_with_air i użyj Poisson Robin/Dirichlet.";
+
 fn geometry_to_object_id_map(
     magnet_entries: &[crate::mesh::MagnetPlanningEntry],
 ) -> BTreeMap<&str, &str> {
@@ -301,10 +304,26 @@ pub(crate) fn plan_fem(
     {
         return Err(PlanError {
             reasons: vec![
-                "study_universe requires a shared-domain FEM mesh (fem_domain_mesh_asset), \
-                 but none was provided. Call study.build_domain_mesh() or \
-                 study.domain_mesh(...) before solving."
-                    .to_string(),
+                format!(
+                    "{} Shared-domain FEM mesh (fem_domain_mesh_asset) was not provided. \
+                     Call study.build_domain_mesh() or study.domain_mesh(...) before solving.",
+                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                ),
+            ],
+        });
+    }
+    if resolved_domain_mesh_asset.is_none()
+        && problem
+            .energy_terms
+            .iter()
+            .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+    {
+        return Err(PlanError {
+            reasons: vec![
+                format!(
+                    "{} Missing shared-domain FEM mesh with air.",
+                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                ),
             ],
         });
     }
@@ -521,8 +540,14 @@ pub(crate) fn plan_fem(
         );
     }
 
-    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, adaptive_timestep) =
-        planned_study_controls(problem, &mut errors);
+    let (
+        integrator,
+        fixed_timestep,
+        gyromagnetic_ratio,
+        relaxation,
+        adaptive_timestep,
+        field_refresh,
+    ) = planned_study_controls(problem, &mut errors);
 
     // ── PBC capability gate (FEM static / time-domain) ───────────────────
     // The static/time-domain FEM runner does not assemble periodic
@@ -643,10 +668,10 @@ pub(crate) fn plan_fem(
         && domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
     {
         return Err(PlanError {
-            reasons: vec![
-                "shared-domain FEM was requested, but the resolved final FEM mesh has no air region. Materialize a conformal domain mesh with air via study.build_domain_mesh() / study.domain_mesh(...), or switch Demag to transfer_grid if you want a magnetic-only mesh."
-                    .to_string(),
-            ],
+            reasons: vec![format!(
+                "{} Shared-domain FEM was requested, but the resolved final FEM mesh has no air region. Materialize a conformal domain mesh with air via study.build_domain_mesh() / study.domain_mesh(...).",
+                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+            )],
         });
     }
     let mut resolved_mesh_parts = if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
@@ -684,28 +709,25 @@ pub(crate) fn plan_fem(
         .map(|frame| frame.with_mesh_bounds(mesh_bounds(&mesh)))
         .and_then(DomainFrameIR::finalized);
 
-    // S07: Auto-resolve demag realization.
-    // Auto → PoissonRobin when the mesh contains air elements (marker 0),
-    // otherwise TransferGrid (traditional FFT-on-Cartesian-grid approach).
+    // S07: Auto-resolve demag realization (Poisson-only contract).
     let resolved_demag_realization: Option<fullmag_ir::ResolvedFemDemagIR> = if enable_demag {
+        let has_air_elements = mesh.element_markers.iter().any(|&m| m == 0);
+        if !has_air_elements {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "{} The resolved FEM mesh has no air elements.",
+                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                )],
+            });
+        }
         Some(match demag_realization {
-            fullmag_ir::RequestedFemDemagIR::TransferGrid => {
-                fullmag_ir::ResolvedFemDemagIR::TransferGrid
-            }
             fullmag_ir::RequestedFemDemagIR::PoissonDirichlet => {
                 fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet
             }
             fullmag_ir::RequestedFemDemagIR::PoissonRobin => {
                 fullmag_ir::ResolvedFemDemagIR::PoissonRobin
             }
-            fullmag_ir::RequestedFemDemagIR::Auto => {
-                let has_air_elements = mesh.element_markers.iter().any(|&m| m == 0);
-                if has_air_elements {
-                    fullmag_ir::ResolvedFemDemagIR::PoissonRobin
-                } else {
-                    fullmag_ir::ResolvedFemDemagIR::TransferGrid
-                }
-            }
+            fullmag_ir::RequestedFemDemagIR::Auto => fullmag_ir::ResolvedFemDemagIR::PoissonRobin,
         })
     } else {
         None
@@ -746,6 +768,7 @@ pub(crate) fn plan_fem(
         integrator,
         fixed_timestep,
         adaptive_timestep,
+        field_refresh,
         relaxation,
         demag_realization: resolved_demag_realization,
         air_box_config,
@@ -778,7 +801,6 @@ pub(crate) fn plan_fem(
         oersted_realization: None,
         gpu_device_index: None,
         mfem_device_string: None,
-        demag_transfer_cell_size: None,
         use_consistent_mass: None,
     };
 
@@ -871,14 +893,23 @@ pub(crate) fn plan_fem(
 
     let study_note = if let Some(control) = fem_plan.relaxation.as_ref() {
         format!(
-            "study: relaxation algorithm={} torque_tolerance={:.6e} energy_tolerance={} max_steps={}",
+            "study: relaxation algorithm={} torque_tolerance={} energy_tolerance={} max_steps={}",
             control.algorithm.as_str(),
-            control.torque_tolerance,
             control
-                .energy_tolerance
+                .stop
+                .torque_tolerance_apm
                 .map(|value| format!("{value:.6e}"))
                 .unwrap_or_else(|| "none".to_string()),
-            control.max_steps
+            control
+                .stop
+                .energy_tolerance_j
+                .map(|value| format!("{value:.6e}"))
+                .unwrap_or_else(|| "none".to_string()),
+            control
+                .stop
+                .max_steps
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
         )
     } else {
         "study: time_evolution".to_string()
@@ -984,10 +1015,26 @@ pub(crate) fn plan_fem_eigen(
     {
         return Err(PlanError {
             reasons: vec![
-                "study_universe requires a shared-domain FEM mesh (fem_domain_mesh_asset), \
-                 but none was provided. Call study.build_domain_mesh() or \
-                 study.domain_mesh(...) before solving."
-                    .to_string(),
+                format!(
+                    "{} Shared-domain FEM mesh (fem_domain_mesh_asset) was not provided. \
+                     Call study.build_domain_mesh() or study.domain_mesh(...) before solving.",
+                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                ),
+            ],
+        });
+    }
+    if resolved_domain_mesh_asset.is_none()
+        && problem
+            .energy_terms
+            .iter()
+            .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+    {
+        return Err(PlanError {
+            reasons: vec![
+                format!(
+                    "{} Missing shared-domain FEM mesh with air.",
+                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                ),
             ],
         });
     }
@@ -1382,10 +1429,10 @@ pub(crate) fn plan_fem_eigen(
         && domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
     {
         return Err(PlanError {
-            reasons: vec![
-                "shared-domain FEM was requested, but the resolved final FEM mesh has no air region. Attach a conformal shared-domain mesh asset or switch the eigen demag path to transfer_grid."
-                    .to_string(),
-            ],
+            reasons: vec![format!(
+                "{} Shared-domain FEM was requested, but the resolved final FEM mesh has no air region. Attach a conformal shared-domain mesh asset.",
+                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+            )],
         });
     }
     let mut resolved_mesh_parts = if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
@@ -1407,24 +1454,23 @@ pub(crate) fn plan_fem_eigen(
         .and_then(DomainFrameIR::finalized);
 
     let resolved_demag_realization: Option<fullmag_ir::ResolvedFemDemagIR> = if enable_demag {
+        let has_air_elements = mesh.element_markers.iter().any(|&m| m == 0);
+        if !has_air_elements {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "{} The resolved FEM mesh has no air elements.",
+                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                )],
+            });
+        }
         Some(match demag_realization {
-            fullmag_ir::RequestedFemDemagIR::TransferGrid => {
-                fullmag_ir::ResolvedFemDemagIR::TransferGrid
-            }
             fullmag_ir::RequestedFemDemagIR::PoissonDirichlet => {
                 fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet
             }
             fullmag_ir::RequestedFemDemagIR::PoissonRobin => {
                 fullmag_ir::ResolvedFemDemagIR::PoissonRobin
             }
-            fullmag_ir::RequestedFemDemagIR::Auto => {
-                let has_air_elements = mesh.element_markers.iter().any(|&m| m == 0);
-                if has_air_elements {
-                    fullmag_ir::ResolvedFemDemagIR::PoissonRobin
-                } else {
-                    fullmag_ir::ResolvedFemDemagIR::TransferGrid
-                }
-            }
+            fullmag_ir::RequestedFemDemagIR::Auto => fullmag_ir::ResolvedFemDemagIR::PoissonRobin,
         })
     } else {
         None

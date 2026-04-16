@@ -504,6 +504,14 @@ fn execute_fem_eigen_inner(
             status: RunStatus::Completed,
             steps: vec![stats],
             final_magnetization: equilibrium.clone(),
+            completion: Some(crate::relaxation::infer_stage_completion(
+                RunStatus::Completed,
+                None,
+                &[],
+                0.0,
+                0.0,
+                false,
+            )),
         },
         initial_magnetization,
         field_snapshots: Vec::new(),
@@ -608,15 +616,6 @@ fn materialize_equilibrium(
     };
     let resolved_demag = resolved_demag_realization(plan);
     let mut problem = match resolved_demag {
-        Some(fullmag_ir::ResolvedFemDemagIR::TransferGrid) => {
-            FemLlgProblem::with_terms_and_demag_transfer_grid(
-                topology,
-                material,
-                dynamics,
-                terms,
-                Some([plan.hmax, plan.hmax, plan.hmax]),
-            )
-        }
         Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin) => {
             FemLlgProblem::with_terms_and_demag_airbox(
                 topology, material, dynamics, terms, false, None,
@@ -642,9 +641,13 @@ fn materialize_equilibrium(
     if matches!(plan.equilibrium, EquilibriumSourceIR::RelaxedInitialState) {
         let control = RelaxationControlIR {
             algorithm: RelaxationAlgorithmIR::LlgOverdamped,
-            torque_tolerance: 1e-5,
-            energy_tolerance: Some(1e-12),
-            max_steps: RELAX_MAX_STEPS,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1e-5),
+                energy_tolerance_j: Some(1e-12),
+                max_steps: Some(RELAX_MAX_STEPS),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
         };
         let mut previous_total_energy = None;
         while steps_taken < RELAX_MAX_STEPS {
@@ -2123,11 +2126,8 @@ fn solver_capabilities(
     }
     if plan.enable_demag {
         match resolved_demag_realization(plan)
-            .unwrap_or(fullmag_ir::ResolvedFemDemagIR::TransferGrid)
+            .unwrap_or(fullmag_ir::ResolvedFemDemagIR::PoissonRobin)
         {
-            fullmag_ir::ResolvedFemDemagIR::TransferGrid => {
-                capabilities.push("demag_transfer_grid")
-            }
             fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet => {
                 capabilities.push("demag_poisson_dirichlet")
             }
@@ -2191,13 +2191,12 @@ fn resolved_demag_realization(plan: &FemEigenPlanIR) -> Option<fullmag_ir::Resol
     }
     Some(
         plan.demag_realization
-            .unwrap_or(fullmag_ir::ResolvedFemDemagIR::TransferGrid),
+            .unwrap_or(fullmag_ir::ResolvedFemDemagIR::PoissonRobin),
     )
 }
 
 fn demag_realization_label(realization: fullmag_ir::ResolvedFemDemagIR) -> &'static str {
     match realization {
-        fullmag_ir::ResolvedFemDemagIR::TransferGrid => "transfer_grid",
         fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet => "poisson_dirichlet",
         fullmag_ir::ResolvedFemDemagIR::PoissonRobin => "poisson_robin",
     }

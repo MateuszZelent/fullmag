@@ -88,12 +88,6 @@ private:
     SteadyClock::time_point start_{};
 };
 
-fullmag_fdm_precision transfer_grid_precision(const Context &ctx) {
-    return ctx.precision == FULLMAG_FEM_PRECISION_SINGLE
-        ? FULLMAG_FDM_PRECISION_SINGLE
-        : FULLMAG_FDM_PRECISION_DOUBLE;
-}
-
 void apply_phase_timings(
     fullmag_fem_step_stats &stats,
     const PhaseTimings &timings)
@@ -277,9 +271,6 @@ int auto_cpu_thread_cap_for_context(const Context &ctx, int requested_threads) {
     if (requested_threads <= 1 || mfem_device_requests_gpu(ctx)) {
         return std::max(1, requested_threads);
     }
-    if (ctx.demag_realization == 0) {
-        return std::max(1, requested_threads);
-    }
     const uint32_t node_count = ctx.n_nodes;
     const uint32_t element_count = ctx.n_elements;
     if (node_count <= 10000u || element_count <= 75000u) {
@@ -311,16 +302,6 @@ void log_cpu_runtime_selection(const Context &ctx) {
         return;
     }
     const char *thread_mode = ctx.cpu_threads_auto_requested ? "auto" : "manual";
-
-    if (ctx.demag_realization == 0) {
-        std::fprintf(
-            stderr,
-            "[fullmag-fem] cpu runtime: demag=transfer_grid cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d\n",
-            thread_mode,
-            ctx.requested_omp_threads,
-            ctx.effective_omp_threads);
-        return;
-    }
 
     std::fprintf(
         stderr,
@@ -369,6 +350,132 @@ double scalar_field_value(
     return index < field.size() ? field[index] : fallback;
 }
 
+bool has_relax_stop_criteria(const Context &ctx) {
+    return ctx.relax_stop.has_torque_tolerance_apm != 0
+        || ctx.relax_stop.has_energy_tolerance_j != 0
+        || ctx.relax_stop.has_max_steps != 0
+        || ctx.relax_stop.has_max_pseudotime_s != 0
+        || ctx.relax_stop.has_max_physical_time_s != 0;
+}
+
+void set_stage_completion(
+    Context &ctx,
+    fullmag_fem_stage_stop_reason reason,
+    const char *metric_name,
+    double metric_value,
+    double threshold)
+{
+    if (ctx.stage_completion.has_reason != 0) {
+        return;
+    }
+    ctx.stage_completion = {};
+    ctx.stage_completion.has_reason = 1;
+    ctx.stage_completion.reason = reason;
+    if (metric_name != nullptr && metric_name[0] != '\0') {
+        ctx.stage_completion.has_metric_name = 1;
+        std::snprintf(
+            ctx.stage_completion.metric_name,
+            sizeof(ctx.stage_completion.metric_name),
+            "%s",
+            metric_name);
+    }
+    ctx.stage_completion.metric_value = metric_value;
+    ctx.stage_completion.threshold = threshold;
+}
+
+double demag_energy_from_field(
+    const Context &ctx,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &h_demag_xyz)
+{
+    if (ctx.mfem_lumped_mass.empty()) {
+        return 0.0;
+    }
+    const size_t n = std::min(ctx.mfem_lumped_mass.size(), m_xyz.size() / 3u);
+    double demag_energy = 0.0;
+    for (size_t node = 0; node < n; ++node) {
+        const size_t base = node * 3u;
+        const double mdoth =
+            m_xyz[base + 0] * h_demag_xyz[base + 0] +
+            m_xyz[base + 1] * h_demag_xyz[base + 1] +
+            m_xyz[base + 2] * h_demag_xyz[base + 2];
+        const double ms_i = scalar_field_value(
+            ctx.Ms_field,
+            node,
+            ctx.material.saturation_magnetisation);
+        demag_energy += -0.5 * kMu0 * ms_i * mdoth * ctx.mfem_lumped_mass[node];
+    }
+    return demag_energy;
+}
+
+void update_stage_completion_from_stats(
+    Context &ctx,
+    const fullmag_fem_step_stats &stats)
+{
+    if (ctx.stage_completion.has_reason != 0 || !has_relax_stop_criteria(ctx)) {
+        return;
+    }
+
+    const double previous_energy = ctx.relax_previous_total_energy_j;
+    const bool has_previous_energy = ctx.relax_previous_total_energy_valid;
+    ctx.relax_previous_total_energy_j = stats.total_energy_joules;
+    ctx.relax_previous_total_energy_valid = true;
+    ctx.relax_pseudotime_s += std::max(stats.dt_seconds, 0.0);
+
+    if (ctx.relax_stop.has_energy_tolerance_j != 0 && has_previous_energy) {
+        const double delta_energy =
+            std::abs(stats.total_energy_joules - previous_energy);
+        if (delta_energy <= ctx.relax_stop.energy_tolerance_j) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_ENERGY,
+                "delta_total_energy_J",
+                delta_energy,
+                ctx.relax_stop.energy_tolerance_j);
+            return;
+        }
+    }
+    if (ctx.relax_stop.has_torque_tolerance_apm != 0 &&
+        stats.max_torque_Apm <= ctx.relax_stop.torque_tolerance_apm) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
+            "max_torque_Apm",
+            stats.max_torque_Apm,
+            ctx.relax_stop.torque_tolerance_apm);
+        return;
+    }
+    if (ctx.relax_stop.has_max_physical_time_s != 0 &&
+        stats.time_seconds >= ctx.relax_stop.max_physical_time_s) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME,
+            "physical_time_s",
+            stats.time_seconds,
+            ctx.relax_stop.max_physical_time_s);
+        return;
+    }
+    if (ctx.relax_stop.has_max_pseudotime_s != 0 &&
+        ctx.relax_pseudotime_s >= ctx.relax_stop.max_pseudotime_s) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME,
+            "pseudo_time_s",
+            ctx.relax_pseudotime_s,
+            ctx.relax_stop.max_pseudotime_s);
+        return;
+    }
+    if (ctx.relax_stop.has_max_steps != 0 &&
+        stats.step >= ctx.relax_stop.max_steps) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS,
+            "steps",
+            static_cast<double>(stats.step),
+            static_cast<double>(ctx.relax_stop.max_steps));
+    }
+}
+
 double average_magnetic_scalar_field(
     const std::vector<double> &field,
     const std::vector<uint8_t> &magnetic_node_mask,
@@ -392,277 +499,6 @@ double average_magnetic_scalar_field(
         return fallback;
     }
     return sum / static_cast<double>(count);
-}
-
-uint32_t transfer_axis_cells(double extent, double requested_cell) {
-    if (requested_cell <= 0.0) {
-        return 1;
-    }
-    if (extent <= 1e-18) {
-        return 1;
-    }
-    return static_cast<uint32_t>(std::max(1.0, std::ceil(extent / requested_cell)));
-}
-
-bool magnetic_bbox(const Context &ctx, Vec3 &bbox_min, Vec3 &bbox_max) {
-    if (ctx.n_nodes == 0) {
-        return false;
-    }
-    bbox_min = {std::numeric_limits<double>::infinity(),
-                std::numeric_limits<double>::infinity(),
-                std::numeric_limits<double>::infinity()};
-    bbox_max = {-std::numeric_limits<double>::infinity(),
-                -std::numeric_limits<double>::infinity(),
-                -std::numeric_limits<double>::infinity()};
-    bool found_any = false;
-    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[node] == 0u) {
-            continue;
-        }
-        const Vec3 point = node_coords(ctx, node);
-        for (int axis = 0; axis < 3; ++axis) {
-            bbox_min[axis] = std::min(bbox_min[axis], point[axis]);
-            bbox_max[axis] = std::max(bbox_max[axis], point[axis]);
-        }
-        found_any = true;
-    }
-    return found_any;
-}
-
-TransferGridDesc build_transfer_grid_desc(const Context &ctx, const Vec3 &bbox_min, const Vec3 &bbox_max) {
-    const Vec3 extent = {
-        std::abs(bbox_max[0] - bbox_min[0]),
-        std::abs(bbox_max[1] - bbox_min[1]),
-        std::abs(bbox_max[2] - bbox_min[2]),
-    };
-    // FEM-039: use dedicated demag cell size if set, otherwise fall back to hmax.
-    const double base_cell = (ctx.demag_transfer_cell_size > 0.0)
-        ? ctx.demag_transfer_cell_size
-        : ctx.hmax;
-    const double requested = std::max(base_cell, 1e-12);
-    TransferGridDesc desc{};
-    desc.nx = transfer_axis_cells(extent[0], requested);
-    desc.ny = transfer_axis_cells(extent[1], requested);
-    desc.nz = transfer_axis_cells(extent[2], requested);
-    desc.dx = std::max(extent[0] / static_cast<double>(desc.nx), 1e-12);
-    desc.dy = std::max(extent[1] / static_cast<double>(desc.ny), 1e-12);
-    desc.dz = std::max(extent[2] / static_cast<double>(desc.nz), 1e-12);
-    desc.bbox_min = bbox_min;
-    return desc;
-}
-
-std::array<std::array<double, 3>, 3> inverse_3x3_columns(
-    const std::array<Vec3, 3> &columns,
-    double det)
-{
-    const double a = columns[0][0];
-    const double b = columns[1][0];
-    const double c = columns[2][0];
-    const double d = columns[0][1];
-    const double e = columns[1][1];
-    const double f = columns[2][1];
-    const double g = columns[0][2];
-    const double h = columns[1][2];
-    const double i = columns[2][2];
-    const double inv_det = 1.0 / det;
-    return {{
-        {(e * i - f * h) * inv_det, (c * h - b * i) * inv_det, (b * f - c * e) * inv_det},
-        {(f * g - d * i) * inv_det, (a * i - c * g) * inv_det, (c * d - a * f) * inv_det},
-        {(d * h - e * g) * inv_det, (b * g - a * h) * inv_det, (a * e - b * d) * inv_det},
-    }};
-}
-
-std::optional<std::array<double, 4>> barycentric_coordinates_tet(
-    const Vec3 &point,
-    const std::array<Vec3, 4> &vertices)
-{
-    const Vec3 d1 = sub3(vertices[1], vertices[0]);
-    const Vec3 d2 = sub3(vertices[2], vertices[0]);
-    const Vec3 d3 = sub3(vertices[3], vertices[0]);
-    const Vec3 rhs = sub3(point, vertices[0]);
-    const double det = dot3(d1, cross3(d2, d3));
-    if (std::abs(det) <= kGeomEps) {
-        return std::nullopt;
-    }
-    const auto inv = inverse_3x3_columns({d1, d2, d3}, det);
-    const double l1 = inv[0][0] * rhs[0] + inv[0][1] * rhs[1] + inv[0][2] * rhs[2];
-    const double l2 = inv[1][0] * rhs[0] + inv[1][1] * rhs[1] + inv[1][2] * rhs[2];
-    const double l3 = inv[2][0] * rhs[0] + inv[2][1] * rhs[1] + inv[2][2] * rhs[2];
-    const double l0 = 1.0 - l1 - l2 - l3;
-    const std::array<double, 4> bary = {l0, l1, l2, l3};
-    constexpr double eps = 1e-9;
-    for (double value : bary) {
-        if (value < -eps || value > 1.0 + eps) {
-            return std::nullopt;
-        }
-    }
-    return bary;
-}
-
-std::pair<uint32_t, uint32_t> cell_index_range_for_tet(
-    double bbox_min_axis,
-    double cell_size_axis,
-    uint32_t n_cells_axis,
-    const std::array<Vec3, 4> &vertices,
-    int axis)
-{
-    double tet_min = std::numeric_limits<double>::infinity();
-    double tet_max = -std::numeric_limits<double>::infinity();
-    for (const Vec3 &vertex : vertices) {
-        tet_min = std::min(tet_min, vertex[axis]);
-        tet_max = std::max(tet_max, vertex[axis]);
-    }
-    const int64_t upper = static_cast<int64_t>(n_cells_axis) - 1;
-    const int64_t start = std::clamp(
-        static_cast<int64_t>(std::ceil(((tet_min - bbox_min_axis) / cell_size_axis) - 0.5)),
-        int64_t{0},
-        upper);
-    const int64_t end = std::clamp(
-        static_cast<int64_t>(std::floor(((tet_max - bbox_min_axis) / cell_size_axis) - 0.5)),
-        int64_t{0},
-        upper);
-    return start <= end
-        ? std::pair<uint32_t, uint32_t>(static_cast<uint32_t>(start), static_cast<uint32_t>(end))
-        : std::pair<uint32_t, uint32_t>(static_cast<uint32_t>(end), static_cast<uint32_t>(start));
-}
-
-void rasterize_magnetization_to_transfer_grid(
-    const Context &ctx,
-    const std::vector<double> &magnetization_xyz,
-    const TransferGridDesc &desc,
-    double transfer_grid_reference_ms,
-    std::vector<uint8_t> &active_mask,
-    std::vector<double> &cell_magnetization_xyz)
-{
-    const size_t n_cells = static_cast<size_t>(desc.cell_count());
-    active_mask.assign(n_cells, 0u);
-    cell_magnetization_xyz.assign(n_cells * 3u, 0.0);
-
-    // FND-001 fix: conservative accumulation — track how many tetrahedra
-    // contribute to each cell and average their contributions, instead of
-    // last-write-wins.  For a proper volume-weighted projection we would need
-    // tet–cell intersection volumes, which is expensive; using the hit count
-    // as weight is a simple, order-independent improvement.
-    std::vector<uint32_t> cell_hit_count(n_cells, 0u);
-
-    for (uint32_t element_index = 0; element_index < ctx.n_elements; ++element_index) {
-        if (!ctx.magnetic_element_mask.empty() &&
-            ctx.magnetic_element_mask[element_index] == 0u) {
-            continue;
-        }
-        const size_t base = static_cast<size_t>(element_index) * 4u;
-        const std::array<uint32_t, 4> element = {
-            ctx.elements[base + 0],
-            ctx.elements[base + 1],
-            ctx.elements[base + 2],
-            ctx.elements[base + 3],
-        };
-        const std::array<Vec3, 4> vertices = {
-            node_coords(ctx, element[0]),
-            node_coords(ctx, element[1]),
-            node_coords(ctx, element[2]),
-            node_coords(ctx, element[3]),
-        };
-        const auto [ix0, ix1] = cell_index_range_for_tet(desc.bbox_min[0], desc.dx, desc.nx, vertices, 0);
-        const auto [iy0, iy1] = cell_index_range_for_tet(desc.bbox_min[1], desc.dy, desc.ny, vertices, 1);
-        const auto [iz0, iz1] = cell_index_range_for_tet(desc.bbox_min[2], desc.dz, desc.nz, vertices, 2);
-
-        // Pre-compute per-node Ms scaling for this element
-        const double n_scales[4] = {
-            scalar_field_value(ctx.Ms_field, static_cast<size_t>(element[0]),
-                               ctx.material.saturation_magnetisation) / transfer_grid_reference_ms,
-            scalar_field_value(ctx.Ms_field, static_cast<size_t>(element[1]),
-                               ctx.material.saturation_magnetisation) / transfer_grid_reference_ms,
-            scalar_field_value(ctx.Ms_field, static_cast<size_t>(element[2]),
-                               ctx.material.saturation_magnetisation) / transfer_grid_reference_ms,
-            scalar_field_value(ctx.Ms_field, static_cast<size_t>(element[3]),
-                               ctx.material.saturation_magnetisation) / transfer_grid_reference_ms,
-        };
-
-        for (uint32_t iz = iz0; iz <= iz1; ++iz) {
-            for (uint32_t iy = iy0; iy <= iy1; ++iy) {
-                for (uint32_t ix = ix0; ix <= ix1; ++ix) {
-                    const Vec3 point = {
-                        desc.bbox_min[0] + (static_cast<double>(ix) + 0.5) * desc.dx,
-                        desc.bbox_min[1] + (static_cast<double>(iy) + 0.5) * desc.dy,
-                        desc.bbox_min[2] + (static_cast<double>(iz) + 0.5) * desc.dz,
-                    };
-                    const auto bary = barycentric_coordinates_tet(point, vertices);
-                    if (!bary.has_value()) {
-                        continue;
-                    }
-                    const size_t cell = desc.index(ix, iy, iz);
-                    active_mask[cell] = 1u;
-                    const size_t out = cell * 3u;
-                    for (int component = 0; component < 3; ++component) {
-                        cell_magnetization_xyz[out + component] +=
-                            (*bary)[0] * magnetization_xyz[static_cast<size_t>(element[0]) * 3u + component] * n_scales[0] +
-                            (*bary)[1] * magnetization_xyz[static_cast<size_t>(element[1]) * 3u + component] * n_scales[1] +
-                            (*bary)[2] * magnetization_xyz[static_cast<size_t>(element[2]) * 3u + component] * n_scales[2] +
-                            (*bary)[3] * magnetization_xyz[static_cast<size_t>(element[3]) * 3u + component] * n_scales[3];
-                    }
-                    cell_hit_count[cell] += 1u;
-                }
-            }
-        }
-    }
-
-    // Normalize cells that received contributions from multiple tetrahedra
-    for (size_t cell = 0; cell < n_cells; ++cell) {
-        if (cell_hit_count[cell] > 1u) {
-            const double inv_count = 1.0 / static_cast<double>(cell_hit_count[cell]);
-            const size_t out = cell * 3u;
-            cell_magnetization_xyz[out + 0] *= inv_count;
-            cell_magnetization_xyz[out + 1] *= inv_count;
-            cell_magnetization_xyz[out + 2] *= inv_count;
-        }
-    }
-}
-
-Vec3 sample_cell_centered_vector_field(
-    const std::vector<double> &values_xyz,
-    const TransferGridDesc &desc,
-    const Vec3 &point)
-{
-    const auto axis_sample = [](double coord, double min_coord, double h, uint32_t n) {
-        if (n <= 1) {
-            return std::tuple<uint32_t, uint32_t, double>(0, 0, 0.0);
-        }
-        const double u = std::clamp(((coord - min_coord) / h) - 0.5, 0.0, static_cast<double>(n) - 1.0);
-        const uint32_t i0 = static_cast<uint32_t>(std::floor(u));
-        const uint32_t i1 = std::min<uint32_t>(i0 + 1, n - 1);
-        const double t = i0 == i1 ? 0.0 : u - static_cast<double>(i0);
-        return std::tuple<uint32_t, uint32_t, double>(i0, i1, t);
-    };
-
-    const auto [x0, x1, tx] = axis_sample(point[0], desc.bbox_min[0], desc.dx, desc.nx);
-    const auto [y0, y1, ty] = axis_sample(point[1], desc.bbox_min[1], desc.dy, desc.ny);
-    const auto [z0, z1, tz] = axis_sample(point[2], desc.bbox_min[2], desc.dz, desc.nz);
-
-    const auto sample = [&values_xyz, &desc](uint32_t ix, uint32_t iy, uint32_t iz) {
-        const size_t base = desc.index(ix, iy, iz) * 3u;
-        return Vec3{values_xyz[base + 0], values_xyz[base + 1], values_xyz[base + 2]};
-    };
-
-    const auto lerp = [](const Vec3 &a, const Vec3 &b, double t) {
-        return add3(scale3(a, 1.0 - t), scale3(b, t));
-    };
-
-    const Vec3 c000 = sample(x0, y0, z0);
-    const Vec3 c100 = sample(x1, y0, z0);
-    const Vec3 c010 = sample(x0, y1, z0);
-    const Vec3 c110 = sample(x1, y1, z0);
-    const Vec3 c001 = sample(x0, y0, z1);
-    const Vec3 c101 = sample(x1, y0, z1);
-    const Vec3 c011 = sample(x0, y1, z1);
-    const Vec3 c111 = sample(x1, y1, z1);
-    const Vec3 c00 = lerp(c000, c100, tx);
-    const Vec3 c10 = lerp(c010, c110, tx);
-    const Vec3 c01 = lerp(c001, c101, tx);
-    const Vec3 c11 = lerp(c011, c111, tx);
-    const Vec3 c0 = lerp(c00, c10, ty);
-    const Vec3 c1 = lerp(c01, c11, ty);
-    return lerp(c0, c1, tz);
 }
 
 void unpack_aos_to_components(
@@ -1681,264 +1517,6 @@ bool compute_exchange_for_magnetization(
     return true;
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// BOOTSTRAP TRANSFER-GRID DEMAG
-//
-// This path rasterises FEM nodal magnetisation onto a regular FDM grid and
-// delegates the demagnetisation calculation to the existing FDM tensor-FFT
-// backend (Newell kernel).  It is a *bootstrap* strategy: accurate for
-// convex domains, but introduces rasterisation error for complex geometries.
-//
-// Alternative native-FEM realisations (Poisson–Dirichlet, Poisson–Robin)
-// solve the demagnetisation on the FEM mesh directly and should be preferred
-// when supported.  See `demag_realization` in context.hpp.
-// ──────────────────────────────────────────────────────────────────────────────
-
-bool ensure_transfer_grid_backend(
-    Context &ctx,
-    const std::vector<double> &magnetization_xyz,
-    std::string &error)
-{
-    if (ctx.transfer_grid.backend != nullptr) {
-        return true;
-    }
-
-    if (fullmag_fdm_is_available() != 1) {
-        error =
-            "native FEM transfer-grid demag requires an available Fullmag FDM backend with CUDA support";
-        return false;
-    }
-
-    Vec3 bbox_min{};
-    Vec3 bbox_max{};
-    if (!magnetic_bbox(ctx, bbox_min, bbox_max)) {
-        error = "failed to determine FEM magnetic bounding box for transfer-grid demag";
-        return false;
-    }
-
-    ctx.transfer_grid.desc = build_transfer_grid_desc(ctx, bbox_min, bbox_max);
-    const double transfer_grid_reference_ms = std::max(
-        average_magnetic_scalar_field(
-            ctx.Ms_field,
-            ctx.magnetic_node_mask,
-            ctx.material.saturation_magnetisation),
-        1e-18);
-    const double transfer_grid_reference_a = average_magnetic_scalar_field(
-        ctx.A_field,
-        ctx.magnetic_node_mask,
-        ctx.material.exchange_stiffness);
-    rasterize_magnetization_to_transfer_grid(
-        ctx,
-        magnetization_xyz,
-        ctx.transfer_grid.desc,
-        transfer_grid_reference_ms,
-        ctx.transfer_grid.active_mask,
-        ctx.transfer_grid.magnetization_xyz);
-
-    const bool any_active = std::any_of(
-        ctx.transfer_grid.active_mask.begin(),
-        ctx.transfer_grid.active_mask.end(),
-        [](uint8_t value) { return value != 0u; });
-    if (!any_active) {
-        error = "transfer-grid demag rasterization produced an empty active mask";
-        return false;
-    }
-
-    fullmag_fdm_plan_desc fdm_plan = {};
-    fdm_plan.grid = fullmag_fdm_grid_desc{
-        ctx.transfer_grid.desc.nx,
-        ctx.transfer_grid.desc.ny,
-        ctx.transfer_grid.desc.nz,
-        ctx.transfer_grid.desc.dx,
-        ctx.transfer_grid.desc.dy,
-        ctx.transfer_grid.desc.dz,
-    };
-    fdm_plan.material = fullmag_fdm_material_desc{
-        transfer_grid_reference_ms,
-        transfer_grid_reference_a,
-        ctx.material.damping,
-        ctx.material.gyromagnetic_ratio,
-    };
-    fdm_plan.precision    = transfer_grid_precision(ctx);
-    fdm_plan.integrator   = FULLMAG_FDM_INTEGRATOR_HEUN;
-    fdm_plan.enable_demag = 1;
-    // FND-003 fix: pass pre-computed Newell kernel spectra to the FDM backend
-    // when the Rust layer provided them.  Fall back to nullptr so the native
-    // FDM backend generates its own Newell tensor otherwise.
-    if (!ctx.transfer_grid.kernel_xx_spectrum.empty()) {
-        fdm_plan.demag_kernel_xx_spectrum  = ctx.transfer_grid.kernel_xx_spectrum.data();
-        fdm_plan.demag_kernel_yy_spectrum  = ctx.transfer_grid.kernel_yy_spectrum.data();
-        fdm_plan.demag_kernel_zz_spectrum  = ctx.transfer_grid.kernel_zz_spectrum.data();
-        fdm_plan.demag_kernel_xy_spectrum  = ctx.transfer_grid.kernel_xy_spectrum.data();
-        fdm_plan.demag_kernel_xz_spectrum  = ctx.transfer_grid.kernel_xz_spectrum.data();
-        fdm_plan.demag_kernel_yz_spectrum  = ctx.transfer_grid.kernel_yz_spectrum.data();
-        fdm_plan.demag_kernel_spectrum_len = static_cast<uint64_t>(ctx.transfer_grid.kernel_xx_spectrum.size());
-    } else {
-        fdm_plan.demag_kernel_xx_spectrum  = nullptr;
-        fdm_plan.demag_kernel_yy_spectrum  = nullptr;
-        fdm_plan.demag_kernel_zz_spectrum  = nullptr;
-        fdm_plan.demag_kernel_xy_spectrum  = nullptr;
-        fdm_plan.demag_kernel_xz_spectrum  = nullptr;
-        fdm_plan.demag_kernel_yz_spectrum  = nullptr;
-        fdm_plan.demag_kernel_spectrum_len = 0;
-    }
-    fdm_plan.active_mask                 = ctx.transfer_grid.active_mask.data();
-    fdm_plan.active_mask_len             = static_cast<uint64_t>(ctx.transfer_grid.active_mask.size());
-    fdm_plan.initial_magnetization_xyz   = ctx.transfer_grid.magnetization_xyz.data();
-    fdm_plan.initial_magnetization_len   = static_cast<uint64_t>(ctx.transfer_grid.magnetization_xyz.size());
-
-    ctx.transfer_grid.backend = fullmag_fdm_backend_create(&fdm_plan);
-    if (ctx.transfer_grid.backend == nullptr) {
-        error = "fullmag_fdm_backend_create returned null during FEM transfer-grid demag setup";
-        return false;
-    }
-
-    if (const char *fdm_error = fullmag_fdm_backend_last_error(ctx.transfer_grid.backend)) {
-        error = std::string("FEM transfer-grid demag failed to initialize FDM backend: ") + fdm_error;
-        fullmag_fdm_backend_destroy(ctx.transfer_grid.backend);
-        ctx.transfer_grid.backend = nullptr;
-        return false;
-    }
-
-    ctx.transfer_grid.ready = true;
-    ctx.transfer_grid.demag_xyz.assign(ctx.transfer_grid.magnetization_xyz.size(), 0.0);
-    return true;
-}
-
-bool compute_demag_for_magnetization(
-    Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_demag_xyz,
-    double &demag_energy,
-    bool allow_interrupt,
-    std::string &error)
-{
-    if (ctx.mfem_lumped_mass.empty()) {
-        error = "MFEM lumped mass is unavailable for transfer-grid demag energy evaluation";
-        return false;
-    }
-
-    if (!ensure_transfer_grid_backend(ctx, m_xyz, error)) {
-        return false;
-    }
-
-    rasterize_magnetization_to_transfer_grid(
-        ctx,
-        m_xyz,
-        ctx.transfer_grid.desc,
-        std::max(
-            average_magnetic_scalar_field(
-                ctx.Ms_field,
-                ctx.magnetic_node_mask,
-                ctx.material.saturation_magnetisation),
-            1e-18),
-        ctx.transfer_grid.active_mask,
-        ctx.transfer_grid.magnetization_xyz);
-    if (allow_interrupt && poll_interrupt(ctx)) {
-        return false;
-    }
-
-    if (fullmag_fdm_backend_upload_magnetization_f64(
-            ctx.transfer_grid.backend,
-            ctx.transfer_grid.magnetization_xyz.data(),
-            static_cast<uint64_t>(ctx.transfer_grid.magnetization_xyz.size())) != FULLMAG_FDM_OK)
-    {
-        const char *fdm_error = fullmag_fdm_backend_last_error(ctx.transfer_grid.backend);
-        error = std::string("FEM transfer-grid demag failed to upload magnetization: ") +
-                (fdm_error != nullptr ? fdm_error : "unknown FDM error");
-        return false;
-    }
-    if (allow_interrupt && poll_interrupt(ctx)) {
-        return false;
-    }
-
-    if (fullmag_fdm_backend_refresh_demag_observable(ctx.transfer_grid.backend) != FULLMAG_FDM_OK) {
-        const char *fdm_error = fullmag_fdm_backend_last_error(ctx.transfer_grid.backend);
-        error = std::string("FEM transfer-grid demag failed to refresh FDM H_demag: ") +
-                (fdm_error != nullptr ? fdm_error : "unknown FDM error");
-        return false;
-    }
-    if (allow_interrupt && poll_interrupt(ctx)) {
-        return false;
-    }
-
-    if (fullmag_fdm_backend_copy_field_f64(
-            ctx.transfer_grid.backend,
-            FULLMAG_FDM_OBSERVABLE_H_DEMAG,
-            ctx.transfer_grid.demag_xyz.data(),
-            static_cast<uint64_t>(ctx.transfer_grid.demag_xyz.size())) != FULLMAG_FDM_OK)
-    {
-        const char *fdm_error = fullmag_fdm_backend_last_error(ctx.transfer_grid.backend);
-        error = std::string("FEM transfer-grid demag failed to copy H_demag: ") +
-                (fdm_error != nullptr ? fdm_error : "unknown FDM error");
-        return false;
-    }
-    if (allow_interrupt && poll_interrupt(ctx)) {
-        return false;
-    }
-
-    h_demag_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
-    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
-        if (allow_interrupt &&
-            node > 0 &&
-            (node % static_cast<uint32_t>(kInterruptPollStride)) == 0 &&
-            poll_interrupt(ctx)) {
-            return false;
-        }
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[node] == 0u) {
-            continue;
-        }
-        const Vec3 sampled = sample_cell_centered_vector_field(
-            ctx.transfer_grid.demag_xyz,
-            ctx.transfer_grid.desc,
-            node_coords(ctx, node));
-        const size_t base = static_cast<size_t>(node) * 3u;
-        h_demag_xyz[base + 0] = sampled[0];
-        h_demag_xyz[base + 1] = sampled[1];
-        h_demag_xyz[base + 2] = sampled[2];
-    }
-
-    // Save full-domain H_demag for visualization.
-    // The main h_demag_xyz only has values at magnetic nodes (airbox is zero
-    // because non-magnetic nodes were skipped above).  For the visual buffer
-    // we re-sample the transfer grid at every node so that the frontend can
-    // display the stray field in the airbox.
-    ctx.h_demag_visual_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
-    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
-        const Vec3 sampled_vis = sample_cell_centered_vector_field(
-            ctx.transfer_grid.demag_xyz,
-            ctx.transfer_grid.desc,
-            node_coords(ctx, node));
-        const size_t base_vis = static_cast<size_t>(node) * 3u;
-        ctx.h_demag_visual_xyz[base_vis + 0] = sampled_vis[0];
-        ctx.h_demag_visual_xyz[base_vis + 1] = sampled_vis[1];
-        ctx.h_demag_visual_xyz[base_vis + 2] = sampled_vis[2];
-    }
-
-    demag_energy = 0.0;
-    for (size_t node = 0; node < ctx.mfem_lumped_mass.size(); ++node) {
-        if (allow_interrupt &&
-            node > 0 &&
-            (node % static_cast<size_t>(kInterruptPollStride)) == 0 &&
-            poll_interrupt(ctx)) {
-            return false;
-        }
-        const size_t base = node * 3u;
-        const double mdoth =
-            m_xyz[base + 0] * h_demag_xyz[base + 0] +
-            m_xyz[base + 1] * h_demag_xyz[base + 1] +
-            m_xyz[base + 2] * h_demag_xyz[base + 2];
-        const double Ms_i = scalar_field_value(
-            ctx.Ms_field,
-            node,
-            ctx.material.saturation_magnetisation);
-        demag_energy +=
-            -0.5 * kMu0 * Ms_i * mdoth * ctx.mfem_lumped_mass[node];
-    }
-
-    return true;
-}
-
 bool compute_effective_fields_for_magnetization_impl(
     Context &ctx,
     const std::vector<double> &m_xyz,
@@ -1977,18 +1555,41 @@ bool compute_effective_fields_for_magnetization_impl(
     double demag = 0.0;
     if (ctx.enable_demag) {
         ScopedPhaseTimer timer(timings != nullptr ? &timings->demag_wall_time_ns : nullptr);
-        if ((ctx.demag_realization == 1 || ctx.demag_realization == 2) && ctx.poisson_ready) {
-            // Native FEM demag: Poisson–Dirichlet (1) or Poisson–Robin (2)
-            if (!context_compute_demag_poisson(ctx, m_xyz, h_demag_xyz, demag, allow_interrupt, error)) {
-                return false;
+        bool refresh_demag = true;
+        if (ctx.field_refresh.has_demag_interval_s != 0 &&
+            ctx.demag_cache_valid &&
+            ctx.field_refresh.demag_interval_s > 0.0) {
+            const double elapsed = ctx.current_time - ctx.demag_last_refresh_time;
+            refresh_demag = elapsed + 1e-30 >= ctx.field_refresh.demag_interval_s;
+        }
+        if (refresh_demag) {
+            if ((ctx.demag_realization == 1 || ctx.demag_realization == 2) && ctx.poisson_ready) {
+                // Native FEM demag: Poisson–Dirichlet (1) or Poisson–Robin (2)
+                if (!context_compute_demag_poisson(
+                        ctx, m_xyz, h_demag_xyz, demag, allow_interrupt, error)) {
+                    return false;
+                }
+            } else {
+                // Bootstrap transfer-grid demag: FEM→FDM rasterisation + tensor-FFT
+                if (!compute_demag_for_magnetization(
+                        ctx, m_xyz, h_demag_xyz, demag, allow_interrupt, error))
+                {
+                    return false;
+                }
             }
-        } else {
-            // Bootstrap transfer-grid demag: FEM→FDM rasterisation + tensor-FFT
-            if (!compute_demag_for_magnetization(
-                    ctx, m_xyz, h_demag_xyz, demag, allow_interrupt, error))
-            {
-                return false;
+            ctx.h_demag_cached_xyz = h_demag_xyz;
+            ctx.h_demag_cached_visual_xyz = ctx.h_demag_visual_xyz;
+            ctx.demag_last_refresh_time = ctx.current_time;
+            ctx.demag_cache_valid = true;
+        } else if (ctx.demag_cache_valid &&
+                   ctx.h_demag_cached_xyz.size() == h_demag_xyz.size()) {
+            h_demag_xyz = ctx.h_demag_cached_xyz;
+            if (ctx.h_demag_cached_visual_xyz.size() == h_demag_xyz.size()) {
+                ctx.h_demag_visual_xyz = ctx.h_demag_cached_visual_xyz;
+            } else {
+                ctx.h_demag_visual_xyz.clear();
             }
+            demag = demag_energy_from_field(ctx, m_xyz, h_demag_xyz);
         }
         if (allow_interrupt && poll_interrupt(ctx)) {
             return false;
@@ -2964,20 +2565,6 @@ void context_destroy_mfem(Context &ctx) {
     // Destroy Poisson demag resources first
     context_destroy_poisson(ctx);
 
-    if (ctx.transfer_grid.backend != nullptr) {
-        fullmag_fdm_backend_destroy(ctx.transfer_grid.backend);
-        ctx.transfer_grid.backend = nullptr;
-    }
-    ctx.transfer_grid.ready = false;
-    ctx.transfer_grid.active_mask.clear();
-    ctx.transfer_grid.magnetization_xyz.clear();
-    ctx.transfer_grid.demag_xyz.clear();
-    ctx.transfer_grid.kernel_xx_spectrum.clear();
-    ctx.transfer_grid.kernel_yy_spectrum.clear();
-    ctx.transfer_grid.kernel_zz_spectrum.clear();
-    ctx.transfer_grid.kernel_xy_spectrum.clear();
-    ctx.transfer_grid.kernel_xz_spectrum.clear();
-    ctx.transfer_grid.kernel_yz_spectrum.clear();
     // NOTE: mfem::Device is a process-global singleton — do NOT delete it here,
     // because a subsequent NativeFemBackend may need the already-configured device.
     delete static_cast<mfem::Coefficient *>(ctx.mfem_a_coeff);
@@ -3571,6 +3158,7 @@ bool context_step_exchange_heun_mfem(
     stats.fsal_reused = 0;
     apply_phase_timings(stats, timings);
     stats.wall_time_ns = elapsed_ns(wall_start);
+    update_stage_completion_from_stats(ctx, stats);
 
     return true;
 }
@@ -3965,6 +3553,7 @@ bool context_step_explicit_rk_mfem(
     stats.fsal_reused = fsal_used ? 1 : 0;
     apply_phase_timings(stats, timings);
     stats.wall_time_ns = elapsed_ns(wall_start);
+    update_stage_completion_from_stats(ctx, stats);
 
     return true;
 }

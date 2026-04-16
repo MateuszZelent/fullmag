@@ -1,6 +1,5 @@
 #pragma once
 
-#include "fullmag_fdm.h"
 #include "fullmag_fem.h"
 
 #include <array>
@@ -39,41 +38,6 @@ struct StepperWorkspace {
     bool fsal_valid = false;                        // true when k[0] holds valid FSAL RHS
 };
 
-struct TransferGridDesc {
-    uint32_t nx = 0;
-    uint32_t ny = 0;
-    uint32_t nz = 0;
-    double dx = 0.0;
-    double dy = 0.0;
-    double dz = 0.0;
-    std::array<double, 3> bbox_min{0.0, 0.0, 0.0};
-
-    [[nodiscard]] uint64_t cell_count() const {
-        return static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz);
-    }
-
-    [[nodiscard]] size_t index(uint32_t ix, uint32_t iy, uint32_t iz) const {
-        return static_cast<size_t>(iz) * static_cast<size_t>(nx) * static_cast<size_t>(ny) +
-               static_cast<size_t>(iy) * static_cast<size_t>(nx) +
-               static_cast<size_t>(ix);
-    }
-};
-
-struct TransferGridState {
-    bool ready = false;
-    TransferGridDesc desc{};
-    std::vector<uint8_t> active_mask;
-    std::vector<double> magnetization_xyz;
-    std::vector<double> demag_xyz;
-    std::vector<double> kernel_xx_spectrum;
-    std::vector<double> kernel_yy_spectrum;
-    std::vector<double> kernel_zz_spectrum;
-    std::vector<double> kernel_xy_spectrum;
-    std::vector<double> kernel_xz_spectrum;
-    std::vector<double> kernel_yz_spectrum;
-    fullmag_fdm_backend *backend = nullptr;
-};
-
 struct Context {
     uint32_t n_nodes = 0;
     uint32_t n_elements = 0;
@@ -83,6 +47,8 @@ struct Context {
     double hmax = 0.0;
     double dt_seconds = 0.0;
     double air_box_factor = 0.0;
+    fullmag_fem_field_refresh_policy field_refresh{};
+    fullmag_fem_relax_stop relax_stop{};
 
     fullmag_fem_precision precision = FULLMAG_FEM_PRECISION_DOUBLE;
     fullmag_fem_integrator integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
@@ -161,6 +127,10 @@ struct Context {
     uint64_t step_count = 0;
     uint64_t demag_call_count = 0;
     double current_time = 0.0;
+    double relax_pseudotime_s = 0.0;
+    double relax_previous_total_energy_j = 0.0;
+    bool relax_previous_total_energy_valid = false;
+    fullmag_fem_stage_completion stage_completion{};
 
     std::vector<double> nodes_xyz;
     std::vector<uint32_t> elements;
@@ -174,6 +144,7 @@ struct Context {
     std::vector<double> m_xyz;
     std::vector<double> h_ex_xyz;
     std::vector<double> h_demag_xyz;
+    std::vector<double> h_demag_cached_xyz;
     std::vector<double> h_ext_xyz;
     std::vector<double> h_ani_xyz;
     std::vector<double> h_dmi_xyz;
@@ -184,9 +155,12 @@ struct Context {
     // h_demag_xyz is zeroed on non-magnetic nodes for LLG/energy,
     // but this copy preserves the Poisson-recovered field everywhere.
     std::vector<double> h_demag_visual_xyz;
+    std::vector<double> h_demag_cached_visual_xyz;
     // Full-domain H_eff for visualization (includes airbox contribution
     // from H_demag and H_ext).
     std::vector<double> h_eff_visual_xyz;
+    bool demag_cache_valid = false;
+    double demag_last_refresh_time = -1.0;
 
     // ── Oersted field (cylindrical conductor) ──
     bool has_oersted_cylinder = false;
@@ -216,11 +190,6 @@ struct Context {
 
     // FEM-030 fix: explicit MFEM device string from plan. Empty = env / default.
     std::string mfem_device_string_override;
-
-    // FEM-039 fix: explicit demag transfer-grid cell size. 0 = fall back to hmax.
-    double demag_transfer_cell_size = 0.0;
-
-    TransferGridState transfer_grid{};
 
 #if FULLMAG_HAS_MFEM_STACK
     std::vector<double> mfem_mx;
@@ -286,8 +255,8 @@ struct Context {
     void *mfem_cached_hypre_pcg = nullptr;  // mfem::HyprePCG*
     bool poisson_solver_setup = false;
 
-    // Demag realization: 0 = transfer_grid, 1 = airbox_dirichlet, 2 = airbox_robin
-    int demag_realization = 0;
+    // Demag realization: 1 = airbox_dirichlet, 2 = airbox_robin
+    int demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
     int poisson_boundary_marker = 99;
 
     // ── Robin boundary condition ──

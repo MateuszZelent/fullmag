@@ -43,7 +43,7 @@ from fullmag.model.outputs import (
     Snapshot,
 )
 from fullmag.model.problem import Problem
-from fullmag.model.study import Eigenmodes, Relaxation, TimeEvolution
+from fullmag.model.study import Eigenmodes, RelaxStop, Relaxation, TimeEvolution
 from fullmag.runtime.loader import LoadedProblem, LoadedStage
 
 
@@ -64,6 +64,14 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "solver": {
             "integrator": base_problem.study.dynamics.integrator if base_problem.study is not None else None,
             "fixed_timestep": _text_number(base_problem.study.dynamics.fixed_timestep) if base_problem.study is not None else None,
+            "demag_interval_s": _text_number(
+                base_problem.study.dynamics.field_refresh.demag_interval_s
+                if (
+                    base_problem.study is not None
+                    and base_problem.study.dynamics.field_refresh is not None
+                )
+                else None
+            ),
             "relax_algorithm": relax_stage.algorithm if relax_stage is not None else "llg_overdamped",
             "torque_tolerance": _text_number(
                 relax_stage.torque_tolerance if relax_stage is not None else 1e-6
@@ -72,6 +80,12 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
                 relax_stage.energy_tolerance if relax_stage is not None else None
             ),
             "max_relax_steps": str(relax_stage.max_steps if relax_stage is not None else 5000),
+            "max_pseudotime_s": _text_number(
+                relax_stage.max_pseudotime_s if relax_stage is not None else None
+            ),
+            "max_physical_time_s": _text_number(
+                relax_stage.max_physical_time_s if relax_stage is not None else None
+            ),
         },
         "mesh": _export_global_mesh_state(base_problem),
         "universe": _export_universe(base_problem),
@@ -280,8 +294,10 @@ def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, 
 
 
 def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
-    entrypoint = str(stage_draft.get("entrypoint_kind") or "").strip().lower()
     kind = str(stage_draft.get("kind") or "").strip().lower()
+    if kind in {"save_state", "load_state", "export"}:
+        return kind
+    entrypoint = str(stage_draft.get("entrypoint_kind") or "").strip().lower()
     if entrypoint == "relax" or "relax" in kind:
         return "relax"
     if entrypoint == "eigenmodes" or "eigen" in kind:
@@ -304,6 +320,37 @@ def _study_pipeline_stage_label(
 
 
 def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
+    action = stage.action if isinstance(stage.action, dict) else None
+    if action is not None:
+        action_kind = str(action.get("kind") or "").strip().lower()
+        if action_kind == "save_state":
+            return {
+                "kind": "save_state",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "artifact_name": str(action.get("artifact_name") or "state_snapshot"),
+                "format": _text_value(action.get("format")),
+                "dataset": _text_value(action.get("dataset")),
+            }
+        if action_kind == "load_state":
+            return {
+                "kind": "load_state",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "artifact_name": _text_value(action.get("artifact_name")),
+                "state_path": _text_value(action.get("state_path")),
+                "format": _text_value(action.get("format")),
+                "dataset": _text_value(action.get("dataset")),
+                "sample_index": _text_value(action.get("sample_index")),
+            }
+        if action_kind == "export":
+            return {
+                "kind": "export",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "artifact_name": _text_value(action.get("artifact_name")),
+                "quantity": _text_value(action.get("quantity")) or "magnetization",
+                "format": _text_value(action.get("format")) or "json",
+                "dataset": _text_value(action.get("dataset")),
+            }
+
     study = stage.problem.study
     if study is None:
         return {"kind": "unknown", "entrypoint_kind": stage.entrypoint_kind}
@@ -314,11 +361,18 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "entrypoint_kind": stage.entrypoint_kind,
             "integrator": dynamics.integrator,
             "fixed_timestep": _text_number(dynamics.fixed_timestep),
+            "demag_interval_s": _text_number(
+                dynamics.field_refresh.demag_interval_s
+                if dynamics.field_refresh is not None
+                else None
+            ),
             "until_seconds": "",
             "relax_algorithm": study.algorithm,
             "torque_tolerance": _text_number(study.torque_tolerance),
             "energy_tolerance": _text_number(study.energy_tolerance),
             "max_steps": str(study.max_steps),
+            "max_pseudotime_s": _text_number(study.max_pseudotime_s),
+            "max_physical_time_s": _text_number(study.max_physical_time_s),
         }
     if isinstance(study, Eigenmodes):
         return {
@@ -347,6 +401,11 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
         "entrypoint_kind": stage.entrypoint_kind,
         "integrator": dynamics.integrator,
         "fixed_timestep": _text_number(dynamics.fixed_timestep),
+        "demag_interval_s": _text_number(
+            dynamics.field_refresh.demag_interval_s
+            if dynamics.field_refresh is not None
+            else None
+        ),
         "until_seconds": _text_number(stage.default_until_seconds),
         "relax_algorithm": "",
         "torque_tolerance": "",
@@ -1332,6 +1391,21 @@ def _render_stages(
     for index, stage in enumerate(stages):
         if stage.problem.study is None:
             continue
+        if stage.action is not None:
+            action_kind = str(stage.action.get("kind") if isinstance(stage.action, dict) else "").strip().lower()
+            if action_kind == "save_state":
+                artifact_name = str(stage.action.get("artifact_name") or "state_snapshot")
+                call_parts = [f"artifact_name={_py_repr(artifact_name)}"]
+                action_format = _text_value(stage.action.get("format"))
+                action_dataset = _text_value(stage.action.get("dataset"))
+                if action_format:
+                    call_parts.append(f"format={_py_repr(action_format)}")
+                if action_dataset:
+                    call_parts.append(f"dataset={_py_repr(action_dataset)}")
+                if is_study_surface:
+                    lines.append(f"study.stages.add_save_state({', '.join(call_parts)})")
+                continue
+            continue
         dynamics_signature = stage.problem.study.dynamics.to_ir()
         if previous_dynamics_signature is not None and dynamics_signature != previous_dynamics_signature:
             lines.append(
@@ -1443,13 +1517,51 @@ def _render_stages(
                 "max_steps",
                 _override_int(relax_override, "max_steps", study.max_steps),
             )
-            call_parts = [
-                f"tol={_py_number(torque_tolerance)}",  # type: ignore[arg-type]
-                f"max_steps={max_steps}",
-                f"algorithm={_py_repr(algorithm)}",
-            ]
-            if energy_tolerance is not None:
-                call_parts.append(f"energy_tolerance={_py_number(energy_tolerance)}")
+            max_pseudotime_s = _override_number(
+                stage_override,
+                "max_pseudotime_s",
+                _override_number(relax_override, "max_pseudotime_s", study.max_pseudotime_s),
+            )
+            max_physical_time_s = _override_number(
+                stage_override,
+                "max_physical_time_s",
+                _override_number(relax_override, "max_physical_time_s", study.max_physical_time_s),
+            )
+            call_parts = [f"algorithm={_py_repr(algorithm)}"]
+            needs_stop_object = (
+                torque_tolerance is None
+                or max_steps is None
+                or max_pseudotime_s is not None
+                or max_physical_time_s is not None
+            )
+            if needs_stop_object:
+                stop_parts: list[str] = []
+                if torque_tolerance is not None:
+                    stop_parts.append(
+                        f"torque_tolerance_apm={_py_number(torque_tolerance)}"
+                    )
+                if energy_tolerance is not None:
+                    stop_parts.append(
+                        f"energy_tolerance_j={_py_number(energy_tolerance)}"
+                    )
+                if max_steps is not None:
+                    stop_parts.append(f"max_steps={max_steps}")
+                if max_pseudotime_s is not None:
+                    stop_parts.append(
+                        f"max_pseudotime_s={_py_number(max_pseudotime_s)}"
+                    )
+                if max_physical_time_s is not None:
+                    stop_parts.append(
+                        f"max_physical_time_s={_py_number(max_physical_time_s)}"
+                    )
+                call_parts.append(f"stop=fm.RelaxStop({', '.join(stop_parts)})")
+            else:
+                call_parts.append(f"tol={_py_number(torque_tolerance)}")  # type: ignore[arg-type]
+                call_parts.append(f"max_steps={max_steps}")
+                if energy_tolerance is not None:
+                    call_parts.append(
+                        f"energy_tolerance={_py_number(energy_tolerance)}"
+                    )
             if algorithm == "llg_overdamped":
                 if relax_solver and relax_solver not in {"auto", "rk23"}:
                     call_parts.append(f"solver={_py_repr(relax_solver)}")
@@ -1490,7 +1602,14 @@ def _stage_override_for(
     override = _normalize_mapping(raw_stage_overrides[index])
     if not override:
         return {}
-    expected_kind = "relax" if isinstance(stage.problem.study, Relaxation) else ("eigenmodes" if isinstance(stage.problem.study, Eigenmodes) else "run")
+    if isinstance(stage.action, dict):
+        action_kind = str(stage.action.get("kind") or "").strip().lower()
+        if action_kind in {"save_state", "load_state", "export"}:
+            expected_kind = action_kind
+        else:
+            expected_kind = "run"
+    else:
+        expected_kind = "relax" if isinstance(stage.problem.study, Relaxation) else ("eigenmodes" if isinstance(stage.problem.study, Eigenmodes) else "run")
     override_kind = override.get("kind")
     if isinstance(override_kind, str) and override_kind and override_kind != expected_kind:
         return {}
@@ -1509,12 +1628,21 @@ def _render_solver_call(
         kwargs.append(f"integrator={_py_repr(integrator)}")
 
     fixed_timestep = _override_number(solver_override, "fixed_timestep", dynamics.fixed_timestep)
+    demag_interval_s = _override_number(
+        solver_override,
+        "demag_interval_s",
+        dynamics.field_refresh.demag_interval_s
+        if dynamics.field_refresh is not None
+        else None,
+    )
     if dynamics.adaptive_timestep is not None:
         if fixed_timestep is not None:
             kwargs.append(f"dt={_py_number(fixed_timestep)}")
         kwargs.append(f"max_error={_py_number(dynamics.adaptive_timestep.atol)}")
     elif fixed_timestep is not None:
         kwargs.append(f"dt={_py_number(fixed_timestep)}")
+    if demag_interval_s is not None:
+        kwargs.append(f"demag_interval_s={_py_number(demag_interval_s)}")
 
     if dynamics.gamma is not None and abs(dynamics.gamma - DEFAULT_GAMMA) > 1e-12:
         kwargs.append(f"gamma={_py_number(dynamics.gamma)}")
@@ -2664,6 +2792,13 @@ def _text_number(value: float | None) -> str:
     return "" if value is None else _py_number(value)
 
 
+def _text_value(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return text
+
+
 def _text_mesh_size(value: object) -> str:
     rendered = _render_mesh_size_literal(value)
     if rendered is None:
@@ -2785,10 +2920,14 @@ def _validate_energy_terms(problem: Problem) -> None:
             continue
         if isinstance(term, Demag):
             demag_count += 1
+            if term.realization == "transfer_grid":
+                raise ValueError(
+                    "FEM transfer_grid został usunięty. "
+                    "Zbuduj shared_domain_mesh_with_air i użyj Poisson Robin/Dirichlet."
+                )
             if term.realization not in {
                 None,
                 "auto",
-                "transfer_grid",
                 "poisson_dirichlet",
                 "poisson_robin",
                 # Legacy aliases still accepted by Demag class:

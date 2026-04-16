@@ -106,11 +106,15 @@ export function validateStudyPipeline(
       && entry.kind !== "field_sweep_relax_snapshot"
       && entry.kind !== "parameter_sweep"
     ) continue;
+    const message =
+      entry.kind === "hysteresis_loop"
+        ? "Hysteresis macro will materialize into repeated settle-relax steps (plus optional save-state actions)."
+        : "Composite macro will materialize into repeated run/relax/save execution steps.";
     diagnostics.push({
       id: `macro-preview-${entry.nodeId}`,
       severity: "info",
       nodeId: entry.nodeId,
-      message: "Composite macro will materialize into repeated run/relax/save execution steps.",
+      message,
       suggestion: "Open Materialized Preview to inspect the generated backend stage sequence.",
     });
   }

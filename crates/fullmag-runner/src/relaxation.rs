@@ -9,9 +9,9 @@
 //!   backtracking line search (OOMMF-level quality).
 
 use fullmag_engine::{add, dot, normalized, scale, sub, ExchangeLlgProblem, FftWorkspace, Vector3};
-use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
+use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR, StageCompletionIR, StageStopReason};
 
-use crate::types::StepStats;
+use crate::types::{RunStatus, StepStats};
 
 // ---------------------------------------------------------------------------
 // Convergence check (shared by all algorithms)
@@ -26,10 +26,14 @@ pub(crate) fn relaxation_converged(
     pure_damping_rhs: bool,
 ) -> bool {
     let max_torque = effective_max_torque_apm(stats, gyromagnetic_ratio, damping, pure_damping_rhs);
-    if max_torque > control.torque_tolerance {
+    if control
+        .stop
+        .torque_tolerance_apm
+        .is_some_and(|threshold| max_torque > threshold)
+    {
         return false;
     }
-    match (control.energy_tolerance, previous_total_energy) {
+    match (control.stop.energy_tolerance_j, previous_total_energy) {
         (Some(energy_tolerance), Some(previous_energy)) => {
             (previous_energy - stats.e_total).abs() <= energy_tolerance
         }
@@ -80,6 +84,129 @@ pub(crate) fn effective_max_torque_apm(
 
 pub(crate) fn llg_overdamped_uses_pure_damping(control: Option<&RelaxationControlIR>) -> bool {
     control.is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::LlgOverdamped)
+}
+
+pub(crate) fn infer_stage_completion(
+    status: RunStatus,
+    relaxation: Option<&RelaxationControlIR>,
+    steps: &[StepStats],
+    gyromagnetic_ratio: f64,
+    damping: f64,
+    pure_damping_rhs: bool,
+) -> StageCompletionIR {
+    let status_label = match status {
+        RunStatus::Completed => "completed",
+        RunStatus::Failed => "failed",
+        RunStatus::Cancelled => "cancelled",
+        RunStatus::Paused => "paused",
+    }
+    .to_string();
+
+    if matches!(status, RunStatus::Cancelled) {
+        return StageCompletionIR {
+            status: status_label,
+            reason: Some(StageStopReason::UserCancelled),
+            metric_name: None,
+            metric_value: None,
+            threshold: None,
+        };
+    }
+
+    let Some(control) = relaxation else {
+        return StageCompletionIR {
+            status: status_label,
+            reason: None,
+            metric_name: None,
+            metric_value: None,
+            threshold: None,
+        };
+    };
+    let Some(last) = steps.last() else {
+        return StageCompletionIR {
+            status: status_label,
+            reason: None,
+            metric_name: None,
+            metric_value: None,
+            threshold: None,
+        };
+    };
+
+    let max_torque =
+        effective_max_torque_apm(last, gyromagnetic_ratio, damping, pure_damping_rhs);
+    let previous_total_energy = steps.iter().rev().nth(1).map(|step| step.e_total);
+    let energy_delta = previous_total_energy.map(|previous| (previous - last.e_total).abs());
+
+    if let (Some(threshold), Some(metric_value)) = (control.stop.energy_tolerance_j, energy_delta) {
+        let torque_ok = control
+            .stop
+            .torque_tolerance_apm
+            .is_none_or(|torque_threshold| max_torque <= torque_threshold);
+        if torque_ok && metric_value <= threshold {
+            return StageCompletionIR {
+                status: status_label,
+                reason: Some(StageStopReason::Energy),
+                metric_name: Some("energy_delta_j".to_string()),
+                metric_value: Some(metric_value),
+                threshold: Some(threshold),
+            };
+        }
+    }
+
+    if let Some(threshold) = control.stop.torque_tolerance_apm {
+        if max_torque <= threshold {
+            return StageCompletionIR {
+                status: status_label,
+                reason: Some(StageStopReason::Torque),
+                metric_name: Some("max_torque_apm".to_string()),
+                metric_value: Some(max_torque),
+                threshold: Some(threshold),
+            };
+        }
+    }
+
+    if let Some(threshold) = control.stop.max_physical_time_s {
+        if last.time >= threshold {
+            return StageCompletionIR {
+                status: status_label,
+                reason: Some(StageStopReason::MaxPhysicalTime),
+                metric_name: Some("physical_time_s".to_string()),
+                metric_value: Some(last.time),
+                threshold: Some(threshold),
+            };
+        }
+    }
+
+    if let Some(threshold) = control.stop.max_pseudotime_s {
+        if last.time >= threshold {
+            return StageCompletionIR {
+                status: status_label,
+                reason: Some(StageStopReason::MaxPseudotime),
+                metric_name: Some("pseudotime_s".to_string()),
+                metric_value: Some(last.time),
+                threshold: Some(threshold),
+            };
+        }
+    }
+
+    if let Some(threshold) = control.stop.max_steps {
+        if last.step >= threshold {
+            return StageCompletionIR {
+                status: status_label,
+                reason: Some(StageStopReason::MaxSteps),
+                metric_name: Some("steps".to_string()),
+                metric_value: Some(last.step as f64),
+                threshold: Some(threshold as f64),
+            };
+        }
+    }
+
+    StageCompletionIR {
+        status: status_label,
+        reason: None,
+        metric_name: None,
+        metric_value: None,
+        threshold: None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -172,9 +299,13 @@ pub(crate) fn execute_projected_gradient_bb(
     let mut steps: u64 = 0;
     let mut converged = false;
 
-    while steps < control.max_steps {
+    while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque(&m, &h_eff);
-        if max_torque <= control.torque_tolerance {
+        if control
+            .stop
+            .torque_tolerance_apm
+            .is_some_and(|threshold| max_torque <= threshold)
+        {
             converged = true;
             break;
         }
@@ -275,10 +406,15 @@ pub(crate) fn execute_projected_gradient_bb(
         steps += 1;
 
         // Check energy tolerance if specified
-        if let Some(etol) = control.energy_tolerance {
+        if let Some(etol) = control.stop.energy_tolerance_j {
             let energy_delta = (prev_energy - energy).abs();
             let max_torque = compute_max_torque(&m, &h_eff);
-            if max_torque <= control.torque_tolerance && energy_delta <= etol {
+            if control
+                .stop
+                .torque_tolerance_apm
+                .is_some_and(|threshold| max_torque <= threshold)
+                && energy_delta <= etol
+            {
                 converged = true;
                 break;
             }
@@ -287,7 +423,11 @@ pub(crate) fn execute_projected_gradient_bb(
 
     // Final torque check
     let final_torque = compute_max_torque(&m, &h_eff);
-    if final_torque <= control.torque_tolerance {
+    if control
+        .stop
+        .torque_tolerance_apm
+        .is_some_and(|threshold| final_torque <= threshold)
+    {
         converged = true;
     }
 
@@ -329,10 +469,14 @@ pub(crate) fn execute_nonlinear_cg(
     let mut steps: u64 = 0;
     let mut converged = false;
 
-    while steps < control.max_steps {
+    while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         // Check convergence
         let max_torque = compute_max_torque(&m, &h_eff);
-        if max_torque <= control.torque_tolerance {
+        if control
+            .stop
+            .torque_tolerance_apm
+            .is_some_and(|threshold| max_torque <= threshold)
+        {
             converged = true;
             break;
         }
@@ -428,7 +572,11 @@ pub(crate) fn execute_nonlinear_cg(
     }
 
     let final_torque = compute_max_torque(&m, &h_eff);
-    if final_torque <= control.torque_tolerance {
+    if control
+        .stop
+        .torque_tolerance_apm
+        .is_some_and(|threshold| final_torque <= threshold)
+    {
         converged = true;
     }
 

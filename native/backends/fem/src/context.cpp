@@ -291,6 +291,36 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
         error = "FEM time step must be positive";
         return false;
     }
+    if (plan.field_refresh.has_demag_interval_s != 0 &&
+        plan.field_refresh.demag_interval_s <= 0.0) {
+        error = "field_refresh.demag_interval_s must be positive when provided";
+        return false;
+    }
+    if (plan.relax_stop.has_torque_tolerance_apm != 0 &&
+        plan.relax_stop.torque_tolerance_apm <= 0.0) {
+        error = "relax_stop.torque_tolerance_apm must be positive when provided";
+        return false;
+    }
+    if (plan.relax_stop.has_energy_tolerance_j != 0 &&
+        plan.relax_stop.energy_tolerance_j < 0.0) {
+        error = "relax_stop.energy_tolerance_j must be non-negative when provided";
+        return false;
+    }
+    if (plan.relax_stop.has_max_steps != 0 &&
+        plan.relax_stop.max_steps == 0) {
+        error = "relax_stop.max_steps must be >= 1 when provided";
+        return false;
+    }
+    if (plan.relax_stop.has_max_pseudotime_s != 0 &&
+        plan.relax_stop.max_pseudotime_s <= 0.0) {
+        error = "relax_stop.max_pseudotime_s must be positive when provided";
+        return false;
+    }
+    if (plan.relax_stop.has_max_physical_time_s != 0 &&
+        plan.relax_stop.max_physical_time_s <= 0.0) {
+        error = "relax_stop.max_physical_time_s must be positive when provided";
+        return false;
+    }
 
     ctx.n_nodes = plan.mesh.n_nodes;
     ctx.n_elements = plan.mesh.n_elements;
@@ -300,6 +330,14 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     ctx.dt_seconds = plan.dt_seconds;
     ctx.current_dt = plan.dt_seconds;
     ctx.air_box_factor = plan.air_box_factor;
+    ctx.field_refresh = plan.field_refresh;
+    ctx.relax_stop = plan.relax_stop;
+    ctx.stage_completion = {};
+    ctx.relax_pseudotime_s = 0.0;
+    ctx.relax_previous_total_energy_j = 0.0;
+    ctx.relax_previous_total_energy_valid = false;
+    ctx.demag_cache_valid = false;
+    ctx.demag_last_refresh_time = -1.0;
     ctx.precision = plan.precision;
     ctx.integrator = plan.integrator;
     ctx.enable_exchange = plan.enable_exchange != 0;
@@ -519,39 +557,6 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
         plan.initial_magnetization_xyz,
         plan.initial_magnetization_xyz + static_cast<size_t>(plan.initial_magnetization_len));
 
-    // Only copy Newell kernel spectra for transfer-grid demag (not poisson_airbox).
-    if (static_cast<int>(plan.demag_realization) == 0 /* TRANSFER_GRID */) {
-        copy_optional_span(
-            plan.demag_kernel_xx_spectrum,
-            static_cast<size_t>(plan.demag_kernel_spectrum_len),
-            ctx.transfer_grid.kernel_xx_spectrum,
-            0.0);
-        copy_optional_span(
-            plan.demag_kernel_yy_spectrum,
-            static_cast<size_t>(plan.demag_kernel_spectrum_len),
-            ctx.transfer_grid.kernel_yy_spectrum,
-            0.0);
-        copy_optional_span(
-            plan.demag_kernel_zz_spectrum,
-            static_cast<size_t>(plan.demag_kernel_spectrum_len),
-            ctx.transfer_grid.kernel_zz_spectrum,
-            0.0);
-        copy_optional_span(
-            plan.demag_kernel_xy_spectrum,
-            static_cast<size_t>(plan.demag_kernel_spectrum_len),
-            ctx.transfer_grid.kernel_xy_spectrum,
-            0.0);
-        copy_optional_span(
-            plan.demag_kernel_xz_spectrum,
-            static_cast<size_t>(plan.demag_kernel_spectrum_len),
-            ctx.transfer_grid.kernel_xz_spectrum,
-            0.0);
-        copy_optional_span(
-            plan.demag_kernel_yz_spectrum,
-            static_cast<size_t>(plan.demag_kernel_spectrum_len),
-            ctx.transfer_grid.kernel_yz_spectrum,
-            0.0);
-    }
     // Build magnetic element mask to match the shared Rust FEM contract:
     // - mixed 0/non-zero markers => non-zero markers are magnetic, 0 is air,
     // - all-zero markers => treat the whole mesh as magnetic,
@@ -722,9 +727,6 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
         ctx.mfem_device_string_override = plan.mfem_device_string;
     }
 
-    // FEM-039 fix: read explicit demag transfer-grid cell size from plan.
-    ctx.demag_transfer_cell_size = plan.demag_transfer_cell_size;
-
     // FND-013: read consistent-mass flag from plan.
     // ctx.use_consistent_mass = (plan.use_consistent_mass != 0);
 
@@ -857,6 +859,8 @@ int context_upload_magnetization_f64(
     ctx.m_xyz.assign(m_xyz, m_xyz + static_cast<size_t>(len));
     ctx.stepper.fsal_valid = false;
     ctx.prev_error_norm = 1.0;
+    ctx.demag_cache_valid = false;
+    ctx.demag_last_refresh_time = -1.0;
 
 #if FULLMAG_HAS_MFEM_STACK
     // FND-004 fix: delegate H_eff assembly to compute_effective_fields_for_magnetization
@@ -918,8 +922,6 @@ void context_populate_device_info(Context &ctx) {
     if (ctx.mfem_exchange_ready) {
         if (!ctx.enable_demag) {
             backend_name = "mfem_cuda_exchange_ready";
-        } else if (ctx.demag_realization == 0) {
-            backend_name = "mfem_cuda_bootstrap_transfer_grid_demag";
         } else if (ctx.demag_realization == 1) {
             backend_name = "mfem_cuda_native_poisson_dirichlet_demag";
         } else if (ctx.demag_realization == 2) {

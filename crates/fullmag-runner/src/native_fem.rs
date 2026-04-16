@@ -17,6 +17,8 @@ use crate::quantities::{normalize_quantity_id, QuantityId};
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(feature = "fem-gpu")]
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError, StepStats};
+#[cfg(feature = "fem-gpu")]
+use fullmag_ir::{StageCompletionIR, StageStopReason};
 
 #[cfg(feature = "fem-gpu")]
 use std::ffi::c_void;
@@ -195,15 +197,13 @@ impl NativeFemBackend {
             damping: plan.material.damping,
             gyromagnetic_ratio: plan.gyromagnetic_ratio,
         };
-        let resolved_demag_realization = plan
-            .demag_realization
-            .unwrap_or(fullmag_ir::ResolvedFemDemagIR::TransferGrid);
-
-        // Let the native FDM backend build its own Newell tensor for FEM
-        // transfer-grid demag. The transfer-grid dimensions are derived from
-        // the magnetic subset of the mesh on the native side, which can differ
-        // from the whole-mesh bbox available here.
-        let demag_kernel_spectra: Option<fullmag_engine::DemagKernelSpectra> = None;
+        let resolved_demag_realization = if plan.enable_demag {
+            plan.demag_realization.ok_or_else(|| RunError {
+                message: "native FEM backend requires a resolved Poisson demag realization when demag is enabled".to_string(),
+            })?
+        } else {
+            fullmag_ir::ResolvedFemDemagIR::PoissonRobin
+        };
 
         let precision = match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => {
@@ -295,9 +295,6 @@ impl NativeFemBackend {
                 fullmag_ir::ResolvedFemDemagIR::PoissonRobin => {
                     ffi::fullmag_fem_demag_realization::FULLMAG_FEM_DEMAG_AIRBOX_ROBIN
                 }
-                fullmag_ir::ResolvedFemDemagIR::TransferGrid => {
-                    ffi::fullmag_fem_demag_realization::FULLMAG_FEM_DEMAG_TRANSFER_GRID
-                }
             },
             poisson_boundary_marker: plan
                 .air_box_config
@@ -321,27 +318,6 @@ impl NativeFemBackend {
                 .as_ref()
                 .and_then(|c| c.robin_beta_factor)
                 .unwrap_or(FALLBACK_ROBIN_BETA_FACTOR),
-            demag_kernel_xx_spectrum: demag_kernel_spectra
-                .as_ref()
-                .map_or(std::ptr::null(), |kernels| kernels.n_xx.as_ptr()),
-            demag_kernel_yy_spectrum: demag_kernel_spectra
-                .as_ref()
-                .map_or(std::ptr::null(), |kernels| kernels.n_yy.as_ptr()),
-            demag_kernel_zz_spectrum: demag_kernel_spectra
-                .as_ref()
-                .map_or(std::ptr::null(), |kernels| kernels.n_zz.as_ptr()),
-            demag_kernel_xy_spectrum: demag_kernel_spectra
-                .as_ref()
-                .map_or(std::ptr::null(), |kernels| kernels.n_xy.as_ptr()),
-            demag_kernel_xz_spectrum: demag_kernel_spectra
-                .as_ref()
-                .map_or(std::ptr::null(), |kernels| kernels.n_xz.as_ptr()),
-            demag_kernel_yz_spectrum: demag_kernel_spectra
-                .as_ref()
-                .map_or(std::ptr::null(), |kernels| kernels.n_yz.as_ptr()),
-            demag_kernel_spectrum_len: demag_kernel_spectra
-                .as_ref()
-                .map_or(0, |kernels| kernels.n_xx.len() as u64),
             initial_magnetization_xyz: m_flat.as_ptr(),
             initial_magnetization_len: m_flat.len() as u64,
             dt_seconds: crate::resolve_initial_timestep(
@@ -352,6 +328,65 @@ impl NativeFemBackend {
                 message: "native FEM: no fixed_timestep or adaptive_timestep specified".to_string(),
             })?,
             adaptive_config: std::ptr::null(),
+            field_refresh: ffi::fullmag_fem_field_refresh_policy {
+                has_demag_interval_s: if plan
+                    .field_refresh
+                    .as_ref()
+                    .and_then(|policy| policy.demag_interval_s)
+                    .is_some()
+                {
+                    1
+                } else {
+                    0
+                },
+                demag_interval_s: plan
+                    .field_refresh
+                    .as_ref()
+                    .and_then(|policy| policy.demag_interval_s)
+                    .unwrap_or(0.0),
+            },
+            relax_stop: {
+                let stop = plan.relaxation.as_ref().map(|control| &control.stop);
+                ffi::fullmag_fem_relax_stop {
+                    has_torque_tolerance_apm: if stop
+                        .and_then(|cfg| cfg.torque_tolerance_apm)
+                        .is_some()
+                    {
+                        1
+                    } else {
+                        0
+                    },
+                    torque_tolerance_apm: stop
+                        .and_then(|cfg| cfg.torque_tolerance_apm)
+                        .unwrap_or(0.0),
+                    has_energy_tolerance_j: if stop.and_then(|cfg| cfg.energy_tolerance_j).is_some()
+                    {
+                        1
+                    } else {
+                        0
+                    },
+                    energy_tolerance_j: stop.and_then(|cfg| cfg.energy_tolerance_j).unwrap_or(0.0),
+                    has_max_steps: if stop.and_then(|cfg| cfg.max_steps).is_some() {
+                        1
+                    } else {
+                        0
+                    },
+                    max_steps: stop.and_then(|cfg| cfg.max_steps).unwrap_or(0),
+                    has_max_pseudotime_s: if stop.and_then(|cfg| cfg.max_pseudotime_s).is_some() {
+                        1
+                    } else {
+                        0
+                    },
+                    max_pseudotime_s: stop.and_then(|cfg| cfg.max_pseudotime_s).unwrap_or(0.0),
+                    has_max_physical_time_s: if stop.and_then(|cfg| cfg.max_physical_time_s).is_some()
+                    {
+                        1
+                    } else {
+                        0
+                    },
+                    max_physical_time_s: stop.and_then(|cfg| cfg.max_physical_time_s).unwrap_or(0.0),
+                }
+            },
             // F-05 fix: enable uniaxial anisotropy when ANY of the relevant
             // parameters are set (Ku, Ku2, Ku_field, Ku2_field).
             has_uniaxial_anisotropy: if plan.material.uniaxial_anisotropy.is_some()
@@ -530,8 +565,6 @@ impl NativeFemBackend {
                 .map_or(0, |c| c.seed.unwrap_or(0)),
             // FEM-030 fix: pass explicit MFEM device string from plan.
             mfem_device_string: std::ptr::null(), // set below if present
-            // FEM-039 fix: pass explicit demag transfer-grid cell size.
-            demag_transfer_cell_size: plan.demag_transfer_cell_size.unwrap_or(0.0),
             // FND-013: pass consistent-mass flag.
             use_consistent_mass: if plan.use_consistent_mass.unwrap_or(false) {
                 1
@@ -1016,6 +1049,74 @@ impl NativeFemBackend {
         })
     }
 
+    pub fn stage_completion(&self) -> Result<Option<StageCompletionIR>, RunError> {
+        let mut completion = ffi::fullmag_fem_stage_completion {
+            has_reason: 0,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
+            has_metric_name: 0,
+            metric_name: [0; 64],
+            metric_value: 0.0,
+            threshold: 0.0,
+        };
+        let rc = unsafe { ffi::fullmag_fem_backend_stage_completion(self.handle, &mut completion) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU stage_completion failed"));
+        }
+        if completion.has_reason == 0 {
+            return Ok(None);
+        }
+
+        let reason = match completion.reason {
+            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE => {
+                StageStopReason::Torque
+            }
+            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY => {
+                StageStopReason::Energy
+            }
+            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS => {
+                StageStopReason::MaxSteps
+            }
+            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME => {
+                StageStopReason::MaxPseudotime
+            }
+            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME => {
+                StageStopReason::MaxPhysicalTime
+            }
+            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED => {
+                StageStopReason::UserCancelled
+            }
+            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR => {
+                StageStopReason::BackendError
+            }
+        };
+
+        let metric_name = if completion.has_metric_name != 0 {
+            let value = unsafe { CStr::from_ptr(completion.metric_name.as_ptr()) }
+                .to_string_lossy()
+                .to_string();
+            if value.is_empty() { None } else { Some(value) }
+        } else {
+            None
+        };
+        let has_metric = metric_name.is_some();
+
+        Ok(Some(StageCompletionIR {
+            status: "completed".to_string(),
+            reason: Some(reason),
+            metric_name,
+            metric_value: if has_metric {
+                Some(completion.metric_value)
+            } else {
+                None
+            },
+            threshold: if has_metric {
+                Some(completion.threshold)
+            } else {
+                None
+            },
+        }))
+    }
+
     fn last_error_or(&self, fallback: &str) -> RunError {
         let err = unsafe { ffi::fullmag_fem_backend_last_error(self.handle) };
         let msg = if err.is_null() {
@@ -1243,7 +1344,6 @@ mod tests {
             oersted_realization: None,
             gpu_device_index: None,
             mfem_device_string: None,
-            demag_transfer_cell_size: None,
             use_consistent_mass: None,
         }
     }
@@ -1353,7 +1453,6 @@ mod tests {
             oersted_realization: None,
             gpu_device_index: None,
             mfem_device_string: None,
-            demag_transfer_cell_size: None,
             use_consistent_mass: None,
         }
     }

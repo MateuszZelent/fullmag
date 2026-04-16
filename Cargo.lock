@@ -1183,9 +1183,6 @@ version = "0.1.0"
 [[package]]
 name = "fullmag-fem-sys"
 version = "0.1.0"
-dependencies = [
- "fullmag-fdm-sys",
-]
 
 [[package]]
 name = "fullmag-ir"

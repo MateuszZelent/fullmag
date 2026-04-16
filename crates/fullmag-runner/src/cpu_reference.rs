@@ -739,7 +739,7 @@ pub(crate) fn execute_reference_fdm(
             }
 
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                step_count >= control.max_steps
+                step_count >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &latest_stats,
@@ -768,16 +768,26 @@ pub(crate) fn execute_reference_fdm(
     )?;
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let status = if cancelled {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
+    let completion = crate::relaxation::infer_stage_completion(
+        status,
+        plan.relaxation.as_ref(),
+        &steps,
+        plan.gyromagnetic_ratio,
+        plan.material.damping,
+        pure_damping_relax,
+    );
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: if cancelled {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Completed
-            },
+            status,
             steps,
             final_magnetization: state.magnetization().to_vec(),
+            completion: Some(completion),
         },
         initial_magnetization,
         field_snapshots,
@@ -1130,11 +1140,16 @@ mod tests {
             integrator: IntegratorChoice::Rk23,
             fixed_timestep: Some(1e-15),
             adaptive_timestep: None,
+            field_refresh: None,
             relaxation: Some(RelaxationControlIR {
                 algorithm: RelaxationAlgorithmIR::LlgOverdamped,
-                torque_tolerance: 1e-6,
-                energy_tolerance: None,
-                max_steps: 10,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-6),
+                    energy_tolerance_j: None,
+                    max_steps: Some(10),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
             }),
             enable_exchange: false,
             enable_demag: false,
@@ -1396,9 +1411,13 @@ mod tests {
         let plan = FdmPlanIR {
             relaxation: Some(RelaxationControlIR {
                 algorithm: RelaxationAlgorithmIR::LlgOverdamped,
-                torque_tolerance: 1e-6,
-                energy_tolerance: None,
-                max_steps: 1000,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-6),
+                    energy_tolerance_j: None,
+                    max_steps: Some(1000),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
             }),
             ..make_test_plan()
         };
@@ -1438,9 +1457,13 @@ mod tests {
         let plan = FdmPlanIR {
             relaxation: Some(RelaxationControlIR {
                 algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
-                torque_tolerance: 1e-6,
-                energy_tolerance: None,
-                max_steps: 1000,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-6),
+                    energy_tolerance_j: None,
+                    max_steps: Some(1000),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
             }),
             ..make_test_plan()
         };
@@ -1456,9 +1479,13 @@ mod tests {
         let plan = FdmPlanIR {
             relaxation: Some(RelaxationControlIR {
                 algorithm: RelaxationAlgorithmIR::NonlinearCg,
-                torque_tolerance: 1e-6,
-                energy_tolerance: None,
-                max_steps: 1000,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-6),
+                    energy_tolerance_j: None,
+                    max_steps: Some(1000),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
             }),
             ..make_test_plan()
         };
@@ -1476,9 +1503,13 @@ mod tests {
             initial_magnetization: random_m0,
             relaxation: Some(RelaxationControlIR {
                 algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
-                torque_tolerance: 1e-6,
-                energy_tolerance: None,
-                max_steps: 5000,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-6),
+                    energy_tolerance_j: None,
+                    max_steps: Some(5000),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
             }),
             ..make_test_plan()
         };
@@ -1506,9 +1537,13 @@ mod tests {
             initial_magnetization: random_m0,
             relaxation: Some(RelaxationControlIR {
                 algorithm: RelaxationAlgorithmIR::NonlinearCg,
-                torque_tolerance: 1e-6,
-                energy_tolerance: None,
-                max_steps: 5000,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-6),
+                    energy_tolerance_j: None,
+                    max_steps: Some(5000),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
             }),
             ..make_test_plan()
         };
@@ -1547,9 +1582,13 @@ mod tests {
             let plan = FdmPlanIR {
                 relaxation: Some(RelaxationControlIR {
                     algorithm,
-                    torque_tolerance: 1e-4,
-                    energy_tolerance: None,
-                    max_steps: 2000,
+                    stop: fullmag_ir::RelaxStopIR {
+                        torque_tolerance_apm: Some(1e-4),
+                        energy_tolerance_j: None,
+                        max_steps: Some(2000),
+                        max_pseudotime_s: None,
+                        max_physical_time_s: None,
+                    },
                 }),
                 ..base.clone()
             };

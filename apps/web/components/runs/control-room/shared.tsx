@@ -194,10 +194,15 @@ export function resolveStudyStageExecutionState(args: {
       activeStageIndex,
       completedStageIndexes: completed,
       stageStatuses: Array.from({ length: declaredTotal }, (_, index) => {
-        const declared = stageExecution.stage_statuses[index];
+        const declared =
+          stageExecution.stages[index]?.status ?? stageExecution.stage_statuses[index];
         if (typeof declared === "string" && declared.length > 0) return declared;
         if (activeStageIndex === index) return "running";
         return completed.includes(index) ? "completed" : "pending";
+      }),
+      stageRecords: Array.from({ length: declaredTotal }, (_, index) => {
+        const record = stageExecution.stages[index];
+        return record ?? null;
       }),
       activeStageKind: stageExecution.active_stage_kind,
       runtimeState: stageExecution.runtime_state,
@@ -236,6 +241,7 @@ export function resolveStudyStageExecutionState(args: {
       if (activeStageIndex === index) return "running";
       return completed.has(index) ? "completed" : "pending";
     }),
+    stageRecords: Array.from({ length: declaredTotal }, () => null),
     activeStageKind: parsed?.kind ?? null,
     runtimeState: workspaceStatus,
     source: "fallback" as const,

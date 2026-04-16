@@ -797,6 +797,7 @@ mod tests {
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
             relaxation: None,
+            field_refresh: None,
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
@@ -828,7 +829,6 @@ mod tests {
             oersted_realization: None,
             gpu_device_index: None,
             mfem_device_string: None,
-            demag_transfer_cell_size: None,
             use_consistent_mass: None,
         });
 
@@ -939,9 +939,13 @@ mod tests {
             adaptive_timestep: None,
             relaxation: Some(RelaxationControlIR {
                 algorithm: RelaxationAlgorithmIR::LlgOverdamped,
-                torque_tolerance: 1e-6,
-                energy_tolerance: None,
-                max_steps: 100,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-6),
+                    energy_tolerance_j: None,
+                    max_steps: Some(100),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
             }),
             boundary_correction: None,
             boundary_geometry: None,

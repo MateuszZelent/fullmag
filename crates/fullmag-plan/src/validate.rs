@@ -1,6 +1,6 @@
 use fullmag_ir::{
-    BackendTarget, FdmGridAssetIR, IntegratorChoice, OutputIR, ProblemIR, RelaxationAlgorithmIR,
-    RelaxationControlIR,
+    BackendTarget, FdmGridAssetIR, FieldRefreshPolicyIR, IntegratorChoice, OutputIR, ProblemIR,
+    RelaxationAlgorithmIR, RelaxationControlIR,
 };
 use std::collections::BTreeSet;
 
@@ -31,6 +31,7 @@ pub(crate) fn planned_study_controls(
     f64,
     Option<RelaxationControlIR>,
     Option<fullmag_ir::AdaptiveTimeStepIR>,
+    Option<FieldRefreshPolicyIR>,
 ) {
     // Parse user-specified integrator string → Option<IntegratorChoice>.
     // "auto" resolves to None, which triggers per-study-kind default selection.
@@ -93,6 +94,10 @@ pub(crate) fn planned_study_controls(
         } => adaptive_timestep.clone(),
     };
 
+    let field_refresh = match problem.study.dynamics() {
+        fullmag_ir::DynamicsIR::Llg { field_refresh, .. } => field_refresh.clone(),
+    };
+
     // Validate adaptive/fixed exclusivity and integrator compatibility.
     if adaptive_timestep.is_some() && fixed_timestep.is_some() {
         errors.push("adaptive_timestep and fixed_timestep are mutually exclusive".to_string());
@@ -112,6 +117,7 @@ pub(crate) fn planned_study_controls(
         gyromagnetic_ratio,
         relaxation,
         adaptive_timestep,
+        field_refresh,
     )
 }
 

@@ -412,8 +412,14 @@ pub(crate) fn plan_fdm(
         }
     };
 
-    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, adaptive_timestep) =
-        planned_study_controls(problem, &mut errors);
+    let (
+        integrator,
+        fixed_timestep,
+        gyromagnetic_ratio,
+        relaxation,
+        adaptive_timestep,
+        field_refresh,
+    ) = planned_study_controls(problem, &mut errors);
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
@@ -487,6 +493,7 @@ pub(crate) fn plan_fdm(
         integrator,
         fixed_timestep,
         adaptive_timestep,
+        field_refresh,
         relaxation,
         boundary_correction: problem
             .backend_policy
@@ -664,14 +671,23 @@ pub(crate) fn plan_fdm(
 
     let study_note = if let Some(control) = fdm_plan.relaxation.as_ref() {
         format!(
-            "study: relaxation algorithm={} torque_tolerance={:.6e} energy_tolerance={} max_steps={}",
+            "study: relaxation algorithm={} torque_tolerance={} energy_tolerance={} max_steps={}",
             control.algorithm.as_str(),
-            control.torque_tolerance,
             control
-                .energy_tolerance
+                .stop
+                .torque_tolerance_apm
                 .map(|value| format!("{value:.6e}"))
                 .unwrap_or_else(|| "none".to_string()),
-            control.max_steps
+            control
+                .stop
+                .energy_tolerance_j
+                .map(|value| format!("{value:.6e}"))
+                .unwrap_or_else(|| "none".to_string()),
+            control
+                .stop
+                .max_steps
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
         )
     } else {
         "study: time_evolution".to_string()
@@ -1108,8 +1124,14 @@ pub(crate) fn plan_fdm_multilayer(
         (common_cells[0] * 2) as u64 * (common_cells[1] * 2) as u64 * (common_cells[2] * 2) as u64;
     let estimated_kernel_bytes = padded_len * 6 * 16 * estimated_unique_kernels as u64;
 
-    let (integrator, fixed_timestep, gyromagnetic_ratio, relaxation, adaptive_timestep) =
-        planned_study_controls(problem, &mut errors);
+    let (
+        integrator,
+        fixed_timestep,
+        gyromagnetic_ratio,
+        relaxation,
+        adaptive_timestep,
+        field_refresh,
+    ) = planned_study_controls(problem, &mut errors);
     if integrator != IntegratorChoice::Heun {
         errors.push(
             "the public multilayer FDM runner currently supports only the 'heun' integrator"
@@ -1191,6 +1213,7 @@ pub(crate) fn plan_fdm_multilayer(
         periodicity: problem.pbc.clone(),
         integrator,
         fixed_timestep,
+        field_refresh,
         relaxation,
         planner_summary: FdmMultilayerSummaryIR {
             requested_strategy: requested_strategy.to_string(),
@@ -1205,14 +1228,23 @@ pub(crate) fn plan_fdm_multilayer(
 
     let study_note = if let Some(control) = plan.relaxation.as_ref() {
         format!(
-            "study: relaxation algorithm={} torque_tolerance={:.6e} energy_tolerance={} max_steps={}",
+            "study: relaxation algorithm={} torque_tolerance={} energy_tolerance={} max_steps={}",
             control.algorithm.as_str(),
-            control.torque_tolerance,
             control
-                .energy_tolerance
+                .stop
+                .torque_tolerance_apm
                 .map(|value| format!("{value:.6e}"))
                 .unwrap_or_else(|| "none".to_string()),
-            control.max_steps
+            control
+                .stop
+                .energy_tolerance_j
+                .map(|value| format!("{value:.6e}"))
+                .unwrap_or_else(|| "none".to_string()),
+            control
+                .stop
+                .max_steps
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
         )
     } else {
         "study: time_evolution".to_string()

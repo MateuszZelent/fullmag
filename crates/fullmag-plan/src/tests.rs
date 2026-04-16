@@ -770,8 +770,8 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
     });
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
-        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
-            geometry_name: "strip".to_string(),
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
             mesh_source: None,
             mesh: Some(fullmag_ir::MeshIR {
                 mesh_name: "strip".to_string(),
@@ -793,8 +793,12 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: std::collections::HashMap::new(),
             }),
-        }],
-        fem_domain_mesh_asset: None,
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
     });
 
     let plan = plan(&ir).expect("FEM air-box mesh asset should produce an air-box config");
@@ -862,8 +866,8 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
     });
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
-        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
-            geometry_name: "strip".to_string(),
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
             mesh_source: None,
             mesh: Some(fullmag_ir::MeshIR {
                 mesh_name: "strip".to_string(),
@@ -885,8 +889,12 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: std::collections::HashMap::new(),
             }),
-        }],
-        fem_domain_mesh_asset: None,
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
     });
 
     let result = plan(&ir).expect(
@@ -946,8 +954,8 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
     });
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
-        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
-            geometry_name: "strip".to_string(),
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
             mesh_source: None,
             mesh: Some(fullmag_ir::MeshIR {
                 mesh_name: "strip".to_string(),
@@ -969,8 +977,12 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: std::collections::HashMap::new(),
             }),
-        }],
-        fem_domain_mesh_asset: None,
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
     });
 
     let error = plan(&ir).expect_err(
@@ -983,7 +995,7 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
 }
 
 #[test]
-fn fem_backend_without_air_elements_keeps_universe_as_provenance_note() {
+fn fem_backend_without_air_elements_rejects_removed_transfer_grid_path() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     ir.problem_meta.runtime_metadata.insert(
@@ -1042,21 +1054,17 @@ fn fem_backend_without_air_elements_keeps_universe_as_provenance_note() {
         fem_domain_mesh_asset: None,
     });
 
-    let plan = plan(&ir).expect("FEM mesh without air elements should still plan");
-    match plan.backend_plan {
-        BackendPlanIR::Fem(fem) => {
-            assert_eq!(
-                fem.demag_realization,
-                Some(fullmag_ir::ResolvedFemDemagIR::TransferGrid)
-            );
-            assert!(fem.air_box_config.is_none());
-        }
-        _ => panic!("expected FEM plan"),
-    }
-    assert!(plan.provenance.notes.iter().any(|note| {
-        note.contains("study_universe metadata present")
-            && note.contains("selected FEM mesh has no air elements")
-    }));
+    let err = plan(&ir).expect_err("FEM mesh without air elements must be rejected");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("transfer_grid został usunięty")
+                && (reason.contains("Shared-domain FEM mesh")
+                    || reason.contains("shared-domain FEM mesh")
+                    || reason.contains("no air elements"))
+        }),
+        "unexpected planner reasons: {:?}",
+        err.reasons
+    );
 }
 
 #[test]
@@ -1427,12 +1435,7 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
             }),
         },
     ];
-    ir.energy_terms = vec![
-        fullmag_ir::EnergyTermIR::Exchange,
-        fullmag_ir::EnergyTermIR::Demag {
-            realization: fullmag_ir::RequestedFemDemagIR::Auto,
-        },
-    ];
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
         fem_mesh_assets: vec![
@@ -1510,7 +1513,7 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
             assert_eq!(fem.object_segments[1].boundary_face_start, 1);
             assert_eq!(fem.object_segments[1].boundary_face_count, 1);
             assert!(fem.enable_exchange);
-            assert!(fem.enable_demag);
+            assert!(!fem.enable_demag);
         }
         _ => panic!("expected FEM plan"),
     }
@@ -1960,9 +1963,13 @@ fn llg_overdamped_relaxation_lowers_to_relaxation_control() {
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
         dynamics: ir.study.dynamics().clone(),
-        torque_tolerance: 1e-3,
-        energy_tolerance: Some(1e-12),
-        max_steps: 250,
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: Some(1e-12),
+            max_steps: Some(250),
+            max_pseudotime_s: None,
+            max_physical_time_s: None,
+        },
         sampling: ir.study.sampling().clone(),
     };
 
@@ -1974,8 +1981,8 @@ fn llg_overdamped_relaxation_lowers_to_relaxation_control() {
                 control.algorithm,
                 fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
             );
-            assert_eq!(control.max_steps, 250);
-            assert_eq!(control.energy_tolerance, Some(1e-12));
+            assert_eq!(control.stop.max_steps, Some(250));
+            assert_eq!(control.stop.energy_tolerance_j, Some(1e-12));
         }
         _ => panic!("expected FDM plan"),
     }
@@ -1987,9 +1994,13 @@ fn projected_gradient_bb_is_now_plannable() {
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
         dynamics: ir.study.dynamics().clone(),
-        torque_tolerance: 1e-3,
-        energy_tolerance: None,
-        max_steps: 250,
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(250),
+            max_pseudotime_s: None,
+            max_physical_time_s: None,
+        },
         sampling: ir.study.sampling().clone(),
     };
 
@@ -2012,9 +2023,13 @@ fn nonlinear_cg_is_now_plannable() {
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
         dynamics: ir.study.dynamics().clone(),
-        torque_tolerance: 1e-3,
-        energy_tolerance: None,
-        max_steps: 250,
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(250),
+            max_pseudotime_s: None,
+            max_physical_time_s: None,
+        },
         sampling: ir.study.sampling().clone(),
     };
 
@@ -2037,9 +2052,13 @@ fn tangent_plane_implicit_is_still_gated() {
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
         dynamics: ir.study.dynamics().clone(),
-        torque_tolerance: 1e-3,
-        energy_tolerance: None,
-        max_steps: 250,
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(250),
+            max_pseudotime_s: None,
+            max_physical_time_s: None,
+        },
         sampling: ir.study.sampling().clone(),
     };
 
@@ -2470,9 +2489,6 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
         fullmag_ir::EnergyTermIR::InterfacialDmi {
             d: 2.5e-3,
             interface_normal: Some([0.0, 3.0, 4.0]),
-        },
-        fullmag_ir::EnergyTermIR::Demag {
-            realization: fullmag_ir::RequestedFemDemagIR::Auto,
         },
     ];
     ir.study = fullmag_ir::StudyIR::Eigenmodes {

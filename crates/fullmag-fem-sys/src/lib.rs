@@ -79,9 +79,20 @@ pub enum fullmag_fem_preconditioner {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fem_demag_realization {
-    FULLMAG_FEM_DEMAG_TRANSFER_GRID = 0,
     FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET = 1,
     FULLMAG_FEM_DEMAG_AIRBOX_ROBIN = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_stage_stop_reason {
+    FULLMAG_FEM_STAGE_STOP_REASON_TORQUE = 1,
+    FULLMAG_FEM_STAGE_STOP_REASON_ENERGY = 2,
+    FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS = 3,
+    FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME = 4,
+    FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME = 5,
+    FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED = 6,
+    FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR = 7,
 }
 
 pub type fullmag_fem_interrupt_poll_fn = Option<unsafe extern "C" fn(*mut c_void) -> i32>;
@@ -119,6 +130,39 @@ pub struct fullmag_fem_solver_config {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_field_refresh_policy {
+    pub has_demag_interval_s: i32,
+    pub demag_interval_s: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_relax_stop {
+    pub has_torque_tolerance_apm: i32,
+    pub torque_tolerance_apm: f64,
+    pub has_energy_tolerance_j: i32,
+    pub energy_tolerance_j: f64,
+    pub has_max_steps: i32,
+    pub max_steps: u64,
+    pub has_max_pseudotime_s: i32,
+    pub max_pseudotime_s: f64,
+    pub has_max_physical_time_s: i32,
+    pub max_physical_time_s: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_stage_completion {
+    pub has_reason: i32,
+    pub reason: fullmag_fem_stage_stop_reason,
+    pub has_metric_name: i32,
+    pub metric_name: [std::os::raw::c_char; 64],
+    pub metric_value: f64,
+    pub threshold: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_plan_desc {
     pub mesh: fullmag_fem_mesh_desc,
     pub material: fullmag_fem_material_desc,
@@ -136,17 +180,12 @@ pub struct fullmag_fem_plan_desc {
     pub poisson_boundary_marker: i32,
     pub robin_beta_mode: i32,
     pub robin_beta_factor: f64,
-    pub demag_kernel_xx_spectrum: *const f64,
-    pub demag_kernel_yy_spectrum: *const f64,
-    pub demag_kernel_zz_spectrum: *const f64,
-    pub demag_kernel_xy_spectrum: *const f64,
-    pub demag_kernel_xz_spectrum: *const f64,
-    pub demag_kernel_yz_spectrum: *const f64,
-    pub demag_kernel_spectrum_len: u64,
     pub initial_magnetization_xyz: *const f64,
     pub initial_magnetization_len: u64,
     pub dt_seconds: f64,
     pub adaptive_config: *const fullmag_fem_adaptive_config,
+    pub field_refresh: fullmag_fem_field_refresh_policy,
+    pub relax_stop: fullmag_fem_relax_stop,
     pub has_uniaxial_anisotropy: i32,
     pub uniaxial_anisotropy_constant: f64,
     pub uniaxial_anisotropy_k2: f64,
@@ -211,8 +250,6 @@ pub struct fullmag_fem_plan_desc {
     pub thermal_seed: u64,
     /// FEM-030: explicit MFEM device string. null = use env / compiled default.
     pub mfem_device_string: *const std::ffi::c_char,
-    /// FEM-039: explicit transfer-grid cell size for demag. 0.0 = fall back to hmax.
-    pub demag_transfer_cell_size: f64,
     /// FND-013: use consistent (full) mass matrix for exchange. 0 = lumped, 1 = consistent.
     pub use_consistent_mass: i32,
 }
@@ -315,6 +352,11 @@ extern "C" {
     pub fn fullmag_fem_backend_snapshot_stats(
         handle: *mut fullmag_fem_backend,
         out_stats: *mut fullmag_fem_step_stats,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_stage_completion(
+        handle: *mut fullmag_fem_backend,
+        out_completion: *mut fullmag_fem_stage_completion,
     ) -> i32;
 
     pub fn fullmag_fem_backend_get_device_info(

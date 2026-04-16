@@ -70,21 +70,40 @@ function stage(kind: ScriptBuilderStageState["kind"], patch?: Partial<ScriptBuil
 
 function expandMacro(node: MacroStageNode): ScriptBuilderStageState[] {
   if (node.macro_kind === "hysteresis_loop") {
-    const steps = Math.max(2, Number(node.config.steps ?? 21));
-    const relaxEach = node.config.relax_each !== false;
-    const savePointState = Boolean(node.config.save_point_state);
+    const explicitFieldValues = Array.isArray(node.config.field_values_t)
+      ? node.config.field_values_t
+      : null;
+    const steps =
+      explicitFieldValues && explicitFieldValues.length > 0
+        ? explicitFieldValues.length
+        : Math.max(2, Number(node.config.steps ?? 21));
+    const settle =
+      node.config.settle && typeof node.config.settle === "object"
+        ? (node.config.settle as Record<string, unknown>)
+        : null;
+    const savePointState = Boolean(node.config.save_state ?? node.config.save_point_state);
+    const torqueTolerance = toStringOr(
+      settle?.torque_tolerance_apm ?? settle?.torque_tolerance ?? node.config.torque_tolerance_apm ?? node.config.torque_tolerance,
+      "1e-4",
+    );
+    const energyTolerance = toStringOr(
+      settle?.energy_tolerance_j ?? settle?.energy_tolerance ?? node.config.energy_tolerance_j ?? node.config.energy_tolerance,
+      "",
+    );
+    const maxSteps = toStringOr(settle?.max_steps ?? node.config.max_steps, "50000");
+    const relaxAlgorithm = toStringOr(node.config.relax_algorithm, "llg_overdamped");
     const expanded: ScriptBuilderStageState[] = [];
     for (let i = 0; i < steps; i += 1) {
       expanded.push(
-        stage("run", {
-          until_seconds: "1e-12",
-          kind: "run",
-          entrypoint_kind: "run",
+        stage("relax", {
+          kind: "relax",
+          entrypoint_kind: "relax",
+          relax_algorithm: relaxAlgorithm,
+          torque_tolerance: torqueTolerance,
+          energy_tolerance: energyTolerance,
+          max_steps: maxSteps,
         }),
       );
-      if (relaxEach) {
-        expanded.push(stage("relax"));
-      }
       if (savePointState) {
         expanded.push(
           stage("save_state", {
