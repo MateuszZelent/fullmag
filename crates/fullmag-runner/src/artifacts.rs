@@ -9,6 +9,26 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
+    let resolved_cpu_threads = u32::try_from(crate::configured_cpu_threads(problem)).ok();
+    serde_json::json!({
+        "requested_cpu_threads": crate::requested_cpu_threads(problem),
+        "resolved_cpu_threads": resolved_cpu_threads,
+        "requested_fem_omp_threads": serde_json::Value::Null,
+        "effective_fem_omp_threads": serde_json::Value::Null,
+    })
+}
+
+fn provenance_with_runtime_threading(
+    problem: &fullmag_ir::ProblemIR,
+    provenance: &crate::types::ExecutionProvenance,
+) -> crate::types::ExecutionProvenance {
+    let mut enriched = provenance.clone();
+    enriched.requested_cpu_threads = crate::requested_cpu_threads(problem);
+    enriched.resolved_cpu_threads = u32::try_from(crate::configured_cpu_threads(problem)).ok();
+    enriched
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FieldArtifactContext {
     pub problem_name: String,
@@ -40,6 +60,8 @@ pub(crate) fn write_artifacts(
 ) -> std::io::Result<()> {
     fs::create_dir_all(output_dir)?;
     let field_context = build_field_context(problem, plan);
+    let runtime_threading = runtime_threading_summary(problem);
+    let execution_provenance = provenance_with_runtime_threading(problem, &executed.provenance);
 
     let metadata = serde_json::json!({
         "problem_name": problem.problem_meta.name,
@@ -48,7 +70,8 @@ pub(crate) fn write_artifacts(
         "problem_meta": problem.problem_meta,
         "execution_plan": plan,
         "artifact_layout": field_context.layout.clone(),
-        "execution_provenance": executed.provenance,
+        "execution_provenance": execution_provenance,
+        "runtime_threading": runtime_threading,
         "engine_version": env!("CARGO_PKG_VERSION"),
         "status": executed.result.status,
         "scalar_rows": executed.result.steps.len(),
@@ -65,7 +88,7 @@ pub(crate) fn write_artifacts(
     write_field_file(
         &output_dir.join("m_initial.json"),
         &field_context,
-        &executed.provenance,
+        &execution_provenance,
         "m",
         0,
         0.0,
@@ -91,7 +114,7 @@ pub(crate) fn write_artifacts(
     write_field_file(
         &output_dir.join("m_final.json"),
         &field_context,
-        &executed.provenance,
+        &execution_provenance,
         "m",
         final_stats.step,
         final_stats.time,
@@ -108,7 +131,7 @@ pub(crate) fn write_artifacts(
             write_field_file(
                 &snapshot_path,
                 &field_context,
-                &executed.provenance,
+                &execution_provenance,
                 &snapshot.name,
                 snapshot.step,
                 snapshot.time,

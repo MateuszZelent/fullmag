@@ -15,6 +15,7 @@ export interface SessionManifest {
   requested_device?: string;
   requested_precision?: string;
   requested_mode?: string;
+  requested_cpu_threads?: number | null;
   execution_mode: string;
   precision: string;
   resolved_backend?: string | null;
@@ -24,6 +25,7 @@ export interface SessionManifest {
   resolved_runtime_family?: string | null;
   resolved_engine_id?: string | null;
   resolved_worker?: string | null;
+  resolved_cpu_threads?: number | null;
   resolved_fallback?: ResolvedFallback;
   artifact_dir: string;
   started_at_unix_ms: number;
@@ -750,6 +752,7 @@ export interface ScriptBuilderState {
   revision: number;
   backend: string | null;
   cpu_threads: number | null;
+  fem_demag_solver_policy: Record<string, unknown> | null;
   demag_realization: string | null;
   external_field: [number, number, number] | null;
   solver: ScriptBuilderSolverState;
@@ -791,6 +794,7 @@ export interface ModelBuilderGraphStudyNode {
   requested_precision: string;
   requested_mode: string;
   requested_cpu_threads: number | null;
+  fem_demag_solver_policy: Record<string, unknown> | null;
   demag_realization: string | null;
   external_field: [number, number, number] | null;
   solver: ScriptBuilderSolverState;
@@ -938,6 +942,7 @@ export interface SceneStudyState {
   requested_precision: string;
   requested_mode: string;
   requested_cpu_threads: number | null;
+  fem_demag_solver_policy: Record<string, unknown> | null;
   demag_realization: string | null;
   external_field: [number, number, number] | null;
   solver: ScriptBuilderSolverState;

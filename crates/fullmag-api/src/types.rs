@@ -108,6 +108,8 @@ pub(crate) struct SessionManifest {
     pub requested_precision: String,
     #[serde(default = "default_strict")]
     pub requested_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_cpu_threads: Option<u32>,
     pub execution_mode: String,
     pub precision: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,6 +126,8 @@ pub(crate) struct SessionManifest {
     pub resolved_engine_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_worker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_cpu_threads: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_fallback: Option<fullmag_runner::ResolvedFallback>,
     pub artifact_dir: String,

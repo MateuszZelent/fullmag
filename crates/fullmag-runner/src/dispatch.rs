@@ -2153,6 +2153,10 @@ fn execute_native_fem(
             .field_refresh
             .as_ref()
             .and_then(|policy| policy.demag_interval_s),
+        requested_cpu_threads: None,
+        resolved_cpu_threads: None,
+        requested_fem_omp_threads: None,
+        effective_fem_omp_threads: None,
         ..Default::default()
     };
     let mut artifacts = if let Some(writer) = artifact_writer {

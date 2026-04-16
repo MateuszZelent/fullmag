@@ -109,6 +109,10 @@ pub(crate) fn execute_reference_fdm_multilayer(
         dt_policy: None,
         mfem_device: None,
         demag_refresh_interval_s: None,
+        requested_cpu_threads: None,
+        resolved_cpu_threads: None,
+        requested_fem_omp_threads: None,
+        effective_fem_omp_threads: None,
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)

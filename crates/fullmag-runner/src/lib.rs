@@ -94,6 +94,8 @@ use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedSessionRuntime {
+    pub requested_cpu_threads: Option<usize>,
+    pub resolved_cpu_threads: usize,
     pub resolved_backend: String,
     pub resolved_device: String,
     pub resolved_precision: String,
@@ -1140,6 +1142,8 @@ pub fn resolve_session_runtime_with_registry(
     registry: Option<&RuntimeRegistry>,
 ) -> Result<ResolvedSessionRuntime, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    let resolved_cpu_threads = configured_cpu_threads(problem);
+    let requested_cpu_threads = requested_cpu_threads(problem).map(|threads| threads as usize);
     let requested_mode = match problem.validation_profile.execution_mode {
         fullmag_ir::ExecutionMode::Strict => "strict".to_string(),
         fullmag_ir::ExecutionMode::Extended => "extended".to_string(),
@@ -1164,6 +1168,8 @@ pub fn resolve_session_runtime_with_registry(
                 }
             };
             Ok(ResolvedSessionRuntime {
+                requested_cpu_threads,
+                resolved_cpu_threads,
                 resolved_backend: dispatch_resolution.resolved_backend,
                 resolved_device: dispatch_resolution.resolved_device,
                 resolved_precision: dispatch_resolution.resolved_precision,
@@ -1196,6 +1202,8 @@ pub fn resolve_session_runtime_with_registry(
                 ),
             };
             Ok(ResolvedSessionRuntime {
+                requested_cpu_threads,
+                resolved_cpu_threads,
                 resolved_backend: dispatch_resolution.resolved_backend,
                 resolved_device: dispatch_resolution.resolved_device,
                 resolved_precision: dispatch_resolution.resolved_precision,
@@ -1217,6 +1225,8 @@ pub fn resolve_session_runtime_with_registry(
         (BackendPlanIR::Fem(_), dispatch::DispatchEngine::Fem(engine)) => {
             let (default_family, engine_id, default_worker) = fem_session_runtime_defaults(engine);
             Ok(ResolvedSessionRuntime {
+                requested_cpu_threads,
+                resolved_cpu_threads,
                 resolved_backend: dispatch_resolution.resolved_backend,
                 resolved_device: dispatch_resolution.resolved_device,
                 resolved_precision: dispatch_resolution.resolved_precision,
@@ -1239,6 +1249,8 @@ pub fn resolve_session_runtime_with_registry(
             let (default_family, engine_id, default_worker) =
                 fem_eigen_session_runtime_defaults(engine);
             Ok(ResolvedSessionRuntime {
+                requested_cpu_threads,
+                resolved_cpu_threads,
                 resolved_backend: dispatch_resolution.resolved_backend,
                 resolved_device: dispatch_resolution.resolved_device,
                 resolved_precision: dispatch_resolution.resolved_precision,
@@ -1265,17 +1277,20 @@ pub fn resolve_session_runtime_with_registry(
     }
 }
 
-fn configured_cpu_threads(problem: &ProblemIR) -> usize {
-    // 1. Explicit per-problem setting from runtime_metadata
-    let from_problem = problem
+pub(crate) fn requested_cpu_threads(problem: &ProblemIR) -> Option<u32> {
+    problem
         .problem_meta
         .runtime_metadata
         .get("runtime_selection")
         .and_then(Value::as_object)
         .and_then(|selection| selection.get("cpu_threads"))
         .and_then(Value::as_u64)
-        .map(|threads| threads as usize);
-    if let Some(threads) = from_problem {
+        .and_then(|threads| u32::try_from(threads).ok())
+}
+
+pub(crate) fn configured_cpu_threads(problem: &ProblemIR) -> usize {
+    // 1. Explicit per-problem setting from runtime_metadata
+    if let Some(threads) = requested_cpu_threads(problem).map(|threads| threads as usize) {
         return threads;
     }
     // 2. Environment variable override

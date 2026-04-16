@@ -126,6 +126,7 @@ export function createModelBuilderGraphV2(
       requested_precision: "double",
       requested_mode: "strict",
       requested_cpu_threads: builder?.cpu_threads ?? null,
+      fem_demag_solver_policy: builder?.fem_demag_solver_policy ?? null,
       demag_realization: builder?.demag_realization ?? null,
       external_field: builder?.external_field ?? null,
       solver: builder?.solver ?? EMPTY_SOLVER,
@@ -186,6 +187,7 @@ export function serializeModelBuilderGraphV2(graph: ModelBuilderGraphV2): Omit<
   return {
     backend: graph.study.backend,
     cpu_threads: graph.study.requested_cpu_threads,
+    fem_demag_solver_policy: graph.study.fem_demag_solver_policy,
     demag_realization: graph.study.demag_realization,
     external_field: graph.study.external_field,
     solver: graph.study.solver,

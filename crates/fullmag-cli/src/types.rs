@@ -50,6 +50,7 @@ pub(crate) struct SessionManifest {
     pub requested_device: String,
     pub requested_precision: String,
     pub requested_mode: String,
+    pub requested_cpu_threads: Option<u32>,
     pub execution_mode: String,
     pub precision: String,
     pub resolved_backend: Option<String>,
@@ -59,6 +60,7 @@ pub(crate) struct SessionManifest {
     pub resolved_runtime_family: Option<String>,
     pub resolved_engine_id: Option<String>,
     pub resolved_worker: Option<String>,
+    pub resolved_cpu_threads: Option<u32>,
     pub resolved_fallback: Option<fullmag_runner::ResolvedFallback>,
     pub artifact_dir: String,
     pub started_at_unix_ms: u128,
@@ -73,6 +75,7 @@ pub(crate) struct SessionRuntimeSelection {
     pub requested_device: String,
     pub requested_precision: String,
     pub requested_mode: String,
+    pub requested_cpu_threads: Option<u32>,
     pub resolved_backend: Option<String>,
     pub resolved_device: Option<String>,
     pub resolved_precision: Option<String>,
@@ -80,6 +83,7 @@ pub(crate) struct SessionRuntimeSelection {
     pub resolved_runtime_family: Option<String>,
     pub resolved_engine_id: Option<String>,
     pub resolved_worker: Option<String>,
+    pub resolved_cpu_threads: Option<u32>,
     pub resolved_fallback: Option<fullmag_runner::ResolvedFallback>,
 }
 

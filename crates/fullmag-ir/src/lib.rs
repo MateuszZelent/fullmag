@@ -1036,9 +1036,7 @@ impl StudyIR {
         match self {
             StudyIR::TimeEvolution { .. } | StudyIR::Eigenmodes { .. } => None,
             StudyIR::Relaxation {
-                algorithm,
-                stop,
-                ..
+                algorithm, stop, ..
             } => Some(RelaxationControlIR {
                 algorithm: *algorithm,
                 stop: stop.clone(),
@@ -1219,6 +1217,8 @@ pub struct FemHintsIR {
     pub hmax: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_solver_policy: Option<FemLinearSolverPolicy>,
 }
 
 /// Per-domain element quality metrics, mirroring ``MeshQualityReport`` in Python.
@@ -2675,6 +2675,7 @@ impl ProblemIR {
                         order: 1,
                         hmax: 2e-9,
                         mesh: None,
+                        demag_solver_policy: None,
                     }),
                     hybrid: None,
                 }),
@@ -2853,18 +2854,16 @@ impl ProblemIR {
                     }
                 }
             }
-            StudyIR::Relaxation {
-                dynamics,
-                stop,
-                ..
-            } => {
+            StudyIR::Relaxation { dynamics, stop, .. } => {
                 validate_study_dynamics(dynamics, &mut errors);
                 if stop.torque_tolerance_apm.is_some_and(|value| value <= 0.0) {
-                    errors.push("relaxation.stop.torque_tolerance_apm must be positive".to_string());
+                    errors
+                        .push("relaxation.stop.torque_tolerance_apm must be positive".to_string());
                 }
                 if stop.energy_tolerance_j.is_some_and(|value| value <= 0.0) {
                     errors.push(
-                        "relaxation.stop.energy_tolerance_j must be positive when provided".to_string(),
+                        "relaxation.stop.energy_tolerance_j must be positive when provided"
+                            .to_string(),
                     );
                 }
                 if stop.max_steps.is_some_and(|value| value == 0) {
@@ -2888,9 +2887,7 @@ impl ProblemIR {
                     && stop.max_pseudotime_s.is_none()
                     && stop.max_physical_time_s.is_none()
                 {
-                    errors.push(
-                        "relaxation.stop requires at least one stop criterion".to_string(),
-                    );
+                    errors.push("relaxation.stop requires at least one stop criterion".to_string());
                 }
                 for output in &self.study.sampling().outputs {
                     if matches!(
@@ -3432,8 +3429,7 @@ fn validate_study_dynamics(dynamics: &DynamicsIR, errors: &mut Vec<String>) {
                 .is_some_and(|value| value <= 0.0)
             {
                 errors.push(
-                    "llg.field_refresh.demag_interval_s must be positive when provided"
-                        .to_string(),
+                    "llg.field_refresh.demag_interval_s must be positive when provided".to_string(),
                 );
             }
         }

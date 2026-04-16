@@ -221,6 +221,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "requested_precision": "double",
             "requested_mode": "strict",
             "requested_cpu_threads": builder.get("cpu_threads"),
+            "fem_demag_solver_policy": builder.get("fem_demag_solver_policy"),
             "demag_realization": builder.get("demag_realization"),
             "external_field": builder.get("external_field"),
             "solver": builder.get("solver") or {},
@@ -321,6 +322,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     return {
         "revision": int(scene.get("revision", 0)),
         "backend": study.get("backend"),
+        "cpu_threads": study.get("requested_cpu_threads"),
+        "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
         "demag_realization": study.get("demag_realization"),
         "external_field": study.get("external_field"),
         "solver": study.get("solver") or {},
@@ -343,6 +346,11 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "runtime_selection": {
             "cpu_threads": _int_or_none(builder.get("cpu_threads")),
         },
+        "fem_demag_solver_policy": (
+            dict(builder.get("fem_demag_solver_policy"))
+            if isinstance(builder.get("fem_demag_solver_policy"), dict)
+            else None
+        ),
         "demag_realization": builder.get("demag_realization"),
         "external_field": (
             [float(value) for value in builder.get("external_field")]

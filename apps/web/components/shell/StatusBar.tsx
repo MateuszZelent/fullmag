@@ -18,6 +18,10 @@ interface StatusBarProps {
   runtimeEngine?: string;
   runtimeGpuLabel?: string;
   precision: string;
+  requestedCpuThreads?: number | null;
+  resolvedCpuThreads?: number | null;
+  requestedFemOmpThreads?: number | null;
+  effectiveFemOmpThreads?: number | null;
   status: string;
   activityLabel?: string;
   activityDetail?: string;
@@ -157,6 +161,10 @@ export default function StatusBar({
   runtimeEngine,
   runtimeGpuLabel,
   precision,
+  requestedCpuThreads,
+  resolvedCpuThreads,
+  requestedFemOmpThreads,
+  effectiveFemOmpThreads,
   status,
   activityLabel,
   activityDetail,
@@ -301,6 +309,15 @@ export default function StatusBar({
             </span>
             <span className="h-3 w-px bg-border/50" />
             <span className="flex items-center gap-1.5"><Cpu size={11} />{runtimeEngine ? `${runtimeEngine}${runtimeGpuLabel ? ` · ${runtimeGpuLabel}` : ""} · ${precision}` : `${backend.toUpperCase()} · ${precision}`}</span>
+            {(requestedCpuThreads != null || resolvedCpuThreads != null || requestedFemOmpThreads != null || effectiveFemOmpThreads != null) ? (
+              <>
+                <span className="h-3 w-px bg-border/50" />
+                <span className="text-[0.62rem] text-muted-foreground">
+                  CPU req {requestedCpuThreads != null ? requestedCpuThreads : "auto"} · Rayon {resolvedCpuThreads != null ? resolvedCpuThreads : "—"} · OMP {effectiveFemOmpThreads != null ? effectiveFemOmpThreads : "—"}
+                  {requestedFemOmpThreads != null ? `/${requestedFemOmpThreads}` : ""}
+                </span>
+              </>
+            ) : null}
           </div>
         </div>
       </div>

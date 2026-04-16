@@ -92,6 +92,7 @@ import type {
   StudyPipelineDocument,
   StudyPrimitiveStageKind,
 } from "@/lib/study-builder/types";
+import { extractFemCpuThreadSummary } from "./control-room/helpers";
 
 const ANALYZE_WORKSPACE_HREF = "/workspace?stage=analyze";
 
@@ -208,6 +209,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const _cmd = useCommand();
   const _model = useModel();
   const ctx = { ..._transport, ..._viewport, ..._cmd, ..._model };
+  const femCpuThreadSummary = useMemo(
+    () => extractFemCpuThreadSummary(ctx.engineLog),
+    [ctx.engineLog],
+  );
   const sidebarCollapsed = ctx.sidebarCollapsed;
   const setSidebarCollapsed = ctx.setSidebarCollapsed;
   const workspaceMode = ctx.workspaceMode;
@@ -1328,6 +1333,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         runtimeEngine={ctx.runtimeEngineLabel ?? undefined}
         runtimeGpuLabel={ctx.runtimeEngineGpuLabel ?? undefined}
         precision={ctx.session?.precision ?? ""}
+        requestedCpuThreads={ctx.session?.requested_cpu_threads ?? ctx.requestedRuntimeSelection.requested_cpu_threads ?? null}
+        resolvedCpuThreads={ctx.session?.resolved_cpu_threads ?? null}
+        requestedFemOmpThreads={femCpuThreadSummary?.requestedOmpThreads ?? null}
+        effectiveFemOmpThreads={femCpuThreadSummary?.effectiveOmpThreads ?? null}
         status={ctx.workspaceStatus}
         activityLabel={ctx.activity.label}
         activityDetail={ctx.activity.detail}

@@ -68,7 +68,7 @@ from fullmag.model.problem import (
     resolve_geometry_sources,
     RuntimeSelection,
 )
-from fullmag.model.discretization import FDM, FEM
+from fullmag.model.discretization import FDM, FEM, FemLinearSolverPolicy
 
 _MESH_SIZE_CALIBRATIONS = (
     "general_physics",
@@ -786,6 +786,7 @@ class _WorldState:
     _hmax: float | str | None = None
     _fem_order: int = 1
     _mesh_source: str | None = None
+    _fem_demag_solver_policy: FemLinearSolverPolicy | None = None
     _api_surface: str = "flat"
     _study_universe: StudyUniverseConfig | None = None
     _domain_mesh_source: str | None = None
@@ -1889,6 +1890,26 @@ class StudyBuilder:
         threads(cpu_threads)
         return self
 
+    def fem_demag_solver(
+        self,
+        *,
+        solver: str = "CG",
+        preconditioner: str = "AMG",
+        rtol: float = 1e-8,
+        atol: float | None = None,
+        max_iterations: int = 500,
+        print_level: int = 0,
+    ) -> "StudyBuilder":
+        fem_demag_solver(
+            solver=solver,
+            preconditioner=preconditioner,
+            rtol=rtol,
+            atol=atol,
+            max_iterations=max_iterations,
+            print_level=print_level,
+        )
+        return self
+
     def cell(self, dx: float, dy: float, dz: float) -> "StudyBuilder":
         cell(dx, dy, dz)
         return self
@@ -2376,6 +2397,28 @@ def threads(cpu_threads: int) -> None:
     if resolved < 1:
         raise ValueError("threads() requires cpu_threads >= 1")
     _state._cpu_threads = resolved
+
+
+def fem_demag_solver(
+    *,
+    solver: str = "CG",
+    preconditioner: str = "AMG",
+    rtol: float = 1e-8,
+    atol: float | None = None,
+    max_iterations: int = 500,
+    print_level: int = 0,
+) -> FemLinearSolverPolicy:
+    """Set the native FEM demag/Poisson linear-solver policy."""
+    policy = FemLinearSolverPolicy(
+        solver=solver,
+        preconditioner=preconditioner,
+        rtol=rtol,
+        atol=atol,
+        max_iterations=max_iterations,
+        print_level=print_level,
+    )
+    _state._fem_demag_solver_policy = policy
+    return policy
 
 
 def cell(dx: float, dy: float, dz: float) -> None:
@@ -2881,7 +2924,12 @@ def _resolve_flat_fem_hint() -> FEM | None:
     if resolved_hmax == "auto":
         resolved_hmax = _estimate_auto_hmax()
 
-    return FEM(order=shared_order or 1, hmax=resolved_hmax, mesh=shared_source)
+    return FEM(
+        order=shared_order or 1,
+        hmax=resolved_hmax,
+        mesh=shared_source,
+        demag_solver_policy=s._fem_demag_solver_policy,
+    )
 
 
 def _mesh_spec_declares_override(spec: _MeshSpecState) -> bool:

@@ -3579,6 +3579,10 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> ExecutionProvenance {
         dt_policy: None,
         mfem_device: None,
         demag_refresh_interval_s: None,
+        requested_cpu_threads: None,
+        resolved_cpu_threads: None,
+        requested_fem_omp_threads: None,
+        effective_fem_omp_threads: None,
     }
 }
 
@@ -3625,6 +3629,10 @@ fn cuda_execution_provenance(
         dt_policy,
         mfem_device: None,
         demag_refresh_interval_s: None,
+        requested_cpu_threads: None,
+        resolved_cpu_threads: None,
+        requested_fem_omp_threads: None,
+        effective_fem_omp_threads: None,
     }
 }
 
@@ -3672,6 +3680,10 @@ fn fem_gpu_execution_provenance(
             .field_refresh
             .as_ref()
             .and_then(|policy| policy.demag_interval_s),
+        requested_cpu_threads: None,
+        resolved_cpu_threads: None,
+        requested_fem_omp_threads: None,
+        effective_fem_omp_threads: None,
     }
 }
 

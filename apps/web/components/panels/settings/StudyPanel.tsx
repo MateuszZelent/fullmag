@@ -9,6 +9,7 @@ import {
 } from "@/lib/study-builder/node-context";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import { migrateFlatStagesToStudyPipeline } from "@/lib/study-builder/migrate";
+import type { SolverPlanSummary } from "../../runs/control-room/types";
 import {
   findNodeById,
   patchNode,
@@ -36,6 +37,7 @@ import {
   PRECISION_PROFILES,
   RELAXATION_PROFILES,
 } from "./profiles";
+import { asRecord, extractFemCpuThreadSummary } from "../../runs/control-room/helpers";
 import {
   humanizeToken,
   precessionModeForPlan,
@@ -133,6 +135,75 @@ function formatCpuThreads(value: number | null): string {
   return value != null ? `${value}` : "auto";
 }
 
+function defaultFemSolverPolicyFromPlan(
+  solverPlan: Pick<SolverPlanSummary, "demagSolver"> | null,
+): Record<string, unknown> {
+  const demagSolver = solverPlan?.demagSolver;
+  return {
+    solver: demagSolver?.method ?? "CG",
+    preconditioner: demagSolver?.preconditioner ?? "AMG",
+    rtol: demagSolver?.relativeTolerance ?? 1e-8,
+    atol: demagSolver?.absoluteTolerance ?? null,
+    max_iterations: demagSolver?.maxIterations ?? 500,
+    print_level: demagSolver?.printLevel ?? 0,
+  };
+}
+
+function solverPolicyFieldNumber(
+  policy: Record<string, unknown> | null | undefined,
+  key: string,
+): number | null {
+  const value = policy?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+const FEM_SOLVER_PRESETS: Array<{
+  id: string;
+  label: string;
+  description: string;
+  policy: Record<string, unknown>;
+}> = [
+  {
+    id: "balanced",
+    label: "Balanced",
+    description: "Default production baseline",
+    policy: {
+      solver: "CG",
+      preconditioner: "AMG",
+      rtol: 1e-8,
+      atol: null,
+      max_iterations: 500,
+      print_level: 0,
+    },
+  },
+  {
+    id: "robust",
+    label: "Robust",
+    description: "Higher tolerance budget, more diagnostics",
+    policy: {
+      solver: "GMRES",
+      preconditioner: "AMG",
+      rtol: 1e-9,
+      atol: null,
+      max_iterations: 1000,
+      print_level: 1,
+    },
+  },
+  {
+    id: "fast",
+    label: "Fast",
+    description: "Lower accuracy, lower iteration budget",
+    policy: {
+      solver: "CG",
+      preconditioner: "JACOBI",
+      rtol: 1e-6,
+      atol: null,
+      max_iterations: 200,
+      print_level: 0,
+    },
+  },
+];
+
 function syncCompatibilityState(
   ctx: { setRunUntilInput: (v: string) => void; setSolverSettings: React.Dispatch<React.SetStateAction<any>> },
   stages: ScriptBuilderStageState[],
@@ -219,6 +290,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     sessionFooter: cmd.sessionFooter,
     runtimeEngineLabel: cmd.runtimeEngineLabel,
     session: cmd.session,
+    engineLog: cmd.engineLog,
     setRunUntilInput: cmd.setRunUntilInput,
     quantities: cmd.quantities,
     artifacts: cmd.artifacts,
@@ -235,6 +307,17 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     ctx.modelBuilderGraph?.study.external_field ??
     null;
   const solverPlan = ctx.solverPlan;
+  const femDemagSolverPolicy = asRecord(
+    ctx.sceneDocument?.study.fem_demag_solver_policy ??
+    ctx.modelBuilderGraph?.study.fem_demag_solver_policy ??
+    null,
+  );
+  const effectiveFemDemagSolverPolicy =
+    femDemagSolverPolicy ?? defaultFemSolverPolicyFromPlan(solverPlan);
+  const femCpuThreadSummary = useMemo(
+    () => extractFemCpuThreadSummary(ctx.engineLog),
+    [ctx.engineLog],
+  );
   const backendProfile = solverPlan?.backendKind ? BACKEND_PROFILES[solverPlan.backendKind] : null;
   const integratorProfile = solverPlan?.integrator ? INTEGRATOR_PROFILES[solverPlan.integrator] : null;
   const precisionProfile = solverPlan?.precision ? PRECISION_PROFILES[solverPlan.precision] : null;
@@ -311,6 +394,24 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
   const patchSelectedNode = (patch: Record<string, unknown>) => {
     if (!selectedAuthoringNode) return;
     commitDocument(patchNodeConfig(authoringDocument, selectedAuthoringNode.id, patch));
+  };
+
+  const setFemDemagSolverPolicy = (patch: Record<string, unknown>) => {
+    ctx.setSceneDocument((previous) =>
+      previous
+        ? {
+            ...previous,
+            study: {
+              ...previous.study,
+              fem_demag_solver_policy: {
+                ...defaultFemSolverPolicyFromPlan(solverPlan),
+                ...(asRecord(previous.study.fem_demag_solver_policy) ?? {}),
+                ...patch,
+              },
+            },
+          }
+        : previous,
+    );
   };
 
   const setExternalFieldComponent = (axis: 0 | 1 | 2, rawValue: string) => {
@@ -464,6 +565,9 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
           <InfoRow label="Mode" value={humanizeToken(solverPlan?.executionMode ?? ctx.session?.execution_mode)} />
           <InfoRow label="Precision" value={humanizeToken(solverPlan?.precision ?? ctx.session?.precision)} />
           <InfoRow label="Requested CPU threads" value={formatCpuThreads(ctx.requestedRuntimeSelection.requested_cpu_threads)} />
+          <InfoRow label="Resolved Rayon threads" value={formatCpuThreads(ctx.session?.resolved_cpu_threads ?? null)} />
+          <InfoRow label="Requested FEM OpenMP threads" value={formatCpuThreads(femCpuThreadSummary?.requestedOmpThreads ?? null)} />
+          <InfoRow label="Effective FEM OpenMP threads" value={formatCpuThreads(femCpuThreadSummary?.effectiveOmpThreads ?? null)} />
           <InfoRow label="Workload" value={workloadLabel} />
         </div>
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -492,7 +596,99 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       </SidebarSection>
       <SidebarSection title="Native FEM Linear Solver" icon="🧱" defaultOpen={true}>
         <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
-          Native FEM demag currently resolves to the runtime linear-solver policy below. This is intentionally read-only here until solver-policy editing becomes a first-class public Python and SceneDocument contract.
+          Native FEM demag uses the linear-solver policy below. This is an advanced backend hint for the native FEM Poisson solve; it is now part of the canonical Python and SceneDocument contract and round-trips with the study tree.
+        </div>
+        <div className="mt-3 grid gap-2">
+          <div className="text-[0.66rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+            Presets
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {FEM_SOLVER_PRESETS.map((preset) => (
+              <Button
+                key={preset.id}
+                size="sm"
+                variant="outline"
+                type="button"
+                title={preset.description}
+                onClick={() => setFemDemagSolverPolicy(preset.policy)}
+              >
+                {preset.label}
+              </Button>
+            ))}
+          </div>
+          <div className="text-[0.72rem] text-muted-foreground">
+            Presets only write the same canonical `FemLinearSolverPolicy`. They are shortcuts, not a second solver contract.
+          </div>
+        </div>
+        <div className="mt-3 grid gap-3">
+          <SelectField
+            label="Method"
+            value={String(effectiveFemDemagSolverPolicy.solver ?? "CG")}
+            onchange={(value) => setFemDemagSolverPolicy({ solver: value })}
+            options={[
+              { value: "CG", label: "CG" },
+              { value: "GMRES", label: "GMRES" },
+            ]}
+          />
+          <SelectField
+            label="Preconditioner"
+            value={String(effectiveFemDemagSolverPolicy.preconditioner ?? "AMG")}
+            onchange={(value) => setFemDemagSolverPolicy({ preconditioner: value })}
+            options={[
+              { value: "AMG", label: "AMG" },
+              { value: "JACOBI", label: "JACOBI" },
+              { value: "NONE", label: "NONE" },
+            ]}
+          />
+          <div className="grid grid-cols-1 gap-3 @[980px]:grid-cols-2">
+            <TextField
+              label="Relative tolerance"
+              value={String(solverPolicyFieldNumber(effectiveFemDemagSolverPolicy, "rtol") ?? "")}
+              onchange={(event) => {
+                const next = parseOptionalNumber(event.target.value);
+                if (next != null && next > 0) setFemDemagSolverPolicy({ rtol: next });
+              }}
+              placeholder="1e-8"
+              mono
+            />
+            <TextField
+              label="Absolute tolerance"
+              value={solverPolicyFieldNumber(effectiveFemDemagSolverPolicy, "atol") != null ? String(solverPolicyFieldNumber(effectiveFemDemagSolverPolicy, "atol")) : ""}
+              onchange={(event) => {
+                const trimmed = event.target.value.trim();
+                if (!trimmed) {
+                  setFemDemagSolverPolicy({ atol: null });
+                  return;
+                }
+                const next = parseOptionalNumber(trimmed);
+                if (next != null && next > 0) setFemDemagSolverPolicy({ atol: next });
+              }}
+              placeholder="disabled"
+              mono
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-3 @[980px]:grid-cols-2">
+            <TextField
+              label="Max iterations"
+              value={String(solverPolicyFieldNumber(effectiveFemDemagSolverPolicy, "max_iterations") ?? "")}
+              onchange={(event) => {
+                const next = parseOptionalPositiveInteger(event.target.value);
+                if (next != null) setFemDemagSolverPolicy({ max_iterations: next });
+              }}
+              placeholder="500"
+              mono
+            />
+            <TextField
+              label="Print level"
+              value={String(solverPolicyFieldNumber(effectiveFemDemagSolverPolicy, "print_level") ?? "")}
+              onchange={(event) => {
+                const next = parseOptionalNumber(event.target.value);
+                if (next != null && next >= 0) setFemDemagSolverPolicy({ print_level: Math.trunc(next) });
+              }}
+              placeholder="0"
+              mono
+            />
+          </div>
         </div>
         <div className="mt-3 grid gap-1">
           <InfoRow
@@ -500,27 +696,27 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
             value={solverPlan?.demagSolver?.family ?? (ctx.isFemBackend && solverPlan?.demagEnabled ? "hypre" : "—")}
           />
           <InfoRow
-            label="Method"
-            value={solverPlan?.demagSolver?.method ?? (ctx.isFemBackend && solverPlan?.demagEnabled ? "CG" : "—")}
+            label="Resolved method"
+            value={solverPlan?.demagSolver?.method ?? String(effectiveFemDemagSolverPolicy.solver ?? "CG")}
           />
           <InfoRow
-            label="Preconditioner"
-            value={solverPlan?.demagSolver?.preconditioner ?? (ctx.isFemBackend && solverPlan?.demagEnabled ? "AMG" : "—")}
+            label="Resolved preconditioner"
+            value={solverPlan?.demagSolver?.preconditioner ?? String(effectiveFemDemagSolverPolicy.preconditioner ?? "AMG")}
           />
           <InfoRow
-            label="Relative tolerance"
+            label="Resolved relative tolerance"
             value={solverPlan?.demagSolver?.relativeTolerance != null ? fmtExp(solverPlan.demagSolver.relativeTolerance) : "—"}
           />
           <InfoRow
-            label="Absolute tolerance"
+            label="Resolved absolute tolerance"
             value={solverPlan?.demagSolver?.absoluteTolerance != null ? fmtExp(solverPlan.demagSolver.absoluteTolerance) : "—"}
           />
           <InfoRow
-            label="Max iterations"
+            label="Resolved max iterations"
             value={solverPlan?.demagSolver?.maxIterations != null ? `${solverPlan.demagSolver.maxIterations}` : "—"}
           />
           <InfoRow
-            label="Print level"
+            label="Resolved print level"
             value={solverPlan?.demagSolver?.printLevel != null ? `${solverPlan.demagSolver.printLevel}` : "—"}
           />
         </div>

@@ -321,6 +321,7 @@ export function buildLegacyScriptBuilderUpdatePayload(
     revision: 0,
     backend: null,
     cpu_threads: null,
+    fem_demag_solver_policy: null,
     demag_realization: demagRealization,
     external_field: null,
     solver: solverSettingsToBuilder(solverSettings),
@@ -498,4 +499,25 @@ export function extractSolverPlan(
     materialAlpha: asNumber(material?.damping),
     notes: asStringArray(planSummary?.notes),
   };
+}
+
+export function extractFemCpuThreadSummary(
+  engineLog: EngineLogEntry[],
+): {
+  requestedOmpThreads: number | null;
+  effectiveOmpThreads: number | null;
+} | null {
+  for (let index = engineLog.length - 1; index >= 0; index -= 1) {
+    const message = engineLog[index]?.message ?? "";
+    if (!message.includes("requested_omp_threads=") || !message.includes("effective_omp_threads=")) {
+      continue;
+    }
+    const requestedMatch = message.match(/requested_omp_threads=(\d+)/);
+    const effectiveMatch = message.match(/effective_omp_threads=(\d+)/);
+    return {
+      requestedOmpThreads: requestedMatch ? Number(requestedMatch[1]) : null,
+      effectiveOmpThreads: effectiveMatch ? Number(effectiveMatch[1]) : null,
+    };
+  }
+  return null;
 }

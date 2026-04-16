@@ -303,13 +303,11 @@ pub(crate) fn plan_fem(
         && shared_domain_mesh_requested(problem, fullmag_ir::RequestedFemDemagIR::Auto)
     {
         return Err(PlanError {
-            reasons: vec![
-                format!(
-                    "{} Shared-domain FEM mesh (fem_domain_mesh_asset) was not provided. \
+            reasons: vec![format!(
+                "{} Shared-domain FEM mesh (fem_domain_mesh_asset) was not provided. \
                      Call study.build_domain_mesh() or study.domain_mesh(...) before solving.",
-                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
-                ),
-            ],
+                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+            )],
         });
     }
     if resolved_domain_mesh_asset.is_none()
@@ -319,12 +317,10 @@ pub(crate) fn plan_fem(
             .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
     {
         return Err(PlanError {
-            reasons: vec![
-                format!(
-                    "{} Missing shared-domain FEM mesh with air.",
-                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
-                ),
-            ],
+            reasons: vec![format!(
+                "{} Missing shared-domain FEM mesh with air.",
+                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+            )],
         });
     }
     let mut merged_initial_magnetization = Vec::new();
@@ -796,7 +792,12 @@ pub(crate) fn plan_fem(
         oersted_time_dep_t_on: 0.0,
         oersted_time_dep_t_off: 0.0,
         magnetoelastic: None,
-        demag_solver_policy: None,
+        demag_solver_policy: problem
+            .backend_policy
+            .discretization_hints
+            .as_ref()
+            .and_then(|hints| hints.fem.as_ref())
+            .and_then(|fem| fem.demag_solver_policy.clone()),
         thermal_seed_config: None,
         oersted_realization: None,
         gpu_device_index: None,
@@ -1014,13 +1015,11 @@ pub(crate) fn plan_fem_eigen(
         && shared_domain_mesh_requested(problem, fullmag_ir::RequestedFemDemagIR::Auto)
     {
         return Err(PlanError {
-            reasons: vec![
-                format!(
-                    "{} Shared-domain FEM mesh (fem_domain_mesh_asset) was not provided. \
+            reasons: vec![format!(
+                "{} Shared-domain FEM mesh (fem_domain_mesh_asset) was not provided. \
                      Call study.build_domain_mesh() or study.domain_mesh(...) before solving.",
-                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
-                ),
-            ],
+                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+            )],
         });
     }
     if resolved_domain_mesh_asset.is_none()
@@ -1030,12 +1029,10 @@ pub(crate) fn plan_fem_eigen(
             .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
     {
         return Err(PlanError {
-            reasons: vec![
-                format!(
-                    "{} Missing shared-domain FEM mesh with air.",
-                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
-                ),
-            ],
+            reasons: vec![format!(
+                "{} Missing shared-domain FEM mesh with air.",
+                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+            )],
         });
     }
     let mut merged_equilibrium = Vec::new();

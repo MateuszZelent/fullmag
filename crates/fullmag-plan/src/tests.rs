@@ -552,6 +552,7 @@ fn fem_backend_with_mesh_asset_plans_successfully() {
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -631,6 +632,7 @@ fn fem_backend_interfacial_dmi_requires_explicit_interface_normal_in_strict_mode
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -690,6 +692,7 @@ fn fem_plan_serializes_mesh_parts() {
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -765,6 +768,7 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
             order: 1,
             hmax: 2e-9,
             mesh: None,
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -861,6 +865,7 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
             order: 1,
             hmax: 2e-9,
             mesh: None,
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -949,6 +954,7 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
             order: 1,
             hmax: 2e-9,
             mesh: None,
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -1026,6 +1032,7 @@ fn fem_backend_without_air_elements_rejects_removed_transfer_grid_path() {
             order: 1,
             hmax: 2e-9,
             mesh: None,
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -1106,6 +1113,7 @@ fn fem_backend_rejects_requested_shared_domain_without_air_elements() {
             order: 1,
             hmax: 2e-9,
             mesh: None,
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -1175,6 +1183,7 @@ fn fem_backend_populates_domain_frame_and_domain_mesh_mode() {
             order: 1,
             hmax: 2e-9,
             mesh: None,
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -1268,6 +1277,7 @@ fn fem_backend_prefers_domain_frame_declared_universe_over_legacy_study_universe
             order: 1,
             hmax: 2e-9,
             mesh: None,
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -1350,6 +1360,7 @@ fn fem_backend_with_mesh_source_json_plans_successfully() {
             order: 1,
             hmax: 2e-9,
             mesh: Some(mesh_path.display().to_string()),
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -1394,6 +1405,7 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
             order: 1,
             hmax: 2e-9,
             mesh: None,
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -2457,6 +2469,7 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -2560,6 +2573,7 @@ fn fem_eigen_backend_interfacial_dmi_requires_explicit_interface_normal_in_stric
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -2641,6 +2655,7 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -2748,6 +2763,7 @@ fn fem_eigen_periodic_bc_requires_periodic_node_pairs() {
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -2818,6 +2834,7 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -2900,6 +2917,7 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -2983,6 +3001,7 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
             order: 1,
             hmax: 2e-9,
             mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -3090,6 +3109,7 @@ fn fem_plan_fails_when_shared_domain_requested_but_no_domain_mesh_asset() {
             order: 1,
             hmax: 2e-9,
             mesh: None,
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });
@@ -3175,6 +3195,7 @@ fn fem_plan_succeeds_when_shared_domain_has_domain_mesh_asset() {
             order: 1,
             hmax: 2e-9,
             mesh: None,
+            demag_solver_policy: None,
         }),
         hybrid: None,
     });

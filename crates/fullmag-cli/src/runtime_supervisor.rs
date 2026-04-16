@@ -50,6 +50,7 @@ impl InteractiveSessionContext {
             "auto",
             execution_precision_name(self.precision),
             execution_mode_name(self.execution_mode),
+            None,
         );
         crate::orchestrator::build_session_manifest(
             &self.session_id,

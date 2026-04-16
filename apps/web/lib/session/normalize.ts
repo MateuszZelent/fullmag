@@ -50,6 +50,10 @@ function normalizeSessionManifest(raw: any) {
         : typeof raw.execution_mode === "string"
           ? raw.execution_mode
           : "strict",
+    requested_cpu_threads:
+      raw.requested_cpu_threads != null && Number.isFinite(Number(raw.requested_cpu_threads))
+        ? Math.max(1, Math.trunc(Number(raw.requested_cpu_threads)))
+        : null,
     resolved_backend:
       typeof raw.resolved_backend === "string" ? raw.resolved_backend : null,
     resolved_device:
@@ -62,6 +66,10 @@ function normalizeSessionManifest(raw: any) {
     resolved_engine_id:
       typeof raw.resolved_engine_id === "string" ? raw.resolved_engine_id : null,
     resolved_worker: typeof raw.resolved_worker === "string" ? raw.resolved_worker : null,
+    resolved_cpu_threads:
+      raw.resolved_cpu_threads != null && Number.isFinite(Number(raw.resolved_cpu_threads))
+        ? Math.max(1, Math.trunc(Number(raw.resolved_cpu_threads)))
+        : null,
     resolved_fallback:
       raw.resolved_fallback && typeof raw.resolved_fallback === "object"
         ? raw.resolved_fallback
@@ -781,6 +789,10 @@ function normalizeScriptBuilder(raw: any): ScriptBuilderState | null {
       raw.cpu_threads != null && Number.isFinite(Number(raw.cpu_threads))
         ? Math.max(1, Math.trunc(Number(raw.cpu_threads)))
         : null,
+    fem_demag_solver_policy:
+      raw.fem_demag_solver_policy && typeof raw.fem_demag_solver_policy === "object"
+        ? { ...raw.fem_demag_solver_policy }
+        : null,
     demag_realization:
       typeof raw.demag_realization === "string" && raw.demag_realization.trim().length > 0
         ? raw.demag_realization
@@ -1117,6 +1129,7 @@ function emptyScriptBuilderState(): ScriptBuilderState {
     revision: 0,
     backend: null,
     cpu_threads: null,
+    fem_demag_solver_policy: null,
     demag_realization: null,
     external_field: null,
     solver: {},
@@ -1220,6 +1233,11 @@ function normalizeSceneStudy(raw: any) {
       raw?.requested_cpu_threads != null && Number.isFinite(Number(raw.requested_cpu_threads))
         ? Math.max(1, Math.trunc(Number(raw.requested_cpu_threads)))
         : normalized?.cpu_threads ?? null,
+    fem_demag_solver_policy:
+      normalized?.fem_demag_solver_policy ??
+      (raw?.fem_demag_solver_policy && typeof raw.fem_demag_solver_policy === "object"
+        ? { ...raw.fem_demag_solver_policy }
+        : null),
     demag_realization: normalized?.demag_realization ?? null,
     external_field: normalized?.external_field ?? null,
     solver: normalized?.solver ?? defaults.solver,

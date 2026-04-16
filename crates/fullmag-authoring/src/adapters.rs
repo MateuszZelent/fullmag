@@ -63,6 +63,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             requested_precision: "double".to_string(),
             requested_mode: "strict".to_string(),
             requested_cpu_threads: builder.cpu_threads,
+            fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
             demag_realization: builder.demag_realization.clone(),
             external_field: builder.external_field,
             solver: builder.solver.clone(),
@@ -157,6 +158,7 @@ pub fn scene_document_to_script_builder(
         revision: scene.revision,
         backend: normalized_scene.study.backend.clone(),
         cpu_threads: normalized_scene.study.requested_cpu_threads,
+        fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
         demag_realization: normalized_scene.study.demag_realization.clone(),
         external_field: normalized_scene.study.external_field,
         solver: normalized_scene.study.solver.clone(),
@@ -187,6 +189,7 @@ pub fn scene_document_to_script_builder_overrides(
             "precision": scene.study.requested_precision,
             "mode": scene.study.requested_mode,
             "cpu_threads": scene.study.requested_cpu_threads,
+            "fem_demag_solver_policy": scene.study.fem_demag_solver_policy,
             "explicit_selection": scene.study.requested_backend != "auto"
                 || scene.study.requested_device != "auto"
                 || scene.study.requested_precision != "double"
@@ -964,6 +967,8 @@ mod tests {
         ScriptBuilderState {
             revision: 7,
             backend: Some("fem".to_string()),
+            cpu_threads: Some(8),
+            fem_demag_solver_policy: Some(fullmag_ir::FemLinearSolverPolicy::default()),
             demag_realization: Some("airbox_robin".to_string()),
             external_field: Some([0.0, 0.0, 0.015]),
             solver: ScriptBuilderSolverState {

@@ -19,7 +19,7 @@ from fullmag.model.antenna import (
     RfDrive,
     SpinWaveExcitationAnalysis,
 )
-from fullmag.model.discretization import FDM, FEM
+from fullmag.model.discretization import FDM, FEM, FemLinearSolverPolicy
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds as shared_geometry_bounds
 from fullmag.model.dynamics import DEFAULT_GAMMA, LLG
 from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedCylinder, Pulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
@@ -60,6 +60,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "revision": 1,
         "backend": base_problem.runtime.backend_target.value,
         "cpu_threads": base_problem.runtime.cpu_threads,
+        "fem_demag_solver_policy": _export_fem_demag_solver_policy(base_problem),
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
         "solver": {
@@ -462,6 +463,17 @@ def _render_runtime(
         lines.append(f"{_surface_call(surface, 'device')}({_py_repr(device_spec)})")
     if cpu_threads is not None:
         lines.append(f"{_surface_call(surface, 'threads')}({cpu_threads})")
+    fem = problem.discretization.fem if problem.discretization is not None else None
+    if isinstance(fem, FEM) and fem.demag_solver_policy is not None:
+        lines.append(
+            f"{_surface_call(surface, 'fem_demag_solver')}("
+            f"solver={_py_repr(fem.demag_solver_policy.solver)}, "
+            f"preconditioner={_py_repr(fem.demag_solver_policy.preconditioner)}, "
+            f"rtol={_py_number(fem.demag_solver_policy.rtol)}, "
+            f"atol={_py_repr(fem.demag_solver_policy.atol)}, "
+            f"max_iterations={fem.demag_solver_policy.max_iterations}, "
+            f"print_level={fem.demag_solver_policy.print_level})"
+        )
 
     fdm = problem.discretization.fdm if problem.discretization is not None else None
     if isinstance(fdm, FDM) and fdm.default_cell is not None:
@@ -552,6 +564,23 @@ def _render_runtime(
         elif enabled is not True:
             lines.append(f"{_surface_call(surface, 'adaptive_mesh')}({str(enabled)})")
     return lines
+
+
+def _export_fem_demag_solver_policy(problem: Problem) -> dict[str, object] | None:
+    fem = problem.discretization.fem if problem.discretization is not None else None
+    if not isinstance(fem, FEM) or fem.demag_solver_policy is None:
+        return None
+    policy: FemLinearSolverPolicy = fem.demag_solver_policy
+    payload: dict[str, object] = {
+        "solver": policy.solver,
+        "preconditioner": policy.preconditioner,
+        "rtol": policy.rtol,
+        "max_iterations": policy.max_iterations,
+        "print_level": policy.print_level,
+    }
+    if policy.atol is not None:
+        payload["atol"] = policy.atol
+    return payload
 
 
 def _render_geometry_and_materials(

@@ -1,4 +1,4 @@
-from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, Hybrid, MeshOperation, MeshSizeControls, PerObjectMeshRecipe, SharedMeshAssemblyPolicy, SweepDistribution, SweptMeshControls
+from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, FemLinearSolverPolicy, Hybrid, MeshOperation, MeshSizeControls, PerObjectMeshRecipe, SharedMeshAssemblyPolicy, SweepDistribution, SweptMeshControls
 from .antenna import (
     AntennaFieldSource,
     CPWAntenna,
@@ -98,6 +98,7 @@ __all__ = [
     "FDMDemag",
     "FDMGrid",
     "FEM",
+    "FemLinearSolverPolicy",
     "Ferromagnet",
     "Hybrid",
     "ImportedGeometry",

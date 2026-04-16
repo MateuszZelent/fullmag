@@ -90,6 +90,17 @@ fn explicit_selection_from_problem(problem: &ProblemIR) -> bool {
         .unwrap_or(false)
 }
 
+fn requested_cpu_threads_from_problem(problem: &ProblemIR) -> Option<u32> {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_selection")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|selection| selection.get("cpu_threads"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|threads| u32::try_from(threads).ok())
+}
+
 #[derive(Debug, Clone, Copy)]
 enum TorqueDisplayMode {
     /// `max_dm_dt` is already a torque-like metric (direct minimizers).
@@ -467,6 +478,7 @@ pub(crate) fn requested_runtime_selection(
     requested_device: &str,
     requested_precision: &str,
     requested_mode: &str,
+    requested_cpu_threads: Option<u32>,
 ) -> SessionRuntimeSelection {
     SessionRuntimeSelection {
         requested_backend: requested_backend.to_string(),
@@ -474,6 +486,7 @@ pub(crate) fn requested_runtime_selection(
         requested_device: requested_device.to_string(),
         requested_precision: requested_precision.to_string(),
         requested_mode: requested_mode.to_string(),
+        requested_cpu_threads,
         resolved_backend: None,
         resolved_device: None,
         resolved_precision: None,
@@ -481,6 +494,7 @@ pub(crate) fn requested_runtime_selection(
         resolved_runtime_family: None,
         resolved_engine_id: None,
         resolved_worker: None,
+        resolved_cpu_threads: None,
         resolved_fallback: None,
     }
 }
@@ -496,15 +510,21 @@ fn session_runtime_selection_for_problem(
     let requested_precision = execution_precision_name(problem.backend_policy.execution_precision);
     let explicit_selection = explicit_selection_from_problem(problem);
     let requested_device = requested_device_from_problem(problem);
+    let requested_cpu_threads = requested_cpu_threads_from_problem(problem);
     let mut selection = requested_runtime_selection(
         requested_backend,
         explicit_selection,
         &requested_device,
         requested_precision,
         requested_mode,
+        requested_cpu_threads,
     );
     match fullmag_runner::resolve_session_runtime(problem) {
         Ok(resolved) => {
+            selection.requested_cpu_threads = resolved
+                .requested_cpu_threads
+                .and_then(|threads| u32::try_from(threads).ok())
+                .or(selection.requested_cpu_threads);
             selection.resolved_backend = Some(resolved.resolved_backend);
             selection.resolved_device = Some(resolved.resolved_device);
             selection.resolved_precision = Some(resolved.resolved_precision);
@@ -512,6 +532,7 @@ fn session_runtime_selection_for_problem(
             selection.resolved_runtime_family = resolved.resolved_runtime_family;
             selection.resolved_engine_id = resolved.resolved_engine_id;
             selection.resolved_worker = resolved.resolved_worker;
+            selection.resolved_cpu_threads = u32::try_from(resolved.resolved_cpu_threads).ok();
             selection.resolved_fallback = resolved.resolved_fallback;
         }
         Err(_) => {
@@ -1052,11 +1073,7 @@ impl ActiveSequenceState {
         self.current_stage_1based.saturating_sub(1)
     }
 
-    fn mark_current(
-        &mut self,
-        status: &str,
-        completion: Option<&fullmag_ir::StageCompletionIR>,
-    ) {
+    fn mark_current(&mut self, status: &str, completion: Option<&fullmag_ir::StageCompletionIR>) {
         let current_index = self.current_stage_index();
         if current_index < self.stages.len() {
             self.stages[current_index] = CurrentLiveStageExecutionRecord {
@@ -1272,6 +1289,7 @@ fn apply_current_fem_overrides(
                     order: 1,
                     hmax,
                     mesh: None,
+                    demag_solver_policy: None,
                 });
             }
         }
@@ -2317,6 +2335,7 @@ pub(crate) fn build_session_manifest(
         requested_device: runtime.requested_device.clone(),
         requested_precision: runtime.requested_precision.clone(),
         requested_mode: runtime.requested_mode.clone(),
+        requested_cpu_threads: runtime.requested_cpu_threads,
         execution_mode: runtime.requested_mode.clone(),
         precision: runtime.requested_precision.clone(),
         resolved_backend: runtime.resolved_backend.clone(),
@@ -2326,6 +2345,7 @@ pub(crate) fn build_session_manifest(
         resolved_runtime_family: runtime.resolved_runtime_family.clone(),
         resolved_engine_id: runtime.resolved_engine_id.clone(),
         resolved_worker: runtime.resolved_worker.clone(),
+        resolved_cpu_threads: runtime.resolved_cpu_threads,
         resolved_fallback: runtime.resolved_fallback.clone(),
         artifact_dir: artifact_dir.display().to_string(),
         started_at_unix_ms,
@@ -2933,6 +2953,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         "auto",
         &requested_precision_name,
         &requested_mode_name,
+        None,
     );
     let bootstrapping_session_manifest = build_session_manifest(
         &session_id,
@@ -3058,6 +3079,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 "auto",
                 &requested_precision_name,
                 &requested_mode_name,
+                None,
             );
             live_workspace.replace(LocalLiveWorkspaceState {
                 session: build_session_manifest(
@@ -3179,6 +3201,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 "auto",
                 execution_precision_name(final_precision),
                 execution_mode_name(final_execution_mode),
+                None,
             )
         });
 
@@ -5455,6 +5478,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
         "auto",
         &requested_precision_name,
         &requested_mode_name,
+        None,
     );
     let bootstrapping_session_manifest = build_session_manifest(
         &session_id,

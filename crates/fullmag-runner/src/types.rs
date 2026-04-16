@@ -789,6 +789,18 @@ pub struct ExecutionProvenance {
     /// Canonical demag refresh cadence in seconds, if explicitly configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_refresh_interval_s: Option<f64>,
+    /// Requested CPU thread count from authoring/runtime selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_cpu_threads: Option<u32>,
+    /// Resolved Rayon/control-plane CPU thread count used for execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_cpu_threads: Option<u32>,
+    /// Requested FEM OpenMP thread count when the native runtime reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_fem_omp_threads: Option<u32>,
+    /// Effective FEM OpenMP thread count when the native runtime reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_fem_omp_threads: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

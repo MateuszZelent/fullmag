@@ -35,6 +35,8 @@ class FDMGrid:
 # ---------------------------------------------------------------------------
 _DEMAG_STRATEGIES = ("auto", "single_grid", "multilayer_convolution")
 _DEMAG_MODES = ("auto", "two_d_stack", "three_d")
+_FEM_LINEAR_SOLVERS = ("CG", "GMRES")
+_FEM_PRECONDITIONERS = ("AMG", "JACOBI", "NONE")
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +109,55 @@ class FDMDemag:
         if self.common_cells_xy is not None:
             ir["common_cells_xy"] = list(self.common_cells_xy)
         return ir
+
+
+# ---------------------------------------------------------------------------
+# FEM linear-solver policy
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True, slots=True)
+class FemLinearSolverPolicy:
+    """Native FEM demag/Poisson linear-solver policy.
+
+    This is an advanced FEM backend hint. It does not change the physical
+    problem; it changes how the native FEM backend solves the Poisson system.
+    """
+
+    solver: Literal["CG", "GMRES"] = "CG"
+    preconditioner: Literal["AMG", "JACOBI", "NONE"] = "AMG"
+    rtol: float = 1e-8
+    atol: float | None = None
+    max_iterations: int = 500
+    print_level: int = 0
+
+    def __post_init__(self) -> None:
+        if self.solver not in _FEM_LINEAR_SOLVERS:
+            raise ValueError(
+                f"solver must be one of {_FEM_LINEAR_SOLVERS!r}, got {self.solver!r}"
+            )
+        if self.preconditioner not in _FEM_PRECONDITIONERS:
+            raise ValueError(
+                "preconditioner must be one of "
+                f"{_FEM_PRECONDITIONERS!r}, got {self.preconditioner!r}"
+            )
+        require_positive(self.rtol, "rtol")
+        if self.atol is not None:
+            require_positive(self.atol, "atol")
+        if self.max_iterations < 1:
+            raise ValueError("max_iterations must be >= 1")
+        if self.print_level < 0:
+            raise ValueError("print_level must be >= 0")
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "solver": self.solver,
+            "preconditioner": self.preconditioner,
+            "rtol": self.rtol,
+            "max_iterations": self.max_iterations,
+            "print_level": self.print_level,
+        }
+        if self.atol is not None:
+            payload["atol"] = self.atol
+        return payload
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +383,7 @@ class FEM:
     order: int
     hmax: float
     mesh: str | None = None
+    demag_solver_policy: FemLinearSolverPolicy | None = None
 
     def __post_init__(self) -> None:
         if self.order < 1:
@@ -345,6 +397,11 @@ class FEM:
             "order": self.order,
             "hmax": self.hmax,
             "mesh": self.mesh,
+            "demag_solver_policy": (
+                self.demag_solver_policy.to_ir()
+                if self.demag_solver_policy is not None
+                else None
+            ),
         }
 
 

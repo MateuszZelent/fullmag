@@ -1110,6 +1110,7 @@ dependencies = [
 name = "fullmag-authoring"
 version = "0.1.0"
 dependencies = [
+ "fullmag-ir",
  "serde",
  "serde_json",
 ]
