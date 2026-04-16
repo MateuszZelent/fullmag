@@ -76,11 +76,11 @@ pub(crate) enum FdmEngine {
     CudaFdm,
 }
 
-/// Which execution engine to use for FEM.
+/// Which public FEM runtime lane to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FemEngine {
     /// Native CPU FEM backend (MFEM stack on host device).
-    CpuReference,
+    CpuNative,
     /// Native GPU FEM backend (MFEM stack on CUDA device).
     NativeGpu,
 }
@@ -115,10 +115,17 @@ fn fdm_engine_id(engine: FdmEngine) -> &'static str {
     }
 }
 
-fn fem_engine_id(engine: FemEngine) -> &'static str {
+pub(crate) fn fem_engine_id(engine: FemEngine) -> &'static str {
     match engine {
-        FemEngine::CpuReference => "fem_cpu_native",
+        FemEngine::CpuNative => "fem_cpu_native",
         FemEngine::NativeGpu => "fem_native_gpu",
+    }
+}
+
+pub(crate) fn fem_eigen_engine_id(engine: FemEngine) -> &'static str {
+    match engine {
+        FemEngine::CpuNative => "fem_eigen_cpu_reference",
+        FemEngine::NativeGpu => "fem_eigen_native_gpu",
     }
 }
 
@@ -573,10 +580,10 @@ pub(crate) fn resolve_fem_engine_with_trail(
         let message = "FEM engine falling back to native FEM CPU — native FEM GPU does not support active current_modules (fallback_reason=current_modules_force_cpu)".to_string();
         runtime_warn_once(&message);
         return Ok(EngineResolution {
-            engine: FemEngine::CpuReference,
+            engine: FemEngine::CpuNative,
             fallback: Some(runtime_fallback(
                 fem_engine_id(FemEngine::NativeGpu),
-                fem_engine_id(FemEngine::CpuReference),
+                fem_engine_id(FemEngine::CpuNative),
                 "current_modules_force_cpu",
                 message,
             )),
@@ -587,7 +594,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
 
     match policy.as_str() {
         "cpu" => Ok(EngineResolution {
-            engine: FemEngine::CpuReference,
+            engine: FemEngine::CpuNative,
             fallback: None,
         }),
         "gpu" => {
@@ -606,10 +613,10 @@ pub(crate) fn resolve_fem_engine_with_trail(
                     );
                     runtime_warn_once(&message);
                     Ok(EngineResolution {
-                        engine: FemEngine::CpuReference,
+                        engine: FemEngine::CpuNative,
                         fallback: Some(runtime_fallback(
                             fem_engine_id(FemEngine::NativeGpu),
-                            fem_engine_id(FemEngine::CpuReference),
+                            fem_engine_id(FemEngine::CpuNative),
                             "native_fem_gpu_unavailable",
                             message,
                         )),
@@ -632,10 +639,10 @@ pub(crate) fn resolve_fem_engine_with_trail(
                     );
                     runtime_warn_once(&message);
                     Ok(EngineResolution {
-                        engine: FemEngine::CpuReference,
+                        engine: FemEngine::CpuNative,
                         fallback: Some(runtime_fallback(
                             fem_engine_id(FemEngine::NativeGpu),
-                            fem_engine_id(FemEngine::CpuReference),
+                            fem_engine_id(FemEngine::CpuNative),
                             "fem_gpu_fe_order_unsupported",
                             message,
                         )),
@@ -662,10 +669,10 @@ pub(crate) fn resolve_fem_engine_with_trail(
                     );
                     runtime_warn_once(&message);
                     Ok(EngineResolution {
-                        engine: FemEngine::CpuReference,
+                        engine: FemEngine::CpuNative,
                         fallback: Some(runtime_fallback(
                             fem_engine_id(FemEngine::NativeGpu),
-                            fem_engine_id(FemEngine::CpuReference),
+                            fem_engine_id(FemEngine::CpuNative),
                             "fem_gpu_fe_order_unsupported",
                             message,
                         )),
@@ -677,13 +684,13 @@ pub(crate) fn resolve_fem_engine_with_trail(
                     );
                     runtime_info_once(&message);
                     Ok(EngineResolution {
-                        engine: FemEngine::CpuReference,
+                        engine: FemEngine::CpuNative,
                         fallback: runtime_device(problem)
                             .filter(|device| matches!(*device, "gpu" | "cuda"))
                             .map(|_| {
                                 runtime_fallback(
                                     fem_engine_id(FemEngine::NativeGpu),
-                                    fem_engine_id(FemEngine::CpuReference),
+                                    fem_engine_id(FemEngine::CpuNative),
                                     "native_fem_gpu_unavailable",
                                     message,
                                 )
@@ -691,7 +698,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
                     })
                 } else {
                     Ok(EngineResolution {
-                        engine: FemEngine::CpuReference,
+                        engine: FemEngine::CpuNative,
                         fallback: None,
                     })
                 }
@@ -728,7 +735,7 @@ fn resolve_fem_engine_with_registry(
 
     let engine = match resolved.device.as_str() {
         "gpu" => FemEngine::NativeGpu,
-        _ => FemEngine::CpuReference,
+        _ => FemEngine::CpuNative,
     };
     let mut fallback = resolved.fallback;
 
@@ -752,12 +759,12 @@ fn resolve_fem_engine_with_registry(
             let message = "FEM engine falling back to native FEM CPU — native FEM GPU does not support active current_modules (fallback_reason=current_modules_force_cpu)".to_string();
             fallback = Some(runtime_fallback(
                 fem_engine_id(FemEngine::NativeGpu),
-                fem_engine_id(FemEngine::CpuReference),
+                fem_engine_id(FemEngine::CpuNative),
                 "current_modules_force_cpu",
                 message,
             ));
             return Ok(DispatchEngineResolution {
-                engine: DispatchEngine::Fem(FemEngine::CpuReference),
+                engine: DispatchEngine::Fem(FemEngine::CpuNative),
                 fallback,
                 runtime_family: Some(cpu_resolved.runtime_family),
                 worker: Some(cpu_resolved.worker),
@@ -791,12 +798,12 @@ fn resolve_fem_engine_with_registry(
             );
             fallback = Some(runtime_fallback(
                 fem_engine_id(FemEngine::NativeGpu),
-                fem_engine_id(FemEngine::CpuReference),
+                fem_engine_id(FemEngine::CpuNative),
                 "fem_gpu_fe_order_unsupported",
                 message,
             ));
             return Ok(DispatchEngineResolution {
-                engine: DispatchEngine::Fem(FemEngine::CpuReference),
+                engine: DispatchEngine::Fem(FemEngine::CpuNative),
                 fallback,
                 runtime_family: Some(cpu_resolved.runtime_family),
                 worker: Some(cpu_resolved.worker),
@@ -835,12 +842,12 @@ fn resolve_fem_engine_with_registry(
                 );
                 fallback = Some(runtime_fallback(
                     fem_engine_id(FemEngine::NativeGpu),
-                    fem_engine_id(FemEngine::CpuReference),
+                    fem_engine_id(FemEngine::CpuNative),
                     "fem_gpu_small_mesh_policy",
                     message,
                 ));
                 return Ok(DispatchEngineResolution {
-                    engine: DispatchEngine::Fem(FemEngine::CpuReference),
+                    engine: DispatchEngine::Fem(FemEngine::CpuNative),
                     fallback,
                     runtime_family: Some(cpu_resolved.runtime_family),
                     worker: Some(cpu_resolved.worker),
@@ -907,7 +914,7 @@ pub(crate) fn resolve_with_registry(
                     resolved_backend: "fem".to_string(),
                     resolved_device: match resolution.engine {
                         FemEngine::NativeGpu => "gpu".to_string(),
-                        FemEngine::CpuReference => "cpu".to_string(),
+                        FemEngine::CpuNative => "cpu".to_string(),
                     },
                     resolved_precision: runtime_precision(problem).to_string(),
                 })
@@ -922,7 +929,7 @@ pub(crate) fn resolve_with_registry(
                     resolved_backend: "fem".to_string(),
                     resolved_device: match resolution.engine {
                         FemEngine::NativeGpu => "gpu".to_string(),
-                        FemEngine::CpuReference => "cpu".to_string(),
+                        FemEngine::CpuNative => "cpu".to_string(),
                     },
                     resolved_precision: runtime_precision(problem).to_string(),
                 })
@@ -943,10 +950,10 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
                 plan.mesh.nodes.len(),
                 min_nodes
             );
-            resolution.engine = FemEngine::CpuReference;
+            resolution.engine = FemEngine::CpuNative;
             resolution.fallback = Some(runtime_fallback(
                 fem_engine_id(FemEngine::NativeGpu),
-                fem_engine_id(FemEngine::CpuReference),
+                fem_engine_id(FemEngine::CpuNative),
                 "fem_gpu_small_mesh_policy",
                 message,
             ));
@@ -984,7 +991,7 @@ pub(crate) fn snapshot_fem_preview(
     request: &LivePreviewRequest,
 ) -> Result<crate::LivePreviewField, RunError> {
     match engine {
-        FemEngine::CpuReference => {
+        FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(plan);
             snapshot_native_fem_preview(&cpu_plan, request)
         }
@@ -999,7 +1006,7 @@ pub(crate) fn snapshot_fem_vector_fields(
     request: &LivePreviewRequest,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     match engine {
-        FemEngine::CpuReference => {
+        FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(plan);
             snapshot_native_fem_vector_fields(&cpu_plan, quantities, request)
         }
@@ -1433,7 +1440,7 @@ pub(crate) fn execute_fem<'a>(
         });
     }
     match engine {
-        FemEngine::CpuReference => {
+        FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
             execute_native_fem(&cpu_plan, until_seconds, outputs, live, artifact_writer)
         }
@@ -1481,7 +1488,7 @@ pub(crate) fn execute_fem_eigen(
     }
 
     match engine {
-        FemEngine::CpuReference => fem_eigen::execute_reference_fem_eigen(plan, outputs),
+        FemEngine::CpuNative => fem_eigen::execute_reference_fem_eigen(plan, outputs),
         FemEngine::NativeGpu => {
             // GPU-accelerated dense eigensolver (Etap A4) — TRANSITIONAL.
             // `execute_gpu_fem_eigen` uses cuSolverDN; returns error if GPU
@@ -1523,7 +1530,7 @@ fn execute_fem_eigen_path(
             });
 
             let executed = match self.engine {
-                FemEngine::CpuReference => {
+                FemEngine::CpuNative => {
                     fem_eigen::execute_reference_fem_eigen(&point_plan, outputs)?
                 }
                 FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen(&point_plan, outputs)?,
@@ -3092,12 +3099,26 @@ mod tests {
         }
         let resolution = resolve_fem_engine_with_trail(&fem_policy_problem())
             .expect("resolution should succeed");
-        assert_eq!(resolution.engine, FemEngine::CpuReference);
+        assert_eq!(resolution.engine, FemEngine::CpuNative);
         let fallback = resolution.fallback.expect("fallback should be present");
         assert!(fallback.occurred);
         assert_eq!(fallback.original_engine, "fem_native_gpu");
         assert_eq!(fallback.fallback_engine, "fem_cpu_native");
         assert_eq!(fallback.reason, "native_fem_gpu_unavailable");
+    }
+
+    #[test]
+    fn fem_time_domain_and_eigen_ids_are_explicit() {
+        assert_eq!(fem_engine_id(FemEngine::CpuNative), "fem_cpu_native");
+        assert_eq!(fem_engine_id(FemEngine::NativeGpu), "fem_native_gpu");
+        assert_eq!(
+            fem_eigen_engine_id(FemEngine::CpuNative),
+            "fem_eigen_cpu_reference"
+        );
+        assert_eq!(
+            fem_eigen_engine_id(FemEngine::NativeGpu),
+            "fem_eigen_native_gpu"
+        );
     }
 
     #[test]

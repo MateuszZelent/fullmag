@@ -730,7 +730,8 @@ pub struct ResolvedFallback {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
     /// Engine that executed the run: e.g. "cpu_reference", "cuda_fdm",
-    /// "fem_cpu_reference", "fem_cpu_native", or "fem_native_gpu".
+    /// "fem_cpu_reference", "fem_cpu_native", "fem_native_gpu",
+    /// "fem_eigen_cpu_reference", or "fem_eigen_native_gpu".
     pub execution_engine: String,
     /// Numeric precision used: "double" or "single".
     pub precision: String,
@@ -790,7 +791,10 @@ pub struct ExecutionProvenance {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeEngineInfo {
+    /// Canonical backend family such as "fdm", "fem", or "fem_eigen".
     pub backend_family: String,
+    /// Canonical resolved engine id such as "fem_cpu_native" or
+    /// "fem_eigen_cpu_reference".
     pub engine_id: String,
     pub engine_label: String,
     pub accelerator: String,

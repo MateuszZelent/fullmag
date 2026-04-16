@@ -138,7 +138,7 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
 
 pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilities {
     match engine {
-        FemEngine::CpuReference => BackendCapabilities {
+        FemEngine::CpuNative => BackendCapabilities {
             engine_id: RuntimeEngineId::FemCpuNative,
             capability_profile_version: "2026-04-04".to_string(),
             supported_terms: vec![

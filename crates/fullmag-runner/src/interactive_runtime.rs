@@ -416,7 +416,7 @@ impl InteractiveFemPreviewRuntime {
         #[cfg(feature = "fem-gpu")]
         {
             let effective_plan = match engine {
-                FemEngine::CpuReference => fem_plan_for_cpu_native(plan),
+                FemEngine::CpuNative => fem_plan_for_cpu_native(plan),
                 FemEngine::NativeGpu => plan.clone(),
             };
             let mesh = crate::types::FemMeshPayload::from(&effective_plan);

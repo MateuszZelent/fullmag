@@ -1034,10 +1034,7 @@ pub fn resolve_runtime_engine(problem: &ProblemIR) -> Result<RuntimeEngineInfo, 
         }
         BackendPlanIR::Fem(_) => {
             let engine = dispatch::resolve_fem_engine_with_trail(problem)?.engine;
-            let (engine_id, engine_label, accelerator) = match engine {
-                dispatch::FemEngine::CpuReference => ("fem_cpu_native", "CPU FEM (MFEM)", "cpu"),
-                dispatch::FemEngine::NativeGpu => ("fem_native_gpu", "GPU FEM", "gpu"),
-            };
+            let (engine_id, engine_label, accelerator) = fem_runtime_engine_info(engine);
             Ok(RuntimeEngineInfo {
                 backend_family: "fem".to_string(),
                 engine_id: engine_id.to_string(),
@@ -1047,12 +1044,7 @@ pub fn resolve_runtime_engine(problem: &ProblemIR) -> Result<RuntimeEngineInfo, 
         }
         BackendPlanIR::FemEigen(_) => {
             let engine = dispatch::resolve_fem_engine_with_trail(problem)?.engine;
-            let (engine_id, engine_label, accelerator) = match engine {
-                dispatch::FemEngine::CpuReference => {
-                    ("fem_eigen_cpu_reference", "CPU FEM Eigen", "cpu")
-                }
-                dispatch::FemEngine::NativeGpu => ("fem_eigen_native_gpu", "GPU FEM Eigen", "gpu"),
-            };
+            let (engine_id, engine_label, accelerator) = fem_eigen_runtime_engine_info(engine);
             Ok(RuntimeEngineInfo {
                 backend_family: "fem_eigen".to_string(),
                 engine_id: engine_id.to_string(),
@@ -1060,6 +1052,58 @@ pub fn resolve_runtime_engine(problem: &ProblemIR) -> Result<RuntimeEngineInfo, 
                 accelerator: accelerator.to_string(),
             })
         }
+    }
+}
+
+fn fem_runtime_engine_info(
+    engine: dispatch::FemEngine,
+) -> (&'static str, &'static str, &'static str) {
+    match engine {
+        dispatch::FemEngine::CpuNative => {
+            (dispatch::fem_engine_id(engine), "CPU FEM (MFEM)", "cpu")
+        }
+        dispatch::FemEngine::NativeGpu => (dispatch::fem_engine_id(engine), "GPU FEM", "gpu"),
+    }
+}
+
+fn fem_eigen_runtime_engine_info(
+    engine: dispatch::FemEngine,
+) -> (&'static str, &'static str, &'static str) {
+    match engine {
+        dispatch::FemEngine::CpuNative => {
+            (dispatch::fem_eigen_engine_id(engine), "CPU FEM Eigen", "cpu")
+        }
+        dispatch::FemEngine::NativeGpu => {
+            (dispatch::fem_eigen_engine_id(engine), "GPU FEM Eigen", "gpu")
+        }
+    }
+}
+
+fn fem_session_runtime_defaults(
+    engine: dispatch::FemEngine,
+) -> (&'static str, &'static str, &'static str) {
+    match engine {
+        dispatch::FemEngine::CpuNative => {
+            ("fem-cpu-native", "fem_cpu_native", "../../bin/fullmag-bin")
+        }
+        dispatch::FemEngine::NativeGpu => ("fem-gpu", "fem_native_gpu", "bin/fullmag-fem-gpu-bin"),
+    }
+}
+
+fn fem_eigen_session_runtime_defaults(
+    engine: dispatch::FemEngine,
+) -> (&'static str, &'static str, &'static str) {
+    match engine {
+        dispatch::FemEngine::CpuNative => (
+            "fem-eigen-cpu-reference",
+            "fem_eigen_cpu_reference",
+            "../../bin/fullmag-bin",
+        ),
+        dispatch::FemEngine::NativeGpu => (
+            "fem-eigen-gpu",
+            "fem_eigen_native_gpu",
+            "bin/fullmag-fem-gpu-bin",
+        ),
     }
 }
 
@@ -1164,16 +1208,30 @@ pub fn resolve_session_runtime_with_registry(
                 resolved_fallback: dispatch_resolution.fallback,
             })
         }
-        (BackendPlanIR::Fem(_), dispatch::DispatchEngine::Fem(engine))
-        | (BackendPlanIR::FemEigen(_), dispatch::DispatchEngine::Fem(engine)) => {
-            let (default_family, engine_id, default_worker) = match engine {
-                dispatch::FemEngine::CpuReference => {
-                    ("fem-cpu-native", "fem_cpu_native", "../../bin/fullmag-bin")
-                }
-                dispatch::FemEngine::NativeGpu => {
-                    ("fem-gpu", "fem_native_gpu", "bin/fullmag-fem-gpu-bin")
-                }
-            };
+        (BackendPlanIR::Fem(_), dispatch::DispatchEngine::Fem(engine)) => {
+            let (default_family, engine_id, default_worker) = fem_session_runtime_defaults(engine);
+            Ok(ResolvedSessionRuntime {
+                resolved_backend: dispatch_resolution.resolved_backend,
+                resolved_device: dispatch_resolution.resolved_device,
+                resolved_precision: dispatch_resolution.resolved_precision,
+                resolved_mode: requested_mode,
+                resolved_runtime_family: Some(
+                    dispatch_resolution
+                        .runtime_family
+                        .unwrap_or_else(|| default_family.to_string()),
+                ),
+                resolved_engine_id: Some(engine_id.to_string()),
+                resolved_worker: Some(
+                    dispatch_resolution
+                        .worker
+                        .unwrap_or_else(|| default_worker.to_string()),
+                ),
+                resolved_fallback: dispatch_resolution.fallback,
+            })
+        }
+        (BackendPlanIR::FemEigen(_), dispatch::DispatchEngine::Fem(engine)) => {
+            let (default_family, engine_id, default_worker) =
+                fem_eigen_session_runtime_defaults(engine);
             Ok(ResolvedSessionRuntime {
                 resolved_backend: dispatch_resolution.resolved_backend,
                 resolved_device: dispatch_resolution.resolved_device,
@@ -1700,5 +1758,29 @@ mod tests {
             vec![true, true, true, true, false, false, false, false]
         );
         assert!(demag_mask.is_none());
+    }
+
+    #[test]
+    fn fem_runtime_and_eigen_engine_ids_stay_distinct() {
+        assert_eq!(
+            fem_runtime_engine_info(dispatch::FemEngine::CpuNative),
+            ("fem_cpu_native", "CPU FEM (MFEM)", "cpu")
+        );
+        assert_eq!(
+            fem_eigen_runtime_engine_info(dispatch::FemEngine::CpuNative),
+            ("fem_eigen_cpu_reference", "CPU FEM Eigen", "cpu")
+        );
+        assert_eq!(
+            fem_session_runtime_defaults(dispatch::FemEngine::CpuNative),
+            ("fem-cpu-native", "fem_cpu_native", "../../bin/fullmag-bin")
+        );
+        assert_eq!(
+            fem_eigen_session_runtime_defaults(dispatch::FemEngine::CpuNative),
+            (
+                "fem-eigen-cpu-reference",
+                "fem_eigen_cpu_reference",
+                "../../bin/fullmag-bin",
+            )
+        );
     }
 }

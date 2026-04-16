@@ -196,6 +196,25 @@ They are:
 - debug paths,
 - parity tools.
 
+### Runtime engine ids
+
+Fullmag uses explicit resolved engine ids in logs, session runtime metadata, and provenance:
+
+| Engine id | Meaning |
+|---|---|
+| `fem_cpu_native` | public time-domain FEM on native MFEM/libCEED/hypre CPU |
+| `fem_native_gpu` | public time-domain FEM on native MFEM/libCEED/CUDA GPU |
+| `fem_cpu_reference` | internal/reference Rust FEM runner for validation and parity |
+| `fem_eigen_cpu_reference` | current CPU FEM eigen solver |
+| `fem_eigen_native_gpu` | current GPU FEM eigen solver |
+
+The important rule is that CPU/GPU selection and concrete solver identity must not be conflated.
+For example, `FULLMAG_FEM_EXECUTION=cpu` selects the CPU lane, but the final engine id still
+depends on the workflow family: `fem_cpu_native` for time-domain FEM and
+`fem_eigen_cpu_reference` for FEM eigen.
+
+See [docs/specs/runtime-engine-naming-v0.md](docs/specs/runtime-engine-naming-v0.md).
+
 ---
 
 ## Execution model

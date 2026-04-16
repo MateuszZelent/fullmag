@@ -31,6 +31,18 @@ Every feature carries one of three statuses:
 - Execution legality, planner resolution, requested-vs-resolved backend semantics, and runtime
   provenance remain governed by the same `ProblemIR` and backend capability rules listed below.
 
+## Runtime engine naming
+
+- `BackendPlanIR::Fem` on CPU resolves to `fem_cpu_native`.
+- `BackendPlanIR::Fem` on GPU resolves to `fem_native_gpu`.
+- `fem_cpu_reference` is reserved for the Rust FEM reference runner and must not appear as the
+  public time-domain FEM `resolved_engine_id`.
+- `BackendPlanIR::FemEigen` on CPU resolves to `fem_eigen_cpu_reference`.
+- `BackendPlanIR::FemEigen` on GPU resolves to `fem_eigen_native_gpu`.
+- `FULLMAG_FEM_EXECUTION=cpu` selects the CPU lane, but the final engine id still depends on the
+  workflow family (`fem_cpu_native` for time-domain FEM, `fem_eigen_cpu_reference` for FEM eigen).
+- Canonical reference: `docs/specs/runtime-engine-naming-v0.md`.
+
 ## Capability matrix
 
 | Feature | FDM | FEM | Hybrid | Tier | Notes |
@@ -44,7 +56,7 @@ Every feature carries one of three statuses:
 | Ferromagnet + random `m0` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Deterministic xorshift64 RNG in planner |
 | Multiple `Ferromagnet` bodies + global demag | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses multilayer-convolution for eligible z-stacks, with CPU reference, a native CUDA single-grid fast path for compatible stacks, and `cuda-assisted` fallback for the remaining current public scope; the CUDA multilayer paths honor `execution_precision` (`double` and calibrated `single`) across the native fast path and the assisted multilayer demag/Heun runtime; FEM merges disjoint mesh assets into one bootstrap plan with body-local exchange and global demag |
 | `Exchange` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | CPU 6-point stencil in FDM and lumped-mass P1 operator in FEM |
-| `Demag` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses Newell tensor FFT; executable FEM uses MFEM-native CPU/GPU paths with transfer-grid and Poisson demag realizations. For explicit native `poisson_robin`, the managed runtime now resolves directly to `hypre_pcg_boomeramg` and logs the resolved solver; when FEM CPU thread selection is left on `auto`, the runtime may resolve to a smaller effective OpenMP count for Poisson/Robin meshes and logs requested vs effective threads. The older Rust FEM Robin/transfer-grid seam remains internal/reference-only |
+| `Demag` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses Newell tensor FFT; executable FEM uses MFEM-native CPU/GPU paths with transfer-grid and Poisson demag realizations. For explicit native `poisson_robin`, the managed runtime now resolves directly to `hypre_pcg_boomeramg` and logs the resolved solver; when FEM CPU thread selection is left on `auto`, the runtime may resolve to a smaller effective OpenMP count for Poisson/Robin meshes and logs requested vs effective threads. The older Rust FEM Robin/transfer-grid seam remains internal/reference-only under `fem_cpu_reference` |
 | `InterfacialDMI` | planned | planned | planned | semantic-only | Not numerically implemented |
 | `Zeeman` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Public API authors `B`; planner normalizes to `H_ext` in A/m for CPU FDM and CPU FEM |
 | `Magnetoelastic` | planned | planned | planned | **internal-reference** | Small-strain magnetoelastic coupling (B1/B2 cubic, λ_s isotropic); prescribed-strain H_mel wired into H_eff; see `docs/physics/0700-shared-magnetoelastic-semantics.md` |
