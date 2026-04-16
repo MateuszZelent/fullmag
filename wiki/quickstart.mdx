@@ -1,0 +1,70 @@
+---
+title: "Quickstart"
+description: "Get Fullmag running locally and understand the main entry points"
+---
+
+## Get started in three steps
+
+Use this path when you want to inspect the code, run the app, or validate a documentation change.
+
+### Step 1: Set up your local environment
+
+<AccordionGroup>
+  <Accordion icon="copy" title="Clone the repository">
+    Clone the Fullmag repository and open the project root where `Cargo.toml`, `package.json`, and `wiki/` live.
+  </Accordion>
+  <Accordion icon="rectangle-terminal" title="Start the preview server">
+    1. Install dependencies with `pnpm install`.
+    2. Use `just ensure-python` if you will touch Python tooling.
+    3. Run the web app with `pnpm --dir apps/web dev`.
+  </Accordion>
+</AccordionGroup>
+
+### Step 2: Run the project checks
+
+<AccordionGroup>
+  <Accordion icon="github" title="Run the main checks">
+    Useful baseline commands:
+
+    ```bash
+    just repo-check
+    just test
+    just web-typecheck
+    ```
+  </Accordion>
+  <Accordion icon="palette" title="Preview the UI">
+    If you are touching the web app, run `pnpm --dir apps/web dev` and inspect the control room locally.
+  </Accordion>
+</AccordionGroup>
+
+### Step 3: Work on docs content
+
+<Accordion icon="rocket" title="Edit the wiki">
+  Update the pages in `wiki/` and keep `wiki/docs.json` in sync with the file paths.
+</Accordion>
+
+## Recommended commands
+
+<CardGroup cols={2}>
+
+<Card title="Repository checks" icon="pen-to-square" href="/development">
+  See the common commands used while changing code or docs.
+</Card>
+
+<Card title="Docs structure" icon="palette" href="/essentials/navigation">
+  Understand how the wiki pages are organized.
+</Card>
+
+<Card title="Markdown guide" icon="square-code" href="/essentials/markdown">
+  Learn the syntax used in the wiki pages.
+</Card>
+
+<Card title="API reference" icon="code" href="/api-reference/introduction">
+  Browse the API-oriented sections of the wiki.
+</Card>
+
+</CardGroup>
+
+<Note>
+  Keep the wiki aligned with `docs/` and the codebase so readers can jump from docs to implementation without guesswork.
+</Note>

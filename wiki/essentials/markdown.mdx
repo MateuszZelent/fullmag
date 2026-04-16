@@ -1,0 +1,88 @@
+---
+title: 'Markdown syntax'
+description: 'The markdown and MDX basics used in the wiki'
+icon: 'text-size'
+---
+
+## Titles
+
+Use headings to create readable sections and anchors.
+
+```md
+## Titles
+```
+
+### Subtitles
+
+Best used for subsection headers.
+
+```md
+### Subtitles
+```
+
+<Tip>
+
+Each heading creates an anchor and appears in the table of contents.
+
+</Tip>
+
+## Text formatting
+
+We support most markdown formatting. Simply add `**`, `_`, or `~` around text to format it.
+
+| Style         | How to write it   | Result          |
+| ------------- | ----------------- | --------------- |
+| Bold          | `**bold**`        | **bold**        |
+| Italic        | `_italic_`        | _italic_        |
+| Strikethrough | `~strikethrough~` | ~strikethrough~ |
+
+You can combine these. For example, write `**_bold and italic_**` to get **_bold and italic_** text.
+
+You need to use HTML to write superscript and subscript text. That is, add `<sup>` or `<sub>` around your text.
+
+| Text Size   | How to write it          | Result                 |
+| ----------- | ------------------------ | ---------------------- |
+| Superscript | `<sup>superscript</sup>` | <sup>superscript</sup> |
+| Subscript   | `<sub>subscript</sub>`   | <sub>subscript</sub>   |
+
+## Linking to pages
+
+You can add a link by wrapping text in `[]()`.
+
+Links to pages in your docs should be root-relative. For example, `[Quickstart](/quickstart)` points at the quickstart page.
+
+Relative links like `[link to text](../text)` are best avoided when you can use root-relative links.
+
+## Blockquotes
+
+### Singleline
+
+To create a blockquote, add a `>` in front of a paragraph.
+
+> Dorothy followed her through many of the beautiful rooms in her castle.
+
+```md
+> Dorothy followed her through many of the beautiful rooms in her castle.
+```
+
+### Multiline
+
+> Dorothy followed her through many of the beautiful rooms in her castle.
+>
+> The Witch bade her clean the pots and kettles and sweep the floor and keep the fire fed with wood.
+
+```md
+> Dorothy followed her through many of the beautiful rooms in her castle.
+>
+> The Witch bade her clean the pots and kettles and sweep the floor and keep the fire fed with wood.
+```
+
+### LaTeX
+
+Mintlify supports [LaTeX](https://www.latex-project.org) through the Latex component.
+
+<Latex>8 x (vk x H1 - H2) = (0,1)</Latex>
+
+```md
+<Latex>8 x (vk x H1 - H2) = (0,1)</Latex>
+```

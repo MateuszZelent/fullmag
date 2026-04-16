@@ -1,0 +1,62 @@
+---
+title: 'Development'
+description: 'Set up the local workflow for changing Fullmag and its docs'
+---
+
+<Info>
+  **Prerequisites**:
+  - Node.js 22 or newer for the web workspace
+  - Rust toolchain for the workspace crates
+  - Python 3.11+ if you plan to touch the Python package or meshing utilities
+</Info>
+
+Use the commands below as the baseline development loop.
+
+<Steps>
+<Step title="Install JavaScript dependencies">
+
+```bash
+pnpm install
+```
+</Step>
+
+<Step title="Run the web app">
+
+Start the frontend when you want to inspect the control room or related UI:
+
+```bash
+pnpm --dir apps/web dev
+```
+
+A local server will open on the default Next.js port.
+
+</Step>
+</Steps>
+
+## Repo checks
+
+Useful commands from the repository root:
+
+```bash
+just repo-check
+just test
+just web-typecheck
+```
+
+## Docs preview
+
+If you are iterating on `wiki/`, keep the `docs.json` navigation and page paths in sync with the files on disk.
+
+## Python setup
+
+For Python-related work, create the project virtualenv and install the package in editable mode.
+
+```bash
+just ensure-python
+```
+
+## Notes
+
+- The repo already contains broader architecture and physics docs under `docs/`.
+- The `wiki/` folder is meant to stay concise and contributor-friendly.
+- Prefer updating the long-form `docs/` material when a change needs deeper technical context.

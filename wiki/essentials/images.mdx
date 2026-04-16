@@ -1,0 +1,59 @@
+---
+title: 'Images and embeds'
+description: 'How to embed screenshots and media in the wiki'
+icon: 'image'
+---
+
+<img
+  style={{ borderRadius: '0.5rem' }}
+  src="/images/hero-light.png"
+/>
+
+## Image
+
+### Using Markdown
+
+Use Markdown when you want a simple image reference.
+
+```md
+![title](/path/image.jpg)
+```
+
+Keep assets small and store them in `wiki/images/` when possible.
+
+### Using embeds
+
+To get more customizability with images, you can also use embeds to add images
+
+```html
+<img height="200" src="/path/image.jpg" />
+```
+
+## Embeds and HTML elements
+
+<iframe
+  width="560"
+  height="315"
+  src="https://www.youtube.com/embed/4KzFe50RQkQ"
+  title="YouTube video player"
+  frameBorder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowFullScreen
+  style={{ width: '100%', borderRadius: '0.5rem' }}
+></iframe>
+
+<br />
+
+<Tip>
+
+HTML tags in MDX are useful when you need layout control or explicit sizing.
+
+</Tip>
+
+### iFrames
+
+Loads another HTML page within the document. Most commonly used for embedding videos.
+
+```html
+<iframe src="https://www.youtube.com/embed/4KzFe50RQkQ"> </iframe>
+```

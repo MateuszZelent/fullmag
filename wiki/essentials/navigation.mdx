@@ -1,0 +1,87 @@
+---
+title: 'Navigation'
+description: 'How the wiki sidebar is structured in docs.json'
+icon: 'map'
+---
+
+The navigation menu is the list of links on every docs site.
+
+You will usually update `docs.json` whenever you add or move a page.
+
+## Navigation syntax
+
+The navigation syntax is recursive, so nested groups are supported. You do not need to include `.mdx` in page names.
+
+<CodeGroup>
+
+```json Regular Navigation
+"navigation": {
+  "tabs": [
+    {
+      "tab": "Docs",
+      "groups": [
+        {
+          "group": "Getting Started",
+          "pages": ["quickstart"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+```json Nested Navigation
+"navigation": {
+  "tabs": [
+    {
+      "tab": "Docs",
+      "groups": [
+        {
+          "group": "Getting Started",
+          "pages": [
+            "quickstart",
+            {
+              "group": "Nested Reference Pages",
+              "pages": ["nested-reference-page"]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+</CodeGroup>
+
+## Folders
+
+Simply put your MDX files in folders and update the paths in `docs.json`.
+
+For example, to have a page at `https://yoursite.com/your-folder/your-page` you would make a folder called `your-folder` containing an MDX file called `your-page.mdx`.
+
+<Warning>
+
+  Avoid naming a top-level folder `api` unless it is nested under another folder. A name such as `api-reference` is safer.
+
+</Warning>
+
+```json Navigation With Folder
+"navigation": {
+  "tabs": [
+    {
+      "tab": "Docs",
+      "groups": [
+        {
+          "group": "Group Name",
+          "pages": ["your-folder/your-page"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+## Hidden pages
+
+MDX files not included in `docs.json` will not show up in the sidebar but remain linkable directly.
