@@ -3375,7 +3375,13 @@ mod tests {
                     "integrator": "rk45",
                     "fixed_timestep": 1e-13
                 },
-                "sampling": { "outputs": [] }
+                "sampling": {
+                    "outputs": [{
+                        "kind": "save_scalar",
+                        "quantity": "E_ex",
+                        "every": 1e-13
+                    }]
+                }
             },
             "backend_policy": {
                 "requested_backend": "fdm",
