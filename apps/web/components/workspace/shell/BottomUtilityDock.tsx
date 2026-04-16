@@ -24,6 +24,9 @@ interface BottomTelemetryDockProps {
   activityDetail: string | null;
   solverIntegrator?: string | null;
   solverMaxError?: number | null;
+  solverMinDt?: number | null;
+  solverMaxDt?: number | null;
+  solverFixedDt?: number | null;
 }
 
 function fmtTimeOrDash(v: number, enabled: boolean): string {
@@ -61,6 +64,9 @@ export default function BottomTelemetryDock({
   activityDetail,
   solverIntegrator,
   solverMaxError,
+  solverMinDt,
+  solverMaxDt,
+  solverFixedDt,
 }: BottomTelemetryDockProps) {
   const convergenceThreshold = convergenceThresholdProp ?? DEFAULT_CONVERGENCE_THRESHOLD;
 
@@ -110,6 +116,24 @@ export default function BottomTelemetryDock({
       hint: "Bieżący krok czasowy używany przez solver.",
       accent: "border-l-[--chart-amber]",
       value: fmtSIOrDash(effectiveDt, "s", hasSolverTelemetry),
+    },
+    {
+      label: "minDt",
+      hint: "Najmniejszy obserwowany krok dt albo limit z planu adaptacyjnego.",
+      accent: "border-l-[--chart-orange]",
+      value: fmtSIOrDash(solverMinDt ?? 0, "s", Boolean(solverMinDt != null && hasSolverTelemetry)),
+    },
+    {
+      label: "maxDt",
+      hint: "Największy obserwowany krok dt albo limit z planu adaptacyjnego.",
+      accent: "border-l-[--chart-orange]",
+      value: fmtSIOrDash(solverMaxDt ?? 0, "s", Boolean(solverMaxDt != null && hasSolverTelemetry)),
+    },
+    {
+      label: "Fixed Δt",
+      hint: "Sztywny krok czasowy ustawiony w planie/ustawieniach solvera.",
+      accent: "border-l-[--chart-violet]",
+      value: fmtSIOrDash(solverFixedDt ?? 0, "s", solverFixedDt != null),
     },
     {
       label: "Solver",

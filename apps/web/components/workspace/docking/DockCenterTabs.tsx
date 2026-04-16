@@ -14,11 +14,29 @@ import { Button } from "@/components/ui/button";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useRuntimeFeatureFlags } from "@/lib/hooks/useRuntimeFeatureFlags";
 import { cn } from "@/lib/utils";
+import { type AnalyzeTab } from "@/components/runs/control-room/analyzeSelection";
 import {
   type WorkspaceMode,
   type WorkspaceTab,
   useWorkspaceStore,
 } from "@/lib/workspace/workspace-store";
+
+function isAnalyzeTab(value: string | undefined): value is AnalyzeTab {
+  return (
+    value === "summary" ||
+    value === "spectrum" ||
+    value === "modes" ||
+    value === "dispersion" ||
+    value === "time-traces" ||
+    value === "vortex-trajectory" ||
+    value === "vortex-frequency" ||
+    value === "vortex-orbit"
+  );
+}
+
+function asAnalyzeTab(value: string | undefined): AnalyzeTab {
+  return isAnalyzeTab(value) ? value : "spectrum";
+}
 
 function isAnalyzeLikeTab(tab: WorkspaceTab): boolean {
   if (tab.kind === "analyze") return true;
@@ -27,13 +45,13 @@ function isAnalyzeLikeTab(tab: WorkspaceTab): boolean {
 }
 
 function analyzeSelectionForTab(tab: WorkspaceTab):
-  | { domain: "eigenmodes" | "vortex"; tab: string; selectedModeIndex?: number | null }
+  | { domain: "eigenmodes" | "vortex"; tab: AnalyzeTab; selectedModeIndex?: number | null }
   | null {
   switch (tab.kind) {
     case "analyze":
       return {
         domain: (tab.payload?.analyzeDomain ?? "eigenmodes") as "eigenmodes" | "vortex",
-        tab: tab.payload?.analyzeTab ?? "spectrum",
+        tab: asAnalyzeTab(tab.payload?.analyzeTab),
       };
     case "result-spectrum":
       return { domain: "eigenmodes", tab: "spectrum", selectedModeIndex: null };
@@ -114,7 +132,7 @@ function applyWorkspaceTabSelection(
     api.setWorkspaceMode("analyze");
     api.model.openAnalyze({
       domain: analyzeSelection.domain,
-      tab: analyzeSelection.tab as any,
+      tab: analyzeSelection.tab,
       selectedModeIndex: analyzeSelection.selectedModeIndex ?? null,
     });
     return;

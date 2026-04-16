@@ -37,17 +37,18 @@ function RootPageInner() {
         navigationIssuedRef.current = true;
         const target = targetPathForLaunchIntent(intent);
         const params = new URLSearchParams(queryString);
+        const route = params.toString().length > 0 ? `${target}?${params}` : target;
         recordFrontendDebugEvent(
           "root-route",
           "redirect_from_query_intent",
           {
-            target,
+            target: route,
             params: params.toString(),
             source: intent.source,
           },
           { includeStack: true },
         );
-        router.replace(`${target}?${params.toString()}` as any);
+        router.replace(route);
         return;
       }
 
@@ -69,17 +70,18 @@ function RootPageInner() {
         if (detected.intent.entryKind) params.set("kind", detected.intent.entryKind);
         if (detected.intent.targetStage) params.set("stage", detected.intent.targetStage);
         if (detected.intent.resumeProjectId) params.set("projectId", detected.intent.resumeProjectId);
+        const route = params.toString().length > 0 ? `${target}?${params}` : target;
         recordFrontendDebugEvent(
           "root-route",
           "redirect_from_live_detection",
           {
-            target,
+            target: route,
             params: params.toString(),
             runId: detected.intent.resumeProjectId,
           },
           { includeStack: true },
         );
-        router.replace(`${target}?${params.toString()}` as any);
+        router.replace(route);
         return;
       }
 

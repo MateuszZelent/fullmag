@@ -1833,9 +1833,11 @@ export function normalizeSessionState(
   }
 
   if (process.env.NODE_ENV !== "production") {
+    const rawScalarRows = raw.scalar_rows;
+    const rawDeltaRows = Array.isArray(rawScalarRows) ? rawScalarRows.length : "?";
     console.debug(
       `[normalize] scalar_rows=${rawScalarRowsForMerge.length}` +
-      ` raw_delta=${Array.isArray(raw.scalar_rows) ? (raw.scalar_rows as any[]).length : "?"}` +
+      ` raw_delta=${rawDeltaRows}` +
       ` v2_step=${rawScalarsFromStep?.step ?? "-"}` +
       ` scalar_rows_total=${raw.scalar_rows_total ?? "?"}`,
     );

@@ -120,7 +120,7 @@ export function fitTextureToObject(
 
   // For metric analytic presets, fit *preset parameters* to geometry instead
   // of scaling the coordinate system (which breaks physical dimensions).
-  if (METRIC_ANALYTIC_PRESETS.has(presetKind as any)) {
+  if (presetKind && METRIC_ANALYTIC_PRESETS.has(presetKind)) {
     const currentParams = asset?.preset_params ?? {};
     const { params: fittedParams, transform } = fitPresetParamsToBounds(
       presetKind,

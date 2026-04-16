@@ -1070,7 +1070,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
 
   return (
     <div className="flex flex-col flex-1 h-full min-h-0 min-w-0 relative overflow-hidden [&>*]:min-w-0 [&>*]:min-h-0 [&>*:not(.viewportOverlay)]:flex-1 [&>*:not(.viewportOverlay)]:w-full">
-      <TelemetryHUD solverSettings={ctx.solverSettings} />
+      <TelemetryHUD />
       {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showAntennaPreviewBadge && antennaPreviewBadgeVisible ? (
         <div className="viewportOverlay absolute right-4 top-4 z-[--z-viewport-badge] rounded-full border border-primary/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-primary shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
           physics 2.5D · preview extruded

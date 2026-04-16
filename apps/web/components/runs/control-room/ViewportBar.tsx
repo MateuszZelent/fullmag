@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useCallback, useMemo } from "react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -14,6 +14,7 @@ import {
   fmtPreviewMaxPoints,
   fmtSI,
 } from "./shared";
+import { type SlicePlane, type VectorComponent } from "./shared";
 import { useTransport, useViewport, useCommand, useModel } from "./context-hooks";
 import { DEFAULT_CONVERGENCE_THRESHOLD } from "../../panels/SolverSettingsPanel";
 import {
@@ -67,6 +68,20 @@ export const ViewportBar = memo(function ViewportBar() {
     ctx.meshClipEnabled,
     ctx.meshClipAxis,
     ctx.meshClipPos,
+  );
+  const isVectorComponent = useCallback(
+    (value: string): value is VectorComponent =>
+      value === "magnitude" || value === "x" || value === "y" || value === "z",
+    [],
+  );
+  const isSlicePlane = useCallback(
+    (value: string): value is SlicePlane =>
+      value === "xy" || value === "xz" || value === "yz",
+    [],
+  );
+  const toClipAxis = useCallback(
+    (plane: SlicePlane): "x" | "y" | "z" => (plane === "xy" ? "z" : plane === "xz" ? "y" : "x"),
+    [],
   );
 
   return (
@@ -151,7 +166,11 @@ export const ViewportBar = memo(function ViewportBar() {
               ) : (
                 <Select
                   value={ctx.component}
-                  onValueChange={(val) => ctx.setComponent(val as any)}
+                  onValueChange={(val) => {
+                    if (isVectorComponent(val)) {
+                      ctx.setComponent(val);
+                    }
+                  }}
                 >
                   <SelectTrigger className="h-8 min-w-[88px] border-border/35 bg-background/45 text-[0.72rem] justify-between">
                     <SelectValue />
@@ -297,8 +316,10 @@ export const ViewportBar = memo(function ViewportBar() {
                   <Select
                     value={ctx.meshClipAxis === "x" ? "yz" : ctx.meshClipAxis === "y" ? "xz" : "xy"}
                     onValueChange={(val) => {
-                      ctx.setPlane(val as any);
-                      ctx.setMeshClipAxis(val === "yz" ? "x" : val === "xz" ? "y" : "z");
+                      if (isSlicePlane(val)) {
+                        ctx.setPlane(val);
+                        ctx.setMeshClipAxis(toClipAxis(val));
+                      }
                     }}
                   >
                     <SelectTrigger className="h-8 min-w-[78px] bg-background/45 border-border/35 text-[0.72rem]">
@@ -329,7 +350,14 @@ export const ViewportBar = memo(function ViewportBar() {
           ) : ctx.effectiveViewMode === "2D" && (
             <>
               <span className="text-[0.68rem] text-muted-foreground">Plane</span>
-              <Select value={ctx.plane} onValueChange={(val) => ctx.setPlane(val as any)}>
+              <Select
+                value={ctx.plane}
+                onValueChange={(val) => {
+                  if (isSlicePlane(val)) {
+                    ctx.setPlane(val);
+                  }
+                }}
+              >
                 <SelectTrigger className="h-8 min-w-[78px] bg-background/45 border-border/35 text-[0.72rem]">
                   <SelectValue />
                 </SelectTrigger>
@@ -358,17 +386,108 @@ export const ViewportBar = memo(function ViewportBar() {
   );
 });
 
-export const TelemetryHUD = memo(function TelemetryHUD({ solverSettings }: { solverSettings: { torqueTolerance?: string | number } }) {
+function formatDt(value: number | null | undefined, enabled: boolean): string {
+  if (!enabled || !Number.isFinite(value ?? NaN)) {
+    return "—";
+  }
+  return fmtSI(value, "s");
+}
+
+function resolveSolverDisplayName(integrator: string | null | undefined): string {
+  if (!integrator) {
+    return "—";
+  }
+  const normalized = integrator.trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    heun: "Heun",
+    rk4: "RK4",
+    rk23: "RK23",
+    rk45: "RK45",
+    abm3: "ABM3",
+  };
+  return aliases[normalized] ?? integrator;
+}
+
+function parsePositiveNumber(value: string): number | null {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function isPositiveFinite(value: number | null | undefined): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+function resolveMinDt(params: {
+  liveRows: { solver_dt: number }[];
+  fallbackMin: number | null;
+  hasSolverTelemetry: boolean;
+}): number | null {
+  const candidates = params.liveRows
+    .map((row) => row.solver_dt)
+    .filter(isPositiveFinite);
+  const liveMin = candidates.length > 0 ? Math.min(...candidates) : null;
+  if (!params.hasSolverTelemetry) return null;
+  return params.fallbackMin ?? liveMin;
+}
+
+function resolveMaxDt(params: {
+  liveRows: { solver_dt: number }[];
+  fallbackMax: number | null;
+  hasSolverTelemetry: boolean;
+}): number | null {
+  const candidates = params.liveRows
+    .map((row) => row.solver_dt)
+    .filter(isPositiveFinite);
+  const liveMax = candidates.length > 0 ? Math.max(...candidates) : null;
+  if (!params.hasSolverTelemetry) return null;
+  return params.fallbackMax ?? liveMax;
+}
+
+export const TelemetryHUD = memo(function TelemetryHUD() {
   const transport = useTransport();
+  const model = useModel();
   if (!FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showTelemetryHud) {
     return null;
   }
+  const toleranceFromSettings = parsePositiveNumber(model.solverSettings.torqueTolerance);
+  const convergenceTolerance = toleranceFromSettings ?? Number(DEFAULT_CONVERGENCE_THRESHOLD);
+
+  const liveRangeFromRows = useMemo(
+    () => transport.scalarRows.slice(-128),
+    [transport.scalarRows],
+  );
+  const commandAdaptiveDtMin = model.solverPlan?.adaptive?.dtMin;
+  const commandAdaptiveDtMax = model.solverPlan?.adaptive?.dtMax;
+  const fixedDtFromPlan = model.solverPlan?.fixedTimestep;
+  const fixedDtFromSettings = parsePositiveNumber(model.solverSettings.fixedTimestep);
+  const currentSolver = resolveSolverDisplayName(
+    model.solverPlan?.integrator || model.solverSettings.integrator,
+  );
+  const fixedDt = Number.isFinite(fixedDtFromPlan) && fixedDtFromPlan > 0
+    ? fixedDtFromPlan
+    : fixedDtFromSettings;
+  const minDt = resolveMinDt({
+    liveRows: liveRangeFromRows,
+    fallbackMin: isPositiveFinite(commandAdaptiveDtMin) ? commandAdaptiveDtMin : null,
+    hasSolverTelemetry: transport.hasSolverTelemetry,
+  });
+  const maxDt = resolveMaxDt({
+    liveRows: liveRangeFromRows,
+    fallbackMax: isPositiveFinite(commandAdaptiveDtMax) ? commandAdaptiveDtMax : null,
+    hasSolverTelemetry: transport.hasSolverTelemetry,
+  });
+
   return (
-    <div className="viewportOverlay absolute top-3 left-1/2 -translate-x-1/2 flex items-center justify-center gap-4 z-10 pointer-events-none text-center font-mono text-[0.7rem] font-bold tracking-wide text-foreground/80 bg-background/60 backdrop-blur-md px-5 py-1.5 rounded-full border border-border/30 shadow-md">
+    <div className="viewportOverlay absolute top-3 left-1/2 -translate-x-1/2 flex flex-wrap items-center justify-center gap-4 z-10 pointer-events-none text-center font-mono text-[0.7rem] font-bold tracking-wide text-foreground/80 bg-background/60 backdrop-blur-md px-5 py-1.5 rounded-full border border-border/30 shadow-md">
       <span>Step {transport.effectiveStep.toLocaleString()}</span>
       <span>{fmtSI(transport.effectiveTime, "s")}</span>
+      <span>solver {currentSolver}</span>
+      <span>dt {formatDt(transport.effectiveDt, transport.hasSolverTelemetry)}</span>
+      <span>minDt {formatDt(minDt, transport.hasSolverTelemetry)}</span>
+      <span>maxDt {formatDt(maxDt, transport.hasSolverTelemetry)}</span>
+      <span>fixDt {fixedDt != null && fixedDt > 0 ? fmtSI(fixedDt, "s") : "—"}</span>
       {transport.effectiveDmDt > 0 && (
-        <span className={cn(transport.effectiveDmDt < (Number(solverSettings.torqueTolerance) || DEFAULT_CONVERGENCE_THRESHOLD) ? "text-emerald-400" : "text-amber-400")}>
+        <span className={cn(transport.effectiveDmDt < convergenceTolerance ? "text-emerald-400" : "text-amber-400")}>
           dm/dt {fmtExp(transport.effectiveDmDt)}
         </span>
       )}

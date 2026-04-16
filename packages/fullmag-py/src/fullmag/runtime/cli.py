@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from fullmag._core import run_problem_json
+from fullmag._core import extract_fem_mesh_ir, resample_fem_to_fdm_grid, run_problem_json
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
 from fullmag.model.study import Eigenmodes, Relaxation
 from fullmag.runtime.loader import load_problem_from_script
@@ -70,6 +70,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "final_magnetization": None,
             }
             final_magnetization = None
+            previous_fem_mesh_ir: dict[str, object] | None = None
             step_offset = 0
             time_offset = 0.0
             base_output_dir = Path(args.output_dir)
@@ -95,7 +96,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                     study_pipeline=study_pipeline,
                 )
                 if final_magnetization is not None:
-                    _apply_continuation_initial_state(ir, final_magnetization)
+                    # Check for cross-backend FEM→FDM state transfer.
+                    if previous_fem_mesh_ir is not None:
+                        transfer_result = resample_fem_to_fdm_grid(
+                            previous_fem_mesh_ir,
+                            final_magnetization,
+                            ir,
+                        )
+                        if transfer_result is not None:
+                            print(
+                                f"fullmag: FEM→FDM state transfer: "
+                                f"{transfer_result['n_located']}/{transfer_result['n_total']} cells "
+                                f"interpolated, {transfer_result['n_outside']} outside",
+                                file=sys.stderr,
+                            )
+                            _apply_continuation_initial_state(ir, transfer_result["values"])
+                        else:
+                            _apply_continuation_initial_state(ir, final_magnetization)
+                    else:
+                        _apply_continuation_initial_state(ir, final_magnetization)
                 stage_output_dir = _stage_output_dir(
                     base_output_dir,
                     stage_index=index,
@@ -119,6 +138,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 aggregate_payload["steps"].extend(offset_steps)
                 final_magnetization = run_payload.get("final_magnetization")
                 aggregate_payload["final_magnetization"] = final_magnetization
+                # Track FEM mesh for potential cross-backend transfer in next stage.
+                previous_fem_mesh_ir = extract_fem_mesh_ir(ir)
                 stage_manifest.append(
                     {
                         "index": index,

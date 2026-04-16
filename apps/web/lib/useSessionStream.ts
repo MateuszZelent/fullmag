@@ -138,22 +138,22 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
   const stateRef = useRef<SessionState | null>(null);
 
   // Ref-based generation tracker to avoid React Compiler strict dependencies
-  const executeConnectRef = useRef<() => void>(null);
+  const executeConnectRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
   useEffect(() => {
-    (executeConnectRef as any).current = () => {
+    executeConnectRef.current = () => {
       const nextGen = connectionGenerationRef.current + 1;
-      (connectionGenerationRef as any).current = nextGen;
+      connectionGenerationRef.current = nextGen;
       const connectionGeneration = nextGen;
 
       const client = currentLiveApiClient();
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);
-        (pollTimerRef as any).current = null;
+        pollTimerRef.current = null;
       }
 
       const cacheKey = client.urls.bootstrap;
@@ -183,14 +183,14 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
           if (raw) {
             const nextState = normalizeSessionState(raw);
             if (nextState.session) {
-              if (nextState.live_state?.finished) (finishedRef as any).current = true;
+              if (nextState.live_state?.finished) finishedRef.current = true;
               setState((prevState) => mergeSessionState(prevState, nextState));
             }
           }
           pollFailureStreakRef.current = 0;
           setError(null);
           setConnection("connected");
-        } catch (pollError: any) {
+        } catch (pollError: unknown) {
           if (unmountedRef.current || connectionGenerationRef.current !== connectionGeneration) {
             return;
           }
@@ -222,7 +222,7 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
           ageMs,
         });
         void fetchBootstrapCached(cacheKey, () => client.fetchBootstrap())
-          .then((raw: any) => {
+          .then((raw) => {
             if (
               unmountedRef.current ||
               connectionGenerationRef.current !== connectionGeneration
@@ -240,10 +240,10 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
               setError(null);
               return;
             }
-            if (nextState.live_state?.finished) (finishedRef as any).current = true;
+            if (nextState.live_state?.finished) finishedRef.current = true;
             setState((prevState) => mergeSessionState(prevState, nextState));
           })
-          .catch((bootstrapError: any) => {
+          .catch((bootstrapError: unknown) => {
             if (
               unmountedRef.current ||
               connectionGenerationRef.current !== connectionGeneration
@@ -283,9 +283,9 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
   }, []);
 
   useEffect(() => {
-    (unmountedRef as any).current = false;
-    (finishedRef as any).current = false;
-    (connectionGenerationRef as any).current = 0;
+    unmountedRef.current = false;
+    finishedRef.current = false;
+    connectionGenerationRef.current = 0;
     pollFailureStreakRef.current = 0;
 
     // Delay the first connect slightly so React StrictMode dev remounts
@@ -301,14 +301,14 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
     return () => {
       const bootstrapTimer = bootstrapTimerRef.current;
       const pollTimer = pollTimerRef.current;
-      (unmountedRef as any).current = true;
+      unmountedRef.current = true;
       if (bootstrapTimer !== null) {
         clearTimeout(bootstrapTimer);
-        (bootstrapTimerRef as any).current = null;
+        bootstrapTimerRef.current = null;
       }
       if (pollTimer !== null) {
         clearTimeout(pollTimer);
-        (pollTimerRef as any).current = null;
+        pollTimerRef.current = null;
       }
     };
   }, [connect]);

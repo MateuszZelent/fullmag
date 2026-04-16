@@ -19,6 +19,7 @@ import TextureTransformGizmo, {
 import type { TextureTransform3D } from "@/lib/textureTransform";
 import type { VisualizationPresetFdmState } from "@/lib/session/types";
 import type {
+  AntennaOverlayConductor,
   AntennaOverlay,
   BuilderObjectOverlay,
   FocusObjectRequest,
@@ -292,7 +293,7 @@ function expandOverlayBounds(
 }
 
 function mapOverlayToFdmSceneBox(
-  overlay: BuilderObjectOverlay,
+  overlay: BuilderObjectOverlay | AntennaOverlayConductor,
   grid: [number, number, number],
   worldExtent: [number, number, number],
   universeCenter?: [number, number, number] | null,
@@ -476,7 +477,7 @@ function FdmAntennaOverlayMeshes({
       {overlays.map((overlay) => {
         const selected = selectedAntennaId === overlay.id;
         const conductors = overlay.conductors.map((conductor) => {
-          const mapped = mapOverlayToFdmSceneBox(conductor as any, grid, worldExtent, universeCenter);
+          const mapped = mapOverlayToFdmSceneBox(conductor, grid, worldExtent, universeCenter);
           if (!mapped) return null;
           const { sceneMin, sceneMax } = mapped;
           const size = [

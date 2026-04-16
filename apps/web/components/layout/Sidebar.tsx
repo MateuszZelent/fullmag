@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
 export interface NavItem {
-  href: string;
+  href: Route;
   label: string;
   icon: ReactNode;
   section?: string;
@@ -83,7 +83,7 @@ export function Sidebar({ items, collapsed, mobileOpen, onCloseMobile, onToggleC
                 return (
                   <Link
                     key={item.href}
-                    href={item.href as Route}
+                    href={item.href}
                     onClick={onCloseMobile}
                     title={collapsed ? item.label : undefined}
                     className={navItemClassName}

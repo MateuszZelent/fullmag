@@ -3,22 +3,39 @@
  *
  * Priority:
  *   1. NEXT_PUBLIC_RUNTIME_HTTP_BASE env var (set at build time or injected by the dev-server)
- *   2. window.location origin — works for same-origin deployments (the common case behind
+ *   2. NEXT_PUBLIC_API_URL env var (legacy compatibility alias)
+ *   3. window.location origin — works for same-origin deployments (the common case behind
  *      dev-server.mjs reverse proxy and typical Docker/Nginx setups)
- *   3. Hard-coded fallback for build-time SSR / unit tests where `window` is not available.
- *      Uses port 3001 to match the canonical dev-server port from package.json.
+ *   4. Safe browser-agnostic relative fallback (`"/"`) for build-time/runtime usage.
  */
+
+const DEFAULT_FALLBACK_RUNTIME_BASE = "/";
+const RUNTIME_HTTP_BASE_ENV_KEYS: string[] = [
+  "NEXT_PUBLIC_RUNTIME_HTTP_BASE",
+  "NEXT_PUBLIC_API_URL",
+];
+
+function configuredRuntimeBaseFromEnv(): string | null {
+  for (const key of RUNTIME_HTTP_BASE_ENV_KEYS) {
+    const value = process.env?.[key as keyof typeof process.env]?.trim();
+    if (value) {
+      return value.replace(/\/+$/, "");
+    }
+  }
+  return null;
+}
+
 export function resolveRuntimeHttpBase(): string {
-  const configured = (
-    typeof process !== 'undefined' ? process.env?.NEXT_PUBLIC_RUNTIME_HTTP_BASE : undefined
-  )?.trim();
-  if (configured) return configured.replace(/\/+$/, '');
+  const configured = configuredRuntimeBaseFromEnv();
+  if (configured) {
+    return configured;
+  }
 
   if (typeof window !== 'undefined') {
     return window.location.origin;
   }
 
-  return 'http://localhost:3001';
+  return DEFAULT_FALLBACK_RUNTIME_BASE;
 }
 
 /** Build URL for the current live session. */

@@ -1,19 +1,39 @@
-import type { ScriptBuilderStageState } from "@/lib/session/types";
 import type {
-  MacroStageNode,
+  ScriptBuilderStageState,
+  StudyPipelineDocumentState,
+  StudyPipelineNodeState,
+} from "@/lib/session/types";
+import type {
   MaterializedStageMapEntry,
   MaterializedStudyPipeline,
+  MacroStageNode,
   PrimitiveStageNode,
   StudyPipelineDocument,
-  StudyPipelineNode,
+  StageGroupNode,
 } from "./types";
 import { validateStudyPipeline } from "./validate";
+
+type MaterializablePrimitiveNode =
+  | PrimitiveStageNode
+  | (StudyPipelineNodeState & { node_kind: "primitive" });
+type MaterializableMacroNode =
+  | MacroStageNode
+  | (StudyPipelineNodeState & { node_kind: "macro" });
+type MaterializableGroupNode =
+  | StageGroupNode
+  | (StudyPipelineNodeState & { node_kind: "group" });
+type MaterializablePipelineNode =
+  | MaterializablePrimitiveNode
+  | MaterializableMacroNode
+  | MaterializableGroupNode;
+type MaterializablePipelineNodes = ReadonlyArray<MaterializablePipelineNode>;
+type MaterializableStudyPipeline = StudyPipelineDocument | StudyPipelineDocumentState;
 
 function toStringOr(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
 }
 
-function primitivePayloadToStage(node: PrimitiveStageNode): ScriptBuilderStageState {
+function primitivePayloadToStage(node: MaterializablePrimitiveNode): ScriptBuilderStageState {
   const payload = node.payload;
   const integratorFallback = node.stage_kind === "relax" ? "auto" : "rk45";
   return {
@@ -42,7 +62,10 @@ function primitivePayloadToStage(node: PrimitiveStageNode): ScriptBuilderStageSt
   };
 }
 
-function stage(kind: ScriptBuilderStageState["kind"], patch?: Partial<ScriptBuilderStageState>): ScriptBuilderStageState {
+function stage(
+  kind: ScriptBuilderStageState["kind"],
+  patch?: Partial<ScriptBuilderStageState>,
+): ScriptBuilderStageState {
   const defaultIntegrator = kind === "relax" ? "auto" : "rk45";
   return {
     kind,
@@ -68,7 +91,7 @@ function stage(kind: ScriptBuilderStageState["kind"], patch?: Partial<ScriptBuil
   };
 }
 
-function expandMacro(node: MacroStageNode): ScriptBuilderStageState[] {
+function expandMacro(node: MaterializableMacroNode): ScriptBuilderStageState[] {
   if (node.macro_kind === "hysteresis_loop") {
     const explicitFieldValues = Array.isArray(node.config.field_values_t)
       ? node.config.field_values_t
@@ -206,7 +229,7 @@ function expandMacro(node: MacroStageNode): ScriptBuilderStageState[] {
 }
 
 function walk(
-  nodes: StudyPipelineNode[],
+  nodes: MaterializablePipelineNodes,
   stages: ScriptBuilderStageState[],
 ): MaterializedStageMapEntry[] {
   const map: MaterializedStageMapEntry[] = [];
@@ -244,7 +267,7 @@ function walk(
 }
 
 export function materializeStudyPipeline(
-  document: StudyPipelineDocument,
+  document: MaterializableStudyPipeline,
 ): MaterializedStudyPipeline {
   const stages: ScriptBuilderStageState[] = [];
   const map = walk(document.nodes, stages);

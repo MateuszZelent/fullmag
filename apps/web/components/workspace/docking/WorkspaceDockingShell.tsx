@@ -48,6 +48,25 @@ function parseDockLayout(model: DockLayoutModel | null, preset: DockResponsivePr
   return createDefaultDockLayout(preset);
 }
 
+function parsePositiveNumber(value: string): number | null {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function isPositiveFinite(value: number | null | undefined): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+function resolveFiniteMin(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return Math.min(...values);
+}
+
+function resolveFiniteMax(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return Math.max(...values);
+}
+
 function RightInspectorPanel() {
   const vp = useViewport();
   if (vp.workspaceMode === "build") return <BuildRightInspector />;
@@ -63,6 +82,38 @@ export default function WorkspaceDockingShell() {
   const cmd = useCommand();
   const modelState = useModel();
   const tp = useTransport();
+  const solverIntegrator =
+    modelState.solverPlan?.integrator ?? modelState.solverSettings.integrator;
+  const solverAdaptiveDtMin = modelState.solverPlan?.adaptive?.dtMin;
+  const solverAdaptiveDtMax = modelState.solverPlan?.adaptive?.dtMax;
+  const fixedDtFromPlan = modelState.solverPlan?.fixedTimestep;
+  const fixedDtFromSettings = parsePositiveNumber(modelState.solverSettings.fixedTimestep);
+  const fixedDt = useMemo(() => {
+    if (typeof fixedDtFromPlan === "number" && Number.isFinite(fixedDtFromPlan) && fixedDtFromPlan > 0) {
+      return fixedDtFromPlan;
+    }
+    return fixedDtFromSettings;
+  }, [fixedDtFromPlan, fixedDtFromSettings]);
+  const solverDtSamples = useMemo(
+    () =>
+      tp.scalarRows
+        .slice(-128)
+        .map((row) => row.solver_dt)
+        .filter(isPositiveFinite),
+    [tp.scalarRows],
+  );
+  const solverMinDt = useMemo(() => {
+    if (!tp.hasSolverTelemetry) return null;
+    return isPositiveFinite(solverAdaptiveDtMin)
+      ? solverAdaptiveDtMin
+      : resolveFiniteMin(solverDtSamples);
+  }, [solverAdaptiveDtMin, tp.hasSolverTelemetry, solverDtSamples]);
+  const solverMaxDt = useMemo(() => {
+    if (!tp.hasSolverTelemetry) return null;
+    return isPositiveFinite(solverAdaptiveDtMax)
+      ? solverAdaptiveDtMax
+      : resolveFiniteMax(solverDtSamples);
+  }, [solverAdaptiveDtMax, tp.hasSolverTelemetry, solverDtSamples]);
 
   const [viewportWidth, setViewportWidth] = useState(1920);
   const responsivePreset = resolveDockResponsivePreset(viewportWidth);
@@ -127,8 +178,6 @@ export default function WorkspaceDockingShell() {
         );
       }
       if (component === "dock-bottom") {
-        const solverIntegrator =
-          modelState.solverPlan?.integrator ?? modelState.solverSettings.integrator;
         const solverMaxError = (() => {
           const planAtol = modelState.solverPlan?.adaptive?.atol;
           if (typeof planAtol === "number" && Number.isFinite(planAtol)) return planAtol;
@@ -154,6 +203,9 @@ export default function WorkspaceDockingShell() {
                 activityDetail={cmd.activity?.detail ?? null}
                 solverIntegrator={solverIntegrator}
                 solverMaxError={solverMaxError}
+                solverMinDt={solverMinDt}
+                solverMaxDt={solverMaxDt}
+                solverFixedDt={fixedDt}
               />
             </div>
             <div className="w-52 shrink-0 overflow-hidden">
@@ -177,10 +229,12 @@ export default function WorkspaceDockingShell() {
     [
       cmd.activity,
       cmd.workspaceStatus,
+      fixedDt,
       modelState.solverPlan?.adaptive?.atol,
-      modelState.solverPlan?.integrator,
-      modelState.solverSettings.integrator,
+      solverIntegrator,
       modelState.solverSettings.maxError,
+      modelState.solverSettings.fixedTimestep,
+      modelState.solverPlan?.fixedTimestep,
       tp.effectiveDmDt,
       tp.effectiveDt,
       tp.effectiveStep,

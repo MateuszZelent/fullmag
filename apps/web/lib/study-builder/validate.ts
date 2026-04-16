@@ -1,8 +1,14 @@
 import type { StudyPipelineDiagnostic, StudyPipelineDocument } from "./types";
+import type { StudyPipelineDocumentState, StudyPipelineNodeState } from "@/lib/session/types";
 
-function flattenEnabledNodeKinds(document: StudyPipelineDocument): Array<{ kind: string; nodeId: string }> {
+type ValidatableStudyPipelineNode = StudyPipelineDocument["nodes"][number] | StudyPipelineNodeState;
+type ValidatableStudyPipeline = StudyPipelineDocument | StudyPipelineDocumentState;
+
+function flattenEnabledNodeKinds(
+  document: ValidatableStudyPipeline,
+): Array<{ kind: string; nodeId: string }> {
   const result: Array<{ kind: string; nodeId: string }> = [];
-  const walk = (nodes: StudyPipelineDocument["nodes"]) => {
+  const walk = (nodes: ReadonlyArray<ValidatableStudyPipelineNode>) => {
     for (const node of nodes) {
       if (!node.enabled) continue;
       if (node.node_kind === "primitive") {
@@ -20,9 +26,9 @@ function flattenEnabledNodeKinds(document: StudyPipelineDocument): Array<{ kind:
   return result;
 }
 
-function collectNodeIds(document: StudyPipelineDocument): string[] {
+function collectNodeIds(document: ValidatableStudyPipeline): string[] {
   const ids: string[] = [];
-  const walk = (nodes: StudyPipelineDocument["nodes"]) => {
+  const walk = (nodes: ReadonlyArray<ValidatableStudyPipelineNode>) => {
     for (const node of nodes) {
       ids.push(node.id);
       if (node.node_kind === "group") {
@@ -35,7 +41,7 @@ function collectNodeIds(document: StudyPipelineDocument): string[] {
 }
 
 export function validateStudyPipeline(
-  document: StudyPipelineDocument,
+  document: ValidatableStudyPipeline,
 ): StudyPipelineDiagnostic[] {
   const diagnostics: StudyPipelineDiagnostic[] = [];
 

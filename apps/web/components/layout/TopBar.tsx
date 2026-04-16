@@ -4,9 +4,10 @@ import { type ReactNode } from 'react';
 import { ThemeToggle } from '../theme';
 import { Menu } from 'lucide-react';
 import Link from 'next/link';
+import type { Route } from 'next';
 
 interface TopBarProps {
-  breadcrumb?: { label: string; href?: string }[];
+  breadcrumb?: { label: string; href?: Route }[];
   onMobileMenuToggle: () => void;
   actions?: ReactNode;
 }
@@ -32,7 +33,7 @@ export function TopBar({ breadcrumb, onMobileMenuToggle, actions }: TopBarProps)
                   {i === breadcrumb.length - 1 ? (
                     <span className="font-medium text-foreground">{item.label}</span>
                   ) : item.href ? (
-                    <Link href={item.href as any} className="hover:text-foreground transition-colors">
+                    <Link href={item.href} className="hover:text-foreground transition-colors">
                       {item.label}
                     </Link>
                   ) : (

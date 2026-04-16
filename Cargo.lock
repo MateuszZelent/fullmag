@@ -1209,7 +1209,9 @@ dependencies = [
 name = "fullmag-py-core"
 version = "0.1.0"
 dependencies = [
+ "fullmag-engine",
  "fullmag-ir",
+ "fullmag-plan",
  "fullmag-runner",
  "pyo3",
  "serde_json",

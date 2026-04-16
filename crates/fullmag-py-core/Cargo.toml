@@ -9,7 +9,9 @@ name = "_fullmag_core"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+fullmag-engine = { path = "../fullmag-engine" }
 fullmag-ir = { path = "../fullmag-ir" }
+fullmag-plan = { path = "../fullmag-plan" }
 fullmag-runner = { path = "../fullmag-runner" }
 pyo3.workspace = true
 serde_json.workspace = true

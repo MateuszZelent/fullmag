@@ -3274,6 +3274,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut step_offset = 0u64;
     let mut time_offset = 0.0f64;
     let mut continuation_magnetization: Option<Vec<[f64; 3]>> = None;
+    let mut continuation_source: Option<ContinuationSource> = None;
 
     // ── wait_for_solve gate ──────────────────────────────────────────────
     let wait_for_solve_requested = stages
@@ -3594,6 +3595,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     ) {
                         Ok(loaded_state) => {
                             continuation_magnetization = Some(loaded_state.values.clone());
+                            continuation_source = None; // loaded from file — unknown source backend
                             live_workspace.update(|state| {
                                 state.live_state.updated_at_unix_ms =
                                     unix_time_millis().unwrap_or(0);
@@ -3702,7 +3704,53 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         );
         if synthetic_action.is_none() {
             if let Some(previous_final_magnetization) = continuation_magnetization.as_deref() {
-                apply_continuation_initial_state(&mut stage.ir, previous_final_magnetization)?;
+                // Check for cross-backend FEM→FDM transfer.
+                if let Some(source) = continuation_source.as_ref() {
+                    match resample_continuation_if_cross_backend(
+                        previous_final_magnetization,
+                        source,
+                        &stage.ir,
+                    ) {
+                        Ok(Some(transfer)) => {
+                            eprintln!(
+                                "[fullmag] FEM→FDM state transfer: {}/{} cells located, {} outside",
+                                transfer.n_located, transfer.n_total, transfer.n_outside
+                            );
+                            if let Some(workspace) = Some(&live_workspace) {
+                                workspace.push_log(
+                                    "info",
+                                    format!(
+                                        "Cross-backend state transfer: {}/{} cells interpolated from FEM mesh",
+                                        transfer.n_located, transfer.n_total
+                                    ),
+                                );
+                            }
+                            apply_continuation_initial_state(&mut stage.ir, &transfer.values)?;
+                        }
+                        Ok(None) => {
+                            // Same-backend continuation — use values directly.
+                            apply_continuation_initial_state(
+                                &mut stage.ir,
+                                previous_final_magnetization,
+                            )?;
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[fullmag] cross-backend state transfer failed: {}",
+                                e
+                            );
+                            bail!(
+                                "FEM→FDM magnetization state transfer failed: {}",
+                                e
+                            );
+                        }
+                    }
+                } else {
+                    apply_continuation_initial_state(
+                        &mut stage.ir,
+                        previous_final_magnetization,
+                    )?;
+                }
             }
         }
         validate_ir(&stage.ir)?;
@@ -3884,6 +3932,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
 
             continuation_magnetization = Some(synthetic_outcome.magnetization);
+            continuation_source = None; // synthetic remesh — inherit unknown source
             live_workspace.push_log("success", synthetic_outcome.message);
             live_workspace.push_log(
                 "success",
@@ -4208,6 +4257,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
         aggregated_steps.extend(offset_steps);
         continuation_magnetization = Some(stage_result.final_magnetization);
+        continuation_source = Some(match &execution_plan.backend_plan {
+            BackendPlanIR::Fem(fem_plan) => {
+                ContinuationSource::Fem(fem_plan.mesh.clone())
+            }
+            _ => ContinuationSource::Fdm,
+        });
 
         // If the stage was cancelled (user clicked Stop) or paused, skip
         // remaining scripted stages so that the interactive command loop can
@@ -4427,6 +4482,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             continue;
                         }
                         continuation_magnetization = Some(loaded_state.values);
+                        continuation_source = None; // loaded from file — unknown source
                         live_workspace.push_log(
                             "success",
                             format!(
@@ -4607,7 +4663,49 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 current_adaptive_runtime_state.as_ref(),
             );
             if let Some(previous_final_magnetization) = continuation_magnetization.as_deref() {
-                apply_continuation_initial_state(&mut stage.ir, previous_final_magnetization)?;
+                if let Some(source) = continuation_source.as_ref() {
+                    match resample_continuation_if_cross_backend(
+                        previous_final_magnetization,
+                        source,
+                        &stage.ir,
+                    ) {
+                        Ok(Some(transfer)) => {
+                            eprintln!(
+                                "[fullmag] FEM→FDM state transfer: {}/{} cells located, {} outside",
+                                transfer.n_located, transfer.n_total, transfer.n_outside
+                            );
+                            live_workspace.push_log(
+                                "info",
+                                format!(
+                                    "Cross-backend state transfer: {}/{} cells interpolated from FEM mesh",
+                                    transfer.n_located, transfer.n_total
+                                ),
+                            );
+                            apply_continuation_initial_state(&mut stage.ir, &transfer.values)?;
+                        }
+                        Ok(None) => {
+                            apply_continuation_initial_state(
+                                &mut stage.ir,
+                                previous_final_magnetization,
+                            )?;
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[fullmag] cross-backend state transfer failed: {}",
+                                e
+                            );
+                            bail!(
+                                "FEM→FDM magnetization state transfer failed: {}",
+                                e
+                            );
+                        }
+                    }
+                } else {
+                    apply_continuation_initial_state(
+                        &mut stage.ir,
+                        previous_final_magnetization,
+                    )?;
+                }
             }
             validate_ir(&stage.ir)?;
             current_plan_summary = stage
@@ -4913,6 +5011,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
                 aggregated_steps.extend(offset_steps);
                 continuation_magnetization = Some(stage_result.final_magnetization.clone());
+                continuation_source = Some(match &execution_plan.backend_plan {
+                    BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
+                    _ => ContinuationSource::Fdm,
+                });
                 interactive_stage_index += 1;
 
                 let paused_at_unix_ms = unix_time_millis()?;
@@ -4984,6 +5086,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
                 aggregated_steps.extend(offset_steps);
                 continuation_magnetization = Some(stage_result.final_magnetization.clone());
+                continuation_source = Some(match &execution_plan.backend_plan {
+                    BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
+                    _ => ContinuationSource::Fdm,
+                });
                 interactive_stage_index += 1;
 
                 let cancelled_at_unix_ms = unix_time_millis()?;
@@ -5241,6 +5347,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
             aggregated_steps.extend(offset_steps);
             continuation_magnetization = Some(stage_result.final_magnetization);
+            continuation_source = Some(match &execution_plan.backend_plan {
+                BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
+                _ => ContinuationSource::Fdm,
+            });
             interactive_stage_index += 1;
 
             let ready_at_unix_ms = unix_time_millis()?;

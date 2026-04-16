@@ -95,7 +95,8 @@ export default function StartHubPage() {
       },
       { includeStack: true },
     );
-    router.push(`${target}?${params.toString()}` as any);
+    const route = params.toString().length > 0 ? `${target}?${params}` : target;
+    router.push(route);
   };
 
   const handleOpenRecent = (entry: RecentSimulationEntry) => {

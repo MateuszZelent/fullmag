@@ -5,6 +5,11 @@ use fullmag_ir::{BackendPlanIR, ProblemIR};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+use fullmag_engine::fem::MeshTopology;
+use fullmag_engine::fem_solution_transfer::{
+    normalize_unit_vectors, transfer_fem_field_to_grid, GridTransferResult,
+};
+
 use crate::formatting::unix_time_millis;
 use crate::live_workspace::LocalLiveWorkspace;
 use crate::types::{
@@ -1869,6 +1874,102 @@ pub(crate) fn apply_continuation_initial_state(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Cross-backend magnetization state transfer (FEM → FDM)
+// ---------------------------------------------------------------------------
+
+/// Metadata about which backend produced the continuation magnetization.
+#[derive(Debug, Clone)]
+pub(crate) enum ContinuationSource {
+    /// Magnetization came from an FDM stage — cell-centered on a regular grid.
+    Fdm,
+    /// Magnetization came from a FEM stage — node-based on a tet mesh.
+    /// Carries the mesh IR needed for resampling to a different backend.
+    Fem(fullmag_ir::MeshIR),
+}
+
+/// Result of cross-backend resampling with transfer statistics.
+#[derive(Debug)]
+pub(crate) struct CrossBackendTransferResult {
+    pub values: Vec<[f64; 3]>,
+    pub n_located: usize,
+    pub n_outside: usize,
+    pub n_total: usize,
+}
+
+/// If the previous stage was FEM and the next stage will be FDM,
+/// resample the continuation magnetization from FEM nodes to FDM cell centers.
+///
+/// Returns `Ok(Some(resampled))` if resampling was performed,
+/// `Ok(None)` if no cross-backend transfer is needed (same backend type),
+/// or `Err` if the transfer fails.
+pub(crate) fn resample_continuation_if_cross_backend(
+    continuation_m: &[[f64; 3]],
+    source: &ContinuationSource,
+    next_stage_ir: &ProblemIR,
+) -> Result<Option<CrossBackendTransferResult>> {
+    let fem_mesh_ir = match source {
+        ContinuationSource::Fem(mesh_ir) => mesh_ir,
+        ContinuationSource::Fdm => return Ok(None), // same-backend, no resampling
+    };
+
+    // Pre-plan the next stage to discover if it's FDM and get grid parameters.
+    let next_plan = fullmag_plan::plan(next_stage_ir)
+        .map_err(|e| anyhow::anyhow!("pre-plan for cross-backend transfer failed: {}", e))?;
+
+    let fdm_plan = match &next_plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => fdm,
+        BackendPlanIR::FdmMultilayer(_) => {
+            // Multi-layer FDM continuation from FEM is not yet supported.
+            bail!(
+                "FEM → FDM-multilayer cross-backend continuation is not yet supported"
+            );
+        }
+        BackendPlanIR::Fem(_) => return Ok(None), // FEM → FEM: same-backend, use direct continuation
+        _ => return Ok(None),
+    };
+
+    // Extract FDM grid parameters.
+    let grid_cells = fdm_plan.grid.cells;
+    let cell_size = fdm_plan.cell_size;
+    let grid_dims = [
+        grid_cells[0] as usize,
+        grid_cells[1] as usize,
+        grid_cells[2] as usize,
+    ];
+
+    // For single-body FDM, the grid is centered at the origin.
+    let grid_origin = [
+        -(grid_cells[0] as f64 * cell_size[0]) * 0.5,
+        -(grid_cells[1] as f64 * cell_size[1]) * 0.5,
+        -(grid_cells[2] as f64 * cell_size[2]) * 0.5,
+    ];
+
+    // Build MeshTopology from the FEM plan's MeshIR.
+    let topo = MeshTopology::from_ir(fem_mesh_ir)
+        .map_err(|e| anyhow::anyhow!("failed to build mesh topology for state transfer: {}", e))?;
+
+    // Resample FEM node-based magnetization to FDM cell centers.
+    let GridTransferResult {
+        mut values,
+        n_located,
+        n_outside,
+        n_total,
+    } = transfer_fem_field_to_grid(&topo, continuation_m, grid_origin, cell_size, grid_dims);
+
+    // Post-transfer normalization: P1 interpolation of unit vectors does not
+    // preserve |m| = 1, so we re-normalize.  Zero vectors (cells outside the
+    // magnetic body) are left at zero.
+    normalize_unit_vectors(&mut values, 1e-12);
+
+    Ok(Some(CrossBackendTransferResult {
+        values,
+        n_located,
+        n_outside,
+        n_total,
+    }))
+}
+
 /// Estimate available system RAM in bytes.
 ///
 /// Reads `/proc/meminfo` (Linux). Falls back to 16 GB if unavailable.
@@ -3159,5 +3260,174 @@ mod tests {
             &stages[3].action,
             Some(ResolvedScriptStageAction::SaveState { .. })
         ));
+    }
+
+    // ------------------------------------------------------------------
+    // Cross-backend resampling (FEM → FDM)
+    // ------------------------------------------------------------------
+
+    /// Build a small FEM MeshIR: a cube [0, 100e-9]³ split into 6 tets.
+    fn small_fem_cube_mesh() -> fullmag_ir::MeshIR {
+        let s = 100e-9_f64;
+        // 8 corners of the cube
+        let nodes = vec![
+            [0.0, 0.0, 0.0],
+            [s, 0.0, 0.0],
+            [s, s, 0.0],
+            [0.0, s, 0.0],
+            [0.0, 0.0, s],
+            [s, 0.0, s],
+            [s, s, s],
+            [0.0, s, s],
+        ];
+        // 6 tets that tile the cube (standard decomposition)
+        let elements: Vec<[u32; 4]> = vec![
+            [0, 1, 3, 4],
+            [1, 2, 3, 6],
+            [1, 4, 5, 6],
+            [1, 3, 4, 6],
+            [3, 4, 6, 7],
+            [4, 5, 6, 7],
+        ];
+        let element_markers = vec![1u32; 6];
+        // Boundary faces (not critical for resampling, but required by IR)
+        let boundary_faces: Vec<[u32; 3]> = vec![
+            [0, 1, 3],
+            [1, 2, 3],
+            [4, 5, 7],
+            [5, 6, 7],
+            [0, 1, 4],
+            [1, 4, 5],
+            [2, 3, 6],
+            [3, 6, 7],
+            [0, 3, 4],
+            [3, 4, 7],
+            [1, 2, 5],
+            [2, 5, 6],
+        ];
+        let boundary_markers = vec![1u32; 12];
+
+        fullmag_ir::MeshIR {
+            mesh_name: "test_cube".to_string(),
+            nodes,
+            elements,
+            element_markers,
+            boundary_faces,
+            boundary_markers,
+            periodic_boundary_pairs: vec![],
+            periodic_node_pairs: vec![],
+            per_domain_quality: Default::default(),
+        }
+    }
+
+    /// Build a ProblemIR requesting FDM backend for a Box that covers the same
+    /// 100 nm cube as the test FEM mesh.
+    fn fdm_target_problem_ir() -> ProblemIR {
+        serde_json::from_value(json!({
+            "ir_version": "0.2.0",
+            "problem_meta": {
+                "name": "cross_backend_test",
+                "description": null,
+                "script_language": "python",
+                "script_source": null,
+                "script_api_version": "0.2.0",
+                "serializer_version": "0.2.0",
+                "entrypoint_kind": "direct_script",
+                "source_hash": null,
+                "runtime_metadata": {},
+                "backend_revision": null,
+                "seeds": []
+            },
+            "geometry": {
+                "entries": [{
+                    "kind": "box",
+                    "name": "cube",
+                    "size": [100e-9, 100e-9, 100e-9]
+                }]
+            },
+            "regions": [{
+                "name": "cube",
+                "geometry": "cube"
+            }],
+            "materials": [{
+                "name": "Py",
+                "saturation_magnetisation": 800000.0,
+                "exchange_stiffness": 1.3e-11,
+                "damping": 0.5,
+                "uniaxial_anisotropy": null,
+                "anisotropy_axis": null
+            }],
+            "magnets": [{
+                "name": "cube",
+                "region": "cube",
+                "material": "Py",
+                "initial_magnetization": {
+                    "kind": "uniform",
+                    "value": [1.0, 0.0, 0.0]
+                }
+            }],
+            "energy_terms": [{ "kind": "exchange" }],
+            "study": {
+                "kind": "time_evolution",
+                "dynamics": {
+                    "kind": "llg",
+                    "gyromagnetic_ratio": 221000.0,
+                    "integrator": "rk45",
+                    "fixed_timestep": 1e-13
+                },
+                "sampling": { "outputs": [] }
+            },
+            "backend_policy": {
+                "requested_backend": "fdm",
+                "execution_precision": "double",
+                "discretization_hints": {
+                    "fdm": { "cell": [25e-9, 25e-9, 25e-9] }
+                }
+            },
+            "validation_profile": {
+                "execution_mode": "strict"
+            }
+        }))
+        .expect("FDM target ProblemIR should parse")
+    }
+
+    #[test]
+    fn test_resample_fem_to_fdm_returns_some_for_cross_backend() {
+        let mesh_ir = small_fem_cube_mesh();
+        // Uniform +x magnetization at 8 FEM nodes
+        let fem_m: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; 8];
+        let source = ContinuationSource::Fem(mesh_ir);
+        let target_ir = fdm_target_problem_ir();
+
+        let result = resample_continuation_if_cross_backend(&fem_m, &source, &target_ir)
+            .expect("resampling should succeed");
+
+        let transfer = result.expect("should return Some for FEM→FDM");
+        // A 100 nm cube with 25 nm cells → 4×4×4 = 64 cells
+        assert_eq!(transfer.n_total, 64, "grid total should be 4×4×4 = 64");
+        assert!(
+            transfer.n_located > 0,
+            "should have some cells inside the mesh"
+        );
+        // All located cells should have roughly +x magnetization
+        for v in &transfer.values {
+            let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            if mag > 0.5 {
+                // This is a located cell — should be ~[1, 0, 0]
+                assert!(v[0] > 0.8, "x component should be ~1.0, got {}", v[0]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_resample_fdm_to_fdm_returns_none() {
+        let fdm_m: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; 64];
+        let source = ContinuationSource::Fdm;
+        let target_ir = fdm_target_problem_ir();
+
+        let result = resample_continuation_if_cross_backend(&fdm_m, &source, &target_ir)
+            .expect("same-backend check should succeed");
+
+        assert!(result.is_none(), "FDM→FDM should return None (no resampling)");
     }
 }

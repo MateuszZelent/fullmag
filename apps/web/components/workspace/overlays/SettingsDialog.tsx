@@ -4,6 +4,7 @@ import { useState } from "react";
 import { X, Monitor, Cpu, Sliders, Keyboard, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
+import { resolveApiBase } from "@/lib/apiBase";
 import {
   getLivePollIntervalMs,
   LIVE_POLL_INTERVAL_MAX_MS,
@@ -117,13 +118,14 @@ function RuntimeTab() {
   const [pollIntervalMs, setPollIntervalMsState] = useState<number>(() =>
     getLivePollIntervalMs(),
   );
+  const backendUrl = resolveApiBase();
 
   return (
     <div className="flex flex-col gap-5">
       <SettingsSection title="Backend connection">
         <SettingsRow label="API base URL" description="URL of the local Fullmag backend">
           <Input
-            defaultValue="http://localhost:8000"
+            defaultValue={backendUrl}
             className="w-52 h-8 bg-muted/40 border-border/60 text-[0.78rem] font-mono"
           />
         </SettingsRow>

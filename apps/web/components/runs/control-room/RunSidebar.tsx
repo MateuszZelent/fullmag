@@ -29,9 +29,49 @@ import { resultIconToken } from "@/features/analyze/registry/resultsTemplateRegi
 import { parseResultNodeContext } from "@/features/analyze/model/resultNodeContext";
 import { resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
-import type { StudyPipelineDocument } from "@/lib/study-builder/types";
 import { currentLiveApiClient } from "@/lib/liveApiClient";
 import type { EigenModeSummary } from "@/components/analyze/eigenTypes";
+import type { StudyPipelineDocumentState } from "@/lib/session/types";
+
+type StudyPipelineNodeState = StudyPipelineDocumentState["nodes"][number];
+
+function removeStudyPipelineNode(
+  nodes: StudyPipelineDocumentState["nodes"],
+  nodeId: string,
+): StudyPipelineDocumentState["nodes"] {
+  return nodes
+    .filter((node) => node.id !== nodeId)
+    .map((node) => {
+      if (node.node_kind !== "group") {
+        return node;
+      }
+      return {
+        ...node,
+        children: removeStudyPipelineNode(node.children, nodeId),
+      };
+    });
+}
+
+function toggleStudyPipelineNodeEnabled(
+  nodes: StudyPipelineDocumentState["nodes"],
+  nodeId: string,
+): StudyPipelineDocumentState["nodes"] {
+  return nodes.map((node) => {
+    if (node.id === nodeId) {
+      return {
+        ...node,
+        enabled: !node.enabled,
+      };
+    }
+    if (node.node_kind !== "group") {
+      return node;
+    }
+    return {
+      ...node,
+      children: toggleStudyPipelineNodeEnabled(node.children, nodeId),
+    };
+  });
+}
 
 type TreeFilterScope = "all" | "objects" | "mesh" | "physics" | "results";
 
@@ -354,9 +394,7 @@ export default function RunSidebar() {
     if (!document) {
       return {};
     }
-    const materialized = materializeStudyPipeline(
-      document as StudyPipelineDocument,
-    );
+    const materialized = materializeStudyPipeline(document);
     const entries: Array<[string, number[]]> = [];
     const collectEntries = (mapEntries: typeof materialized.map): void => {
       for (const entry of mapEntries) {
@@ -844,8 +882,10 @@ export default function RunSidebar() {
         const stageId = match[1];
         const accepted = window.confirm("Delete this stage from the pipeline?");
         if (accepted) {
-          const nextDocument = { ...model.studyPipeline } as any;
-          nextDocument.nodes = nextDocument.nodes.filter((n: any) => n.id !== stageId);
+          const nextDocument: StudyPipelineDocumentState = {
+            ...model.studyPipeline,
+            nodes: removeStudyPipelineNode(model.studyPipeline.nodes, stageId),
+          };
           model.setStudyPipeline(nextDocument);
           const compiled = materializeStudyPipeline(nextDocument);
           model.setStudyStages(compiled.stages);
@@ -857,10 +897,10 @@ export default function RunSidebar() {
       const match = nodeId.match(/^study-stage-node:(.+?)(?:\/|$)/);
       if (match && model.studyPipeline) {
         const stageId = match[1];
-        const nextDocument = { ...model.studyPipeline } as any;
-        nextDocument.nodes = nextDocument.nodes.map((n: any) =>
-          n.id === stageId ? { ...n, enabled: !n.enabled } : n,
-        );
+        const nextDocument: StudyPipelineDocumentState = {
+          ...model.studyPipeline,
+          nodes: toggleStudyPipelineNodeEnabled(model.studyPipeline.nodes, stageId),
+        };
         model.setStudyPipeline(nextDocument);
         const compiled = materializeStudyPipeline(nextDocument);
         model.setStudyStages(compiled.stages);
