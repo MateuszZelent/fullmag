@@ -58,8 +58,11 @@ function fingerprintRevision(fingerprint: string): number {
 const THEME = {
   bg: "transparent",
   paper: "transparent",
-  text: "hsl(215, 20.2%, 65.1%)",
-  gridLine: "hsla(217.2, 32.6%, 17.5%, 0.35)",
+  text: "hsl(210, 40%, 96%)",
+  axisText: "hsl(215, 20%, 78%)",
+  gridLine: "rgba(148, 163, 184, 0.18)",
+  zeroLine: "rgba(148, 163, 184, 0.28)",
+  axisLine: "rgba(148, 163, 184, 0.32)",
   hoverLabel: "hsl(222.2, 84%, 4.9%)",
   hoverText: "hsl(210, 40%, 98%)",
   hoverBorder: "hsl(217.2, 32.6%, 17.5%)",
@@ -211,43 +214,52 @@ const ScalarPlot = memo(function ScalarPlot({
       paper_bgcolor: THEME.paper,
       plot_bgcolor: THEME.bg,
       font: {
-        family: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-        size: 11,
-        color: THEME.text,
+        family:
+          "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+        size: 12,
+        color: THEME.axisText,
       },
       title: chartTitle
-        ? { text: chartTitle, font: { size: 13, color: THEME.text, weight: 600 }, x: 0.5, xanchor: "center" as const, y: 0.96 }
+        ? {
+            text: chartTitle,
+            font: { size: 14, color: THEME.text, weight: 600 },
+            x: 0.5,
+            xanchor: "center" as const,
+            y: 0.97,
+          }
         : undefined,
       margin: {
         l: 60,
-        r: 24,
-        t: chartTitle ? 36 : 16,
-        b: showRangeSlider ? 76 : 40,
+        r: unitGroups.rightUnit ? 70 : 26,
+        t: traces.length > 1 ? (chartTitle ? 70 : 52) : (chartTitle ? 42 : 20),
+        b: showRangeSlider ? 88 : 46,
         pad: 4,
       },
       xaxis: {
-        title: { text: xLabel, standoff: 12, font: { size: 11, color: THEME.text } },
-        color: THEME.text,
+        title: { text: xLabel, standoff: 14, font: { size: 12, color: THEME.axisText } },
+        color: THEME.axisText,
+        showgrid: true,
         gridcolor: THEME.gridLine,
         gridwidth: 1,
+        griddash: "dot",
         zeroline: true,
-        zerolinecolor: THEME.gridLine,
+        zerolinecolor: THEME.zeroLine,
         zerolinewidth: 1,
         automargin: true,
         showline: true,
-        linecolor: THEME.gridLine,
-        tickfont: { size: 10, color: THEME.text },
+        linecolor: THEME.axisLine,
+        tickfont: { size: 11, color: THEME.axisText },
         exponentformat: timeScale ? "none" : "e",
         showspikes: true,
         spikemode: "across",
         spikethickness: 1,
-        spikecolor: "rgba(96,165,250,0.35)",
+        spikecolor: "rgba(96,165,250,0.45)",
         rangeslider: showRangeSlider && rowsForPlot.length > 2
           ? {
               visible: true,
               thickness: 0.08,
-              bgcolor: "rgba(15,23,42,0.22)",
-              bordercolor: THEME.gridLine,
+              bgcolor: "rgba(15,23,42,0.45)",
+              bordercolor: THEME.axisLine,
             }
           : undefined,
         tickformat: timeScale
@@ -263,24 +275,25 @@ const ScalarPlot = memo(function ScalarPlot({
                 ? `Value (${unitGroups.leftUnit})`
                 : "Value",
           standoff: 12,
-          font: { size: 11, color: THEME.text }
+          font: { size: 12, color: THEME.axisText }
         },
-        color: THEME.text,
+        color: THEME.axisText,
+        showgrid: true,
         gridcolor: THEME.gridLine,
         gridwidth: 1,
         griddash: "dot",
         zeroline: true,
-        zerolinecolor: THEME.gridLine,
+        zerolinecolor: THEME.zeroLine,
         zerolinewidth: 1,
         automargin: true,
         showline: true,
-        linecolor: THEME.gridLine,
-        tickfont: { size: 10, color: THEME.text },
+        linecolor: THEME.axisLine,
+        tickfont: { size: 11, color: THEME.axisText },
         type: yAxisScale,
         showspikes: true,
         spikemode: "across",
         spikethickness: 1,
-        spikecolor: "rgba(96,165,250,0.3)",
+        spikecolor: "rgba(96,165,250,0.4)",
         exponentformat: "e",
         tickformat: magnetizationOnly ? ".2f" : undefined,
       },
@@ -289,30 +302,32 @@ const ScalarPlot = memo(function ScalarPlot({
             title: {
               text: `Value (${unitGroups.rightUnit})`,
               standoff: 12,
-              font: { size: 11, color: THEME.text }
+              font: { size: 12, color: THEME.axisText }
             },
             overlaying: "y",
             side: "right",
-            color: THEME.text,
+            color: THEME.axisText,
             showgrid: false,
             zeroline: false,
             automargin: true,
             showline: true,
-            linecolor: THEME.gridLine,
-            tickfont: { size: 10, color: THEME.text },
+            linecolor: THEME.axisLine,
+            tickfont: { size: 11, color: THEME.axisText },
             type: yAxisScale,
             exponentformat: "e",
           }
         : undefined,
+      showlegend: traces.length > 1,
       legend: {
         orientation: "h",
-        yanchor: "top",
-        y: showRangeSlider ? -0.3 : -0.22,
-        xanchor: "center",
-        x: 0.5,
-        font: { size: 11, color: THEME.text },
-        bgcolor: "rgba(0,0,0,0)",
-        bordercolor: "rgba(0,0,0,0)"
+        yanchor: "bottom",
+        y: 1.02,
+        xanchor: "left",
+        x: 0,
+        font: { size: 11, color: THEME.axisText },
+        bgcolor: "rgba(8, 12, 24, 0.72)",
+        bordercolor: "rgba(148, 163, 184, 0.18)",
+        borderwidth: 1,
       },
       hovermode: "x unified",
       hoverlabel: {
@@ -322,11 +337,10 @@ const ScalarPlot = memo(function ScalarPlot({
         namelength: -1,
       },
       dragmode: "pan",
-      uirevision: uiRevisionKey,
-      datarevision: rowsFingerprint,
+      uirevision: `scalar-plot:${uiRevisionKey}`,
       modebar: {
         bgcolor: "transparent",
-        color: THEME.text,
+        color: THEME.axisText,
         activecolor: "#60a5fa",
         orientation: "v",
       },
@@ -340,8 +354,8 @@ const ScalarPlot = memo(function ScalarPlot({
       unitGroups.leftUnit,
       unitGroups.rightUnit,
       uiRevisionKey,
-      rowsFingerprint,
       rowsForPlot.length,
+      traces.length,
       showRangeSlider,
       yAxisScale,
     ],
@@ -371,6 +385,7 @@ const ScalarPlot = memo(function ScalarPlot({
 
   return (
     <Plot
+      key={`scalar-plot:${uiRevisionKey}`}
       data={traces}
       layout={layout}
       config={config}

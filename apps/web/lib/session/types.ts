@@ -749,6 +749,7 @@ export interface ScriptBuilderExcitationAnalysisEntry {
 export interface ScriptBuilderState {
   revision: number;
   backend: string | null;
+  cpu_threads: number | null;
   demag_realization: string | null;
   external_field: [number, number, number] | null;
   solver: ScriptBuilderSolverState;
@@ -789,6 +790,7 @@ export interface ModelBuilderGraphStudyNode {
   requested_device: string;
   requested_precision: string;
   requested_mode: string;
+  requested_cpu_threads: number | null;
   demag_realization: string | null;
   external_field: [number, number, number] | null;
   solver: ScriptBuilderSolverState;
@@ -935,6 +937,7 @@ export interface SceneStudyState {
   requested_device: string;
   requested_precision: string;
   requested_mode: string;
+  requested_cpu_threads: number | null;
   demag_realization: string | null;
   external_field: [number, number, number] | null;
   solver: ScriptBuilderSolverState;

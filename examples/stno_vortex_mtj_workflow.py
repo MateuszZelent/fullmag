@@ -20,7 +20,7 @@ body = study.geometry(fm.Cylinder(radius=5e-08, height=9e-09, name="free"), name
 body.Ms = 700000
 body.Aex = 1.2e-11
 body.alpha = 0.01
-body.m = fm.uniform(1, 0, 0)  # type: ignore[assignment]
+body.m = fm.random(2)  # type: ignore[assignment]
 
 # External field
 study.b_ext(0, 0, 0.02)

@@ -14,7 +14,18 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, X, ChevronDown, Info, Search } from "lucide-react";
+import {
+  Activity,
+  BarChart3,
+  ChevronDown,
+  Clock3,
+  Info,
+  Magnet,
+  Plus,
+  Search,
+  X,
+  Zap,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -70,6 +81,34 @@ interface ChartQuantitySelectorProps {
   /** Enable scope switching only when per-object scalar history is truly available. */
   supportsObjectScope?: boolean;
 }
+
+const PRESET_ICON_CLASS = "h-3.5 w-3.5";
+
+const PRESET_META: Record<
+  ChartPresetId,
+  { icon: typeof Zap; description: string }
+> = {
+  energy: {
+    icon: Zap,
+    description: "Exchange, demag, external, anisotropy, DMI, total",
+  },
+  magnetization: {
+    icon: Magnet,
+    description: "Average magnetization components mx, my, mz",
+  },
+  convergence: {
+    icon: Activity,
+    description: "Solver health and convergence monitors",
+  },
+  timestep: {
+    icon: Clock3,
+    description: "Adaptive time-step history",
+  },
+  all: {
+    icon: BarChart3,
+    description: "Balanced mixed view across key scalar families",
+  },
+};
 
 // ── Component ────────────────────────────────────────────────────
 
@@ -282,23 +321,31 @@ export default function ChartQuantitySelector({
           </span>
           {PRESET_ORDER.map((presetId) => {
             const preset = CHART_PRESETS[presetId];
+            const presetMeta = PRESET_META[presetId];
             const isActive = chartState.activePreset === presetId;
+            const PresetIcon = presetMeta.icon;
             return (
-              <Button
-                key={presetId}
-                variant={isActive ? "default" : "outline"}
-                size="sm"
-                className={cn(
-                  "h-6 px-2.5 text-[0.65rem] font-semibold tracking-wide transition-all",
-                  isActive
-                    ? "bg-primary/90 text-primary-foreground shadow-sm shadow-primary/25"
-                    : "bg-muted/20 border-border/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                )}
-                onClick={() => handlePreset(presetId)}
-              >
-                <span className="mr-1">{preset.icon}</span>
-                {preset.label}
-              </Button>
+              <Tooltip key={presetId}>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={isActive ? "default" : "outline"}
+                    size="sm"
+                    className={cn(
+                      "h-7 gap-1.5 rounded-md px-2.5 text-[0.68rem] font-semibold tracking-[0.01em] transition-all",
+                      isActive
+                        ? "bg-primary/90 text-primary-foreground shadow-sm shadow-primary/20"
+                        : "bg-muted/20 border-border/30 text-muted-foreground hover:bg-muted/45 hover:text-foreground",
+                    )}
+                    onClick={() => handlePreset(presetId)}
+                  >
+                    <PresetIcon className={PRESET_ICON_CLASS} />
+                    {preset.label}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-64 text-xs">
+                  {presetMeta.description}
+                </TooltipContent>
+              </Tooltip>
             );
           })}
         </div>
@@ -346,7 +393,7 @@ export default function ChartQuantitySelector({
             size="sm"
             disabled={!hasAvailable}
             aria-label="Add chart series"
-            className="h-6 gap-1 px-2 text-[0.65rem] font-semibold border-dashed border-border/40 text-muted-foreground hover:text-foreground hover:border-primary/40 disabled:opacity-55"
+            className="h-7 gap-1.5 px-2.5 text-[0.68rem] font-semibold border-dashed border-border/40 text-muted-foreground hover:text-foreground hover:border-primary/40 disabled:opacity-55"
             onClick={() => {
               if (!hasAvailable) return;
               setAddPopoverOpen((prev) => {
@@ -357,7 +404,7 @@ export default function ChartQuantitySelector({
             }}
           >
             <Plus size={12} />
-            Add
+            Add series
             <ChevronDown
               size={10}
               className={cn(
@@ -458,7 +505,7 @@ export default function ChartQuantitySelector({
               <Badge
                 key={key}
                 variant="outline"
-                className="h-6 gap-1 pl-2 pr-1 text-[0.62rem] font-semibold border-border/30 bg-muted/15 hover:bg-muted/30 transition-colors group"
+                className="h-7 gap-1.5 pl-2.5 pr-1.5 text-[0.66rem] font-semibold border-border/30 bg-muted/15 hover:bg-muted/30 transition-colors group"
                 style={{
                   borderLeftColor: color,
                   borderLeftWidth: 3,

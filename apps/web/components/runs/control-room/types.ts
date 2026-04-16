@@ -33,6 +33,16 @@ export interface SolverRelaxationSummary {
   maxSteps: number | null;
 }
 
+export interface SolverLinearSolverSummary {
+  family: string | null;
+  method: string | null;
+  preconditioner: string | null;
+  relativeTolerance: number | null;
+  absoluteTolerance: number | null;
+  maxIterations: number | null;
+  printLevel: number | null;
+}
+
 export interface SolverPlanSummary {
   backendKind: string | null;
   requestedBackend: string | null;
@@ -54,6 +64,7 @@ export interface SolverPlanSummary {
   meshSource: string | null;
   feOrder: number | null;
   hmax: number | null;
+  demagSolver: SolverLinearSolverSummary | null;
   materialName: string | null;
   materialMsat: number | null;
   materialAex: number | null;

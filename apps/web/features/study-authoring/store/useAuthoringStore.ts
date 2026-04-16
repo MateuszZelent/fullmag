@@ -60,6 +60,7 @@ interface AuthoringStoreState {
     requested_device: string;
     requested_precision: string;
     requested_mode: string;
+    requested_cpu_threads: number | null;
   };
 
   /** Selection / focus */
@@ -103,6 +104,7 @@ interface AuthoringStoreState {
     requested_device: string;
     requested_precision: string;
     requested_mode: string;
+    requested_cpu_threads: number | null;
   }) => void;
   setSelectedSidebarNodeId: (id: string | null) => void;
   setSelectedObjectId: (id: string | null) => void;
@@ -142,6 +144,7 @@ const INITIAL_STATE = {
     requested_device: "auto",
     requested_precision: "double",
     requested_mode: "strict",
+    requested_cpu_threads: null,
   },
   selectedSidebarNodeId: null,
   selectedObjectId: null,

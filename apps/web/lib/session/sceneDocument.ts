@@ -160,6 +160,7 @@ export function buildSceneDocumentFromScriptBuilder(
       requested_device: "auto",
       requested_precision: "double",
       requested_mode: "strict",
+      requested_cpu_threads: builder.cpu_threads,
       demag_realization: builder.demag_realization,
       external_field: builder.external_field,
       solver: builder.solver,
@@ -231,6 +232,7 @@ export function buildScriptBuilderFromSceneDocument(
   return {
     revision: scene.revision,
     backend: scene.study.backend,
+    cpu_threads: scene.study.requested_cpu_threads,
     demag_realization: scene.study.demag_realization,
     external_field: scene.study.external_field,
     solver: scene.study.solver,

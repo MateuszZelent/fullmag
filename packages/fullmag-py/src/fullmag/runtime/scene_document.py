@@ -216,6 +216,11 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         },
         "study": {
             "backend": builder.get("backend"),
+            "requested_backend": "auto",
+            "requested_device": "auto",
+            "requested_precision": "double",
+            "requested_mode": "strict",
+            "requested_cpu_threads": builder.get("cpu_threads"),
             "demag_realization": builder.get("demag_realization"),
             "external_field": builder.get("external_field"),
             "solver": builder.get("solver") or {},
@@ -335,6 +340,9 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     solver = dict(builder.get("solver") or {})
     mesh = dict(builder.get("mesh") or {})
     return {
+        "runtime_selection": {
+            "cpu_threads": _int_or_none(builder.get("cpu_threads")),
+        },
         "demag_realization": builder.get("demag_realization"),
         "external_field": (
             [float(value) for value in builder.get("external_field")]

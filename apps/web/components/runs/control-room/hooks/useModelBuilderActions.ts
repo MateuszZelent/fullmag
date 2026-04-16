@@ -124,6 +124,7 @@ export function useModelBuilderActions({
         requested_device: string;
         requested_precision: string;
         requested_mode: string;
+        requested_cpu_threads: number | null;
       }>
     >
   >(
@@ -140,6 +141,7 @@ export function useModelBuilderActions({
           requested_device: previousScene.study.requested_device,
           requested_precision: previousScene.study.requested_precision,
           requested_mode: previousScene.study.requested_mode,
+          requested_cpu_threads: previousScene.study.requested_cpu_threads,
         };
         const nextRuntime =
           typeof update === "function" ? update(currentRuntime) : update;

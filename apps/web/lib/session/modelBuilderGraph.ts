@@ -125,6 +125,7 @@ export function createModelBuilderGraphV2(
       requested_device: "auto",
       requested_precision: "double",
       requested_mode: "strict",
+      requested_cpu_threads: builder?.cpu_threads ?? null,
       demag_realization: builder?.demag_realization ?? null,
       external_field: builder?.external_field ?? null,
       solver: builder?.solver ?? EMPTY_SOLVER,
@@ -184,6 +185,7 @@ export function serializeModelBuilderGraphV2(graph: ModelBuilderGraphV2): Omit<
 > {
   return {
     backend: graph.study.backend,
+    cpu_threads: graph.study.requested_cpu_threads,
     demag_realization: graph.study.demag_realization,
     external_field: graph.study.external_field,
     solver: graph.study.solver,
@@ -301,6 +303,7 @@ export function setModelBuilderRequestedRuntime(
     requested_device: string;
     requested_precision: string;
     requested_mode: string;
+    requested_cpu_threads: number | null;
   }>,
   defaults?: ModelBuilderGraphDefaults,
 ): ModelBuilderGraphV2 {
@@ -311,6 +314,7 @@ export function setModelBuilderRequestedRuntime(
       requested_device: ensured.study.requested_device,
       requested_precision: ensured.study.requested_precision,
       requested_mode: ensured.study.requested_mode,
+      requested_cpu_threads: ensured.study.requested_cpu_threads,
     },
     action,
   );

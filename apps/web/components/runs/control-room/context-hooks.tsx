@@ -275,6 +275,7 @@ export interface ModelContextValue {
     requested_device: string;
     requested_precision: string;
     requested_mode: string;
+    requested_cpu_threads: number | null;
   };
   material: MaterialSummary | null;
   solverPlan: SolverPlanSummary | null;
@@ -374,6 +375,7 @@ export interface ModelContextValue {
       requested_device: string;
       requested_precision: string;
       requested_mode: string;
+      requested_cpu_threads: number | null;
     }>
   >;
   setStudyStages: React.Dispatch<React.SetStateAction<ScriptBuilderStageState[]>>;

@@ -1880,6 +1880,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         localBuilderDraft?.study.requested_mode ??
         modelBuilderGraph?.study.requested_mode ??
         "strict",
+      requested_cpu_threads:
+        localBuilderDraft?.study.requested_cpu_threads ??
+        modelBuilderGraph?.study.requested_cpu_threads ??
+        null,
     },
     material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshShowArrows,

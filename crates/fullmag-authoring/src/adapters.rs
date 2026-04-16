@@ -62,6 +62,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             requested_device: "auto".to_string(),
             requested_precision: "double".to_string(),
             requested_mode: "strict".to_string(),
+            requested_cpu_threads: builder.cpu_threads,
             demag_realization: builder.demag_realization.clone(),
             external_field: builder.external_field,
             solver: builder.solver.clone(),
@@ -155,6 +156,7 @@ pub fn scene_document_to_script_builder(
     Ok(ScriptBuilderState {
         revision: scene.revision,
         backend: normalized_scene.study.backend.clone(),
+        cpu_threads: normalized_scene.study.requested_cpu_threads,
         demag_realization: normalized_scene.study.demag_realization.clone(),
         external_field: normalized_scene.study.external_field,
         solver: normalized_scene.study.solver.clone(),
@@ -184,10 +186,12 @@ pub fn scene_document_to_script_builder_overrides(
             "device": scene.study.requested_device,
             "precision": scene.study.requested_precision,
             "mode": scene.study.requested_mode,
+            "cpu_threads": scene.study.requested_cpu_threads,
             "explicit_selection": scene.study.requested_backend != "auto"
                 || scene.study.requested_device != "auto"
                 || scene.study.requested_precision != "double"
-                || scene.study.requested_mode != "strict",
+                || scene.study.requested_mode != "strict"
+                || scene.study.requested_cpu_threads.is_some(),
         },
         "demag_realization": builder.demag_realization,
         "external_field": builder.external_field

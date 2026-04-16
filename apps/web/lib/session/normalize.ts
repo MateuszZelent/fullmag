@@ -777,6 +777,10 @@ function normalizeScriptBuilder(raw: any): ScriptBuilderState | null {
       typeof raw.backend === "string" && raw.backend.trim().length > 0
         ? raw.backend
         : null,
+    cpu_threads:
+      raw.cpu_threads != null && Number.isFinite(Number(raw.cpu_threads))
+        ? Math.max(1, Math.trunc(Number(raw.cpu_threads)))
+        : null,
     demag_realization:
       typeof raw.demag_realization === "string" && raw.demag_realization.trim().length > 0
         ? raw.demag_realization
@@ -1112,6 +1116,7 @@ function emptyScriptBuilderState(): ScriptBuilderState {
   return normalizeScriptBuilder({
     revision: 0,
     backend: null,
+    cpu_threads: null,
     demag_realization: null,
     external_field: null,
     solver: {},
@@ -1188,6 +1193,7 @@ function normalizeSceneStudy(raw: any) {
   const normalized = normalizeScriptBuilder({
     revision: 0,
     backend: raw?.backend ?? null,
+    cpu_threads: raw?.requested_cpu_threads ?? raw?.cpu_threads ?? null,
     demag_realization: raw?.demag_realization ?? null,
     external_field: raw?.external_field ?? null,
     solver: raw?.solver ?? {},
@@ -1210,6 +1216,10 @@ function normalizeSceneStudy(raw: any) {
       typeof raw?.requested_precision === "string" ? raw.requested_precision : "double",
     requested_mode:
       typeof raw?.requested_mode === "string" ? raw.requested_mode : "strict",
+    requested_cpu_threads:
+      raw?.requested_cpu_threads != null && Number.isFinite(Number(raw.requested_cpu_threads))
+        ? Math.max(1, Math.trunc(Number(raw.requested_cpu_threads)))
+        : normalized?.cpu_threads ?? null,
     demag_realization: normalized?.demag_realization ?? null,
     external_field: normalized?.external_field ?? null,
     solver: normalized?.solver ?? defaults.solver,

@@ -77,6 +77,7 @@ export interface AuthoringState {
     requested_device: string;
     requested_precision: string;
     requested_mode: string;
+    requested_cpu_threads: number | null;
   };
 
   /** Selection / focus (authoring domain) */

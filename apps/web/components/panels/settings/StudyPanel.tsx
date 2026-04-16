@@ -115,9 +115,22 @@ function parseOptionalNumber(raw: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+function parseOptionalPositiveInteger(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value)) return null;
+  const resolved = Math.trunc(value);
+  return resolved >= 1 ? resolved : null;
+}
+
 function formatExternalField(field: [number, number, number] | null): string {
   if (!field) return "disabled";
   return `${fmtExp(field[0])}, ${fmtExp(field[1])}, ${fmtExp(field[2])} T`;
+}
+
+function formatCpuThreads(value: number | null): string {
+  return value != null ? `${value}` : "auto";
 }
 
 function syncCompatibilityState(
@@ -396,6 +409,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
           <InfoRow label="Requested backend" value={humanizeToken(ctx.requestedRuntimeSelection.requested_backend)} />
           <InfoRow label="Requested device" value={humanizeToken(ctx.requestedRuntimeSelection.requested_device)} />
           <InfoRow label="Requested precision" value={humanizeToken(ctx.requestedRuntimeSelection.requested_precision)} />
+          <InfoRow label="Requested CPU threads" value={formatCpuThreads(ctx.requestedRuntimeSelection.requested_cpu_threads)} />
           <InfoRow label="Integrator" value={ctx.solverSettings.integrator || "—"} />
           <InfoRow label="Fixed dt" value={ctx.solverSettings.fixedTimestep || "adaptive / default"} />
           <InfoRow label="Relax algorithm" value={humanizeToken(ctx.solverSettings.relaxAlgorithm)} />
@@ -410,6 +424,38 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       <SidebarSection title="Runtime & Backend" icon="⚙" defaultOpen={true}>
         <SolverSelector />
       </SidebarSection>
+      <SidebarSection title="CPU Load & Apply Timing" icon="🧵" defaultOpen={true}>
+        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
+          CPU load is configured per compute start. Fullmag resolves Rayon/OpenMP/native FEM thread pools when the run begins, so edits made during an active solve apply to the next compute, not the current one.
+        </div>
+        <div className="mt-3 grid gap-3">
+          <TextField
+            label="Requested CPU threads"
+            value={
+              ctx.requestedRuntimeSelection.requested_cpu_threads != null
+                ? String(ctx.requestedRuntimeSelection.requested_cpu_threads)
+                : ""
+            }
+            onchange={(event) => {
+              const nextValue = parseOptionalPositiveInteger(event.target.value);
+              ctx.setRequestedRuntimeSelection((current) => ({
+                ...current,
+                requested_cpu_threads: nextValue,
+              }));
+            }}
+            placeholder="auto"
+            mono
+          />
+          <div className="grid gap-1">
+            <InfoRow label="Current request" value={formatCpuThreads(ctx.requestedRuntimeSelection.requested_cpu_threads)} />
+            <InfoRow
+              label="Apply timing"
+              value={ctx.workspaceStatus === "running" ? "next compute only" : "next runtime resolution"}
+            />
+            <InfoRow label="Can change mid-run" value="no — restart or start a new compute" />
+          </div>
+        </div>
+      </SidebarSection>
       <SidebarSection title="Resolved Runtime" icon="🧠" defaultOpen={true}>
         <div className="grid gap-1">
           <InfoRow label="State" value={ctx.workspaceStatus} />
@@ -417,6 +463,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
           <InfoRow label="Backend" value={humanizeToken(solverPlan?.resolvedBackend ?? solverPlan?.backendKind ?? ctx.sessionFooter.requestedBackend)} />
           <InfoRow label="Mode" value={humanizeToken(solverPlan?.executionMode ?? ctx.session?.execution_mode)} />
           <InfoRow label="Precision" value={humanizeToken(solverPlan?.precision ?? ctx.session?.precision)} />
+          <InfoRow label="Requested CPU threads" value={formatCpuThreads(ctx.requestedRuntimeSelection.requested_cpu_threads)} />
           <InfoRow label="Workload" value={workloadLabel} />
         </div>
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -441,6 +488,41 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
           <InfoRow label="Precession" value={precessionModeForPlan(solverPlan)} />
           <InfoRow label="Gamma" value={solverPlan?.gyromagneticRatio != null ? `${fmtExp(solverPlan.gyromagneticRatio)} m/(A·s)` : "—"} />
           <InfoRow label="Relax algorithm" value={relaxationProfile?.label ?? humanizeToken(ctx.solverSettings.relaxAlgorithm)} />
+        </div>
+      </SidebarSection>
+      <SidebarSection title="Native FEM Linear Solver" icon="🧱" defaultOpen={true}>
+        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
+          Native FEM demag currently resolves to the runtime linear-solver policy below. This is intentionally read-only here until solver-policy editing becomes a first-class public Python and SceneDocument contract.
+        </div>
+        <div className="mt-3 grid gap-1">
+          <InfoRow
+            label="Family"
+            value={solverPlan?.demagSolver?.family ?? (ctx.isFemBackend && solverPlan?.demagEnabled ? "hypre" : "—")}
+          />
+          <InfoRow
+            label="Method"
+            value={solverPlan?.demagSolver?.method ?? (ctx.isFemBackend && solverPlan?.demagEnabled ? "CG" : "—")}
+          />
+          <InfoRow
+            label="Preconditioner"
+            value={solverPlan?.demagSolver?.preconditioner ?? (ctx.isFemBackend && solverPlan?.demagEnabled ? "AMG" : "—")}
+          />
+          <InfoRow
+            label="Relative tolerance"
+            value={solverPlan?.demagSolver?.relativeTolerance != null ? fmtExp(solverPlan.demagSolver.relativeTolerance) : "—"}
+          />
+          <InfoRow
+            label="Absolute tolerance"
+            value={solverPlan?.demagSolver?.absoluteTolerance != null ? fmtExp(solverPlan.demagSolver.absoluteTolerance) : "—"}
+          />
+          <InfoRow
+            label="Max iterations"
+            value={solverPlan?.demagSolver?.maxIterations != null ? `${solverPlan.demagSolver.maxIterations}` : "—"}
+          />
+          <InfoRow
+            label="Print level"
+            value={solverPlan?.demagSolver?.printLevel != null ? `${solverPlan.demagSolver.printLevel}` : "—"}
+          />
         </div>
       </SidebarSection>
       <SidebarSection title="Integrator Defaults" icon="⏱" defaultOpen={true}>

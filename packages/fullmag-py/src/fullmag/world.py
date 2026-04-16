@@ -778,6 +778,7 @@ class _WorldState:
     _gpu_count: int = 0
     _device_index: int | None = None
     _precision: str | None = None
+    _cpu_threads: int | None = None
     _boundary_correction: str | None = None  # "none" | "volume" | "full"
 
     # Grid
@@ -1884,6 +1885,10 @@ class StudyBuilder:
         device(spec, precision=precision)
         return self
 
+    def threads(self, cpu_threads: int) -> "StudyBuilder":
+        threads(cpu_threads)
+        return self
+
     def cell(self, dx: float, dy: float, dz: float) -> "StudyBuilder":
         cell(dx, dy, dz)
         return self
@@ -2363,6 +2368,14 @@ def device(spec: str, *, precision: str | None = None) -> None:
         _state._device = spec
     if precision is not None:
         _state._precision = precision.lower()
+
+
+def threads(cpu_threads: int) -> None:
+    """Set requested CPU thread count for the next run."""
+    resolved = int(cpu_threads)
+    if resolved < 1:
+        raise ValueError("threads() requires cpu_threads >= 1")
+    _state._cpu_threads = resolved
 
 
 def cell(dx: float, dy: float, dz: float) -> None:
@@ -3656,6 +3669,8 @@ def _build_problem(
         rt = rt.gpu(s._gpu_count)
     if s._precision is not None:
         rt = rt.precision(s._precision)
+    if s._cpu_threads is not None:
+        rt = rt.threads(s._cpu_threads)
 
     runtime_metadata: dict[str, Any] = {"interactive_session_requested": s._interactive}
     runtime_metadata["script_api_surface"] = s._api_surface

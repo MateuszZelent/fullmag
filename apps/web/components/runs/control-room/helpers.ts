@@ -320,6 +320,7 @@ export function buildLegacyScriptBuilderUpdatePayload(
   return buildSceneDocumentFromScriptBuilder({
     revision: 0,
     backend: null,
+    cpu_threads: null,
     demag_realization: demagRealization,
     external_field: null,
     solver: solverSettingsToBuilder(solverSettings),
@@ -438,6 +439,7 @@ export function extractSolverPlan(
   const material = asRecord(backendPlan.material);
   const adaptive = asRecord(backendPlan.adaptive_timestep);
   const relaxation = asRecord(backendPlan.relaxation);
+  const demagSolverPolicy = asRecord(backendPlan.demag_solver_policy);
   const planSummary = asRecord(session?.plan_summary);
 
   return {
@@ -479,6 +481,17 @@ export function extractSolverPlan(
     meshSource: asString(backendPlan.mesh_source),
     feOrder: asNumber(backendPlan.fe_order),
     hmax: asNumber(backendPlan.hmax),
+    demagSolver: demagSolverPolicy
+      ? {
+          family: "hypre",
+          method: asString(demagSolverPolicy.solver),
+          preconditioner: asString(demagSolverPolicy.preconditioner),
+          relativeTolerance: asNumber(demagSolverPolicy.rtol),
+          absoluteTolerance: asNumber(demagSolverPolicy.atol),
+          maxIterations: asNumber(demagSolverPolicy.max_iterations),
+          printLevel: asNumber(demagSolverPolicy.print_level),
+        }
+      : null,
     materialName: asString(material?.name),
     materialMsat: asNumber(material?.saturation_magnetisation),
     materialAex: asNumber(material?.exchange_stiffness),

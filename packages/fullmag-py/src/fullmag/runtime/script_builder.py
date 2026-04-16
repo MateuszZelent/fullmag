@@ -59,6 +59,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     return {
         "revision": 1,
         "backend": base_problem.runtime.backend_target.value,
+        "cpu_threads": base_problem.runtime.cpu_threads,
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
         "solver": {
@@ -431,6 +432,13 @@ def _render_runtime(
     surface: str,
 ) -> list[str]:
     runtime = problem.runtime
+    runtime_override = _normalize_mapping(overrides.get("runtime_selection"))
+    override_cpu_threads = runtime_override.get("cpu_threads") if runtime_override else None
+    cpu_threads = (
+        int(override_cpu_threads)
+        if isinstance(override_cpu_threads, (int, float)) and not isinstance(override_cpu_threads, bool)
+        else runtime.cpu_threads
+    )
     lines = ["# Engine"]
     if surface == "flat" and problem.name != "fullmag_sim":
         lines.append(f"fm.name({_py_repr(problem.name)})")
@@ -452,6 +460,8 @@ def _render_runtime(
         )
     else:
         lines.append(f"{_surface_call(surface, 'device')}({_py_repr(device_spec)})")
+    if cpu_threads is not None:
+        lines.append(f"{_surface_call(surface, 'threads')}({cpu_threads})")
 
     fdm = problem.discretization.fdm if problem.discretization is not None else None
     if isinstance(fdm, FDM) and fdm.default_cell is not None:

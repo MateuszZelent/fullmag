@@ -220,6 +220,8 @@ pub struct SceneStudyState {
     #[serde(default = "default_strict")]
     pub requested_mode: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_cpu_threads: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
