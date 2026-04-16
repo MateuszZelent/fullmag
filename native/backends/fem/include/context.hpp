@@ -297,6 +297,7 @@ struct Context {
     void  *mfem_boundary_mass = nullptr; // mfem::BilinearForm* for ∫_Γ φᵢφⱼ dS
 
     // CPU OpenMP runtime diagnostics for Poisson/Robin demag.
+    bool cpu_threads_auto_requested = false;
     int requested_omp_threads = 1;
     int effective_omp_threads = 1;
 #endif

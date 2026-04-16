@@ -94,11 +94,27 @@ if [ -d "${RUNTIME_ROOT}/lib/pmix2/share/pmix" ]; then
   export PMIX_EXEC_PREFIX="${RUNTIME_ROOT}/lib/pmix2"
   export PMIX_MCA_pcompress_base_silence_warning="${PMIX_MCA_pcompress_base_silence_warning:-1}"
 fi
+unset FULLMAG_CPU_THREADS_AUTO_RESOLVED
 if [ -n "${FULLMAG_CPU_THREADS:-}" ] && [ -z "${OMP_NUM_THREADS:-}" ]; then
-  export OMP_NUM_THREADS="${FULLMAG_CPU_THREADS}"
-fi
-if [ -z "${OMP_NUM_THREADS:-}" ] && command -v nproc >/dev/null 2>&1; then
-  export OMP_NUM_THREADS="$(nproc)"
+  case "${FULLMAG_CPU_THREADS}" in
+    auto|AUTO|Auto)
+      if command -v nproc >/dev/null 2>&1; then
+        FULLMAG_CPU_THREADS_AUTO_RESOLVED="$(nproc)"
+      else
+        FULLMAG_CPU_THREADS_AUTO_RESOLVED=1
+      fi
+      if [ "${FULLMAG_CPU_THREADS_AUTO_RESOLVED}" -gt 8 ]; then
+        FULLMAG_CPU_THREADS_AUTO_RESOLVED=8
+      fi
+      export FULLMAG_CPU_THREADS_AUTO_RESOLVED
+      export OMP_NUM_THREADS="${FULLMAG_CPU_THREADS_AUTO_RESOLVED}"
+      ;;
+    ''|*[!0-9]*)
+      ;;
+    *)
+      export OMP_NUM_THREADS="${FULLMAG_CPU_THREADS}"
+      ;;
+  esac
 fi
 export FULLMAG_FEM_EXECUTION="${FULLMAG_FEM_EXECUTION:-gpu}"
 export FULLMAG_FEM_GPU_INDEX="${FULLMAG_FEM_GPU_INDEX:-0}"

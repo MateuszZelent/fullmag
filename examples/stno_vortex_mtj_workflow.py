@@ -76,7 +76,7 @@ study.tableautosave(1e-14, quantities=("time", "mx", "E_total"))
 # study.save("max_h_eff", every=1e-11)
 
 # Stages
-study.stages.add_relax(max_steps=8000, tol=1e-6, algorithm="llg_overdamped", max_error=1e-6)
+study.stages.add_relax(max_steps=10000, tol=1e-6, algorithm="llg_overdamped", max_error=1e-6)
 # study.stages.add_eigenmodes(
 #     count=20,
 #     target="lowest",

@@ -165,7 +165,7 @@ run-stno-interactive-managed fem_execution="gpu" cpu_threads="auto":
         exit 2; \
     fi
     if [ "{{cpu_threads}}" = "auto" ]; then \
-        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" '{{gpu_runtime_bin}}' --dev -i examples/stno_vortex_mtj_workflow.py; \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS=auto '{{gpu_runtime_bin}}' --dev -i examples/stno_vortex_mtj_workflow.py; \
     else \
         FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS="{{cpu_threads}}" '{{gpu_runtime_bin}}' --dev -i examples/stno_vortex_mtj_workflow.py; \
     fi
@@ -226,21 +226,34 @@ rebuild-gpu-runtime:
 # Outputs timing comparison and speedup table.
 bench-cpu-scaling:
     just ensure-python
-    just build fullmag
-    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" ./scripts/bench_fem_cpu_scaling.sh
+    if [ ! -x '{{gpu_runtime_bin}}' ]; then \
+        echo "Managed FEM runtime bundle is missing (used for both FEM CPU and FEM GPU)." >&2; \
+        echo "Run: just rebuild-fem-runtime" >&2; \
+        exit 2; \
+    fi
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" FULLMAG_BIN="{{gpu_runtime_bin}}" ./scripts/bench_fem_cpu_scaling.sh
 
 # Quick version of CPU scaling benchmark (fewer steps, fewer mesh sizes).
 bench-cpu-scaling-quick:
     just ensure-python
-    just build fullmag
-    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" ./scripts/bench_fem_cpu_scaling.sh --quick
+    if [ ! -x '{{gpu_runtime_bin}}' ]; then \
+        echo "Managed FEM runtime bundle is missing (used for both FEM CPU and FEM GPU)." >&2; \
+        echo "Run: just rebuild-fem-runtime" >&2; \
+        exit 2; \
+    fi
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" FULLMAG_BIN="{{gpu_runtime_bin}}" ./scripts/bench_fem_cpu_scaling.sh --quick
 
 # Single-run profiling benchmark. Use with htop/perf to observe CPU utilization.
-# Example: FULLMAG_CPU_THREADS=8 just bench-profile
+# Example: just bench-profile auto
 bench-profile threads="auto":
     just ensure-python
-    just build fullmag
-    PATH="{{local_bin}}:$PATH" \
+    if [ ! -x '{{gpu_runtime_bin}}' ]; then \
+        echo "Managed FEM runtime bundle is missing (used for both FEM CPU and FEM GPU)." >&2; \
+        echo "Run: just rebuild-fem-runtime" >&2; \
+        exit 2; \
+    fi
     FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_FDM_EXECUTION=cpu \
+    FULLMAG_FEM_EXECUTION=cpu \
     FULLMAG_CPU_THREADS="{{threads}}" \
-    fullmag --headless examples/bench_fem_simple.py
+    '{{gpu_runtime_bin}}' --headless examples/bench_fem_simple.py

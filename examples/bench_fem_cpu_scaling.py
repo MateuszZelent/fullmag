@@ -5,7 +5,7 @@ and runs a single relaxation stage automatically. It is intended for
 thread-scaling sweeps driven by `scripts/bench_fem_cpu_scaling.sh`.
 
 Usage:
-    FULLMAG_CPU_THREADS=4 BENCH_HMAX=4e-9 fullmag --headless examples/bench_fem_cpu_scaling.py
+    FULLMAG_CPU_THREADS=auto BENCH_HMAX=4e-9 fullmag --headless examples/bench_fem_cpu_scaling.py
 """
 
 import os
@@ -25,7 +25,8 @@ print(f"[bench]   hmax          = {HMAX:.2e} m", file=sys.stderr)
 print(f"[bench]   max_steps     = {MAX_STEPS}", file=sys.stderr)
 print(f"[bench]   radius        = {RADIUS:.2e} m", file=sys.stderr)
 print(f"[bench]   height        = {HEIGHT:.2e} m", file=sys.stderr)
-print(f"[bench]   cpu_threads   = {CPU_THREADS}", file=sys.stderr)
+print(f"[bench]   cpu_threads.request = {CPU_THREADS}", file=sys.stderr)
+print("[bench]   cpu_threads.resolve = see [fullmag-fem] cpu runtime log", file=sys.stderr)
 
 setup_start = time.perf_counter()
 

@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <tuple>
 
 #ifdef _OPENMP
@@ -217,6 +218,15 @@ int openmp_max_threads() {
 #endif
 }
 
+int detected_cpu_threads() {
+#ifdef _OPENMP
+    return std::max(1, omp_get_num_procs());
+#else
+    const unsigned int concurrency = std::thread::hardware_concurrency();
+    return std::max(1u, concurrency);
+#endif
+}
+
 std::optional<int> parse_positive_env_int(const char *name) {
     const char *raw = std::getenv(name);
     if (raw == nullptr || *raw == '\0') {
@@ -230,30 +240,83 @@ std::optional<int> parse_positive_env_int(const char *name) {
     return static_cast<int>(parsed);
 }
 
-int requested_cpu_threads() {
+bool env_requests_auto_threads(const char *name) {
+    const char *raw = std::getenv(name);
+    if (raw == nullptr || *raw == '\0') {
+        return false;
+    }
+    return std::strcmp(raw, "auto") == 0 ||
+           std::strcmp(raw, "AUTO") == 0 ||
+           std::strcmp(raw, "Auto") == 0;
+}
+
+struct CpuThreadRequest {
+    int requested_threads = 1;
+    int auto_resolved_threads = 0;
+    bool auto_requested = false;
+};
+
+CpuThreadRequest requested_cpu_threads() {
+    if (env_requests_auto_threads("FULLMAG_CPU_THREADS")) {
+        return CpuThreadRequest{
+            detected_cpu_threads(),
+            parse_positive_env_int("FULLMAG_CPU_THREADS_AUTO_RESOLVED").value_or(0),
+            true,
+        };
+    }
     if (const auto from_omp = parse_positive_env_int("OMP_NUM_THREADS")) {
-        return *from_omp;
+        return CpuThreadRequest{*from_omp, 0, false};
     }
     if (const auto from_fullmag = parse_positive_env_int("FULLMAG_CPU_THREADS")) {
-        return *from_fullmag;
+        return CpuThreadRequest{*from_fullmag, 0, false};
     }
-    return openmp_max_threads();
+    return CpuThreadRequest{detected_cpu_threads(), 0, true};
+}
+
+int auto_cpu_thread_cap_for_context(const Context &ctx, int requested_threads) {
+    if (requested_threads <= 1 || mfem_device_requests_gpu(ctx)) {
+        return std::max(1, requested_threads);
+    }
+    if (ctx.demag_realization == 0) {
+        return std::max(1, requested_threads);
+    }
+    const uint32_t node_count = ctx.n_nodes;
+    const uint32_t element_count = ctx.n_elements;
+    if (node_count <= 10000u || element_count <= 75000u) {
+        return std::min(requested_threads, 8);
+    }
+    if (node_count <= 50000u || element_count <= 400000u) {
+        return std::min(requested_threads, 16);
+    }
+    return std::max(1, requested_threads);
 }
 
 void configure_cpu_openmp_runtime(Context &ctx) {
-    ctx.requested_omp_threads = requested_cpu_threads();
-    ctx.effective_omp_threads = ctx.requested_omp_threads;
+    const CpuThreadRequest request = requested_cpu_threads();
+    ctx.cpu_threads_auto_requested = request.auto_requested;
+    ctx.requested_omp_threads = request.requested_threads;
+    ctx.effective_omp_threads = request.requested_threads;
+    if (request.auto_requested) {
+        ctx.effective_omp_threads = request.auto_resolved_threads > 0
+            ? std::min(request.requested_threads, request.auto_resolved_threads)
+            : auto_cpu_thread_cap_for_context(ctx, request.requested_threads);
+    }
+#ifdef _OPENMP
+    omp_set_num_threads(ctx.effective_omp_threads);
+#endif
 }
 
 void log_cpu_runtime_selection(const Context &ctx) {
     if (mfem_device_requests_gpu(ctx)) {
         return;
     }
+    const char *thread_mode = ctx.cpu_threads_auto_requested ? "auto" : "manual";
 
     if (ctx.demag_realization == 0) {
         std::fprintf(
             stderr,
-            "[fullmag-fem] cpu runtime: demag=transfer_grid requested_omp_threads=%d effective_omp_threads=%d\n",
+            "[fullmag-fem] cpu runtime: demag=transfer_grid cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d\n",
+            thread_mode,
             ctx.requested_omp_threads,
             ctx.effective_omp_threads);
         return;
@@ -261,7 +324,8 @@ void log_cpu_runtime_selection(const Context &ctx) {
 
     std::fprintf(
         stderr,
-        "[fullmag-fem] cpu runtime: poisson_solver=hypre_pcg_boomeramg requested_omp_threads=%d effective_omp_threads=%d mesh_nodes=%u elements=%u\n",
+        "[fullmag-fem] cpu runtime: poisson_solver=hypre_pcg_boomeramg cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d mesh_nodes=%u elements=%u\n",
+        thread_mode,
         ctx.requested_omp_threads,
         ctx.effective_omp_threads,
         ctx.n_nodes,

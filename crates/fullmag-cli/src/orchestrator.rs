@@ -2809,26 +2809,46 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         init_api_port()?;
     }
 
-    // Eagerly configure the global Rayon pool so that ALL par_iter calls
-    // (including those inside the interactive runtime) use all available cores.
-    let cpu_threads = std::thread::available_parallelism()
+    // Eagerly configure the global Rayon pool used by Rust-side control-plane
+    // work. Native FEM CPU OpenMP thread selection is resolved separately and
+    // logged by the managed/runtime backend.
+    let default_cpu_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    let cpu_threads = std::env::var("FULLMAG_CPU_THREADS")
-        .ok()
-        .or_else(|| std::env::var("RAYON_NUM_THREADS").ok())
+    let fullmag_cpu_threads = std::env::var("FULLMAG_CPU_THREADS").ok();
+    let rayon_cpu_threads = std::env::var("RAYON_NUM_THREADS").ok();
+    let cpu_threads = fullmag_cpu_threads
+        .as_deref()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n >= 1)
-        .unwrap_or(cpu_threads);
+        .or_else(|| {
+            rayon_cpu_threads
+                .as_deref()
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|&n| n >= 1)
+        })
+        .unwrap_or(default_cpu_threads);
+    let rayon_log_detail = match fullmag_cpu_threads.as_deref() {
+        Some(raw) if raw.eq_ignore_ascii_case("auto") => {
+            " (FULLMAG_CPU_THREADS=auto; native FEM CPU logs resolved OpenMP threads separately)"
+        }
+        Some(_) => " (source=FULLMAG_CPU_THREADS)",
+        None => match rayon_cpu_threads {
+            Some(_) => " (source=RAYON_NUM_THREADS)",
+            None => " (default host parallelism)",
+        },
+    };
     if let Err(e) = rayon::ThreadPoolBuilder::new()
         .num_threads(cpu_threads)
         .build_global()
     {
         eprintln!(
-            "[fullmag-cli] WARNING: could not configure global Rayon pool ({cpu_threads} threads): {e}"
+            "[fullmag-cli] WARNING: could not configure Rayon control-plane pool ({cpu_threads} threads): {e}"
         );
     } else {
-        eprintln!("[fullmag-cli] Rayon global pool: {cpu_threads} threads");
+        eprintln!(
+            "[fullmag-cli] Rayon control-plane pool: {cpu_threads} threads{rayon_log_detail}"
+        );
     }
 
     // Load feature flags once at startup (file > env > defaults)

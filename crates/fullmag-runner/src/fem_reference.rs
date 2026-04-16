@@ -424,6 +424,7 @@ fn execute_reference_fem_impl(
             &mut steps,
             &mut artifacts,
             None,
+            None,
         )?;
     }
 
@@ -535,13 +536,14 @@ fn execute_reference_fem_impl(
             wall_time_ns: wall_elapsed,
             ..StepStats::default()
         };
-        current_stats = latest_stats.clone();
+        current_stats = enrich_step_stats_from_magnetization(
+            latest_stats.clone(),
+            state.magnetization(),
+            &plan.object_segments,
+        );
 
         if !default_scalar_trace || !field_schedules.is_empty() {
             let ant = antenna_field_at(&problem, state.magnetization().len());
-            let scalar_due_now = scalar_schedules
-                .iter()
-                .any(|schedule| is_due(state.time_seconds, schedule.next_time));
             let field_due_now = field_schedules
                 .iter()
                 .any(|schedule| is_due(state.time_seconds, schedule.next_time));
@@ -556,8 +558,7 @@ fn execute_reference_fem_impl(
                 .as_ref()
                 .is_some_and(display_is_global_scalar);
             let need_observables_for_live_preview = preview_due && !preview_targets_global_scalar;
-            let need_step_observables =
-                scalar_due_now || field_due_now || need_observables_for_live_preview;
+            let need_step_observables = field_due_now || need_observables_for_live_preview;
             let step_observables: Option<StateObservables> = if need_step_observables {
                 let obs = observe_state(&problem, &state, &ant)?;
                 current_observables = obs.clone();
@@ -578,6 +579,7 @@ fn execute_reference_fem_impl(
                 &mut steps,
                 &mut artifacts,
                 step_observables.as_ref(),
+                Some(&current_stats),
             )?;
             if let Some(live) = live.as_mut() {
                 let heavy_payload_every = live.field_every_n.max(1);
@@ -759,6 +761,7 @@ fn execute_reference_fem_impl(
         &field_schedules,
         &mut steps,
         &mut artifacts,
+        Some(&current_stats),
     )?;
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
@@ -794,6 +797,7 @@ fn record_due_outputs(
     steps: &mut Vec<StepStats>,
     artifacts: &mut ArtifactRecorder,
     precomputed_observables: Option<&StateObservables>,
+    fallback_scalar_stats: Option<&StepStats>,
 ) -> Result<(), RunError> {
     let scalar_due = scalar_schedules
         .iter()
@@ -806,6 +810,15 @@ fn record_due_outputs(
 
     if !scalar_due && due_field_names.is_empty() {
         return Ok(());
+    }
+
+    if scalar_due && due_field_names.is_empty() {
+        if let Some(stats) = fallback_scalar_stats {
+            artifacts.record_scalar(stats)?;
+            steps.push(stats.clone());
+            advance_due_schedules(scalar_schedules, state.time_seconds);
+            return Ok(());
+        }
     }
 
     // Reuse pre-computed observables (from live block) to avoid a redundant observe call.
@@ -884,6 +897,7 @@ fn record_final_outputs(
     field_schedules: &[OutputSchedule],
     steps: &mut Vec<StepStats>,
     artifacts: &mut ArtifactRecorder,
+    fallback_scalar_stats: Option<&StepStats>,
 ) -> Result<(), RunError> {
     let need_scalar = default_scalar_trace
         || steps
@@ -905,6 +919,14 @@ fn record_final_outputs(
 
     if !need_scalar && missing_field_names.is_empty() {
         return Ok(());
+    }
+
+    if need_scalar && missing_field_names.is_empty() {
+        if let Some(stats) = fallback_scalar_stats {
+            artifacts.record_scalar(stats)?;
+            steps.push(stats.clone());
+            return Ok(());
+        }
     }
 
     let observables = observe_state(problem, state, antenna_field)?;
@@ -931,6 +953,16 @@ fn record_final_outputs(
     }
 
     Ok(())
+}
+
+fn enrich_step_stats_from_magnetization(
+    mut stats: StepStats,
+    magnetization: &[[f64; 3]],
+    object_segments: &[FemObjectSegmentIR],
+) -> StepStats {
+    apply_average_m_to_step_stats(&mut stats, magnetization);
+    stats.per_object_scalars = fem_per_object_scalars(object_segments, magnetization, &stats);
+    stats
 }
 
 pub(crate) fn observe_state(

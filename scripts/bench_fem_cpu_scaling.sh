@@ -3,7 +3,9 @@
 # bench_fem_cpu_scaling.sh — Measure FEM solver CPU scaling across thread counts.
 #
 # This script runs the FEM relaxation benchmark at multiple thread counts
-# (4, 8, 20, 40) and multiple mesh resolutions to observe parallel scaling.
+# (default: 4, 8, 20, 40) and multiple mesh resolutions to observe parallel
+# scaling. Set `THREAD_COUNTS="auto 4 8"` to include the managed-runtime auto
+# policy in the sweep.
 #
 # Usage:
 #   ./scripts/bench_fem_cpu_scaling.sh
@@ -12,7 +14,7 @@
 # Output: Prints a summary table and writes detailed JSON to bench_results/
 #
 # Requirements:
-#   - fullmag binary built and in PATH (or use `just build fullmag` first)
+#   - fullmag-compatible launcher available via `FULLMAG_BIN` or PATH
 #   - Python with fullmag package available
 #
 
@@ -26,7 +28,11 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 # ── Configuration ───────────────────────────────────────────────────────
 
 # Thread counts to test
-THREAD_COUNTS=(4 8 20 40)
+if [[ -n "${THREAD_COUNTS:-}" ]]; then
+    read -r -a THREAD_COUNTS <<< "${THREAD_COUNTS}"
+else
+    THREAD_COUNTS=(4 8 20 40)
+fi
 
 # Mesh resolutions (hmax in meters) — smaller = more nodes
 # hmax=4e-9 → ~6-7k nodes, hmax=3e-9 → ~15k nodes, hmax=2.5e-9 → ~25k nodes
@@ -48,11 +54,18 @@ fi
 
 mkdir -p "$RESULTS_DIR"
 
-# Ensure fullmag is available
-if ! command -v fullmag &> /dev/null; then
-    echo "[bench] ERROR: fullmag not found in PATH"
-    echo "[bench] Run: just build fullmag"
-    exit 1
+FULLMAG_BIN="${FULLMAG_BIN:-fullmag}"
+if [[ "$FULLMAG_BIN" == */* ]]; then
+    if [[ ! -x "$FULLMAG_BIN" ]]; then
+        echo "[bench] ERROR: FULLMAG_BIN is not executable: $FULLMAG_BIN"
+        exit 1
+    fi
+else
+    if ! command -v "$FULLMAG_BIN" &> /dev/null; then
+        echo "[bench] ERROR: launcher not found: $FULLMAG_BIN"
+        echo "[bench] Set FULLMAG_BIN=/abs/path/to/fullmag-fem-gpu or add fullmag to PATH"
+        exit 1
+    fi
 fi
 
 # Detect available CPU cores
@@ -62,6 +75,7 @@ echo "╔═══════════════════════�
 echo "║              FEM CPU Scaling Benchmark - Fullmag                      ║"
 echo "╠═══════════════════════════════════════════════════════════════════════╣"
 echo "║ Available CPU cores: $AVAILABLE_CORES"
+echo "║ Launcher:            $FULLMAG_BIN"
 echo "║ Thread counts:       ${THREAD_COUNTS[*]}"
 echo "║ Mesh sizes:          ${MESH_LABELS[*]}"
 echo "║ Steps per run:       $MAX_STEPS"
@@ -98,7 +112,7 @@ for mesh_idx in "${!MESH_HMAX_VALUES[@]}"; do
         FULLMAG_CPU_THREADS=$THREADS \
         BENCH_HMAX=$HMAX \
         BENCH_MAX_STEPS=$MAX_STEPS \
-        fullmag --headless "$REPO_ROOT/examples/bench_fem_cpu_scaling.py" \
+        "$FULLMAG_BIN" --headless "$REPO_ROOT/examples/bench_fem_cpu_scaling.py" \
             2>&1 | tee "$RUN_LOG" || true
         
         END_TIME=$(date +%s.%N)
@@ -126,7 +140,7 @@ for mesh_idx in "${!MESH_HMAX_VALUES[@]}"; do
   {
     "mesh_label": "$LABEL",
     "hmax_m": "$HMAX",
-    "threads": $THREADS,
+    "threads": "$THREADS",
     "max_steps": $MAX_STEPS,
     "total_time_s": $ELAPSED,
     "node_count": "$NODE_COUNT",

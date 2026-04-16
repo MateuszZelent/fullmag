@@ -4,7 +4,7 @@ Runs a non-interactive relaxation stage and prints step-by-step timing emitted
 by the native runner. Use this for `htop`, `perf`, or flamegraph sessions.
 
 Usage:
-    FULLMAG_CPU_THREADS=8 fullmag --headless examples/bench_fem_simple.py
+    FULLMAG_CPU_THREADS=auto fullmag --headless examples/bench_fem_simple.py
 """
 
 import os
@@ -23,7 +23,8 @@ print("│  FEM CPU Benchmark - Simple Profiling Run                   │", fil
 print("├──────────────────────────────────────────────────────────────┤", file=sys.stderr)
 print(f"│  hmax       = {HMAX:.2e} m", file=sys.stderr)
 print(f"│  max_steps  = {MAX_STEPS}", file=sys.stderr)
-print(f"│  threads    = {THREADS}", file=sys.stderr)
+print(f"│  threads.request = {THREADS}", file=sys.stderr)
+print("│  threads.resolve = see [fullmag-fem] cpu runtime log", file=sys.stderr)
 print("└──────────────────────────────────────────────────────────────┘", file=sys.stderr)
 print("", file=sys.stderr)
 
