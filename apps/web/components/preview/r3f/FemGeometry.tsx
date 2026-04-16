@@ -138,6 +138,7 @@ export const FemGeometry = memo(function FemGeometry({
     nNodes,
     nElements,
     fieldData,
+    fieldRevision,
   } = meshData;
   const centerX = globalCenter?.x ?? null;
   const centerY = globalCenter?.y ?? null;
@@ -725,6 +726,7 @@ export const FemGeometry = memo(function FemGeometry({
     pointsGeometry,
     pointsVertexMap,
     qualityPerFace,
+    fieldRevision,
     sharedBaseVertexColors,
     uniformColor,
     vertexMap,

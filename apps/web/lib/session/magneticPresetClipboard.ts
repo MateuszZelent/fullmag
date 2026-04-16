@@ -13,6 +13,7 @@ export type ClipboardMagneticPreset = {
 const LOCAL_STORAGE_KEY = "fullmag:clipboard:magnetic_preset";
 
 export function copyMagneticPreset(asset: MagnetizationAsset) {
+  if (typeof window === "undefined") return;
   if (asset.kind !== "preset_texture" || !asset.preset_kind) return;
 
   const payload: ClipboardMagneticPreset = {
@@ -33,6 +34,8 @@ export function copyMagneticPreset(asset: MagnetizationAsset) {
 }
 
 export function readMagneticPresetClipboard(): ClipboardMagneticPreset | null {
+  if (typeof window === "undefined") return null;
+
   try {
     const data = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (!data) return null;

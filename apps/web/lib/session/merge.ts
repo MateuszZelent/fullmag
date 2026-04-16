@@ -246,7 +246,7 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
   );
   // else: next has more rows than prev AND starts before prevScalarStep → full snapshot → use next as-is.
 
-  if (process.env.NODE_ENV !== "production") {
+  if (typeof process !== "undefined" && process.env.NODE_ENV !== "production") {
     const v2Step = next.step_update_v2?.scalars?.step ?? null;
     console.debug(
       `[merge] prev=${prev.scalar_rows.length} next_raw=${next.scalar_rows.length}` +

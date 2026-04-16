@@ -12,6 +12,12 @@ import {
 import { getViewportQualityProfile, type ViewportQualityProfileId } from "./viewportQualityProfiles";
 import ViewportGizmoStack from "./ViewportGizmoStack";
 import { useCanvasHost } from "./useCanvasHost";
+import {
+  CAMERA_CONTROL_PROFILES,
+  type CameraControlProfileId,
+  createCameraStepLockState,
+  applyCameraStepLock,
+} from "../camera/cameraProfiles";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 
@@ -50,6 +56,7 @@ interface ScientificViewportShellProps {
   renderDefaultGizmos?: boolean;
   renderPolicy?: Partial<ViewportRenderPolicy>;
   onInteractionChange?: (active: boolean) => void;
+  controlProfile?: CameraControlProfileId;
   diagnosticOverrides?: {
     enableControls?: boolean;
     enableLights?: boolean;
@@ -88,11 +95,13 @@ function ShellControls({
   navigation,
   target,
   controlsRef,
+  controlProfile,
   onInteractionChange,
 }: {
   navigation: ShellNavigation;
   target: [number, number, number];
   controlsRef: React.MutableRefObject<any>;
+  controlProfile: CameraControlProfileId;
   onInteractionChange?: (active: boolean) => void;
 }) {
   const handleStart = useCallback(() => {
@@ -101,20 +110,40 @@ function ShellControls({
   const handleEnd = useCallback(() => {
     onInteractionChange?.(false);
   }, [onInteractionChange]);
+  const stepLockState = useRef(createCameraStepLockState());
+  const profile = CAMERA_CONTROL_PROFILES[controlProfile];
+  const handleChange = useCallback(() => {
+    const controls = controlsRef.current;
+    if (!controls) {
+      return;
+    }
+    const snapped = applyCameraStepLock({
+      camera: controls.object,
+      controls,
+      profile,
+      state: stepLockState.current,
+    });
+    if (snapped) {
+      controls.update();
+    }
+  }, [controlProfile, controlsRef, profile]);
 
   if (navigation === "cad") {
     return (
       <OrbitControls
         ref={controlsRef}
         enableDamping={FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.enableControlDamping}
-        dampingFactor={FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.enableControlDamping ? 0.08 : 0}
-        rotateSpeed={0.85}
-        zoomSpeed={0.85}
-        panSpeed={0.9}
+        dampingFactor={
+          FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.enableControlDamping ? profile.dampingFactor : 0
+        }
+        rotateSpeed={profile.rotateSpeed}
+        zoomSpeed={profile.zoomSpeed}
+        panSpeed={profile.panSpeed}
         screenSpacePanning
         target={target}
         onStart={handleStart}
         onEnd={handleEnd}
+        onChange={handleChange}
       />
     );
   }
@@ -122,10 +151,12 @@ function ShellControls({
   return (
     <TrackballControls
       ref={controlsRef}
-      rotateSpeed={2.4}
-      zoomSpeed={1.2}
-      panSpeed={0.85}
+      rotateSpeed={profile.rotateSpeed}
+      zoomSpeed={profile.zoomSpeed}
+      panSpeed={profile.panSpeed}
+      dynamicDampingFactor={profile.dampingFactor}
       target={target}
+      onChange={handleChange}
       onStart={handleStart}
       onEnd={handleEnd}
     />
@@ -140,11 +171,41 @@ function ShellBridgeSync({
   controlsRef: MutableRefObject<any>;
 }) {
   const { camera } = useThree();
+  const controlsRefCurrent = useRef<any>(null);
+
   useEffect(() => {
-    if (bridgeRef) {
-      bridgeRef.current = { camera, controls: controlsRef.current };
+    if (!bridgeRef) {
+      return;
     }
+
+    let raf = 0;
+    let disposed = false;
+
+    const syncBridge = () => {
+      if (disposed) {
+        return;
+      }
+      const controls = controlsRef.current;
+      if (controls !== controlsRefCurrent.current) {
+        controlsRefCurrent.current = controls;
+      }
+      bridgeRef.current = { camera, controls };
+      if (!controls) {
+        raf = window.requestAnimationFrame(syncBridge);
+      }
+    };
+
+    syncBridge();
+
+    return () => {
+      disposed = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+      bridgeRef.current = null;
+    };
   }, [bridgeRef, camera, controlsRef]);
+
   return null;
 }
 
@@ -171,6 +232,7 @@ export default function ScientificViewportShell({
   renderDefaultGizmos = true,
   renderPolicy,
   onInteractionChange,
+  controlProfile = "fdm",
   diagnosticOverrides,
 }: ScientificViewportShellProps) {
   const controlsEnabled =
@@ -252,8 +314,9 @@ export default function ScientificViewportShell({
         } else {
           gl.toneMapping = THREE.NoToneMapping;
         }
+        const controls = effectiveControlsRef.current;
         if (bridgeSyncEnabled && effectiveBridgeRef) {
-          effectiveBridgeRef.current = { camera, controls: effectiveControlsRef.current };
+          effectiveBridgeRef.current = { camera, controls };
         }
         if (canvasCreatedEnabled) {
           onCanvasCreated?.({ gl, camera });
@@ -276,6 +339,7 @@ export default function ScientificViewportShell({
           navigation={navigation}
           target={target}
           controlsRef={effectiveControlsRef}
+          controlProfile={controlProfile}
           onInteractionChange={handleInteractionChange}
         />
       ) : null}

@@ -2428,9 +2428,13 @@ mod tests {
             "study": {
                 "kind": "relaxation",
                 "algorithm": "llg_overdamped",
-                "torque_tolerance": 1e-4,
-                "energy_tolerance": null,
-                "max_steps": 50,
+                "stop": {
+                    "torque_tolerance_apm": 1e-4,
+                    "energy_tolerance_j": null,
+                    "max_steps": 50,
+                    "max_pseudotime_s": null,
+                    "max_physical_time_s": null
+                },
                 "dynamics": {
                     "kind": "llg",
                     "gyromagnetic_ratio": 221000.0,
@@ -3280,16 +3284,15 @@ mod tests {
             [s, s, s],
             [0.0, s, s],
         ];
-        // 6 tets that tile the cube (standard decomposition)
+        // 5 tets that tile the cube (standard non-degenerate decomposition)
         let elements: Vec<[u32; 4]> = vec![
             [0, 1, 3, 4],
             [1, 2, 3, 6],
             [1, 4, 5, 6],
-            [1, 3, 4, 6],
             [3, 4, 6, 7],
-            [4, 5, 6, 7],
+            [1, 3, 4, 6],
         ];
-        let element_markers = vec![1u32; 6];
+        let element_markers = vec![1u32; 5];
         // Boundary faces (not critical for resampling, but required by IR)
         let boundary_faces: Vec<[u32; 3]> = vec![
             [0, 1, 3],
@@ -3377,9 +3380,9 @@ mod tests {
                 },
                 "sampling": {
                     "outputs": [{
-                        "kind": "save_scalar",
-                        "quantity": "E_ex",
-                        "every": 1e-13
+                        "kind": "scalar",
+                        "name": "E_ex",
+                        "every_seconds": 1e-13
                     }]
                 }
             },

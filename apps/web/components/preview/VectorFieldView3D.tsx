@@ -44,6 +44,12 @@ import { ViewportIconAction } from "./ViewportIconAction";
 import { ViewportPopoverPanel, ViewportPopoverRow, ViewportPopoverTrigger } from "./ViewportPopoverPanel";
 import { ViewportOverlayLayout } from "./ViewportOverlayLayout";
 import { ViewportStatusChip } from "./ViewportStatusChips";
+import {
+  CAMERA_CONTROL_PROFILES,
+  type CameraControlProfileId,
+  createCameraStepLockState,
+  applyCameraStepLock,
+} from "./camera/cameraProfiles";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -199,19 +205,61 @@ function SyncedControls({
   const { camera } = useThree();
   const [nx, ny, nz] = grid;
   const cx = nx / 2, cy = nz / 2, cz = ny / 2;
+  const controlsRefCurrent = useRef<any>(null);
+  const stepLockState = useRef(createCameraStepLockState());
+  const controlProfile: CameraControlProfileId = "fdm";
+  const profile = CAMERA_CONTROL_PROFILES[controlProfile];
+  const handleChange = useCallback(() => {
+    const controls = controlsRefObject.current;
+    const snapped = applyCameraStepLock({
+      camera,
+      controls,
+      profile,
+      state: stepLockState.current,
+    });
+    if (snapped) {
+      controls?.update();
+    }
+  }, [camera, controlsRefObject, profile]);
 
   useEffect(() => {
-    viewCubeBridgeRef.current = { camera, controls: controlsRefObject.current };
-  }, [camera, controlsRefObject, viewCubeBridgeRef]);
+    let raf = 0;
+    let disposed = false;
+
+    const syncBridge = () => {
+      if (disposed) {
+        return;
+      }
+      const controls = controlsRefObject.current;
+      if (controls !== controlsRefCurrent.current) {
+        controlsRefCurrent.current = controls;
+      }
+      viewCubeBridgeRef.current = { camera, controls };
+      if (!controls) {
+        raf = window.requestAnimationFrame(syncBridge);
+      }
+    };
+
+    syncBridge();
+
+    return () => {
+      disposed = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+      viewCubeBridgeRef.current = null;
+    };
+  }, [camera, viewCubeBridgeRef]);
 
   return (
     <TrackballControls
       ref={controlsRefObject}
-      rotateSpeed={1}
-      zoomSpeed={1.2}
-      panSpeed={0.8}
+      rotateSpeed={profile.rotateSpeed}
+      zoomSpeed={profile.zoomSpeed}
+      panSpeed={profile.panSpeed}
+      dynamicDampingFactor={profile.dampingFactor}
       target={[cx, cy, cz]}
-      dynamicDampingFactor={1}
+      onChange={handleChange}
       enabled={cameraEnabled}
     />
   );

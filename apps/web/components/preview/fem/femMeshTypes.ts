@@ -28,6 +28,7 @@ export interface FemMeshData {
   nElements: number;
   fieldData?: { x: ArrayLike<number>; y: ArrayLike<number>; z: ArrayLike<number> };
   fieldNComp?: number;
+  fieldRevision?: number | string | null;
   activeMask?: boolean[] | null;
   quantityDomain?: "magnetic_only" | "full_domain" | "surface_only" | null;
 }

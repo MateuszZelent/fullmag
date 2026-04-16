@@ -59,6 +59,7 @@ export interface UseFemMeshDerivedParams {
   selectedVectors: Float64Array | number[] | null;
   selectedFieldNComp: number;
   selectedFieldDomain: "magnetic_only" | "full_domain" | "surface_only" | null;
+  fieldDataRevision?: number | string | null;
   activeMask: boolean[] | null;
   spatialPreview: any;
   meshShowArrows: boolean;
@@ -159,6 +160,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
     selectedVectors,
     selectedFieldNComp,
     selectedFieldDomain,
+    fieldDataRevision = null,
     activeMask,
     spatialPreview,
     meshShowArrows,
@@ -320,7 +322,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
       z[i] = selectedVectors[i * 3 + 2] ?? 0;
     }
     return { x, y, z };
-  }, [femMeshBase, selectedFieldNComp, selectedVectors]);
+  }, [femMeshBase, selectedFieldNComp, selectedVectors, fieldDataRevision]);
 
   // Combined: new object only when topology OR field data changes
   const femMeshData = useMemo<FemMeshData | null>(() => {
@@ -334,8 +336,17 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
           ? activeMask
           : null,
       quantityDomain: selectedFieldDomain ?? spatialPreview?.quantity_domain ?? "full_domain",
+      fieldRevision: fieldDataRevision,
     };
-  }, [activeMask, femFieldData, femMeshBase, selectedFieldDomain, selectedFieldNComp, spatialPreview?.quantity_domain]);
+  }, [
+    activeMask,
+    femFieldData,
+    femMeshBase,
+    fieldDataRevision,
+    selectedFieldDomain,
+    selectedFieldNComp,
+    spatialPreview?.quantity_domain,
+  ]);
   useEffect(() => {
     femMeshDataRef.current = femMeshData;
   }, [femMeshData, femMeshDataRef]);

@@ -11,9 +11,10 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean 
 }
 
 export function getWorkspaceFeatureFlags(): WorkspaceFeatureFlags {
+  const workspaceV2EnabledEnv =
+    typeof process !== "undefined" ? process.env.NEXT_PUBLIC_WORKSPACE_V2_ENABLED : undefined;
   return {
     // V2 defaults to enabled for final cutover; can be disabled in env for rollback.
-    workspaceV2Enabled: parseBooleanEnv(process.env.NEXT_PUBLIC_WORKSPACE_V2_ENABLED, true),
+    workspaceV2Enabled: parseBooleanEnv(workspaceV2EnabledEnv, true),
   };
 }
-

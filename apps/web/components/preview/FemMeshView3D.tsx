@@ -655,6 +655,7 @@ function FemMeshView3DInner({
         controlsRef={controlsRef}
         onViewCubeRotate={handleViewCubeRotate}
         onResetView={() => setCameraPreset("reset")}
+        controlProfile="fem"
         renderDefaultGizmos={false}
         onPointerMissed={geometryPointerInteractionsEnabled ? onPointerMissed : undefined}
         onCanvasContextMenu={(e) => e.preventDefault()}
@@ -669,7 +670,11 @@ function FemMeshView3DInner({
         {!missingExactScopeSegment ? (
           <>
           {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showCameraAutoFit && wrapperFlags.enableCameraFitEffect ? (
-            <CameraAutoFit maxDim={dynamicMaxDim} generation={cameraFitGeneration} controlsRef={controlsRef} />
+            <CameraAutoFit
+              maxDim={dynamicMaxDim}
+              generation={cameraFitGeneration}
+              controlsRef={controlsRef}
+            />
           ) : null}
           {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showClipPlanesHelper ? (
             <FemClipPlanes enabled={clipEnabled} axis={clipAxis} posPercentage={clipPos} flip={clipFlip} geomSize={dynamicGeomSize} />

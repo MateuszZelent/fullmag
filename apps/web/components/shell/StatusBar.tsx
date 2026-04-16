@@ -6,6 +6,7 @@ import {
   Loader2, CheckCircle2, XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { fmtSI } from "@/lib/format";
 
 interface StatusBarProps {
   connection: "connecting" | "connected" | "disconnected";
@@ -44,8 +45,12 @@ interface StatusBarProps {
   stageProgressValue?: number;
   eTotalSpark?: number[];
   dmDtSpark?: number[];
-  dtSpark?: number[];
   hasSolverTelemetry?: boolean;
+  solverDt?: number | null;
+  solverMinDt?: number | null;
+  solverMaxDt?: number | null;
+  solverFixedDt?: number | null;
+  solverIntegrator?: string | null;
 }
 
 function Sparkline({
@@ -151,6 +156,28 @@ function solverAcceleratorLabel(
   return null;
 }
 
+function formatSolverDt(value: number | null | undefined, enabled: boolean): string {
+  if (!enabled || !Number.isFinite(value ?? NaN) || (value ?? 0) <= 0) {
+    return "—";
+  }
+  return fmtSI(value, "s");
+}
+
+function resolveSolverIntegratorLabel(integrator?: string | null): string {
+  if (!integrator) {
+    return "—";
+  }
+  const normalized = integrator.trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    heun: "Heun",
+    rk4: "RK4",
+    rk23: "RK23",
+    rk45: "RK45",
+    abm3: "ABM3",
+  };
+  return aliases[normalized] ?? integrator;
+}
+
 export default function StatusBar({
   connection,
   step,
@@ -183,10 +210,19 @@ export default function StatusBar({
   stageProgressValue,
   eTotalSpark = [],
   dmDtSpark = [],
-  dtSpark = [],
   hasSolverTelemetry = false,
+  solverDt,
+  solverMinDt,
+  solverMaxDt,
+  solverFixedDt,
+  solverIntegrator,
 }: StatusBarProps) {
   const solverAccelerator = solverAcceleratorLabel(runtimeEngine, runtimeGpuLabel, backend);
+  const solverDtDisplay = formatSolverDt(solverDt, hasSolverTelemetry);
+  const solverMinDtDisplay = formatSolverDt(solverMinDt, hasSolverTelemetry);
+  const solverMaxDtDisplay = formatSolverDt(solverMaxDt, hasSolverTelemetry);
+  const solverFixedDtDisplay = formatSolverDt(solverFixedDt, hasSolverTelemetry);
+  const solverName = resolveSolverIntegratorLabel(solverIntegrator);
   return (
     <div className="flex items-center justify-between gap-3 border-t border-white/5 bg-background/60 px-3 py-1 text-[0.68rem] tracking-wide text-muted-foreground z-40 min-h-[26px]">
       <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0 mr-2">
@@ -251,7 +287,6 @@ export default function StatusBar({
             <>
               <Sparkline values={eTotalSpark} stroke="#0ea5e9" title="E_total trend" />
               <Sparkline values={dmDtSpark} stroke="#89b4fa" title="max dm/dt trend" />
-              <Sparkline values={dtSpark} stroke="#10b981" title="solver dt trend" />
             </>
           ) : (
             <span className="text-[0.6rem] text-muted-foreground/70">
@@ -291,6 +326,25 @@ export default function StatusBar({
                 <span className="h-3 w-px bg-border/50" />
               </>
             )}
+            <span className="font-mono text-[0.58rem] text-muted-foreground">
+              Solver {solverName}
+            </span>
+            <span className="h-3 w-px bg-border/50" />
+            <span className="font-mono text-[0.58rem] text-muted-foreground">
+              dt {solverDtDisplay}
+            </span>
+            <span className="h-3 w-px bg-border/50" />
+            <span className="font-mono text-[0.58rem] text-muted-foreground">
+              minDt {solverMinDtDisplay}
+            </span>
+            <span className="h-3 w-px bg-border/50" />
+            <span className="font-mono text-[0.58rem] text-muted-foreground">
+              maxDt {solverMaxDtDisplay}
+            </span>
+            <span className="h-3 w-px bg-border/50" />
+            <span className="font-mono text-[0.58rem] text-muted-foreground">
+              fixDt {solverFixedDtDisplay}
+            </span>
             {solverAccelerator ? (
               <>
                 <span className={cn(

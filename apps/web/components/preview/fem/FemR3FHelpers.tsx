@@ -34,12 +34,52 @@ export function FemClipPlanes({ enabled, axis, posPercentage, flip = false, geom
 }
 
 /** Auto-fit the R3F camera to the geometry bounding sphere whenever maxDim changes. */
-export function CameraAutoFit({ maxDim, generation, controlsRef }: { maxDim: number; generation: number; controlsRef?: React.MutableRefObject<any> }) {
+export function CameraAutoFit({
+  maxDim,
+  generation,
+  targetCenter,
+  controlsRef,
+}: {
+  maxDim: number;
+  generation: number;
+  targetCenter?: THREE.Vector3;
+  controlsRef?: React.MutableRefObject<any>;
+}) {
   const { camera, invalidate } = useThree();
   useEffect(() => {
-    if (maxDim <= 0 || generation === 0) return;
-    fitCameraToBounds(camera, maxDim, undefined, controlsRef?.current ?? undefined);
-    invalidate();
-  }, [camera, controlsRef, invalidate, maxDim, generation]);
+    if (maxDim <= 0 || generation === 0) {
+      return;
+    }
+
+    let raf = 0;
+    let disposed = false;
+
+    const syncFit = () => {
+      if (disposed) {
+        return;
+      }
+
+      fitCameraToBounds(
+        camera,
+        maxDim,
+        targetCenter,
+        controlsRef?.current ?? undefined,
+      );
+      invalidate();
+
+      if (!controlsRef?.current) {
+        raf = window.requestAnimationFrame(syncFit);
+      }
+    };
+
+    syncFit();
+
+    return () => {
+      disposed = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+    };
+  }, [camera, controlsRef, invalidate, maxDim, generation, targetCenter]);
   return null;
 }

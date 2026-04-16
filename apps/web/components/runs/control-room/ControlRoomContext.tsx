@@ -1561,6 +1561,22 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     renderPreviewMatchesActiveQuantity,
     renderPreview?.vector_field_values,
   ]);
+  const fieldDataRevision = useMemo(() => {
+    if (!selectedFieldFrame || !selectedVectors?.length) {
+      if (renderPreviewMatchesActiveQuantity && renderPreview?.source_step != null) {
+        return `${activeQuantityId}:${renderPreview.source_step}:${effectiveStep}`;
+      }
+      return null;
+    }
+    return `${selectedFieldFrame.quantity_id}:${selectedFieldFrame.n_comp}:${selectedFieldFrame.values.length}:${effectiveStep}`;
+  }, [
+    activeQuantityId,
+    effectiveStep,
+    renderPreview?.source_step,
+    renderPreviewMatchesActiveQuantity,
+    selectedFieldFrame,
+    selectedVectors?.length,
+  ]);
 
   const quantityDescriptor = useMemo(
     () => (activeQuantityId ? quantityDescriptorById.get(activeQuantityId) ?? null : null),
@@ -1701,6 +1717,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     selectedVectors,
     selectedFieldNComp,
     selectedFieldDomain,
+    fieldDataRevision,
     activeMask,
     spatialPreview,
     meshShowArrows,

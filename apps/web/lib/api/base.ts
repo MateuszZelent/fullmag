@@ -16,10 +16,19 @@ const RUNTIME_HTTP_BASE_ENV_KEYS: string[] = [
 ];
 
 function configuredRuntimeBaseFromEnv(): string | null {
+  if (typeof window !== "undefined") {
+    return null;
+  }
+
+  const env = typeof process !== "undefined" ? process.env : undefined;
   for (const key of RUNTIME_HTTP_BASE_ENV_KEYS) {
-    const value = process.env?.[key as keyof typeof process.env]?.trim();
-    if (value) {
-      return value.replace(/\/+$/, "");
+    const value = env?.[key as keyof typeof env];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed.replace(/\/+$/, "");
     }
   }
   return null;

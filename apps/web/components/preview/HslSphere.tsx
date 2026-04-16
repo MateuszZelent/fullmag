@@ -17,7 +17,7 @@
  * reference sphere must swap Y/Z when sampling the HSL map for FEM/FDM.
  */
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Canvas, useThree } from "@react-three/fiber";
 import { Text, Billboard, Line } from "@react-three/drei";
@@ -78,26 +78,55 @@ function CameraSync({
   mainCameraRef: React.MutableRefObject<{ camera: THREE.Camera; controls?: any } | null>;
 }) {
   const { camera, invalidate } = useThree();
+  const attachedControlsRef = useRef<any>(null);
+  const lastOrientationRef = useRef("");
   const syncCamera = useCallback(() => {
     const main = mainCameraRef.current;
     if (!main) {
       return;
     }
+    const quat = main.camera.quaternion;
+    const sig = [quat.x, quat.y, quat.z, quat.w].join("|");
+    if (sig === lastOrientationRef.current) {
+      return;
+    }
     // Copy only the rotation from the main camera.
-    camera.quaternion.copy(main.camera.quaternion);
+    camera.quaternion.copy(quat);
     camera.position.set(0, 0, 3).applyQuaternion(camera.quaternion);
     camera.lookAt(0, 0, 0);
+    lastOrientationRef.current = sig;
     invalidate();
   }, [camera, invalidate, mainCameraRef]);
 
   useEffect(() => {
-    syncCamera();
-    const main = mainCameraRef.current;
-    const controls = main?.controls;
+    let raf = 0;
+    let disposed = false;
     const handleChange = () => syncCamera();
-    controls?.addEventListener?.("change", handleChange);
+
+    const attachIfReady = () => {
+      if (disposed) {
+        return;
+      }
+      const controls = mainCameraRef.current?.controls;
+      if (controls && controls !== attachedControlsRef.current) {
+        attachedControlsRef.current?.removeEventListener?.("change", handleChange);
+        attachedControlsRef.current = controls;
+        controls.addEventListener?.("change", handleChange);
+      }
+      syncCamera();
+      if (!controls) {
+        raf = window.requestAnimationFrame(attachIfReady);
+      }
+    };
+
+    attachIfReady();
     return () => {
-      controls?.removeEventListener?.("change", handleChange);
+      disposed = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+      attachedControlsRef.current?.removeEventListener?.("change", handleChange);
+      attachedControlsRef.current = null;
     };
   }, [mainCameraRef, syncCamera]);
 

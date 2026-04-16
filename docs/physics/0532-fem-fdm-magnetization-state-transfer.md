@@ -151,9 +151,9 @@ hard validation gate for v1.
 - [x] Engine resampler (`transfer_fem_field_to_grid`)
 - [x] Post-transfer normalization
 - [x] Unit tests
-- [ ] Runner orchestration (Phase 4, later)
-- [ ] Provenance metadata (Phase 4, later)
-- [ ] Integration tests (Phase 5, later)
+- [x] Runner orchestration (Rust orchestrator + Python CLI)
+- [x] Provenance metadata (transfer stats logged at info level)
+- [x] Integration tests (step_utils cross-backend tests)
 - [ ] Documentation update
 
 ## 8. Known limits and deferred work

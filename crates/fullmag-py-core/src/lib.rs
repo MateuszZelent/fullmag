@@ -133,28 +133,6 @@ fn extract_fem_mesh_ir_json(ir_json: &str) -> PyResult<Option<String>> {
     }
 }
 
-/// Extract the FEM mesh IR from a problem's execution plan.
-///
-/// Returns the mesh IR as a JSON string if the backend resolves to FEM,
-/// or `None` if the backend is not FEM.
-#[pyfunction]
-fn extract_fem_mesh_ir_json(ir_json: &str) -> PyResult<Option<String>> {
-    let ir: ProblemIR =
-        serde_json::from_str(ir_json).map_err(|e| PyValueError::new_err(e.to_string()))?;
-
-    let plan = fullmag_plan::plan(&ir)
-        .map_err(|e| PyValueError::new_err(format!("planning failed: {}", e)))?;
-
-    match &plan.backend_plan {
-        BackendPlanIR::Fem(fem_plan) => {
-            let mesh_json = serde_json::to_string(&fem_plan.mesh)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            Ok(Some(mesh_json))
-        }
-        _ => Ok(None),
-    }
-}
-
 #[pymodule(name = "_fullmag_core")]
 fn fullmag_py_core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(validate_ir_json, module)?)?;

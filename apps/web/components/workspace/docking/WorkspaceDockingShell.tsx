@@ -15,6 +15,7 @@ import RunSidebar from "@/components/runs/control-room/RunSidebar";
 import BottomUtilityDock from "@/components/workspace/shell/BottomUtilityDock";
 import ChartsDock from "@/components/workspace/docks/ChartsDock";
 import EmptyState from "@/components/ui/EmptyState";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   AnalyzeRightInspector,
   BuildRightInspector,
@@ -257,13 +258,15 @@ export default function WorkspaceDockingShell() {
 
   return (
     <div className="relative h-full w-full min-h-0 min-w-0 overflow-hidden bg-background">
-      <FlexLayout
-        key={modelKey}
-        model={model}
-        factory={factory}
-        classNameMapper={classNameMapper}
-        onModelChange={onModelChange}
-      />
+      <TooltipProvider delayDuration={250}>
+        <FlexLayout
+          key={modelKey}
+          model={model}
+          factory={factory}
+          classNameMapper={classNameMapper}
+          onModelChange={onModelChange}
+        />
+      </TooltipProvider>
     </div>
   );
 }

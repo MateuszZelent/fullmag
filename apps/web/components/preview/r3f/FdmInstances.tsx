@@ -467,7 +467,7 @@ function FdmInstances({
   }, [vectors, grid, settings, geometryMode, activeMask, mode, count, nx, ny, nz, onVisibleCount, sceneOpacityMultiplier, isolateGridBounds, invalidate]);
 
   if (count === 0) {
-    if (process.env.NODE_ENV === "development") {
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {
       console.warn("[FdmInstances] count=0 — grid is", grid, "— no instances will render");
     }
     return null;

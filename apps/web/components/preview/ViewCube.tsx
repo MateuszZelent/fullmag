@@ -14,16 +14,23 @@ import { useEffect, useRef, useCallback } from "react";
 import * as THREE from "three";
 import type { TrackballControls } from "three/examples/jsm/controls/TrackballControls.js";
 import { cn } from "@/lib/utils";
+import { setCameraPresetAroundTarget } from "./camera/cameraHelpers";
 
 type SceneHandle = {
-  camera: THREE.PerspectiveCamera;
-  controls: TrackballControls;
+  camera: THREE.Camera;
+  controls: TrackballControls | {
+    target: THREE.Vector3;
+    update(): void;
+    addEventListener?: (type: string, listener: () => void) => void;
+    removeEventListener?: (type: string, listener: () => void) => void;
+  };
 };
 
 interface ViewCubeProps {
   sceneRef?: React.MutableRefObject<SceneHandle | null>;
   onRotate?: (quaternion: THREE.Quaternion) => void;
   onReset?: () => void;
+  className?: string;
   cubeClassName?: string;
   axisClassName?: string;
   embedded?: boolean;
@@ -71,16 +78,22 @@ export default function ViewCube({
   onRotate,
   onReset,
   className,
+  cubeClassName,
+  axisClassName,
+  embedded,
 }: ViewCubeProps & { className?: string }) {
-  const dragRef = useRef({ dragging: false, startX: 0, startY: 0, hasDragged: false });
+  const dragRef = useRef({ dragging: false, startX: 0, startY: 0, hasDragged: false, pointerId: -1 });
   const cubeSceneRef = useRef<HTMLDivElement | null>(null);
   const axisSceneRef = useRef<HTMLDivElement | null>(null);
+  const attachedControlsRef = useRef<SceneHandle["controls"] | null>(null);
 
   // ─── Camera matrix → CSS ──────────────────────────────────────────
   const getCameraMatrix = useCallback((): string => {
-    if (!sceneRef?.current) return "none";
-    const scene = sceneRef.current;
+    const scene = sceneRef?.current;
+    if (!scene) return "none";
     const { camera } = scene;
+    camera.updateMatrixWorld?.(true);
+    camera.updateWorldMatrix?.(true, false);
     _m.copy(camera.matrixWorldInverse);
     _m.elements[12] = 0;
     _m.elements[13] = 0;
@@ -102,15 +115,37 @@ export default function ViewCube({
   }, [getCameraMatrix]);
 
   useEffect(() => {
-    syncTransform();
-    const scene = sceneRef?.current;
-    const controls = scene?.controls as
-      | { addEventListener?: (type: string, listener: () => void) => void; removeEventListener?: (type: string, listener: () => void) => void }
-      | undefined;
+    let raf = 0;
+    let cancelled = false;
     const handleChange = () => syncTransform();
-    controls?.addEventListener?.("change", handleChange);
+
+    const attachIfReady = () => {
+      const scene = sceneRef?.current;
+      const controls = scene?.controls as any;
+      if (!controls || attachedControlsRef.current === controls) {
+        syncTransform();
+        return Boolean(controls);
+      }
+      attachedControlsRef.current?.removeEventListener?.("change", handleChange);
+      attachedControlsRef.current = controls;
+      controls.addEventListener?.("change", handleChange);
+      syncTransform();
+      return true;
+    };
+
+    const poll = () => {
+      if (cancelled) return;
+      if (!attachIfReady()) {
+        raf = window.requestAnimationFrame(poll);
+      }
+    };
+
+    poll();
     return () => {
-      controls?.removeEventListener?.("change", handleChange);
+      cancelled = true;
+      if (raf) window.cancelAnimationFrame(raf);
+      attachedControlsRef.current?.removeEventListener?.("change", handleChange);
+      attachedControlsRef.current = null;
     };
   }, [sceneRef, syncTransform]);
 
@@ -135,15 +170,27 @@ export default function ViewCube({
       onReset();
       return;
     }
+    const scene = sceneRef?.current;
+    if (scene) {
+      setCameraPresetAroundTarget(scene.camera, scene.controls, "reset", scene.camera.position.clone().sub(scene.controls.target).length() || 1);
+      syncTransform();
+      return;
+    }
     if (onRotate) {
       onRotate(new THREE.Quaternion());
     }
-  }, [onRotate, onReset]);
+  }, [onRotate, onReset, sceneRef, syncTransform]);
 
   // ─── Drag orbit ──────────────────────────────────────────────────
   const onPointerDown = useCallback((e: React.PointerEvent) => {
-    dragRef.current = { dragging: true, hasDragged: false, startX: e.clientX, startY: e.clientY };
-    (e.target as HTMLElement)?.setPointerCapture?.(e.pointerId);
+    dragRef.current = {
+      dragging: true,
+      hasDragged: false,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+    };
+    (e.currentTarget as HTMLElement)?.setPointerCapture?.(e.pointerId);
     e.preventDefault();
   }, []);
 
@@ -177,15 +224,22 @@ export default function ViewCube({
   );
 
   const onPointerUp = useCallback(() => {
+    const current = cubeSceneRef.current;
+    const pointerId = dragRef.current.pointerId;
+    if (pointerId >= 0 && current?.hasPointerCapture?.(pointerId)) {
+      current.releasePointerCapture(pointerId);
+    }
     dragRef.current.dragging = false;
+    dragRef.current.pointerId = -1;
   }, []);
 
   return (
-    <div className={cn("flex flex-col items-center gap-4", className)}>
+    <div className={cn("flex flex-col items-center gap-4", embedded ? "select-none" : null, className)}>
       {/* ViewCube */}
       <div
         className={cn(
-          "w-size-viewcube h-[5.5rem] flex flex-col items-center pointer-events-none pt-[6px] rounded-xl bg-gradient-to-b from-card to-[hsl(var(--background))] border border-border/40 shadow-xl backdrop-blur-md [perspective:220px] relative pointer-events-auto"
+          "relative flex h-[5.5rem] w-size-viewcube flex-col items-center rounded-xl border border-border/40 bg-gradient-to-b from-card to-[hsl(var(--background))] pt-[6px] shadow-xl backdrop-blur-md [perspective:220px]",
+          cubeClassName,
         )}
       >
         <div
@@ -197,11 +251,19 @@ export default function ViewCube({
           onPointerLeave={onPointerUp}
         >
           {faces.map((face, fi) => (
-            <div key={fi} className={`absolute inset-0 w-size-viewcube-button h-size-viewcube-button grid grid-cols-[10px_1fr_10px] grid-rows-[10px_1fr_10px] [backface-visibility:visible] bg-gradient-to-br from-card to-muted border border-border/30`} style={{ transform: face.cssTransform === "vcFaceTop" ? "translateZ(30px)" : face.cssTransform === "vcFaceBottom" ? "rotateY(180deg) translateZ(30px)" : face.cssTransform === "vcFaceRight" ? "rotateY(90deg) translateZ(30px)" : face.cssTransform === "vcFaceLeft" ? "rotateY(-90deg) translateZ(30px)" : face.cssTransform === "vcFaceFront" ? "rotateX(90deg) translateZ(30px)" : "rotateX(-90deg) translateZ(30px)" }}>
+            <div key={fi} className="absolute inset-0 grid h-size-viewcube-button w-size-viewcube-button grid-cols-[10px_1fr_10px] grid-rows-[10px_1fr_10px] border border-border/30 bg-gradient-to-br from-card to-muted [backface-visibility:visible]" style={{ transform: face.cssTransform === "vcFaceTop" ? "translateZ(30px)" : face.cssTransform === "vcFaceBottom" ? "rotateY(180deg) translateZ(30px)" : face.cssTransform === "vcFaceRight" ? "rotateY(90deg) translateZ(30px)" : face.cssTransform === "vcFaceLeft" ? "rotateY(-90deg) translateZ(30px)" : face.cssTransform === "vcFaceFront" ? "rotateX(90deg) translateZ(30px)" : "rotateX(-90deg) translateZ(30px)" }}>
               {face.zones.flat().map((zone, zi) => (
                 <button
                   key={zi}
-                  className={`flex items-center justify-center border-none bg-transparent cursor-pointer p-0 m-0 transition-colors hover:bg-muted/30 ${zone.type === "face" ? "text-foreground/80 hover:bg-muted/50 hover:text-white" : zone.type === "edge" ? "hover:bg-teal-500/30" : "hover:bg-amber-500/30"}`}
+                  type="button"
+                  className={cn(
+                    "m-0 flex cursor-pointer items-center justify-center border-none bg-transparent p-0 transition-colors",
+                    zone.type === "face"
+                      ? "text-foreground/80 hover:bg-muted/50 hover:text-white"
+                      : zone.type === "edge"
+                        ? "hover:bg-teal-500/30"
+                        : "hover:bg-amber-500/30",
+                  )}
                   onClick={() => handleZoneClick(zone.dir)}
                   title={zone.label ?? ""}
                 >
@@ -211,14 +273,14 @@ export default function ViewCube({
             </div>
           ))}
         </div>
-        <button className="mt-[5px] w-size-viewcube-indicator h-size-viewcube-indicator rounded-full bg-card border border-border/40 text-muted-foreground text-[12px] cursor-pointer flex items-center justify-center transition-all backdrop-blur-md leading-none pointer-events-auto hover:bg-primary/20 hover:border-primary hover:text-white" onClick={resetCamera} title="Reset view">
+        <button type="button" className="mt-[5px] flex h-size-viewcube-indicator w-size-viewcube-indicator cursor-pointer items-center justify-center rounded-full border border-border/40 bg-card text-[12px] leading-none text-muted-foreground transition-all backdrop-blur-md hover:border-primary hover:bg-primary/20 hover:text-white" onClick={resetCamera} title="Reset view">
           ⌂
         </button>
       </div>
 
       {/* Axis Gizmo */}
       <div
-        className="w-[90px] h-[90px] pointer-events-none [perspective:200px] relative pointer-events-none"
+        className={cn("relative h-[90px] w-[90px] [perspective:200px]", axisClassName)}
       >
         <div ref={axisSceneRef} className="relative w-[90px] h-[90px] [transform-style:preserve-3d]">
           {/* X axis (red) */}

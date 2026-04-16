@@ -148,6 +148,9 @@ export async function clearRecovery(): Promise<RecoveryClearResponse> {
 
 /** Convert a File object to base64 string for upload. */
 export function fileToBase64(file: File): Promise<string> {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("FileReader unavailable in this environment"));
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -166,6 +169,9 @@ export function downloadFmsFile(
   base64: string,
   filename: string,
 ): void {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {

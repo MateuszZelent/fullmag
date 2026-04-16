@@ -93,6 +93,7 @@ import type {
   StudyPrimitiveStageKind,
 } from "@/lib/study-builder/types";
 import { extractFemCpuThreadSummary } from "./control-room/helpers";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const ANALYZE_WORKSPACE_HREF = "/workspace?stage=analyze";
 
@@ -195,6 +196,25 @@ function resolveStudyAnchorNodeId(
   return Number.isFinite(flatIndex) ? document.nodes[flatIndex]?.id ?? null : null;
 }
 
+function parsePositiveNumber(value: string): number | null {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function isPositiveFinite(value: number | null | undefined): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+function resolveFiniteMin(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return Math.min(...values);
+}
+
+function resolveFiniteMax(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return Math.max(...values);
+}
+
 /* ── Inner shell (consumes context) ── */
 
 export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMode?: WorkspaceMode }) {
@@ -213,6 +233,37 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     () => extractFemCpuThreadSummary(ctx.engineLog),
     [ctx.engineLog],
   );
+  const commandSolverIntegrators = ctx.solverPlan?.integrator ?? ctx.solverSettings.integrator;
+  const commandAdaptiveDtMin = ctx.solverPlan?.adaptive?.dtMin;
+  const commandAdaptiveDtMax = ctx.solverPlan?.adaptive?.dtMax;
+  const commandFixedDtFromPlan = ctx.solverPlan?.fixedTimestep;
+  const commandFixedDtFromSettings = parsePositiveNumber(ctx.solverSettings.fixedTimestep);
+  const commandSolverDtSamples = useMemo(
+    () =>
+      ctx.scalarRows
+        .slice(-128)
+        .map((row) => row.solver_dt)
+        .filter(isPositiveFinite),
+    [ctx.scalarRows],
+  );
+  const commandMinDt = useMemo(() => {
+    if (!ctx.hasSolverTelemetry) return null;
+    return isPositiveFinite(commandAdaptiveDtMin)
+      ? commandAdaptiveDtMin
+      : resolveFiniteMin(commandSolverDtSamples);
+  }, [commandAdaptiveDtMin, ctx.hasSolverTelemetry, commandSolverDtSamples]);
+  const commandMaxDt = useMemo(() => {
+    if (!ctx.hasSolverTelemetry) return null;
+    return isPositiveFinite(commandAdaptiveDtMax)
+      ? commandAdaptiveDtMax
+      : resolveFiniteMax(commandSolverDtSamples);
+  }, [commandAdaptiveDtMax, ctx.hasSolverTelemetry, commandSolverDtSamples]);
+  const commandFixedDt = useMemo(() => {
+    if (isPositiveFinite(commandFixedDtFromPlan)) {
+      return commandFixedDtFromPlan;
+    }
+    return commandFixedDtFromSettings;
+  }, [commandFixedDtFromPlan, commandFixedDtFromSettings]);
   const sidebarCollapsed = ctx.sidebarCollapsed;
   const setSidebarCollapsed = ctx.setSidebarCollapsed;
   const workspaceMode = ctx.workspaceMode;
@@ -1257,7 +1308,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       ) : null}
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.useDockingShell ? (
         <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
-          <WorkspaceDockingShell />
+          <TooltipProvider delayDuration={250}>
+            <WorkspaceDockingShell />
+          </TooltipProvider>
         </div>
       ) : (
         <PanelGroup
@@ -1372,8 +1425,12 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         stageProgressValue={footerStage.value}
         eTotalSpark={ctx.eTotalSpark}
         dmDtSpark={ctx.dmDtSpark}
-        dtSpark={ctx.dtSpark}
         hasSolverTelemetry={ctx.hasSolverTelemetry}
+        solverDt={ctx.effectiveDt}
+        solverMinDt={commandMinDt}
+        solverMaxDt={commandMaxDt}
+        solverFixedDt={commandFixedDt}
+        solverIntegrator={commandSolverIntegrators}
         nodeCount={ctx.isFemBackend && ctx.femMesh
           ? `${ctx.femMesh.nodes.length.toLocaleString()} nodes`
           : ctx.totalCells && ctx.totalCells > 0

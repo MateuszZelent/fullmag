@@ -9,6 +9,12 @@ import ViewCube from "./ViewCube";
 import { fitCameraToBounds, focusCameraOnBounds, rotateCameraAroundTarget } from "./camera/cameraHelpers";
 import SceneAxes3D from "./r3f/SceneAxes3D";
 import { useCanvasHost } from "./shared/useCanvasHost";
+import {
+  CAMERA_CONTROL_PROFILES,
+  type CameraControlProfileId,
+  createCameraStepLockState,
+  applyCameraStepLock,
+} from "./camera/cameraProfiles";
 import type {
   BuilderObjectOverlay,
   FocusObjectRequest,
@@ -100,18 +106,61 @@ function SyncedControls({
   target: [number, number, number];
 }) {
   const { camera } = useThree();
+  const controlsRefCurrent = useRef<any>(null);
+  const stepLockState = useRef(createCameraStepLockState());
+  const controlProfile: CameraControlProfileId = "fdm";
+  const profile = CAMERA_CONTROL_PROFILES[controlProfile];
+  const handleChange = useCallback(() => {
+    const controls = controlsRefObject.current;
+    const snapped = applyCameraStepLock({
+      camera,
+      controls,
+      profile,
+      state: stepLockState.current,
+    });
+    if (snapped) {
+      controls?.update();
+    }
+  }, [camera, controlsRefObject, profile]);
 
   useEffect(() => {
-    viewCubeBridgeRef.current = { camera, controls: controlsRefObject.current };
-  }, [camera, controlsRefObject, viewCubeBridgeRef]);
+    let raf = 0;
+    let disposed = false;
+
+    const syncBridge = () => {
+      if (disposed) {
+        return;
+      }
+      const controls = controlsRefObject.current;
+      if (controls !== controlsRefCurrent.current) {
+        controlsRefCurrent.current = controls;
+      }
+      viewCubeBridgeRef.current = { camera, controls };
+      if (!controls) {
+        raf = window.requestAnimationFrame(syncBridge);
+      }
+    };
+
+    syncBridge();
+
+    return () => {
+      disposed = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+      viewCubeBridgeRef.current = null;
+    };
+  }, [camera, viewCubeBridgeRef]);
 
   return (
     <TrackballControls
       ref={controlsRefObject}
-      rotateSpeed={2.4}
-      zoomSpeed={1.2}
-      panSpeed={0.9}
+      rotateSpeed={profile.rotateSpeed}
+      zoomSpeed={profile.zoomSpeed}
+      panSpeed={profile.panSpeed}
+      dynamicDampingFactor={profile.dampingFactor}
       target={target}
+      onChange={handleChange}
     />
   );
 }

@@ -1832,7 +1832,7 @@ export function normalizeSessionState(
     }
   }
 
-  if (process.env.NODE_ENV !== "production") {
+  if (typeof process !== "undefined" && process.env.NODE_ENV !== "production") {
     const rawScalarRows = raw.scalar_rows;
     const rawDeltaRows = Array.isArray(rawScalarRows) ? rawScalarRows.length : "?";
     console.debug(

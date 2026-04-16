@@ -44,7 +44,7 @@ export function recordFrontendDebugEvent(
   } catch {
     // Ignore performance API failures.
   }
-  if (process.env.NODE_ENV !== "production") {
+  if (typeof process !== "undefined" && process.env.NODE_ENV !== "production") {
     console.info(`[fullmag-debug][${scope}] ${event}`, detail ?? {});
     if (entry.stack) {
       console.info(entry.stack);
