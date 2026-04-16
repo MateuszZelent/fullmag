@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-03-25
+- Last updated: 2026-04-16
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -16,8 +16,8 @@
 
 ## 1. Problem statement
 
-This note freezes the **bootstrap executable FEM demagnetization paths** used by the CPU
-reference engine and by the current native MFEM executable seam.
+This note freezes the **bootstrap executable FEM demagnetization paths** used by the historical
+Rust reference FEM helper and by the current native MFEM executable seam.
 
 The long-term FEM demagnetization direction for Fullmag remains:
 
@@ -45,7 +45,7 @@ The bootstrap design now has two layers:
 
 The reason for the current executable default is pragmatic and explicit:
 
-> **for the public CPU-reference runner, transfer-grid exact tensor demag gives much better
+> **for the public executable FEM CPU/GPU runtime, transfer-grid exact tensor demag gives much better
 > FDM↔FEM parity than the old dense Robin solve, while keeping the same public `Demag()` surface.**
 
 This is still not the final FEM demag backend. The final target remains MFEM/libCEED/hypre on GPU.
@@ -57,15 +57,24 @@ At the time of writing, the executable `fullmag` FEM runner uses:
 - FEM exchange on the mesh,
 - FEM Zeeman on the mesh,
 - **transfer-grid exact tensor demag** for `H_demag` / `E_demag`,
-- `LLG(heun)` in the bootstrap CPU-reference path.
+- `LLG(heun)` in the bootstrap reference/helper path.
 
 When the native MFEM backend is available, the same executable bootstrap contract is reused
 there too: exchange stays on the FEM mesh, while demag is still supplied through the
 transfer-grid demag seam rather than through the final mesh-native hypre/open-boundary solver.
 
-The older Robin scalar-potential solve remains in the engine as a reference seam and fallback for
+The older Robin scalar-potential solve remains in the engine as a reference seam for tests and
 non-runner experimentation, but it is no longer the preferred executable path for cross-backend
 validation.
+
+For the still-supported explicit `poisson_robin` native FEM runtime path, CPU execution now resolves
+to one mesh-native solver family only:
+
+- CPU-native executable path: `hypre_pcg_boomeramg`,
+- GPU-native executable path: `hypre_pcg_boomeramg`.
+
+This does not change the public physics surface. The user still requests
+`Demag(realization="poisson_robin")`; only the resolved runtime linear solve changes.
 
 ## 2. Physical model
 
@@ -198,11 +207,16 @@ For one LLG RHS evaluation:
 
    using exact elementwise P1 integration via element-average magnetization.
 
-2. Solve the dense bootstrap linear system
+2. Solve the bootstrap linear system
 
    $$
    (K + \beta M_{\partial D})\,u = b.
    $$
+
+   Runtime policy:
+
+   - GPU-native executable path: hypre PCG + BoomerAMG,
+   - CPU-native executable path: hypre PCG + BoomerAMG.
 
 3. Recover elementwise demag field
 
@@ -211,6 +225,11 @@ For one LLG RHS evaluation:
    $$
 
 4. Average elementwise demag fields back to magnetic nodes.
+
+   In the native executable seam this recovery now uses OpenMP-parallel thread-local accumulation
+   with a node-wise reduction when the mesh size and scratch-memory budget justify parallel
+   execution. Small CPU Poisson meshes remain on a low-thread configuration because reduction
+   overhead dominates.
 
 5. Form
 
@@ -226,8 +245,8 @@ For one LLG RHS evaluation:
 
 6. Advance LLG with Heun in the bootstrap reference runner.
 
-The current executable reference engine uses a dense direct solve.
-This is acceptable only for very small meshes and exists solely to define the executable contract.
+The historical dense/direct reference seam remains acceptable only for very small debug/reference
+meshes. The executable native CPU/GPU seam now resolves to MFEM/Hypre sparse solvers instead.
 
 ## 5. SI units and naming
 
@@ -280,6 +299,10 @@ Minimum bootstrap validation:
 3. For a flat box-like mesh, out-of-plane uniform magnetization has larger demag energy than
    in-plane uniform magnetization.
 4. `Exchange + Demag + Zeeman + LLG(heun)` remains stable in the narrow CPU-reference slice.
+5. Runner logs must distinguish requested `poisson_robin` from the resolved CPU/GPU linear solver
+   (`hypre_pcg_boomeramg` in the native executable path).
+6. CPU runtime diagnostics must still report requested vs effective thread counts without changing
+   the public requested execution intent.
 
 Comparison against a future MFEM production backend should use physical tolerances, not bitwise
 identity.
@@ -287,7 +310,8 @@ identity.
 ## 8. Known limitations
 
 - This is **not** the final MFEM/libCEED/hypre implementation.
-- The dense linear solve is only for small reference meshes.
+- The explicit native `poisson_robin` path now depends on an MPI/Hypre-enabled MFEM runtime; older
+  CPU fallback solvers are intentionally removed.
 - The Robin boundary is only the first open-boundary surrogate.
 - The current marker convention is bootstrap-only.
 - The control room can stream FEM scalar/session updates now, but mesh-native live visualization is
@@ -295,7 +319,8 @@ identity.
 
 ## 9. Deferred work
 
-- Replace the dense solve with MFEM/hypre-backed sparse linear solves.
+- Keep the managed CPU/GPU Poisson runtime aligned around the same Hypre solve path and validate
+  the startup cost on smaller meshes.
 - Replace the bootstrap Robin truncation with better open-boundary strategies.
 - Make magnetic/support regions explicit in the lowered FEM plan.
 - Add mesh-native FEM live visualization in the control room.

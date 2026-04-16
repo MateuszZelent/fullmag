@@ -64,6 +64,8 @@ use crate::types::{
 };
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::types::{ExecutionProvenance, FieldSnapshot, RunResult, RunStatus, StepStats};
+#[cfg(feature = "fem-gpu")]
+use fullmag_engine::fem::FemBackendId;
 
 /// Which execution engine to use for FDM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2040,9 +2042,9 @@ fn build_fem_cached_preview_fields(
 #[cfg(feature = "fem-gpu")]
 fn native_fem_execution_engine(plan: &FemPlanIR) -> &'static str {
     if plan.mfem_device_string.as_deref() == Some("cpu") {
-        "native_fem_cpu"
+        FemBackendId::CpuNative.provenance_name()
     } else {
-        "native_fem_gpu"
+        FemBackendId::GpuNative.provenance_name()
     }
 }
 

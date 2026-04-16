@@ -41,6 +41,7 @@ import {
   sameVisualizationPresets,
   serializeMeshEntityViewStateForScene,
 } from "./controlRoomUtils";
+import { scalarRowsTipFingerprint } from "@/lib/plots/scalarRows";
 import type {
   DisplaySelection,
   EngineLogEntry,
@@ -431,17 +432,21 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const runtimeStatus = state?.runtime_status ?? null;
   const commandStatus = state?.command_status ?? null;
   const stageExecution = state?.stage_execution ?? null;
-  // Reference-stable scalarRows: only changes ref when length or last step differs.
-  // This prevents cascading useMemo invalidation on every WS tick.
+  // Reference-stable scalarRows: only changes ref when the history tip changes.
+  // This prevents cascading useMemo invalidation on unrelated runtime ticks.
   const rawScalarRows = state?.scalar_rows ?? EMPTY_SCALAR_ROWS;
   const stableScalarRowsRef = useRef(rawScalarRows);
   const scalarRowsFingerprintRef = useRef("");
-  const scalarRowsFp = `${rawScalarRows.length}:${rawScalarRows.length > 0 ? rawScalarRows[rawScalarRows.length - 1]?.step ?? -1 : -1}`;
+  const scalarRowsFp = scalarRowsTipFingerprint(rawScalarRows);
   if (scalarRowsFp !== scalarRowsFingerprintRef.current) {
     scalarRowsFingerprintRef.current = scalarRowsFp;
     stableScalarRowsRef.current = rawScalarRows;
   }
   const scalarRows = stableScalarRowsRef.current;
+  const scalarRowsTotal =
+    typeof state?.scalar_rows_total === "number"
+      ? state.scalar_rows_total
+      : scalarRows.length;
   const engineLog = state?.engine_log ?? EMPTY_ENGINE_LOG;
   const quantities = state?.quantities ?? EMPTY_QUANTITIES;
   const artifactsArr = state?.artifacts ?? EMPTY_ARTIFACTS;
@@ -1752,14 +1757,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag,
     effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
     elapsed, stepsPerSec,
-    liveState, effectiveLiveState, scalarRows,
+    liveState, effectiveLiveState, scalarRows, scalarRowsTotal,
     dmDtSpark, dtSpark, eTotalSpark,
     preview, selectedVectors, fieldStats, hasSolverTelemetry,
   }), [
     effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag,
     effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
     elapsed, stepsPerSec,
-    liveState, effectiveLiveState, scalarRows,
+    liveState, effectiveLiveState, scalarRows, scalarRowsTotal,
     dmDtSpark, dtSpark, eTotalSpark,
     preview, selectedVectors, fieldStats, hasSolverTelemetry,
   ]);

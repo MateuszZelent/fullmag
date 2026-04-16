@@ -107,6 +107,7 @@ export interface TransportContextValue {
   liveState: LiveState | null;
   effectiveLiveState: LiveState | null;
   scalarRows: ScalarRow[];
+  scalarRowsTotal: number;
   dmDtSpark: number[];
   dtSpark: number[];
   eTotalSpark: number[];

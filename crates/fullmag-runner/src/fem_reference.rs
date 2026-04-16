@@ -1,6 +1,9 @@
-//! CPU reference FEM runner: executes narrow FEM LLG via `fullmag-engine::fem`.
+//! Reference FEM helper: executes narrow FEM LLG via `fullmag-engine::fem`.
 //!
-//! Current executable slice:
+//! This path is retained for tests, preview helpers, and provenance checks.
+//! The public executable FEM CPU path routes through the native MFEM backend.
+//!
+//! Current narrow reference slice:
 //! - precomputed `MeshIR`
 //! - `Exchange`, optional bootstrap `Demag`, and optional `Zeeman`
 //! - `LLG(heun)`
@@ -8,7 +11,9 @@
 
 #![allow(dead_code)]
 
-use fullmag_engine::fem::{FemIntegratorWorkspace, FemLlgProblem, FemLlgState, MeshTopology};
+use fullmag_engine::fem::{
+    FemBackendId, FemIntegratorWorkspace, FemLlgProblem, FemLlgState, MeshTopology,
+};
 use fullmag_engine::{
     AdaptiveStepConfig, EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator,
 };
@@ -295,16 +300,7 @@ pub(crate) fn build_problem_and_state(
 }
 
 pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
-    let demag_operator_kind = if !plan.enable_demag {
-        None
-    } else {
-        Some(
-            plan.demag_realization
-                .map(|r| r.provenance_name())
-                .unwrap_or("fem_transfer_grid_tensor_fft_newell")
-                .to_string(),
-        )
-    };
+    let resolved_demag_realization = reference_demag_provenance_name(plan);
     let dt_policy = if plan.adaptive_timestep.is_some() {
         Some("adaptive".to_string())
     } else if plan.fixed_timestep.is_some() {
@@ -315,9 +311,9 @@ pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
         None
     };
     ExecutionProvenance {
-        execution_engine: "cpu_reference_fem".to_string(),
+        execution_engine: FemBackendId::CpuReference.provenance_name().to_string(),
         precision: "double".to_string(),
-        demag_operator_kind,
+        demag_operator_kind: resolved_demag_realization.clone(),
         fft_backend: None,
         device_name: None,
         compute_capability: None,
@@ -328,12 +324,22 @@ pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
         requested_demag_realization: plan
             .demag_realization
             .map(|r| r.provenance_name().to_string()),
-        resolved_demag_realization: plan
-            .demag_realization
-            .map(|r| r.provenance_name().to_string()),
+        resolved_demag_realization,
         dt_policy,
+        demag_transfer_cell_size: plan.demag_transfer_cell_size,
         ..Default::default()
     }
+}
+
+fn reference_demag_provenance_name(plan: &FemPlanIR) -> Option<String> {
+    if !plan.enable_demag {
+        return None;
+    }
+    Some(
+        plan.demag_realization
+            .map(|realization| realization.provenance_name().to_string())
+            .unwrap_or_else(|| "fem_poisson".to_string()),
+    )
 }
 
 fn execute_reference_fem_impl(
@@ -442,7 +448,7 @@ fn execute_reference_fem_impl(
     );
 
     eprintln!(
-        "[fullmag-runner] cpu-fem LLG loop: until={:.4e} dt_initial={:.4e} \
+        "[fullmag-runner] reference-fem LLG loop: until={:.4e} dt_initial={:.4e} \
          max_steps={} torque_tol={:.4e}",
         until_seconds,
         dt,
@@ -712,7 +718,7 @@ fn execute_reference_fem_impl(
             );
             if max_steps_hit || converged {
                 eprintln!(
-                    "[fullmag-runner] cpu-fem relaxation stop at step {}: \
+                    "[fullmag-runner] reference-fem relaxation stop at step {}: \
                      max_steps_hit={max_steps_hit} (step={} >= max_steps={}), \
                      converged={converged} \
                      (max_torque_T={:.4e} torque_tol={:.4e} energy_tol={:?})",
@@ -733,7 +739,7 @@ fn execute_reference_fem_impl(
     }
     if !cancelled {
         eprintln!(
-            "[fullmag-runner] cpu-fem loop exited: step={} time={:.4e} until={:.4e} (time_limit_reached={})",
+            "[fullmag-runner] reference-fem loop exited: step={} time={:.4e} until={:.4e} (time_limit_reached={})",
             step_count,
             state.time_seconds,
             until_seconds,
@@ -1597,6 +1603,23 @@ mod tests {
             .expect("H_demag preview should be present");
         assert_eq!(h_demag.quantity_domain, "full_domain");
         assert_eq!(h_demag.vector_field_values.len(), plan.mesh.nodes.len() * 3);
+    }
+
+    #[test]
+    fn reference_provenance_defaults_implicit_demag_to_fem_poisson() {
+        let plan = make_test_plan(true);
+        let provenance = execution_provenance(&plan);
+
+        assert_eq!(provenance.execution_engine, "fem_cpu_reference");
+        assert_eq!(provenance.requested_demag_realization, None);
+        assert_eq!(
+            provenance.resolved_demag_realization.as_deref(),
+            Some("fem_poisson")
+        );
+        assert_eq!(
+            provenance.demag_operator_kind.as_deref(),
+            Some("fem_poisson")
+        );
     }
 
     #[test]

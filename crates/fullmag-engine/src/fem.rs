@@ -48,7 +48,7 @@ impl FemBackendId {
         match self {
             Self::CpuReference => "fem_cpu_reference",
             Self::CpuNative => "fem_cpu_native",
-            Self::GpuNative => "fem_gpu_native",
+            Self::GpuNative => "fem_native_gpu",
         }
     }
 
@@ -516,6 +516,40 @@ impl CgWorkspace {
         grow(&mut self.p, n);
         grow(&mut self.ap, n);
         grow(&mut self.inv_diag, n);
+    }
+}
+
+/// Reusable demag buffers that eliminate per-solve allocations in the
+/// Poisson/Robin demag hot path.
+#[derive(Debug, Clone)]
+struct DemagWorkspace {
+    cg: CgWorkspace,
+    rhs: Vec<f64>,
+    field: Vec<Vector3>,
+    weights: Vec<f64>,
+}
+
+impl DemagWorkspace {
+    fn new(n: usize) -> Self {
+        Self {
+            cg: CgWorkspace::new(n),
+            rhs: vec![0.0; n],
+            field: vec![[0.0, 0.0, 0.0]; n],
+            weights: vec![0.0; n],
+        }
+    }
+
+    fn ensure_size(&mut self, n: usize) {
+        self.cg.ensure_size(n);
+        if self.rhs.len() < n {
+            self.rhs.resize(n, 0.0);
+        }
+        if self.field.len() < n {
+            self.field.resize(n, [0.0, 0.0, 0.0]);
+        }
+        if self.weights.len() < n {
+            self.weights.resize(n, 0.0);
+        }
     }
 }
 
@@ -1073,9 +1107,9 @@ pub struct FemLlgProblem {
     /// Cache of the last demag field + energy to avoid redundant CG solves
     /// in `step_report_from_vectors` (called right after the integrator step).
     demag_cache: Mutex<Option<(Vec<Vector3>, f64)>>,
-    /// Reusable CG workspace for Poisson/Robin demag solves, eliminating
-    /// per-solve heap allocations in the hot path.
-    demag_cg_ws: Mutex<CgWorkspace>,
+    /// Reusable demag solve workspace for Poisson/Robin solves, eliminating
+    /// per-solve heap allocations for CG, RHS assembly, and nodal averaging.
+    demag_ws: Mutex<DemagWorkspace>,
     /// Cached inverse-diagonal (Jacobi preconditioner) for the demag CSR
     /// matrix.  Computed once and reused for every CG solve.
     demag_inv_diag: Vec<f64>,
@@ -1097,7 +1131,7 @@ impl Clone for FemLlgProblem {
             demag_csr: self.demag_csr.clone(),
             demag_dirichlet_boundary: self.demag_dirichlet_boundary,
             demag_cache: Mutex::new(None),
-            demag_cg_ws: Mutex::new(CgWorkspace::new(self.topology.n_nodes)),
+            demag_ws: Mutex::new(DemagWorkspace::new(self.topology.n_nodes)),
             demag_inv_diag: self.demag_inv_diag.clone(),
         }
     }
@@ -1144,7 +1178,7 @@ impl FemLlgProblem {
             demag_csr,
             demag_dirichlet_boundary: false,
             demag_cache: Mutex::new(None),
-            demag_cg_ws: Mutex::new(CgWorkspace::new(n)),
+            demag_ws: Mutex::new(DemagWorkspace::new(n)),
             demag_inv_diag,
         }
     }
@@ -1173,7 +1207,7 @@ impl FemLlgProblem {
             demag_csr,
             demag_dirichlet_boundary: false,
             demag_cache: Mutex::new(None),
-            demag_cg_ws: Mutex::new(CgWorkspace::new(n_nodes)),
+            demag_ws: Mutex::new(DemagWorkspace::new(n_nodes)),
             demag_inv_diag,
         }
     }
@@ -1210,7 +1244,7 @@ impl FemLlgProblem {
             demag_csr,
             demag_dirichlet_boundary: dirichlet_boundary,
             demag_cache: Mutex::new(None),
-            demag_cg_ws: Mutex::new(CgWorkspace::new(n_nodes)),
+            demag_ws: Mutex::new(DemagWorkspace::new(n_nodes)),
             demag_inv_diag,
         }
     }
@@ -2622,10 +2656,13 @@ impl FemLlgProblem {
         &self,
         magnetization: &[Vector3],
     ) -> Result<(Vec<Vector3>, f64)> {
-        let mut rhs = self.demag_rhs_from_vectors(magnetization);
+        let n = self.demag_csr.n;
+        let mut ws = self.demag_ws.lock().unwrap();
+        ws.ensure_size(n);
+        self.demag_rhs_from_vectors_into(magnetization, &mut ws.rhs[..n]);
         if self.demag_dirichlet_boundary {
             for &node in &self.topology.boundary_nodes {
-                if let Some(value) = rhs.get_mut(node as usize) {
+                if let Some(value) = ws.rhs.get_mut(node as usize) {
                     *value = 0.0;
                 }
             }
@@ -2633,25 +2670,29 @@ impl FemLlgProblem {
         // FND-012: use overridable solver parameters
         let tol = self.sparse_cg_tol.unwrap_or(SPARSE_CG_TOL);
         let max_iter = self.sparse_cg_max_iter.unwrap_or(SPARSE_CG_MAX_ITER);
-        let mut ws = self.demag_cg_ws.lock().unwrap();
+        let DemagWorkspace {
+            cg,
+            rhs,
+            field,
+            weights,
+        } = &mut *ws;
         solve_sparse_cg_cached(
             &self.demag_csr,
-            &rhs,
+            &rhs[..n],
             tol,
             max_iter,
-            &mut ws,
+            cg,
             &self.demag_inv_diag,
         )?;
-        let n = self.demag_csr.n;
-        let field = self.demag_field_from_potential(&ws.x[..n]);
+        self.demag_field_from_potential_into(&cg.x[..n], &mut field[..n], &mut weights[..n]);
         let energy = 0.5
             * MU0
-            * ws.x[..n]
+            * cg.x[..n]
                 .iter()
-                .zip(rhs.iter())
+                .zip(rhs[..n].iter())
                 .map(|(u, b)| u * b)
                 .sum::<f64>();
-        Ok((field, energy))
+        Ok((field[..n].to_vec(), energy))
     }
 
     fn transfer_grid_demag_observables_from_vectors(
@@ -2753,8 +2794,9 @@ impl FemLlgProblem {
         Ok((node_demag_field, demag_energy_joules))
     }
 
-    fn demag_rhs_from_vectors(&self, magnetization: &[Vector3]) -> Vec<f64> {
-        let mut rhs = vec![0.0; self.topology.n_nodes];
+    fn demag_rhs_from_vectors_into(&self, magnetization: &[Vector3], rhs: &mut [f64]) {
+        debug_assert_eq!(rhs.len(), self.topology.n_nodes);
+        rhs.fill(0.0);
         for (element_index, element) in self.topology.elements.iter().enumerate() {
             if !self.topology.magnetic_element_mask[element_index] {
                 continue;
@@ -2775,13 +2817,19 @@ impl FemLlgProblem {
                 rhs[element[local_index] as usize] += volume * dot(avg_m, gradients[local_index]);
             }
         }
-        rhs
     }
 
-    fn demag_field_from_potential(&self, potential: &[f64]) -> Vec<Vector3> {
-        let mut field = vec![[0.0, 0.0, 0.0]; self.topology.n_nodes];
-        let mut weights = vec![0.0; self.topology.n_nodes];
-
+    fn demag_field_from_potential_into(
+        &self,
+        potential: &[f64],
+        field: &mut [Vector3],
+        weights: &mut [f64],
+    ) {
+        debug_assert_eq!(potential.len(), self.topology.n_nodes);
+        debug_assert_eq!(field.len(), self.topology.n_nodes);
+        debug_assert_eq!(weights.len(), self.topology.n_nodes);
+        field.fill([0.0, 0.0, 0.0]);
+        weights.fill(0.0);
         for (element_index, element) in self.topology.elements.iter().enumerate() {
             let gradients = self.topology.grad_phi[element_index];
             let mut grad_u = [0.0, 0.0, 0.0];
@@ -2808,8 +2856,6 @@ impl FemLlgProblem {
                 *value = scale(*value, 1.0 / weights[index]);
             }
         }
-
-        field
     }
 
     fn anisotropy_field_from_vectors(&self, magnetization: &[Vector3]) -> Vec<Vector3> {

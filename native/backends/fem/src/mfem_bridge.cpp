@@ -14,6 +14,10 @@
 #include <string>
 #include <tuple>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
 #endif
@@ -153,6 +157,14 @@ bool mfem_device_requests_gpu() {
     return std::strcmp(device, "cpu") != 0;
 }
 
+bool mfem_device_requests_gpu(const Context &ctx) {
+    const char *device = configured_mfem_device_string(ctx);
+    if (device == nullptr || *device == '\0') {
+        return true;
+    }
+    return std::strcmp(device, "cpu") != 0;
+}
+
 bool env_flag_enabled(const char *name) {
     const char *raw = std::getenv(name);
     if (raw == nullptr || *raw == '\0') {
@@ -165,6 +177,95 @@ bool env_flag_enabled(const char *name) {
            std::strcmp(raw, "ON") == 0 ||
            std::strcmp(raw, "yes") == 0 ||
            std::strcmp(raw, "YES") == 0;
+}
+
+bool detailed_fem_step_profile_enabled() {
+    return env_flag_enabled("FULLMAG_FEM_STEP_PROFILE");
+}
+
+void log_demag_call_profile(
+    const Context &ctx,
+    uint64_t demag_call_index,
+    uint64_t assemble_wall_time_ns,
+    uint64_t solve_wall_time_ns,
+    uint64_t recover_wall_time_ns)
+{
+    if (!detailed_fem_step_profile_enabled()) {
+        return;
+    }
+    const uint64_t total_wall_time_ns =
+        assemble_wall_time_ns + solve_wall_time_ns + recover_wall_time_ns;
+    std::fprintf(
+        stderr,
+        "[fullmag-fem] demag call: step=%llu call=%llu dt=%.3e assemble=%llums solve=%llums recover=%llums total=%llums lin_iters=%d residual=%.3e\n",
+        static_cast<unsigned long long>(ctx.step_count),
+        static_cast<unsigned long long>(demag_call_index),
+        ctx.current_dt,
+        static_cast<unsigned long long>(assemble_wall_time_ns / 1000000ull),
+        static_cast<unsigned long long>(solve_wall_time_ns / 1000000ull),
+        static_cast<unsigned long long>(recover_wall_time_ns / 1000000ull),
+        static_cast<unsigned long long>(total_wall_time_ns / 1000000ull),
+        ctx.poisson_last_iterations,
+        ctx.poisson_last_residual);
+}
+
+int openmp_max_threads() {
+#ifdef _OPENMP
+    return std::max(1, omp_get_max_threads());
+#else
+    return 1;
+#endif
+}
+
+std::optional<int> parse_positive_env_int(const char *name) {
+    const char *raw = std::getenv(name);
+    if (raw == nullptr || *raw == '\0') {
+        return std::nullopt;
+    }
+    char *end = nullptr;
+    const long parsed = std::strtol(raw, &end, 10);
+    if (end == raw || *end != '\0' || parsed < 1) {
+        return std::nullopt;
+    }
+    return static_cast<int>(parsed);
+}
+
+int requested_cpu_threads() {
+    if (const auto from_omp = parse_positive_env_int("OMP_NUM_THREADS")) {
+        return *from_omp;
+    }
+    if (const auto from_fullmag = parse_positive_env_int("FULLMAG_CPU_THREADS")) {
+        return *from_fullmag;
+    }
+    return openmp_max_threads();
+}
+
+void configure_cpu_openmp_runtime(Context &ctx) {
+    ctx.requested_omp_threads = requested_cpu_threads();
+    ctx.effective_omp_threads = ctx.requested_omp_threads;
+}
+
+void log_cpu_runtime_selection(const Context &ctx) {
+    if (mfem_device_requests_gpu(ctx)) {
+        return;
+    }
+
+    if (ctx.demag_realization == 0) {
+        std::fprintf(
+            stderr,
+            "[fullmag-fem] cpu runtime: demag=transfer_grid requested_omp_threads=%d effective_omp_threads=%d\n",
+            ctx.requested_omp_threads,
+            ctx.effective_omp_threads);
+        return;
+    }
+
+    std::fprintf(
+        stderr,
+        "[fullmag-fem] cpu runtime: poisson_solver=hypre_pcg_boomeramg requested_omp_threads=%d effective_omp_threads=%d mesh_nodes=%u elements=%u\n",
+        ctx.requested_omp_threads,
+        ctx.effective_omp_threads,
+        ctx.n_nodes,
+        ctx.n_elements);
 }
 
 void debug_checkpoint(const char *stage) {
@@ -2124,151 +2225,17 @@ bool assemble_poisson_rhs(
     return true;
 }
 
-/// Solve the Poisson equation: -∇²u = -∇·M with Dirichlet u=0 on ∂D.
-bool solve_poisson(
-    Context &ctx,
-    const mfem::Vector &rhs,
-    mfem::Vector &solution,
-    std::string &error)
-{
-    debug_checkpoint("context_compute_demag_poisson:solve_enter");
-    auto *A_bc = static_cast<mfem::SparseMatrix *>(ctx.mfem_poisson_bc_op);
-    if (A_bc == nullptr) {
-        error = "Poisson BC-eliminated operator is null during solve";
-        return false;
-    }
+mfem::Array<int> poisson_essential_tdofs(const Context &ctx) {
+    return mfem::Array<int>(
+        const_cast<int *>(ctx.poisson_ess_tdof_list.data()),
+        static_cast<int>(ctx.poisson_ess_tdof_list.size()));
+}
 
-    // Apply boundary conditions to RHS only (matrix is pre-eliminated in init)
-    mfem::Vector rhs_bc(rhs);
-    mfem::Array<int> ess_tdof(ctx.poisson_ess_tdof_list.data(),
-                              static_cast<int>(ctx.poisson_ess_tdof_list.size()));
+void zero_poisson_essential_values(const Context &ctx, mfem::Vector &vec) {
+    mfem::Array<int> ess_tdof = poisson_essential_tdofs(ctx);
     for (int i = 0; i < ess_tdof.Size(); ++i) {
-        rhs_bc(ess_tdof[i]) = 0.0;
+        vec(ess_tdof[i]) = 0.0;
     }
-
-    // Warm-start from previous step
-    mfem::Vector sol_bc(solution);
-    mfem::Vector residual(rhs_bc.Size());
-    mfem::Vector direction(rhs_bc.Size());
-    mfem::Vector q(rhs_bc.Size());
-    mfem::Vector z(rhs_bc.Size());
-    mfem::Vector diagonal(rhs_bc.Size());
-    debug_checkpoint("context_compute_demag_poisson:solve_before_diag");
-    A_bc->GetDiag(diagonal);
-    debug_checkpoint("context_compute_demag_poisson:solve_after_diag");
-
-    auto apply_jacobi = [&](const mfem::Vector &src, mfem::Vector &dst) {
-        dst.SetSize(src.Size());
-        for (int i = 0; i < src.Size(); ++i) {
-            const double diag = diagonal(i);
-            dst(i) = std::abs(diag) > 1e-30 ? src(i) / diag : src(i);
-        }
-    };
-    auto dot = [](const mfem::Vector &a, const mfem::Vector &b) {
-        double sum = 0.0;
-        for (int i = 0; i < a.Size(); ++i) {
-            sum += a(i) * b(i);
-        }
-        return sum;
-    };
-
-    debug_checkpoint("context_compute_demag_poisson:solve_before_initial_mult");
-    A_bc->Mult(sol_bc, q);
-    debug_checkpoint("context_compute_demag_poisson:solve_after_initial_mult");
-    residual = rhs_bc;
-    residual -= q;
-    apply_jacobi(residual, z);
-    direction = z;
-    double rho = dot(residual, z);
-    const double rhs_norm = std::sqrt(std::max(dot(rhs_bc, rhs_bc), 1e-300));
-    const double tol = ctx.demag_solver.relative_tolerance;
-    double residual_norm = std::sqrt(std::max(dot(residual, residual), 0.0));
-    const double abs_residual_tol = std::max(kPoissonAbsResidualTol, tol * rhs_norm);
-    double rel_residual = residual_norm / rhs_norm;
-    const int max_iter = static_cast<int>(ctx.demag_solver.max_iterations);
-    int iter = 0;
-
-    if (residual_norm <= abs_residual_tol) {
-        ctx.poisson_last_iterations = 0;
-        ctx.poisson_last_residual = rel_residual;
-        for (int i = 0; i < ess_tdof.Size(); ++i) {
-            sol_bc(ess_tdof[i]) = 0.0;
-        }
-        solution = sol_bc;
-        debug_checkpoint("context_compute_demag_poisson:solve_done_cpu");
-        return true;
-    }
-
-    for (; iter < max_iter && rel_residual > tol; ++iter) {
-        debug_checkpoint("context_compute_demag_poisson:solve_iter_mult_enter");
-        A_bc->Mult(direction, q);
-        debug_checkpoint("context_compute_demag_poisson:solve_iter_mult_done");
-        const double denom = dot(direction, q);
-        residual_norm = std::sqrt(std::max(dot(residual, residual), 0.0));
-        const double q_norm = std::sqrt(std::max(dot(q, q), 0.0));
-        const double curvature_scale = std::max(1.0, residual_norm * q_norm);
-        const double tiny_curvature = 1e-24 * curvature_scale;
-        if (!std::isfinite(denom)) {
-            error = "Poisson host CG encountered a non-finite or zero curvature"
-                " (rho=" + std::to_string(rho)
-                + ", denom=" + std::to_string(denom)
-                + ", |r|=" + std::to_string(residual_norm)
-                + ", |q|=" + std::to_string(q_norm)
-                + ")";
-            return false;
-        }
-        if (!std::isfinite(rho) || std::abs(rho) <= tiny_curvature || std::abs(denom) <= tiny_curvature) {
-            // Near the converged solution the BC-eliminated Poisson system can
-            // produce an almost-null search curvature due to roundoff. Treat
-            // that as a soft convergence exit instead of aborting the whole
-            // FEM GPU solve.
-            rel_residual = residual_norm / rhs_norm;
-            if (residual_norm <= abs_residual_tol || rel_residual <= std::max(tol, 1e-8)) {
-                ++iter;
-                break;
-            }
-            error = "Poisson host CG encountered a non-finite or zero curvature"
-                " (rho=" + std::to_string(rho)
-                + ", denom=" + std::to_string(denom)
-                + ", |r|=" + std::to_string(residual_norm)
-                + ", |q|=" + std::to_string(q_norm)
-                + ")";
-            return false;
-        }
-        const double alpha = rho / denom;
-        for (int i = 0; i < sol_bc.Size(); ++i) {
-            sol_bc(i) += alpha * direction(i);
-            residual(i) -= alpha * q(i);
-        }
-        rel_residual = std::sqrt(std::max(dot(residual, residual), 0.0)) / rhs_norm;
-        if (rel_residual <= tol) {
-            ++iter;
-            break;
-        }
-        apply_jacobi(residual, z);
-        const double rho_next = dot(residual, z);
-        if (!std::isfinite(rho_next)) {
-            error = "Poisson host CG encountered a non-finite preconditioned residual";
-            return false;
-        }
-        const double beta = rho_next / rho;
-        for (int i = 0; i < direction.Size(); ++i) {
-            direction(i) = z(i) + beta * direction(i);
-        }
-        rho = rho_next;
-    }
-
-    ctx.poisson_last_iterations = iter;
-    ctx.poisson_last_residual = rel_residual;
-
-    // Restore essential DOF values (u=0 on boundary)
-    for (int i = 0; i < ess_tdof.Size(); ++i) {
-        sol_bc(ess_tdof[i]) = 0.0;
-    }
-
-    solution = sol_bc;
-    debug_checkpoint("context_compute_demag_poisson:solve_done_cpu");
-    return true;
 }
 
 #ifdef MFEM_USE_MPI
@@ -2303,11 +2270,7 @@ bool solve_poisson_hypre(
 
     // Apply BCs to RHS
     mfem::Vector rhs_bc(rhs);
-    mfem::Array<int> ess_tdof(ctx.poisson_ess_tdof_list.data(),
-                              static_cast<int>(ctx.poisson_ess_tdof_list.size()));
-    for (int i = 0; i < ess_tdof.Size(); ++i) {
-        rhs_bc(ess_tdof[i]) = 0.0;
-    }
+    zero_poisson_essential_values(ctx, rhs_bc);
 
     const HYPRE_BigInt glob_size = static_cast<HYPRE_BigInt>(A_bc->NumRows());
     HYPRE_BigInt row_starts[2] = {0, glob_size};
@@ -2318,11 +2281,11 @@ bool solve_poisson_hypre(
         auto *A_par = new mfem::HypreParMatrix(MPI_COMM_WORLD, glob_size, row_starts, A_bc);
         ctx.mfem_cached_hypre_par = A_par;
 
-        // BoomerAMG preconditioner — GPU-friendly settings
+        // BoomerAMG preconditioner — native MFEM Poisson settings shared by CPU/GPU execution.
         auto *amg = new mfem::HypreBoomerAMG(*A_par);
         amg->SetPrintLevel(0);
-        amg->SetRelaxType(18);   // l1-scaled Jacobi (GPU-friendly)
-        amg->SetCoarsening(8);   // PMIS (good for GPU/parallel)
+        amg->SetRelaxType(18);   // l1-scaled Jacobi
+        amg->SetCoarsening(8);   // PMIS
         amg->SetInterpolation(6);   // extended+i interpolation
         amg->SetAggressiveCoarsening(1);
         ctx.mfem_cached_hypre_amg = amg;
@@ -2377,9 +2340,7 @@ bool solve_poisson_hypre(
     ctx.poisson_last_residual = static_cast<double>(final_residual);
 
     // Restore essential DOFs
-    for (int i = 0; i < ess_tdof.Size(); ++i) {
-        solution(ess_tdof[i]) = 0.0;
-    }
+    zero_poisson_essential_values(ctx, solution);
 
     debug_checkpoint("context_compute_demag_poisson:solve_done_hypre");
     return true;
@@ -2404,25 +2365,30 @@ bool recover_demag_field(
         return false;
     }
 
-    h_demag_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
+    const size_t node_count = static_cast<size_t>(ctx.n_nodes);
+    const size_t field_len = node_count * 3u;
+    h_demag_xyz.assign(field_len, 0.0);
 
     // Create GridFunction from the potential solution
     mfem::GridFunction gf_u(fes);
     gf_u.SetFromTrueDofs(potential);
 
     // Accumulate -∇u at each node, weighted by shape * quadrature weight
-    std::vector<double> node_weight(static_cast<size_t>(ctx.n_nodes), 0.0);
+    std::vector<double> node_weight(node_count, 0.0);
 
-    for (int elem = 0; elem < mesh->GetNE(); ++elem) {
+    auto accumulate_element = [&](int elem,
+                                  std::vector<double> &field_accum,
+                                  std::vector<double> &weight_accum,
+                                  mfem::Array<int> &dofs,
+                                  mfem::Vector &u_elem,
+                                  mfem::DenseMatrix &dshape,
+                                  mfem::Vector &shape) {
         const mfem::FiniteElement *fe = fes->GetFE(elem);
         mfem::ElementTransformation *T = mesh->GetElementTransformation(elem);
 
-        mfem::Array<int> dofs;
         fes->GetElementDofs(elem, dofs);
         const int local_ndof = dofs.Size();
-
-        // Extract element DOF values of the potential
-        mfem::Vector u_elem(local_ndof);
+        u_elem.SetSize(local_ndof);
         for (int i = 0; i < local_ndof; ++i) {
             const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
             const double sign = dofs[i] >= 0 ? 1.0 : -1.0;
@@ -2432,16 +2398,15 @@ bool recover_demag_field(
         const mfem::IntegrationRule &ir =
             mfem::IntRules.Get(fe->GetGeomType(), 2 * fe->GetOrder());
 
+        shape.SetSize(local_ndof);
+        dshape.SetSize(local_ndof, 3);
         for (int q = 0; q < ir.GetNPoints(); ++q) {
             const mfem::IntegrationPoint &ip = ir.IntPoint(q);
             T->SetIntPoint(&ip);
             const double w = ip.weight * T->Weight();
 
-            // Gradient of shape functions in physical coordinates
-            mfem::DenseMatrix dshape(local_ndof, 3);
             fe->CalcPhysDShape(*T, dshape);
 
-            // grad_u = Σᵢ uᵢ · ∇φᵢ
             double grad_u[3] = {0.0, 0.0, 0.0};
             for (int i = 0; i < local_ndof; ++i) {
                 for (int d = 0; d < 3; ++d) {
@@ -2449,8 +2414,6 @@ bool recover_demag_field(
                 }
             }
 
-            // Distribute -∇u to each DOF, weighted by shape function
-            mfem::Vector shape(local_ndof);
             fe->CalcShape(ip, shape);
             for (int i = 0; i < local_ndof; ++i) {
                 const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
@@ -2458,22 +2421,97 @@ bool recover_demag_field(
                     continue;
                 }
                 const double phi_w = std::abs(shape(i)) * w;
-                const size_t base = static_cast<size_t>(gdof) * 3u;
-                h_demag_xyz[base + 0] += -grad_u[0] * phi_w;
-                h_demag_xyz[base + 1] += -grad_u[1] * phi_w;
-                h_demag_xyz[base + 2] += -grad_u[2] * phi_w;
-                node_weight[static_cast<size_t>(gdof)] += phi_w;
+                const size_t node = static_cast<size_t>(gdof);
+                const size_t base = node * 3u;
+                field_accum[base + 0] += -grad_u[0] * phi_w;
+                field_accum[base + 1] += -grad_u[1] * phi_w;
+                field_accum[base + 2] += -grad_u[2] * phi_w;
+                weight_accum[node] += phi_w;
             }
         }
-    }
+    };
 
-    // Normalize by accumulated weights
-    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
-        if (node_weight[node] > 0.0) {
+    int recover_threads = 1;
+#ifdef _OPENMP
+    recover_threads = std::max(1, ctx.effective_omp_threads);
+    const size_t bytes_per_thread =
+        sizeof(double) * (field_len + node_count);
+    constexpr size_t kMaxRecoverScratchBytes = 256ull * 1024ull * 1024ull;
+    while (recover_threads > 1 &&
+           bytes_per_thread * static_cast<size_t>(recover_threads) > kMaxRecoverScratchBytes) {
+        recover_threads /= 2;
+    }
+#endif
+    const bool parallel_recover = recover_threads > 1 && mesh->GetNE() >= 2000;
+
+    if (parallel_recover) {
+#ifdef _OPENMP
+        std::vector<std::vector<double>> field_partials(
+            static_cast<size_t>(recover_threads),
+            std::vector<double>(field_len, 0.0));
+        std::vector<std::vector<double>> weight_partials(
+            static_cast<size_t>(recover_threads),
+            std::vector<double>(node_count, 0.0));
+
+#pragma omp parallel num_threads(recover_threads)
+        {
+            const int tid = omp_get_thread_num();
+            auto &field_local = field_partials[static_cast<size_t>(tid)];
+            auto &weight_local = weight_partials[static_cast<size_t>(tid)];
+            mfem::Array<int> dofs;
+            mfem::Vector u_elem;
+            mfem::DenseMatrix dshape;
+            mfem::Vector shape;
+
+#pragma omp for schedule(static)
+            for (int elem = 0; elem < mesh->GetNE(); ++elem) {
+                accumulate_element(elem, field_local, weight_local, dofs, u_elem, dshape, shape);
+            }
+        }
+
+#pragma omp parallel for schedule(static) num_threads(recover_threads)
+        for (int node = 0; node < static_cast<int>(node_count); ++node) {
+            double weight_sum = 0.0;
+            double hx = 0.0;
+            double hy = 0.0;
+            double hz = 0.0;
             const size_t base = static_cast<size_t>(node) * 3u;
-            h_demag_xyz[base + 0] /= node_weight[node];
-            h_demag_xyz[base + 1] /= node_weight[node];
-            h_demag_xyz[base + 2] /= node_weight[node];
+            for (int tid = 0; tid < recover_threads; ++tid) {
+                const auto &field_local = field_partials[static_cast<size_t>(tid)];
+                const auto &weight_local = weight_partials[static_cast<size_t>(tid)];
+                hx += field_local[base + 0];
+                hy += field_local[base + 1];
+                hz += field_local[base + 2];
+                weight_sum += weight_local[static_cast<size_t>(node)];
+            }
+            node_weight[static_cast<size_t>(node)] = weight_sum;
+            if (weight_sum > 0.0) {
+                h_demag_xyz[base + 0] = hx / weight_sum;
+                h_demag_xyz[base + 1] = hy / weight_sum;
+                h_demag_xyz[base + 2] = hz / weight_sum;
+            }
+        }
+#endif
+    } else {
+        mfem::Array<int> dofs;
+        mfem::Vector u_elem;
+        mfem::DenseMatrix dshape;
+        mfem::Vector shape;
+        for (int elem = 0; elem < mesh->GetNE(); ++elem) {
+            accumulate_element(elem, h_demag_xyz, node_weight, dofs, u_elem, dshape, shape);
+        }
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(recover_threads > 1 && static_cast<int>(node_count) >= 2048) num_threads(recover_threads)
+#endif
+        for (int node = 0; node < static_cast<int>(node_count); ++node) {
+            const double weight = node_weight[static_cast<size_t>(node)];
+            if (weight > 0.0) {
+                const size_t base = static_cast<size_t>(node) * 3u;
+                h_demag_xyz[base + 0] /= weight;
+                h_demag_xyz[base + 1] /= weight;
+                h_demag_xyz[base + 2] /= weight;
+            }
         }
     }
 
@@ -2490,21 +2528,25 @@ bool recover_demag_field(
     }
 
     demag_energy = 0.0;
-    for (size_t i = 0; i < ctx.mfem_lumped_mass.size(); ++i) {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) reduction(+:demag_energy) if(recover_threads > 1 && static_cast<int>(ctx.mfem_lumped_mass.size()) >= 2048) num_threads(recover_threads)
+#endif
+    for (int i = 0; i < static_cast<int>(ctx.mfem_lumped_mass.size()); ++i) {
         if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[i] == 0u) {
             continue;
         }
-        const size_t base = i * 3u;
+        const size_t node = static_cast<size_t>(i);
+        const size_t base = node * 3u;
         const double mdoth =
             m_xyz[base + 0] * h_demag_xyz[base + 0] +
             m_xyz[base + 1] * h_demag_xyz[base + 1] +
             m_xyz[base + 2] * h_demag_xyz[base + 2];
         const double Ms_i = scalar_field_value(
             ctx.Ms_field,
-            i,
+            node,
             ctx.material.saturation_magnetisation);
         demag_energy +=
-            -0.5 * kMu0 * Ms_i * mdoth * ctx.mfem_lumped_mass[i];
+            -0.5 * kMu0 * Ms_i * mdoth * ctx.mfem_lumped_mass[node];
     }
 
     // Robin BC correction: E_bdr = (μ₀/2) · β · ∫_Γ u² dS
@@ -2603,16 +2645,20 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
             cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
             ctx.compute_event = reinterpret_cast<void *>(ev);
         } else {
+            configure_cpu_openmp_runtime(ctx);
             std::call_once(s_mfem_device_once, [&ctx]() {
                 ctx.mfem_device = new mfem::Device("cpu");
             });
             ctx.mfem_selected_device_index = -1;
+            log_cpu_runtime_selection(ctx);
         }
 #else
+        configure_cpu_openmp_runtime(ctx);
         std::call_once(s_mfem_device_once, [&ctx]() {
             ctx.mfem_device = new mfem::Device("cpu");
         });
         ctx.mfem_selected_device_index = -1;
+        log_cpu_runtime_selection(ctx);
 #endif
 
         debug_checkpoint("context_initialize_mfem:device_ready");
@@ -3126,12 +3172,15 @@ bool context_compute_demag_poisson(
         return false;
     }
     debug_checkpoint("context_compute_demag_poisson:enter");
+    const uint64_t demag_call_index = ++ctx.demag_call_count;
 
     // S03: Assemble RHS b(v) = ∫ M·∇v dV
+    const auto assemble_wall_start = SteadyClock::now();
     mfem::Vector rhs;
     if (!assemble_poisson_rhs(ctx, m_xyz, rhs, error)) {
         return false;
     }
+    const uint64_t assemble_wall_time_ns = elapsed_ns(assemble_wall_start);
     if (allow_interrupt && poll_interrupt(ctx)) {
         return false;
     }
@@ -3142,31 +3191,28 @@ bool context_compute_demag_poisson(
     mfem::Vector solution(fes->GetTrueVSize());
     gf_potential->GetTrueDofs(solution);  // warm-start
 
+    const auto solve_wall_start = SteadyClock::now();
 #ifdef MFEM_USE_MPI
-    // Use the Hypre GPU CG+BoomerAMG path when running with a GPU device unless
-    // the caller explicitly opts out.  The CPU hand-written CG is still the
-    // default when no GPU device is active (e.g. during unit tests or CPU-only
-    // runs) or when FULLMAG_FEM_DISABLE_HYPRE_POISSON=1 is set for debugging.
-    const bool use_hypre = mfem_device_requests_gpu()
-        && !env_flag_enabled("FULLMAG_FEM_DISABLE_HYPRE_POISSON");
-    if (use_hypre || env_flag_enabled("FULLMAG_FEM_ENABLE_HYPRE_POISSON")) {
-        if (!solve_poisson_hypre(ctx, rhs, solution, error)) {
-            return false;
-        }
-    } else
-#endif
-    if (!solve_poisson(ctx, rhs, solution, error)) {
+    if (!solve_poisson_hypre(ctx, rhs, solution, error)) {
         return false;
     }
+#else
+    error =
+        "Poisson demag requires an MPI/Hypre-enabled MFEM runtime; legacy CPU-native fallback solvers were removed";
+    return false;
+#endif
+    const uint64_t solve_wall_time_ns = elapsed_ns(solve_wall_start);
     debug_checkpoint("context_compute_demag_poisson:solve_done");
     if (allow_interrupt && poll_interrupt(ctx)) {
         return false;
     }
 
     // S05: Recover H_demag = -∇u and compute energy
+    const auto recover_wall_start = SteadyClock::now();
     if (!recover_demag_field(ctx, solution, h_demag_xyz, demag_energy, m_xyz, error)) {
         return false;
     }
+    const uint64_t recover_wall_time_ns = elapsed_ns(recover_wall_start);
     debug_checkpoint("context_compute_demag_poisson:recover_done");
     if (allow_interrupt && poll_interrupt(ctx)) {
         return false;
@@ -3174,6 +3220,12 @@ bool context_compute_demag_poisson(
 
     // Store solution for warm-start in next step
     gf_potential->SetFromTrueDofs(solution);
+    log_demag_call_profile(
+        ctx,
+        demag_call_index,
+        assemble_wall_time_ns,
+        solve_wall_time_ns,
+        recover_wall_time_ns);
 
     return true;
 }

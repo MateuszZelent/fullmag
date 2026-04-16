@@ -37,8 +37,7 @@ This note therefore serves two purposes simultaneously:
 2. define the *GPU-aware FEM implementation target* so future work does not drift into a
    CPU-only or mesh-library-specific dead end.
 
-At the time of writing, the public product path now has a **narrow executable FEM CPU-reference
-slice**:
+At the time of writing, the public product path now has a **narrow executable FEM slice**:
 
 - precomputed `MeshIR` (or external meshing through the Python geometry asset layer),
 - `Exchange`,
@@ -50,8 +49,10 @@ slice**:
 The current executable `Demag` path is still **bootstrap-only**:
 
 - it is not yet the final MFEM/libCEED/hypre realization,
-- in the public CPU-reference runner it currently uses a transfer-grid exact tensor demag path to
-  improve FDM↔FEM parity,
+- in the public executable FEM CPU/GPU path it currently uses a transfer-grid exact tensor demag
+  path to improve FDM↔FEM parity,
+- the older Rust reference FEM helper remains in `fullmag-engine` / `fem_reference` for tests,
+  preview helpers, and bootstrap validation, not as the public production CPU runtime,
 - the long-term target remains a true FEM magnetostatic operator on MFEM/hypre.
 
 This note therefore still serves primarily as a design-frozen physics note for the full FEM target,

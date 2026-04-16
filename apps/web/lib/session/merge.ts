@@ -43,47 +43,48 @@ export function mergeScalarRowsDelta(
   prevRows: ScalarRow[],
   nextRows: ScalarRow[],
   scalarRowsTotal?: number,
+  maxRows: number | null = MAX_LIVE_SCALAR_ROWS,
 ): ScalarRow[] {
   const prevScalarStep = lastScalarStep(prevRows);
   const nextScalarStep = lastScalarStep(nextRows);
 
   let result: ScalarRow[];
 
-  if (nextScalarStep < prevScalarStep) {
+  if (prevRows.length === 0) {
+    result = nextRows;
+  } else if (nextRows.length === 0) {
+    result =
+      (scalarRowsTotal ?? 0) > 0 && prevRows.length > 0
+        ? prevRows
+        : nextRows;
+  } else if (nextScalarStep < prevScalarStep) {
     result = prevRows;
-  } else if (
-    nextRows.length === 0 &&
-    (scalarRowsTotal ?? 0) > 0 &&
-    prevRows.length > 0
-  ) {
-    result = prevRows;
-  } else if (nextRows.length > 0 && nextScalarStep > prevScalarStep) {
+  } else {
     const firstNextStep = nextRows[0]?.step ?? -1;
-    const isPureDelta = firstNextStep > prevScalarStep;
-    if (isPureDelta) {
+    const looksLikeFullSnapshot =
+      firstNextStep === 0 ||
+      nextRows.length >= prevRows.length ||
+      nextRows.length === (scalarRowsTotal ?? -1);
+
+    if (looksLikeFullSnapshot && nextScalarStep >= prevScalarStep) {
+      result = nextRows;
+    } else if (firstNextStep > prevScalarStep) {
       const prevStepSet = new Set(prevRows.map((r) => r.step));
       const genuinelyNew = nextRows.filter((r) => !prevStepSet.has(r.step));
       result = genuinelyNew.length > 0 ? [...prevRows, ...genuinelyNew] : prevRows;
     } else {
-      result = nextRows;
+      const overlapIndex = prevRows.findIndex((row) => row.step >= firstNextStep);
+      if (overlapIndex >= 0 && prevRows[overlapIndex]?.step === firstNextStep) {
+        result = [...prevRows.slice(0, overlapIndex), ...nextRows];
+      } else {
+        result = prevRows;
+      }
     }
-  } else if (nextScalarStep === prevScalarStep && nextRows.length < prevRows.length) {
-    result = prevRows;
-  } else if (nextRows.length === prevRows.length && nextScalarStep === prevScalarStep) {
-    const prevLast = prevRows[prevRows.length - 1];
-    const nextLast = nextRows[nextRows.length - 1];
-    if (prevLast?.e_total === nextLast?.e_total && prevLast?.max_dm_dt === nextLast?.max_dm_dt) {
-      result = prevRows;
-    } else {
-      result = nextRows;
-    }
-  } else {
-    result = nextRows;
   }
 
-  // Enforce hard cap on in-memory scalar rows.
-  if (result.length > MAX_LIVE_SCALAR_ROWS) {
-    return result.slice(result.length - MAX_LIVE_SCALAR_ROWS);
+  // Enforce hard cap on in-memory scalar rows unless the caller opts out.
+  if (maxRows != null && result.length > maxRows) {
+    return result.slice(result.length - maxRows);
   }
   return result;
 }

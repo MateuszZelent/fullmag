@@ -12,6 +12,10 @@ export function useControlRoomTransport(state: SessionState | null): TransportCo
   const run = state?.run ?? null;
   const liveState = state?.live_state ?? null;
   const scalarRows = state?.scalar_rows ?? EMPTY_SCALAR_ROWS;
+  const scalarRowsTotal =
+    typeof state?.scalar_rows_total === "number"
+      ? state.scalar_rows_total
+      : scalarRows.length;
   const preview = state?.preview ?? null;
 
   const hasSolverTelemetry = useMemo(() => 
@@ -115,6 +119,7 @@ export function useControlRoomTransport(state: SessionState | null): TransportCo
     liveState,
     effectiveLiveState,
     scalarRows,
+    scalarRowsTotal,
     dmDtSpark,
     dtSpark,
     eTotalSpark,
@@ -129,7 +134,7 @@ export function useControlRoomTransport(state: SessionState | null): TransportCo
     effectiveEAni, effectiveEDmi, effectiveETotal,
     elapsed, stepsPerSec,
     liveState, effectiveLiveState,
-    scalarRows,
+    scalarRows, scalarRowsTotal,
     dmDtSpark, dtSpark, eTotalSpark,
     preview,
     hasSolverTelemetry,

@@ -1,6 +1,8 @@
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use std::collections::HashSet;
 
+#[cfg(feature = "fem-gpu")]
+use fullmag_engine::fem::FemBackendId;
 use fullmag_engine::fem::{FemIntegratorWorkspace, FemLlgProblem, FemLlgState};
 use fullmag_engine::{ExchangeLlgProblem, ExchangeLlgState, FftWorkspace, IntegratorBuffers};
 use fullmag_ir::{BackendPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR, RelaxationAlgorithmIR};
@@ -3534,29 +3536,17 @@ fn fem_gpu_execution_provenance(
     } else {
         Some("fallback".to_string())
     };
-    let execution_engine = if plan.mfem_device_string.as_deref() == Some("cpu") {
-        "native_fem_cpu"
-    } else {
-        "native_fem_gpu"
-    };
+    let execution_engine = native_fem_backend_id(plan).provenance_name();
+    let resolved_demag_realization = resolved_native_fem_demag(plan);
     ExecutionProvenance {
         execution_engine: execution_engine.to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
             fullmag_ir::ExecutionPrecision::Double => "double".to_string(),
         },
-        demag_operator_kind: if plan.enable_demag {
-            Some(
-                plan.demag_realization
-                    .map(|r| r.provenance_name())
-                    .unwrap_or("fem_transfer_grid_tensor_fft_newell")
-                    .to_string(),
-            )
-        } else {
-            None
-        },
-        fft_backend: if plan.enable_demag && !plan.demag_realization.is_some_and(|r| r.is_poisson())
-        {
+        demag_operator_kind: resolved_demag_realization
+            .map(|realization| realization.provenance_name().to_string()),
+        fft_backend: if resolved_demag_realization.is_some_and(|r| !r.is_poisson()) {
             Some("cuFFT".to_string())
         } else {
             None
@@ -3574,12 +3564,32 @@ fn fem_gpu_execution_provenance(
         requested_demag_realization: plan
             .demag_realization
             .map(|r| r.provenance_name().to_string()),
-        resolved_demag_realization: plan
-            .demag_realization
-            .map(|r| r.provenance_name().to_string()),
+        resolved_demag_realization: resolved_demag_realization
+            .map(|realization| realization.provenance_name().to_string()),
         dt_policy,
         mfem_device: plan.mfem_device_string.clone(),
         demag_transfer_cell_size: plan.demag_transfer_cell_size,
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_backend_id(plan: &FemPlanIR) -> FemBackendId {
+    if plan.mfem_device_string.as_deref() == Some("cpu") {
+        FemBackendId::CpuNative
+    } else {
+        FemBackendId::GpuNative
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn resolved_native_fem_demag(plan: &FemPlanIR) -> Option<fullmag_ir::ResolvedFemDemagIR> {
+    if plan.enable_demag {
+        Some(
+            plan.demag_realization
+                .unwrap_or(fullmag_ir::ResolvedFemDemagIR::TransferGrid),
+        )
+    } else {
+        None
     }
 }
 

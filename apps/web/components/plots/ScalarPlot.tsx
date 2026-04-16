@@ -5,8 +5,9 @@ import type { QuantityDescriptor, ScalarRow } from "../../lib/useSessionStream";
 import Plot from "./DynamicPlot";
 import { scalarSeriesList, type ScalarSeriesMeta } from "../../lib/quantities/scalars";
 import { normalizeUnitLabel } from "../../lib/format";
+import { scalarRowsTipFingerprint } from "@/lib/plots/scalarRows";
 
-const MAX_VISIBLE_POINTS = 2400;
+export const MAX_VISIBLE_POINTS = 2400;
 
 const SERIES_COLORS = [
   "#60a5fa", "#34d399", "#f472b6", "#fbbf24",
@@ -46,6 +47,14 @@ function chooseTimeScale(maxAbsSeconds: number): TimeScale {
   return TIME_SCALES[TIME_SCALES.length - 1];
 }
 
+function fingerprintRevision(fingerprint: string): number {
+  let hash = 0;
+  for (let index = 0; index < fingerprint.length; index += 1) {
+    hash = (hash * 31 + fingerprint.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
 const THEME = {
   bg: "transparent",
   paper: "transparent",
@@ -64,6 +73,10 @@ interface Props {
   seriesColors?: string[];
   chartTitle?: string;
   uiRevisionKey?: string;
+  yAxisScale?: "linear" | "log";
+  showMarkers?: boolean;
+  showRangeSlider?: boolean;
+  alwaysShowModeBar?: boolean;
 }
 
 const ScalarPlot = memo(function ScalarPlot({
@@ -74,7 +87,17 @@ const ScalarPlot = memo(function ScalarPlot({
   seriesColors,
   chartTitle,
   uiRevisionKey = "charts",
+  yAxisScale = "linear",
+  showMarkers = false,
+  showRangeSlider = false,
+  alwaysShowModeBar = false,
 }: Props) {
+  const rowsFingerprint = useMemo(() => scalarRowsTipFingerprint(rows), [rows]);
+  const revision = useMemo(
+    () => fingerprintRevision(rowsFingerprint),
+    [rowsFingerprint],
+  );
+
   const rowsForPlot = useMemo(() => {
     if (rows.length <= MAX_VISIBLE_POINTS) return rows;
     const stride = Math.ceil(rows.length / MAX_VISIBLE_POINTS);
@@ -144,7 +167,10 @@ const ScalarPlot = memo(function ScalarPlot({
   }, [seriesMeta]);
 
   const traces = useMemo(() => {
-    const mode = rowsForPlot.length > 1 ? ("lines" as const) : ("markers" as const);
+    const mode =
+      rowsForPlot.length > 1
+        ? (showMarkers ? ("lines+markers" as const) : ("lines" as const))
+        : ("markers" as const);
 
     return seriesMeta.map((series, i) => ({
       x: xValues,
@@ -163,13 +189,22 @@ const ScalarPlot = memo(function ScalarPlot({
       },
       marker: {
         color: seriesColors?.[i] ?? SERIES_COLORS[i % SERIES_COLORS.length],
-        size: rowsForPlot.length > 1 ? 0 : 7,
+        size: rowsForPlot.length > 1 ? (showMarkers ? 4 : 0) : 7,
       },
       hovertemplate: magnetizationOnly
         ? `%{y:.4f}<extra>${buildAxisLabel(series)}</extra>`
         : `%{y:.4e}<extra>${buildAxisLabel(series)}</extra>`,
     }));
-  }, [xValues, yByKey, rowsForPlot.length, seriesMeta, magnetizationOnly, seriesColors, unitGroups]);
+  }, [
+    xValues,
+    yByKey,
+    rowsForPlot.length,
+    seriesMeta,
+    magnetizationOnly,
+    seriesColors,
+    showMarkers,
+    unitGroups,
+  ]);
 
   const layout = useMemo(
     (): Partial<Plotly.Layout> => ({
@@ -183,7 +218,13 @@ const ScalarPlot = memo(function ScalarPlot({
       title: chartTitle
         ? { text: chartTitle, font: { size: 13, color: THEME.text, weight: 600 }, x: 0.5, xanchor: "center" as const, y: 0.96 }
         : undefined,
-      margin: { l: 60, r: 24, t: chartTitle ? 36 : 16, b: 40, pad: 4 },
+      margin: {
+        l: 60,
+        r: 24,
+        t: chartTitle ? 36 : 16,
+        b: showRangeSlider ? 76 : 40,
+        pad: 4,
+      },
       xaxis: {
         title: { text: xLabel, standoff: 12, font: { size: 11, color: THEME.text } },
         color: THEME.text,
@@ -197,6 +238,18 @@ const ScalarPlot = memo(function ScalarPlot({
         linecolor: THEME.gridLine,
         tickfont: { size: 10, color: THEME.text },
         exponentformat: timeScale ? "none" : "e",
+        showspikes: true,
+        spikemode: "across",
+        spikethickness: 1,
+        spikecolor: "rgba(96,165,250,0.35)",
+        rangeslider: showRangeSlider && rowsForPlot.length > 2
+          ? {
+              visible: true,
+              thickness: 0.08,
+              bgcolor: "rgba(15,23,42,0.22)",
+              bordercolor: THEME.gridLine,
+            }
+          : undefined,
         tickformat: timeScale
           ? timeScale.tickformat
           : magnetizationOnly ? ".3f" : undefined,
@@ -223,6 +276,11 @@ const ScalarPlot = memo(function ScalarPlot({
         showline: true,
         linecolor: THEME.gridLine,
         tickfont: { size: 10, color: THEME.text },
+        type: yAxisScale,
+        showspikes: true,
+        spikemode: "across",
+        spikethickness: 1,
+        spikecolor: "rgba(96,165,250,0.3)",
         exponentformat: "e",
         tickformat: magnetizationOnly ? ".2f" : undefined,
       },
@@ -242,13 +300,14 @@ const ScalarPlot = memo(function ScalarPlot({
             showline: true,
             linecolor: THEME.gridLine,
             tickfont: { size: 10, color: THEME.text },
+            type: yAxisScale,
             exponentformat: "e",
           }
         : undefined,
       legend: {
         orientation: "h",
         yanchor: "top",
-        y: -0.22,
+        y: showRangeSlider ? -0.3 : -0.22,
         xanchor: "center",
         x: 0.5,
         font: { size: 11, color: THEME.text },
@@ -264,7 +323,7 @@ const ScalarPlot = memo(function ScalarPlot({
       },
       dragmode: "pan",
       uirevision: uiRevisionKey,
-      datarevision: rowsForPlot.length,
+      datarevision: rowsFingerprint,
       modebar: {
         bgcolor: "transparent",
         color: THEME.text,
@@ -281,28 +340,33 @@ const ScalarPlot = memo(function ScalarPlot({
       unitGroups.leftUnit,
       unitGroups.rightUnit,
       uiRevisionKey,
+      rowsFingerprint,
       rowsForPlot.length,
+      showRangeSlider,
+      yAxisScale,
     ],
   );
 
   const config = useMemo(
-    (): Partial<Plotly.Config> => ({
-      responsive: true,
-      displaylogo: false,
-      modeBarButtonsToRemove: [
-        "lasso2d",
-        "select2d",
-        "sendDataToCloud",
-        "hoverCompareCartesian",
-        "hoverClosestCartesian",
-      ],
-      toImageButtonOptions: {
-        format: "png",
-        filename: "fullmag_scalar_plot",
-        scale: 2,
-      },
-    }),
-    [],
+    (): Partial<Plotly.Config> => {
+      const nextConfig: Partial<Plotly.Config> = {
+        responsive: true,
+        displaylogo: false,
+        scrollZoom: true,
+        doubleClick: "reset+autosize",
+        modeBarButtonsToRemove: ["sendDataToCloud"],
+        toImageButtonOptions: {
+          format: "png",
+          filename: "fullmag_scalar_plot",
+          scale: 2,
+        },
+      };
+      if (alwaysShowModeBar) {
+        nextConfig.displayModeBar = true;
+      }
+      return nextConfig;
+    },
+    [alwaysShowModeBar],
   );
 
   return (
@@ -310,9 +374,10 @@ const ScalarPlot = memo(function ScalarPlot({
       data={traces}
       layout={layout}
       config={config}
-      revision={rowsForPlot.length}
+      revision={revision}
       useResizeHandler
       className="h-full w-full"
+      style={{ width: "100%", height: "100%" }}
     />
   );
 });

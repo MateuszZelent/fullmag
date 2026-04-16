@@ -159,6 +159,7 @@ struct Context {
     fullmag_fem_solver_config demag_solver{};
 
     uint64_t step_count = 0;
+    uint64_t demag_call_count = 0;
     double current_time = 0.0;
 
     std::vector<double> nodes_xyz;
@@ -294,6 +295,10 @@ struct Context {
     double robin_beta_factor = 1.0;      // c in β = c/R*
     double robin_effective_beta = 0.0;   // computed β value
     void  *mfem_boundary_mass = nullptr; // mfem::BilinearForm* for ∫_Γ φᵢφⱼ dS
+
+    // CPU OpenMP runtime diagnostics for Poisson/Robin demag.
+    int requested_omp_threads = 1;
+    int effective_omp_threads = 1;
 #endif
 
     // ── S12: CUDA stream management ──

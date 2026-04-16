@@ -729,7 +729,8 @@ pub struct ResolvedFallback {
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
-    /// Engine that executed the run: "cpu_reference" or "cuda_fdm".
+    /// Engine that executed the run: e.g. "cpu_reference", "cuda_fdm",
+    /// "fem_cpu_reference", "fem_cpu_native", or "fem_native_gpu".
     pub execution_engine: String,
     /// Numeric precision used: "double" or "single".
     pub precision: String,

@@ -264,6 +264,38 @@ fn saturating_nanos_u64(duration: Duration) -> u64 {
     duration.as_nanos().min(u128::from(u64::MAX)) as u64
 }
 
+fn detailed_fem_step_profile_enabled() -> bool {
+    std::env::var("FULLMAG_FEM_STEP_PROFILE")
+        .ok()
+        .is_some_and(|raw| {
+            matches!(
+                raw.as_str(),
+                "1" | "true" | "TRUE" | "on" | "ON" | "yes" | "YES"
+            )
+        })
+}
+
+fn append_detailed_fem_step_profile(line: &mut String, stats: &fullmag_runner::StepStats) {
+    if !detailed_fem_step_profile_enabled() {
+        return;
+    }
+    let exchange_ms = stats.exchange_wall_time_ns as f64 / 1e6;
+    let demag_ms = stats.demag_wall_time_ns as f64 / 1e6;
+    let rhs_ms = stats.rhs_wall_time_ns as f64 / 1e6;
+    let extra_ms = stats.extra_energy_wall_time_ns as f64 / 1e6;
+    let snapshot_ms = stats.snapshot_wall_time_ns as f64 / 1e6;
+    let dt_next = stats.dt_suggested.unwrap_or(0.0);
+    line.push_str(&format!(
+        "  phases[ex={exchange_ms:.0}ms demag={demag_ms:.0}ms rhs={rhs_ms:.0}ms extra={extra_ms:.0}ms snap={snapshot_ms:.0}ms]  rk[rhs_evals={} rejected={} fsal={}]  demag[iters={}]  err={:.3e}  dt_next={:.3e}",
+        stats.rhs_evals,
+        stats.rejected_attempts,
+        if stats.fsal_reused { 1 } else { 0 },
+        stats.demag_solves,
+        stats.error_estimate.unwrap_or(0.0),
+        dt_next,
+    ));
+}
+
 fn format_stage_progress_line(
     prefix: &str,
     stats: &fullmag_runner::StepStats,
@@ -277,7 +309,7 @@ fn format_stage_progress_line(
         estimate_max_torque_from_step(stats.max_dm_dt, torque_mode).unwrap_or(0.0)
     };
     if let Some(age) = heartbeat_age {
-        format!(
+        let mut line = format!(
             "{prefix}  heartbeat  step {:>6}  t={:.4e}  dt={:.3e}  max_dm_dt={:.4e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  idle={:.1}s  [{:.0}ms]",
             stats.step,
             stats.time,
@@ -288,9 +320,11 @@ fn format_stage_progress_line(
             stats.max_h_eff,
             age.as_secs_f64(),
             wall_ms,
-        )
+        );
+        append_detailed_fem_step_profile(&mut line, stats);
+        line
     } else {
-        format!(
+        let mut line = format!(
             "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_dm_dt={:.4e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
             stats.step,
             stats.time,
@@ -300,7 +334,9 @@ fn format_stage_progress_line(
             stats.e_total,
             stats.max_h_eff,
             wall_ms,
-        )
+        );
+        append_detailed_fem_step_profile(&mut line, stats);
+        line
     }
 }
 

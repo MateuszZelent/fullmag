@@ -67,6 +67,8 @@ interface ChartQuantitySelectorProps {
    * Falls back to FALLBACK_QUANTITY_GROUPS when undefined or empty.
    */
   quantityGroups?: ChartQuantityGroup[];
+  /** Enable scope switching only when per-object scalar history is truly available. */
+  supportsObjectScope?: boolean;
 }
 
 // ── Component ────────────────────────────────────────────────────
@@ -76,11 +78,13 @@ export default function ChartQuantitySelector({
   chartState,
   onStateChange,
   quantityGroups,
+  supportsObjectScope = false,
 }: ChartQuantitySelectorProps) {
   const [addPopoverOpen, setAddPopoverOpen] = useState(false);
   const [unitLimitHint, setUnitLimitHint] = useState<string | null>(null);
   const [seriesFilter, setSeriesFilter] = useState("");
   const multiDomain = domains.length > 1;
+  const scopeInteractive = multiDomain && supportsObjectScope;
 
   // Use dynamic groups when available, otherwise fallback
   const effectiveGroups = useMemo(
@@ -219,12 +223,12 @@ export default function ChartQuantitySelector({
                 <Select
                   value={chartState.selectedDomain ?? "__all__"}
                   onValueChange={handleDomainChange}
-                  disabled={!multiDomain}
+                  disabled={!scopeInteractive}
                 >
                   <SelectTrigger
                     className={cn(
                       "h-7 w-40 text-[0.7rem] bg-muted/30 border-border/40",
-                      !multiDomain && "opacity-60 cursor-default",
+                      !scopeInteractive && "opacity-60 cursor-default",
                     )}
                   >
                     <SelectValue placeholder="Scope" />
@@ -242,13 +246,27 @@ export default function ChartQuantitySelector({
                 </Select>
               </div>
             </TooltipTrigger>
-            {!multiDomain && (
+            {!scopeInteractive && (
               <TooltipContent side="bottom" className="max-w-64 text-xs">
-                <p className="font-semibold mb-0.5">Scope: Universe</p>
-                <p className="text-muted-foreground">
-                  Per-ferromagnet data will be available when multi-domain
-                  simulations emit per-object scalar aggregates.
-                </p>
+                {supportsObjectScope ? (
+                  <>
+                    <p className="font-semibold mb-0.5">Scope: Universe</p>
+                    <p className="text-muted-foreground">
+                      Per-object scope becomes available once this study exposes
+                      more than one addressable domain.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-semibold mb-0.5">Scope is fixed to Universe</p>
+                    <p className="text-muted-foreground">
+                      The current live chart trace is built from canonical
+                      `scalar_rows` / `scalars.csv`. Per-object scalar history is
+                      not wired into Charts yet, so choosing a domain here would
+                      be misleading.
+                    </p>
+                  </>
+                )}
               </TooltipContent>
             )}
           </Tooltip>
