@@ -83,7 +83,9 @@ pub use types::{
     StepUpdate,
 };
 
-use crate::capabilities::{capabilities_for_fdm_engine, capabilities_for_fem_engine};
+use crate::capabilities::{
+    capabilities_for_fdm_engine, capabilities_for_fem_eigen_engine, capabilities_for_fem_engine,
+};
 use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, OutputIR, ProblemIR};
 use interactive::InteractiveBackend;
 use serde_json::Value;
@@ -1070,12 +1072,16 @@ fn fem_eigen_runtime_engine_info(
     engine: dispatch::FemEngine,
 ) -> (&'static str, &'static str, &'static str) {
     match engine {
-        dispatch::FemEngine::CpuNative => {
-            (dispatch::fem_eigen_engine_id(engine), "CPU FEM Eigen", "cpu")
-        }
-        dispatch::FemEngine::NativeGpu => {
-            (dispatch::fem_eigen_engine_id(engine), "GPU FEM Eigen", "gpu")
-        }
+        dispatch::FemEngine::CpuNative => (
+            dispatch::fem_eigen_engine_id(engine),
+            "CPU FEM Eigen",
+            "cpu",
+        ),
+        dispatch::FemEngine::NativeGpu => (
+            dispatch::fem_eigen_engine_id(engine),
+            "GPU FEM Eigen",
+            "gpu",
+        ),
     }
 }
 
@@ -1119,7 +1125,7 @@ pub fn resolve_runtime_capabilities(problem: &ProblemIR) -> Result<BackendCapabi
         BackendPlanIR::FdmMultilayer(_) => Ok(capabilities_for_fdm_engine(
             dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
         )),
-        BackendPlanIR::FemEigen(_) => Ok(capabilities_for_fem_engine(
+        BackendPlanIR::FemEigen(_) => Ok(capabilities_for_fem_eigen_engine(
             dispatch::resolve_fem_engine_with_trail(problem)?.engine,
         )),
     }

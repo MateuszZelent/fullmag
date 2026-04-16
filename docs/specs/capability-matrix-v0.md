@@ -41,6 +41,8 @@ Every feature carries one of three statuses:
 - `BackendPlanIR::FemEigen` on GPU resolves to `fem_eigen_native_gpu`.
 - `FULLMAG_FEM_EXECUTION=cpu` selects the CPU lane, but the final engine id still depends on the
   workflow family (`fem_cpu_native` for time-domain FEM, `fem_eigen_cpu_reference` for FEM eigen).
+- `resolve_runtime_capabilities()` must return the same canonical engine ids as runtime/session
+  resolution; capabilities metadata is part of the same public execution contract.
 - Canonical reference: `docs/specs/runtime-engine-naming-v0.md`.
 
 ## Capability matrix

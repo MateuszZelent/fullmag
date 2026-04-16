@@ -6,6 +6,7 @@ This note defines the canonical naming for resolved execution engines shown in:
 
 - `resolve_runtime_engine()`,
 - `resolve_session_runtime()`,
+- `resolve_runtime_capabilities()`,
 - session/runtime metadata,
 - artifact provenance,
 - diagnostic logs.
