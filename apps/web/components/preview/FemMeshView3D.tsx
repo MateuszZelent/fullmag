@@ -675,6 +675,11 @@ function FemMeshView3DInner({
           enableControls:
             selectionOnlyInteractionMode || textureGizmoDragging ? false : true,
         }}
+        telemetryLabel={
+          quantityId
+            ? `fem-${quantityId}-${runtimeRenderMode}`
+            : `fem-${runtimeRenderMode}`
+        }
       >
         {!missingExactScopeSegment ? (
           <>

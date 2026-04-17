@@ -43,15 +43,39 @@ export interface SliceCollection {
   valueRange: { min: number; max: number };
 }
 
+export type SliceSampleRef =
+  | { kind: "node"; nodeIndex: number }
+  | { kind: "edge"; nodeA: number; nodeB: number; t: number };
+
+export interface BoundarySegmentTopology2D {
+  a: Point2;
+  b: Point2;
+  sampleA: SliceSampleRef;
+  sampleB: SliceSampleRef;
+}
+
+export interface PolygonTopology2D {
+  points: Point2[];
+  worldPoints: Point3[];
+  sampleRefs: SliceSampleRef[];
+  partId: string | null;
+}
+
+export interface SliceTopologyCollection {
+  planeCoord: number;
+  normalLabel: string;
+  uLabel: string;
+  vLabel: string;
+  bounds: { uMin: number; uMax: number; vMin: number; vMax: number };
+  segments: BoundarySegmentTopology2D[];
+  polygons: PolygonTopology2D[];
+}
+
 interface Bounds2D {
   uMin: number;
   uMax: number;
   vMin: number;
   vMax: number;
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v));
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -70,13 +94,7 @@ function nodeScalar(meshData: FemMeshData, nodeIndex: number, component: VectorC
   const fy = fld.y[nodeIndex] ?? 0;
   const fz = fld.z[nodeIndex] ?? 0;
   if (nComp <= 1) {
-    switch (component) {
-      case "x":
-      case "y":
-      case "z":
-      case "magnitude":
-        return fx;
-    }
+    return fx;
   }
   switch (component) {
     case "x":
@@ -99,6 +117,28 @@ function nodeVector(meshData: FemMeshData, nodeIndex: number): Point3 {
   return [fld.x[nodeIndex] ?? 0, fld.y[nodeIndex] ?? 0, fld.z[nodeIndex] ?? 0];
 }
 
+function sampleScalar(meshData: FemMeshData, ref: SliceSampleRef, component: VectorComponent): number {
+  if (ref.kind === "node") {
+    return nodeScalar(meshData, ref.nodeIndex, component);
+  }
+  const a = nodeScalar(meshData, ref.nodeA, component);
+  const b = nodeScalar(meshData, ref.nodeB, component);
+  return lerp(a, b, ref.t);
+}
+
+function sampleVector(meshData: FemMeshData, ref: SliceSampleRef): Point3 {
+  if (ref.kind === "node") {
+    return nodeVector(meshData, ref.nodeIndex);
+  }
+  const a = nodeVector(meshData, ref.nodeA);
+  const b = nodeVector(meshData, ref.nodeB);
+  return [
+    lerp(a[0], b[0], ref.t),
+    lerp(a[1], b[1], ref.t),
+    lerp(a[2], b[2], ref.t),
+  ];
+}
+
 export function axisIndices(plane: SlicePlane): { normal: 0 | 1 | 2; u: 0 | 1 | 2; v: 0 | 1 | 2 } {
   switch (plane) {
     case "xy":
@@ -119,7 +159,7 @@ function axisLabel(index: 0 | 1 | 2): string {
   return index === 0 ? "x" : index === 1 ? "y" : "z";
 }
 
-function uniquePoints<T extends { point: Point3; value: number }>(points: T[], epsilon: number): T[] {
+function uniqueIntersectionPoints<T extends { point: Point3 }>(points: T[], epsilon: number): T[] {
   const out: T[] = [];
   for (const candidate of points) {
     const exists = out.some(
@@ -128,12 +168,14 @@ function uniquePoints<T extends { point: Point3; value: number }>(points: T[], e
         Math.abs(entry.point[1] - candidate.point[1]) <= epsilon &&
         Math.abs(entry.point[2] - candidate.point[2]) <= epsilon,
     );
-    if (!exists) out.push(candidate);
+    if (!exists) {
+      out.push(candidate);
+    }
   }
   return out;
 }
 
-function sortIntersectionLoop<T extends { point: Point3; value: number }>(points: T[], plane: SlicePlane): T[] {
+function sortIntersectionLoop<T extends { point: Point3 }>(points: T[], plane: SlicePlane): T[] {
   if (points.length <= 2) return points;
   const projected = points.map((entry, index) => ({ index, uv: project(entry.point, plane) }));
   const centerU = projected.reduce((sum, entry) => sum + entry.uv[0], 0) / projected.length;
@@ -219,14 +261,21 @@ function chooseRenderBounds(args: {
   return padDegenerateBounds(visiblePartBounds ?? intersectionBounds);
 }
 
-function collectBoundarySegments(
+function nodeRef(nodeIndex: number): SliceSampleRef {
+  return { kind: "node", nodeIndex };
+}
+
+function edgeRef(nodeA: number, nodeB: number, t: number): SliceSampleRef {
+  return { kind: "edge", nodeA, nodeB, t };
+}
+
+function collectBoundaryTopology(
   meshData: FemMeshData,
   plane: SlicePlane,
-  component: VectorComponent,
   planeCoord: number,
   visibility: SliceVisibilityState | null,
   boundsStrategy: SliceBoundsStrategy,
-): SliceCollection {
+): SliceTopologyCollection {
   const flatNodes = meshData.nodes;
   const flatFaces = meshData.boundaryFaces;
   const numNodes = flatNodes.length / 3;
@@ -236,90 +285,99 @@ function collectBoundarySegments(
   let minN = Number.POSITIVE_INFINITY;
   let maxN = Number.NEGATIVE_INFINITY;
   for (let i = 0; i < numNodes; i++) {
-    const pn = flatNodes[i * 3 + normal];
-    if (pn < minN) minN = pn;
-    if (pn > maxN) maxN = pn;
+    const value = flatNodes[i * 3 + normal];
+    if (value < minN) minN = value;
+    if (value > maxN) maxN = value;
   }
   const epsilon = Math.max((maxN - minN) * 1e-4, 1e-15);
-  const segments: Segment2D[] = [];
+  const segments: BoundarySegmentTopology2D[] = [];
   let intersectionBounds: Bounds2D | null = null;
-  let valueMin = Number.POSITIVE_INFINITY;
-  let valueMax = Number.NEGATIVE_INFINITY;
-  const addSegment = (pa: Point3, pb: Point3, va: number, vb: number) => {
-    valueMin = Math.min(valueMin, va, vb);
-    valueMax = Math.max(valueMax, va, vb);
+
+  const addSegment = (pa: Point3, pb: Point3, sampleA: SliceSampleRef, sampleB: SliceSampleRef) => {
     const a = project(pa, plane);
     const b = project(pb, plane);
     intersectionBounds = includePointInBounds(intersectionBounds, a);
     intersectionBounds = includePointInBounds(intersectionBounds, b);
-    segments.push({ a, b, va, vb });
+    segments.push({ a, b, sampleA, sampleB });
   };
+
   const edges = [
     [0, 1],
     [1, 2],
     [2, 0],
   ] as const;
-  for (let f = 0; f < numFaces; f++) {
-    if (visibility?.visibleBoundaryFaces && visibility.visibleBoundaryFaces[f] !== 1) continue;
-    const ia = flatFaces[f * 3];
-    const ib = flatFaces[f * 3 + 1];
-    const ic = flatFaces[f * 3 + 2];
-    const p: [Point3, Point3, Point3] = [
+
+  for (let faceIndex = 0; faceIndex < numFaces; faceIndex++) {
+    if (visibility?.visibleBoundaryFaces && visibility.visibleBoundaryFaces[faceIndex] !== 1) continue;
+    const ia = flatFaces[faceIndex * 3];
+    const ib = flatFaces[faceIndex * 3 + 1];
+    const ic = flatFaces[faceIndex * 3 + 2];
+    const ids = [ia, ib, ic] as const;
+    const points: [Point3, Point3, Point3] = [
       [flatNodes[ia * 3], flatNodes[ia * 3 + 1], flatNodes[ia * 3 + 2]],
       [flatNodes[ib * 3], flatNodes[ib * 3 + 1], flatNodes[ib * 3 + 2]],
       [flatNodes[ic * 3], flatNodes[ic * 3 + 1], flatNodes[ic * 3 + 2]],
     ];
-    const values = [
-      nodeScalar(meshData, ia, component),
-      nodeScalar(meshData, ib, component),
-      nodeScalar(meshData, ic, component),
+    const signed = [
+      points[0][normal] - planeCoord,
+      points[1][normal] - planeCoord,
+      points[2][normal] - planeCoord,
     ] as const;
-    const signed = [p[0][normal] - planeCoord, p[1][normal] - planeCoord, p[2][normal] - planeCoord] as const;
-    const near = [Math.abs(signed[0]) <= epsilon, Math.abs(signed[1]) <= epsilon, Math.abs(signed[2]) <= epsilon] as const;
+    const near = [
+      Math.abs(signed[0]) <= epsilon,
+      Math.abs(signed[1]) <= epsilon,
+      Math.abs(signed[2]) <= epsilon,
+    ] as const;
+
     if (near[0] && near[1] && near[2]) {
-      addSegment(p[0], p[1], values[0], values[1]);
-      addSegment(p[1], p[2], values[1], values[2]);
-      addSegment(p[2], p[0], values[2], values[0]);
+      addSegment(points[0], points[1], nodeRef(ids[0]), nodeRef(ids[1]));
+      addSegment(points[1], points[2], nodeRef(ids[1]), nodeRef(ids[2]));
+      addSegment(points[2], points[0], nodeRef(ids[2]), nodeRef(ids[0]));
       continue;
     }
-    const intersections: { point: Point3; value: number }[] = [];
+
+    const intersections: Array<{ point: Point3; sampleRef: SliceSampleRef }> = [];
     for (const [a, b] of edges) {
       const da = signed[a];
       const db = signed[b];
-      const va = values[a];
-      const vb = values[b];
       if (Math.abs(da) <= epsilon && Math.abs(db) <= epsilon) {
-        intersections.push({ point: p[a], value: va });
-        intersections.push({ point: p[b], value: vb });
+        intersections.push({ point: points[a], sampleRef: nodeRef(ids[a]) });
+        intersections.push({ point: points[b], sampleRef: nodeRef(ids[b]) });
         continue;
       }
       if (Math.abs(da) <= epsilon) {
-        intersections.push({ point: p[a], value: va });
+        intersections.push({ point: points[a], sampleRef: nodeRef(ids[a]) });
         continue;
       }
       if (Math.abs(db) <= epsilon) {
-        intersections.push({ point: p[b], value: vb });
+        intersections.push({ point: points[b], sampleRef: nodeRef(ids[b]) });
         continue;
       }
       if (da * db < 0) {
         const t = da / (da - db);
-        intersections.push({ point: lerpPoint(p[a], p[b], t), value: lerp(va, vb, t) });
+        intersections.push({
+          point: lerpPoint(points[a], points[b], t),
+          sampleRef: edgeRef(ids[a], ids[b], t),
+        });
       }
     }
-    const unique = uniquePoints(intersections, epsilon);
+
+    const unique = uniqueIntersectionPoints(intersections, epsilon);
     if (unique.length === 2) {
-      addSegment(unique[0].point, unique[1].point, unique[0].value, unique[1].value);
+      addSegment(unique[0].point, unique[1].point, unique[0].sampleRef, unique[1].sampleRef);
     } else if (unique.length === 3) {
       unique.sort((lhs, rhs) => lhs.point[u] - rhs.point[u] || lhs.point[v] - rhs.point[v]);
-      addSegment(unique[0].point, unique[1].point, unique[0].value, unique[1].value);
-      addSegment(unique[1].point, unique[2].point, unique[1].value, unique[2].value);
+      addSegment(unique[0].point, unique[1].point, unique[0].sampleRef, unique[1].sampleRef);
+      addSegment(unique[1].point, unique[2].point, unique[1].sampleRef, unique[2].sampleRef);
     }
   }
+
   const bounds = chooseRenderBounds({
     strategy: boundsStrategy,
     intersectionBounds,
     visiblePartBounds: boundsFromVisibleParts(visibility, plane),
   });
+
   return {
     planeCoord,
     normalLabel: axisLabel(normal),
@@ -328,19 +386,16 @@ function collectBoundarySegments(
     bounds,
     segments,
     polygons: [],
-    arrows: [],
-    valueRange: finalizeRange(valueMin, valueMax, component),
   };
 }
 
-function collectTetraSegments(
+function collectTetraTopology(
   meshData: FemMeshData,
   plane: SlicePlane,
-  component: VectorComponent,
   planeCoord: number,
   visibility: SliceVisibilityState | null,
   boundsStrategy: SliceBoundsStrategy,
-): SliceCollection {
+): SliceTopologyCollection {
   const flatNodes = meshData.nodes;
   const flatElements = meshData.elements;
   const numNodes = flatNodes.length / 3;
@@ -350,16 +405,14 @@ function collectTetraSegments(
   let minN = Number.POSITIVE_INFINITY;
   let maxN = Number.NEGATIVE_INFINITY;
   for (let i = 0; i < numNodes; i++) {
-    const pn = flatNodes[i * 3 + normal];
-    if (pn < minN) minN = pn;
-    if (pn > maxN) maxN = pn;
+    const value = flatNodes[i * 3 + normal];
+    if (value < minN) minN = value;
+    if (value > maxN) maxN = value;
   }
   const epsilon = Math.max((maxN - minN) * 1e-4, 1e-15);
-  const polygons: Polygon2D[] = [];
-  const arrows: SliceArrow2D[] = [];
+  const polygons: PolygonTopology2D[] = [];
   let intersectionBounds: Bounds2D | null = null;
-  let valueMin = Number.POSITIVE_INFINITY;
-  let valueMax = Number.NEGATIVE_INFINITY;
+
   const edges = [
     [0, 1],
     [0, 2],
@@ -368,6 +421,7 @@ function collectTetraSegments(
     [1, 3],
     [2, 3],
   ] as const;
+
   for (let elementIndex = 0; elementIndex < numElements; elementIndex++) {
     if (visibility?.visibleElements && visibility.visibleElements[elementIndex] !== 1) continue;
     const ids = [
@@ -376,111 +430,69 @@ function collectTetraSegments(
       flatElements[elementIndex * 4 + 2],
       flatElements[elementIndex * 4 + 3],
     ] as const;
-    const points = ids.map((nodeIndex) => [flatNodes[nodeIndex * 3], flatNodes[nodeIndex * 3 + 1], flatNodes[nodeIndex * 3 + 2]] as Point3) as [Point3, Point3, Point3, Point3];
-    const values = ids.map((nodeIndex) => nodeScalar(meshData, nodeIndex, component)) as [number, number, number, number];
-    const vectors = ids.map((nodeIndex) => nodeVector(meshData, nodeIndex)) as [Point3, Point3, Point3, Point3];
+    const points = ids.map(
+      (nodeIndex) =>
+        [
+          flatNodes[nodeIndex * 3],
+          flatNodes[nodeIndex * 3 + 1],
+          flatNodes[nodeIndex * 3 + 2],
+        ] as Point3,
+    ) as [Point3, Point3, Point3, Point3];
     const signed = points.map((point) => point[normal] - planeCoord) as [number, number, number, number];
-    const intersections: { point: Point3; value: number; vector: Point3 }[] = [];
+    const intersections: Array<{ point: Point3; sampleRef: SliceSampleRef }> = [];
+
     for (const [a, b] of edges) {
       const da = signed[a];
       const db = signed[b];
-      const va = values[a];
-      const vb = values[b];
-      const vecA = vectors[a];
-      const vecB = vectors[b];
       if (Math.abs(da) <= epsilon && Math.abs(db) <= epsilon) {
-        intersections.push({ point: points[a], value: va, vector: vecA });
-        intersections.push({ point: points[b], value: vb, vector: vecB });
+        intersections.push({ point: points[a], sampleRef: nodeRef(ids[a]) });
+        intersections.push({ point: points[b], sampleRef: nodeRef(ids[b]) });
         continue;
       }
       if (Math.abs(da) <= epsilon) {
-        intersections.push({ point: points[a], value: va, vector: vecA });
+        intersections.push({ point: points[a], sampleRef: nodeRef(ids[a]) });
         continue;
       }
       if (Math.abs(db) <= epsilon) {
-        intersections.push({ point: points[b], value: vb, vector: vecB });
+        intersections.push({ point: points[b], sampleRef: nodeRef(ids[b]) });
         continue;
       }
       if (da * db > 0) continue;
       const t = da / (da - db);
       intersections.push({
         point: lerpPoint(points[a], points[b], t),
-        value: lerp(va, vb, t),
-        vector: [
-          lerp(vecA[0], vecB[0], t),
-          lerp(vecA[1], vecB[1], t),
-          lerp(vecA[2], vecB[2], t),
-        ],
+        sampleRef: edgeRef(ids[a], ids[b], t),
       });
     }
-    const unique = sortIntersectionLoop(uniquePoints(intersections, epsilon), plane);
+
+    const unique = sortIntersectionLoop(uniqueIntersectionPoints(intersections, epsilon), plane);
     if (unique.length < 3) continue;
-    let avgValue = 0;
-    let avgU = 0;
-    let avgV = 0;
-    let avgVectorU = 0;
-    let avgVectorV = 0;
-    let avgWorldX = 0;
-    let avgWorldY = 0;
-    let avgWorldZ = 0;
-    let avgVectorX = 0;
-    let avgVectorY = 0;
-    let avgVectorZ = 0;
-    const pts: Point2[] = [];
-    let minVal = unique[0].value;
-    let maxVal = unique[0].value;
+
+    const polygonPoints: Point2[] = [];
+    const worldPoints: Point3[] = [];
+    const sampleRefs: SliceSampleRef[] = [];
     for (const entry of unique) {
-      avgValue += entry.value;
       const projected = project(entry.point, plane);
-      pts.push(projected);
-      avgU += projected[0];
-      avgV += projected[1];
-      avgWorldX += entry.point[0];
-      avgWorldY += entry.point[1];
-      avgWorldZ += entry.point[2];
-      avgVectorU += entry.vector[u];
-      avgVectorV += entry.vector[v];
-      avgVectorX += entry.vector[0];
-      avgVectorY += entry.vector[1];
-      avgVectorZ += entry.vector[2];
+      polygonPoints.push(projected);
+      worldPoints.push(entry.point);
+      sampleRefs.push(entry.sampleRef);
       intersectionBounds = includePointInBounds(intersectionBounds, projected);
-      if (entry.value < minVal) minVal = entry.value;
-      if (entry.value > maxVal) maxVal = entry.value;
     }
-    avgValue /= unique.length;
-    avgU /= unique.length;
-    avgV /= unique.length;
-    avgWorldX /= unique.length;
-    avgWorldY /= unique.length;
-    avgWorldZ /= unique.length;
-    avgVectorU /= unique.length;
-    avgVectorV /= unique.length;
-    avgVectorX /= unique.length;
-    avgVectorY /= unique.length;
-    avgVectorZ /= unique.length;
-    valueMin = Math.min(valueMin, minVal);
-    valueMax = Math.max(valueMax, maxVal);
+
     polygons.push({
-      points: pts,
-      value: avgValue,
+      points: polygonPoints,
+      worldPoints,
+      sampleRefs,
       partId: visibility?.elementPartIds[elementIndex] ?? null,
-      worldPoint: [avgWorldX, avgWorldY, avgWorldZ],
-      worldVector: [avgVectorX, avgVectorY, avgVectorZ],
-    });
-    arrows.push({
-      origin: [avgU, avgV],
-      vector: [avgVectorU, avgVectorV],
-      magnitude: Math.hypot(avgVectorU, avgVectorV),
-      partId: visibility?.elementPartIds[elementIndex] ?? null,
-      worldPoint: [avgWorldX, avgWorldY, avgWorldZ],
-      worldVector: [avgVectorX, avgVectorY, avgVectorZ],
     });
   }
+
   const bounds = chooseRenderBounds({
     strategy: boundsStrategy,
     intersectionBounds,
     visiblePartBounds: boundsFromVisibleParts(visibility, plane),
   });
+
   return {
     planeCoord,
     normalLabel: axisLabel(normal),
@@ -488,6 +500,122 @@ function collectTetraSegments(
     vLabel: axisLabel(v),
     bounds,
     segments: [],
+    polygons,
+  };
+}
+
+export function collectSliceTopology(
+  meshData: FemMeshData,
+  plane: SlicePlane,
+  planeCoord: number,
+  visibility: SliceVisibilityState | null,
+  boundsStrategy: SliceBoundsStrategy = "visible-context",
+): SliceTopologyCollection {
+  return meshData.elements.length >= 4
+    ? collectTetraTopology(meshData, plane, planeCoord, visibility, boundsStrategy)
+    : collectBoundaryTopology(meshData, plane, planeCoord, visibility, boundsStrategy);
+}
+
+export function sampleSliceField(
+  meshData: FemMeshData,
+  plane: SlicePlane,
+  component: VectorComponent,
+  topology: SliceTopologyCollection,
+): SliceCollection {
+  const { u, v } = axisIndices(plane);
+  const segments: Segment2D[] = [];
+  const polygons: Polygon2D[] = [];
+  const arrows: SliceArrow2D[] = [];
+  let valueMin = Number.POSITIVE_INFINITY;
+  let valueMax = Number.NEGATIVE_INFINITY;
+
+  for (const segment of topology.segments) {
+    const va = sampleScalar(meshData, segment.sampleA, component);
+    const vb = sampleScalar(meshData, segment.sampleB, component);
+    valueMin = Math.min(valueMin, va, vb);
+    valueMax = Math.max(valueMax, va, vb);
+    segments.push({
+      a: segment.a,
+      b: segment.b,
+      va,
+      vb,
+    });
+  }
+
+  for (const polygon of topology.polygons) {
+    let avgValue = 0;
+    let avgU = 0;
+    let avgV = 0;
+    let avgWorldX = 0;
+    let avgWorldY = 0;
+    let avgWorldZ = 0;
+    let avgVectorU = 0;
+    let avgVectorV = 0;
+    let avgVectorX = 0;
+    let avgVectorY = 0;
+    let avgVectorZ = 0;
+    let localMin = Number.POSITIVE_INFINITY;
+    let localMax = Number.NEGATIVE_INFINITY;
+
+    for (let index = 0; index < polygon.sampleRefs.length; index += 1) {
+      const value = sampleScalar(meshData, polygon.sampleRefs[index]!, component);
+      const vector = sampleVector(meshData, polygon.sampleRefs[index]!);
+      const worldPoint = polygon.worldPoints[index]!;
+      const projected = polygon.points[index]!;
+      avgValue += value;
+      avgU += projected[0];
+      avgV += projected[1];
+      avgWorldX += worldPoint[0];
+      avgWorldY += worldPoint[1];
+      avgWorldZ += worldPoint[2];
+      avgVectorU += vector[u];
+      avgVectorV += vector[v];
+      avgVectorX += vector[0];
+      avgVectorY += vector[1];
+      avgVectorZ += vector[2];
+      localMin = Math.min(localMin, value);
+      localMax = Math.max(localMax, value);
+    }
+
+    const count = polygon.sampleRefs.length || 1;
+    avgValue /= count;
+    avgU /= count;
+    avgV /= count;
+    avgWorldX /= count;
+    avgWorldY /= count;
+    avgWorldZ /= count;
+    avgVectorU /= count;
+    avgVectorV /= count;
+    avgVectorX /= count;
+    avgVectorY /= count;
+    avgVectorZ /= count;
+    valueMin = Math.min(valueMin, localMin);
+    valueMax = Math.max(valueMax, localMax);
+
+    polygons.push({
+      points: polygon.points,
+      value: avgValue,
+      partId: polygon.partId,
+      worldPoint: [avgWorldX, avgWorldY, avgWorldZ],
+      worldVector: [avgVectorX, avgVectorY, avgVectorZ],
+    });
+    arrows.push({
+      origin: [avgU, avgV],
+      vector: [avgVectorU, avgVectorV],
+      magnitude: Math.hypot(avgVectorU, avgVectorV),
+      partId: polygon.partId,
+      worldPoint: [avgWorldX, avgWorldY, avgWorldZ],
+      worldVector: [avgVectorX, avgVectorY, avgVectorZ],
+    });
+  }
+
+  return {
+    planeCoord: topology.planeCoord,
+    normalLabel: topology.normalLabel,
+    uLabel: topology.uLabel,
+    vLabel: topology.vLabel,
+    bounds: topology.bounds,
+    segments,
     polygons,
     arrows,
     valueRange: finalizeRange(valueMin, valueMax, component),
@@ -502,7 +630,12 @@ export function collectSegments(
   visibility: SliceVisibilityState | null,
   boundsStrategy: SliceBoundsStrategy = "visible-context",
 ): SliceCollection {
-  return meshData.elements.length >= 4
-    ? collectTetraSegments(meshData, plane, component, planeCoord, visibility, boundsStrategy)
-    : collectBoundarySegments(meshData, plane, component, planeCoord, visibility, boundsStrategy);
+  const topology = collectSliceTopology(
+    meshData,
+    plane,
+    planeCoord,
+    visibility,
+    boundsStrategy,
+  );
+  return sampleSliceField(meshData, plane, component, topology);
 }

@@ -9,12 +9,14 @@ import ViewCube from "./ViewCube";
 import { fitCameraToBounds, focusCameraOnBounds, rotateCameraAroundTarget } from "./camera/cameraHelpers";
 import SceneAxes3D from "./r3f/SceneAxes3D";
 import { useCanvasHost } from "./shared/useCanvasHost";
+import ViewportTelemetryProbe from "./shared/ViewportTelemetryProbe";
 import {
   CAMERA_CONTROL_PROFILES,
   type CameraControlProfileId,
   createCameraStepLockState,
   applyCameraStepLock,
 } from "./camera/cameraProfiles";
+import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 import type {
   BuilderObjectOverlay,
   FocusObjectRequest,
@@ -106,7 +108,6 @@ function SyncedControls({
   target: [number, number, number];
 }) {
   const { camera } = useThree();
-  const controlsRefCurrent = useRef<any>(null);
   const stepLockState = useRef(createCameraStepLockState());
   const controlProfile: CameraControlProfileId = "fdm";
   const profile = CAMERA_CONTROL_PROFILES[controlProfile];
@@ -131,10 +132,7 @@ function SyncedControls({
       if (disposed) {
         return;
       }
-      const controls = controlsRefObject.current;
-      if (controls !== controlsRefCurrent.current) {
-        controlsRefCurrent.current = controls;
-      }
+      const controls = controlsRefObject.current ?? null;
       viewCubeBridgeRef.current = { camera, controls };
       if (!controls) {
         raf = window.requestAnimationFrame(syncBridge);
@@ -150,7 +148,7 @@ function SyncedControls({
       }
       viewCubeBridgeRef.current = null;
     };
-  }, [camera, viewCubeBridgeRef]);
+  }, [camera, controlsRefObject, viewCubeBridgeRef]);
 
   return (
     <TrackballControls
@@ -321,6 +319,12 @@ export default function BoundsPreview3D({
   onRequestObjectSelect,
   onGeometryTranslate,
 }: BoundsPreview3DProps) {
+  const telemetry = useViewportTelemetryEntry({
+    label: "bounds-preview",
+    renderer: "webgl",
+    frameloop: "demand",
+    hidden: false,
+  });
   const { hostRef, hostNode } = useCanvasHost<HTMLDivElement>();
   const bounds = useMemo(() => combineOverlayBounds(objectOverlays), [objectOverlays]);
   const frameCenter = worldCenter
@@ -411,6 +415,7 @@ export default function BoundsPreview3D({
           frameloop="demand"
           camera={{ position: [3, 2.4, 3], fov: 45, near: 0.0001, far: 10000 }}
         >
+          <ViewportTelemetryProbe dpr={1} hidden={false} onStats={telemetry.update} />
           <color attach="background" args={[0x1e1e2e]} />
           <ambientLight intensity={0.45} />
           <directionalLight position={[1, 2, 3]} intensity={0.8} />

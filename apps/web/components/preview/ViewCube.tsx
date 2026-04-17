@@ -351,7 +351,6 @@ export default function ViewCube({
   className,
   cubeClassName,
   axisClassName,
-  embedded,
 }: ViewCubeProps & { className?: string }) {
 
   const ax = sceneAxisDescriptor(0, axisConvention);
@@ -396,20 +395,23 @@ export default function ViewCube({
   }, [cameraCSS]);
 
   useEffect(() => {
-    let raf = 0; let dead = false;
+    let raf = 0;
+    let dead = false;
     const ch = () => sync();
-    const tick = () => {
+    const attachWhenReady = () => {
       if (dead) return;
-      const c = sceneRef?.current?.controls as ChangeListenable | undefined;
-      if (c !== attached.current) {
+      const controls = sceneRef?.current?.controls as ChangeListenable | undefined;
+      if (controls && controls !== attached.current) {
         attached.current?.removeEventListener?.("change", ch);
-        attached.current = c ?? null;
-        c?.addEventListener?.("change", ch);
+        attached.current = controls;
+        controls.addEventListener?.("change", ch);
       }
       sync();
-      raf = requestAnimationFrame(tick);
+      if (!controls) {
+        raf = requestAnimationFrame(attachWhenReady);
+      }
     };
-    tick();
+    attachWhenReady();
     return () => {
       dead = true;
       cancelAnimationFrame(raf);

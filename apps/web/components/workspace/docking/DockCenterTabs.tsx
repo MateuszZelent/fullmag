@@ -187,6 +187,7 @@ export default function DockCenterTabs() {
       closable: false,
       pinned: true,
       keepAlive: true,
+      lifecycle: "warm",
       payload: { viewMode: "Analyze" },
     });
   }, [currentStage, openTab, tabs]);
@@ -317,14 +318,17 @@ export default function DockCenterTabs() {
         </div>
 
         {tabs.map((tab) => {
-          const keepMounted = tab.keepAlive || tab.id === activeTab?.id;
-          if (!keepMounted && tab.id !== activeTab?.id) {
+          const isActive = tab.id === activeTab?.id;
+          const shouldKeepWarm = tab.lifecycle === "warm";
+          const shouldRender = isActive || shouldKeepWarm;
+          if (!shouldRender) {
             return null;
           }
           return (
             <TabsContent
               key={tab.id}
               value={tab.id}
+              forceMount={shouldKeepWarm ? true : undefined}
               className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
             >
               {tab.kind === "viewport-charts" ? (

@@ -4,6 +4,7 @@ import type { LaunchIntent } from "./launch-intent";
 
 export type WorkspaceMode = "build" | "study" | "analyze";
 export type RightInspectorTab = "properties" | "selected-submeshes" | "tools" | "console";
+export type WorkspaceTabLifecycle = "unmount-on-hide" | "warm";
 
 export type WorkspaceTabKind =
   | "viewport-3d"
@@ -29,6 +30,7 @@ export interface WorkspaceTab {
   closable: boolean;
   pinned: boolean;
   keepAlive: boolean;
+  lifecycle: WorkspaceTabLifecycle;
   payload?: {
     resultWorkspaceId?: string;
     quantityId?: string;
@@ -46,6 +48,7 @@ export interface WorkspaceTabInput {
   closable?: boolean;
   pinned?: boolean;
   keepAlive?: boolean;
+  lifecycle?: WorkspaceTabLifecycle;
   payload?: WorkspaceTab["payload"];
 }
 
@@ -71,7 +74,8 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "3D Viewport",
       closable: false,
       pinned: true,
-      keepAlive: true,
+      keepAlive: false,
+      lifecycle: "unmount-on-hide",
       payload: { viewMode: "3D" },
     },
     {
@@ -81,7 +85,8 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "2D Slice",
       closable: false,
       pinned: true,
-      keepAlive: true,
+      keepAlive: false,
+      lifecycle: "unmount-on-hide",
       payload: { viewMode: "2D" },
     },
     {
@@ -91,7 +96,8 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "Mesh Workspace",
       closable: false,
       pinned: true,
-      keepAlive: true,
+      keepAlive: false,
+      lifecycle: "unmount-on-hide",
       payload: { viewMode: "Mesh" },
     },
     {
@@ -102,6 +108,7 @@ function defaultCoreTabs(): WorkspaceTab[] {
       closable: false,
       pinned: true,
       keepAlive: false,
+      lifecycle: "unmount-on-hide",
       payload: { viewMode: "Analyze", analyzeDomain: "eigenmodes", analyzeTab: "spectrum" },
     },
     {
@@ -112,6 +119,7 @@ function defaultCoreTabs(): WorkspaceTab[] {
       closable: false,
       pinned: true,
       keepAlive: true,
+      lifecycle: "warm",
       payload: { viewMode: "Analyze" },
     },
   ];
@@ -122,6 +130,21 @@ function cloneTabsByStage(input: Record<WorkspaceMode, WorkspaceTab[]>): Record<
     build: input.build.map((tab) => ({ ...tab, payload: tab.payload ? { ...tab.payload } : undefined })),
     study: input.study.map((tab) => ({ ...tab, payload: tab.payload ? { ...tab.payload } : undefined })),
     analyze: input.analyze.map((tab) => ({ ...tab, payload: tab.payload ? { ...tab.payload } : undefined })),
+  };
+}
+
+function normalizeWorkspaceTab(tab: WorkspaceTab): WorkspaceTab {
+  const lifecycle: WorkspaceTabLifecycle =
+    tab.lifecycle === "warm" || tab.lifecycle === "unmount-on-hide"
+      ? tab.lifecycle
+      : tab.keepAlive
+        ? "warm"
+        : "unmount-on-hide";
+  return {
+    ...tab,
+    keepAlive: lifecycle === "warm",
+    lifecycle,
+    payload: tab.payload ? { ...tab.payload } : undefined,
   };
 }
 
@@ -337,9 +360,26 @@ const persistedDockingState = loadPersistedDockingState();
 function ensureCoreTabsForStage(tabs: WorkspaceTab[] | undefined): WorkspaceTab[] {
   const incoming = Array.isArray(tabs) ? tabs : [];
   const coreTabs = defaultCoreTabs();
-  const incomingById = new Map(incoming.map((tab) => [tab.id, tab]));
-  const merged: WorkspaceTab[] = coreTabs.map((core) => incomingById.get(core.id) ?? core);
-  const extra = incoming.filter((tab) => !coreTabs.some((core) => core.id === tab.id));
+  const incomingById = new Map(incoming.map((tab) => [tab.id, normalizeWorkspaceTab(tab)]));
+  const merged: WorkspaceTab[] = coreTabs.map((core) => {
+    const persisted = incomingById.get(core.id);
+    if (!persisted) {
+      return normalizeWorkspaceTab(core);
+    }
+    return normalizeWorkspaceTab({
+      ...persisted,
+      kind: core.kind,
+      title: core.title,
+      closable: core.closable,
+      pinned: core.pinned,
+      keepAlive: core.keepAlive,
+      lifecycle: core.lifecycle,
+      payload: core.payload,
+    });
+  });
+  const extra = incoming
+    .filter((tab) => !coreTabs.some((core) => core.id === tab.id))
+    .map((tab) => normalizeWorkspaceTab(tab));
   return [...merged, ...extra];
 }
 
@@ -440,6 +480,9 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         );
         if (existing) {
           activeId = existing.id;
+          if (state.activeWorkspaceTabByStage[stage] === existing.id) {
+            return state;
+          }
           const nextState = {
             activeWorkspaceTabByStage: {
               ...state.activeWorkspaceTabByStage,
@@ -457,7 +500,8 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
           title: tabInput.title,
           closable: tabInput.closable ?? true,
           pinned: tabInput.pinned ?? false,
-          keepAlive: tabInput.keepAlive ?? false,
+          keepAlive: (tabInput.lifecycle ?? (tabInput.keepAlive ? "warm" : "unmount-on-hide")) === "warm",
+          lifecycle: tabInput.lifecycle ?? (tabInput.keepAlive ? "warm" : "unmount-on-hide"),
           payload: tabInput.payload,
         };
 
@@ -510,6 +554,9 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       set((state) => {
         const tabs = state.workspaceTabsByStage[stage];
         if (tabId != null && !tabs.some((tab) => tab.id === tabId)) {
+          return state;
+        }
+        if (state.activeWorkspaceTabByStage[stage] === tabId) {
           return state;
         }
         const nextState = {
@@ -606,6 +653,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
               closable: candidate.closable ?? true,
               pinned: candidate.pinned ?? false,
               keepAlive: candidate.keepAlive ?? false,
+              lifecycle: candidate.lifecycle ?? (candidate.keepAlive ? "warm" : "unmount-on-hide"),
               payload: candidate.payload,
             });
           }

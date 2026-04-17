@@ -137,4 +137,33 @@ describe("workspace docking store", () => {
     expect(imported).toBe(true);
     expect(useWorkspaceStore.getState().currentStage).toBe("study");
   });
+
+  it("uses explicit lifecycle defaults for heavy viewports and keeps charts warm", () => {
+    const defaults = getDefaultWorkspaceTabsByStage();
+    const studyTabs = defaults.study;
+    expect(studyTabs.find((tab) => tab.id === "core:3d")?.lifecycle).toBe("unmount-on-hide");
+    expect(studyTabs.find((tab) => tab.id === "core:2d")?.lifecycle).toBe("unmount-on-hide");
+    expect(studyTabs.find((tab) => tab.id === "core:mesh")?.lifecycle).toBe("unmount-on-hide");
+    expect(studyTabs.find((tab) => tab.id === "core:charts")?.lifecycle).toBe("warm");
+  });
+
+  it("normalizes explicit lifecycle when opening tabs", () => {
+    const warmId = useWorkspaceStore.getState().openTab("study", {
+      key: "manual:charts-clone",
+      kind: "viewport-charts",
+      title: "Charts Clone",
+      lifecycle: "warm",
+    });
+    const coldId = useWorkspaceStore.getState().openTab("study", {
+      key: "manual:3d-clone",
+      kind: "viewport-3d",
+      title: "3D Clone",
+    });
+
+    const tabs = useWorkspaceStore.getState().workspaceTabsByStage.study;
+    expect(tabs.find((tab) => tab.id === warmId)?.keepAlive).toBe(true);
+    expect(tabs.find((tab) => tab.id === warmId)?.lifecycle).toBe("warm");
+    expect(tabs.find((tab) => tab.id === coldId)?.keepAlive).toBe(false);
+    expect(tabs.find((tab) => tab.id === coldId)?.lifecycle).toBe("unmount-on-hide");
+  });
 });

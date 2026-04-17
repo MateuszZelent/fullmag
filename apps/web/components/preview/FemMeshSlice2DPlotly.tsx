@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { PlotHoverEvent, PlotMouseEvent } from "plotly.js";
+import { recordFrontendPerfSample, type PerfSample } from "@/lib/debug/frontendPerfDebug";
 import type { FemMeshData, FemVectorDomainFilter } from "./FemMeshView3D";
 import type { AntennaOverlay } from "../runs/control-room/shared";
 import Plot from "../plots/DynamicPlot";
@@ -16,9 +17,12 @@ import {
 } from "./fem/femSliceUtils";
 import {
   axisIndices,
-  collectSegments,
+  collectSliceTopology,
+  sampleSliceField,
   type Point2,
   type SlicePlane,
+  type SliceCollection,
+  type SliceTopologyCollection,
   type VectorComponent,
 } from "./fem/femSliceGeometry";
 import {
@@ -35,6 +39,11 @@ import {
   smartAutoScale,
   type ResolvedColorScale,
 } from "./fem/femSliceColorScale";
+import {
+  fieldCacheKey,
+  topologyCacheKey,
+} from "./fem/femSliceCache";
+import type { FemSliceQuery } from "./fem/femSliceQuery";
 import { ViewportToolbar3D } from "./ViewportToolbar3D";
 import { ViewportToolGroup, ViewportToolSeparator } from "./ViewportToolGroup";
 import { ViewportIconAction } from "./ViewportIconAction";
@@ -107,6 +116,25 @@ const COOLWARM = [
   "#e7745b",
   "#b40426",
 ] as const;
+const ENABLE_SLICE_PERF_SAMPLES = process.env.NODE_ENV !== "production";
+
+type CommittedPerfSample = Omit<PerfSample, "timestampMs">;
+
+function perfNow(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function useCommittedPerfSample(sample: CommittedPerfSample | null): void {
+  useEffect(() => {
+    if (!sample || !ENABLE_SLICE_PERF_SAMPLES) {
+      return;
+    }
+    recordFrontendPerfSample({
+      ...sample,
+      timestampMs: perfNow(),
+    });
+  }, [sample]);
+}
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -413,7 +441,6 @@ export default function FemMeshSlice2DPlotly({
     [
       airSegmentVisible,
       meshData,
-      meshData.quantityDomain,
       meshEntityViewState,
       meshParts,
       objectViewMode,
@@ -422,18 +449,168 @@ export default function FemMeshSlice2DPlotly({
     ],
   );
 
-  const slice = useMemo(
-    () =>
-      collectSegments(
-        meshData,
-        effectivePlane,
-        effectiveComponent,
-        planeCoord,
-        visibilityState,
-        objectViewMode === "isolate" ? "visible-intersection" : "visible-context",
-      ),
-    [meshData, effectivePlane, effectiveComponent, planeCoord, visibilityState, objectViewMode],
+  const sliceQuery = useMemo<FemSliceQuery>(
+    () => ({
+      orientation: effectivePlane,
+      positionMode: "sync_3d_clip",
+      planeOffset: clipPos,
+      thicknessMode: "exact",
+      thicknessWorld: 0,
+      aggregation: "sample",
+      quantityId: quantityId ?? "m",
+      component: effectiveComponent,
+      vectorMode: arrowsVisible ? "in_plane" : "off",
+      scope: objectViewMode === "isolate" ? "selection" : "visible",
+      extentMode: objectViewMode === "isolate" ? "fit_intersection" : "fit_visible",
+      colorScaleMode: "slice_auto",
+    }),
+    [
+      arrowsVisible,
+      clipPos,
+      effectiveComponent,
+      effectivePlane,
+      objectViewMode,
+      quantityId,
+    ],
   );
+  const boundsStrategy = objectViewMode === "isolate" ? "visible-intersection" : "visible-context";
+  const topologyKey = useMemo(
+    () =>
+      topologyCacheKey(sliceQuery, {
+        planeWorldCoord: planeCoord,
+        meshNodes: meshData.nodes as unknown as object,
+        meshElements: meshData.elements as unknown as object,
+        meshBoundaryFaces: meshData.boundaryFaces as unknown as object,
+        visibleElements: visibilityState.visibleElements,
+        visibleBoundaryFaces: visibilityState.visibleBoundaryFaces,
+        visiblePartIds: visibilityState.visiblePartIds,
+        boundsStrategy,
+      }),
+    [
+      boundsStrategy,
+      meshData.boundaryFaces,
+      meshData.elements,
+      meshData.nodes,
+      planeCoord,
+      sliceQuery,
+      visibilityState,
+    ],
+  );
+  const fieldKey = useMemo(
+    () =>
+      fieldCacheKey(sliceQuery, {
+        planeWorldCoord: planeCoord,
+        meshNodes: meshData.nodes as unknown as object,
+        meshElements: meshData.elements as unknown as object,
+        meshBoundaryFaces: meshData.boundaryFaces as unknown as object,
+        visibleElements: visibilityState.visibleElements,
+        visibleBoundaryFaces: visibilityState.visibleBoundaryFaces,
+        visiblePartIds: visibilityState.visiblePartIds,
+        boundsStrategy,
+        fieldX: meshData.fieldData?.x as object | null | undefined,
+        fieldY: meshData.fieldData?.y as object | null | undefined,
+        fieldZ: meshData.fieldData?.z as object | null | undefined,
+        fieldRevision: meshData.fieldRevision,
+        fieldNComp: meshData.fieldNComp,
+      }),
+    [
+      boundsStrategy,
+      meshData.boundaryFaces,
+      meshData.elements,
+      meshData.fieldData?.x,
+      meshData.fieldData?.y,
+      meshData.fieldData?.z,
+      meshData.fieldNComp,
+      meshData.fieldRevision,
+      meshData.nodes,
+      planeCoord,
+      sliceQuery,
+      visibilityState,
+    ],
+  );
+  const sliceTopologyMeasurement = useMemo<{
+    value: SliceTopologyCollection;
+    sample: CommittedPerfSample | null;
+  }>(() => {
+    const start = ENABLE_SLICE_PERF_SAMPLES ? perfNow() : 0;
+    const value = collectSliceTopology(
+      meshData,
+      effectivePlane,
+      planeCoord,
+      visibilityState,
+      boundsStrategy,
+    );
+    return {
+      value,
+      sample: ENABLE_SLICE_PERF_SAMPLES
+        ? {
+            scope: "FemSlice2D",
+            phase: "topology",
+            durationMs: perfNow() - start,
+            meta: {
+              plane: effectivePlane,
+              boundsStrategy,
+              elements: visibilityState.visibleElements?.length ?? 0,
+              boundaryFaces: visibilityState.visibleBoundaryFaces?.length ?? 0,
+              polygons: value.polygons.length,
+              segments: value.segments.length,
+            },
+          }
+        : null,
+    };
+  },
+    [
+      boundsStrategy,
+      effectivePlane,
+      meshData,
+      planeCoord,
+      visibilityState,
+    ],
+  );
+  const sliceTopology = sliceTopologyMeasurement.value;
+  useCommittedPerfSample(sliceTopologyMeasurement.sample);
+
+  const sliceMeasurement = useMemo<{
+    value: SliceCollection;
+    sample: CommittedPerfSample | null;
+  }>(() => {
+    const start = ENABLE_SLICE_PERF_SAMPLES ? perfNow() : 0;
+    const value = sampleSliceField(meshData, effectivePlane, effectiveComponent, sliceTopology);
+    return {
+      value,
+      sample: ENABLE_SLICE_PERF_SAMPLES
+        ? {
+            scope: "FemSlice2D",
+            phase: "field",
+            durationMs: perfNow() - start,
+            meta: {
+              plane: effectivePlane,
+              component: effectiveComponent,
+              quantity: quantityId ?? "m",
+              fieldNComp: meshData.fieldNComp ?? 0,
+              fieldRevision:
+                typeof meshData.fieldRevision === "number"
+                  ? meshData.fieldRevision
+                  : meshData.fieldRevision
+                    ? String(meshData.fieldRevision)
+                    : "none",
+              polygons: value.polygons.length,
+              arrows: value.arrows.length,
+            },
+          }
+        : null,
+    };
+  },
+    [
+      effectiveComponent,
+      effectivePlane,
+      meshData,
+      quantityId,
+      sliceTopology,
+    ],
+  );
+  const slice = sliceMeasurement.value;
+  useCommittedPerfSample(sliceMeasurement.sample);
 
   const colorScale = useMemo(
     () => smartAutoScale(slice.valueRange.min, slice.valueRange.max, quantityId, effectiveComponent),
@@ -697,7 +874,8 @@ export default function FemMeshSlice2DPlotly({
       dragmode: "pan",
       hovermode: "closest",
       showlegend: false,
-      uirevision: `${effectivePlane}:${effectiveComponent}:${quantityId ?? "q"}`,
+      uirevision: topologyKey,
+      datarevision: fieldKey,
       xaxis: {
         title: { text: `${slice.uLabel} axis (m)`, font: { color: TEXT_STRONG, size: 12 } },
         range: [slice.bounds.uMin, slice.bounds.uMax],
@@ -754,11 +932,9 @@ export default function FemMeshSlice2DPlotly({
       },
     }),
     [
-      effectiveComponent,
-      effectivePlane,
-      fieldNComp,
+      fieldKey,
       hasField,
-      quantityId,
+      topologyKey,
       quantityTitle,
       slice,
     ],

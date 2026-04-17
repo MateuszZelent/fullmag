@@ -12,6 +12,7 @@ import { rotateCameraAroundTarget, focusCameraOnBounds } from "./camera/cameraHe
 import FdmLighting from "./r3f/FdmLighting";
 import SceneAxes3D from "./r3f/SceneAxes3D";
 import { useCanvasHost } from "./shared/useCanvasHost";
+import ViewportTelemetryProbe from "./shared/ViewportTelemetryProbe";
 import TextureTransformGizmo, {
   type TextureGizmoMode,
   type TexturePreviewProxy,
@@ -51,6 +52,7 @@ import {
   applyCameraStepLock,
 } from "./camera/cameraProfiles";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 import { TransformGizmoLayer } from "./transform/TransformGizmoLayer";
 import { axisLabelsForConvention } from "./transform/axisConvention";
 
@@ -209,7 +211,6 @@ function SyncedControls({
   const { camera } = useThree();
   const [nx, ny, nz] = grid;
   const cx = nx / 2, cy = nz / 2, cz = ny / 2;
-  const controlsRefCurrent = useRef<any>(null);
   const stepLockState = useRef(createCameraStepLockState());
   const controlProfile: CameraControlProfileId = "fdm";
   const profile = CAMERA_CONTROL_PROFILES[controlProfile];
@@ -234,10 +235,7 @@ function SyncedControls({
       if (disposed) {
         return;
       }
-      const controls = controlsRefObject.current;
-      if (controls !== controlsRefCurrent.current) {
-        controlsRefCurrent.current = controls;
-      }
+      const controls = controlsRefObject.current ?? null;
       viewCubeBridgeRef.current = { camera, controls };
       if (!controls) {
         raf = window.requestAnimationFrame(syncBridge);
@@ -253,7 +251,7 @@ function SyncedControls({
       }
       viewCubeBridgeRef.current = null;
     };
-  }, [camera, viewCubeBridgeRef]);
+  }, [camera, controlsRefObject, viewCubeBridgeRef]);
 
   return (
     <TrackballControls
@@ -621,6 +619,15 @@ function VectorFieldView3DInner({
     () => (externalSettings ? settingsFromPreset(externalSettings) : internalSettings),
     [externalSettings, internalSettings],
   );
+  const canvasDpr = settings.quality === "ultra"
+    ? Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, 2)
+    : 1;
+  const telemetry = useViewportTelemetryEntry({
+    label: "fdm-viewport",
+    renderer: "webgl",
+    frameloop: viewportVisible ? "demand" : "never",
+    hidden: !viewportVisible,
+  });
   const [openPopover, setOpenPopover] = useState<"color" | "display" | "topo" | "camera" | null>(null);
 
   // ── 3dsmax-style interaction mode (camera / move / rotate / scale) ──
@@ -1144,12 +1151,14 @@ function VectorFieldView3DInner({
               r3fSceneRef.current = scene;
               r3fCameraRef.current = camera;
             }}
-            dpr={settings.quality === "ultra"
-              ? Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, 2)
-              : 1
-            }
+            dpr={canvasDpr}
             style={{ background: `#${BG_COLOR.toString(16).padStart(6, "0")}` }}
           >
+            <ViewportTelemetryProbe
+              dpr={canvasDpr}
+              hidden={!viewportVisible}
+              onStats={telemetry.update}
+            />
             <color attach="background" args={[BG_COLOR]} />
             <SceneConfig toneMapping={settings.quality !== "low"} />
 

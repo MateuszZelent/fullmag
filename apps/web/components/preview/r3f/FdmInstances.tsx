@@ -7,6 +7,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { applyMagnetizationHsl } from "../magnetizationColor";
 import { COMP_NEGATIVE, COMP_NEUTRAL, COMP_POSITIVE } from "./colorUtils";
 import type { QualityLevel, RenderMode, VoxelColorMode, VoxelSampling, TopoComponent } from "../VectorFieldView3D";
+import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
 
@@ -255,6 +256,7 @@ function FdmInstances({
 
   /* ── Update instances (core rendering loop) ───────────────────── */
   useEffect(() => {
+    const start = typeof performance !== "undefined" ? performance.now() : Date.now();
     const mesh = meshRef.current;
     if (!mesh) return;
     const instanceColor = mesh.instanceColor;
@@ -283,6 +285,18 @@ function FdmInstances({
       instanceColor.needsUpdate = true;
       onVisibleCount?.(0);
       invalidate();
+      const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+      recordFrontendPerfSample({
+        scope: "FdmInstances",
+        phase: "update",
+        durationMs: timestampMs - start,
+        timestampMs,
+        meta: {
+          visible: 0,
+          mode,
+          quality: settings.quality,
+        },
+      });
       return;
     }
 
@@ -292,6 +306,18 @@ function FdmInstances({
       instanceColor.needsUpdate = true;
       onVisibleCount?.(0);
       invalidate();
+      const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+      recordFrontendPerfSample({
+        scope: "FdmInstances",
+        phase: "update",
+        durationMs: timestampMs - start,
+        timestampMs,
+        meta: {
+          visible: 0,
+          mode,
+          quality: settings.quality,
+        },
+      });
       return;
     }
 
@@ -342,6 +368,18 @@ function FdmInstances({
         materialRef.needsUpdate = true;
       }
       invalidate();
+      const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+      recordFrontendPerfSample({
+        scope: "FdmInstances",
+        phase: "update",
+        durationMs: timestampMs - start,
+        timestampMs,
+        meta: {
+          visible,
+          mode,
+          quality: settings.quality,
+        },
+      });
       return;
     }
 
@@ -464,6 +502,18 @@ function FdmInstances({
       materialRef.depthWrite = true;
     }
     invalidate();
+    const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    recordFrontendPerfSample({
+      scope: "FdmInstances",
+      phase: "update",
+      durationMs: timestampMs - start,
+      timestampMs,
+      meta: {
+        visible,
+        mode,
+        quality: settings.quality,
+      },
+    });
   }, [vectors, grid, settings, geometryMode, activeMask, mode, count, nx, ny, nz, onVisibleCount, sceneOpacityMultiplier, isolateGridBounds, invalidate]);
 
   if (count === 0) {

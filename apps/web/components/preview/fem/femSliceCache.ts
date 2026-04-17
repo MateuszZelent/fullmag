@@ -11,7 +11,45 @@
  */
 
 import type { FemSliceQuery } from "./femSliceQuery";
-import type { SliceResult } from "./femSliceExact";
+
+const objectIdentityMap = new WeakMap<object, number>();
+let nextObjectIdentity = 1;
+
+function objectIdentity(value: object | null | undefined): number {
+  if (!value) {
+    return 0;
+  }
+  const existing = objectIdentityMap.get(value);
+  if (existing) {
+    return existing;
+  }
+  const created = nextObjectIdentity++;
+  objectIdentityMap.set(value, created);
+  return created;
+}
+
+export interface FemSliceCacheContext {
+  planeWorldCoord: number;
+  meshNodes?: object | null;
+  meshElements?: object | null;
+  meshBoundaryFaces?: object | null;
+  visibleElements?: object | null;
+  visibleBoundaryFaces?: object | null;
+  visiblePartIds?: Iterable<string>;
+  boundsStrategy?: string;
+  fieldX?: object | null;
+  fieldY?: object | null;
+  fieldZ?: object | null;
+  fieldRevision?: string | number | null;
+  fieldNComp?: number | null;
+}
+
+function visiblePartsFingerprint(value: Iterable<string> | undefined): string {
+  if (!value) {
+    return "";
+  }
+  return Array.from(value).sort().join(",");
+}
 
 // ── Cache keys ───────────────────────────────────────────────────
 
@@ -19,16 +57,44 @@ import type { SliceResult } from "./femSliceExact";
  * Returns a string key that changes whenever the topology of the slice
  * would change (plane orientation, position, thickness).
  */
-export function topologyCacheKey(query: FemSliceQuery, planeWorldCoord: number): string {
-  return `${query.orientation}:${query.thicknessMode}:${planeWorldCoord.toPrecision(12)}:${query.thicknessWorld}`;
+export function topologyCacheKey(
+  query: FemSliceQuery,
+  context: FemSliceCacheContext,
+): string {
+  return [
+    query.orientation,
+    query.thicknessMode,
+    context.planeWorldCoord.toPrecision(12),
+    query.thicknessWorld,
+    context.boundsStrategy ?? "visible-context",
+    objectIdentity(context.meshNodes ?? null),
+    objectIdentity(context.meshElements ?? null),
+    objectIdentity(context.meshBoundaryFaces ?? null),
+    objectIdentity(context.visibleElements ?? null),
+    objectIdentity(context.visibleBoundaryFaces ?? null),
+    visiblePartsFingerprint(context.visiblePartIds),
+  ].join(":");
 }
 
 /**
  * Returns a string key for the field sample level.  Changes when the
  * quantity or component changes (but topology stays the same).
  */
-export function fieldCacheKey(query: FemSliceQuery, planeWorldCoord: number): string {
-  return `${topologyCacheKey(query, planeWorldCoord)}:${query.quantityId}:${query.component}:${query.aggregation}`;
+export function fieldCacheKey(
+  query: FemSliceQuery,
+  context: FemSliceCacheContext,
+): string {
+  return [
+    topologyCacheKey(query, context),
+    query.quantityId,
+    query.component,
+    query.aggregation,
+    objectIdentity(context.fieldX ?? null),
+    objectIdentity(context.fieldY ?? null),
+    objectIdentity(context.fieldZ ?? null),
+    context.fieldRevision ?? "none",
+    context.fieldNComp ?? "none",
+  ].join(":");
 }
 
 // ── Memo guards ──────────────────────────────────────────────────
@@ -37,8 +103,8 @@ export function fieldCacheKey(query: FemSliceQuery, planeWorldCoord: number): st
  * Lightweight guard that tells callers whether a recompute is needed.
  *
  * Usage (inside useMemo deps):
- *   const topoKey = topologyCacheKey(query, resolved.planeWorldCoord);
- *   const fieldKey = fieldCacheKey(query, resolved.planeWorldCoord);
+ *   const topoKey = topologyCacheKey(query, context);
+ *   const fieldKey = fieldCacheKey(query, context);
  *   // useMemo(..., [topoKey])  for topology
  *   // useMemo(..., [fieldKey]) for field samples
  */

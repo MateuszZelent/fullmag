@@ -12,6 +12,7 @@ import {
 import { getViewportQualityProfile, type ViewportQualityProfileId } from "./viewportQualityProfiles";
 import ViewportGizmoStack from "./ViewportGizmoStack";
 import { useCanvasHost } from "./useCanvasHost";
+import ViewportTelemetryProbe from "./ViewportTelemetryProbe";
 import {
   CAMERA_CONTROL_PROFILES,
   type CameraControlProfileId,
@@ -20,6 +21,7 @@ import {
 } from "../camera/cameraProfiles";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
+import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 
 export type ShellProjection = "perspective" | "orthographic";
 export type ShellNavigation = "trackball" | "cad";
@@ -66,6 +68,7 @@ interface ScientificViewportShellProps {
     enableBridgeSync?: boolean;
     forceFrameloopMode?: ViewportFrameloopMode;
   };
+  telemetryLabel?: string;
 }
 
 function ShellCamera({ projection }: { projection: ShellProjection }) {
@@ -126,7 +129,7 @@ function ShellControls({
     if (snapped) {
       controls.update();
     }
-  }, [controlProfile, controlsRef, profile]);
+  }, [controlsRef, profile]);
 
   if (navigation === "cad") {
     return (
@@ -166,12 +169,13 @@ function ShellControls({
 function ShellBridgeSync({
   bridgeRef,
   controlsRef,
+  awaitControls,
 }: {
   bridgeRef: MutableRefObject<any> | null;
   controlsRef: MutableRefObject<any>;
+  awaitControls: boolean;
 }) {
   const { camera } = useThree();
-  const controlsRefCurrent = useRef<any>(null);
 
   useEffect(() => {
     if (!bridgeRef) {
@@ -185,16 +189,11 @@ function ShellBridgeSync({
       if (disposed) {
         return;
       }
-      const controls = controlsRef.current;
-      if (
-        controls !== controlsRefCurrent.current ||
-        bridgeRef.current?.camera !== camera ||
-        bridgeRef.current?.controls !== controls
-      ) {
-        controlsRefCurrent.current = controls ?? null;
-        bridgeRef.current = { camera, controls: controls ?? null };
+      const controls = controlsRef.current ?? null;
+      bridgeRef.current = { camera, controls };
+      if (awaitControls && !controls) {
+        raf = window.requestAnimationFrame(syncBridge);
       }
-      raf = window.requestAnimationFrame(syncBridge);
     };
 
     syncBridge();
@@ -206,7 +205,7 @@ function ShellBridgeSync({
       }
       bridgeRef.current = null;
     };
-  }, [bridgeRef, camera, controlsRef]);
+  }, [awaitControls, bridgeRef, camera, controlsRef]);
 
   return null;
 }
@@ -236,6 +235,7 @@ export default function ScientificViewportShell({
   onInteractionChange,
   controlProfile = "fdm",
   diagnosticOverrides,
+  telemetryLabel = "scientific-viewport",
 }: ScientificViewportShellProps) {
   const controlsEnabled =
     diagnosticOverrides?.enableControls ?? FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.enableViewportControls;
@@ -279,6 +279,12 @@ export default function ScientificViewportShell({
         : forcedFrameloopMode === "never"
           ? "never"
           : "demand";
+  const telemetry = useViewportTelemetryEntry({
+    label: telemetryLabel,
+    renderer: "webgl",
+    frameloop,
+    hidden: resolvedHidden,
+  });
   const handleInteractionChange = useCallback((next: boolean) => {
     if (interactionActiveRef.current === next) {
       return;
@@ -346,8 +352,17 @@ export default function ScientificViewportShell({
         />
       ) : null}
       {bridgeSyncEnabled ? (
-        <ShellBridgeSync bridgeRef={effectiveBridgeRef} controlsRef={effectiveControlsRef} />
+        <ShellBridgeSync
+          bridgeRef={effectiveBridgeRef}
+          controlsRef={effectiveControlsRef}
+          awaitControls={controlsEnabled}
+        />
       ) : null}
+      <ViewportTelemetryProbe
+        dpr={effectiveDpr}
+        hidden={resolvedHidden}
+        onStats={telemetry.update}
+      />
     </Canvas>
   );
 

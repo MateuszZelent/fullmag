@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { collectSegments, type SlicePlane } from "../femSliceGeometry";
+import {
+  collectSegments,
+  collectSliceTopology,
+  sampleSliceField,
+  type SlicePlane,
+} from "../femSliceGeometry";
 import type { FemMeshData } from "../femMeshTypes";
 
 function makeMeshData(): FemMeshData {
@@ -44,4 +49,21 @@ describe("collectSegments", () => {
       expect(slice.valueRange).toEqual({ min: 1, max: 1 });
     },
   );
+
+  it("keeps topology stable while resampling field components", () => {
+    const meshData = makeMeshData();
+    const topology = collectSliceTopology(meshData, "xy", 0.25, null);
+    const sliceX = sampleSliceField(meshData, "xy", "x", topology);
+    const sliceZ = sampleSliceField(meshData, "xy", "z", topology);
+
+    expect(topology.polygons).toHaveLength(1);
+    expect(sliceX.polygons).toHaveLength(1);
+    expect(sliceZ.polygons).toHaveLength(1);
+    expect(sliceX.polygons[0]?.points).toEqual(topology.polygons[0]?.points);
+    expect(sliceZ.polygons[0]?.points).toEqual(topology.polygons[0]?.points);
+    expect(sliceX.polygons[0]?.value).toBe(1);
+    expect(sliceZ.polygons[0]?.value).toBe(3);
+    expect(sliceX.arrows[0]?.vector).toEqual([1, 2]);
+    expect(sliceZ.arrows[0]?.vector).toEqual([1, 2]);
+  });
 });

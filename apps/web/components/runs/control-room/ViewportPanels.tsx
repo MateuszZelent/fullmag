@@ -19,6 +19,7 @@ import BoundsPreview3D from "../../preview/BoundsPreview3D";
 import EmptyState from "../../ui/EmptyState";
 import AnalyzeViewport from "./AnalyzeViewport";
 import ResultNodeViewport from "./ResultNodeViewport";
+import { FrontendViewportPerfHud } from "./FrontendViewportPerfHud";
 
 import {
   fmtExp,
@@ -1336,6 +1337,8 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
           </div>
         </div>
       ) : null}
+
+      <FrontendViewportPerfHud />
 
       {showFdm3D ? (
         <div className="absolute inset-0">

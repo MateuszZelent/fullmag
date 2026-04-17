@@ -1,10 +1,12 @@
-type PerfSample = {
+export type PerfSample = {
   scope: string;
   phase: string;
   durationMs: number;
   timestampMs: number;
   meta?: Record<string, number | string | boolean | null>;
 };
+
+const perfListeners = new Set<() => void>();
 
 declare global {
   interface Window {
@@ -13,17 +15,40 @@ declare global {
 }
 
 const MAX_SAMPLES = 400;
+const EMPTY_FRONTEND_PERF_SAMPLES: PerfSample[] = [];
+
+let frontendPerfSamples: PerfSample[] = [];
+
+function getCanonicalPerfSamples(): PerfSample[] {
+  if (typeof window === "undefined") {
+    return EMPTY_FRONTEND_PERF_SAMPLES;
+  }
+  const globalSamples = window.__FULLMAG_FRONTEND_PERF__;
+  if (!globalSamples) {
+    window.__FULLMAG_FRONTEND_PERF__ = frontendPerfSamples;
+    return frontendPerfSamples;
+  }
+  if (globalSamples !== frontendPerfSamples) {
+    frontendPerfSamples = globalSamples;
+  }
+  return globalSamples;
+}
 
 export function recordFrontendPerfSample(sample: PerfSample): void {
   if (typeof window === "undefined") {
     return;
   }
-  const store = window.__FULLMAG_FRONTEND_PERF__ ?? [];
-  store.push(sample);
-  if (store.length > MAX_SAMPLES) {
-    store.splice(0, store.length - MAX_SAMPLES);
+
+  const next = [...getCanonicalPerfSamples()];
+  next.push(sample);
+  if (next.length > MAX_SAMPLES) {
+    next.splice(0, next.length - MAX_SAMPLES);
   }
-  window.__FULLMAG_FRONTEND_PERF__ = store;
+  frontendPerfSamples = next;
+  window.__FULLMAG_FRONTEND_PERF__ = frontendPerfSamples;
+  for (const listener of perfListeners) {
+    listener();
+  }
 }
 
 const renderCounters = new Map<string, number>();
@@ -41,4 +66,19 @@ export function recordFrontendRender(scope: string, meta?: Record<string, number
       ...(meta ?? {}),
     },
   });
+}
+
+export function getFrontendPerfSamples(): PerfSample[] {
+  if (typeof window === "undefined") {
+    return EMPTY_FRONTEND_PERF_SAMPLES;
+  }
+  const store = getCanonicalPerfSamples();
+  return store.length > 0 ? store : EMPTY_FRONTEND_PERF_SAMPLES;
+}
+
+export function subscribeFrontendPerfSamples(listener: () => void): () => void {
+  perfListeners.add(listener);
+  return () => {
+    perfListeners.delete(listener);
+  };
 }

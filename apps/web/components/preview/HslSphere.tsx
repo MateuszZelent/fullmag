@@ -108,7 +108,7 @@ function CameraSync({
     let disposed = false;
     const handleChange = () => syncCamera();
 
-    const tick = () => {
+    const attachWhenReady = () => {
       if (disposed) {
         return;
       }
@@ -119,10 +119,12 @@ function CameraSync({
         controls?.addEventListener?.("change", handleChange);
       }
       syncCamera();
-      raf = window.requestAnimationFrame(tick);
+      if (!controls) {
+        raf = window.requestAnimationFrame(attachWhenReady);
+      }
     };
 
-    tick();
+    attachWhenReady();
     return () => {
       disposed = true;
       if (raf) {
