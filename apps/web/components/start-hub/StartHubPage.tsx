@@ -1,5 +1,6 @@
 "use client";
 
+import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import StartHubShell from "./StartHubShell";
@@ -96,7 +97,7 @@ export default function StartHubPage() {
       { includeStack: true },
     );
     const route = params.toString().length > 0 ? `${target}?${params}` : target;
-    router.push(route);
+    router.push(route as Route);
   };
 
   const handleOpenRecent = (entry: RecentSimulationEntry) => {

@@ -157,7 +157,12 @@ fn execute_fem_eigen_inner(
 ) -> Result<ExecutedRun, RunError> {
     if plan.precision != fullmag_ir::ExecutionPrecision::Double {
         return Err(RunError {
-            message: "execution_precision='single' is not executable in the FEM eigen CPU reference runner; use 'double'".to_string(),
+            message: if try_gpu {
+                "execution_precision='single' is not executable in the FEM eigen GPU path; single-precision GPU eigensolve is not yet implemented"
+            } else {
+                "execution_precision='single' is not executable in the FEM eigen CPU path; use 'double'"
+            }
+            .to_string(),
         });
     }
 
@@ -2142,15 +2147,11 @@ fn solver_capabilities(
             fullmag_ir::ResolvedFemDemagIR::PoissonRobin => {
                 capabilities.push("demag_poisson_robin")
             }
-            fullmag_ir::ResolvedFemDemagIR::Bem => {
-                capabilities.push("demag_bem")
-            }
+            fullmag_ir::ResolvedFemDemagIR::Bem => capabilities.push("demag_bem"),
             fullmag_ir::ResolvedFemDemagIR::FredkinKoehler => {
                 capabilities.push("demag_fredkin_koehler")
             }
-            fullmag_ir::ResolvedFemDemagIR::Fmm => {
-                capabilities.push("demag_fmm")
-            }
+            fullmag_ir::ResolvedFemDemagIR::Fmm => capabilities.push("demag_fmm"),
         }
     }
     if plan.external_field.is_some() {

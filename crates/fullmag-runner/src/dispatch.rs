@@ -2090,14 +2090,17 @@ fn execute_native_fem(
     let mut backend = NativeFemBackend::create(plan)?;
     let device_info = backend.device_info()?;
     let execution_engine = native_fem_execution_engine(plan);
+    let demag_policy = plan.demag_solver_policy.clone().unwrap_or_default();
     runtime_info_once(&format!(
-        "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={}",
+        "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={} demag_solver={} preconditioner={}",
         execution_engine,
         device_info.name,
         device_info.compute_capability,
         device_info.driver_version,
         device_info.runtime_version,
-        plan.mfem_device_string.as_deref().unwrap_or("cuda")
+        plan.mfem_device_string.as_deref().unwrap_or("cuda"),
+        demag_policy.solver,
+        demag_policy.preconditioner,
     ));
     let node_count = plan.mesh.nodes.len();
     let initial_magnetization = backend.copy_m(node_count)?;

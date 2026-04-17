@@ -117,6 +117,15 @@ pub(crate) fn gpu_availability() -> GpuAvailability {
 }
 
 #[cfg(feature = "fem-gpu")]
+fn single_precision_rejection(plan: &fullmag_ir::FemPlanIR) -> &'static str {
+    if plan.mfem_device_string.as_deref() == Some("cpu") {
+        "native FEM CPU backend currently supports only double precision; single precision is not implemented"
+    } else {
+        "native FEM GPU backend requires double precision; single-precision CUDA kernels are not yet implemented"
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
     magnetic_node_mask: Vec<bool>,
@@ -151,9 +160,7 @@ impl NativeFemBackend {
         }
         if plan.precision == fullmag_ir::ExecutionPrecision::Single {
             return Err(RunError {
-                message: "native FEM GPU backend requires double precision; \
-                     single-precision CUDA kernels are not yet implemented"
-                    .to_string(),
+                message: single_precision_rejection(plan).to_string(),
             });
         }
         let nodes_flat: Vec<f64> = plan
@@ -738,6 +745,8 @@ impl NativeFemBackend {
             dt_suggested: 0.0,
             rhs_evaluations: 0,
             fsal_reused: 0,
+            requested_omp_threads: 0,
+            effective_omp_threads: 0,
         };
 
         let rc = unsafe { ffi::fullmag_fem_backend_step(self.handle, dt, &mut stats) };
@@ -782,7 +791,16 @@ impl NativeFemBackend {
             },
             rhs_evals: stats.rhs_evaluations,
             fsal_reused: stats.fsal_reused != 0,
-            demag_solves: stats.demag_linear_iterations,
+            demag_solves: if stats.demag_linear_iterations > 0 {
+                1
+            } else {
+                0
+            },
+            poisson_iterations: stats.demag_linear_iterations,
+            poisson_final_residual: stats.demag_linear_residual,
+            demag_refreshed: stats.demag_linear_iterations > 0,
+            requested_fem_omp_threads: stats.requested_omp_threads,
+            effective_fem_omp_threads: stats.effective_omp_threads,
             ..StepStats::default()
         };
         step_stats.per_object_scalars =
@@ -875,6 +893,8 @@ impl NativeFemBackend {
             dt_suggested: 0.0,
             rhs_evaluations: 0,
             fsal_reused: 0,
+            requested_omp_threads: 0,
+            effective_omp_threads: 0,
         };
 
         let rc = unsafe { ffi::fullmag_fem_backend_snapshot_stats(self.handle, &mut stats) };
@@ -904,7 +924,16 @@ impl NativeFemBackend {
             rhs_wall_time_ns: stats.rhs_wall_time_ns,
             extra_energy_wall_time_ns: stats.extra_energy_wall_time_ns,
             snapshot_wall_time_ns: stats.snapshot_wall_time_ns,
-            demag_solves: stats.demag_linear_iterations,
+            demag_solves: if stats.demag_linear_iterations > 0 {
+                1
+            } else {
+                0
+            },
+            poisson_iterations: stats.demag_linear_iterations,
+            poisson_final_residual: stats.demag_linear_residual,
+            demag_refreshed: stats.demag_linear_iterations > 0,
+            requested_fem_omp_threads: stats.requested_omp_threads,
+            effective_fem_omp_threads: stats.effective_omp_threads,
             ..StepStats::default()
         };
         crate::scalar_metrics::apply_average_m_to_step_stats(&mut step_stats, &magnetization);
@@ -1659,6 +1688,34 @@ mod tests {
         } else {
             backend.step(1e-13).expect("native fem step");
         }
+    }
+
+    #[test]
+    fn native_fem_single_precision_rejection_is_cpu_specific() {
+        let mut plan = make_exchange_only_plan();
+        plan.precision = ExecutionPrecision::Single;
+        plan.mfem_device_string = Some("cpu".to_string());
+
+        let err = match NativeFemBackend::create(&plan) {
+            Ok(_) => panic!("CPU single precision should fail"),
+            Err(err) => err,
+        };
+        assert!(err.message.contains("CPU backend"));
+        assert!(err.message.contains("double precision"));
+    }
+
+    #[test]
+    fn native_fem_single_precision_rejection_is_gpu_specific() {
+        let mut plan = make_exchange_only_plan();
+        plan.precision = ExecutionPrecision::Single;
+        plan.mfem_device_string = Some("cuda".to_string());
+
+        let err = match NativeFemBackend::create(&plan) {
+            Ok(_) => panic!("GPU single precision should fail"),
+            Err(err) => err,
+        };
+        assert!(err.message.contains("GPU backend"));
+        assert!(err.message.contains("single-precision CUDA kernels"));
     }
 
     #[test]

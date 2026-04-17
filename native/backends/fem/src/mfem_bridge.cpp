@@ -203,6 +203,30 @@ bool detailed_fem_step_profile_enabled() {
     return env_flag_enabled("FULLMAG_FEM_STEP_PROFILE");
 }
 
+const char *demag_linear_solver_name(fullmag_fem_linear_solver solver) {
+    switch (solver) {
+    case FULLMAG_FEM_LINEAR_SOLVER_CG:
+        return "CG";
+    case FULLMAG_FEM_LINEAR_SOLVER_GMRES:
+        return "GMRES";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+const char *demag_preconditioner_name(fullmag_fem_preconditioner preconditioner) {
+    switch (preconditioner) {
+    case FULLMAG_FEM_PRECONDITIONER_AMG:
+        return "AMG";
+    case FULLMAG_FEM_PRECONDITIONER_JACOBI:
+        return "JACOBI";
+    case FULLMAG_FEM_PRECONDITIONER_NONE:
+        return "NONE";
+    default:
+        return "UNKNOWN";
+    }
+}
+
 void log_demag_call_profile(
     const Context &ctx,
     uint64_t demag_call_index,
@@ -330,7 +354,9 @@ void log_cpu_runtime_selection(const Context &ctx) {
 
     std::fprintf(
         stderr,
-        "[fullmag-fem] cpu runtime: poisson_solver=hypre_pcg_boomeramg cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d mesh_nodes=%u elements=%u\n",
+        "[fullmag-fem] cpu runtime: poisson_solver=%s preconditioner=%s cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d mesh_nodes=%u elements=%u\n",
+        demag_linear_solver_name(ctx.demag_solver.solver),
+        demag_preconditioner_name(ctx.demag_solver.preconditioner),
         thread_mode,
         ctx.requested_omp_threads,
         ctx.effective_omp_threads,
@@ -1754,6 +1780,9 @@ void fill_demag_solver_stats(
         stats.demag_linear_iterations = 0;
         stats.demag_linear_residual = 0.0;
     }
+    // Thread provenance: filled from context each step for telemetry.
+    stats.requested_omp_threads = ctx.requested_omp_threads;
+    stats.effective_omp_threads = ctx.effective_omp_threads;
 }
 
 void fill_common_step_metrics(
@@ -1968,35 +1997,93 @@ bool solve_poisson_hypre(
     const HYPRE_BigInt glob_size = static_cast<HYPRE_BigInt>(A_bc->NumRows());
     HYPRE_BigInt row_starts[2] = {0, glob_size};
 
-    // First call: build and cache the HypreParMatrix + AMG + PCG
+    // First call: build and cache the HypreParMatrix plus the configured
+    // Krylov solver/preconditioner pair. The policy is chosen in Rust and
+    // must be honored here to keep runtime diagnostics truthful.
     if (!ctx.poisson_solver_setup) {
         // Wrap the SparseMatrix in a HypreParMatrix (borrows pointers; lives as long as ctx)
         auto *A_par = new mfem::HypreParMatrix(MPI_COMM_WORLD, glob_size, row_starts, A_bc);
         ctx.mfem_cached_hypre_par = A_par;
 
-        // BoomerAMG preconditioner — native MFEM Poisson settings shared by CPU/GPU execution.
-        auto *amg = new mfem::HypreBoomerAMG(*A_par);
-        amg->SetPrintLevel(0);
-        amg->SetRelaxType(18);   // l1-scaled Jacobi
-        amg->SetCoarsening(8);   // PMIS
-        amg->SetInterpolation(6);   // extended+i interpolation
-        amg->SetAggressiveCoarsening(1);
-        ctx.mfem_cached_hypre_amg = amg;
+        mfem::HypreSolver *preconditioner = nullptr;
+        switch (ctx.demag_solver.preconditioner) {
+        case FULLMAG_FEM_PRECONDITIONER_AMG: {
+            auto *amg = new mfem::HypreBoomerAMG(*A_par);
+            amg->SetPrintLevel(0);
+            amg->SetRelaxType(18);   // l1-scaled Jacobi
+            amg->SetCoarsening(8);   // PMIS
+            amg->SetInterpolation(6);   // extended+i interpolation
+            amg->SetAggressiveCoarsening(1);
+            preconditioner = amg;
+            break;
+        }
+        case FULLMAG_FEM_PRECONDITIONER_JACOBI:
+            preconditioner = new mfem::HypreDiagScale(*A_par);
+            break;
+        case FULLMAG_FEM_PRECONDITIONER_NONE: {
+            auto *identity = new mfem::HypreIdentity();
+            identity->SetOperator(*A_par);
+            preconditioner = identity;
+            break;
+        }
+        default:
+            error = "Unsupported native FEM demag preconditioner enum";
+            delete A_par;
+            ctx.mfem_cached_hypre_par = nullptr;
+            return false;
+        }
+        ctx.mfem_cached_hypre_preconditioner = preconditioner;
 
-        // HyprePCG solver
-        auto *pcg = new mfem::HyprePCG(MPI_COMM_WORLD);
-        pcg->SetTol(ctx.demag_solver.relative_tolerance);
-        pcg->SetMaxIter(static_cast<int>(ctx.demag_solver.max_iterations));
-        pcg->SetPrintLevel(0);
-        pcg->SetOperator(*A_par);
-        pcg->SetPreconditioner(*amg);
-        ctx.mfem_cached_hypre_pcg = pcg;
+        mfem::HypreSolver *solver = nullptr;
+        switch (ctx.demag_solver.solver) {
+        case FULLMAG_FEM_LINEAR_SOLVER_CG: {
+            auto *pcg = new mfem::HyprePCG(MPI_COMM_WORLD);
+            pcg->SetTol(ctx.demag_solver.relative_tolerance);
+            pcg->SetMaxIter(static_cast<int>(ctx.demag_solver.max_iterations));
+            pcg->SetPrintLevel(0);
+            pcg->SetOperator(*A_par);
+            pcg->SetPreconditioner(*preconditioner);
+            solver = pcg;
+            break;
+        }
+        case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
+            auto *gmres = new mfem::HypreGMRES(MPI_COMM_WORLD);
+            gmres->SetTol(ctx.demag_solver.relative_tolerance);
+            gmres->SetMaxIter(static_cast<int>(ctx.demag_solver.max_iterations));
+            gmres->SetKDim(50);
+            gmres->SetPrintLevel(0);
+            gmres->SetOperator(*A_par);
+            gmres->SetPreconditioner(*preconditioner);
+            solver = gmres;
+            break;
+        }
+        default:
+            error = "Unsupported native FEM demag linear solver enum";
+            switch (ctx.demag_solver.preconditioner) {
+            case FULLMAG_FEM_PRECONDITIONER_AMG:
+                delete static_cast<mfem::HypreBoomerAMG *>(ctx.mfem_cached_hypre_preconditioner);
+                break;
+            case FULLMAG_FEM_PRECONDITIONER_JACOBI:
+                delete static_cast<mfem::HypreDiagScale *>(ctx.mfem_cached_hypre_preconditioner);
+                break;
+            case FULLMAG_FEM_PRECONDITIONER_NONE:
+                delete static_cast<mfem::HypreIdentity *>(ctx.mfem_cached_hypre_preconditioner);
+                break;
+            default:
+                break;
+            }
+            ctx.mfem_cached_hypre_preconditioner = nullptr;
+            delete A_par;
+            ctx.mfem_cached_hypre_par = nullptr;
+            return false;
+        }
+        ctx.mfem_cached_hypre_solver = solver;
 
         ctx.poisson_solver_setup = true;
     }
 
     auto *A_par = static_cast<mfem::HypreParMatrix *>(ctx.mfem_cached_hypre_par);
-    auto *pcg = static_cast<mfem::HyprePCG *>(ctx.mfem_cached_hypre_pcg);
+    auto *solver = static_cast<mfem::HypreSolver *>(ctx.mfem_cached_hypre_solver);
 
     // Build dedicated Hypre vectors and copy data explicitly.
     // Wrapping mfem::Vector::GetData() directly can trip MFEM/Hypre memory
@@ -2016,7 +2103,7 @@ bool solve_poisson_hypre(
         x_host[i] = sol_host[i];
     }
 
-    pcg->Mult(b_par, x_par);
+    solver->Mult(b_par, x_par);
 
     // Copy the solved potential back to the MFEM vector.
     const double *x_solved = x_par.HostRead();
@@ -2025,11 +2112,27 @@ bool solve_poisson_hypre(
         solution_host[i] = x_solved[i];
     }
 
-    int iterations = 0;
-    pcg->GetNumIterations(iterations);
-    ctx.poisson_last_iterations = iterations;
     mfem::real_t final_residual = 0.0;
-    pcg->GetFinalResidualNorm(final_residual);
+    int iterations = 0;
+    switch (ctx.demag_solver.solver) {
+    case FULLMAG_FEM_LINEAR_SOLVER_CG: {
+        auto *pcg = static_cast<mfem::HyprePCG *>(ctx.mfem_cached_hypre_solver);
+        pcg->GetNumIterations(iterations);
+        pcg->GetFinalResidualNorm(final_residual);
+        break;
+    }
+    case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
+        auto *gmres = static_cast<mfem::HypreGMRES *>(ctx.mfem_cached_hypre_solver);
+        gmres->GetNumIterations(iterations);
+        gmres->GetFinalResidualNorm(final_residual);
+        break;
+    }
+    default:
+        iterations = 0;
+        final_residual = 0.0;
+        break;
+    }
+    ctx.poisson_last_iterations = iterations;
     ctx.poisson_last_residual = static_cast<double>(final_residual);
 
     // Restore essential DOFs
@@ -2814,12 +2917,33 @@ bool context_initialize_poisson(Context &ctx, std::string &error) {
 
 void context_destroy_poisson(Context &ctx) {
     // Cached Hypre solver objects — must be deleted before the matrix they reference.
-    // Order matters: PCG → AMG → ParMatrix (reverse of construction).
+    // Order matters: solver → preconditioner → ParMatrix (reverse of construction).
 #ifdef MFEM_USE_MPI
-    delete static_cast<mfem::HyprePCG *>(ctx.mfem_cached_hypre_pcg);
-    ctx.mfem_cached_hypre_pcg = nullptr;
-    delete static_cast<mfem::HypreBoomerAMG *>(ctx.mfem_cached_hypre_amg);
-    ctx.mfem_cached_hypre_amg = nullptr;
+    switch (ctx.demag_solver.solver) {
+    case FULLMAG_FEM_LINEAR_SOLVER_CG:
+        delete static_cast<mfem::HyprePCG *>(ctx.mfem_cached_hypre_solver);
+        break;
+    case FULLMAG_FEM_LINEAR_SOLVER_GMRES:
+        delete static_cast<mfem::HypreGMRES *>(ctx.mfem_cached_hypre_solver);
+        break;
+    default:
+        break;
+    }
+    ctx.mfem_cached_hypre_solver = nullptr;
+    switch (ctx.demag_solver.preconditioner) {
+    case FULLMAG_FEM_PRECONDITIONER_AMG:
+        delete static_cast<mfem::HypreBoomerAMG *>(ctx.mfem_cached_hypre_preconditioner);
+        break;
+    case FULLMAG_FEM_PRECONDITIONER_JACOBI:
+        delete static_cast<mfem::HypreDiagScale *>(ctx.mfem_cached_hypre_preconditioner);
+        break;
+    case FULLMAG_FEM_PRECONDITIONER_NONE:
+        delete static_cast<mfem::HypreIdentity *>(ctx.mfem_cached_hypre_preconditioner);
+        break;
+    default:
+        break;
+    }
+    ctx.mfem_cached_hypre_preconditioner = nullptr;
     delete static_cast<mfem::HypreParMatrix *>(ctx.mfem_cached_hypre_par);
     ctx.mfem_cached_hypre_par = nullptr;
 #endif

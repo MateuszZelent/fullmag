@@ -24,6 +24,11 @@ import { Text, Billboard, Line } from "@react-three/drei";
 import { magnetizationHslColor } from "./magnetizationColor";
 import { cn } from "@/lib/utils";
 import { useCanvasHost } from "./shared/useCanvasHost";
+import {
+  applyAxisConventionVec3,
+  sceneAxisDescriptor,
+  type AxisConvention,
+} from "./transform/axisConvention";
 
 /* ── Types ─────────────────────────────────────────────────── */
 
@@ -32,7 +37,7 @@ interface HslSphereProps {
     camera: THREE.PerspectiveCamera | THREE.Camera;
     controls: any;
   } | null>;
-  axisConvention?: "identity" | "swapYZ";
+  axisConvention?: AxisConvention;
   size?: number;
   compact?: boolean;
   className?: string;
@@ -103,23 +108,21 @@ function CameraSync({
     let disposed = false;
     const handleChange = () => syncCamera();
 
-    const attachIfReady = () => {
+    const tick = () => {
       if (disposed) {
         return;
       }
       const controls = mainCameraRef.current?.controls;
-      if (controls && controls !== attachedControlsRef.current) {
+      if (controls !== attachedControlsRef.current) {
         attachedControlsRef.current?.removeEventListener?.("change", handleChange);
-        attachedControlsRef.current = controls;
-        controls.addEventListener?.("change", handleChange);
+        attachedControlsRef.current = controls ?? null;
+        controls?.addEventListener?.("change", handleChange);
       }
       syncCamera();
-      if (!controls) {
-        raf = window.requestAnimationFrame(attachIfReady);
-      }
+      raf = window.requestAnimationFrame(tick);
     };
 
-    attachIfReady();
+    tick();
     return () => {
       disposed = true;
       if (raf) {
@@ -193,20 +196,6 @@ export default function HslSphere({
 
 /* ── Inner scene (must be inside Canvas) ───────────────────── */
 
-type AxisConvention = "identity" | "swapYZ";
-
-function conventionVector(
-  x: number,
-  y: number,
-  z: number,
-  axisConvention: AxisConvention,
-): [number, number, number] {
-  if (axisConvention === "swapYZ") {
-    return [x, z, y];
-  }
-  return [x, y, z];
-}
-
 function HslSphereScene({
   mainCameraRef,
   axisConvention,
@@ -224,7 +213,7 @@ function HslSphereScene({
 
     for (let i = 0; i < posAttr.count; i++) {
       v.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).normalize();
-      const [mx, my, mz] = conventionVector(v.x, v.y, v.z, axisConvention);
+      const [mx, my, mz] = applyAxisConventionVec3([v.x, v.y, v.z], axisConvention);
       const c = magnetizationHslColor(mx, my, mz);
       colors[i * 3] = c.r;
       colors[i * 3 + 1] = c.g;
@@ -244,18 +233,11 @@ function HslSphereScene({
       sphereMat.dispose();
     };
   }, [sphereGeo, sphereMat]);
-  const axisLabels =
-    axisConvention === "swapYZ"
-      ? {
-          screenX: { text: "X", color: "#e65050" },
-          screenY: { text: "Z", color: "#5090e6" },
-          depth: { text: "Y", color: "#50c850" },
-        }
-      : {
-          screenX: { text: "X", color: "#e65050" },
-          screenY: { text: "Y", color: "#50c850" },
-          depth: { text: "Z", color: "#5090e6" },
-        };
+  const axisLabels = {
+    screenX: sceneAxisDescriptor(0, axisConvention),
+    screenY: sceneAxisDescriptor(1, axisConvention),
+    depth: sceneAxisDescriptor(2, axisConvention),
+  };
 
   return (
     <>

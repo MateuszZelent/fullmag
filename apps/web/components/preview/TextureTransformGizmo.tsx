@@ -1,9 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import * as THREE from "three";
 import { PivotControls } from "@react-three/drei";
 import type { TextureTransform3D } from "@/lib/textureTransform";
+import {
+  composePivotedTextureTransformMatrix,
+  textureTransformFromPivotMatrix,
+  textureTransformToPivotFrame,
+  type Vec3,
+} from "@/lib/textureTransformMath";
+import { swapYZQuat, swapYZVec3 } from "./transform/axisConvention";
 
 export type TextureGizmoMode = "translate" | "rotate" | "scale";
 export type TexturePreviewProxy = "none" | "disc" | "box" | "cylinder" | "wall" | "wave";
@@ -32,45 +39,86 @@ interface Props {
   onCommit?: (next: TextureTransform3D) => void;
 }
 
-/** Swap Y↔Z in a 3-element tuple. */
-function swapYZVec3(v: [number, number, number]): [number, number, number] {
-  return [v[0], v[2], v[1]];
+function gizmoDebugEnabled(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return Boolean((window as Window & { __FULLMAG_GIZMO_DEBUG__?: boolean }).__FULLMAG_GIZMO_DEBUG__);
 }
 
-/** Swap Y↔Z in a quaternion (x,y,z,w). Equivalent to conjugating by a Y↔Z swap. */
-function swapYZQuat(q: [number, number, number, number]): [number, number, number, number] {
-  return [q[0], q[2], q[1], q[3]];
+function quatToEulerDeg(
+  q: [number, number, number, number],
+): [number, number, number] {
+  const euler = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(...q), "XYZ");
+  return [
+    THREE.MathUtils.radToDeg(euler.x),
+    THREE.MathUtils.radToDeg(euler.y),
+    THREE.MathUtils.radToDeg(euler.z),
+  ];
 }
 
-function toObject3DTransform(transform: TextureTransform3D, doSwap: boolean) {
-  const t = doSwap ? swapYZVec3(transform.translation) : transform.translation;
-  const q = doSwap ? swapYZQuat(transform.rotation_quat) : transform.rotation_quat;
-  const s = doSwap ? swapYZVec3(transform.scale) : transform.scale;
-  const position = new THREE.Vector3(...t);
-  const quaternion = new THREE.Quaternion(...q);
-  const scale = new THREE.Vector3(...s);
+function summarizeTransform(transform: TextureTransform3D) {
+  return {
+    translation: transform.translation,
+    rotation_quat: transform.rotation_quat,
+    rotation_euler_deg_xyz: quatToEulerDeg(transform.rotation_quat),
+    scale: transform.scale,
+    pivot: transform.pivot,
+  };
+}
+
+function toSceneTextureTransform(
+  transform: TextureTransform3D,
+  doSwap: boolean,
+): TextureTransform3D {
+  return {
+    translation: doSwap ? swapYZVec3(transform.translation) : [...transform.translation],
+    rotation_quat: doSwap ? swapYZQuat(transform.rotation_quat) : [...transform.rotation_quat],
+    scale: doSwap ? swapYZVec3(transform.scale) : [...transform.scale],
+    pivot: doSwap ? swapYZVec3(transform.pivot) : [...transform.pivot],
+  };
+}
+
+function decomposeMatrixTransform(matrix: THREE.Matrix4) {
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  matrix.decompose(position, quaternion, scale);
   return { position, quaternion, scale };
 }
 
-function snapshotGroupTransform(
-  group: THREE.Group,
+function summarizeSceneMatrix(matrix: THREE.Matrix4) {
+  const { position, quaternion, scale } = decomposeMatrixTransform(matrix);
+  return {
+    translation: [position.x, position.y, position.z] as [number, number, number],
+    rotation_quat: [
+      quaternion.x,
+      quaternion.y,
+      quaternion.z,
+      quaternion.w,
+    ] as [number, number, number, number],
+    rotation_euler_deg_xyz: quatToEulerDeg([
+      quaternion.x,
+      quaternion.y,
+      quaternion.z,
+      quaternion.w,
+    ]),
+    scale: [scale.x, scale.y, scale.z] as [number, number, number],
+  };
+}
+
+function snapshotMatrixTransform(
+  matrix: THREE.Matrix4,
   baseTransform: TextureTransform3D,
   mode: TextureGizmoMode,
   syncPivotWithTranslation: boolean,
   doSwap: boolean,
 ): TextureTransform3D {
-  let translation: [number, number, number] = [
-    group.position.x,
-    group.position.y,
-    group.position.z,
-  ];
-  let rotation_quat: [number, number, number, number] = [
-    group.quaternion.x,
-    group.quaternion.y,
-    group.quaternion.z,
-    group.quaternion.w,
-  ];
-  let scaleVec: [number, number, number] = [group.scale.x, group.scale.y, group.scale.z];
+  const scenePivot = doSwap ? swapYZVec3(baseTransform.pivot) : [...baseTransform.pivot];
+  const sceneTransform = textureTransformFromPivotMatrix(matrix, scenePivot as Vec3);
+  let translation: [number, number, number] = [...sceneTransform.translation];
+  let rotation_quat: [number, number, number, number] = [...sceneTransform.rotation_quat];
+  let scaleVec: [number, number, number] = [...sceneTransform.scale];
 
   // Convert scene → physical
   if (doSwap) {
@@ -178,16 +226,37 @@ export default function TextureTransformGizmo({
   onLiveChange,
   onCommit,
 }: Props) {
-  const groupRef = useRef<THREE.Group>(null);
+  const lastSnapshotLogRef = useRef<string>("");
+  const sceneTransform = toSceneTextureTransform(transform, swapYZ);
+  const pivotFrame = textureTransformToPivotFrame(sceneTransform);
+  const matrixRef = useRef<THREE.Matrix4>(composePivotedTextureTransformMatrix(sceneTransform));
 
-  const initial = useMemo(() => toObject3DTransform(transform, swapYZ), [transform, swapYZ]);
+  useLayoutEffect(() => {
+    composePivotedTextureTransformMatrix(sceneTransform, matrixRef.current);
+  }, [sceneTransform]);
 
   useEffect(() => {
-    if (!groupRef.current) return;
-    groupRef.current.position.copy(initial.position);
-    groupRef.current.quaternion.copy(initial.quaternion);
-    groupRef.current.scale.copy(initial.scale);
-  }, [initial]);
+    if (!gizmoDebugEnabled() || !visible) {
+      return;
+    }
+    const signature = JSON.stringify({
+      mode,
+      swapYZ,
+      transform,
+      sceneMatrix: summarizeSceneMatrix(matrixRef.current),
+    });
+    if (signature === lastSnapshotLogRef.current) {
+      return;
+    }
+    lastSnapshotLogRef.current = signature;
+    console.groupCollapsed(
+      `[GizmoSync] TextureTransformGizmo mode=${mode} swapYZ=${swapYZ ? "on" : "off"}`,
+    );
+    console.log("physical transform input", summarizeTransform(transform));
+    console.log("scene pivot frame", pivotFrame);
+    console.log("scene transform passed to PivotControls", summarizeSceneMatrix(matrixRef.current));
+    console.groupEnd();
+  }, [mode, pivotFrame, swapYZ, transform, visible]);
 
   if (!visible) {
     return null;
@@ -199,36 +268,71 @@ export default function TextureTransformGizmo({
       fixed
       scale={75}
       lineWidth={2}
+      autoTransform={false}
+      matrix={matrixRef.current}
       disableAxes={false}
       activeAxes={[true, true, true]}
       disableRotations={mode !== "rotate"}
       disableSliders={false}
       disableScaling={mode !== "scale"}
-      onDragStart={onDragStart}
-      onDrag={() => {
-        const group = groupRef.current;
-        if (!group || !onLiveChange) {
+      onDragStart={() => {
+        onDragStart?.();
+        if (!gizmoDebugEnabled()) {
           return;
         }
-        onLiveChange(snapshotGroupTransform(group, transform, mode, syncPivotWithTranslation, swapYZ));
+        console.groupCollapsed(
+          `[GizmoSync] drag-start mode=${mode} swapYZ=${swapYZ ? "on" : "off"}`,
+        );
+        console.log("scene pivot frame", pivotFrame);
+        console.log("scene matrix", summarizeSceneMatrix(matrixRef.current));
+        console.groupEnd();
+      }}
+      onDrag={(localMatrix) => {
+        matrixRef.current.copy(localMatrix);
+        if (onLiveChange) {
+          onLiveChange(
+            snapshotMatrixTransform(
+              localMatrix,
+              transform,
+              mode,
+              syncPivotWithTranslation,
+              swapYZ,
+            ),
+          );
+        }
       }}
       onDragEnd={() => {
         onDragEnd?.();
-        const group = groupRef.current;
-        if (!group || !onCommit) {
-          return;
+        const committed = snapshotMatrixTransform(
+          matrixRef.current,
+          transform,
+          mode,
+          syncPivotWithTranslation,
+          swapYZ,
+        );
+        if (gizmoDebugEnabled()) {
+          console.groupCollapsed(
+            `[GizmoSync] drag-end mode=${mode} swapYZ=${swapYZ ? "on" : "off"}`,
+          );
+          console.log("scene matrix", summarizeSceneMatrix(matrixRef.current));
+          console.log("committed physical transform", summarizeTransform(committed));
+          console.groupEnd();
         }
-        onCommit(snapshotGroupTransform(group, transform, mode, syncPivotWithTranslation, swapYZ));
+        onCommit?.(committed);
       }}
     >
-      <group ref={groupRef}>
+      <group>
         {showPreviewProxy ? (
-          <PreviewProxyMesh proxy={previewProxy} />
+          <group position={pivotFrame.childOffset}>
+            <PreviewProxyMesh proxy={previewProxy} />
+          </group>
         ) : (
-          <mesh>
-            <sphereGeometry args={[0.01, 6, 6]} />
-            <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-          </mesh>
+          <group position={pivotFrame.childOffset}>
+            <mesh>
+              <sphereGeometry args={[0.01, 6, 6]} />
+              <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+            </mesh>
+          </group>
         )}
       </group>
     </PivotControls>

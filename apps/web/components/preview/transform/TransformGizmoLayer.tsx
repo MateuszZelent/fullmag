@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useEffect } from "react";
 import * as THREE from "three";
 import { PivotControls } from "@react-three/drei";
 
@@ -19,7 +19,7 @@ interface TransformGizmoLayerProps {
 /**
  * Unified transform gizmo layer.
  * Wraps children in PivotControls when active.
- * Extracts translation delta on drag end and resets group position.
+ * Keeps the gizmo on a controlled matrix so drag state lives in one place.
  */
 export function TransformGizmoLayer({
   active,
@@ -28,15 +28,34 @@ export function TransformGizmoLayer({
   onTranslate,
   children,
 }: TransformGizmoLayerProps) {
-  const groupRef = useRef<THREE.Group>(null);
+  const matrixRef = useRef(new THREE.Matrix4());
+  const dragPositionRef = useRef(new THREE.Vector3());
+  const scratchQuaternionRef = useRef(new THREE.Quaternion());
+  const scratchScaleRef = useRef(new THREE.Vector3());
+
+  useEffect(() => {
+    if (!active) {
+      matrixRef.current.identity();
+      dragPositionRef.current.set(0, 0, 0);
+    }
+  }, [active]);
+
+  const handleDrag = useCallback((localMatrix: THREE.Matrix4) => {
+    matrixRef.current.copy(localMatrix);
+    localMatrix.decompose(
+      dragPositionRef.current,
+      scratchQuaternionRef.current,
+      scratchScaleRef.current,
+    );
+  }, []);
 
   const handleDragEnd = useCallback(() => {
-    if (!groupRef.current || !onTranslate) return;
-    const p = groupRef.current.position;
+    const p = dragPositionRef.current;
     if (Math.abs(p.x) > 1e-12 || Math.abs(p.y) > 1e-12 || Math.abs(p.z) > 1e-12) {
-      onTranslate(p.x, p.y, p.z);
+      onTranslate?.(p.x, p.y, p.z);
     }
-    groupRef.current.position.set(0, 0, 0);
+    matrixRef.current.identity();
+    dragPositionRef.current.set(0, 0, 0);
   }, [onTranslate]);
 
   if (!active) {
@@ -50,10 +69,15 @@ export function TransformGizmoLayer({
       axisColors={["#f87171", "#4ade80", "#60a5fa"]}
       scale={scale}
       fixed
+      autoTransform={false}
+      matrix={matrixRef.current}
       activeAxes={activeAxes}
+      disableRotations
+      disableScaling
+      onDrag={handleDrag}
       onDragEnd={handleDragEnd}
     >
-      <group ref={groupRef}>{children}</group>
+      <group>{children}</group>
     </PivotControls>
   );
 }

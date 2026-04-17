@@ -3271,6 +3271,40 @@ def geometry(shape: object, name: str = "body") -> MagnetHandle:
 # Solver
 # ---------------------------------------------------------------------------
 
+# Named demag refresh quality profiles.
+# "exact" = every step (no interval), "balanced" = moderate, "fast" = aggressive skip.
+_DEMAG_QUALITY_PROFILES: dict[str, float | None] = {
+    "exact": None,          # refresh every RHS evaluation
+    "balanced": 5e-13,      # ~0.5 ps cadence — good default
+    "fast": 2e-12,          # ~2 ps cadence — aggressive, may lose accuracy
+}
+
+
+def demag_quality(profile: str) -> None:
+    """Set demag refresh cadence from a named quality profile.
+
+    Parameters
+    ----------
+    profile : str
+        One of ``"exact"``, ``"balanced"``, or ``"fast"``.
+
+        * ``"exact"``    — recompute demag every RHS evaluation (no skip).
+        * ``"balanced"`` — refresh every ~0.5 ps (``demag_interval_s = 5e-13``).
+        * ``"fast"``     — refresh every ~2 ps (``demag_interval_s = 2e-12``).
+    """
+    profile_lower = profile.lower()
+    if profile_lower not in _DEMAG_QUALITY_PROFILES:
+        allowed = ", ".join(sorted(_DEMAG_QUALITY_PROFILES))
+        raise ValueError(
+            f"Unknown demag quality profile {profile!r}. Choose from: {allowed}"
+        )
+    interval = _DEMAG_QUALITY_PROFILES[profile_lower]
+    if interval is not None:
+        _state._demag_interval_s = interval
+    else:
+        _state._demag_interval_s = None
+
+
 def solver(
     *,
     dt: float | None = None,

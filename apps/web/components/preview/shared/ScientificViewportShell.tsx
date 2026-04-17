@@ -186,13 +186,15 @@ function ShellBridgeSync({
         return;
       }
       const controls = controlsRef.current;
-      if (controls !== controlsRefCurrent.current) {
-        controlsRefCurrent.current = controls;
+      if (
+        controls !== controlsRefCurrent.current ||
+        bridgeRef.current?.camera !== camera ||
+        bridgeRef.current?.controls !== controls
+      ) {
+        controlsRefCurrent.current = controls ?? null;
+        bridgeRef.current = { camera, controls: controls ?? null };
       }
-      bridgeRef.current = { camera, controls };
-      if (!controls) {
-        raf = window.requestAnimationFrame(syncBridge);
-      }
+      raf = window.requestAnimationFrame(syncBridge);
     };
 
     syncBridge();

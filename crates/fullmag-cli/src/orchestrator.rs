@@ -297,11 +297,13 @@ fn append_detailed_fem_step_profile(line: &mut String, stats: &fullmag_runner::S
     let snapshot_ms = stats.snapshot_wall_time_ns as f64 / 1e6;
     let dt_next = stats.dt_suggested.unwrap_or(0.0);
     line.push_str(&format!(
-        "  phases[ex={exchange_ms:.0}ms demag={demag_ms:.0}ms rhs={rhs_ms:.0}ms extra={extra_ms:.0}ms snap={snapshot_ms:.0}ms]  rk[rhs_evals={} rejected={} fsal={}]  demag[iters={}]  err={:.3e}  dt_next={:.3e}",
+        "  phases[ex={exchange_ms:.0}ms demag={demag_ms:.0}ms rhs={rhs_ms:.0}ms extra={extra_ms:.0}ms snap={snapshot_ms:.0}ms]  rk[rhs_evals={} rejected={} fsal={}]  demag[solves={} lin_iters={} residual={:.3e}]  err={:.3e}  dt_next={:.3e}",
         stats.rhs_evals,
         stats.rejected_attempts,
         if stats.fsal_reused { 1 } else { 0 },
         stats.demag_solves,
+        stats.poisson_iterations,
+        stats.poisson_final_residual,
         stats.error_estimate.unwrap_or(0.0),
         dt_next,
     ));
@@ -321,11 +323,10 @@ fn format_stage_progress_line(
     };
     if let Some(age) = heartbeat_age {
         let mut line = format!(
-            "{prefix}  heartbeat  step {:>6}  t={:.4e}  dt={:.3e}  max_dm_dt={:.4e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  idle={:.1}s  [{:.0}ms]",
+            "{prefix}  heartbeat  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  idle={:.1}s  [{:.0}ms]",
             stats.step,
             stats.time,
             stats.dt,
-            stats.max_dm_dt,
             torque_t,
             stats.e_total,
             stats.max_h_eff,
@@ -336,11 +337,10 @@ fn format_stage_progress_line(
         line
     } else {
         let mut line = format!(
-            "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_dm_dt={:.4e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
+            "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
             stats.step,
             stats.time,
             stats.dt,
-            stats.max_dm_dt,
             torque_t,
             stats.e_total,
             stats.max_h_eff,
@@ -3735,21 +3735,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             )?;
                         }
                         Err(e) => {
-                            eprintln!(
-                                "[fullmag] cross-backend state transfer failed: {}",
-                                e
-                            );
-                            bail!(
-                                "FEM→FDM magnetization state transfer failed: {}",
-                                e
-                            );
+                            eprintln!("[fullmag] cross-backend state transfer failed: {}", e);
+                            bail!("FEM→FDM magnetization state transfer failed: {}", e);
                         }
                     }
                 } else {
-                    apply_continuation_initial_state(
-                        &mut stage.ir,
-                        previous_final_magnetization,
-                    )?;
+                    apply_continuation_initial_state(&mut stage.ir, previous_final_magnetization)?;
                 }
             }
         }
@@ -4258,9 +4249,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         aggregated_steps.extend(offset_steps);
         continuation_magnetization = Some(stage_result.final_magnetization);
         continuation_source = Some(match &execution_plan.backend_plan {
-            BackendPlanIR::Fem(fem_plan) => {
-                ContinuationSource::Fem(fem_plan.mesh.clone())
-            }
+            BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
             _ => ContinuationSource::Fdm,
         });
 
@@ -4690,21 +4679,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             )?;
                         }
                         Err(e) => {
-                            eprintln!(
-                                "[fullmag] cross-backend state transfer failed: {}",
-                                e
-                            );
-                            bail!(
-                                "FEM→FDM magnetization state transfer failed: {}",
-                                e
-                            );
+                            eprintln!("[fullmag] cross-backend state transfer failed: {}", e);
+                            bail!("FEM→FDM magnetization state transfer failed: {}", e);
                         }
                     }
                 } else {
-                    apply_continuation_initial_state(
-                        &mut stage.ir,
-                        previous_final_magnetization,
-                    )?;
+                    apply_continuation_initial_state(&mut stage.ir, previous_final_magnetization)?;
                 }
             }
             validate_ir(&stage.ir)?;

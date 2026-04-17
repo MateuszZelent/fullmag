@@ -201,8 +201,8 @@ function parsePositiveNumber(value: string): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function isPositiveFinite(value: number | null | undefined): boolean {
-  return Number.isFinite(value) && value > 0;
+function isPositiveFinite(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function resolveFiniteMin(values: number[]): number | null {

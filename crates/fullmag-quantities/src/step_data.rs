@@ -29,6 +29,15 @@ pub struct StepDiagnostics {
     pub demag_solves: u32,
     #[serde(default)]
     pub fsal_reused: bool,
+    /// Number of PCG iterations in the last Poisson demag solve.
+    #[serde(default)]
+    pub poisson_iterations: u32,
+    /// Final residual norm of the last Poisson demag solve.
+    #[serde(default)]
+    pub poisson_final_residual: f64,
+    /// Whether demag field was freshly solved (true) or frozen (false) this step.
+    #[serde(default)]
+    pub demag_refreshed: bool,
 }
 
 /// Per-step physical scalar observations.

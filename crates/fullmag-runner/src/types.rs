@@ -139,6 +139,21 @@ pub struct StepStats {
     pub demag_solves: u32,
     #[serde(default)]
     pub fsal_reused: bool,
+    /// Number of PCG iterations in the last Poisson demag solve.
+    #[serde(default)]
+    pub poisson_iterations: u32,
+    /// Final residual norm of the last Poisson demag solve.
+    #[serde(default)]
+    pub poisson_final_residual: f64,
+    /// Whether demag was refreshed (true) or used frozen field (false) this step.
+    #[serde(default)]
+    pub demag_refreshed: bool,
+    /// FEM requested OMP thread count (from C++ context, constant per run).
+    #[serde(default)]
+    pub requested_fem_omp_threads: i32,
+    /// FEM effective OMP thread count (after auto-capping, constant per run).
+    #[serde(default)]
+    pub effective_fem_omp_threads: i32,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
 }
@@ -177,6 +192,11 @@ impl Default for StepStats {
             rhs_evals: 0,
             demag_solves: 0,
             fsal_reused: false,
+            poisson_iterations: 0,
+            poisson_final_residual: 0.0,
+            demag_refreshed: false,
+            requested_fem_omp_threads: 0,
+            effective_fem_omp_threads: 0,
             per_object_scalars: HashMap::new(),
         }
     }
@@ -201,6 +221,9 @@ impl StepStats {
             rhs_evals: self.rhs_evals,
             demag_solves: self.demag_solves,
             fsal_reused: self.fsal_reused,
+            poisson_iterations: self.poisson_iterations,
+            poisson_final_residual: self.poisson_final_residual,
+            demag_refreshed: self.demag_refreshed,
         }
     }
 

@@ -20,10 +20,16 @@ function configuredRuntimeBaseFromEnv(): string | null {
     return null;
   }
 
-  const env =
-    typeof globalThis !== "undefined" && (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+  const rawEnv =
+    typeof globalThis !== "undefined"
+      ? (globalThis as { process?: { env?: unknown } }).process?.env
+      : undefined;
+  if (!rawEnv || typeof rawEnv !== "object") {
+    return null;
+  }
+  const env = rawEnv as Record<string, unknown>;
   for (const key of RUNTIME_HTTP_BASE_ENV_KEYS) {
-    const value = env?.[key];
+    const value = env[key];
     if (typeof value !== "string") {
       continue;
     }

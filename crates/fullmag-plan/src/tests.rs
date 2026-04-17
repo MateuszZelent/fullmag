@@ -551,16 +551,16 @@ fn fem_backend_with_mesh_asset_plans_successfully() {
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
             hmax: 2e-9,
-            mesh: Some("meshes/unit_tet.msh".to_string()),
+            mesh: None,
             demag_solver_policy: None,
         }),
         hybrid: None,
     });
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
-        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
-            geometry_name: "strip".to_string(),
-            mesh_source: Some("meshes/unit_tet.msh".to_string()),
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
             mesh: Some(fullmag_ir::MeshIR {
                 mesh_name: "strip".to_string(),
                 nodes: vec![
@@ -568,17 +568,25 @@ fn fem_backend_with_mesh_asset_plans_successfully() {
                     [1.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
-                element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
-                boundary_markers: vec![1],
+                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: std::collections::HashMap::new(),
             }),
-        }],
-        fem_domain_mesh_asset: None,
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
     });
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
@@ -631,16 +639,16 @@ fn fem_backend_interfacial_dmi_requires_explicit_interface_normal_in_strict_mode
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
             hmax: 2e-9,
-            mesh: Some("meshes/unit_tet.msh".to_string()),
+            mesh: None,
             demag_solver_policy: None,
         }),
         hybrid: None,
     });
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
-        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
-            geometry_name: "strip".to_string(),
-            mesh_source: Some("meshes/unit_tet.msh".to_string()),
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
             mesh: Some(fullmag_ir::MeshIR {
                 mesh_name: "strip".to_string(),
                 nodes: vec![
@@ -648,17 +656,25 @@ fn fem_backend_interfacial_dmi_requires_explicit_interface_normal_in_strict_mode
                     [1.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
-                element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
-                boundary_markers: vec![1],
+                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: std::collections::HashMap::new(),
             }),
-        }],
-        fem_domain_mesh_asset: None,
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
     });
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::InterfacialDmi {
         d: 3.0e-3,
@@ -691,16 +707,16 @@ fn fem_plan_serializes_mesh_parts() {
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
             hmax: 2e-9,
-            mesh: Some("meshes/unit_tet.msh".to_string()),
+            mesh: None,
             demag_solver_policy: None,
         }),
         hybrid: None,
     });
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
-        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
-            geometry_name: "strip".to_string(),
-            mesh_source: Some("meshes/unit_tet.msh".to_string()),
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
             mesh: Some(fullmag_ir::MeshIR {
                 mesh_name: "strip".to_string(),
                 nodes: vec![
@@ -708,17 +724,25 @@ fn fem_plan_serializes_mesh_parts() {
                     [1.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
-                element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
-                boundary_markers: vec![1],
+                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: std::collections::HashMap::new(),
             }),
-        }],
-        fem_domain_mesh_asset: None,
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
     });
 
     let plan = plan(&ir).expect("FEM mesh asset should produce a FemPlanIR");
@@ -2083,36 +2107,144 @@ fn tangent_plane_implicit_is_still_gated() {
 #[test]
 fn single_precision_is_rejected_for_phase_one_cpu_execution() {
     let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [2e-9, 2e-9, 5e-9],
+            default_cell: None,
+            per_magnet: None,
+            demag: None,
+            boundary_correction: None,
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: Some(fullmag_ir::FemHintsIR {
+            order: 1,
+            hmax: 2e-9,
+            mesh: None,
+            demag_solver_policy: None,
+        }),
+        hybrid: None,
+    });
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
+                ],
+                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                boundary_markers: vec![1, 99],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
+    });
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
     ir.backend_policy.execution_precision = ExecutionPrecision::Single;
 
-    let err = plan(&ir).expect_err("single precision should not be executable on CPU reference");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("execution_precision='single'")));
+    let err = crate::fem::plan_fem(&ir, BackendTarget::Fem)
+        .expect_err("single precision should not be executable on FEM CPU path");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("execution_precision='single'")
+                && reason.contains("CPU path")
+                && reason.contains("supports only 'double'")
+        }),
+        "unexpected FEM CPU reasons: {:?}",
+        err.reasons
+    );
 }
 
 #[test]
-fn single_precision_is_accepted_when_cuda_device_requested() {
+fn single_precision_is_rejected_with_gpu_specific_reason_when_cuda_device_requested() {
     let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [2e-9, 2e-9, 5e-9],
+            default_cell: None,
+            per_magnet: None,
+            demag: None,
+            boundary_correction: None,
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: Some(fullmag_ir::FemHintsIR {
+            order: 1,
+            hmax: 2e-9,
+            mesh: None,
+            demag_solver_policy: None,
+        }),
+        hybrid: None,
+    });
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
+                ],
+                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                boundary_markers: vec![1, 99],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
+    });
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
     ir.backend_policy.execution_precision = ExecutionPrecision::Single;
     ir.problem_meta.runtime_metadata.insert(
         "runtime_selection".to_string(),
         serde_json::json!({"device": "cuda", "device_index": 0}),
     );
 
-    let result = plan(&ir);
-    // Planning should succeed (no precision error); execution may still
-    // fail later if the machine has no GPU, but that is the runner's job.
+    let err = crate::fem::plan_fem(&ir, BackendTarget::Fem)
+        .expect_err("single precision should be rejected honestly on FEM GPU");
     assert!(
-        result.is_ok()
-            || !result
-                .as_ref()
-                .unwrap_err()
-                .reasons
-                .iter()
-                .any(|r| r.contains("execution_precision='single'")),
-        "planner should not reject single precision when CUDA device is requested"
+        err.reasons.iter().any(|reason| {
+            reason.contains("execution_precision='single'")
+                && reason.contains("GPU path")
+                && reason.contains("single-precision CUDA kernels are not yet implemented")
+        }),
+        "unexpected FEM GPU reasons: {:?}",
+        err.reasons
     );
 }
 

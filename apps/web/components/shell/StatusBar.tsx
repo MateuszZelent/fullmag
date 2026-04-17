@@ -157,7 +157,7 @@ function solverAcceleratorLabel(
 }
 
 function formatSolverDt(value: number | null | undefined, enabled: boolean): string {
-  if (!enabled || !Number.isFinite(value ?? NaN) || (value ?? 0) <= 0) {
+  if (!enabled || typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return "—";
   }
   return fmtSI(value, "s");

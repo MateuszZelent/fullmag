@@ -22,11 +22,73 @@ fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Val
 fn provenance_with_runtime_threading(
     problem: &fullmag_ir::ProblemIR,
     provenance: &crate::types::ExecutionProvenance,
+    steps: &[StepStats],
 ) -> crate::types::ExecutionProvenance {
     let mut enriched = provenance.clone();
     enriched.requested_cpu_threads = crate::requested_cpu_threads(problem);
     enriched.resolved_cpu_threads = u32::try_from(crate::configured_cpu_threads(problem)).ok();
+    // Populate FEM OMP thread provenance from the first step that has non-zero
+    // thread info (reported by the native C++ backend via FFI).
+    if enriched.requested_fem_omp_threads.is_none() {
+        if let Some(first) = steps.first() {
+            if first.requested_fem_omp_threads > 0 {
+                enriched.requested_fem_omp_threads = Some(first.requested_fem_omp_threads as u32);
+            }
+            if first.effective_fem_omp_threads > 0 {
+                enriched.effective_fem_omp_threads = Some(first.effective_fem_omp_threads as u32);
+            }
+        }
+    }
     enriched
+}
+
+fn demag_runtime_metadata(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    provenance: &crate::types::ExecutionProvenance,
+    steps: &[StepStats],
+) -> serde_json::Value {
+    match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => {
+            if !fem.enable_demag {
+                return serde_json::Value::Null;
+            }
+
+            let policy = fem.demag_solver_policy.clone().unwrap_or_default();
+            let resolved_demag = fem
+                .demag_realization
+                .unwrap_or(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+            let last = steps.last();
+            let boundary_variant = match resolved_demag {
+                fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet => Some("dirichlet"),
+                fullmag_ir::ResolvedFemDemagIR::PoissonRobin => Some("robin"),
+                _ => None,
+            };
+
+            serde_json::json!({
+                "model": resolved_demag.model_name(),
+                "boundary_variant": boundary_variant,
+                "linear_solver": policy.solver,
+                "preconditioner": policy.preconditioner,
+                "relative_tolerance": policy.rtol,
+                "max_iterations": policy.max_iterations,
+                "actual_iterations": last.map(|entry| entry.poisson_iterations),
+                "final_residual_norm": last.map(|entry| entry.poisson_final_residual),
+                "mfem_device": provenance.mfem_device,
+                "requested_fem_omp_threads": provenance.requested_fem_omp_threads,
+                "effective_fem_omp_threads": provenance.effective_fem_omp_threads,
+                "airbox_factor": fem.air_box_config.as_ref().map(|cfg| cfg.factor),
+                "robin_beta_mode": fem
+                    .air_box_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.robin_beta_mode.clone()),
+                "robin_beta_factor": fem
+                    .air_box_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.robin_beta_factor),
+            })
+        }
+        _ => serde_json::Value::Null,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -61,7 +123,9 @@ pub(crate) fn write_artifacts(
     fs::create_dir_all(output_dir)?;
     let field_context = build_field_context(problem, plan);
     let runtime_threading = runtime_threading_summary(problem);
-    let execution_provenance = provenance_with_runtime_threading(problem, &executed.provenance);
+    let execution_provenance =
+        provenance_with_runtime_threading(problem, &executed.provenance, &executed.result.steps);
+    let demag_runtime = demag_runtime_metadata(plan, &execution_provenance, &executed.result.steps);
 
     let metadata = serde_json::json!({
         "problem_name": problem.problem_meta.name,
@@ -72,6 +136,7 @@ pub(crate) fn write_artifacts(
         "artifact_layout": field_context.layout.clone(),
         "execution_provenance": execution_provenance,
         "runtime_threading": runtime_threading,
+        "demag_runtime": demag_runtime,
         "engine_version": env!("CARGO_PKG_VERSION"),
         "status": executed.result.status,
         "scalar_rows": executed.result.steps.len(),

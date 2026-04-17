@@ -248,6 +248,9 @@ typedef struct {
     double dt_suggested;
     uint32_t rhs_evaluations;
     int fsal_reused;
+    /* Thread provenance (filled from context each step) */
+    int32_t requested_omp_threads;
+    int32_t effective_omp_threads;
 } fullmag_fem_step_stats;
 
 typedef struct {

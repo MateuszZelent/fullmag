@@ -3,7 +3,7 @@
 import { useDeferredValue, useEffect, useRef, useState, useCallback, useMemo, memo, type Dispatch, type SetStateAction } from "react";
 import * as THREE from "three";
 import { Canvas, useThree } from "@react-three/fiber";
-import { TrackballControls, PivotControls } from "@react-three/drei";
+import { TrackballControls } from "@react-three/drei";
 import { cn } from "@/lib/utils";
 import ViewCube from "./ViewCube";
 import HslSphere from "./HslSphere";
@@ -51,6 +51,10 @@ import {
   applyCameraStepLock,
 } from "./camera/cameraProfiles";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { TransformGizmoLayer } from "./transform/TransformGizmoLayer";
+import { axisLabelsForConvention } from "./transform/axisConvention";
+
+const FDM_AXIS_CONVENTION = "swapYZ" as const;
 
 // ─── Types ──────────────────────────────────────────────────────────
 interface Props {
@@ -402,8 +406,6 @@ function FdmObjectOverlayMeshes({
   onGeometryTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
 }) {
   const hasSelected = Boolean(selectedObjectId);
-  const groupRef = useRef<THREE.Group>(null);
-  
   const cellX = worldExtent[0] / Math.max(grid[0], 1);
   const cellY = worldExtent[1] / Math.max(grid[1], 1);
   const cellZ = worldExtent[2] / Math.max(grid[2], 1);
@@ -471,26 +473,19 @@ function FdmObjectOverlayMeshes({
 
         if (selected && onGeometryTranslate) {
           return (
-            <PivotControls
+            <TransformGizmoLayer
               key={overlay.id}
-              depthTest={false}
-              lineWidth={2}
-              axisColors={["#f87171", "#4ade80", "#60a5fa"]}
+              active
               scale={100}
-              fixed={true}
-              onDragEnd={() => {
-                if (groupRef.current) {
-                  const p = groupRef.current.position;
-                  const physicalDx = p.x * cellX;
-                  const physicalDz = p.y * cellZ;
-                  const physicalDy = p.z * cellY;
-                  onGeometryTranslate(overlay.id, physicalDx, physicalDy, physicalDz);
-                  groupRef.current.position.set(0, 0, 0);
-                }
+              onTranslate={(dx, dy, dz) => {
+                const physicalDx = dx * cellX;
+                const physicalDz = dy * cellZ;
+                const physicalDy = dz * cellY;
+                onGeometryTranslate(overlay.id, physicalDx, physicalDy, physicalDz);
               }}
             >
-              <group ref={groupRef}>{meshes}</group>
-            </PivotControls>
+              {meshes}
+            </TransformGizmoLayer>
           );
         }
 
@@ -515,7 +510,6 @@ function FdmAntennaOverlayMeshes({
   universeCenter?: [number, number, number] | null;
   onAntennaTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
 }) {
-  const groupRef = useRef<THREE.Group>(null);
   const cellX = worldExtent[0] / Math.max(grid[0], 1);
   const cellY = worldExtent[1] / Math.max(grid[1], 1);
   const cellZ = worldExtent[2] / Math.max(grid[2], 1);
@@ -569,26 +563,19 @@ function FdmAntennaOverlayMeshes({
 
         if (selected && onAntennaTranslate) {
           return (
-            <PivotControls
+            <TransformGizmoLayer
               key={overlay.id}
-              depthTest={false}
-              lineWidth={2}
-              axisColors={["#f87171", "#4ade80", "#60a5fa"]}
+              active
               scale={100}
-              fixed={true}
-              onDragEnd={() => {
-                if (groupRef.current) {
-                  const p = groupRef.current.position;
-                  const physicalDx = p.x * cellX;
-                  const physicalDz = p.y * cellZ;
-                  const physicalDy = p.z * cellY;
-                  onAntennaTranslate(overlay.id, physicalDx, physicalDy, physicalDz);
-                  groupRef.current.position.set(0, 0, 0);
-                }
+              onTranslate={(dx, dy, dz) => {
+                const physicalDx = dx * cellX;
+                const physicalDz = dy * cellZ;
+                const physicalDy = dz * cellY;
+                onAntennaTranslate(overlay.id, physicalDx, physicalDy, physicalDz);
               }}
             >
-              <group ref={groupRef}>{conductors}</group>
-            </PivotControls>
+              <group>{conductors}</group>
+            </TransformGizmoLayer>
           );
         }
         return <group key={overlay.id}>{conductors}</group>;
@@ -1026,13 +1013,14 @@ function VectorFieldView3DInner({
               sceneRef={viewCubeSceneRef}
               onRotate={handleViewCubeRotate}
               onReset={resetCamera}
+              axisConvention={FDM_AXIS_CONVENTION}
             />
           )}
         </ViewportOverlayLayout.TopRight>
 
         <ViewportOverlayLayout.BottomLeft>
           {fdmViewportFlags.showOrientationSphere && viewportVisible && !geometryMode ? (
-            <HslSphere sceneRef={viewCubeSceneRef} axisConvention="identity" />
+            <HslSphere sceneRef={viewCubeSceneRef} axisConvention={FDM_AXIS_CONVENTION} />
           ) : null}
         </ViewportOverlayLayout.BottomLeft>
 
@@ -1206,7 +1194,7 @@ function VectorFieldView3DInner({
                 worldExtent={axesWorldExtent}
                 center={[cx, cy, cz]}
                 sceneScale={axesSceneScale}
-                axisLabels={["x", "z", "y"]}
+                axisLabels={axisLabelsForConvention(FDM_AXIS_CONVENTION)}
               />
             )}
 

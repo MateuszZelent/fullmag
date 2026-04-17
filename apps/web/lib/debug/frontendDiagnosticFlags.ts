@@ -134,6 +134,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     showTextureTransformGizmo: true,
     showHoverTooltip: true,
     showContextMenu: true,
+    showStatusBar: true,
   },
   fdmViewport: {
     showToolbar: true,

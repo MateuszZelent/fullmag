@@ -1,5 +1,6 @@
 'use client';
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import type { Route } from "next";
 import { useRouter, useSearchParams } from "next/navigation";
 import StartHubPage from "@/components/start-hub/StartHubPage";
 import {
@@ -48,7 +49,7 @@ function RootPageInner() {
           },
           { includeStack: true },
         );
-        router.replace(route);
+        router.replace(route as Route);
         return;
       }
 
@@ -81,7 +82,7 @@ function RootPageInner() {
           },
           { includeStack: true },
         );
-        router.replace(route);
+        router.replace(route as Route);
         return;
       }
 

@@ -221,7 +221,7 @@ export function useFemSceneGeometry({
     return {
       ...transform,
       translation: boundsCenter,
-      pivot: boundsCenter,
+      pivot: [...transform.pivot] as [number, number, number],
     };
   }, [activeTextureTransform, selectedObjectOverlay]);
 

@@ -1,10 +1,19 @@
 import type { SceneDocument, MagnetizationAsset } from "./types";
-import { MAGNETIC_PRESET_CATALOG, METRIC_ANALYTIC_PRESETS, type MagneticPresetDescriptor } from "../magnetizationPresetCatalog";
+import {
+  MAGNETIC_PRESET_CATALOG,
+  METRIC_ANALYTIC_PRESETS,
+  type MagneticPresetDescriptor,
+  type MagneticPresetKind,
+} from "../magnetizationPresetCatalog";
 import { fitPresetParamsToBounds } from "../textureTransform";
 
 function cloneSceneDocument(scene: SceneDocument): SceneDocument {
   // structuredClone is safe here as SceneDocument is pure JSON-serializable data
   return structuredClone(scene);
+}
+
+function isMagneticPresetKind(value: string): value is MagneticPresetKind {
+  return MAGNETIC_PRESET_CATALOG.some((descriptor) => descriptor.kind === value);
 }
 
 export function patchMagnetizationAsset(
@@ -116,11 +125,15 @@ export function fitTextureToObject(
   }
 
   const asset = scene.magnetization_assets.find((a) => a.id === assetId);
-  const presetKind = asset?.preset_kind ?? "";
+  const presetKind = asset?.preset_kind;
 
   // For metric analytic presets, fit *preset parameters* to geometry instead
   // of scaling the coordinate system (which breaks physical dimensions).
-  if (presetKind && METRIC_ANALYTIC_PRESETS.has(presetKind)) {
+  if (
+    typeof presetKind === "string" &&
+    isMagneticPresetKind(presetKind) &&
+    METRIC_ANALYTIC_PRESETS.has(presetKind)
+  ) {
     const currentParams = asset?.preset_params ?? {};
     const { params: fittedParams, transform } = fitPresetParamsToBounds(
       presetKind,

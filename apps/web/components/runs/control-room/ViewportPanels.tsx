@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useCallback, useEffect } from "react";
+import { memo, useMemo, useCallback, useEffect, useRef } from "react";
 
 import { MAGNETIC_PRESET_CATALOG } from "@/lib/magnetizationPresetCatalog";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
@@ -38,7 +38,46 @@ import {
 } from "./viewportUtils";
 import type { Vec3, Quat } from "./viewportUtils";
 export { ViewportBar } from "./ViewportBar";
-import { TelemetryHUD } from "./ViewportBar";
+
+const DEBUG_GIZMO_SYNC = process.env.NODE_ENV !== "production";
+
+function quatToEulerDeg(
+  q: [number, number, number, number],
+): [number, number, number] {
+  const [x, y, z, w] = q;
+  const sinrCosp = 2 * (w * x + y * z);
+  const cosrCosp = 1 - 2 * (x * x + y * y);
+  const rx = Math.atan2(sinrCosp, cosrCosp);
+  const sinp = 2 * (w * y - z * x);
+  const ry = Math.abs(sinp) >= 1 ? Math.sign(sinp) * (Math.PI / 2) : Math.asin(sinp);
+  const sinyCosp = 2 * (w * z + x * y);
+  const cosyCosp = 1 - 2 * (y * y + z * z);
+  const rz = Math.atan2(sinyCosp, cosyCosp);
+  const toDeg = 180 / Math.PI;
+  return [rx * toDeg, ry * toDeg, rz * toDeg];
+}
+
+function hasMeaningfulRotation(q: [number, number, number, number]): boolean {
+  return (
+    Math.abs(q[0]) > 1e-6 ||
+    Math.abs(q[1]) > 1e-6 ||
+    Math.abs(q[2]) > 1e-6 ||
+    Math.abs(q[3] - 1) > 1e-6
+  );
+}
+
+function summarizeTransform(transform: {
+  translation: Vec3;
+  rotation_quat: Quat;
+  scale: Vec3;
+}) {
+  return {
+    translation: transform.translation,
+    rotation_quat: transform.rotation_quat,
+    rotation_euler_deg_xyz: quatToEulerDeg(transform.rotation_quat),
+    scale: transform.scale,
+  };
+}
 
 export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   /* Granular hooks replacing useControlRoom */
@@ -103,6 +142,13 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   }, [ctx.sceneDocument, ctx.selectedObjectId]);
   const activeTextureMappingSpace =
     selectedMagnetizationAsset?.mapping?.space === "world" ? "world" : "object";
+  const localTextureTransform = useMemo(
+    () =>
+      selectedMagnetizationAsset?.kind === "preset_texture"
+        ? toPreviewTextureTransform(selectedMagnetizationAsset.texture_transform)
+        : null,
+    [selectedMagnetizationAsset],
+  );
   const selectedObjectTransform = useMemo(() => {
     if (!selectedSceneObject) {
       return {
@@ -120,7 +166,9 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const activeTextureTransform =
     selectedMagnetizationAsset?.kind === "preset_texture" && ctx.activeTransformScope !== "object"
       ? (() => {
-          const base = toPreviewTextureTransform(selectedMagnetizationAsset.texture_transform);
+          const base =
+            localTextureTransform ??
+            toPreviewTextureTransform(selectedMagnetizationAsset.texture_transform);
           if (activeTextureMappingSpace !== "object") {
             return base;
           }
@@ -231,6 +279,65 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         : null,
     [ctx.objectOverlays, selectedFemObjectId],
   );
+  const gizmoDiagnosticSignatureRef = useRef<string>("");
+  useEffect(() => {
+    if (!DEBUG_GIZMO_SYNC || !selectedSceneObject) {
+      return;
+    }
+    const signature = JSON.stringify({
+      objectId: selectedSceneObject.id,
+      activeTransformScope: ctx.activeTransformScope,
+      mappingSpace: activeTextureMappingSpace,
+      objectTransform: selectedObjectTransform,
+      localTextureTransform,
+      activeTextureTransform,
+      selectedObjectOverlay,
+    });
+    if (signature === gizmoDiagnosticSignatureRef.current) {
+      return;
+    }
+    gizmoDiagnosticSignatureRef.current = signature;
+
+    console.groupCollapsed(
+      `[GizmoSync] viewport object=${selectedSceneObject.name || selectedSceneObject.id} scope=${ctx.activeTransformScope ?? "none"}`,
+    );
+    console.log("scene object transform", summarizeTransform(selectedObjectTransform));
+    if (selectedObjectOverlay) {
+      console.log("selected overlay anchor", selectedObjectOverlay);
+    } else {
+      console.log("selected overlay anchor", null);
+    }
+    if (localTextureTransform) {
+      console.log("texture transform in authoring space", {
+        mapping_space: activeTextureMappingSpace,
+        ...summarizeTransform(localTextureTransform),
+        pivot: localTextureTransform.pivot,
+      });
+    }
+    if (activeTextureTransform) {
+      console.log("texture transform resolved for gizmo/world space", {
+        ...summarizeTransform(activeTextureTransform),
+        pivot: activeTextureTransform.pivot,
+      });
+    }
+    if (hasMeaningfulRotation(selectedObjectTransform.rotation_quat)) {
+      console.warn(
+        "[GizmoSync] selected object has non-identity rotation_quat, but current viewport overlays are bounds-driven and axis-aligned. The anchor used by gizmo/preview can drift because overlay extraction does not encode oriented object geometry.",
+      );
+      console.warn(
+        "[GizmoSync] SceneDocument -> ScriptBuilder export currently re-materializes translation into geometry_params, but not object rotation. That means rotation is not flowing through the same canonical path as translation yet.",
+      );
+    }
+    console.groupEnd();
+  }, [
+    activeTextureMappingSpace,
+    activeTextureTransform,
+    ctx.activeTransformScope,
+    localTextureTransform,
+    selectedObjectOverlay,
+    selectedObjectTransform,
+    selectedSceneObject,
+  ]);
   const displayObjectOverlays = useMemo(
     () => {
       if (ctx.isFemBackend && ctx.meshParts.length > 0) {
@@ -1119,7 +1226,6 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
 
   return (
     <div className="flex flex-col flex-1 h-full min-h-0 min-w-0 relative overflow-hidden [&>*]:min-w-0 [&>*]:min-h-0 [&>*:not(.viewportOverlay)]:flex-1 [&>*:not(.viewportOverlay)]:w-full">
-      <TelemetryHUD />
       {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showAntennaPreviewBadge && antennaPreviewBadgeVisible ? (
         <div className="viewportOverlay absolute right-4 top-4 z-[--z-viewport-badge] rounded-full border border-primary/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-primary shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
           physics 2.5D · preview extruded

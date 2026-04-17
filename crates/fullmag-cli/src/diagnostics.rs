@@ -276,6 +276,18 @@ pub(crate) fn diagnose_initial_fem_plan(plan: &FemPlanIR) -> Result<InitialState
             None => FemLlgProblem::with_terms_and_demag_airbox(
                 topology, material, dynamics, terms, false, None,
             ),
+            Some(
+                realization @ (
+                    fullmag_ir::ResolvedFemDemagIR::Bem
+                    | fullmag_ir::ResolvedFemDemagIR::FredkinKoehler
+                    | fullmag_ir::ResolvedFemDemagIR::Fmm
+                ),
+            ) => {
+                return Err(anyhow!(
+                    "diagnostic FEM runner: demag model '{}' is not yet implemented in the backend",
+                    realization.model_name(),
+                ));
+            }
         }
     };
     let state = problem

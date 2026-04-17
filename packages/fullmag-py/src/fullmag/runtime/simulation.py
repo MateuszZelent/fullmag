@@ -42,6 +42,9 @@ class StepStats:
     rhs_evals: int = 0
     demag_solves: int = 0
     fsal_reused: bool = False
+    poisson_iterations: int = 0
+    poisson_final_residual: float = 0.0
+    demag_refreshed: bool = False
     per_object_scalars: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
@@ -231,6 +234,9 @@ def result_from_run_payload(
                 rhs_evals=s.get("rhs_evals", 0),
                 demag_solves=s.get("demag_solves", 0),
                 fsal_reused=s.get("fsal_reused", False),
+                poisson_iterations=s.get("poisson_iterations", 0),
+                poisson_final_residual=s.get("poisson_final_residual", 0.0),
+                demag_refreshed=s.get("demag_refreshed", False),
                 per_object_scalars=_coerce_per_object_scalars(per_object_raw),
             )
         )

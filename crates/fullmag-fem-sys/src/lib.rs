@@ -285,6 +285,10 @@ pub struct fullmag_fem_step_stats {
     pub dt_suggested: f64,
     pub rhs_evaluations: u32,
     pub fsal_reused: i32,
+    /// Requested OMP thread count (from env / config).
+    pub requested_omp_threads: i32,
+    /// Effective OMP thread count (after auto-capping).
+    pub effective_omp_threads: i32,
 }
 
 #[repr(C)]

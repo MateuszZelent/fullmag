@@ -21,6 +21,18 @@ use crate::validate::{
 const FEM_TRANSFER_GRID_REMOVAL_MESSAGE: &str =
     "FEM transfer_grid został usunięty. Zbuduj shared_domain_mesh_with_air i użyj Poisson Robin/Dirichlet.";
 
+fn fem_single_precision_rejection(requested_cuda: bool, context: &str) -> String {
+    if requested_cuda {
+        format!(
+            "execution_precision='single' is not executable in the {context} GPU path; single-precision CUDA kernels are not yet implemented"
+        )
+    } else {
+        format!(
+            "execution_precision='single' is not executable in the {context} CPU path; current FEM CPU execution supports only 'double'"
+        )
+    }
+}
+
 fn geometry_to_object_id_map(
     magnet_entries: &[crate::mesh::MagnetPlanningEntry],
 ) -> BTreeMap<&str, &str> {
@@ -527,13 +539,11 @@ pub(crate) fn plan_fem(
         !problem.current_modules.is_empty(),
         &mut errors,
     );
-    if problem.backend_policy.execution_precision != ExecutionPrecision::Double
-        && !runtime_requests_cuda(problem)
-    {
-        errors.push(
-            "execution_precision='single' is not yet supported by the FEM planning baseline on CPU"
-                .to_string(),
-        );
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+        errors.push(fem_single_precision_rejection(
+            runtime_requests_cuda(problem),
+            "native FEM time-domain",
+        ));
     }
 
     let (
@@ -736,15 +746,11 @@ pub(crate) fn plan_fem(
             }
             fullmag_ir::RequestedFemDemagIR::Auto => fullmag_ir::ResolvedFemDemagIR::PoissonRobin,
             // Unimplemented models are already rejected above.
-            fullmag_ir::RequestedFemDemagIR::Bem => {
-                fullmag_ir::ResolvedFemDemagIR::Bem
-            }
+            fullmag_ir::RequestedFemDemagIR::Bem => fullmag_ir::ResolvedFemDemagIR::Bem,
             fullmag_ir::RequestedFemDemagIR::FredkinKoehler => {
                 fullmag_ir::ResolvedFemDemagIR::FredkinKoehler
             }
-            fullmag_ir::RequestedFemDemagIR::Fmm => {
-                fullmag_ir::ResolvedFemDemagIR::Fmm
-            }
+            fullmag_ir::RequestedFemDemagIR::Fmm => fullmag_ir::ResolvedFemDemagIR::Fmm,
         })
     } else {
         None
@@ -1359,13 +1365,11 @@ pub(crate) fn plan_fem_eigen(
     }
 
     validate_eigen_outputs(&problem.study.sampling().outputs, &mut errors);
-    if problem.backend_policy.execution_precision != ExecutionPrecision::Double
-        && !runtime_requests_cuda(problem)
-    {
-        errors.push(
-            "execution_precision='single' is not yet supported by the FEM eigen baseline on CPU"
-                .to_string(),
-        );
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+        errors.push(fem_single_precision_rejection(
+            runtime_requests_cuda(problem),
+            "FEM eigen",
+        ));
     }
 
     let gyromagnetic_ratio = match dynamics {
@@ -1515,15 +1519,11 @@ pub(crate) fn plan_fem_eigen(
                 fullmag_ir::ResolvedFemDemagIR::PoissonRobin
             }
             fullmag_ir::RequestedFemDemagIR::Auto => fullmag_ir::ResolvedFemDemagIR::PoissonRobin,
-            fullmag_ir::RequestedFemDemagIR::Bem => {
-                fullmag_ir::ResolvedFemDemagIR::Bem
-            }
+            fullmag_ir::RequestedFemDemagIR::Bem => fullmag_ir::ResolvedFemDemagIR::Bem,
             fullmag_ir::RequestedFemDemagIR::FredkinKoehler => {
                 fullmag_ir::ResolvedFemDemagIR::FredkinKoehler
             }
-            fullmag_ir::RequestedFemDemagIR::Fmm => {
-                fullmag_ir::ResolvedFemDemagIR::Fmm
-            }
+            fullmag_ir::RequestedFemDemagIR::Fmm => fullmag_ir::ResolvedFemDemagIR::Fmm,
         })
     } else {
         None

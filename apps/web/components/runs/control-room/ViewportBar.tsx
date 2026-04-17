@@ -387,7 +387,7 @@ export const ViewportBar = memo(function ViewportBar() {
 });
 
 function formatDt(value: number | null | undefined, enabled: boolean): string {
-  if (!enabled || !Number.isFinite(value ?? NaN)) {
+  if (!enabled || typeof value !== "number" || !Number.isFinite(value)) {
     return "—";
   }
   return fmtSI(value, "s");
@@ -413,8 +413,8 @@ function parsePositiveNumber(value: string): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function isPositiveFinite(value: number | null | undefined): boolean {
-  return Number.isFinite(value) && value > 0;
+function isPositiveFinite(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function resolveMinDt(params: {
@@ -463,7 +463,7 @@ export const TelemetryHUD = memo(function TelemetryHUD() {
   const currentSolver = resolveSolverDisplayName(
     model.solverPlan?.integrator || model.solverSettings.integrator,
   );
-  const fixedDt = Number.isFinite(fixedDtFromPlan) && fixedDtFromPlan > 0
+  const fixedDt = typeof fixedDtFromPlan === "number" && Number.isFinite(fixedDtFromPlan) && fixedDtFromPlan > 0
     ? fixedDtFromPlan
     : fixedDtFromSettings;
   const minDt = resolveMinDt({

@@ -1,13 +1,14 @@
 'use client';
 
 import { useCallback, useState, type ReactNode } from 'react';
+import type { Route } from "next";
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { navigationItems } from './navigation';
 
 interface AppLayoutProps {
   children: ReactNode;
-  breadcrumb?: { label: string; href?: string }[];
+  breadcrumb?: { label: string; href?: Route }[];
   actions?: ReactNode;
 }
 

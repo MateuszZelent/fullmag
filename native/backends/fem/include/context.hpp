@@ -256,9 +256,9 @@ struct Context {
     double poisson_last_residual = 0.0;
 
     // Cached Hypre solver/preconditioner (persistent across solves)
-    void *mfem_cached_hypre_par = nullptr;  // mfem::HypreParMatrix* (wraps bc_op)
-    void *mfem_cached_hypre_amg = nullptr;  // mfem::HypreBoomerAMG*
-    void *mfem_cached_hypre_pcg = nullptr;  // mfem::HyprePCG*
+    void *mfem_cached_hypre_par = nullptr;            // mfem::HypreParMatrix* (wraps bc_op)
+    void *mfem_cached_hypre_preconditioner = nullptr; // mfem::HypreSolver*
+    void *mfem_cached_hypre_solver = nullptr;         // mfem::HypreSolver*
     bool poisson_solver_setup = false;
 
     // Demag realization: 1 = airbox_dirichlet, 2 = airbox_robin
