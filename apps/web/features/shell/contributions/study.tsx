@@ -3,8 +3,8 @@
  */
 
 import {
-  Cog, Columns2, ListChecks, Target, Play, Sparkles, Magnet,
-  FunctionSquare, Layers3, Binary, Zap, Plus, RefreshCw, Download,
+  Cog, ListChecks, Target, Play, Sparkles, Magnet,
+  FunctionSquare, Layers3, Binary, Zap, Plus, RefreshCw,
   Pause, Square, SkipForward,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -34,76 +34,6 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           iconColor: "text-muted-foreground",
           action: () =>
             ctx.run({ id: "navigation.select-node", nodeId: "study" }),
-        },
-        {
-          id: "study-defaults",
-          icon: <Columns2 size={20} />,
-          label: "Defaults",
-          tooltip: "Runtime, solver and output defaults",
-          active:
-            studyNode?.kind === "study-defaults" ||
-            studyNode?.kind === "study-runtime-defaults" ||
-            studyNode?.kind === "study-solver-defaults" ||
-            studyNode?.kind === "study-physics-defaults" ||
-            studyNode?.kind === "study-outputs-defaults",
-          iconColor: "text-cyan-400",
-          action: () =>
-            ctx.run({
-              id: "navigation.select-node",
-              nodeId: "study-defaults",
-            }),
-          menuItems: [
-            {
-              id: "study-defaults-runtime",
-              label: "Runtime Defaults",
-              icon: <Play size={14} />,
-              description: "Run horizon, execution mode and runtime policy",
-              active: studyNode?.kind === "study-runtime-defaults",
-              action: () =>
-                ctx.run({
-                  id: "navigation.select-node",
-                  nodeId: "study-defaults-runtime",
-                }),
-            },
-            {
-              id: "study-defaults-solver",
-              label: "Solver Defaults",
-              icon: <Target size={14} />,
-              description:
-                "Integrator, relaxation and convergence defaults",
-              active: studyNode?.kind === "study-solver-defaults",
-              action: () =>
-                ctx.run({
-                  id: "navigation.select-node",
-                  nodeId: "study-defaults-solver",
-                }),
-            },
-            {
-              id: "study-defaults-physics",
-              label: "Physics Defaults",
-              icon: <Magnet size={14} />,
-              description:
-                "Global Zeeman field and baseline magnetic forcing",
-              active: studyNode?.kind === "study-physics-defaults",
-              action: () =>
-                ctx.run({
-                  id: "navigation.select-node",
-                  nodeId: "study-defaults-physics",
-                }),
-            },
-            {
-              id: "study-defaults-outputs",
-              label: "Output Defaults",
-              icon: <Download size={14} />,
-              description: "Artifacts, snapshots and export policy",
-              active: studyNode?.kind === "study-outputs-defaults",
-              action: () =>
-                ctx.run({
-                  id: "navigation.select-node",
-                  nodeId: "study-defaults-outputs",
-                }),
-            },
-          ],
         },
         {
           id: "study-stages",

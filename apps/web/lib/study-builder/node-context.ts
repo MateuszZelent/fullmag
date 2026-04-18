@@ -15,11 +15,6 @@ export type StudyStageDetailSection =
 export type StudyNodeContext =
   | { kind: "simulation-root" }
   | { kind: "study-root" }
-  | { kind: "study-defaults" }
-  | { kind: "study-runtime-defaults" }
-  | { kind: "study-solver-defaults" }
-  | { kind: "study-physics-defaults" }
-  | { kind: "study-outputs-defaults" }
   | { kind: "study-stages" }
   | { kind: "study-stage-empty" }
   | {

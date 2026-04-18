@@ -2,14 +2,13 @@
 /* eslint-disable react-hooks/preserve-manual-memoization */
 
 import { useMemo } from "react";
-import { fmtExp, fmtSIOrDash } from "@/lib/format";
+import { fmtExp } from "@/lib/format";
 import {
   parseStudyNodeContext,
   type StudyNodeContext,
 } from "@/lib/study-builder/node-context";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import { migrateFlatStagesToStudyPipeline } from "@/lib/study-builder/migrate";
-import type { SolverPlanSummary } from "../../runs/control-room/types";
 import {
   findNodeById,
   patchNode,
@@ -25,24 +24,16 @@ import { summarizeMaterializedStage } from "@/lib/study-builder/summaries";
 import type { ScriptBuilderStageState } from "@/lib/session/types";
 import StageInspector from "@/components/workspace/study-builder/StageInspector";
 import StudyBuilderWorkspace from "@/components/workspace/study-builder/StudyBuilderWorkspace";
-import { IntegratorSettingsPanel, RelaxationSettingsPanel } from "../SolverSettingsPanel";
 import { useTransport, useViewport, useCommand, useModel } from "../../runs/control-room/context-hooks";
 import { Button } from "../../ui/button";
 import SelectField from "../../ui/SelectField";
 import TextField from "../../ui/TextField";
-import SolverSelector from "../../solver/SolverSelector";
 import {
-  BACKEND_PROFILES,
-  INTEGRATOR_PROFILES,
-  PRECISION_PROFILES,
   RELAXATION_PROFILES,
 } from "./profiles";
-import { asRecord, extractFemCpuThreadSummary } from "../../runs/control-room/helpers";
 import {
   humanizeToken,
-  precessionModeForPlan,
   studyKindForPlan,
-  timestepModeForPlan,
 } from "./helpers";
 import { InfoRow, SidebarSection, StatusBadge } from "./primitives";
 
@@ -109,100 +100,6 @@ function builtAuthoringDocument(
 ): StudyPipelineDocument {
   return pipeline ?? migrateFlatStagesToStudyPipeline(stages);
 }
-
-function parseOptionalNumber(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const value = Number(trimmed);
-  return Number.isFinite(value) ? value : null;
-}
-
-function parseOptionalPositiveInteger(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const value = Number(trimmed);
-  if (!Number.isFinite(value)) return null;
-  const resolved = Math.trunc(value);
-  return resolved >= 1 ? resolved : null;
-}
-
-function formatExternalField(field: [number, number, number] | null): string {
-  if (!field) return "disabled";
-  return `${fmtExp(field[0])}, ${fmtExp(field[1])}, ${fmtExp(field[2])} T`;
-}
-
-function formatCpuThreads(value: number | null): string {
-  return value != null ? `${value}` : "auto";
-}
-
-function defaultFemSolverPolicyFromPlan(
-  solverPlan: Pick<SolverPlanSummary, "demagSolver"> | null,
-): Record<string, unknown> {
-  const demagSolver = solverPlan?.demagSolver;
-  return {
-    solver: demagSolver?.method ?? "CG",
-    preconditioner: demagSolver?.preconditioner ?? "AMG",
-    rtol: demagSolver?.relativeTolerance ?? 1e-8,
-    atol: demagSolver?.absoluteTolerance ?? null,
-    max_iterations: demagSolver?.maxIterations ?? 500,
-    print_level: demagSolver?.printLevel ?? 0,
-  };
-}
-
-function solverPolicyFieldNumber(
-  policy: Record<string, unknown> | null | undefined,
-  key: string,
-): number | null {
-  const value = policy?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-const FEM_SOLVER_PRESETS: Array<{
-  id: string;
-  label: string;
-  description: string;
-  policy: Record<string, unknown>;
-}> = [
-  {
-    id: "balanced",
-    label: "Balanced",
-    description: "Default production baseline",
-    policy: {
-      solver: "CG",
-      preconditioner: "AMG",
-      rtol: 1e-8,
-      atol: null,
-      max_iterations: 500,
-      print_level: 0,
-    },
-  },
-  {
-    id: "robust",
-    label: "Robust",
-    description: "Higher tolerance budget, more diagnostics",
-    policy: {
-      solver: "GMRES",
-      preconditioner: "AMG",
-      rtol: 1e-9,
-      atol: null,
-      max_iterations: 1000,
-      print_level: 1,
-    },
-  },
-  {
-    id: "fast",
-    label: "Fast",
-    description: "Lower accuracy, lower iteration budget",
-    policy: {
-      solver: "CG",
-      preconditioner: "JACOBI",
-      rtol: 1e-6,
-      atol: null,
-      max_iterations: 200,
-      print_level: 0,
-    },
-  },
-];
 
 function syncCompatibilityState(
   ctx: { setRunUntilInput: (v: string) => void; setSolverSettings: React.Dispatch<React.SetStateAction<any>> },
@@ -302,28 +199,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     () => parseStudyNodeContext(nodeId) ?? STUDY_ROOT_NODE,
     [nodeId],
   );
-  const externalField =
-    ctx.sceneDocument?.study.external_field ??
-    ctx.modelBuilderGraph?.study.external_field ??
-    null;
   const solverPlan = ctx.solverPlan;
-  const femDemagSolverPolicy = asRecord(
-    ctx.sceneDocument?.study.fem_demag_solver_policy ??
-    ctx.modelBuilderGraph?.study.fem_demag_solver_policy ??
-    null,
-  );
-  const effectiveFemDemagSolverPolicy =
-    femDemagSolverPolicy ?? defaultFemSolverPolicyFromPlan(solverPlan);
-  const femCpuThreadSummary = useMemo(
-    () => extractFemCpuThreadSummary(ctx.engineLog),
-    [ctx.engineLog],
-  );
-  const backendProfile = solverPlan?.backendKind ? BACKEND_PROFILES[solverPlan.backendKind] : null;
-  const integratorProfile = solverPlan?.integrator ? INTEGRATOR_PROFILES[solverPlan.integrator] : null;
-  const precisionProfile = solverPlan?.precision ? PRECISION_PROFILES[solverPlan.precision] : null;
-  const relaxationProfile = solverPlan?.relaxation?.algorithm
-    ? RELAXATION_PROFILES[solverPlan.relaxation.algorithm]
-    : null;
   const workloadLabel = ctx.isFemBackend && ctx.femMesh
     ? `${ctx.femMesh.nodes.length.toLocaleString()} nodes · ${ctx.femMesh.elements.length.toLocaleString()} tets`
     : ctx.totalCells && ctx.totalCells > 0
@@ -396,55 +272,6 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     commitDocument(patchNodeConfig(authoringDocument, selectedAuthoringNode.id, patch));
   };
 
-  const setFemDemagSolverPolicy = (patch: Record<string, unknown>) => {
-    ctx.setSceneDocument((previous) =>
-      previous
-        ? {
-            ...previous,
-            study: {
-              ...previous.study,
-              fem_demag_solver_policy: {
-                ...defaultFemSolverPolicyFromPlan(solverPlan),
-                ...(asRecord(previous.study.fem_demag_solver_policy) ?? {}),
-                ...patch,
-              },
-            },
-          }
-        : previous,
-    );
-  };
-
-  const setExternalFieldComponent = (axis: 0 | 1 | 2, rawValue: string) => {
-    const parsed = parseOptionalNumber(rawValue);
-    ctx.setSceneDocument((previous) => {
-      if (!previous) return previous;
-      const baseline = previous.study.external_field ?? [0, 0, 0];
-      const nextField: [number, number, number] = [...baseline] as [number, number, number];
-      nextField[axis] = parsed ?? 0;
-      return {
-        ...previous,
-        study: {
-          ...previous.study,
-          external_field: nextField,
-        },
-      };
-    });
-  };
-
-  const clearExternalField = () => {
-    ctx.setSceneDocument((previous) =>
-      previous
-        ? {
-            ...previous,
-            study: {
-              ...previous.study,
-              external_field: null,
-            },
-          }
-        : previous,
-    );
-  };
-
   const renderStudyRoot = () => (
     <>
       <SidebarSection
@@ -476,333 +303,6 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
           <InfoRow label="Execution step map" value={`${materialized.map.length} entries`} />
           <InfoRow label="Current stage" value={activeStageIndex != null ? `${activeStageIndex + 1}` : "—"} />
           <InfoRow label="Completed stages" value={`${completedStageCount}`} />
-        </div>
-      </SidebarSection>
-    </>
-  );
-
-  const renderDefaultsOverview = () => (
-    <>
-      <SidebarSection title="Study Defaults" icon="⚙" defaultOpen={true}>
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
-          Defaults define the baseline runtime, solver and output policy inherited by newly authored stages. Individual stages can diverge later, but this is the first place where the study contract should be configured.
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" type="button" onClick={() => ctx.setSelectedSidebarNodeId("study-defaults-runtime")}>
-            Runtime & Backend
-          </Button>
-          <Button size="sm" variant="outline" type="button" onClick={() => ctx.setSelectedSidebarNodeId("study-defaults-solver")}>
-            Solver Defaults
-          </Button>
-          <Button size="sm" variant="outline" type="button" onClick={() => ctx.setSelectedSidebarNodeId("study-defaults-physics")}>
-            Physics Defaults
-          </Button>
-          <Button size="sm" variant="outline" type="button" onClick={() => ctx.setSelectedSidebarNodeId("study-defaults-outputs")}>
-            Outputs Defaults
-          </Button>
-        </div>
-      </SidebarSection>
-      <SidebarSection title="Current Default Snapshot" icon="📌" defaultOpen={true}>
-        <div className="grid gap-1">
-          <InfoRow label="Requested backend" value={humanizeToken(ctx.requestedRuntimeSelection.requested_backend)} />
-          <InfoRow label="Requested device" value={humanizeToken(ctx.requestedRuntimeSelection.requested_device)} />
-          <InfoRow label="Requested precision" value={humanizeToken(ctx.requestedRuntimeSelection.requested_precision)} />
-          <InfoRow label="Requested CPU threads" value={formatCpuThreads(ctx.requestedRuntimeSelection.requested_cpu_threads)} />
-          <InfoRow label="Integrator" value={ctx.solverSettings.integrator || "—"} />
-          <InfoRow label="Fixed dt" value={ctx.solverSettings.fixedTimestep || "adaptive / default"} />
-          <InfoRow label="Relax algorithm" value={humanizeToken(ctx.solverSettings.relaxAlgorithm)} />
-          <InfoRow label="External field B [T]" value={formatExternalField(externalField)} />
-        </div>
-      </SidebarSection>
-    </>
-  );
-
-  const renderRuntimeDefaults = () => (
-    <>
-      <SidebarSection title="Runtime & Backend" icon="⚙" defaultOpen={true}>
-        <SolverSelector />
-      </SidebarSection>
-      <SidebarSection title="CPU Load & Apply Timing" icon="🧵" defaultOpen={true}>
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
-          CPU load is configured per compute start. Fullmag resolves Rayon/OpenMP/native FEM thread pools when the run begins, so edits made during an active solve apply to the next compute, not the current one.
-        </div>
-        <div className="mt-3 grid gap-3">
-          <TextField
-            label="Requested CPU threads"
-            value={
-              ctx.requestedRuntimeSelection.requested_cpu_threads != null
-                ? String(ctx.requestedRuntimeSelection.requested_cpu_threads)
-                : ""
-            }
-            onchange={(event) => {
-              const nextValue = parseOptionalPositiveInteger(event.target.value);
-              ctx.setRequestedRuntimeSelection((current) => ({
-                ...current,
-                requested_cpu_threads: nextValue,
-              }));
-            }}
-            placeholder="auto"
-            mono
-          />
-          <div className="grid gap-1">
-            <InfoRow label="Current request" value={formatCpuThreads(ctx.requestedRuntimeSelection.requested_cpu_threads)} />
-            <InfoRow
-              label="Apply timing"
-              value={ctx.workspaceStatus === "running" ? "next compute only" : "next runtime resolution"}
-            />
-            <InfoRow label="Can change mid-run" value="no — restart or start a new compute" />
-          </div>
-        </div>
-      </SidebarSection>
-      <SidebarSection title="Resolved Runtime" icon="🧠" defaultOpen={true}>
-        <div className="grid gap-1">
-          <InfoRow label="State" value={ctx.workspaceStatus} />
-          <InfoRow label="Engine" value={ctx.runtimeEngineLabel ?? ctx.sessionFooter.requestedBackend ?? "—"} />
-          <InfoRow label="Backend" value={humanizeToken(solverPlan?.resolvedBackend ?? solverPlan?.backendKind ?? ctx.sessionFooter.requestedBackend)} />
-          <InfoRow label="Mode" value={humanizeToken(solverPlan?.executionMode ?? ctx.session?.execution_mode)} />
-          <InfoRow label="Precision" value={humanizeToken(solverPlan?.precision ?? ctx.session?.precision)} />
-          <InfoRow label="Requested CPU threads" value={formatCpuThreads(ctx.requestedRuntimeSelection.requested_cpu_threads)} />
-          <InfoRow label="Resolved Rayon threads" value={formatCpuThreads(ctx.session?.resolved_cpu_threads ?? null)} />
-          <InfoRow label="Requested FEM OpenMP threads" value={formatCpuThreads(femCpuThreadSummary?.requestedOmpThreads ?? null)} />
-          <InfoRow label="Effective FEM OpenMP threads" value={formatCpuThreads(femCpuThreadSummary?.effectiveOmpThreads ?? null)} />
-          <InfoRow label="Workload" value={workloadLabel} />
-        </div>
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {backendProfile && <StatusBadge label={backendProfile.label} />}
-          {precisionProfile && <StatusBadge label={precisionProfile.label} />}
-          {solverPlan?.demagEnabled && <StatusBadge label="Demag" />}
-          {solverPlan?.exchangeEnabled && <StatusBadge label="Exchange" />}
-        </div>
-      </SidebarSection>
-    </>
-  );
-
-  const renderSolverDefaults = () => (
-    <>
-      <SidebarSection title="Solver Defaults" icon="🧮" defaultOpen={true}>
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
-          These defaults define the baseline time integration and relaxation policy for newly authored stages. Stage-local overrides should be exceptional, not the main authoring path.
-        </div>
-        <div className="mt-3 grid gap-1">
-          <InfoRow label="Integrator" value={integratorProfile?.label ?? humanizeToken(solverPlan?.integrator)} />
-          <InfoRow label="Dt control" value={timestepModeForPlan(solverPlan)} />
-          <InfoRow label="Precession" value={precessionModeForPlan(solverPlan)} />
-          <InfoRow label="Gamma" value={solverPlan?.gyromagneticRatio != null ? `${fmtExp(solverPlan.gyromagneticRatio)} m/(A·s)` : "—"} />
-          <InfoRow label="Relax algorithm" value={relaxationProfile?.label ?? humanizeToken(ctx.solverSettings.relaxAlgorithm)} />
-        </div>
-      </SidebarSection>
-      <SidebarSection title="Native FEM Linear Solver" icon="🧱" defaultOpen={true}>
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
-          Native FEM demag uses the linear-solver policy below. This is an advanced backend hint for the native FEM Poisson solve; it is now part of the canonical Python and SceneDocument contract and round-trips with the study tree.
-        </div>
-        <div className="mt-3 grid gap-2">
-          <div className="text-[0.66rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-            Presets
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {FEM_SOLVER_PRESETS.map((preset) => (
-              <Button
-                key={preset.id}
-                size="sm"
-                variant="outline"
-                type="button"
-                title={preset.description}
-                onClick={() => setFemDemagSolverPolicy(preset.policy)}
-              >
-                {preset.label}
-              </Button>
-            ))}
-          </div>
-          <div className="text-[0.72rem] text-muted-foreground">
-            Presets only write the same canonical `FemLinearSolverPolicy`. They are shortcuts, not a second solver contract.
-          </div>
-        </div>
-        <div className="mt-3 grid gap-3">
-          <SelectField
-            label="Method"
-            value={String(effectiveFemDemagSolverPolicy.solver ?? "CG")}
-            onchange={(value) => setFemDemagSolverPolicy({ solver: value })}
-            options={[
-              { value: "CG", label: "CG" },
-              { value: "GMRES", label: "GMRES" },
-            ]}
-          />
-          <SelectField
-            label="Preconditioner"
-            value={String(effectiveFemDemagSolverPolicy.preconditioner ?? "AMG")}
-            onchange={(value) => setFemDemagSolverPolicy({ preconditioner: value })}
-            options={[
-              { value: "AMG", label: "AMG" },
-              { value: "JACOBI", label: "JACOBI" },
-              { value: "NONE", label: "NONE" },
-            ]}
-          />
-          <div className="grid grid-cols-1 gap-3 @[980px]:grid-cols-2">
-            <TextField
-              label="Relative tolerance"
-              value={String(solverPolicyFieldNumber(effectiveFemDemagSolverPolicy, "rtol") ?? "")}
-              onchange={(event) => {
-                const next = parseOptionalNumber(event.target.value);
-                if (next != null && next > 0) setFemDemagSolverPolicy({ rtol: next });
-              }}
-              placeholder="1e-8"
-              mono
-            />
-            <TextField
-              label="Absolute tolerance"
-              value={solverPolicyFieldNumber(effectiveFemDemagSolverPolicy, "atol") != null ? String(solverPolicyFieldNumber(effectiveFemDemagSolverPolicy, "atol")) : ""}
-              onchange={(event) => {
-                const trimmed = event.target.value.trim();
-                if (!trimmed) {
-                  setFemDemagSolverPolicy({ atol: null });
-                  return;
-                }
-                const next = parseOptionalNumber(trimmed);
-                if (next != null && next > 0) setFemDemagSolverPolicy({ atol: next });
-              }}
-              placeholder="disabled"
-              mono
-            />
-          </div>
-          <div className="grid grid-cols-1 gap-3 @[980px]:grid-cols-2">
-            <TextField
-              label="Max iterations"
-              value={String(solverPolicyFieldNumber(effectiveFemDemagSolverPolicy, "max_iterations") ?? "")}
-              onchange={(event) => {
-                const next = parseOptionalPositiveInteger(event.target.value);
-                if (next != null) setFemDemagSolverPolicy({ max_iterations: next });
-              }}
-              placeholder="500"
-              mono
-            />
-            <TextField
-              label="Print level"
-              value={String(solverPolicyFieldNumber(effectiveFemDemagSolverPolicy, "print_level") ?? "")}
-              onchange={(event) => {
-                const next = parseOptionalNumber(event.target.value);
-                if (next != null && next >= 0) setFemDemagSolverPolicy({ print_level: Math.trunc(next) });
-              }}
-              placeholder="0"
-              mono
-            />
-          </div>
-        </div>
-        <div className="mt-3 grid gap-1">
-          <InfoRow
-            label="Family"
-            value={solverPlan?.demagSolver?.family ?? (ctx.isFemBackend && solverPlan?.demagEnabled ? "hypre" : "—")}
-          />
-          <InfoRow
-            label="Resolved method"
-            value={solverPlan?.demagSolver?.method ?? String(effectiveFemDemagSolverPolicy.solver ?? "CG")}
-          />
-          <InfoRow
-            label="Resolved preconditioner"
-            value={solverPlan?.demagSolver?.preconditioner ?? String(effectiveFemDemagSolverPolicy.preconditioner ?? "AMG")}
-          />
-          <InfoRow
-            label="Resolved relative tolerance"
-            value={solverPlan?.demagSolver?.relativeTolerance != null ? fmtExp(solverPlan.demagSolver.relativeTolerance) : "—"}
-          />
-          <InfoRow
-            label="Resolved absolute tolerance"
-            value={solverPlan?.demagSolver?.absoluteTolerance != null ? fmtExp(solverPlan.demagSolver.absoluteTolerance) : "—"}
-          />
-          <InfoRow
-            label="Resolved max iterations"
-            value={solverPlan?.demagSolver?.maxIterations != null ? `${solverPlan.demagSolver.maxIterations}` : "—"}
-          />
-          <InfoRow
-            label="Resolved print level"
-            value={solverPlan?.demagSolver?.printLevel != null ? `${solverPlan.demagSolver.printLevel}` : "—"}
-          />
-        </div>
-      </SidebarSection>
-      <SidebarSection title="Integrator Defaults" icon="⏱" defaultOpen={true}>
-        <IntegratorSettingsPanel
-          settings={ctx.solverSettings}
-          onChange={ctx.setSolverSettings}
-          solverRunning={ctx.workspaceStatus === "running"}
-        />
-      </SidebarSection>
-      <SidebarSection title="Relaxation Defaults" icon="🎯" defaultOpen={true}>
-        <RelaxationSettingsPanel
-          settings={ctx.solverSettings}
-          onChange={ctx.setSolverSettings}
-          solverRunning={ctx.workspaceStatus === "running"}
-        />
-      </SidebarSection>
-    </>
-  );
-
-  const renderPhysicsDefaults = () => (
-    <>
-      <SidebarSection title="Physics Defaults" icon="🧲" defaultOpen={true}>
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
-          Configure the global Zeeman field inherited by authored stages and macros. Stage-level sweeps can override this baseline during execution.
-        </div>
-        <div className="mt-3 grid grid-cols-1 gap-3 @[980px]:grid-cols-3">
-          <TextField
-            label="Bx [T]"
-            value={externalField ? String(externalField[0]) : ""}
-            onchange={(event) => setExternalFieldComponent(0, event.target.value)}
-            placeholder="0"
-            mono
-          />
-          <TextField
-            label="By [T]"
-            value={externalField ? String(externalField[1]) : ""}
-            onchange={(event) => setExternalFieldComponent(1, event.target.value)}
-            placeholder="0"
-            mono
-          />
-          <TextField
-            label="Bz [T]"
-            value={externalField ? String(externalField[2]) : ""}
-            onchange={(event) => setExternalFieldComponent(2, event.target.value)}
-            placeholder="0"
-            mono
-          />
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" type="button" onClick={clearExternalField}>
-            Disable External Field
-          </Button>
-        </div>
-      </SidebarSection>
-      <SidebarSection title="Current Zeeman Baseline" icon="🧭" defaultOpen={true}>
-        <div className="grid gap-1">
-          <InfoRow label="External B [T]" value={formatExternalField(externalField)} />
-          <InfoRow
-            label="Magnitude |B| [T]"
-            value={
-              externalField
-                ? fmtExp(
-                    Math.sqrt(
-                      externalField[0] ** 2 +
-                        externalField[1] ** 2 +
-                        externalField[2] ** 2,
-                    ),
-                  )
-                : "—"
-            }
-          />
-        </div>
-      </SidebarSection>
-    </>
-  );
-
-  const renderOutputsDefaults = () => (
-    <>
-      <SidebarSection title="Outputs Defaults" icon="💾" defaultOpen={true}>
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
-          Stage-specific output authoring is not yet a first-class contract in the builder. For now this node exposes the inherited live output surface and current artifact availability, so the `Study` tree already has a dedicated place for future output policies instead of overloading the runtime panels.
-        </div>
-        <div className="mt-3 grid gap-1">
-          <InfoRow label="Published quantities" value={`${ctx.quantities.length}`} />
-          <InfoRow label="Artifacts" value={`${ctx.artifacts.length}`} />
-          <InfoRow label="State I/O" value={ctx.stateIoBusy ? "busy" : "available"} />
-          <InfoRow label="Current dt" value={fmtSIOrDash(ctx.effectiveDt, "s", ctx.hasSolverTelemetry)} />
         </div>
       </SidebarSection>
     </>
@@ -1168,21 +668,6 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
 
   if (studyNode.kind === "simulation-root" || studyNode.kind === "study-root") {
     return renderStudyRoot();
-  }
-  if (studyNode.kind === "study-defaults") {
-    return renderDefaultsOverview();
-  }
-  if (studyNode.kind === "study-runtime-defaults") {
-    return renderRuntimeDefaults();
-  }
-  if (studyNode.kind === "study-solver-defaults") {
-    return renderSolverDefaults();
-  }
-  if (studyNode.kind === "study-physics-defaults") {
-    return renderPhysicsDefaults();
-  }
-  if (studyNode.kind === "study-outputs-defaults") {
-    return renderOutputsDefaults();
   }
   if (studyNode.kind === "study-stages" || studyNode.kind === "study-stage-empty") {
     return renderStagesPanel();
