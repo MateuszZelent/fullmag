@@ -168,6 +168,7 @@ const ICON_REGISTRY: Record<NodeKind, IconRegistryEntry> = {
 
   // Physics
   "physics.root":                          { token: "zap",              label: "Physics" },
+  "physics.solver":                        { token: "wrench",           label: "Solver" },
   "physics.llg":                           { token: "activity",         label: "LLG Dynamics" },
   "physics.exchange":                      { token: "repeat",           label: "Exchange" },
   "physics.demag":                         { token: "magnet",           label: "Demagnetization" },
@@ -224,6 +225,9 @@ const ICON_REGISTRY: Record<NodeKind, IconRegistryEntry> = {
   "study.stage.detail.settle":             { token: "magnet",           label: "Settle Stage" },
   "study.stage.detail.outputs":            { token: "save",             label: "Outputs" },
   "study.stage.detail.materialized":       { token: "brick-wall",       label: "Materialized Preview" },
+
+  // Runtime
+  "session.runtime":                       { token: "settings",         label: "Runtime & Backend" },
 
   // Results
   "results.root":                          { token: "bar-chart-3",      label: "Results" },

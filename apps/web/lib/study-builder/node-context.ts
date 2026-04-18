@@ -53,8 +53,8 @@ export function parseStudyNodeContext(
   if (!nodeId) return null;
   if (nodeId === "study-root") return { kind: "simulation-root" };
   if (nodeId === "study") return { kind: "study-root" };
-  if (nodeId === "study-defaults") return { kind: "study-defaults" };
-  if (nodeId === "study-defaults-runtime") return { kind: "study-runtime-defaults" };
+  if (nodeId === "study-defaults") return { kind: "study-stages" };
+  if (nodeId === "study-defaults-runtime") return { kind: "study-stages" };
   if (
     nodeId === "study-defaults-solver" ||
     nodeId === "study-solver" ||
@@ -63,10 +63,10 @@ export function parseStudyNodeContext(
     nodeId === "study-convergence" ||
     nodeId === "study-relax"
   ) {
-    return { kind: "study-solver-defaults" };
+    return { kind: "study-stages" };
   }
-  if (nodeId === "study-defaults-physics") return { kind: "study-physics-defaults" };
-  if (nodeId === "study-defaults-outputs") return { kind: "study-outputs-defaults" };
+  if (nodeId === "study-defaults-physics") return { kind: "study-stages" };
+  if (nodeId === "study-defaults-outputs") return { kind: "study-stages" };
   if (
     nodeId === "study-stages" ||
     nodeId === "study-builder" ||

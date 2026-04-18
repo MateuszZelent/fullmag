@@ -454,7 +454,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
         defaultOpen={true}
       >
         <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
-          This is the COMSOL-like study subsystem root. Authoring lives under <span className="font-semibold text-foreground">Defaults</span> and <span className="font-semibold text-foreground">Stages</span>, while runtime progress stays in the lower dock and status bar.
+          Study focuses on stage authoring, stage materialization and stage outputs. Physics and runtime defaults are configured outside this branch to avoid semantic duplication.
         </div>
         <div className="mt-3 grid gap-1">
           <InfoRow label="Study kind" value={studyKindForPlan(solverPlan)} />
@@ -464,9 +464,6 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
           <InfoRow label="Active workload" value={workloadLabel} />
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" type="button" onClick={() => ctx.setSelectedSidebarNodeId("study-defaults")}>
-            Open Defaults
-          </Button>
           <Button size="sm" variant="outline" type="button" onClick={() => ctx.setSelectedSidebarNodeId("study-stages")}>
             Open Stages
           </Button>

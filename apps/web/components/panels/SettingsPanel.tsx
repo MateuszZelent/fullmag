@@ -12,6 +12,7 @@ import MaterialPanel from "./settings/MaterialPanel";
 import MeshPanel from "./settings/MeshPanel";
 import ObjectMeshPanel from "./settings/ObjectMeshPanel";
 import PhysicsPanel from "./settings/PhysicsPanel";
+import RuntimePanel from "./settings/RuntimePanel";
 import RegionPanel from "./settings/RegionPanel";
 import StudyPanel from "./settings/StudyPanel";
 import UniversePanel from "./settings/UniversePanel";
@@ -221,11 +222,12 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
             switch (descriptor.panelKey) {
               case PanelKey.SESSION:         return <SessionInfoPanel />;
               case PanelKey.SCRIPT_BUILDER:  return <ScriptBuilderInfoPanel />;
+              case PanelKey.RUNTIME:         return <RuntimePanel nodeId={panelProps.nodeId as string | undefined} />;
               case PanelKey.VIS_PRESET:      return <VisualizationPresetPanel nodeId={panelProps.nodeId as string} />;
               case PanelKey.STUDY:           return <StudyPanel nodeId={panelProps.nodeId as string} />;
               case PanelKey.UNIVERSE:        return <UniversePanel />;
               case PanelKey.ANTENNA:         return <AntennaPanel nodeId={panelProps.nodeId as string} />;
-              case PanelKey.PHYSICS:         return <PhysicsPanel />;
+              case PanelKey.PHYSICS:         return <PhysicsPanel nodeId={panelProps.nodeId as string | undefined} />;
               case PanelKey.RESULTS:         return <ResultsPanel />;
               case PanelKey.PREVIEW_CONTROLS: return <PreviewControlsPanel />;
               case PanelKey.ENERGY:          return <EnergyPanel />;

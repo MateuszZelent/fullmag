@@ -4,11 +4,13 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { CheckCircle2, Circle, LoaderCircle, MinusCircle, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
+  BackendCapabilities,
   ModelBuilderGraphV2,
   SceneDocument,
   ScriptBuilderCurrentModuleEntry,
   ScriptBuilderExcitationAnalysisEntry,
   ScriptBuilderGeometryEntry,
+  ScriptBuilderMagneticInteractionEntry,
   ScriptBuilderMagnetizationEntry,
   ScriptBuilderStageState,
   VisualizationPreset,
@@ -20,6 +22,10 @@ import {
   ensureObjectPhysicsStack,
   magneticInteractionLabel,
 } from "@/lib/session/magneticPhysics";
+import {
+  buildPhysicsCapabilityView,
+  type PhysicsCapabilityViewEntry,
+} from "@/lib/session/physicsCatalog";
 import {
   buildFlatStudyStageNodeId,
   buildPipelineStudyStageNodeId,
@@ -328,6 +334,65 @@ function buildFlatStudyStageTreeNodes(
       children: detailChildren,
     };
   });
+}
+
+function hasNonZeroField(field: readonly number[] | null | undefined): boolean {
+  return Boolean(field && field.some((component) => Math.abs(Number(component) || 0) > 0));
+}
+
+function normalizePhysicsStack(
+  stack: readonly ScriptBuilderMagneticInteractionEntry[],
+): ScriptBuilderMagneticInteractionEntry[] {
+  const byKind = new Map<string, ScriptBuilderMagneticInteractionEntry>();
+  for (const entry of stack) {
+    const current = byKind.get(entry.kind);
+    if (!current) {
+      byKind.set(entry.kind, entry);
+      continue;
+    }
+    byKind.set(entry.kind, {
+      ...current,
+      enabled: current.enabled || entry.enabled,
+      params: current.params ?? entry.params,
+    });
+  }
+  return Array.from(byKind.values());
+}
+
+function enrichPhysicsCapabilityEntries(
+  entries: PhysicsCapabilityViewEntry[],
+  opts: {
+    zeemanField?: readonly number[] | null;
+    exchangeEnabled?: boolean;
+    demagEnabled?: boolean;
+    metadata?: Record<string, unknown> | null;
+  },
+): PhysicsCapabilityViewEntry[] {
+  return entries.map((entry) => {
+    let active = entry.active;
+    if (entry.id === "zeeman") {
+      active = hasNonZeroField(opts.zeemanField);
+    } else if (entry.id === "exchange") {
+      active = opts.exchangeEnabled ?? entry.active;
+    } else if (entry.id === "demag") {
+      active = opts.demagEnabled ?? entry.active;
+    } else if (entry.id === "thermal_noise") {
+      active = opts.metadata?.thermal_active === true;
+    } else if (entry.id === "spin_transfer_torque") {
+      active = opts.metadata?.stt_active === true;
+    } else if (entry.id === "spin_orbit_torque") {
+      active = opts.metadata?.sot_active === true;
+    } else if (entry.id === "oersted") {
+      active = opts.metadata?.oersted_active === true;
+    }
+    return { ...entry, active };
+  });
+}
+
+function physicsModuleNodeStatus(entry: PhysicsCapabilityViewEntry): NodeStatus {
+  if (entry.active) return "ready";
+  if (entry.available) return "pending";
+  return "pending";
 }
 
 interface ModelTreeProps {
@@ -736,8 +801,10 @@ export function buildFullmagModelTree(opts: {
   solverStatus?: NodeStatus;
   solverIntegrator?: string;
   solverRelaxAlgorithm?: string;
-  demagMethod?: string;
+  demagRealization?: string | null;
   physicsTerms?: string[];
+  capabilities?: BackendCapabilities | null;
+  metadata?: Record<string, unknown> | null;
   exchangeEnabled?: boolean;
   demagEnabled?: boolean;
   zeemanField?: number[] | null;
@@ -918,42 +985,85 @@ export function buildFullmagModelTree(opts: {
   const universePadding = opts.universePadding ?? graphUniverse?.padding ?? null;
 
   /* ── Physics ─────────────────────────────────────────────────────── */
-  const physicsChildren: TreeNodeData[] = [
-    { id: "phys-llg", label: "LLG Dynamics", icon: "∂", status: "ready" },
-    { 
-      id: "phys-exchange", 
-      label: "Exchange", 
-      icon: "↔", 
-      status: opts.exchangeEnabled === false ? "pending" : "ready",
-      badge: opts.exchangeEnabled === false ? "disabled" : undefined
-    },
+  const aggregatePhysicsStack = normalizePhysicsStack(
+    geos.flatMap((geometry) =>
+      ensureObjectPhysicsStack(
+        geometry.physics_stack,
+        geometry.material.Dind ?? null,
+      ),
+    ),
+  );
+  const rawPhysicsCapabilityEntries = buildPhysicsCapabilityView(
+    opts.capabilities ?? null,
+    aggregatePhysicsStack,
+  );
+  const physicsCapabilityEntries = enrichPhysicsCapabilityEntries(
+    rawPhysicsCapabilityEntries,
     {
-      id: "phys-demag",
-      label: "Demagnetization",
-      icon: "🧲",
-      status: opts.demagEnabled === false ? "pending" : "ready",
-      badge: opts.demagEnabled === false ? "disabled" : (opts.demagMethod ?? "transfer-grid"),
-      children: [
-        { id: "phys-demag-method", label: `Method: ${opts.demagMethod ?? "transfer-grid"}`, icon: "⚙" },
-        { id: "phys-demag-open-bc", label: "Open boundary", icon: "∞" },
-      ],
+      zeemanField: opts.zeemanField,
+      exchangeEnabled: opts.exchangeEnabled,
+      demagEnabled: opts.demagEnabled,
+      metadata: opts.metadata,
     },
-    { 
-      id: "phys-zeeman", 
-      label: "Zeeman (external H)", 
-      icon: "→", 
-      status: opts.zeemanField ? "ready" : "pending",
-      badge: opts.zeemanField ? undefined : "disabled" 
+  );
+  const demagBoundaryLabel =
+    opts.demagRealization == null || opts.demagRealization === "auto"
+      ? "Auto"
+      : opts.demagRealization === "poisson_dirichlet" || opts.demagRealization === "airbox_dirichlet"
+        ? "Dirichlet"
+        : opts.demagRealization === "poisson_robin" || opts.demagRealization === "airbox_robin"
+          ? "Robin"
+          : opts.demagRealization;
+  const physicsChildren: TreeNodeData[] = [
+    {
+      id: "physics-solver",
+      label: "Solver",
+      icon: "wrench",
+      status: "ready",
+      badge: opts.solverIntegrator ? opts.solverIntegrator.toUpperCase() : "auto",
     },
-    { id: "phys-bc", label: "Boundary Conditions", icon: "▢" },
+    ...physicsCapabilityEntries.map((entry) => ({
+      id: `physics-module-${entry.id}`,
+      label: entry.label,
+      icon:
+        entry.id === "exchange"
+          ? "repeat"
+          : entry.id === "demag"
+            ? "magnet"
+            : entry.id === "zeeman"
+              ? "arrow-right"
+              : entry.id === "thermal_noise"
+                ? "thermometer"
+                : entry.id === "spin_transfer_torque" || entry.id === "spin_orbit_torque"
+                  ? "refresh-cw"
+                  : entry.id === "interfacial_dmi" || entry.id === "bulk_dmi"
+                    ? "git-branch"
+                    : entry.id === "uniaxial_anisotropy" || entry.id === "cubic_anisotropy"
+                      ? "diamond"
+                      : "zap",
+      status: physicsModuleNodeStatus(entry),
+      badge: entry.active ? "active" : (entry.available ? "available" : "unavailable"),
+      children:
+        entry.id === "demag"
+          ? [
+              {
+                id: "physics-module-demag-method",
+                label: "Method",
+                icon: "settings",
+                status: physicsModuleNodeStatus(entry),
+                badge: opts.solverIntegrator ? opts.solverIntegrator.toUpperCase() : undefined,
+              },
+              {
+                id: "physics-module-demag-boundary",
+                label: "Boundary Conditions",
+                icon: "square",
+                status: physicsModuleNodeStatus(entry),
+                badge: demagBoundaryLabel,
+              },
+            ]
+          : undefined,
+    })),
   ];
-
-  if (opts.physicsTerms?.includes("thermal")) {
-    physicsChildren.push({ id: "phys-thermal", label: "Thermal Noise", icon: "🌡", status: "pending" });
-  }
-  if (opts.physicsTerms?.includes("sot") || opts.physicsTerms?.includes("stt")) {
-    physicsChildren.push({ id: "phys-spin-torque", label: "Spin Torque", icon: "⟳", status: "pending" });
-  }
 
   const objectsChildren: TreeNodeData[] =
     objects.length > 0
@@ -968,6 +1078,15 @@ export function buildFullmagModelTree(opts: {
         ];
 
   const studyChildren: TreeNodeData[] = [];
+
+  studyChildren.push({
+    id: "runtime",
+    label: "Runtime & Backend",
+    icon: "cpu",
+    badge: opts.backend ?? "auto",
+    status: opts.solverStatus === "active" ? "active" : "ready",
+    defaultOpen: false,
+  });
 
   if (showUniverse) {
     studyChildren.push({
@@ -1383,7 +1502,7 @@ export function buildFullmagModelTree(opts: {
       label: "Physics",
       icon: "zap",
       status: "ready",
-      defaultOpen: false,
+      defaultOpen: true,
       onClick: opts.onPhysicsClick,
       children: physicsChildren,
     },
@@ -1396,46 +1515,6 @@ export function buildFullmagModelTree(opts: {
       defaultOpen: true,
       onClick: opts.onSolverClick,
       children: [
-        {
-          id: "study-defaults",
-          label: "Defaults",
-          icon: "🧭",
-          badge: opts.backend ?? "auto",
-          status: "ready",
-          defaultOpen: true,
-          children: [
-            {
-              id: "study-defaults-runtime",
-              label: "Runtime & Backend",
-              icon: "⚙",
-              badge: opts.backend ?? "auto",
-              status: "ready",
-            },
-            {
-              id: "study-defaults-solver",
-              label: "Solver Defaults",
-              icon: "🔧",
-              badge: opts.solverIntegrator ? opts.solverIntegrator.toUpperCase() : "auto",
-              status: "ready",
-            },
-            {
-              id: "study-defaults-physics",
-              label: "Physics Defaults",
-              icon: "🧲",
-              badge: opts.zeemanField
-                ? `${opts.zeemanField.map((component) => Number(component).toExponential(2)).join(", ")} T`
-                : "no field",
-              status: "ready",
-            },
-            {
-              id: "study-defaults-outputs",
-              label: "Outputs Defaults",
-              icon: "💾",
-              badge: opts.scalarRowCount ? `${opts.scalarRowCount} pts` : "inherit",
-              status: "ready",
-            },
-          ],
-        },
         {
           id: "study-stages",
           label: "Stages",

@@ -61,6 +61,7 @@ export interface InspectorDescriptor {
 export const PanelKey = {
   SESSION:             "session",
   SCRIPT_BUILDER:      "script-builder",
+  RUNTIME:             "runtime",
   VIS_PRESET:          "vis-preset",
   STUDY:               "study",
   UNIVERSE:            "universe",
@@ -124,6 +125,11 @@ const RULES: RegistryRule[] = [
     kinds: ["session.script-builder"],
     panelKey: PanelKey.SCRIPT_BUILDER,
     props: noProps,
+  },
+  {
+    kinds: ["session.runtime"],
+    panelKey: PanelKey.RUNTIME,
+    props: passNodeId,
   },
 
   // ── Visualization ──
@@ -242,6 +248,7 @@ const RULES: RegistryRule[] = [
   {
     kinds: [
       "physics.root",
+      "physics.solver",
       "physics.llg",
       "physics.exchange",
       "physics.demag",
@@ -255,7 +262,7 @@ const RULES: RegistryRule[] = [
       "physics.interaction",
     ],
     panelKey: PanelKey.PHYSICS,
-    props: noProps,
+    props: passNodeId,
   },
 
   // ── Results ──

@@ -16,6 +16,7 @@ export type NodeKind =
   // Session & Script
   | "session.root"
   | "session.script-builder"
+  | "session.runtime"
   // Universe
   | "universe.root"
   | "universe.domain"
@@ -52,6 +53,7 @@ export type NodeKind =
   | "physics.root"
   | "physics.llg"
   | "physics.exchange"
+  | "physics.solver"
   | "physics.demag"
   | "physics.demag.method"
   | "physics.zeeman"

@@ -33,8 +33,6 @@ import { currentLiveApiClient } from "@/lib/liveApiClient";
 import type { EigenModeSummary } from "@/components/analyze/eigenTypes";
 import type { StudyPipelineDocumentState } from "@/lib/session/types";
 
-type StudyPipelineNodeState = StudyPipelineDocumentState["nodes"][number];
-
 function removeStudyPipelineNode(
   nodes: StudyPipelineDocumentState["nodes"],
   nodeId: string,
@@ -90,7 +88,7 @@ function nodeMatchesScope(node: TreeNodeData, scope: TreeFilterScope): boolean {
         node.id.includes("-mesh")
       );
     case "physics":
-      return /^(physics|phys-|physobj-|study-solver|solver)/.test(node.id) || haystack.includes("physics");
+      return /^(physics|phys-|physobj-|physics-module-|physics-solver|solver)/.test(node.id) || haystack.includes("physics");
     case "results":
       return /^(results|res-|analyze|preview)/.test(node.id) || haystack.includes("result");
   }
@@ -440,10 +438,16 @@ export default function RunSidebar() {
         solverStatus: tp.hasSolverTelemetry ? "active" : "pending",
         solverIntegrator: model.solverPlan?.integrator ?? model.solverSettings.integrator,
         solverRelaxAlgorithm: model.solverPlan?.relaxation?.algorithm ?? model.solverSettings.relaxAlgorithm,
-        demagMethod: "transfer-grid",
+        demagRealization: model.scriptBuilderDemagRealization,
+        capabilities: cmd.capabilities,
+        metadata: cmd.metadata,
         exchangeEnabled: model.material?.exchangeEnabled,
         demagEnabled: model.material?.demagEnabled,
-        zeemanField: model.material?.zeemanField,
+        zeemanField:
+          model.sceneDocument?.study.external_field
+          ?? model.modelBuilderGraph?.study.external_field
+          ?? model.material?.zeemanField
+          ?? null,
         convergenceStatus:
           tp.hasSolverTelemetry && tp.effectiveDmDt > 0 && tp.effectiveDmDt < (Number(model.solverSettings.torqueTolerance) || DEFAULT_CONVERGENCE_THRESHOLD)
             ? "ready"
@@ -469,6 +473,7 @@ export default function RunSidebar() {
       }),
     [
       model.modelBuilderGraph, model.sceneDocument, model.effectiveFemMesh, tp.hasSolverTelemetry, cmd.isFemBackend, model.material,
+      model.scriptBuilderDemagRealization, cmd.capabilities, cmd.metadata,
       model.mesherSourceKind, model.meshFeOrder, model.meshName,
       model.solverPlan?.integrator, model.solverPlan?.relaxation?.algorithm,
       model.solverSettings.integrator, model.solverSettings.relaxAlgorithm, model.solverSettings.torqueTolerance,
@@ -503,7 +508,7 @@ export default function RunSidebar() {
     if (activeStageLayout.leftDock === "results-tree") return "results";
     if (activeStageLayout.leftDock === "study-tree") return "study";
     if (activeStageLayout.leftDock === "model") return "study-root";
-    if (cmd.interactiveControlsEnabled) return "study-solver";
+    if (cmd.interactiveControlsEnabled) return "physics-solver";
     const firstObjectId =
       model.sceneDocument?.objects[0]?.name ??
       model.sceneDocument?.objects[0]?.id ??

@@ -349,6 +349,14 @@ export function previewQuantityForTreeNode(id: string): string | null {
   if (id === "antennas" || id.startsWith("ant-")) {
     return "H_ant";
   }
+  if (id.startsWith("physics-module-")) {
+    const moduleId = id.replace("physics-module-", "");
+    if (moduleId.startsWith("demag")) return "H_demag";
+    if (moduleId.startsWith("exchange")) return "H_ex";
+    if (moduleId.startsWith("zeeman")) return "H_ext";
+    if (moduleId.startsWith("interfacial_dmi") || moduleId.startsWith("bulk_dmi")) return "H_dmi";
+    return null;
+  }
   switch (id) {
     case "phys-llg":
       return "m";
@@ -360,6 +368,8 @@ export function previewQuantityForTreeNode(id: string): string | null {
       return "H_demag";
     case "phys-zeeman":
       return "H_ext";
+    case "physics-solver":
+      return "m";
     default:
       return null;
   }
