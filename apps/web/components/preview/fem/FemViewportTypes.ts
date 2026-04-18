@@ -33,6 +33,7 @@ export type FemViewportOverlayPopover =
   | "display"
   | "vectors"
   | "camera"
+  | "info"
   | "panels"
   | null;
 

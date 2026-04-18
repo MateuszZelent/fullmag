@@ -99,12 +99,14 @@ function ShellControls({
   target,
   controlsRef,
   controlProfile,
+  enabled,
   onInteractionChange,
 }: {
   navigation: ShellNavigation;
   target: [number, number, number];
   controlsRef: React.MutableRefObject<any>;
   controlProfile: CameraControlProfileId;
+  enabled: boolean;
   onInteractionChange?: (active: boolean) => void;
 }) {
   const handleStart = useCallback(() => {
@@ -135,6 +137,7 @@ function ShellControls({
     return (
       <OrbitControls
         ref={controlsRef}
+        enabled={enabled}
         enableDamping={FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.enableControlDamping}
         dampingFactor={
           FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.enableControlDamping ? profile.dampingFactor : 0
@@ -154,6 +157,7 @@ function ShellControls({
   return (
     <TrackballControls
       ref={controlsRef}
+      enabled={enabled}
       rotateSpeed={profile.rotateSpeed}
       zoomSpeed={profile.zoomSpeed}
       panSpeed={profile.panSpeed}
@@ -342,20 +346,19 @@ export default function ScientificViewportShell({
         </>
       ) : null}
       {children}
-      {controlsEnabled ? (
-        <ShellControls
-          navigation={navigation}
-          target={target}
-          controlsRef={effectiveControlsRef}
-          controlProfile={controlProfile}
-          onInteractionChange={handleInteractionChange}
-        />
-      ) : null}
+      <ShellControls
+        navigation={navigation}
+        target={target}
+        controlsRef={effectiveControlsRef}
+        controlProfile={controlProfile}
+        enabled={controlsEnabled}
+        onInteractionChange={handleInteractionChange}
+      />
       {bridgeSyncEnabled ? (
         <ShellBridgeSync
           bridgeRef={effectiveBridgeRef}
           controlsRef={effectiveControlsRef}
-          awaitControls={controlsEnabled}
+          awaitControls
         />
       ) : null}
       <ViewportTelemetryProbe

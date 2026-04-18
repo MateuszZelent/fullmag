@@ -11,6 +11,7 @@ import {
   ArrowUpRight,
   Video,
   Camera,
+  Info,
   Layers,
   SlidersHorizontal,
 } from "lucide-react";
@@ -19,7 +20,11 @@ import { ViewportToolGroup, ViewportToolSeparator } from "../ViewportToolGroup";
 import { ViewportIconAction } from "../ViewportIconAction";
 import { ViewportPopoverPanel, ViewportPopoverRow, ViewportPopoverTrigger } from "../ViewportPopoverPanel";
 import type { ArrowSamplingMode, FemArrowColorMode, FemColorField, RenderMode, ClipAxis } from "../FemMeshView3D";
-import type { FemViewportNavigation, FemViewportProjection } from "./FemViewportTypes";
+import type {
+  FemViewportNavigation,
+  FemViewportOverlayPopover,
+  FemViewportProjection,
+} from "./FemViewportTypes";
 import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles";
 import {
   GLYPH_BUDGET_MAX,
@@ -59,8 +64,12 @@ export interface FemViewportToolbarProps {
   totalPartsCount?: number;
   hasField?: boolean;
   fieldLabel?: string;
-  openPopover: string | null;
-  onOpenPopoverChange: (id: string | null) => void;
+  nNodes?: number;
+  nElements?: number;
+  nFaces?: number;
+  selectedFacesCount?: number;
+  openPopover: FemViewportOverlayPopover;
+  onOpenPopoverChange: (id: FemViewportOverlayPopover) => void;
   onRenderModeChange: (value: RenderMode) => void;
   onSurfaceColorFieldChange: (value: FemColorField) => void;
   onArrowColorModeChange: (value: FemArrowColorMode) => void;
@@ -176,6 +185,10 @@ export function FemViewportToolbar({
   totalPartsCount,
   hasField,
   fieldLabel,
+  nNodes,
+  nElements,
+  nFaces,
+  selectedFacesCount = 0,
   openPopover,
   onOpenPopoverChange,
   onRenderModeChange,
@@ -767,6 +780,55 @@ export function FemViewportToolbar({
 
       {/* ── Panels ── */}
       <ViewportToolGroup label="Panels" compact={compact}>
+        <ViewportPopoverTrigger preferredHorizontal="right" preferredVertical="bottom">
+          <ViewportIconAction
+            icon={<Info size={14} />}
+            showCaret
+            active={openPopover === "info"}
+            onClick={() => onOpenPopoverChange(openPopover === "info" ? null : "info")}
+            title="Simulation Details"
+          />
+          {openPopover === "info" && (
+            <ViewportPopoverPanel
+              anchorRef={{ current: null }}
+              title="Simulation Details"
+              className="w-[min(34rem,calc(100vw-1rem))] max-w-[min(34rem,calc(100vw-1rem))]"
+            >
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[0.66rem]">
+                <span className="text-muted-foreground">Nodes</span>
+                <span className="font-mono text-right">{nNodes?.toLocaleString() ?? "n/a"}</span>
+                <span className="text-muted-foreground">Tetrahedra</span>
+                <span className="font-mono text-right">{nElements?.toLocaleString() ?? "n/a"}</span>
+                <span className="text-muted-foreground">Boundary faces</span>
+                <span className="font-mono text-right">{nFaces?.toLocaleString() ?? "n/a"}</span>
+                <span className="text-muted-foreground">Render mode</span>
+                <span className="font-mono text-right">{renderMode}</span>
+                <span className="text-muted-foreground">Clip</span>
+                <span className="font-mono text-right">
+                  {clipEnabled ? `${clipAxis.toUpperCase()} @ ${clipPos}%` : "off"}
+                </span>
+                <span className="text-muted-foreground">Quantity</span>
+                <span className="font-mono text-right">{activeQuantity?.shortLabel ?? "n/a"}</span>
+                <span className="text-muted-foreground">Field</span>
+                <span className="font-mono text-right">{fieldLabel ?? (hasField ? "M" : "n/a")}</span>
+                <span className="text-muted-foreground">Vectors</span>
+                <span className="font-mono text-right">
+                  {arrowsVisible ? `on (${effectiveDensity})` : "off"}
+                </span>
+                <span className="text-muted-foreground">Selection</span>
+                <span className="font-mono text-right">
+                  {selectedFacesCount > 0 ? `${selectedFacesCount} faces` : "none"}
+                </span>
+                <span className="text-muted-foreground">Visible parts</span>
+                <span className="font-mono text-right">
+                  {visiblePartsCount !== undefined && totalPartsCount !== undefined
+                    ? `${visiblePartsCount}/${totalPartsCount}`
+                    : "n/a"}
+                </span>
+              </div>
+            </ViewportPopoverPanel>
+          )}
+        </ViewportPopoverTrigger>
         <ViewportPopoverTrigger preferredHorizontal="left">
           <ViewportIconAction
             icon={<Layers size={14} />}

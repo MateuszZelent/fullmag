@@ -58,7 +58,7 @@ interface UseFemViewportPresenterArgs {
   labeledMode: boolean;
   legendOpen: boolean;
   partExplorerOpen?: boolean;
-  openPopover: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "panels" | null;
+  openPopover: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "info" | "panels" | null;
   selectedFaces: number[];
   showOrientationLegend?: boolean;
   arrowField: FemColorField;
@@ -92,7 +92,7 @@ interface UseFemViewportPresenterArgs {
   setInternalArrowSamplingMode: (v: ArrowSamplingMode) => void;
   setInternalPartExplorerOpen: (fn: (prev: boolean) => boolean) => void;
   setLabeledMode: (v: boolean) => void;
-  setOpenPopover: (id: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "panels" | null) => void;
+  setOpenPopover: (id: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "info" | "panels" | null) => void;
   setCameraProjection: (v: "perspective" | "orthographic") => void;
   setNavigationMode: (v: "trackball" | "cad") => void;
   setQualityProfile: (v: ViewportQualityProfileId) => void;

@@ -43,7 +43,7 @@ interface UseFemViewportCommandsArgs {
   clipEnabled: boolean;
   partExplorerOpen: boolean;
   setOpenPopover: Dispatch<SetStateAction<
-    "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "panels" | null
+    "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "info" | "panels" | null
   >>;
   setLegendOpen: Dispatch<SetStateAction<boolean>>;
   setInternalPartExplorerOpen: Dispatch<SetStateAction<boolean>>;
@@ -56,6 +56,7 @@ type PopoverId =
   | "display"
   | "vectors"
   | "camera"
+  | "info"
   | "panels"
   | null;
 

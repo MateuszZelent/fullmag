@@ -15,7 +15,7 @@ import { glyphBudgetToMaxPoints } from "./vectorDensityBudget";
 import { colorLegendLabel, colorLegendGradient } from "./femColorUtils";
 import { FemViewportToolbar } from "./FemViewportToolbar";
 import { FemViewportStatusBar } from "./FemViewportStatusBar";
-import { FemRefineToolbar, FemSelectionHUD } from "./FemSelectionHUD";
+import { FemRefineToolbar } from "./FemSelectionHUD";
 import { FieldLegend } from "../field/FieldLegend";
 import HslSphere from "../HslSphere";
 import ViewCube from "../ViewCube";
@@ -93,7 +93,7 @@ export interface UseFemOverlayItemsArgs {
   labeledMode: boolean;
   legendOpen: boolean;
   partExplorerOpen?: boolean;
-  openPopover: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "panels" | null;
+  openPopover: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "info" | "panels" | null;
   selectedFaces: number[];
   effectiveShowOrientationLegend: boolean;
   interactionActive: boolean;
@@ -154,7 +154,7 @@ export interface UseFemOverlayItemsArgs {
   setLabeledMode: (v: boolean) => void;
   toggleLegend: () => void;
   togglePartExplorerInternal: () => void;
-  setOpenPopover: (id: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "panels" | null) => void;
+  setOpenPopover: (id: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "info" | "panels" | null) => void;
   setCameraProjection: (v: "perspective" | "orthographic") => void;
   setNavigationMode: (v: "trackball" | "cad") => void;
   setQualityProfile: (v: ViewportQualityProfileId) => void;
@@ -229,6 +229,10 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
             totalPartsCount={args.hasMeshParts ? args.meshParts.length : undefined}
             hasField={!args.missingMagneticMask}
             fieldLabel={args.fieldLabel}
+            nNodes={args.meshData.nNodes}
+            nElements={args.meshData.nElements}
+            nFaces={Math.floor(args.meshData.boundaryFaces.length / 3)}
+            selectedFacesCount={args.selectedFaces.length}
             openPopover={args.openPopover}
             onOpenPopoverChange={(id) => args.setOpenPopover(id as UseFemOverlayItemsArgs["openPopover"])}
             onRenderModeChange={args.applyToolbarRenderMode}
@@ -479,16 +483,6 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
         priority: 5,
         render: ({ variant }) => (
           <>
-            <FemSelectionHUD
-              compact={variant !== "full"}
-              nNodes={args.meshData.nNodes}
-              nElements={args.meshData.nElements}
-              nFaces={args.meshData.boundaryFaces.length / 3}
-              clipEnabled={args.clipEnabled}
-              clipAxis={args.clipAxis}
-              clipPos={args.clipPos}
-              selectedFacesCount={args.selectedFaces.length}
-            />
             {args.onRefine ? (
               <FemRefineToolbar
                 className={variant === "icon" ? "max-w-full flex-wrap justify-center" : undefined}
