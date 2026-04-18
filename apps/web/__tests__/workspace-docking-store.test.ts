@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getDefaultActiveWorkspaceTabByStage,
   getDefaultDockingStorageKey,
+  getDefaultDockingLayoutByPreset,
   getDefaultWorkspaceTabsByStage,
   useWorkspaceStore,
 } from "../lib/workspace/workspace-store";
+import { createDefaultDockLayout } from "../components/workspace/docking/dockLayoutDefaults";
 
 class MemoryStorage {
   private data = new Map<string, string>();
@@ -29,11 +31,7 @@ function resetDockingStore() {
   useWorkspaceStore.setState({
     workspaceTabsByStage: getDefaultWorkspaceTabsByStage(),
     activeWorkspaceTabByStage: getDefaultActiveWorkspaceTabByStage(),
-    dockLayoutByStage: {
-      build: { desktop: null, tablet: null, mobile: null },
-      study: { desktop: null, tablet: null, mobile: null },
-      analyze: { desktop: null, tablet: null, mobile: null },
-    },
+    dockLayoutByStage: getDefaultDockingLayoutByPreset(),
     currentStage: "study",
   });
 }
@@ -100,20 +98,21 @@ describe("workspace docking store", () => {
   });
 
   it("setDockLayout persists model to localStorage", () => {
-    const model = {
-      global: { splitterSize: 6 },
-      layout: { type: "row", children: [] },
-      borders: [],
-    } as Record<string, unknown>;
+    const model = createDefaultDockLayout("desktop") as Record<string, unknown>;
 
     useWorkspaceStore.getState().setDockLayout("study", "desktop", model);
 
-    expect(useWorkspaceStore.getState().dockLayoutByStage.study.desktop).toEqual(model);
+    expect(useWorkspaceStore.getState().dockLayoutByStage.study.desktop?.model).toMatchObject(model);
+    expect(
+      useWorkspaceStore.getState().dockLayoutByStage.study.desktop?.dockingLayoutSchemaVersion,
+    ).toBe(1);
+    expect(useWorkspaceStore.getState().dockLayoutByStage.study.desktop?.wasRecovered).toBe(false);
 
     vi.runAllTimers();
 
     const stored = memoryStorage.getItem(getDefaultDockingStorageKey());
     expect(stored).toBeTruthy();
+    expect(stored).toContain("dockingLayoutSchemaVersion");
     expect(stored).toContain("splitterSize");
   });
 

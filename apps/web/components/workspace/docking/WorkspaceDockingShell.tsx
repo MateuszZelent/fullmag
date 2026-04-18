@@ -1,16 +1,16 @@
 "use client";
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Layout as FlexLayout,
   Model,
   TabNode,
   type Action,
-  type IJsonModel,
 } from "flexlayout-react";
 
 import { useCommand, useModel, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import RunSidebar from "@/components/runs/control-room/RunSidebar";
 import BottomUtilityDock from "@/components/workspace/shell/BottomUtilityDock";
 import ChartsDock from "@/components/workspace/docks/ChartsDock";
@@ -22,32 +22,12 @@ import {
   StudyRightInspector,
 } from "@/components/workspace/modes/WorkspaceModeInspectors";
 import {
-  type DockLayoutModel,
-  type WorkspaceMode,
   useWorkspaceStore,
 } from "@/lib/workspace/workspace-store";
 
 import DockCenterTabs from "./DockCenterTabs";
-import {
-  createDefaultDockLayout,
-  resolveDockResponsivePreset,
-  type DockResponsivePreset,
-} from "./dockLayoutDefaults";
-
-function parseDockLayout(model: DockLayoutModel | null, preset: DockResponsivePreset): IJsonModel {
-  if (model) {
-    try {
-      const candidate = model as Partial<IJsonModel>;
-      if (candidate.layout && typeof candidate.layout === "object") {
-        return candidate as IJsonModel;
-      }
-      return createDefaultDockLayout(preset);
-    } catch {
-      return createDefaultDockLayout(preset);
-    }
-  }
-  return createDefaultDockLayout(preset);
-}
+import { resolveDockResponsivePreset } from "./dockLayoutDefaults";
+import { useDockLayoutRuntime } from "./useDockLayoutRuntime";
 
 function parsePositiveNumber(value: string): number | null {
   const parsed = Number.parseFloat(value);
@@ -79,6 +59,10 @@ export default function WorkspaceDockingShell() {
   const currentStage = useWorkspaceStore((state) => state.currentStage);
   const stageLayouts = useWorkspaceStore((state) => state.dockLayoutByStage[state.currentStage]);
   const setDockLayout = useWorkspaceStore((state) => state.setDockLayout);
+  const setDockLayoutToDefaultTemplate = useWorkspaceStore(
+    (state) => state.setDockLayoutToDefaultTemplate,
+  );
+  const clearDockingLayoutStorage = useWorkspaceStore((state) => state.clearDockingLayoutStorage);
 
   const cmd = useCommand();
   const modelState = useModel();
@@ -120,12 +104,14 @@ export default function WorkspaceDockingShell() {
   const responsivePreset = resolveDockResponsivePreset(viewportWidth);
   const stageLayout = stageLayouts[responsivePreset];
 
-  const stageRef = useRef<WorkspaceMode>(currentStage);
-  const presetRef = useRef<DockResponsivePreset>(responsivePreset);
-
-  const [model, setModel] = useState<Model>(() =>
-    Model.fromJson(parseDockLayout(stageLayout, responsivePreset)),
-  );
+  const runtime = useDockLayoutRuntime({
+    stage: currentStage,
+    preset: responsivePreset,
+    layoutEnvelope: stageLayout,
+    setDockLayout,
+    setDockLayoutToDefaultTemplate,
+    clearDockingLayoutStorage,
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -135,23 +121,12 @@ export default function WorkspaceDockingShell() {
     return () => window.removeEventListener("resize", update);
   }, []);
 
-  useEffect(() => {
-    const stageChanged = stageRef.current !== currentStage;
-    const presetChanged = presetRef.current !== responsivePreset;
-    if (stageChanged || presetChanged) {
-      setModel(Model.fromJson(parseDockLayout(stageLayout, responsivePreset)));
-      stageRef.current = currentStage;
-      presetRef.current = responsivePreset;
-    }
-  }, [currentStage, responsivePreset, stageLayout]);
-
   const onModelChange = useCallback(
     (nextModel: Model, action: Action) => {
       void action;
-      const serialized: DockLayoutModel = { ...nextModel.toJson() };
-      setDockLayout(currentStage, responsivePreset, serialized);
+      runtime.onModelChange(nextModel, action);
     },
-    [currentStage, responsivePreset, setDockLayout],
+    [runtime],
   );
 
   const factory = useCallback(
@@ -257,13 +232,48 @@ export default function WorkspaceDockingShell() {
     () => `${currentStage}:${responsivePreset}`,
     [currentStage, responsivePreset],
   );
+  const currentPresetStats = runtime.metrics;
+  const hasRecovery = currentPresetStats.wasRecovered;
+  const recoveryLabel = hasRecovery
+    ? `naprawiony: ${currentPresetStats.lastRepairReason ?? "układ zregenerowany"}`
+    : "brak naprawy";
+  const lastRepairLabel = currentPresetStats.lastRepairAtUnixMs
+    ? new Date(currentPresetStats.lastRepairAtUnixMs).toLocaleTimeString("pl-PL")
+    : "brak";
 
   return (
     <div className="relative h-full w-full min-h-0 min-w-0 overflow-hidden bg-background">
+      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showLayoutDebugHud && (
+      <div className="absolute right-2 top-2 z-10 flex max-w-[72vw] flex-wrap items-center gap-2 rounded-md border border-border/40 bg-background/95 px-2 py-1 text-xs shadow">
+        <span className="rounded-sm bg-muted/70 px-2 py-0.5">preset: {currentPresetStats.preset}</span>
+        <span className="rounded-sm bg-muted/70 px-2 py-0.5">template: {currentPresetStats.templateId}</span>
+        <span className="rounded-sm bg-muted/70 px-2 py-0.5">v{currentPresetStats.dockingLayoutSchemaVersion}</span>
+        <span
+          className={`rounded-sm px-2 py-0.5 ${hasRecovery ? "bg-amber-500/20 text-amber-200" : "bg-emerald-500/20 text-emerald-200"}`}
+        >
+          {recoveryLabel}
+        </span>
+        <span className="rounded-sm bg-muted/70 px-2 py-0.5">naprawa: {lastRepairLabel}</span>
+        <button
+          type="button"
+          className="rounded-md border border-border/50 bg-background px-2 py-0.5 hover:bg-muted"
+          onClick={runtime.restoreCurrentPresetTemplate}
+        >
+          Przywróć domyślny układ
+        </button>
+        <button
+          type="button"
+          className="rounded-md border border-border/50 bg-background px-2 py-0.5 hover:bg-muted"
+          onClick={runtime.clearStorageAndReset}
+        >
+          Wyczyść zapis i reset
+        </button>
+      </div>
+      )}
       <TooltipProvider delayDuration={250}>
         <FlexLayout
           key={modelKey}
-          model={model}
+          model={runtime.model}
           factory={factory}
           classNameMapper={classNameMapper}
           onModelChange={onModelChange}

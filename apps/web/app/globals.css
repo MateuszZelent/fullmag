@@ -1362,7 +1362,7 @@ th {
   --color-border-tab-selected-background: color-mix(in oklab, hsl(var(--muted)) 60%, transparent);
   --color-border-tab-unselected: hsl(var(--muted-foreground));
   --color-border-tab-unselected-background: transparent;
-  --color-splitter: color-mix(in oklab, hsl(var(--border)) 72%, transparent);
+  --color-splitter: color-mix(in oklab, hsl(var(--border)) 18%, transparent);
   --color-splitter-hover: color-mix(in oklab, hsl(var(--primary)) 38%, transparent);
   --color-splitter-drag: color-mix(in oklab, hsl(var(--primary)) 45%, transparent);
   --color-drag1: hsl(var(--primary));
@@ -1380,4 +1380,70 @@ th {
 
 .workspace-docking .flexlayout__tab {
   border-radius: 8px 8px 0 0;
+}
+
+.workspace-docking .flexlayout__splitter {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: col-resize;
+  min-width: 3px;
+  min-height: 3px;
+  transition: background 0.15s ease;
+}
+
+.workspace-docking .flexlayout__splitter:hover {
+  background: var(--color-splitter-hover);
+}
+
+.workspace-docking .flexlayout__splitter_drag {
+  cursor: grabbing;
+  background: var(--color-splitter-drag);
+}
+
+.workspace-docking .flexlayout__splitter_handle,
+.workspace-docking .flexlayout__splitter_handle_vert,
+.workspace-docking .flexlayout__splitter_handle_horz {
+  pointer-events: auto;
+  touch-action: none;
+  z-index: 12;
+  opacity: 0.18;
+  transition: opacity 0.15s ease;
+}
+
+.workspace-docking .flexlayout__splitter:hover .flexlayout__splitter_handle_vert,
+.workspace-docking .flexlayout__splitter:hover .flexlayout__splitter_handle_horz {
+  opacity: 0.55;
+}
+
+.workspace-docking .flexlayout__splitter_drag .flexlayout__splitter_handle_vert,
+.workspace-docking .flexlayout__splitter_drag .flexlayout__splitter_handle_horz {
+  opacity: 0.85;
+}
+
+.workspace-docking .flexlayout__splitter_handle {
+  width: 10px;
+  height: 10px;
+}
+
+.workspace-docking .flexlayout__splitter_handle_vert {
+  width: 100%;
+  min-width: 2px;
+  background: color-mix(in oklab, hsl(var(--foreground)) 55%, transparent);
+  border-radius: 999px;
+}
+
+.workspace-docking .flexlayout__splitter_handle_horz {
+  height: 100%;
+  min-height: 2px;
+  background: color-mix(in oklab, hsl(var(--foreground)) 55%, transparent);
+  border-radius: 999px;
+}
+
+.workspace-docking .flexlayout__splitter_extra {
+  cursor: col-resize;
+}
+
+.workspace-docking .flexlayout__splitter_edge {
+  cursor: col-resize;
 }

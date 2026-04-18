@@ -21,6 +21,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     showStatusBar: true,
     showWorkspaceOverlays: true,
     showBackendErrorNotice: true,
+    showLayoutDebugHud: false,
   },
   viewportRouting: {
     useMinimalViewportSelectionPath: false,
