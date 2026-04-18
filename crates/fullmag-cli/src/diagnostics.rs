@@ -277,11 +277,9 @@ pub(crate) fn diagnose_initial_fem_plan(plan: &FemPlanIR) -> Result<InitialState
                 topology, material, dynamics, terms, false, None,
             ),
             Some(
-                realization @ (
-                    fullmag_ir::ResolvedFemDemagIR::Bem
-                    | fullmag_ir::ResolvedFemDemagIR::FredkinKoehler
-                    | fullmag_ir::ResolvedFemDemagIR::Fmm
-                ),
+                realization @ (fullmag_ir::ResolvedFemDemagIR::Bem
+                | fullmag_ir::ResolvedFemDemagIR::FredkinKoehler
+                | fullmag_ir::ResolvedFemDemagIR::Fmm),
             ) => {
                 return Err(anyhow!(
                     "diagnostic FEM runner: demag model '{}' is not yet implemented in the backend",

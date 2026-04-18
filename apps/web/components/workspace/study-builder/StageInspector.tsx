@@ -20,6 +20,16 @@ import {
   InspectorSection,
   ToggleRow,
 } from "@/components/panels/settings/primitives";
+import {
+  describeOption,
+  EIGEN_DAMPING_POLICY_DETAILS,
+  EIGEN_EQUILIBRIUM_SOURCE_DETAILS,
+  EIGEN_NORMALIZATION_DETAILS,
+  EIGEN_SPIN_WAVE_BC_DETAILS,
+  EIGEN_TARGET_DETAILS,
+  INTEGRATOR_DETAILS,
+  RELAX_ALGORITHM_DETAILS,
+} from "@/lib/study-builder/studyCatalog";
 
 
 const INTEGRATOR_OPTIONS = Object.entries(INTEGRATOR_PROFILES).map(([value, profile]) => ({
@@ -108,6 +118,11 @@ function Field({
   return <InspectorField label={label} control={children} />;
 }
 
+function OptionHelp({ text }: { text: string | null }) {
+  if (!text) return null;
+  return <div className="text-[0.68rem] leading-relaxed text-muted-foreground">{text}</div>;
+}
+
 export default function StageInspector({
   node,
   onRename,
@@ -130,6 +145,34 @@ export default function StageInspector({
       && node.config.settle
       && typeof node.config.settle === "object"
       ? (node.config.settle as Record<string, unknown>)
+      : null;
+  const selectedIntegratorDescription =
+    node.node_kind === "primitive" && (node.stage_kind === "relax" || node.stage_kind === "run")
+      ? describeOption(INTEGRATOR_DETAILS, String(node.payload.integrator ?? "rk45"))?.description ?? null
+      : null;
+  const selectedRelaxDescription =
+    node.node_kind === "primitive" && node.stage_kind === "relax"
+      ? describeOption(RELAX_ALGORITHM_DETAILS, String(node.payload.relax_algorithm ?? "llg_overdamped"))?.description ?? null
+      : null;
+  const selectedEigenTargetDescription =
+    node.node_kind === "primitive" && node.stage_kind === "eigenmodes"
+      ? describeOption(EIGEN_TARGET_DETAILS, String(node.payload.eigen_target ?? "lowest"))?.description ?? null
+      : null;
+  const selectedEquilibriumDescription =
+    node.node_kind === "primitive" && node.stage_kind === "eigenmodes"
+      ? describeOption(EIGEN_EQUILIBRIUM_SOURCE_DETAILS, String(node.payload.eigen_equilibrium_source ?? "relax"))?.description ?? null
+      : null;
+  const selectedNormalizationDescription =
+    node.node_kind === "primitive" && node.stage_kind === "eigenmodes"
+      ? describeOption(EIGEN_NORMALIZATION_DETAILS, String(node.payload.eigen_normalization ?? "unit_l2"))?.description ?? null
+      : null;
+  const selectedDampingDescription =
+    node.node_kind === "primitive" && node.stage_kind === "eigenmodes"
+      ? describeOption(EIGEN_DAMPING_POLICY_DETAILS, String(node.payload.eigen_damping_policy ?? "ignore"))?.description ?? null
+      : null;
+  const selectedSpinWaveBcDescription =
+    node.node_kind === "primitive" && node.stage_kind === "eigenmodes"
+      ? describeOption(EIGEN_SPIN_WAVE_BC_DETAILS, String(node.payload.eigen_spin_wave_bc ?? "free"))?.description ?? null
       : null;
 
   return (
@@ -180,12 +223,15 @@ export default function StageInspector({
 
             {(node.stage_kind === "relax" || node.stage_kind === "run") && (
               <div className="md:col-span-2">
-                <SelectField
-                  label="Integrator"
-                  value={String(node.payload.integrator ?? "rk45")}
-                  options={INTEGRATOR_OPTIONS}
-                  onchange={(value) => onPatchConfig({ integrator: value })}
-                />
+                <div className="flex flex-col gap-1.5">
+                  <SelectField
+                    label="Integrator"
+                    value={String(node.payload.integrator ?? "rk45")}
+                    options={INTEGRATOR_OPTIONS}
+                    onchange={(value) => onPatchConfig({ integrator: value })}
+                  />
+                  <OptionHelp text={selectedIntegratorDescription} />
+                </div>
               </div>
             )}
 
@@ -209,12 +255,15 @@ export default function StageInspector({
             {node.stage_kind === "relax" ? (
               <>
                 <div className="md:col-span-2">
-                  <SelectField
-                    label="Relax algorithm"
-                    value={String(node.payload.relax_algorithm ?? "llg_overdamped")}
-                    options={RELAX_ALGORITHM_OPTIONS}
-                    onchange={(value) => onPatchConfig({ relax_algorithm: value })}
-                  />
+                  <div className="flex flex-col gap-1.5">
+                    <SelectField
+                      label="Relax algorithm"
+                      value={String(node.payload.relax_algorithm ?? "llg_overdamped")}
+                      options={RELAX_ALGORITHM_OPTIONS}
+                      onchange={(value) => onPatchConfig({ relax_algorithm: value })}
+                    />
+                    <OptionHelp text={selectedRelaxDescription} />
+                  </div>
                 </div>
                 <TextField
                   label="Torque tolerance"
@@ -251,30 +300,42 @@ export default function StageInspector({
                   onchange={(event) => onPatchConfig({ eigen_count: event.target.value })}
                   mono
                 />
-                <SelectField
-                  label="Target"
-                  value={String(node.payload.eigen_target ?? "lowest")}
-                  options={EIGEN_TARGET_OPTIONS}
-                  onchange={(value) => onPatchConfig({ eigen_target: value })}
-                />
-                <SelectField
-                  label="Equilibrium source"
-                  value={String(node.payload.eigen_equilibrium_source ?? "relax")}
-                  options={EIGEN_EQUILIBRIUM_SOURCE_OPTIONS}
-                  onchange={(value) => onPatchConfig({ eigen_equilibrium_source: value })}
-                />
-                <SelectField
-                  label="Normalization"
-                  value={String(node.payload.eigen_normalization ?? "unit_l2")}
-                  options={EIGEN_NORMALIZATION_OPTIONS}
-                  onchange={(value) => onPatchConfig({ eigen_normalization: value })}
-                />
-                <SelectField
-                  label="Damping policy"
-                  value={String(node.payload.eigen_damping_policy ?? "ignore")}
-                  options={EIGEN_DAMPING_POLICY_OPTIONS}
-                  onchange={(value) => onPatchConfig({ eigen_damping_policy: value })}
-                />
+                <div className="flex flex-col gap-1.5">
+                  <SelectField
+                    label="Target"
+                    value={String(node.payload.eigen_target ?? "lowest")}
+                    options={EIGEN_TARGET_OPTIONS}
+                    onchange={(value) => onPatchConfig({ eigen_target: value })}
+                  />
+                  <OptionHelp text={selectedEigenTargetDescription} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <SelectField
+                    label="Equilibrium source"
+                    value={String(node.payload.eigen_equilibrium_source ?? "relax")}
+                    options={EIGEN_EQUILIBRIUM_SOURCE_OPTIONS}
+                    onchange={(value) => onPatchConfig({ eigen_equilibrium_source: value })}
+                  />
+                  <OptionHelp text={selectedEquilibriumDescription} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <SelectField
+                    label="Normalization"
+                    value={String(node.payload.eigen_normalization ?? "unit_l2")}
+                    options={EIGEN_NORMALIZATION_OPTIONS}
+                    onchange={(value) => onPatchConfig({ eigen_normalization: value })}
+                  />
+                  <OptionHelp text={selectedNormalizationDescription} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <SelectField
+                    label="Damping policy"
+                    value={String(node.payload.eigen_damping_policy ?? "ignore")}
+                    options={EIGEN_DAMPING_POLICY_OPTIONS}
+                    onchange={(value) => onPatchConfig({ eigen_damping_policy: value })}
+                  />
+                  <OptionHelp text={selectedDampingDescription} />
+                </div>
                 <TextField
                   label="Target frequency"
                   value={String(node.payload.eigen_target_frequency ?? "")}
@@ -287,17 +348,20 @@ export default function StageInspector({
                   onchange={(event) => onPatchConfig({ eigen_k_vector: event.target.value })}
                   mono
                 />
-                <SelectField
-                  label="Spin-wave BC"
-                  value={String(node.payload.eigen_spin_wave_bc ?? "free")}
-                  options={EIGEN_SPIN_WAVE_BC_OPTIONS}
-                  onchange={(value) =>
-                    onPatchConfig({
-                      eigen_spin_wave_bc: value,
-                      ...patchEigenBcConfig(node.payload as EigenBcCarrier, { kind: value }),
-                    })
-                  }
-                />
+                <div className="flex flex-col gap-1.5">
+                  <SelectField
+                    label="Spin-wave BC"
+                    value={String(node.payload.eigen_spin_wave_bc ?? "free")}
+                    options={EIGEN_SPIN_WAVE_BC_OPTIONS}
+                    onchange={(value) =>
+                      onPatchConfig({
+                        eigen_spin_wave_bc: value,
+                        ...patchEigenBcConfig(node.payload as EigenBcCarrier, { kind: value }),
+                      })
+                    }
+                  />
+                  <OptionHelp text={selectedSpinWaveBcDescription} />
+                </div>
                 <div className="md:col-span-2">
                   <ToggleRow
                     label="Include demag in eigenproblem"

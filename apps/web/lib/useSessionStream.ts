@@ -17,6 +17,7 @@ export type {
   LiveState,
   FemLiveMesh,
   FemMeshPart,
+  BackendCapabilities,
   ScalarRow,
   EngineLogEntry,
   QuantityDescriptor,

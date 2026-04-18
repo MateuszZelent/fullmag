@@ -336,6 +336,8 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     ctx->oersted_time_dep_offset = plan->oersted_time_dep_offset;
     ctx->oersted_time_dep_t_on = plan->oersted_time_dep_t_on;
     ctx->oersted_time_dep_t_off = plan->oersted_time_dep_t_off;
+    const bool has_oersted_field = plan->oersted_field_xyz != nullptr && plan->oersted_field_len != 0;
+    ctx->has_oersted_field = ctx->has_oersted_cylinder || has_oersted_field;
 
     // Adaptive step config (DP45)
     ctx->adaptive_max_error = plan->adaptive_max_error > 0 ? plan->adaptive_max_error : 1e-5;
@@ -359,6 +361,17 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         ctx->last_error = "active_mask_len mismatch: expected "
             + std::to_string(ctx->cell_count)
             + ", got " + std::to_string(plan->active_mask_len);
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (ctx->has_oersted_cylinder && has_oersted_field) {
+        ctx->last_error =
+            "oersted configuration is ambiguous: provide either OerstedCylinder or oersted_field_xyz, not both";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (has_oersted_field && plan->oersted_field_len != ctx->cell_count * 3u) {
+        ctx->last_error = "oersted_field_len mismatch: expected "
+            + std::to_string(ctx->cell_count * 3u)
+            + ", got " + std::to_string(plan->oersted_field_len);
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (ctx->has_region_mask && plan->region_mask_len != ctx->cell_count) {
@@ -517,6 +530,10 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     // Precompute Oersted static field for I = 1 A
     if (ctx->has_oersted_cylinder) {
         if (!context_precompute_oersted_field(*ctx)) {
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
+    } else if (has_oersted_field) {
+        if (!context_upload_oersted_field(*ctx, plan->oersted_field_xyz, plan->oersted_field_len)) {
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);
         }
     }

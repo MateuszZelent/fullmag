@@ -85,6 +85,7 @@ pub(crate) fn compute_per_unit_antenna_fields(
                 add_antenna_field(&mut field, &plan.mesh.nodes, bounds, antenna, 1.0);
                 result.push(field);
             }
+            CurrentModuleIR::CurrentTransport { .. } => {}
         }
     }
     Ok(result)
@@ -112,6 +113,7 @@ pub(crate) fn combined_antenna_field_at_time(
                     field[2] += per_unit[node][2] * amp;
                 }
             }
+            CurrentModuleIR::CurrentTransport { .. } => {}
         }
     }
     total
@@ -139,6 +141,7 @@ pub(crate) fn compute_antenna_field(plan: &FemPlanIR) -> Result<Vec<[f64; 3]>, R
                     drive.current_a,
                 );
             }
+            CurrentModuleIR::CurrentTransport { .. } => {}
         }
     }
     Ok(total)

@@ -7,15 +7,48 @@ The capability matrix answers two questions before execution:
 1. Is a Python-authored `ProblemIR` legal for the requested backend and mode?
 2. If it is legal, what planning path should be selected?
 
-## Three-tier feature status model
+For the STT / STNO roadmap slice, the canonical machine-readable source is:
 
-Every feature carries one of three statuses:
+- `docs/specs/capability-matrix-v0.json`
+
+That JSON file is the authoritative status source for:
+
+- the four-state vocabulary,
+- Oersted alignment,
+- STNO benchmark / report status,
+- explicit semantic-only status for deferred FEM periodic / eigen parity items.
+
+The broader Markdown tables below remain a wider repository snapshot during the
+status-model migration, but the JSON slice above wins if there is any conflict
+for STT / STNO roadmap items.
+
+## Four-state status vocabulary
+
+Every product-facing feature should be described with one of these statuses:
 
 | Status | Meaning |
 |--------|---------|
-| **`semantic-only`** | Legal in Python API and `ProblemIR`. Can be serialized, validated, and planned. Not numerically implemented. |
-| **`internal-reference`** | Numerically implemented inside `fullmag-engine` or equivalent crate, but not wired to the public `Simulation.run()` path. |
-| **`public-executable`** | Fully wired end-to-end: Python `Simulation.run()` → plan → runner → engine → artifacts. |
+| **`semantic_only`** | Legal in Python API and `ProblemIR`, but not executable on the current public path. |
+| **`reference_executable`** | Executable on the trusted reference lane used for correctness and validation. |
+| **`production_executable`** | Executable on the intended production lane. |
+| **`validated`** | Executable and benchmarked with explicit regression coverage for the documented workload. |
+
+## Drive / STNO alignment slice
+
+The following status statements are intentionally explicit because older docs and examples drifted:
+
+| Feature | Status summary | Alignment note |
+|---|---|---|
+| `OerstedCylinder` on FDM and native FEM | `reference_executable` on CPU FDM, `production_executable` on GPU FDM and native FEM CPU/GPU for constant / sinusoidal / pulse envelopes | `piecewise_linear` is still rejected on the public planner path. |
+| `OerstedField(model="from_current_solution")` for cylindrical `prescribed_density` sources | `reference_executable` on CPU FDM, `production_executable` on GPU FDM and native FEM CPU/GPU | Executable only for `CurrentTransport(model="prescribed_density")` with cylindrical `solve_region` and axis-aligned current; planner lowers to the exact infinite-cylinder Oersted realization. |
+| `OerstedField(model="from_current_solution")` for general `prescribed_density` sources | `reference_executable` on CPU FDM, `production_executable` on GPU FDM and native FEM CPU/GPU | Non-cylindrical prescribed-current sources lower to a midpoint Biot-Savart `H_oe(x)` realization with explicit provenance. The current FDM slice is still single-body and capped by planner source-cell count, but both CPU reference and native CUDA now execute the resulting per-cell field. |
+| `CurrentTransport(model="prescribed_density")` | `reference_executable` on CPU FDM, `production_executable` on GPU FDM and native FEM CPU/GPU | Emits `current_transport/<name>.json` as an auxiliary artifact. On FDM and native FEM it can bind named current sources into prescribed Slonczewski / Zhang-Li torque modules. |
+| `SlonczewskiSTT` / `ZhangLiSTT` | `reference_executable` on CPU FDM, `production_executable` on GPU FDM and native FEM CPU/GPU | Native FEM executes the current public single-module subset; the Rust FEM reference runner still does not. |
+| `examples/stno_vortex_ref_minimal.py` | `reference_executable` on the reference FDM lane | This is the canonical minimal STNO benchmark; full solver CI validation remains separate work. |
+| `examples/stno_vortex_mtj_workflow.py` | non-canonical workflow example | Do not treat this generated workflow as the golden benchmark. |
+| Artifact-backed STNO report | `validated` on the reference FDM lane | Uses real solver artifacts, not synthetic demonstration data, and has regression coverage for the analysis path. |
+| FEM periodic / Floquet spin-wave support | `semantic_only` | Keep semantics and implementation status separate. |
+| FEM eigen equilibrium import for STNO parity | `semantic_only` | Do not describe as end-to-end public STNO support yet. |
 
 ## Current bootstrap policy
 

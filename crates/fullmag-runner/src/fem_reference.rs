@@ -1207,6 +1207,7 @@ mod tests {
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
+            field_refresh: None,
             relaxation: None,
             demag_realization: None,
             air_box_config: None,
@@ -1226,6 +1227,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
             oersted_time_dep_phase: 0.0,
@@ -1327,6 +1329,7 @@ mod tests {
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
+            field_refresh: None,
             relaxation: None,
             demag_realization: None,
             air_box_config: None,
@@ -1346,6 +1349,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
             oersted_time_dep_phase: 0.0,
@@ -1499,6 +1503,7 @@ mod tests {
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
+            field_refresh: None,
             relaxation: None,
             demag_realization: Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin),
             air_box_config: Some(AirBoxConfigIR {
@@ -1528,6 +1533,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
             oersted_time_dep_phase: 0.0,
@@ -1635,7 +1641,7 @@ mod tests {
     #[test]
     fn fem_airbox_plan_uses_airbox_demag_operator_in_reference_runner() {
         let plan = make_shared_domain_airbox_demag_plan();
-        let (problem, _state) = build_problem_and_state(&plan)
+        let (_problem, _state) = build_problem_and_state(&plan)
             .expect("shared-domain FEM airbox problem should build in reference runner");
         let provenance = execution_provenance(&plan);
 

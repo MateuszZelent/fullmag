@@ -1,0 +1,279 @@
+{
+  "schema_version": "capability_matrix.v0",
+  "updated_at": "2026-04-18",
+  "status_vocabulary": {
+    "semantic_only": "Canonical API and IR semantics exist, but the public executable path does not run this feature yet.",
+    "reference_executable": "Executable on the trusted reference lane used for correctness and validation.",
+    "production_executable": "Executable on the intended production lane.",
+    "validated": "Executable and benchmarked with explicit regression coverage for the documented workload."
+  },
+  "lanes": [
+    "fdm_cpu_reference",
+    "fdm_gpu_production",
+    "fem_cpu_public",
+    "fem_gpu_public"
+  ],
+  "features": [
+    {
+      "id": "slonczewski_stt",
+      "label": "SlonczewskiSTT",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "Current public executable subset supports a single Slonczewski module at a time, with either inline current_density or a named CurrentTransport prescribed_density source. Native FEM CPU/GPU execute this subset; the Rust FEM reference runner still does not."
+    },
+    {
+      "id": "zhang_li_stt",
+      "label": "ZhangLiSTT",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "Current public executable subset supports a single Zhang-Li module at a time, with either inline current_density or a named CurrentTransport prescribed_density source. Native FEM CPU/GPU execute the P1 element-gradient approximation; the Rust FEM reference runner still does not."
+    },
+    {
+      "id": "interface_cpp_stt",
+      "label": "InterfaceCppSTT",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Canonical placeholder for interface-local CPP multilayer torque."
+    },
+    {
+      "id": "drift_diffusion_spin_torque",
+      "label": "DriftDiffusionSpinTorque",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Deferred until current transport and spin accumulation are modeled explicitly."
+    },
+    {
+      "id": "spin_orbit_torque",
+      "label": "SpinOrbitTorque",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Canonical placeholder for damping-like and field-like SOT."
+    },
+    {
+      "id": "oersted_cylinder_constant",
+      "label": "OerstedCylinder constant envelope",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "Analytic infinite-cylinder Oersted support exists on FDM and native FEM CPU/GPU public paths."
+    },
+    {
+      "id": "oersted_cylinder_sinusoidal",
+      "label": "OerstedCylinder sinusoidal envelope",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "Same executable status as the constant envelope on FDM and native FEM."
+    },
+    {
+      "id": "oersted_cylinder_pulse",
+      "label": "OerstedCylinder pulse envelope",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "Public FDM and native FEM planners lower pulse envelopes."
+    },
+    {
+      "id": "oersted_cylinder_piecewise_linear",
+      "label": "OerstedCylinder piecewise_linear envelope",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Current FDM planner rejects piecewise-linear Oersted envelopes explicitly."
+    },
+    {
+      "id": "oersted_from_current_solution_cylindrical_prescribed_density",
+      "label": "OerstedField from_current_solution (cylindrical prescribed density)",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "Executable when the named CurrentTransport uses prescribed_density in a cylindrical solve_region with axis-aligned current; planner lowers to the exact infinite-cylinder Oersted realization on FDM and native FEM CPU/GPU."
+    },
+    {
+      "id": "oersted_from_current_solution_general_prescribed_density",
+      "label": "OerstedField from_current_solution (general prescribed density, midpoint Biot-Savart)",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "For non-cylindrical prescribed-density solve regions, the public planner lowers to a midpoint Biot-Savart field with equivalent-sphere self regularization. CPU-reference FDM executes the single-body per-cell slice with an explicit active-source-cell cap; native CUDA FDM executes the same planner-resolved per-cell field; native FEM CPU/GPU execute the per-node slice."
+    },
+    {
+      "id": "stno_vortex_ref_minimal",
+      "label": "STNO vortex reference benchmark",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [
+        "artifact-backed peak frequency extraction",
+        "artifact-backed orbit radius extraction",
+        "artifact-backed steady-state detection"
+      ],
+      "notes": "Canonical minimal benchmark is `examples/stno_vortex_ref_minimal.py`; artifact-analysis regressions exist, but the full solver benchmark is not yet CI-validated end-to-end."
+    },
+    {
+      "id": "stno_artifact_report",
+      "label": "Artifact-backed STNO report",
+      "lanes": {
+        "fdm_cpu_reference": "validated",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [
+        "peak frequency",
+        "linewidth",
+        "orbit radius",
+        "steady-state score"
+      ],
+      "notes": "Uses `scalars.csv` and optional `fields/m` snapshots."
+    },
+    {
+      "id": "current_transport_prescribed_density",
+      "label": "CurrentTransport prescribed_density",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "Writes `current_transport/<name>.json` auxiliary artifacts on the public FDM path and on native FEM CPU/GPU paths. Prescribed transport no longer forces FEM GPU fallback; only antenna_field_source still does."
+    },
+    {
+      "id": "current_transport_ohmic_poisson",
+      "label": "CurrentTransport ohmic_poisson",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Deferred."
+    },
+    {
+      "id": "fem_periodic_spin_wave",
+      "label": "FEM periodic or Floquet spin-wave support",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Documented semantics exist, but this should not be described as public-executable."
+    },
+    {
+      "id": "fem_eigen_equilibrium_import",
+      "label": "FEM eigenmodes with imported equilibrium from time-domain artifacts",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Keep status explicit; do not imply end-to-end STNO parity."
+    },
+    {
+      "id": "composite_free_layer_stno",
+      "label": "Composite free-layer STNO benchmark",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Phase 5 roadmap item."
+    },
+    {
+      "id": "nudged_elastic_band",
+      "label": "NudgedElasticBand",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Phase 6 roadmap item."
+    },
+    {
+      "id": "parameter_sweep",
+      "label": "ParameterSweep",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Phase 8 roadmap item."
+    },
+    {
+      "id": "optimization_study",
+      "label": "OptimizationStudy",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Phase 8 roadmap item."
+    }
+  ]
+}

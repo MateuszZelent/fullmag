@@ -1921,9 +1921,7 @@ pub(crate) fn resample_continuation_if_cross_backend(
         BackendPlanIR::Fdm(fdm) => fdm,
         BackendPlanIR::FdmMultilayer(_) => {
             // Multi-layer FDM continuation from FEM is not yet supported.
-            bail!(
-                "FEM → FDM-multilayer cross-backend continuation is not yet supported"
-            );
+            bail!("FEM → FDM-multilayer cross-backend continuation is not yet supported");
         }
         BackendPlanIR::Fem(_) => return Ok(None), // FEM → FEM: same-backend, use direct continuation
         _ => return Ok(None),
@@ -3437,6 +3435,9 @@ mod tests {
         let result = resample_continuation_if_cross_backend(&fdm_m, &source, &target_ir)
             .expect("same-backend check should succeed");
 
-        assert!(result.is_none(), "FDM→FDM should return None (no resampling)");
+        assert!(
+            result.is_none(),
+            "FDM→FDM should return None (no resampling)"
+        );
     }
 }

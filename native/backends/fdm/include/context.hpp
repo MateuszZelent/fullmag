@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -121,6 +122,7 @@ struct Context {
     double sot_thickness  = 1.0e-9;       // t_F FM layer thickness [m]
 
     // Oersted field (cylindrical conductor)
+    bool has_oersted_field = false;
     bool has_oersted_cylinder = false;
     double oersted_current = 0.0;        // DC current [A]
     double oersted_radius = 0.0;         // cylinder radius [m]
@@ -286,6 +288,36 @@ struct SttParams {
     double  stt_cpp_pf          = 0.0;
 };
 
+inline double oersted_field_scale(const Context &ctx) {
+    if (!ctx.has_oersted_field) {
+        return 0.0;
+    }
+    if (!ctx.has_oersted_cylinder) {
+        return 1.0;
+    }
+
+    double scale = ctx.oersted_current;
+    const double t = ctx.current_time;
+    switch (ctx.oersted_time_dep_kind) {
+        case 1: {
+            const double f = ctx.oersted_time_dep_freq;
+            const double phi = ctx.oersted_time_dep_phase;
+            const double off = ctx.oersted_time_dep_offset;
+            scale *= sin(2.0 * M_PI * f * t + phi) + off;
+            break;
+        }
+        case 2: {
+            const double t_on = ctx.oersted_time_dep_t_on;
+            const double t_off = ctx.oersted_time_dep_t_off;
+            scale *= (t >= t_on && t < t_off) ? 1.0 : 0.0;
+            break;
+        }
+        default:
+            break;
+    }
+    return scale;
+}
+
 /// Build an SttParams from a Context.
 inline SttParams stt_params_from_ctx(const Context &ctx) {
     SttParams p;
@@ -448,6 +480,9 @@ bool context_upload_cubic_anisotropy_fields(
 /// Precompute static Oersted field profile for I = 1 A (host → device).
 /// Must be called after context_alloc_device when has_oersted_cylinder is set.
 bool context_precompute_oersted_field(Context &ctx);
+
+/// Upload precomputed AoS Oersted field H_oe(x) [A/m] to the shared device buffer.
+bool context_upload_oersted_field(Context &ctx, const double *field_xyz, uint64_t len);
 
 /// Upload sparse demag boundary correction tensors.
 bool context_upload_demag_boundary_corr(

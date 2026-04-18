@@ -9,6 +9,11 @@ This document describes the physical models implemented in fullmag for **spin-to
 3. Thermal fluctuations
 4. Observables and their extraction from simulation data
 
+Canonical benchmark note:
+
+- the current reference benchmark is [`examples/stno_vortex_ref_minimal.py`](../../examples/stno_vortex_ref_minimal.py),
+- the builder-generated [`examples/stno_vortex_mtj_workflow.py`](../../examples/stno_vortex_mtj_workflow.py) remains a workflow example, not the golden benchmark.
+
 ---
 
 ## 1. Governing Equation
@@ -68,14 +73,25 @@ Typical STNO parameters:
 
 **Python DSL:**
 ```python
-spin_torque = SlonczewskiSTT(
-    current_density=[0, 0, 5e10],
-    spin_polarization=[0, 0, 1],
-    degree=0.4,
-    lambda_asymmetry=1.0,
-    epsilon_prime=0.0,
+problem = Problem(
+    ...,
+    spin_torques=[
+        SlonczewskiSTT(
+            current_density=[0, 0, 5e10],
+            spin_polarization=[0, 0, 1],
+            degree=0.4,
+            lambda_asymmetry=1.0,
+            epsilon_prime=0.0,
+        )
+    ],
 )
 ```
+
+Legacy compatibility note:
+
+- `spin_torque=SlonczewskiSTT(...)` still works,
+- canonical authoring now uses `spin_torques=[...]`,
+- the current public executable path still supports one torque module at a time.
 
 ### 2.2 Zhang–Li STT (CIP)
 
@@ -127,9 +143,9 @@ The current may be modulated with any `TimeDependence` envelope:
 
 | Backend | Oersted field | Notes |
 |---------|---------------|-------|
-| **CUDA FDM** | ✅ | Full support |
-| **CPU FDM** | ❌ | Not yet implemented (F13) |
-| **FEM GPU** | ✅ | Via finite-element source term |
+| **CUDA FDM** | ✅ | Production executable for the current public STNO slice |
+| **CPU FDM** | ✅ | Reference executable for constant / sinusoidal / pulse envelopes |
+| **FEM GPU** | semantic-only for the STNO public slice | Do not treat as public end-to-end STNO parity |
 
 ---
 
@@ -175,11 +191,11 @@ ThermalNoise(temperature=300.0, seed=42)
 |---------|----------|---------|---------|
 | Slonczewski STT | ✅ | ✅ | ❌ |
 | Zhang–Li STT | ✅ | ✅ | ❌ |
-| Oersted field | ✅ | ❌ | ✅ |
+| Oersted field | ✅ | ✅ | semantic-only for the current STNO public slice |
 | Thermal noise | ✅ | ✅ | ✅ |
 | PiecewiseLinear TD | ✅* | ✅* | ✅* |
 
-*PiecewiseLinear for Oersted time dependence is currently rejected by the FDM planner.
+*PiecewiseLinear for Oersted time dependence is currently rejected by the public FDM planner.
 
 ---
 
@@ -195,4 +211,7 @@ ThermalNoise(temperature=300.0, seed=42)
 8. Analyze: PSD of ⟨mₓ⟩(t) or ⟨m_y⟩(t), extract peak frequency and linewidth
 9. Track vortex core position, compute orbit radius and gyration frequency
 
-See [examples/stno_vortex_mtj_workflow.py](../../examples/stno_vortex_mtj_workflow.py) for a complete working example.
+See:
+
+- [examples/stno_vortex_ref_minimal.py](../../examples/stno_vortex_ref_minimal.py) for the canonical executable benchmark,
+- [examples/stno_vortex_mtj_postprocess.py](../../examples/stno_vortex_mtj_postprocess.py) for real artifact-backed post-processing.

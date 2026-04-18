@@ -201,6 +201,15 @@ fn runtime_info_once(message: &str) {
     runtime_log_once("info", message);
 }
 
+fn has_antenna_field_source(problem: &ProblemIR) -> bool {
+    problem.current_modules.iter().any(|module| {
+        matches!(
+            module,
+            fullmag_ir::CurrentModuleIR::AntennaFieldSource { .. }
+        )
+    })
+}
+
 fn unsupported_cpu_fdm_terms(plan: &FdmPlanIR, outputs: &[OutputIR]) -> Vec<&'static str> {
     let mut unsupported = Vec::new();
     if plan.has_oersted_cylinder {
@@ -569,15 +578,15 @@ pub(crate) fn resolve_fem_engine_with_trail(
         Err(_) => (ir_policy.to_string(), false),
     };
 
-    if !problem.current_modules.is_empty() {
+    if has_antenna_field_source(problem) {
         if policy == "gpu" {
             return Err(RunError {
                 message:
-                    "FEM GPU execution was requested, but native FEM GPU currently does not support active current_modules (fallback_reason=current_modules_force_cpu)"
+                    "FEM GPU execution was requested, but native FEM GPU currently does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)"
                         .to_string(),
             });
         }
-        let message = "FEM engine falling back to native FEM CPU — native FEM GPU does not support active current_modules (fallback_reason=current_modules_force_cpu)".to_string();
+        let message = "FEM engine falling back to native FEM CPU — native FEM GPU does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)".to_string();
         runtime_warn_once(&message);
         return Ok(EngineResolution {
             engine: FemEngine::CpuNative,
@@ -740,11 +749,11 @@ fn resolve_fem_engine_with_registry(
     let mut fallback = resolved.fallback;
 
     if engine == FemEngine::NativeGpu {
-        if !problem.current_modules.is_empty() {
+        if has_antenna_field_source(problem) {
             if explicit_selection {
                 return Err(RunError {
                     message:
-                        "FEM GPU execution was requested, but native FEM GPU currently does not support active current_modules (fallback_reason=current_modules_force_cpu)"
+                        "FEM GPU execution was requested, but native FEM GPU currently does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)"
                             .to_string(),
                 });
             }
@@ -756,7 +765,7 @@ fn resolve_fem_engine_with_registry(
                     .to_string(),
             }
                     })?;
-            let message = "FEM engine falling back to native FEM CPU — native FEM GPU does not support active current_modules (fallback_reason=current_modules_force_cpu)".to_string();
+            let message = "FEM engine falling back to native FEM CPU — native FEM GPU does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)".to_string();
             fallback = Some(runtime_fallback(
                 fem_engine_id(FemEngine::NativeGpu),
                 fem_engine_id(FemEngine::CpuNative),
@@ -1426,19 +1435,6 @@ pub(crate) fn execute_fem<'a>(
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
-    if normalized_plan.current_density.is_some()
-        || normalized_plan.stt_degree.is_some()
-        || normalized_plan.stt_beta.is_some()
-        || normalized_plan.stt_spin_polarization.is_some()
-        || normalized_plan.stt_lambda.is_some()
-        || normalized_plan.stt_epsilon_prime.is_some()
-    {
-        return Err(RunError {
-            message:
-                "FEM STT is not executable yet; refusing to run a semantically misleading fallback"
-                    .to_string(),
-        });
-    }
     match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
@@ -3012,9 +3008,9 @@ fn record_cuda_final_outputs(
 mod tests {
     use super::*;
     use fullmag_ir::{
-        AntennaIR, BackendTarget, CurrentModuleIR, DiscretizationHintsIR, FdmHintsIR, FemHintsIR,
-        FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector, FemObjectSegmentIR, FemPlanIR, MeshIR,
-        ProblemIR, RfDriveIR,
+        AntennaIR, BackendTarget, CurrentModuleIR, CurrentTransportModelIR, DiscretizationHintsIR,
+        FdmHintsIR, FemHintsIR, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
+        FemObjectSegmentIR, FemPlanIR, MeshIR, ProblemIR, RfDriveIR,
     };
     use serde_json::Value;
     use std::collections::HashMap;
@@ -3042,6 +3038,7 @@ mod tests {
                 order: 1,
                 hmax: 2e-9,
                 mesh: None,
+                demag_solver_policy: None,
             }),
             hybrid: None,
         });
@@ -3116,6 +3113,7 @@ mod tests {
             integrator: fullmag_ir::IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
+            field_refresh: None,
             relaxation: None,
             demag_realization: None,
             air_box_config: None,
@@ -3135,6 +3133,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
             oersted_time_dep_phase: 0.0,
@@ -3237,6 +3236,34 @@ mod tests {
         }
         let err = result.expect_err("current modules must reject forced GPU");
         assert!(err.message.contains("current_modules_force_cpu"));
+    }
+
+    #[test]
+    fn prescribed_current_transport_does_not_force_cpu_fallback() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let mut problem = fem_policy_problem();
+        problem
+            .current_modules
+            .push(CurrentModuleIR::CurrentTransport {
+                name: "drive".to_string(),
+                model: CurrentTransportModelIR::PrescribedDensity,
+                current_density: Some([0.0, 0.0, 5e10]),
+                solve_region: Some("free".to_string()),
+                conductivity_s_per_m: None,
+            });
+
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        let resolution =
+            resolve_fem_engine_with_trail(&problem).expect("prescribed transport should resolve");
+        assert_ne!(
+            resolution
+                .fallback
+                .as_ref()
+                .map(|fallback| fallback.reason.as_str()),
+            Some("current_modules_force_cpu")
+        );
     }
 
     #[test]

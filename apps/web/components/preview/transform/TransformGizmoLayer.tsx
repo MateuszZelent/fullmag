@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useCallback, useEffect } from "react";
+import { useRef, useCallback, useEffect, useState } from "react";
 import * as THREE from "three";
 import { PivotControls } from "@react-three/drei";
 
@@ -24,39 +24,39 @@ interface TransformGizmoLayerProps {
 export function TransformGizmoLayer({
   active,
   activeAxes = [true, true, true],
-  scale = 75,
+  scale = 92,
   onTranslate,
   children,
 }: TransformGizmoLayerProps) {
-  const matrixRef = useRef(new THREE.Matrix4());
+  const [matrix] = useState(() => new THREE.Matrix4());
   const dragPositionRef = useRef(new THREE.Vector3());
   const scratchQuaternionRef = useRef(new THREE.Quaternion());
   const scratchScaleRef = useRef(new THREE.Vector3());
 
   useEffect(() => {
     if (!active) {
-      matrixRef.current.identity();
+      matrix.identity();
       dragPositionRef.current.set(0, 0, 0);
     }
-  }, [active]);
+  }, [active, matrix]);
 
   const handleDrag = useCallback((localMatrix: THREE.Matrix4) => {
-    matrixRef.current.copy(localMatrix);
+    matrix.copy(localMatrix);
     localMatrix.decompose(
       dragPositionRef.current,
       scratchQuaternionRef.current,
       scratchScaleRef.current,
     );
-  }, []);
+  }, [matrix]);
 
   const handleDragEnd = useCallback(() => {
     const p = dragPositionRef.current;
     if (Math.abs(p.x) > 1e-12 || Math.abs(p.y) > 1e-12 || Math.abs(p.z) > 1e-12) {
       onTranslate?.(p.x, p.y, p.z);
     }
-    matrixRef.current.identity();
+    matrix.identity();
     dragPositionRef.current.set(0, 0, 0);
-  }, [onTranslate]);
+  }, [matrix, onTranslate]);
 
   if (!active) {
     return <>{children}</>;
@@ -65,12 +65,12 @@ export function TransformGizmoLayer({
   return (
     <PivotControls
       depthTest={false}
-      lineWidth={2}
-      axisColors={["#f87171", "#4ade80", "#60a5fa"]}
+      lineWidth={2.6}
+      axisColors={["#ff7a7a", "#5af29c", "#6cb8ff"]}
       scale={scale}
       fixed
       autoTransform={false}
-      matrix={matrixRef.current}
+      matrix={matrix}
       activeAxes={activeAxes}
       disableRotations
       disableScaling

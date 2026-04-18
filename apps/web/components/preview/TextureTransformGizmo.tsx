@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { PivotControls } from "@react-three/drei";
 import type { TextureTransform3D } from "@/lib/textureTransform";
@@ -149,28 +149,54 @@ function snapshotMatrixTransform(
 }
 
 function PreviewProxyMesh({ proxy }: { proxy: TexturePreviewProxy }) {
+  const fillMaterial = (
+    color: string,
+    opacity: number,
+  ) => <meshStandardMaterial color={color} transparent opacity={opacity} roughness={0.34} metalness={0.08} />;
+  const wireMaterial = (
+    color: string,
+    opacity: number,
+  ) => <meshBasicMaterial color={color} wireframe transparent opacity={opacity} depthWrite={false} />;
   if (proxy === "none") {
     return (
-      <mesh>
-        <sphereGeometry args={[0.18, 20, 20]} />
-        <meshBasicMaterial color="#89dceb" wireframe transparent opacity={0.55} />
-      </mesh>
+      <group>
+        <mesh>
+          <sphereGeometry args={[0.22, 24, 24]} />
+          {fillMaterial("#8ad9ff", 0.16)}
+        </mesh>
+        <mesh>
+          <sphereGeometry args={[0.22, 16, 16]} />
+          {wireMaterial("#d5f1ff", 0.5)}
+        </mesh>
+      </group>
     );
   }
   if (proxy === "disc") {
     return (
-      <mesh rotation={[Math.PI / 2, 0, 0]}>
-        <cylinderGeometry args={[0.7, 0.7, 0.06, 48, 1, true]} />
-        <meshBasicMaterial color="#89dceb" wireframe transparent opacity={0.4} />
-      </mesh>
+      <group>
+        <mesh rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.74, 0.74, 0.08, 56]} />
+          {fillMaterial("#7ed9ff", 0.14)}
+        </mesh>
+        <mesh rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.72, 0.028, 12, 72]} />
+          {wireMaterial("#d4f0ff", 0.78)}
+        </mesh>
+      </group>
     );
   }
   if (proxy === "cylinder") {
     return (
-      <mesh>
-        <cylinderGeometry args={[0.45, 0.45, 1.2, 28, 1, true]} />
-        <meshBasicMaterial color="#89dceb" wireframe transparent opacity={0.35} />
-      </mesh>
+      <group>
+        <mesh>
+          <cylinderGeometry args={[0.48, 0.48, 1.26, 36]} />
+          {fillMaterial("#86dbff", 0.12)}
+        </mesh>
+        <mesh>
+          <cylinderGeometry args={[0.48, 0.48, 1.26, 28, 1, true]} />
+          {wireMaterial("#d4f0ff", 0.62)}
+        </mesh>
+      </group>
     );
   }
   if (proxy === "wall") {
@@ -178,15 +204,19 @@ function PreviewProxyMesh({ proxy }: { proxy: TexturePreviewProxy }) {
       <group>
         <mesh>
           <boxGeometry args={[0.2, 1.2, 1.2]} />
-          <meshBasicMaterial color="#89dceb" wireframe transparent opacity={0.4} />
+          {fillMaterial("#85dbff", 0.18)}
+        </mesh>
+        <mesh>
+          <boxGeometry args={[0.2, 1.2, 1.2]} />
+          {wireMaterial("#d7f2ff", 0.62)}
         </mesh>
         <mesh position={[0.4, 0, 0]}>
           <boxGeometry args={[0.6, 1.2, 1.2]} />
-          <meshBasicMaterial color="#f38ba8" wireframe transparent opacity={0.15} />
+          {wireMaterial("#ff9fc1", 0.18)}
         </mesh>
         <mesh position={[-0.4, 0, 0]}>
           <boxGeometry args={[0.6, 1.2, 1.2]} />
-          <meshBasicMaterial color="#89b4fa" wireframe transparent opacity={0.15} />
+          {wireMaterial("#92bcff", 0.18)}
         </mesh>
       </group>
     );
@@ -196,20 +226,30 @@ function PreviewProxyMesh({ proxy }: { proxy: TexturePreviewProxy }) {
       <group>
         <mesh>
           <boxGeometry args={[1.5, 0.6, 0.6]} />
-          <meshBasicMaterial color="#89dceb" wireframe transparent opacity={0.25} />
+          {fillMaterial("#8ad9ff", 0.1)}
+        </mesh>
+        <mesh>
+          <boxGeometry args={[1.5, 0.6, 0.6]} />
+          {wireMaterial("#d7f1ff", 0.38)}
         </mesh>
         <mesh rotation={[0, 0, Math.PI / 2]}>
-          <cylinderGeometry args={[0.02, 0.02, 1.8, 8]} />
-          <meshBasicMaterial color="#f5c2e7" transparent opacity={0.8} />
+          <cylinderGeometry args={[0.03, 0.03, 1.8, 10]} />
+          {fillMaterial("#f5c2e7", 0.72)}
         </mesh>
       </group>
     );
   }
   return (
-    <mesh>
-      <boxGeometry args={[1, 1, 1]} />
-      <meshBasicMaterial color="#89dceb" wireframe transparent opacity={0.3} />
-    </mesh>
+    <group>
+      <mesh>
+        <boxGeometry args={[1, 1, 1]} />
+        {fillMaterial("#86dbff", 0.12)}
+      </mesh>
+      <mesh>
+        <boxGeometry args={[1, 1, 1]} />
+        {wireMaterial("#d5f1ff", 0.52)}
+      </mesh>
+    </group>
   );
 }
 
@@ -229,11 +269,11 @@ export default function TextureTransformGizmo({
   const lastSnapshotLogRef = useRef<string>("");
   const sceneTransform = toSceneTextureTransform(transform, swapYZ);
   const pivotFrame = textureTransformToPivotFrame(sceneTransform);
-  const matrixRef = useRef<THREE.Matrix4>(composePivotedTextureTransformMatrix(sceneTransform));
+  const [matrix] = useState(() => composePivotedTextureTransformMatrix(sceneTransform));
 
   useLayoutEffect(() => {
-    composePivotedTextureTransformMatrix(sceneTransform, matrixRef.current);
-  }, [sceneTransform]);
+    composePivotedTextureTransformMatrix(sceneTransform, matrix);
+  }, [matrix, sceneTransform]);
 
   useEffect(() => {
     if (!gizmoDebugEnabled() || !visible) {
@@ -243,7 +283,7 @@ export default function TextureTransformGizmo({
       mode,
       swapYZ,
       transform,
-      sceneMatrix: summarizeSceneMatrix(matrixRef.current),
+      sceneMatrix: summarizeSceneMatrix(matrix),
     });
     if (signature === lastSnapshotLogRef.current) {
       return;
@@ -254,9 +294,9 @@ export default function TextureTransformGizmo({
     );
     console.log("physical transform input", summarizeTransform(transform));
     console.log("scene pivot frame", pivotFrame);
-    console.log("scene transform passed to PivotControls", summarizeSceneMatrix(matrixRef.current));
+    console.log("scene transform passed to PivotControls", summarizeSceneMatrix(matrix));
     console.groupEnd();
-  }, [mode, pivotFrame, swapYZ, transform, visible]);
+  }, [matrix, mode, pivotFrame, swapYZ, transform, visible]);
 
   if (!visible) {
     return null;
@@ -266,12 +306,13 @@ export default function TextureTransformGizmo({
     <PivotControls
       depthTest={false}
       fixed
-      scale={75}
-      lineWidth={2}
+      scale={94}
+      lineWidth={2.8}
       autoTransform={false}
-      matrix={matrixRef.current}
+      matrix={matrix}
       disableAxes={false}
       activeAxes={[true, true, true]}
+      axisColors={["#ff7d7d", "#5cf29d", "#6fbcff"]}
       disableRotations={mode !== "rotate"}
       disableSliders={false}
       disableScaling={mode !== "scale"}
@@ -284,11 +325,11 @@ export default function TextureTransformGizmo({
           `[GizmoSync] drag-start mode=${mode} swapYZ=${swapYZ ? "on" : "off"}`,
         );
         console.log("scene pivot frame", pivotFrame);
-        console.log("scene matrix", summarizeSceneMatrix(matrixRef.current));
+        console.log("scene matrix", summarizeSceneMatrix(matrix));
         console.groupEnd();
       }}
       onDrag={(localMatrix) => {
-        matrixRef.current.copy(localMatrix);
+        matrix.copy(localMatrix);
         if (onLiveChange) {
           onLiveChange(
             snapshotMatrixTransform(
@@ -304,7 +345,7 @@ export default function TextureTransformGizmo({
       onDragEnd={() => {
         onDragEnd?.();
         const committed = snapshotMatrixTransform(
-          matrixRef.current,
+          matrix,
           transform,
           mode,
           syncPivotWithTranslation,
@@ -314,7 +355,7 @@ export default function TextureTransformGizmo({
           console.groupCollapsed(
             `[GizmoSync] drag-end mode=${mode} swapYZ=${swapYZ ? "on" : "off"}`,
           );
-          console.log("scene matrix", summarizeSceneMatrix(matrixRef.current));
+          console.log("scene matrix", summarizeSceneMatrix(matrix));
           console.log("committed physical transform", summarizeTransform(committed));
           console.groupEnd();
         }
@@ -322,6 +363,8 @@ export default function TextureTransformGizmo({
       }}
     >
       <group>
+        <ambientLight intensity={0.7} />
+        <directionalLight position={[2.4, 2.4, 2.8]} intensity={0.55} />
         {showPreviewProxy ? (
           <group position={pivotFrame.childOffset}>
             <PreviewProxyMesh proxy={previewProxy} />

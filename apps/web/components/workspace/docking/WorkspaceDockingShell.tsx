@@ -1,5 +1,4 @@
 "use client";
-/* eslint-disable react-hooks/set-state-in-effect */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -124,7 +123,7 @@ export default function WorkspaceDockingShell() {
   const onModelChange = useCallback(
     (nextModel: Model, action: Action) => {
       void action;
-      runtime.onModelChange(nextModel, action);
+      runtime.onModelChange(nextModel);
     },
     [runtime],
   );
@@ -210,9 +209,9 @@ export default function WorkspaceDockingShell() {
       fixedDt,
       modelState.solverPlan?.adaptive?.atol,
       solverIntegrator,
+      solverMaxDt,
+      solverMinDt,
       modelState.solverSettings.maxError,
-      modelState.solverSettings.fixedTimestep,
-      modelState.solverPlan?.fixedTimestep,
       tp.effectiveDmDt,
       tp.effectiveDt,
       tp.effectiveStep,

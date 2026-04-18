@@ -1,7 +1,6 @@
 import type {
   IJsonBorderNode,
   IJsonModel,
-  IJsonNode,
   IJsonRowNode,
   IJsonTabNode,
   IJsonTabSetNode,
@@ -22,7 +21,7 @@ import {
   resolveDockLayoutTemplateId,
 } from "@/components/workspace/docking/dockLayoutDefaults";
 
-export type DockLayoutModel = Record<string, unknown>;
+export type DockLayoutModel = IJsonModel;
 
 export const DOCKING_LAYOUT_SCHEMA_VERSION = 1;
 export const DOCKING_LAYOUT_SCHEMA_VERSION_KEY = "dockingLayoutSchemaVersion";
@@ -70,13 +69,28 @@ export interface DockLayoutParseContext {
 }
 
 interface InternalParseResult {
-  model: DockLayoutModel | null;
+  model: DockLayoutModel;
   reasons: string[];
-  schemaVersion: number | null;
-  templateId: DockLayoutTemplateId | null;
+  schemaVersion: number;
+  templateId: DockLayoutTemplateId;
   wasRecovered: boolean;
   lastRepairReason: string | null;
   changed: boolean;
+}
+
+type DockLayoutTreeNode = IJsonRowNode | IJsonTabSetNode;
+type DockLayoutAnyNode = DockLayoutTreeNode | IJsonBorderNode | IJsonTabNode;
+
+function isTabNode(node: DockLayoutAnyNode): node is IJsonTabNode {
+  return node.type === "tab";
+}
+
+function isTabSetNode(node: DockLayoutAnyNode): node is IJsonTabSetNode {
+  return node.type === "tabset";
+}
+
+function isTreeNode(node: DockLayoutAnyNode): node is DockLayoutTreeNode {
+  return node.type === "row" || node.type === "tabset";
 }
 
 function isNumber(value: unknown): value is number {
@@ -152,21 +166,13 @@ function collectTabComponents(model: IJsonModel): Set<string> {
   return found;
 }
 
-function clampNodeMinSizes(node: IJsonNode): boolean {
+function clampNodeMinSizes(node: DockLayoutTreeNode): boolean {
   let changed = false;
-  if (!isPlainObject(node)) {
-    return false;
-  }
-  const base = node as IJsonTabSetNode & {
-    component?: string;
-    minWidth?: number;
-    minHeight?: number;
-    weight?: number;
-    children?: IJsonNode[];
-  };
-
-  if (base.type === "tabset" && isString(base.component)) {
-    const component = base.component as DockPanelComponent;
+  if (isTabSetNode(node)) {
+    const firstChild = node.children[0];
+    const component = firstChild && isTabNode(firstChild) && isString(firstChild.component)
+      ? (firstChild.component as DockPanelComponent)
+      : null;
     const minWidth =
       component === "dock-left"
         ? DOCKING_MIN_WIDTH_LEFT
@@ -178,24 +184,24 @@ function clampNodeMinSizes(node: IJsonNode): boolean {
 
     const minHeight = component === "dock-bottom" ? DOCKING_MIN_HEIGHT_BOTTOM : undefined;
 
-    if (isNumber(minWidth) && (!isNumber(base.minWidth) || base.minWidth < minWidth)) {
-      base.minWidth = minWidth;
+    if (isNumber(minWidth) && (!isNumber(node.minWidth) || node.minWidth < minWidth)) {
+      node.minWidth = minWidth;
       changed = true;
     }
-    if (isNumber(minHeight) && (!isNumber(base.minHeight) || base.minHeight < minHeight)) {
-      base.minHeight = minHeight;
+    if (isNumber(minHeight) && (!isNumber(node.minHeight) || node.minHeight < minHeight)) {
+      node.minHeight = minHeight;
       changed = true;
     }
   }
 
-  if (isNumber(base.weight) && base.weight <= 0) {
-    base.weight = 100;
+  if (isNumber(node.weight) && node.weight <= 0) {
+    node.weight = 100;
     changed = true;
   }
 
-  if (Array.isArray(base.children)) {
-    for (const child of base.children) {
-      if (clampNodeMinSizes(child as IJsonNode)) {
+  if ("children" in node && Array.isArray(node.children)) {
+    for (const child of node.children) {
+      if (isTreeNode(child) && clampNodeMinSizes(child)) {
         changed = true;
       }
     }
@@ -221,27 +227,34 @@ function recoverFromTemplate(model: IJsonModel, templateModel: IJsonModel, reaso
 
 function buildTabSetFromTemplate(templateModel: IJsonModel, component: DockPanelComponent): IJsonTabSetNode | null {
   const nodes = collectTemplateNodes(templateModel);
-  const hit = nodes.find((node) => node.type === "tabset" && node.component === component);
+  const hit = nodes.find(
+    (node): node is IJsonTabSetNode =>
+      isTabSetNode(node) && node.children.some((child) => child.component === component),
+  );
   return hit ? cloneJson(hit) : null;
 }
 
-function collectTemplateNodes(model: IJsonModel): Array<IJsonTabSetNode | IJsonTabNode | IJsonBorderNode> {
-  const nodes: Array<IJsonTabSetNode | IJsonTabNode | IJsonBorderNode> = [];
+function collectTemplateNodes(model: IJsonModel): DockLayoutAnyNode[] {
+  const nodes: DockLayoutAnyNode[] = [];
 
-  const visit = (value: unknown): void => {
-    if (!isPlainObject(value)) return;
-    const node = value as { type?: string; children?: unknown[] };
-    if (
-      node.type === "tabset" ||
-      node.type === "tab" ||
-      node.type === "border"
-    ) {
-      nodes.push(node as IJsonTabSetNode | IJsonTabNode | IJsonBorderNode);
+  const visit = (node: DockLayoutAnyNode | IJsonModel): void => {
+    if ("layout" in node) {
+      visit(node.layout);
+      for (const border of node.borders ?? []) {
+        visit(border);
+      }
+      return;
     }
-    const children = Array.isArray(node.children) ? node.children : null;
-    if (!children) return;
-    for (const child of children) {
-      visit(child);
+
+    nodes.push(node);
+    if ("children" in node && Array.isArray(node.children)) {
+      for (const child of node.children) {
+        if (isTabNode(child)) {
+          nodes.push(child);
+          continue;
+        }
+        visit(child);
+      }
     }
   };
 
@@ -454,7 +467,7 @@ function normalizeCandidateJson(value: unknown, preset: DockResponsivePreset): I
   }
 
   const clamped = cloneJson(normalizedModel) as IJsonModel;
-  if (clampNodeMinSizes(clamped.layout as IJsonNode)) {
+  if (clampNodeMinSizes(clamped.layout)) {
     reasons.push("Clamped layout min-size constraints to safe values.");
     changed = true;
   }
@@ -503,7 +516,7 @@ export function normalizeDockLayoutEnvelope(
   return {
     envelope: {
       dockingLayoutSchemaVersion: resolved.schemaVersion,
-      templateId: resolved.templateId ?? resolveDockLayoutTemplateId(preset),
+      templateId: resolved.templateId,
       model: resolved.model,
       lastRepairReason: resolved.lastRepairReason,
       lastRepairAtUnixMs: resolved.wasRecovered ? nowUnixMs() : null,

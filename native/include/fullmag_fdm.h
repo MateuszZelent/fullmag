@@ -64,6 +64,7 @@ typedef enum {
     FULLMAG_FDM_OBSERVABLE_H_DEMAG  = 3,
     FULLMAG_FDM_OBSERVABLE_H_EXT    = 4,
     FULLMAG_FDM_OBSERVABLE_H_EFF    = 5,
+    FULLMAG_FDM_OBSERVABLE_H_OE     = 6,
 } fullmag_fdm_observable;
 
 typedef enum {
@@ -175,6 +176,8 @@ typedef struct {
     double                     oersted_time_dep_offset;/* sinusoidal: offset */
     double                     oersted_time_dep_t_on;  /* pulse: t_on [s] */
     double                     oersted_time_dep_t_off; /* pulse: t_off [s] */
+    const double              *oersted_field_xyz;      /* optional precomputed AoS H_OE [A/m] */
+    uint64_t                   oersted_field_len;      /* = cell_count * 3 when present */
 
     /*
      * Optional precomputed Newell tensor spectra, interleaved as

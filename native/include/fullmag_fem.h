@@ -185,12 +185,24 @@ typedef struct {
     const double *kc2_field;          uint64_t kc2_field_len;
     const double *kc3_field;          uint64_t kc3_field_len;
 
+    /* Spin-transfer torque */
+    int                        has_zhang_li_stt;
+    int                        has_slonczewski_stt;
+    double                     stt_current_density_am2[3];
+    double                     stt_degree;
+    double                     stt_beta;
+    double                     stt_spin_polarization[3];
+    double                     stt_lambda;
+    double                     stt_epsilon_prime;
+
     /* Oersted field from cylindrical conductor */
     int                        has_oersted_cylinder;
     double                     oersted_current;
     double                     oersted_radius;
     double                     oersted_center[3];
     double                     oersted_axis[3];
+    const double              *oersted_field_xyz;
+    uint64_t                   oersted_field_len;
     uint32_t                   oersted_time_dep_kind;
     double                     oersted_time_dep_freq;
     double                     oersted_time_dep_phase;

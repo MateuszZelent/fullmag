@@ -432,6 +432,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const runtimeStatus = state?.runtime_status ?? null;
   const commandStatus = state?.command_status ?? null;
   const stageExecution = state?.stage_execution ?? null;
+  const capabilities = state?.capabilities ?? null;
   // Reference-stable scalarRows: only changes ref when the history tip changes.
   // This prevents cascading useMemo invalidation on unrelated runtime ticks.
   const rawScalarRows = state?.scalar_rows ?? EMPTY_SCALAR_ROWS;
@@ -1822,7 +1823,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   ]);
 
   const commandValue = useMemo<CommandContextValue>(() => ({
-    connection, error, session, run, metadata, engineLog: mergedEngineLog, quantities, artifacts: artifactsArr,
+    connection, error, session, run, capabilities, metadata, engineLog: mergedEngineLog, quantities, artifacts: artifactsArr,
     workspaceStatus, isWaitingForCompute, solverNotStartedMessage, isFemBackend, runtimeEngineLabel,
     runtimeEngineGpuLabel, runtimeEngineGpuDevice,
     activity, sessionFooter, runtimeStatus, stageExecution, runtimeCanAcceptCommands,
@@ -1834,7 +1835,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setRunUntilInput, enqueueCommand, handleCompute, handleSimulationAction,
     handleStateExport, handleStateImport, syncScriptBuilder,
   }), [
-    connection, error, session, run, metadata, mergedEngineLog, quantities, artifactsArr,
+    connection, error, session, run, capabilities, metadata, mergedEngineLog, quantities, artifactsArr,
     workspaceStatus, isWaitingForCompute, solverNotStartedMessage, isFemBackend, runtimeEngineLabel,
     runtimeEngineGpuLabel, runtimeEngineGpuDevice,
     activity, sessionFooter, runtimeStatus, stageExecution, runtimeCanAcceptCommands,

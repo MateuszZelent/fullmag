@@ -1,5 +1,6 @@
+/* eslint-disable react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Model, type Action } from "flexlayout-react";
+import { Model } from "flexlayout-react";
 
 import type { DockResponsivePreset } from "@/components/workspace/docking/dockLayoutDefaults";
 import type { DockLayoutEnvelope, DockLayoutModel } from "@/lib/workspace/dockLayoutContract";
@@ -31,7 +32,7 @@ interface UseDockLayoutRuntimeOptions {
 export interface UseDockLayoutRuntimeReturn {
   model: Model;
   metrics: DockLayoutRuntimeMetrics;
-  onModelChange: (nextModel: Model, action: Action) => void;
+  onModelChange: (nextModel: Model) => void;
   restoreCurrentPresetTemplate: () => void;
   clearStorageAndReset: () => void;
 }
@@ -120,7 +121,7 @@ export function useDockLayoutRuntime({
   }, [syncFromStore]);
 
   const onModelChange = useCallback(
-    (nextModel: Model, _action: Action) => {
+    (nextModel: Model) => {
       const raw = nextModel.toJson();
       const result = normalizeDockLayoutEnvelope(raw, preset);
       const nextModelJson = result.envelope.model;

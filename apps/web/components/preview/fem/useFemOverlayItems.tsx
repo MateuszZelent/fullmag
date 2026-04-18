@@ -11,6 +11,7 @@ import type { MutableRefObject } from "react";
 import type { ViewportOverlayDescriptor } from "../ViewportOverlayManager";
 import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import type { OrientationDebugSnapshot } from "../camera/cameraOrientation";
 import { glyphBudgetToMaxPoints } from "./vectorDensityBudget";
 import { colorLegendLabel, colorLegendGradient } from "./femColorUtils";
 import { FemViewportToolbar } from "./FemViewportToolbar";
@@ -19,6 +20,7 @@ import { FemRefineToolbar } from "./FemSelectionHUD";
 import { FieldLegend } from "../field/FieldLegend";
 import HslSphere from "../HslSphere";
 import ViewCube from "../ViewCube";
+import type { FemViewportOverlayPopover } from "./FemViewportTypes";
 import type {
   ArrowSamplingMode,
   FemColorField,
@@ -93,7 +95,7 @@ export interface UseFemOverlayItemsArgs {
   labeledMode: boolean;
   legendOpen: boolean;
   partExplorerOpen?: boolean;
-  openPopover: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "info" | "panels" | null;
+  openPopover: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "rotation" | "info" | "panels" | null;
   selectedFaces: number[];
   effectiveShowOrientationLegend: boolean;
   interactionActive: boolean;
@@ -154,7 +156,7 @@ export interface UseFemOverlayItemsArgs {
   setLabeledMode: (v: boolean) => void;
   toggleLegend: () => void;
   togglePartExplorerInternal: () => void;
-  setOpenPopover: (id: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "info" | "panels" | null) => void;
+  setOpenPopover: (id: FemViewportOverlayPopover) => void;
   setCameraProjection: (v: "perspective" | "orthographic") => void;
   setNavigationMode: (v: "trackball" | "cad") => void;
   setQualityProfile: (v: ViewportQualityProfileId) => void;
@@ -163,6 +165,16 @@ export interface UseFemOverlayItemsArgs {
   takeScreenshot: () => void;
   handleViewCubeRotate: (quaternion: import("three").Quaternion) => void;
   viewCubeSceneRef: MutableRefObject<any>;
+  rotationSnapshots: {
+    viewport: OrientationDebugSnapshot | null;
+    viewCube: OrientationDebugSnapshot | null;
+    hsl: OrientationDebugSnapshot | null;
+  };
+  updateRotationSnapshot: (
+    key: "viewport" | "viewCube" | "hsl",
+    snapshot: OrientationDebugSnapshot,
+  ) => void;
+  applyRotationEuler: (nextEulerDeg: [number, number, number]) => void;
 }
 
 /** Derive a short label for a color field / arrow color mode. */
@@ -355,6 +367,8 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
             arrowsBlockReason={args.arrowsBlockReason}
             toolbarScopeLabel={args.toolbarScopeLabel}
             interactionSimplified={args.interactionActive}
+            rotationSnapshots={args.rotationSnapshots}
+            onApplyRotationEuler={args.applyRotationEuler}
           />
         ),
       });
@@ -398,6 +412,7 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
               sceneRef={args.viewCubeSceneRef}
               onRotate={args.handleViewCubeRotate}
               onReset={() => args.setCameraPreset("reset")}
+              onOrientationSnapshot={(snapshot) => args.updateRotationSnapshot("viewCube", snapshot)}
               embedded
             />
           </div>
@@ -441,6 +456,7 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
             sceneRef={args.viewCubeSceneRef}
             axisConvention="identity"
             compact={variant !== "full"}
+            onOrientationSnapshot={(snapshot) => args.updateRotationSnapshot("hsl", snapshot)}
             embedded
           />
         ),

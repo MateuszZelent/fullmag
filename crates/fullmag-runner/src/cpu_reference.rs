@@ -233,7 +233,7 @@ pub(crate) fn build_snapshot_problem_and_state(
             exchange: plan.enable_exchange,
             demag: plan.enable_demag,
             external_field: plan.external_field,
-            per_node_field: None,
+            per_node_field: plan.oersted_field_xyz.clone(),
             magnetoelastic: build_mel(plan),
             uniaxial_anisotropy: plan.material.uniaxial_anisotropy_ku1.map(|ku1| {
                 UniaxialAnisotropyConfig {
@@ -387,7 +387,7 @@ pub(crate) fn execute_reference_fdm(
             exchange: plan.enable_exchange,
             demag: plan.enable_demag,
             external_field: plan.external_field,
-            per_node_field: None,
+            per_node_field: plan.oersted_field_xyz.clone(),
             magnetoelastic: build_mel(plan),
             uniaxial_anisotropy: plan.material.uniaxial_anisotropy_ku1.map(|ku1| {
                 UniaxialAnisotropyConfig {
@@ -945,12 +945,37 @@ pub(crate) fn observe_state(
     let observables = problem.observe(state).map_err(|e| RunError {
         message: format!("Engine observables: {}", e),
     })?;
+    let uniform_external = if let Some(field) = problem.terms.external_field {
+        state
+            .magnetization()
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                if problem
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask[index])
+                {
+                    [0.0, 0.0, 0.0]
+                } else {
+                    field
+                }
+            })
+            .collect()
+    } else {
+        vec![[0.0, 0.0, 0.0]; state.magnetization().len()]
+    };
+    let oersted_field = problem
+        .terms
+        .per_node_field
+        .clone()
+        .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
 
     Ok(StateObservables {
         magnetization: observables.magnetization,
         exchange_field: observables.exchange_field,
         demag_field: observables.demag_field,
-        external_field: observables.external_field,
+        external_field: uniform_external,
         antenna_field: vec![[0.0, 0.0, 0.0]; state.magnetization().len()],
         effective_field: observables.effective_field,
         anisotropy_field: Vec::new(),
@@ -958,7 +983,7 @@ pub(crate) fn observe_state(
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
-        oersted_field: Vec::new(),
+        oersted_field,
         thermal_field: Vec::new(),
         exchange_energy: observables.exchange_energy_joules,
         demag_energy: observables.demag_energy_joules,
@@ -1042,11 +1067,12 @@ fn select_base_field(
         "H_ex" => Ok(observables.exchange_field.clone()),
         "H_demag" => Ok(observables.demag_field.clone()),
         "H_ext" => Ok(observables.external_field.clone()),
+        "H_OE" => Ok(observables.oersted_field.clone()),
         "H_eff" => Ok(observables.effective_field.clone()),
         other => Err(RunError {
             message: format!(
                 "CPU FDM snapshot: field '{}' is not available in this execution path \
-                 (available: m, H_ex, H_demag, H_ext, H_eff)",
+                 (available: m, H_ex, H_demag, H_ext, H_OE, H_eff)",
                 other
             ),
         }),
@@ -1107,12 +1133,14 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
             oersted_time_dep_phase: 0.0,
             oersted_time_dep_offset: 0.0,
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
+            oersted_realization: None,
             temperature: None,
             interfacial_dmi: None,
             bulk_dmi: None,
@@ -1168,12 +1196,14 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
             oersted_time_dep_phase: 0.0,
             oersted_time_dep_offset: 0.0,
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
+            oersted_realization: None,
             temperature: None,
             interfacial_dmi: None,
             bulk_dmi: None,
@@ -1324,6 +1354,56 @@ mod tests {
         assert!(stats.e_demag.is_finite());
         assert!(stats.e_ext.is_finite());
         assert!(stats.e_total.is_finite());
+    }
+
+    #[test]
+    fn generalized_oersted_field_reaches_cpu_reference_observables() {
+        let plan = FdmPlanIR {
+            enable_exchange: false,
+            external_field: Some([2.0, -1.0, 0.5]),
+            oersted_field_xyz: Some(vec![
+                [0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.5, 0.5, 0.5],
+                [0.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [-1.0, 0.0, 0.0],
+                [-0.5, -0.5, -0.5],
+                [0.25, 0.0, 0.0],
+                [0.0, 0.25, 0.0],
+                [0.0, 0.0, 0.25],
+                [0.25, 0.25, 0.0],
+                [0.0, 0.25, 0.25],
+                [0.25, 0.0, 0.25],
+                [0.1, 0.2, 0.3],
+                [0.0, 0.0, 0.0],
+            ]),
+            oersted_realization: Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint),
+            ..make_test_plan()
+        };
+
+        let (problem, state) = build_snapshot_problem_and_state(&plan).expect("snapshot problem");
+        let observables = observe_state(&problem, &state).expect("observables");
+
+        assert_eq!(observables.external_field[0], [2.0, -1.0, 0.5]);
+        assert_eq!(observables.oersted_field[0], [0.0, 0.0, 1.0]);
+        assert_eq!(observables.oersted_field[1], [0.0, 1.0, 0.0]);
+        assert_eq!(
+            select_base_field(&observables, "H_OE").unwrap(),
+            observables.oersted_field
+        );
+        for component in 0..3 {
+            assert!(
+                (observables.effective_field[0][component]
+                    - (observables.exchange_field[0][component]
+                        + observables.demag_field[0][component]
+                        + observables.external_field[0][component]
+                        + observables.oersted_field[0][component]))
+                    .abs()
+                    < 1e-12
+            );
+        }
     }
 
     #[test]

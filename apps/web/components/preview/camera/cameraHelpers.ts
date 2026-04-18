@@ -1,5 +1,10 @@
 import * as THREE from "three";
 
+import {
+  applyCameraQuaternionAroundTarget,
+  snapCameraToDirection,
+} from "./cameraOrientation";
+
 /**
  * Rotate the camera around the current controls target to look from a direction given by a quaternion.
  * Preserves the distance from the target.
@@ -9,14 +14,7 @@ export function rotateCameraAroundTarget(
   controls: { target: THREE.Vector3; update(): void },
   quat: THREE.Quaternion,
 ) {
-  const target = controls.target.clone();
-  const dist = camera.position.clone().sub(target).length();
-  const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(quat).normalize();
-  camera.position.copy(target).add(dir.multiplyScalar(dist));
-  camera.lookAt(target);
-  camera.up.set(0, 1, 0).applyQuaternion(quat);
-  controls.target.copy(target);
-  controls.update();
+  applyCameraQuaternionAroundTarget(camera, controls, quat);
 }
 
 export type CameraPreset = "reset" | "front" | "top" | "right";
@@ -30,9 +28,8 @@ export function setCameraPresetAroundTarget(
   preset: CameraPreset,
   distance: number,
 ) {
-  const target = controls.target.clone();
   let dir: THREE.Vector3;
-  let up = new THREE.Vector3(0, 1, 0);
+  let up: THREE.Vector3 | undefined;
   switch (preset) {
     case "reset": dir = new THREE.Vector3(0.75, 0.6, 0.75).normalize(); break;
     case "front": dir = new THREE.Vector3(0, 0, 1); break;
@@ -40,14 +37,10 @@ export function setCameraPresetAroundTarget(
     case "right": dir = new THREE.Vector3(1, 0, 0); break;
     default:      dir = new THREE.Vector3(0.75, 0.6, 0.75).normalize(); break;
   }
-  camera.position.copy(target).add(dir.multiplyScalar(distance));
-  camera.up.copy(up);
-  camera.lookAt(target);
-  if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
-    (camera as THREE.OrthographicCamera).updateProjectionMatrix();
-  }
-  controls.target.copy(target);
-  controls.update();
+  snapCameraToDirection(camera, controls, dir, {
+    distance,
+    up,
+  });
 }
 
 export interface BoundsBox {

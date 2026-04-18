@@ -95,7 +95,8 @@ fn resample_fem_to_fdm_grid_json(
     let topo = MeshTopology::from_ir(&fem_mesh_ir)
         .map_err(|e| PyValueError::new_err(format!("mesh topology build failed: {}", e)))?;
 
-    let result = transfer_fem_field_to_grid(&topo, &magnetization, grid_origin, cell_size, grid_dims);
+    let result =
+        transfer_fem_field_to_grid(&topo, &magnetization, grid_origin, cell_size, grid_dims);
     let mut values = result.values;
     normalize_unit_vectors(&mut values, 1e-12);
 

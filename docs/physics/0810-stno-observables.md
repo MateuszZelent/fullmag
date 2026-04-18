@@ -4,6 +4,15 @@
 
 This document describes the observables relevant to STNO characterization and how they are extracted from fullmag simulation output using the `fullmag.analysis` module.
 
+For the current public benchmark slice, the canonical artifact-backed entrypoints are:
+
+```python
+from fullmag.analysis import analyze_stno_artifacts, write_stno_report
+
+report = analyze_stno_artifacts("run_output/stno_vortex_ref_minimal")
+write_stno_report("run_output/stno_vortex_ref_minimal", report=report)
+```
+
 ---
 
 ## 1. Power Spectral Density (PSD)
@@ -37,6 +46,7 @@ f_peak = peak_frequency(freqs, psd, fmin=100e6, fmax=5e9)
 - **Peak frequency** = vortex gyrotropic mode frequency
 - Scales with applied current density $J$ above threshold
 - Typical range: 100 MHz – 1 GHz for vortex STNOs
+- For the current reference benchmark, the signal is selected from the real `mx` / `my` artifact traces, not from synthetic data.
 
 ---
 
@@ -188,9 +198,25 @@ where $\lambda_1 > \lambda_2$ are eigenvalues of the position covariance matrix.
 - $e = 0$: circular orbit
 - $e \to 1$: highly elongated orbit
 
+## 5. Artifact workflow contract
+
+The current STNO report path expects:
+
+- `scalars.csv` with at least `time`, `mx`, `my`, `mz`,
+- optional `fields/m/step_*.json` for vortex-core tracking,
+- real solver artifacts from the executable benchmark path.
+
+The current report summary computes:
+
+- peak frequency,
+- linewidth,
+- Q factor,
+- steady-state score,
+- orbit radius and ellipticity when `fields/m` snapshots exist.
+
 ---
 
-## 5. Deprecated Functions
+## 6. Deprecated Functions
 
 | Deprecated | Replacement | Notes |
 |------------|-------------|-------|
@@ -198,7 +224,7 @@ where $\lambda_1 > \lambda_2$ are eigenvalues of the position covariance matrix.
 
 ---
 
-## 6. References
+## 7. References
 
 1. Slavin & Tiberkevich, IEEE Trans. Magn. 45 (2009) — STNO theory
 2. Dussaux et al., Nat. Commun. 1, 8 (2010) — vortex STNO experiments

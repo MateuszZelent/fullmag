@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, memo } from "react";
+import { useEffect, useMemo, useRef, useState, memo, useCallback } from "react";
+import * as THREE from "three";
 import { FemClipPlanes, CameraAutoFit } from "./fem/FemR3FHelpers";
 import { useFemViewportModel } from "./fem/useFemViewportModel";
 import { useFemViewportCommands } from "./fem/useFemViewportCommands";
@@ -37,6 +38,11 @@ import { useFemSceneGeometry } from "./fem/useFemSceneGeometry";
 import { useFemFaceInteraction } from "./fem/useFemFaceInteraction";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
+import {
+  captureOrientationDebugSnapshot,
+  type OrientationDebugSnapshot,
+} from "./camera/cameraOrientation";
+import { useSceneCameraChange } from "./camera/useSceneCameraChange";
 export type {
   FemMeshData,
   MeshSelectionSnapshot,
@@ -242,6 +248,15 @@ function FemMeshView3DInner({
   const partExplorerOpen = controlledPartExplorerOpen ?? internalPartExplorerOpen;
 
   const [cameraFitGeneration, setCameraFitGeneration] = useState(0);
+  const [rotationSnapshots, setRotationSnapshots] = useState<{
+    viewport: OrientationDebugSnapshot | null;
+    viewCube: OrientationDebugSnapshot | null;
+    hsl: OrientationDebugSnapshot | null;
+  }>({
+    viewport: null,
+    viewCube: null,
+    hsl: null,
+  });
 
   const controlsRef = useRef<any>(null);
   const viewCubeSceneRef = useRef<any>(null);
@@ -525,6 +540,37 @@ function FemMeshView3DInner({
     setCaptureActive,
     setQualityProfile,
   });
+  const updateRotationSnapshot = useCallback((
+    key: "viewport" | "viewCube" | "hsl",
+    snapshot: OrientationDebugSnapshot,
+  ) => {
+    setRotationSnapshots((previous) => {
+      const current = previous[key];
+      if (current?.signature === snapshot.signature && current.cssTransform === snapshot.cssTransform) {
+        return previous;
+      }
+      return { ...previous, [key]: snapshot };
+    });
+  }, []);
+  const syncViewportRotationSnapshot = useCallback(() => {
+    const bridge = viewCubeSceneRef.current;
+    if (!bridge?.camera) {
+      return;
+    }
+    updateRotationSnapshot("viewport", captureOrientationDebugSnapshot(bridge.camera));
+  }, [updateRotationSnapshot]);
+  useSceneCameraChange(viewCubeSceneRef, syncViewportRotationSnapshot);
+  const applyRotationEuler = useCallback((nextEulerDeg: [number, number, number]) => {
+    const quaternion = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(
+        THREE.MathUtils.degToRad(nextEulerDeg[0]),
+        THREE.MathUtils.degToRad(nextEulerDeg[1]),
+        THREE.MathUtils.degToRad(nextEulerDeg[2]),
+        "XYZ",
+      ),
+    );
+    handleViewCubeRotate(quaternion);
+  }, [handleViewCubeRotate]);
   const shellTarget = useMemo(
     () => [dynamicGeomCenter.x, dynamicGeomCenter.y, dynamicGeomCenter.z] as [
       number,
@@ -631,6 +677,9 @@ function FemMeshView3DInner({
     takeScreenshot,
     handleViewCubeRotate,
     viewCubeSceneRef,
+    rotationSnapshots,
+    updateRotationSnapshot,
+    applyRotationEuler,
     setClipEnabled,
     toggleClip,
     setClipAxis,

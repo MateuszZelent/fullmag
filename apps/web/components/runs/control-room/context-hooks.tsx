@@ -18,6 +18,7 @@ import { createContext, useContext } from "react";
 import type { GpuTelemetryDevice } from "../../../lib/liveApiClient";
 import type {
   ArtifactEntry,
+  BackendCapabilities,
   CommandStatus,
   EngineLogEntry,
   FemLiveMesh,
@@ -208,6 +209,7 @@ export interface CommandContextValue {
   error: string | null;
   session: SessionManifest | null;
   run: RunManifest | null;
+  capabilities: BackendCapabilities | null;
   metadata: Record<string, unknown> | null;
   engineLog: EngineLogEntry[];
   quantities: QuantityDescriptor[];

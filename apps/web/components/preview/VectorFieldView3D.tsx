@@ -9,6 +9,10 @@ import ViewCube from "./ViewCube";
 import HslSphere from "./HslSphere";
 import FdmInstances from "./r3f/FdmInstances";
 import { rotateCameraAroundTarget, focusCameraOnBounds } from "./camera/cameraHelpers";
+import {
+  captureOrientationDebugSnapshot,
+  type OrientationDebugSnapshot,
+} from "./camera/cameraOrientation";
 import FdmLighting from "./r3f/FdmLighting";
 import SceneAxes3D from "./r3f/SceneAxes3D";
 import { useCanvasHost } from "./shared/useCanvasHost";
@@ -33,6 +37,7 @@ import {
   ArrowUpRight,
   Video,
   Camera,
+  Info,
   Mountain,
   Move,
   RotateCw,
@@ -55,6 +60,7 @@ import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 import { TransformGizmoLayer } from "./transform/TransformGizmoLayer";
 import { axisLabelsForConvention } from "./transform/axisConvention";
+import { useSceneCameraChange } from "./camera/useSceneCameraChange";
 
 const FDM_AXIS_CONVENTION = "swapYZ" as const;
 
@@ -193,6 +199,59 @@ function loadSettings(): Settings {
     topoComponent: loadEnum(STORAGE_KEYS.topoComponent, ["x", "y", "z"], "z"),
     topoMultiplier: loadClamped(STORAGE_KEYS.topoMultiplier, 5, 0.5, 50),
   };
+}
+
+type RotationPanelKey = "viewport" | "viewCube" | "hsl";
+
+function formatVector(values: readonly number[], digits = 3): string {
+  return values.map((value) => value.toFixed(digits)).join(", ");
+}
+
+function formatCssTransform(transform: string): string {
+  return transform.length > 92 ? `${transform.slice(0, 92)}...` : transform;
+}
+
+function RotationDebugBlock({
+  label,
+  snapshot,
+}: {
+  label: string;
+  snapshot: OrientationDebugSnapshot | null;
+}) {
+  return (
+    <div className="rounded-md border border-border/35 bg-background/35 px-2 py-2">
+      <div className="text-[0.58rem] font-bold uppercase tracking-[0.18em] text-foreground/90">
+        {label}
+      </div>
+      {snapshot ? (
+        <div className="mt-1 space-y-1 text-[0.6rem] leading-4 text-muted-foreground">
+          <div>
+            <span className="text-foreground/80">Quat</span>: {formatVector(snapshot.quaternion, 4)}
+          </div>
+          <div>
+            <span className="text-foreground/80">Euler</span>: {formatVector(snapshot.eulerDeg, 1)}
+          </div>
+          <div>
+            <span className="text-foreground/80">Up</span>: {formatVector(snapshot.up, 3)}
+          </div>
+          <div>
+            <span className="text-foreground/80">Fwd</span>: {formatVector(snapshot.forward, 3)}
+          </div>
+          <div>
+            <span className="text-foreground/80">Pos</span>: {formatVector(snapshot.position, 3)}
+          </div>
+          <div className="break-all">
+            <span className="text-foreground/80">Sig</span>: {snapshot.signature}
+          </div>
+          <div className="break-all">
+            <span className="text-foreground/80">CSS</span>: {formatCssTransform(snapshot.cssTransform)}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-1 text-[0.6rem] text-muted-foreground">Brak danych.</div>
+      )}
+    </div>
+  );
 }
 
 // ─── R3F camera ↔ ViewCube bridge ───────────────────────────────────
@@ -628,7 +687,7 @@ function VectorFieldView3DInner({
     frameloop: viewportVisible ? "demand" : "never",
     hidden: !viewportVisible,
   });
-  const [openPopover, setOpenPopover] = useState<"color" | "display" | "topo" | "camera" | null>(null);
+  const [openPopover, setOpenPopover] = useState<"color" | "display" | "topo" | "camera" | "info" | "rotation" | null>(null);
 
   // ── 3dsmax-style interaction mode (camera / move / rotate / scale) ──
   type InteractionMode = "camera" | "move" | "rotate" | "scale";
@@ -683,12 +742,37 @@ function VectorFieldView3DInner({
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
   const r3fSceneRef = useRef<THREE.Scene | null>(null);
   const r3fCameraRef = useRef<THREE.Camera | null>(null);
+  const [rotationSnapshots, setRotationSnapshots] = useState<Record<RotationPanelKey, OrientationDebugSnapshot | null>>({
+    viewport: null,
+    viewCube: null,
+    hsl: null,
+  });
 
   const [nx, ny, nz] = grid;
   const { cx, cy, cz, orbitDist } = useMemo(() => ({
     cx: nx / 2, cy: nz / 2, cz: ny / 2,
     orbitDist: Math.max(nx, ny, nz) * 1.5,
   }), [nx, ny, nz]);
+  const updateRotationSnapshot = useCallback((key: RotationPanelKey, snapshot: OrientationDebugSnapshot) => {
+    setRotationSnapshots((previous) => {
+      const current = previous[key];
+      if (
+        current?.signature === snapshot.signature &&
+        current.cssTransform === snapshot.cssTransform
+      ) {
+        return previous;
+      }
+      return { ...previous, [key]: snapshot };
+    });
+  }, []);
+  const syncViewportRotationSnapshot = useCallback(() => {
+    const bridge = viewCubeSceneRef.current;
+    if (!bridge?.camera) {
+      return;
+    }
+    updateRotationSnapshot("viewport", captureOrientationDebugSnapshot(bridge.camera));
+  }, [updateRotationSnapshot]);
+  useSceneCameraChange(viewCubeSceneRef, syncViewportRotationSnapshot);
 
   // Persist settings changes
   const update = useCallback((patch: Partial<Settings>) => {
@@ -1001,6 +1085,67 @@ function VectorFieldView3DInner({
                 )}
               </ViewportPopoverTrigger>
 
+              <ViewportPopoverTrigger preferredHorizontal="left">
+                <ViewportIconAction
+                  icon={<RotateCw size={14} />}
+                  label="R"
+                  active={openPopover === "rotation"}
+                  onClick={() => setOpenPopover(prev => prev === "rotation" ? null : "rotation")}
+                  className="min-w-[34px]"
+                  title="Rotation Debug"
+                />
+                {openPopover === "rotation" && (
+                  <ViewportPopoverPanel
+                    anchorRef={{ current: null }}
+                    title="Rotation Debug"
+                    className="min-w-[320px] max-w-[420px]"
+                  >
+                    <div className="space-y-2">
+                      <div className="text-[0.62rem] text-muted-foreground">
+                        Viewport, kostka i HSL raportują tu własne snapshoty orientacji po zmianie kamery.
+                      </div>
+                      <RotationDebugBlock label="Viewport 3D" snapshot={rotationSnapshots.viewport} />
+                      <RotationDebugBlock label="ViewCube" snapshot={rotationSnapshots.viewCube} />
+                      <RotationDebugBlock label="HSL Sphere" snapshot={rotationSnapshots.hsl} />
+                    </div>
+                  </ViewportPopoverPanel>
+                )}
+              </ViewportPopoverTrigger>
+
+              <ViewportPopoverTrigger preferredHorizontal="left">
+                <ViewportIconAction
+                  icon={<Info size={14} />}
+                  showCaret
+                  active={openPopover === "info"}
+                  onClick={() => setOpenPopover(prev => prev === "info" ? null : "info")}
+                  title="Viewport Info"
+                />
+                {openPopover === "info" && (
+                  <ViewportPopoverPanel
+                    anchorRef={{ current: null }}
+                    title="Viewport Info"
+                    className="min-w-[260px] max-w-[360px]"
+                  >
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[0.66rem]">
+                      <span className="text-muted-foreground">Grid</span>
+                      <span className="font-mono text-right">{nx} x {ny} x {nz}</span>
+                      <span className="text-muted-foreground">Field</span>
+                      <span className="font-mono text-right">{fieldLabel ?? "M"}</span>
+                      <span className="text-muted-foreground">Render</span>
+                      <span className="font-mono text-right">{settings.renderMode}</span>
+                      <span className="text-muted-foreground">Quality</span>
+                      <span className="font-mono text-right">{settings.quality}</span>
+                      <span className="text-muted-foreground">Sampling</span>
+                      <span className="font-mono text-right">{settings.sampling}x</span>
+                      <span className="text-muted-foreground">Topography</span>
+                      <span className="font-mono text-right">{settings.topoEnabled ? `on (${settings.topoComponent})` : "off"}</span>
+                      <span className="text-muted-foreground">Visible</span>
+                      <span className="font-mono text-right">{viewportVisible ? "yes" : "no"}</span>
+                    </div>
+                  </ViewportPopoverPanel>
+                )}
+              </ViewportPopoverTrigger>
+
               <ViewportToolSeparator />
 
               {/* Capture */}
@@ -1021,13 +1166,19 @@ function VectorFieldView3DInner({
               onRotate={handleViewCubeRotate}
               onReset={resetCamera}
               axisConvention={FDM_AXIS_CONVENTION}
+              onOrientationSnapshot={(snapshot) => updateRotationSnapshot("viewCube", snapshot)}
             />
           )}
         </ViewportOverlayLayout.TopRight>
 
         <ViewportOverlayLayout.BottomLeft>
           {fdmViewportFlags.showOrientationSphere && viewportVisible && !geometryMode ? (
-            <HslSphere sceneRef={viewCubeSceneRef} axisConvention={FDM_AXIS_CONVENTION} />
+            <HslSphere
+              sceneRef={viewCubeSceneRef}
+              axisConvention={FDM_AXIS_CONVENTION}
+              size={156}
+              onOrientationSnapshot={(snapshot) => updateRotationSnapshot("hsl", snapshot)}
+            />
           ) : null}
         </ViewportOverlayLayout.BottomLeft>
 

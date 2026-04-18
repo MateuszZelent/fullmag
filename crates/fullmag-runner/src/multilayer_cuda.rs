@@ -908,12 +908,14 @@ fn build_native_stacked_cuda_plan(
             mel_b2: None,
             mel_uniform_strain: None,
             oersted_axis: None,
+            oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
             oersted_time_dep_phase: 0.0,
             oersted_time_dep_offset: 0.0,
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
+            oersted_realization: None,
         },
         layers,
         global_grid,
@@ -1203,12 +1205,14 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         mel_b2: None,
         mel_uniform_strain: None,
         oersted_axis: None,
+        oersted_field_xyz: None,
         oersted_time_dep_kind: 0,
         oersted_time_dep_freq: 0.0,
         oersted_time_dep_phase: 0.0,
         oersted_time_dep_offset: 0.0,
         oersted_time_dep_t_on: 0.0,
         oersted_time_dep_t_off: 0.0,
+        oersted_realization: None,
     }
 }
 
@@ -2610,6 +2614,7 @@ mod tests {
         FdmMultilayerPlanIR {
             mode: "three_d".to_string(),
             common_cells: [2, 1, 1],
+            field_refresh: None,
             layers: vec![
                 FdmLayerPlanIR {
                     magnet_name: "bottom".to_string(),

@@ -321,6 +321,21 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
         error = "relax_stop.max_physical_time_s must be positive when provided";
         return false;
     }
+    if (plan.oersted_field_xyz != nullptr &&
+        plan.oersted_field_len != expected_m_len) {
+        error = "oersted_field_xyz length mismatch";
+        return false;
+    }
+    if (plan.has_oersted_cylinder != 0 &&
+        plan.oersted_field_xyz != nullptr &&
+        plan.oersted_field_len > 0) {
+        error = "oersted cylinder and explicit oersted_field_xyz are mutually exclusive";
+        return false;
+    }
+    if (plan.has_zhang_li_stt != 0 && plan.has_slonczewski_stt != 0) {
+        error = "native FEM plan supports only one executable STT family at a time";
+        return false;
+    }
 
     ctx.n_nodes = plan.mesh.n_nodes;
     ctx.n_elements = plan.mesh.n_elements;
@@ -380,6 +395,22 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     ctx.cubic_axis2 = {plan.cubic_axis2[0], plan.cubic_axis2[1], plan.cubic_axis2[2]};
     ctx.material = plan.material;
     ctx.demag_solver = plan.demag_solver;
+    ctx.has_zhang_li_stt = plan.has_zhang_li_stt != 0;
+    ctx.has_slonczewski_stt = plan.has_slonczewski_stt != 0;
+    ctx.stt_current_density_am2 = {
+        plan.stt_current_density_am2[0],
+        plan.stt_current_density_am2[1],
+        plan.stt_current_density_am2[2],
+    };
+    ctx.stt_degree = plan.stt_degree;
+    ctx.stt_beta = plan.stt_beta;
+    ctx.stt_spin_polarization = {
+        plan.stt_spin_polarization[0],
+        plan.stt_spin_polarization[1],
+        plan.stt_spin_polarization[2],
+    };
+    ctx.stt_lambda = plan.stt_lambda;
+    ctx.stt_epsilon_prime = plan.stt_epsilon_prime;
 
     // Copy per-node spatially varying fields
     auto copy_field = [](std::vector<double> &dst, const double *src, uint64_t len) {
@@ -504,6 +535,19 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
                 return false;
             }
         }
+        if (ctx.has_slonczewski_stt) {
+            double len = std::sqrt(
+                ctx.stt_spin_polarization[0] * ctx.stt_spin_polarization[0] +
+                ctx.stt_spin_polarization[1] * ctx.stt_spin_polarization[1] +
+                ctx.stt_spin_polarization[2] * ctx.stt_spin_polarization[2]);
+            if (!(len > kZeroThreshold) || !std::isfinite(len)) {
+                error = "stt_spin_polarization must be finite and non-zero";
+                return false;
+            }
+            ctx.stt_spin_polarization[0] /= len;
+            ctx.stt_spin_polarization[1] /= len;
+            ctx.stt_spin_polarization[2] /= len;
+        }
     }
 
     // Adaptive time-stepping from plan
@@ -610,6 +654,7 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
 
     // ── Oersted field (cylindrical conductor) ──
     ctx.has_oersted_cylinder = plan.has_oersted_cylinder != 0;
+    ctx.has_oersted_field = plan.oersted_field_xyz != nullptr && plan.oersted_field_len > 0;
     ctx.oersted_current = plan.oersted_current;
     ctx.oersted_radius = plan.oersted_radius;
     for (int i = 0; i < 3; ++i) {
@@ -637,7 +682,11 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     ctx.oersted_time_dep_t_on = plan.oersted_time_dep_t_on;
     ctx.oersted_time_dep_t_off = plan.oersted_time_dep_t_off;
 
-    if (ctx.has_oersted_cylinder && ctx.oersted_radius > 0.0) {
+    if (ctx.has_oersted_field) {
+        ctx.h_oe_xyz.assign(
+            plan.oersted_field_xyz,
+            plan.oersted_field_xyz + static_cast<size_t>(plan.oersted_field_len));
+    } else if (ctx.has_oersted_cylinder && ctx.oersted_radius > 0.0) {
         // Precompute static Oersted field for I = 1 A on FEM node coordinates.
         // Ampère's law for infinite cylinder along arbitrary axis â:
         //   inside  (r_perp < R):  |H| = r_perp / (2π R²)

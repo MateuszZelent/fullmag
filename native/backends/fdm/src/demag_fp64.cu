@@ -624,29 +624,8 @@ void launch_effective_field_fp64(Context &ctx) {
         ctx.mel_strain[3] * 0.5, ctx.mel_strain[4] * 0.5, ctx.mel_strain[5] * 0.5); // e23, e13, e12 (tensor)
 
     // ── Add Oersted field contribution: H_eff += I(t) * H_oe_static ──
-    if (ctx.has_oersted_cylinder) {
-        double t = ctx.current_time;
-        double I_scale = ctx.oersted_current;
-
-        // Evaluate time-dependence envelope
-        switch (ctx.oersted_time_dep_kind) {
-            case 1: { // Sinusoidal
-                double f = ctx.oersted_time_dep_freq;
-                double phi = ctx.oersted_time_dep_phase;
-                double off = ctx.oersted_time_dep_offset;
-                I_scale *= sin(2.0 * M_PI * f * t + phi) + off;
-                break;
-            }
-            case 2: { // Pulse
-                double t_on = ctx.oersted_time_dep_t_on;
-                double t_off = ctx.oersted_time_dep_t_off;
-                I_scale *= (t >= t_on && t < t_off) ? 1.0 : 0.0;
-                break;
-            }
-            default: // Constant (kind=0)
-                break;
-        }
-
+    if (ctx.has_oersted_field) {
+        const double I_scale = oersted_field_scale(ctx);
         // Simple axpy: work += I_scale * h_oe_static
         add_scaled_field_fp64_kernel<<<grid, BLOCK_SIZE>>>(
             static_cast<double*>(ctx.work.x),

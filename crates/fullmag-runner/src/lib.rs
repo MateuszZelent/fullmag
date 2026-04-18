@@ -1396,8 +1396,8 @@ pub fn run_reference_fem_eigen(
 mod tests {
     use super::*;
     use fullmag_ir::{
-        ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, GridDimensions,
-        IntegratorChoice, MeshIR,
+        CurrentModuleIR, CurrentTransportModelIR, ExchangeBoundaryCondition, ExecutionPrecision,
+        FdmMaterialIR, GridDimensions, IntegratorChoice, MeshIR,
     };
     #[cfg(feature = "cuda")]
     use fullmag_ir::{FdmGridAssetIR, GeometryAssetsIR, GeometryEntryIR};
@@ -1443,12 +1443,14 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
             oersted_time_dep_phase: 0.0,
             oersted_time_dep_offset: 0.0,
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
+            oersted_realization: None,
             temperature: None,
             interfacial_dmi: None,
             bulk_dmi: None,
@@ -1548,6 +1550,8 @@ mod tests {
             fdm,
             2e-13,
             &plan.output_plan.outputs,
+            None,
+            None,
         )
         .expect("cpu run");
         let cuda = dispatch::execute_fdm(
@@ -1555,6 +1559,8 @@ mod tests {
             fdm,
             2e-13,
             &plan.output_plan.outputs,
+            None,
+            None,
         )
         .expect("cuda run");
 
@@ -1694,6 +1700,53 @@ mod tests {
         .expect("metadata should parse");
         assert_eq!(metadata["field_snapshots"].as_u64(), Some(4));
         assert_eq!(metadata["scalar_rows"].as_u64(), Some(2));
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn run_problem_writes_prescribed_current_transport_artifact() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem
+            .current_modules
+            .push(CurrentModuleIR::CurrentTransport {
+                name: "drive".to_string(),
+                model: CurrentTransportModelIR::PrescribedDensity,
+                current_density: Some([0.0, 0.0, 5e10]),
+                solve_region: None,
+                conductivity_s_per_m: None,
+            });
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-current-transport-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result = run_problem(&problem, 2e-13, &output_dir).expect("run_problem should succeed");
+        assert_eq!(result.status, RunStatus::Completed);
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("current_transport/drive.json"))
+                .expect("current transport artifact should be readable"),
+        )
+        .expect("current transport artifact should parse");
+        assert_eq!(artifact["kind"], "current_transport");
+        assert_eq!(artifact["model"], "prescribed_density");
+        assert_eq!(artifact["unit"], "A/m^2");
+
+        let values = artifact["values"]
+            .as_array()
+            .expect("values should be an array");
+        let total_cell_count = artifact["layout"]["total_cell_count"]
+            .as_u64()
+            .expect("layout should report total_cell_count")
+            as usize;
+        assert_eq!(values.len(), total_cell_count);
+        assert_eq!(values[0], serde_json::json!([0.0, 0.0, 5e10]));
 
         fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
     }

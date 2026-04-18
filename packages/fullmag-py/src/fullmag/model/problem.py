@@ -14,11 +14,12 @@ from fullmag._progress import emit_progress, emit_progress_event
 from fullmag._validation import ensure_unique_names, require_non_empty
 from fullmag.init.textures import PresetTexture
 from fullmag.model.antenna import AntennaFieldSource, SpinWaveExcitationAnalysis
+from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.discretization import DiscretizationHints, FEM
 from fullmag.model.dynamics import LLG
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds
-from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedCylinder, PiecewiseLinear, ThermalNoise, UniaxialAnisotropy, Zeeman
-from fullmag.model.spin_torque import SlonczewskiSTT, SpinTorque, ZhangLiSTT
+from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.spin_torque import LegacySpinTorque, SpinTorqueModule
 from fullmag.model.mechanics import (
     ElasticBody,
     ElasticMaterial,
@@ -693,10 +694,78 @@ class RuntimeSelection:
 backend = RuntimeSelection()
 
 
-EnergyTerm = Exchange | Demag | InterfacialDMI | BulkDMI | Zeeman | Magnetoelastic | UniaxialAnisotropy | OerstedCylinder | CubicAnisotropy | ThermalNoise
-CurrentModule = AntennaFieldSource
+EnergyTerm = Exchange | Demag | InterfacialDMI | BulkDMI | Zeeman | Magnetoelastic | UniaxialAnisotropy | OerstedCylinder | OerstedField | CubicAnisotropy | ThermalNoise
+CurrentModule = AntennaFieldSource | CurrentTransport
 LegacyOutputSpec = SaveField | SaveScalar | Snapshot
 OutputSpec = LegacyOutputSpec | SaveSpectrum | SaveMode | SaveDispersion
+
+
+def _is_spin_torque_module(value: object) -> bool:
+    return hasattr(value, "to_ir_module")
+
+
+def _normalize_spin_torque_modules(
+    legacy_spin_torque: LegacySpinTorque | None,
+    spin_torques: Sequence[SpinTorqueModule] | SpinTorqueModule | None,
+) -> tuple[SpinTorqueModule, ...]:
+    has_canonical_modules = False
+    if spin_torques is not None:
+        if _is_spin_torque_module(spin_torques):
+            has_canonical_modules = True
+        else:
+            has_canonical_modules = len(spin_torques) > 0
+
+    if legacy_spin_torque is not None and has_canonical_modules:
+        raise ValueError(
+            "Use either spin_torque=... (legacy single-module API) or "
+            "spin_torques=[...] (canonical multi-module API), not both"
+        )
+
+    if spin_torques in (None, ()):
+        return (legacy_spin_torque,) if legacy_spin_torque is not None else ()
+
+    if _is_spin_torque_module(spin_torques):
+        return (spin_torques,)
+
+    normalized: list[SpinTorqueModule] = []
+    for index, module in enumerate(spin_torques):
+        if not _is_spin_torque_module(module):
+            raise TypeError(
+                f"spin_torques[{index}] must be a spin torque module with to_ir_module(), "
+                f"got {type(module).__name__}"
+            )
+        normalized.append(module)
+    return tuple(normalized)
+
+
+def _spin_torque_modules_ir(problem: "Problem") -> list[dict[str, object]]:
+    return [module.to_ir_module() for module in problem.spin_torques]
+
+
+def _legacy_spin_torque_fields(problem: "Problem") -> dict[str, object]:
+    if len(problem.spin_torques) != 1:
+        return {}
+    to_ir_fields = getattr(problem.spin_torques[0], "to_ir_fields", None)
+    if not callable(to_ir_fields):
+        return {}
+    fields = to_ir_fields()
+    if not isinstance(fields, dict):
+        raise TypeError("spin torque module to_ir_fields() must return dict[str, object]")
+    return fields
+
+
+def _current_module_name_map(
+    current_modules: Sequence[CurrentModule],
+) -> dict[str, CurrentModule]:
+    return {module.name: module for module in current_modules}
+
+
+def _module_kind(module: CurrentModule) -> str:
+    if isinstance(module, AntennaFieldSource):
+        return "antenna_field_source"
+    if isinstance(module, CurrentTransport):
+        return "current_transport"
+    return type(module).__name__
 
 
 def _builder_source_kind(entrypoint_kind: str) -> str:
@@ -721,18 +790,20 @@ def _builder_editable_scopes(
     if study_universe is not None:
         scopes.append("universe")
     scopes.extend(["geometry", "materials", "energies", "study", "outputs"])
-    if problem.current_modules:
+    if any(isinstance(module, AntennaFieldSource) for module in problem.current_modules):
         scopes.append("antennas")
+    if any(isinstance(module, CurrentTransport) for module in problem.current_modules):
+        scopes.append("current_transport")
     if mesh_workflow is not None or (
         problem.discretization is not None and problem.discretization.fem is not None
     ):
         scopes.append("meshing")
     # STNO scopes (F03)
-    if problem.spin_torque is not None:
+    if problem.spin_torques:
         scopes.append("spin_torque")
     if problem.temperature is not None:
         scopes.append("thermal")
-    if any(isinstance(t, OerstedCylinder) for t in problem.energy):
+    if any(isinstance(t, (OerstedCylinder, OerstedField)) for t in problem.energy):
         scopes.append("oersted")
     return scopes
 
@@ -800,7 +871,8 @@ def build_problem_builder_manifest(
             "discretization": problem.discretization.to_ir() if problem.discretization else None,
             "mesh_workflow": mesh_workflow,
             # STNO / drive fields (F02)
-            "spin_torque": problem.spin_torque.to_ir_fields() if problem.spin_torque is not None else None,
+            "spin_torque": _legacy_spin_torque_fields(problem) or None,
+            "spin_torque_modules": _spin_torque_modules_ir(problem),
             "temperature": problem.temperature,
         },
     }
@@ -862,8 +934,10 @@ class Problem:
         repr=False,
         compare=False,
     )
-    # Spin-transfer torque (optional)
-    spin_torque: SpinTorque | None = None
+    # Legacy single-module spin-transfer torque.
+    spin_torque: LegacySpinTorque | None = None
+    # Canonical torque family. Allows more than one module to be authored.
+    spin_torques: Sequence[SpinTorqueModule] = ()
     # Temperature for Brown thermal field [K] (optional, 0 = no noise)
     temperature: float | None = None
     # Magnetoelastic (optional)
@@ -885,6 +959,11 @@ class Problem:
 
         normalized_study = self._normalize_study()
         object.__setattr__(self, "study", normalized_study)
+        normalized_spin_torques = _normalize_spin_torque_modules(
+            self.spin_torque,
+            self.spin_torques,
+        )
+        object.__setattr__(self, "spin_torques", normalized_spin_torques)
 
         if self.temperature is not None and self.temperature < 0.0:
             raise ValueError("temperature must be >= 0")
@@ -908,11 +987,41 @@ class Problem:
         ensure_unique_names(
             (module.name for module in self.current_modules), "current module names"
         )
+        current_modules_by_name = _current_module_name_map(self.current_modules)
         if self.excitation_analysis is not None:
-            source_names = {module.name for module in self.current_modules}
-            if self.excitation_analysis.source not in source_names:
+            source_module = current_modules_by_name.get(self.excitation_analysis.source)
+            if source_module is None:
                 raise ValueError(
                     "excitation_analysis.source must reference one of Problem.current_modules"
+                )
+            if not isinstance(source_module, AntennaFieldSource):
+                raise ValueError(
+                    "excitation_analysis.source must reference an AntennaFieldSource"
+                )
+        for module in self.spin_torques:
+            current_source = getattr(module, "current_source", None)
+            if current_source is None:
+                continue
+            source_module = current_modules_by_name.get(current_source)
+            if source_module is None:
+                raise ValueError(
+                    f"spin torque current_source={current_source!r} must reference one of Problem.current_modules"
+                )
+            if not isinstance(source_module, CurrentTransport):
+                raise ValueError(
+                    f"spin torque current_source={current_source!r} must reference a CurrentTransport, got {_module_kind(source_module)}"
+                )
+        for term in self.energy:
+            if not isinstance(term, OerstedField):
+                continue
+            source_module = current_modules_by_name.get(term.source)
+            if source_module is None:
+                raise ValueError(
+                    f"OerstedField source={term.source!r} must reference one of Problem.current_modules"
+                )
+            if not isinstance(source_module, CurrentTransport):
+                raise ValueError(
+                    f"OerstedField source={term.source!r} must reference a CurrentTransport, got {_module_kind(source_module)}"
                 )
         self._validate_material_consistency()
         self._validate_geometry_consistency()
@@ -1005,6 +1114,11 @@ class Problem:
             geometry_assets,
         )
 
+        spin_torque_payload: dict[str, object] = {}
+        if self.spin_torques:
+            spin_torque_payload["spin_torque_modules"] = _spin_torque_modules_ir(self)
+        spin_torque_payload.update(_legacy_spin_torque_fields(self))
+
         return {
             "ir_version": IR_VERSION,
             "problem_meta": {
@@ -1037,8 +1151,8 @@ class Problem:
                 "discretization_hints": discretization.to_ir() if discretization else None,
             },
             "validation_profile": {"execution_mode": runtime.execution_mode.value},
-            # Spin-transfer torque
-            **(self.spin_torque.to_ir_fields() if self.spin_torque is not None else {}),
+            # Spin-torque family
+            **spin_torque_payload,
             # Temperature
             **({
                 "temperature": self.temperature,

@@ -6,6 +6,7 @@ from .antenna import (
     RfDrive,
     SpinWaveExcitationAnalysis,
 )
+from .current_transport import CurrentTransport
 from .dynamics import (
     AdaptiveTimestep,
     Elastodynamics,
@@ -22,7 +23,9 @@ from .energy import (
     Exchange,
     InterfacialDMI,
     Magnetoelastic,
+    OerstedField,
     OerstedCylinder,
+    OERSTED_FIELD_MODELS,
     PiecewiseLinear,
     Pulse,
     Sinusoidal,
@@ -59,7 +62,15 @@ from .problem import (
     RuntimeSelection,
     backend,
 )
-from .spin_torque import SlonczewskiSTT, SpinTorque, ZhangLiSTT
+from .spin_torque import (
+    DriftDiffusionSpinTorque,
+    InterfaceCppSTT,
+    SlonczewskiSTT,
+    SpinOrbitTorque,
+    SpinTorque,
+    SpinTorqueModule,
+    ZhangLiSTT,
+)
 from .structure import Ferromagnet, Material, Region
 from .study import Eigenmodes, FrequencyResponse, RelaxStop, Relaxation, TimeEvolution
 from .eigen import KPath, KPoint, ModeTracking
@@ -74,6 +85,7 @@ __all__ = [
     "Box",
     "BulkDMI",
     "CPWAntenna",
+    "CurrentTransport",
     "Constant",
     "Cylinder",
     "Demag",
@@ -108,12 +120,14 @@ __all__ = [
     "SweptMeshControls",
     "LLG",
     "Magnetoelastic",
+    "OerstedField",
     "MagnetostrictionLaw",
     "Material",
     "MechanicalBoundaryCondition",
     "MechanicalLoad",
     "MicrostripAntenna",
     "OerstedCylinder",
+    "OERSTED_FIELD_MODELS",
     "PrescribedStrain",
     "Problem",
     "QuasistaticElasticity",
@@ -145,6 +159,10 @@ __all__ = [
     "backend",
     "PiecewiseLinear",
     "SlonczewskiSTT",
+    "InterfaceCppSTT",
+    "DriftDiffusionSpinTorque",
+    "SpinOrbitTorque",
     "ZhangLiSTT",
     "SpinTorque",
+    "SpinTorqueModule",
 ]

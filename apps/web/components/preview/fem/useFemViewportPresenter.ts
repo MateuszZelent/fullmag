@@ -3,6 +3,8 @@ import { computeFaceAspectRatios } from "../r3f/colorUtils";
 import { useFemOverlayItems } from "./useFemOverlayItems";
 import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles";
 import type { ViewportOverlayDescriptor } from "../ViewportOverlayManager";
+import type { FemViewportOverlayPopover } from "./FemViewportTypes";
+import type { OrientationDebugSnapshot } from "../camera/cameraOrientation";
 import type { ArrowSamplingMode, FemColorField, FemMeshData, RenderMode, ClipAxis, FemArrowColorMode, FemVectorDomainFilter, FemFerromagnetVisibilityMode } from "./femMeshTypes";
 import type { FemMeshPart } from "../../../lib/session/types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
@@ -58,7 +60,7 @@ interface UseFemViewportPresenterArgs {
   labeledMode: boolean;
   legendOpen: boolean;
   partExplorerOpen?: boolean;
-  openPopover: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "info" | "panels" | null;
+  openPopover: FemViewportOverlayPopover;
   selectedFaces: number[];
   showOrientationLegend?: boolean;
   arrowField: FemColorField;
@@ -92,7 +94,7 @@ interface UseFemViewportPresenterArgs {
   setInternalArrowSamplingMode: (v: ArrowSamplingMode) => void;
   setInternalPartExplorerOpen: (fn: (prev: boolean) => boolean) => void;
   setLabeledMode: (v: boolean) => void;
-  setOpenPopover: (id: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "info" | "panels" | null) => void;
+  setOpenPopover: (id: FemViewportOverlayPopover) => void;
   setCameraProjection: (v: "perspective" | "orthographic") => void;
   setNavigationMode: (v: "trackball" | "cad") => void;
   setQualityProfile: (v: ViewportQualityProfileId) => void;
@@ -102,6 +104,16 @@ interface UseFemViewportPresenterArgs {
   takeScreenshot: () => void;
   handleViewCubeRotate: (quaternion: import("three").Quaternion) => void;
   viewCubeSceneRef: MutableRefObject<any>;
+  rotationSnapshots: {
+    viewport: OrientationDebugSnapshot | null;
+    viewCube: OrientationDebugSnapshot | null;
+    hsl: OrientationDebugSnapshot | null;
+  };
+  updateRotationSnapshot: (
+    key: "viewport" | "viewCube" | "hsl",
+    snapshot: OrientationDebugSnapshot,
+  ) => void;
+  applyRotationEuler: (nextEulerDeg: [number, number, number]) => void;
   setClipEnabled: (value: boolean) => void;
   toggleClip: () => void;
   setClipAxis: (value: ClipAxis) => void;
@@ -269,6 +281,9 @@ export function useFemViewportPresenter(args: UseFemViewportPresenterArgs): {
     takeScreenshot: args.takeScreenshot,
     handleViewCubeRotate: args.handleViewCubeRotate,
     viewCubeSceneRef: args.viewCubeSceneRef,
+    rotationSnapshots: args.rotationSnapshots,
+    updateRotationSnapshot: args.updateRotationSnapshot,
+    applyRotationEuler: args.applyRotationEuler,
   });
 
   const {

@@ -168,8 +168,19 @@ struct Context {
     // without re-solving the Poisson system.
     double cached_robin_boundary_energy = 0.0;
 
+    // ── Spin-transfer torque ──
+    bool has_zhang_li_stt = false;
+    bool has_slonczewski_stt = false;
+    std::array<double, 3> stt_current_density_am2{0.0, 0.0, 0.0};
+    double stt_degree = 0.0;
+    double stt_beta = 0.0;
+    std::array<double, 3> stt_spin_polarization{0.0, 0.0, 1.0};
+    double stt_lambda = 1.0;
+    double stt_epsilon_prime = 0.0;
+
     // ── Oersted field (cylindrical conductor) ──
     bool has_oersted_cylinder = false;
+    bool has_oersted_field = false;
     double oersted_current = 0.0;
     double oersted_radius = 0.0;
     std::array<double, 3> oersted_center{0.0, 0.0, 0.0};

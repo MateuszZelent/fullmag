@@ -47,6 +47,7 @@ pub enum fullmag_fdm_observable {
     FULLMAG_FDM_OBSERVABLE_H_DEMAG = 3,
     FULLMAG_FDM_OBSERVABLE_H_EXT = 4,
     FULLMAG_FDM_OBSERVABLE_H_EFF = 5,
+    FULLMAG_FDM_OBSERVABLE_H_OE = 6,
 }
 
 #[repr(C)]
@@ -168,6 +169,8 @@ pub struct fullmag_fdm_plan_desc {
     pub oersted_time_dep_offset: f64,
     pub oersted_time_dep_t_on: f64,
     pub oersted_time_dep_t_off: f64,
+    pub oersted_field_xyz: *const f64,
+    pub oersted_field_len: u64,
 
     pub demag_kernel_xx_spectrum: *const f64,
     pub demag_kernel_yy_spectrum: *const f64,

@@ -126,6 +126,7 @@ pub(crate) fn validate_executable_outputs(
     enable_exchange: bool,
     enable_demag: bool,
     enable_zeeman: bool,
+    enable_oersted: bool,
     enable_antenna_field: bool,
     errors: &mut Vec<String>,
 ) {
@@ -163,10 +164,11 @@ pub(crate) fn validate_executable_outputs(
         match output {
             OutputIR::Field { name, .. } => {
                 if !allowed_fields.contains(&name.as_str())
+                    && !(enable_oersted && name == "H_OE")
                     && !(enable_antenna_field && name == "H_ant")
                 {
                     errors.push(format!(
-                        "field output '{}' is not executable in the current FDM path; allowed fields are m, H_ex, H_demag, H_ext, and H_eff",
+                        "field output '{}' is not executable in the current FDM path; allowed fields are m, H_ex, H_demag, H_ext, H_OE, and H_eff",
                         name
                     ));
                 } else if name == "H_ex" && !enable_exchange {
@@ -175,6 +177,11 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("field output 'H_demag' requires Demag()".to_string());
                 } else if name == "H_ext" && !enable_zeeman {
                     errors.push("field output 'H_ext' requires Zeeman(...)".to_string());
+                } else if name == "H_OE" && !enable_oersted {
+                    errors.push(
+                        "field output 'H_OE' requires OerstedCylinder() or OerstedField(...)"
+                            .to_string(),
+                    );
                 } else if name == "H_ant" && !enable_antenna_field {
                     errors.push(
                         "field output 'H_ant' requires at least one antenna current module"
@@ -212,10 +219,11 @@ pub(crate) fn validate_executable_outputs(
                 field, component, ..
             } => {
                 if !allowed_fields.contains(&field.as_str())
+                    && !(enable_oersted && field == "H_OE")
                     && !(enable_antenna_field && field == "H_ant")
                 {
                     errors.push(format!(
-                        "snapshot field '{}' is not executable in the current path; allowed fields are m, H_ex, H_demag, H_ext, and H_eff",
+                        "snapshot field '{}' is not executable in the current path; allowed fields are m, H_ex, H_demag, H_ext, H_OE, and H_eff",
                         field
                     ));
                 } else if field == "H_ex" && !enable_exchange {
@@ -224,6 +232,11 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("snapshot field 'H_demag' requires Demag()".to_string());
                 } else if field == "H_ext" && !enable_zeeman {
                     errors.push("snapshot field 'H_ext' requires Zeeman(...)".to_string());
+                } else if field == "H_OE" && !enable_oersted {
+                    errors.push(
+                        "snapshot field 'H_OE' requires OerstedCylinder() or OerstedField(...)"
+                            .to_string(),
+                    );
                 } else if field == "H_ant" && !enable_antenna_field {
                     errors.push(
                         "snapshot field 'H_ant' requires at least one antenna current module"

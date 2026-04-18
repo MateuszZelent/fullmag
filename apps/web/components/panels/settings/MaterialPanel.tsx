@@ -9,6 +9,7 @@ import {
   type MagneticPresetDescriptor,
   type MagneticPresetKind,
 } from "../../../lib/magnetizationPresetCatalog";
+import { useCommand } from "../../runs/control-room/context-hooks";
 import { useModel } from "../../runs/control-room/ControlRoomContext";
 import { fmtSI } from "../../runs/control-room/shared";
 import { TextField } from "../../ui/TextField";
@@ -28,6 +29,10 @@ import {
   removeOptionalInteraction,
   upsertObjectInteraction,
 } from "../../../lib/session/magneticPhysics";
+import {
+  buildPhysicsCapabilityView,
+  getPhysicsCatalogEntry,
+} from "../../../lib/session/physicsCatalog";
 import {
   assignMagneticPreset,
   fitTextureToObject,
@@ -172,6 +177,7 @@ export default function MaterialPanel({
   nodeId?: string;
   view?: "full" | "magnetization";
 }) {
+  const cmd = useCommand();
   const model = useModel();
   const showFullSections = view !== "magnetization";
 
@@ -192,6 +198,10 @@ export default function MaterialPanel({
   const physicsStack = useMemo<ScriptBuilderMagneticInteractionEntry[]>(
     () => ensureObjectPhysicsStack(sceneObject?.physics_stack, materialAsset?.properties.Dind ?? null),
     [materialAsset?.properties.Dind, sceneObject?.physics_stack],
+  );
+  const physicsCapabilityView = useMemo(
+    () => buildPhysicsCapabilityView(cmd.capabilities, physicsStack),
+    [cmd.capabilities, physicsStack],
   );
 
   const updateMaterial = useCallback(
@@ -831,6 +841,9 @@ export default function MaterialPanel({
     Number(uniaxialAxisRaw[2] ?? 1),
   ] as [number, number, number];
   const uniaxialKu1 = Number(uniaxial?.params?.ku1 ?? 0);
+  const backendOnlyTerms = physicsCapabilityView.filter(
+    (entry) => entry.available && !entry.authorableInObjectPanel,
+  );
 
   return (
     <div className="flex flex-col px-2 pt-4">
@@ -885,6 +898,11 @@ export default function MaterialPanel({
                       ) : null}
                     </div>
                   </div>
+                  {getPhysicsCatalogEntry(interaction.kind)?.description ? (
+                    <div className="mt-2 text-[0.72rem] text-muted-foreground">
+                      {getPhysicsCatalogEntry(interaction.kind)?.description}
+                    </div>
+                  ) : null}
                   {interaction.kind === "interfacial_dmi" ? (
                     <div className="mt-2 text-[0.72rem] text-muted-foreground">
                       Uses <span className="font-mono text-foreground">Dind</span> from Material Constants.
@@ -945,6 +963,12 @@ export default function MaterialPanel({
                 Add Uniaxial Ku
               </Button>
             </div>
+            {backendOnlyTerms.length > 0 ? (
+              <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[0.72rem] text-amber-100/90">
+                Current backend also exposes: {backendOnlyTerms.map((entry) => entry.label).join(", ")}.
+                These semantics exist in runtime/Python, but this object panel still lacks first-class editors for them.
+              </div>
+            ) : null}
           </div>
         </SidebarSection>
       )}

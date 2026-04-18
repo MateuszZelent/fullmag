@@ -214,7 +214,142 @@ pub(crate) fn write_artifacts(
         fs::write(artifact_path, &artifact.bytes)?;
     }
 
+    write_prescribed_current_transport_artifacts(
+        output_dir,
+        problem,
+        plan,
+        &field_context,
+        &execution_provenance,
+    )?;
+
     Ok(())
+}
+
+fn write_prescribed_current_transport_artifacts(
+    output_dir: &Path,
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    context: &FieldArtifactContext,
+    provenance: &crate::types::ExecutionProvenance,
+) -> std::io::Result<()> {
+    for module in &problem.current_modules {
+        let fullmag_ir::CurrentModuleIR::CurrentTransport {
+            name,
+            model: fullmag_ir::CurrentTransportModelIR::PrescribedDensity,
+            current_density: Some(current_density),
+            solve_region,
+            ..
+        } = module
+        else {
+            continue;
+        };
+
+        let (values, coverage): (Vec<[f64; 3]>, &'static str) = match &plan.backend_plan {
+            BackendPlanIR::Fdm(fdm) => {
+                let total_cells = fdm.grid.cells[0] as usize
+                    * fdm.grid.cells[1] as usize
+                    * fdm.grid.cells[2] as usize;
+                let values = match &fdm.active_mask {
+                    Some(mask) => mask
+                        .iter()
+                        .map(|is_active| {
+                            if *is_active {
+                                *current_density
+                            } else {
+                                [0.0, 0.0, 0.0]
+                            }
+                        })
+                        .collect(),
+                    None => vec![*current_density; total_cells],
+                };
+                (values, "active_fdm_cells")
+            }
+            BackendPlanIR::Fem(fem) => {
+                let mut values = vec![[0.0, 0.0, 0.0]; fem.mesh.nodes.len()];
+                let mut matched_any_segment = false;
+                let target_geometry = solve_region.as_deref().and_then(|region_name| {
+                    resolve_current_transport_geometry(problem, region_name)
+                });
+                for segment in &fem.object_segments {
+                    let matches_region = solve_region
+                        .as_deref()
+                        .is_some_and(|region| segment.object_id == region);
+                    let matches_geometry = target_geometry.is_some_and(|geometry_name| {
+                        segment.geometry_id.as_deref() == Some(geometry_name)
+                    });
+                    let matches = solve_region.is_none() || matches_region || matches_geometry;
+                    if !matches {
+                        continue;
+                    }
+                    matched_any_segment = true;
+                    let start = segment.node_start as usize;
+                    let end = start
+                        .saturating_add(segment.node_count as usize)
+                        .min(values.len());
+                    for value in &mut values[start..end] {
+                        *value = *current_density;
+                    }
+                }
+                if solve_region.is_none() || !matched_any_segment {
+                    values.fill(*current_density);
+                    (values, "full_fem_layout_uniform")
+                } else {
+                    (values, "solve_region_nodes")
+                }
+            }
+            _ => continue,
+        };
+        let artifact_json = serde_json::json!({
+            "kind": "current_transport",
+            "module_name": name,
+            "model": "prescribed_density",
+            "unit": "A/m^2",
+            "distribution": "uniform_prescribed",
+            "coverage": coverage,
+            "solve_region": solve_region,
+            "layout": context.layout.clone(),
+            "provenance": {
+                "problem_name": context.problem_name,
+                "ir_version": context.ir_version,
+                "source_hash": context.source_hash,
+                "execution_mode": context.execution_mode,
+                "execution_engine": provenance.execution_engine,
+                "precision": provenance.precision,
+            },
+            "values": values,
+        });
+        let artifact_path = output_dir
+            .join("current_transport")
+            .join(format!("{name}.json"));
+        if let Some(parent) = artifact_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(
+            artifact_path,
+            serde_json::to_string_pretty(&artifact_json).unwrap(),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn resolve_current_transport_geometry<'a>(
+    problem: &'a fullmag_ir::ProblemIR,
+    solve_region: &str,
+) -> Option<&'a str> {
+    problem
+        .regions
+        .iter()
+        .find(|region| region.name == solve_region)
+        .map(|region| region.geometry.as_str())
+        .or_else(|| {
+            problem
+                .geometry
+                .entries
+                .iter()
+                .find(|entry| entry.name() == solve_region)
+                .map(|entry| entry.name())
+        })
 }
 
 pub(crate) fn write_scalars_csv(path: &Path, steps: &[StepStats]) -> std::io::Result<()> {
@@ -375,7 +510,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
 pub(crate) fn field_unit(observable: &str) -> &'static str {
     match observable {
         "m" => "dimensionless",
-        "H_ex" | "H_demag" | "H_ext" | "H_eff" | "H_ani" | "H_dmi" => "A/m",
+        "H_ex" | "H_demag" | "H_ext" | "H_OE" | "H_eff" | "H_ani" | "H_dmi" => "A/m",
         other => panic!("unsupported observable '{}'", other),
     }
 }
@@ -383,11 +518,16 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{ExecutedRun, ExecutionProvenance, FieldSnapshot, RunResult, RunStatus};
     use fullmag_ir::{
         BackendPlanIR, CommonPlanMeta, ExchangeBoundaryCondition, ExecutionMode, ExecutionPlanIR,
-        ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions, IntegratorChoice,
-        OutputPlanIR, ProvenancePlanIR,
+        ExecutionPrecision, FdmMaterialIR, FdmPlanIR, FemDomainMeshModeIR, FemObjectSegmentIR,
+        FemPlanIR, GridDimensions, IntegratorChoice, MaterialIR, MeshIR, OutputPlanIR,
+        ProvenancePlanIR,
     };
+    use std::collections::HashMap;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn test_execution_plan(active_mask: Option<Vec<bool>>) -> ExecutionPlanIR {
         ExecutionPlanIR {
@@ -419,6 +559,7 @@ mod tests {
                 integrator: IntegratorChoice::Heun,
                 fixed_timestep: Some(1e-13),
                 adaptive_timestep: None,
+                field_refresh: None,
                 relaxation: None,
                 boundary_correction: None,
                 boundary_geometry: None,
@@ -434,16 +575,137 @@ mod tests {
                 oersted_radius: None,
                 oersted_center: None,
                 oersted_axis: None,
+                oersted_field_xyz: None,
                 oersted_time_dep_kind: 0,
                 oersted_time_dep_freq: 0.0,
                 oersted_time_dep_phase: 0.0,
                 oersted_time_dep_offset: 0.0,
                 oersted_time_dep_t_on: 0.0,
                 oersted_time_dep_t_off: 0.0,
+                oersted_realization: None,
                 temperature: None,
                 interfacial_dmi: None,
                 bulk_dmi: None,
                 ..Default::default()
+            }),
+            output_plan: OutputPlanIR {
+                outputs: Vec::new(),
+            },
+            provenance: ProvenancePlanIR { notes: Vec::new() },
+        }
+    }
+
+    fn test_fem_execution_plan() -> ExecutionPlanIR {
+        ExecutionPlanIR {
+            common: CommonPlanMeta {
+                ir_version: "v0".to_string(),
+                requested_backend: fullmag_ir::BackendTarget::Fem,
+                resolved_backend: fullmag_ir::BackendTarget::Fem,
+                execution_mode: ExecutionMode::Strict,
+            },
+            backend_plan: BackendPlanIR::Fem(FemPlanIR {
+                mesh_name: "unit_tet".to_string(),
+                mesh_source: Some("meshes/unit_tet.msh".to_string()),
+                mesh: MeshIR {
+                    mesh_name: "unit_tet".to_string(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    elements: vec![[0, 1, 2, 3]],
+                    element_markers: vec![1],
+                    boundary_faces: vec![[0, 1, 2]],
+                    boundary_markers: vec![1],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: HashMap::new(),
+                },
+                object_segments: vec![FemObjectSegmentIR {
+                    object_id: "free".to_string(),
+                    geometry_id: Some("pillar".to_string()),
+                    node_start: 0,
+                    node_count: 4,
+                    element_start: 0,
+                    element_count: 1,
+                    boundary_face_start: 0,
+                    boundary_face_count: 1,
+                }],
+                mesh_parts: Vec::new(),
+                domain_mesh_mode: FemDomainMeshModeIR::MergedMagneticMesh,
+                domain_frame: None,
+                fe_order: 1,
+                hmax: 0.4,
+                initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                material: MaterialIR {
+                    name: "Py".to_string(),
+                    saturation_magnetisation: 800e3,
+                    exchange_stiffness: 13e-12,
+                    damping: 0.02,
+                    uniaxial_anisotropy: None,
+                    anisotropy_axis: None,
+                    uniaxial_anisotropy_k2: None,
+                    cubic_anisotropy_kc1: None,
+                    cubic_anisotropy_kc2: None,
+                    cubic_anisotropy_kc3: None,
+                    cubic_anisotropy_axis1: None,
+                    cubic_anisotropy_axis2: None,
+                    ms_field: None,
+                    a_field: None,
+                    alpha_field: None,
+                    ku_field: None,
+                    ku2_field: None,
+                    kc1_field: None,
+                    kc2_field: None,
+                    kc3_field: None,
+                },
+                region_materials: Vec::new(),
+                enable_exchange: true,
+                enable_demag: false,
+                external_field: None,
+                current_modules: Vec::new(),
+                gyromagnetic_ratio: 2.211e5,
+                precision: ExecutionPrecision::Double,
+                exchange_bc: ExchangeBoundaryCondition::Neumann,
+                integrator: IntegratorChoice::Heun,
+                fixed_timestep: Some(1e-13),
+                adaptive_timestep: None,
+                field_refresh: None,
+                relaxation: None,
+                demag_realization: None,
+                air_box_config: None,
+                interfacial_dmi: None,
+                dmi_interface_normal: None,
+                bulk_dmi: None,
+                dind_field: None,
+                dbulk_field: None,
+                temperature: None,
+                current_density: None,
+                stt_degree: None,
+                stt_beta: None,
+                stt_spin_polarization: None,
+                stt_lambda: None,
+                stt_epsilon_prime: None,
+                has_oersted_cylinder: false,
+                oersted_current: None,
+                oersted_radius: None,
+                oersted_center: None,
+                oersted_axis: None,
+                oersted_field_xyz: None,
+                oersted_time_dep_kind: 0,
+                oersted_time_dep_freq: 0.0,
+                oersted_time_dep_phase: 0.0,
+                oersted_time_dep_offset: 0.0,
+                oersted_time_dep_t_on: 0.0,
+                oersted_time_dep_t_off: 0.0,
+                magnetoelastic: None,
+                demag_solver_policy: None,
+                thermal_seed_config: None,
+                oersted_realization: None,
+                gpu_device_index: None,
+                mfem_device_string: None,
+                use_consistent_mass: None,
             }),
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),
@@ -472,5 +734,180 @@ mod tests {
         assert_eq!(layout["active_cell_count"], 8);
         assert_eq!(layout["inactive_cell_count"], 0);
         assert_eq!(layout["active_fraction"], serde_json::json!(1.0));
+    }
+
+    #[test]
+    fn fem_prescribed_current_transport_artifact_uses_solve_region_nodes() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem
+            .current_modules
+            .push(fullmag_ir::CurrentModuleIR::CurrentTransport {
+                name: "drive".to_string(),
+                model: fullmag_ir::CurrentTransportModelIR::PrescribedDensity,
+                current_density: Some([0.0, 0.0, 5e10]),
+                solve_region: Some("pillar_region".to_string()),
+                conductivity_s_per_m: None,
+            });
+        problem.regions = vec![fullmag_ir::RegionIR {
+            name: "pillar_region".to_string(),
+            geometry: "pillar".to_string(),
+        }];
+        let plan = test_fem_execution_plan();
+        let context = build_field_context(&problem, &plan);
+        let provenance = crate::types::ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            demag_operator_kind: None,
+            fft_backend: None,
+            device_name: None,
+            compute_capability: None,
+            cuda_driver_version: None,
+            cuda_runtime_version: None,
+            lossy_fallback_used: false,
+            ignored_terms: Vec::new(),
+            random_seed: None,
+            resolved_fallback: None,
+            requested_integrator: None,
+            resolved_integrator: None,
+            requested_demag_realization: None,
+            resolved_demag_realization: None,
+            dt_policy: None,
+            mfem_device: None,
+            demag_refresh_interval_s: None,
+            requested_cpu_threads: None,
+            resolved_cpu_threads: None,
+            requested_fem_omp_threads: None,
+            effective_fem_omp_threads: None,
+        };
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fem-current-transport-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        write_prescribed_current_transport_artifacts(
+            &output_dir,
+            &problem,
+            &plan,
+            &context,
+            &provenance,
+        )
+        .expect("fem current transport artifact should be written");
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("current_transport/drive.json"))
+                .expect("artifact should exist"),
+        )
+        .expect("artifact should parse");
+        assert_eq!(artifact["coverage"], "solve_region_nodes");
+        assert_eq!(artifact["layout"]["backend"], "fem");
+        let values = artifact["values"].as_array().expect("values should exist");
+        assert_eq!(values.len(), 4);
+        assert_eq!(values[0], serde_json::json!([0.0, 0.0, 5e10]));
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn write_artifacts_persists_h_oe_field_snapshot() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = test_execution_plan(Some(vec![
+            true, true, false, false, true, false, true, false,
+        ]));
+        let provenance = ExecutionProvenance {
+            execution_engine: "fdm_gpu_native".to_string(),
+            precision: "double".to_string(),
+            demag_operator_kind: None,
+            fft_backend: None,
+            device_name: Some("test-gpu".to_string()),
+            compute_capability: Some("9.0".to_string()),
+            cuda_driver_version: Some(12040),
+            cuda_runtime_version: Some(12040),
+            lossy_fallback_used: false,
+            ignored_terms: Vec::new(),
+            random_seed: None,
+            resolved_fallback: None,
+            requested_integrator: None,
+            resolved_integrator: None,
+            requested_demag_realization: None,
+            resolved_demag_realization: None,
+            dt_policy: None,
+            mfem_device: None,
+            demag_refresh_interval_s: None,
+            requested_cpu_threads: None,
+            resolved_cpu_threads: None,
+            requested_fem_omp_threads: None,
+            effective_fem_omp_threads: None,
+        };
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-h-oe-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 1,
+                    time: 1.0e-13,
+                    dt: 1.0e-13,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+            field_snapshots: vec![FieldSnapshot {
+                name: "H_OE".to_string(),
+                step: 1,
+                time: 1.0e-13,
+                solver_dt: 1.0e-13,
+                values: vec![
+                    [0.0, 0.0, 1.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [-1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                ],
+            }],
+            field_snapshot_count: 1,
+            auxiliary_artifacts: Vec::new(),
+            provenance,
+        };
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("H_OE artifact write should succeed");
+
+        let field_json: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("fields/H_OE/step_000001.json"))
+                .expect("H_OE artifact should exist"),
+        )
+        .expect("H_OE artifact should parse");
+        assert_eq!(field_json["observable"], "H_OE");
+        assert_eq!(field_json["unit"], "A/m");
+        assert_eq!(field_json["step"], 1);
+        assert_eq!(field_json["layout"]["backend"], "fdm");
+        assert_eq!(field_json["values"][0], serde_json::json!([0.0, 0.0, 1.0]));
+        assert_eq!(field_json["values"][6], serde_json::json!([-1.0, 0.0, 0.0]));
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata should exist"),
+        )
+        .expect("metadata should parse");
+        assert_eq!(metadata["field_snapshots"], 1);
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }
 }

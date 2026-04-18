@@ -17,7 +17,7 @@
  * reference sphere must swap Y/Z when sampling the HSL map for FEM/FDM.
  */
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import { Canvas, useThree } from "@react-three/fiber";
 import { Text, Billboard, Line } from "@react-three/drei";
@@ -29,11 +29,18 @@ import {
   sceneAxisDescriptor,
   type AxisConvention,
 } from "./transform/axisConvention";
+import {
+  cameraOrientationSignature,
+  captureOrientationDebugSnapshot,
+  type OrientationDebugSnapshot,
+  type SceneCameraHandle,
+} from "./camera/cameraOrientation";
+import { useSceneCameraChange } from "./camera/useSceneCameraChange";
 
 /* ── Types ─────────────────────────────────────────────────── */
 
 interface HslSphereProps {
-  sceneRef: React.MutableRefObject<{
+  sceneRef: MutableRefObject<{
     camera: THREE.PerspectiveCamera | THREE.Camera;
     controls: any;
   } | null>;
@@ -43,15 +50,14 @@ interface HslSphereProps {
   className?: string;
   anchorClassName?: string;
   embedded?: boolean;
+  onOrientationSnapshot?: (snapshot: OrientationDebugSnapshot) => void;
 }
 
 /* ── Constants ─────────────────────────────────────────────── */
 
-const SIZE = 110;
+const SIZE = 144;
 const SPHERE_RADIUS = 0.9;
 const SEGMENTS = 64;
-const LABEL_DIST = 1.18;
-
 /* ── Axis label component ─────────────────────────────────── */
 
 function AxisLabel({ text, color, position, fontSize = 0.28 }: {
@@ -79,11 +85,12 @@ function AxisLabel({ text, color, position, fontSize = 0.28 }: {
 
 function CameraSync({
   mainCameraRef,
+  onOrientationSnapshot,
 }: {
-  mainCameraRef: React.MutableRefObject<{ camera: THREE.Camera; controls?: any } | null>;
+  mainCameraRef: MutableRefObject<SceneCameraHandle | null>;
+  onOrientationSnapshot?: (snapshot: OrientationDebugSnapshot) => void;
 }) {
   const { camera, invalidate } = useThree();
-  const attachedControlsRef = useRef<any>(null);
   const lastOrientationRef = useRef("");
   const syncCamera = useCallback(() => {
     const main = mainCameraRef.current;
@@ -91,49 +98,20 @@ function CameraSync({
       return;
     }
     const quat = main.camera.quaternion;
-    const sig = [quat.x, quat.y, quat.z, quat.w].join("|");
+    const sig = cameraOrientationSignature(main.camera);
     if (sig === lastOrientationRef.current) {
       return;
     }
-    // Copy only the rotation from the main camera.
+    // Mirror the full orientation contract from the main camera.
+    camera.up.copy(main.camera.up);
     camera.quaternion.copy(quat);
     camera.position.set(0, 0, 3).applyQuaternion(camera.quaternion);
-    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
     lastOrientationRef.current = sig;
+    onOrientationSnapshot?.(captureOrientationDebugSnapshot(camera));
     invalidate();
-  }, [camera, invalidate, mainCameraRef]);
-
-  useEffect(() => {
-    let raf = 0;
-    let disposed = false;
-    const handleChange = () => syncCamera();
-
-    const attachWhenReady = () => {
-      if (disposed) {
-        return;
-      }
-      const controls = mainCameraRef.current?.controls;
-      if (controls !== attachedControlsRef.current) {
-        attachedControlsRef.current?.removeEventListener?.("change", handleChange);
-        attachedControlsRef.current = controls ?? null;
-        controls?.addEventListener?.("change", handleChange);
-      }
-      syncCamera();
-      if (!controls) {
-        raf = window.requestAnimationFrame(attachWhenReady);
-      }
-    };
-
-    attachWhenReady();
-    return () => {
-      disposed = true;
-      if (raf) {
-        window.cancelAnimationFrame(raf);
-      }
-      attachedControlsRef.current?.removeEventListener?.("change", handleChange);
-      attachedControlsRef.current = null;
-    };
-  }, [mainCameraRef, syncCamera]);
+  }, [camera, invalidate, mainCameraRef, onOrientationSnapshot]);
+  useSceneCameraChange(mainCameraRef, syncCamera);
 
   return null;
 }
@@ -148,6 +126,7 @@ export default function HslSphere({
   className = "",
   anchorClassName,
   embedded = false,
+  onOrientationSnapshot,
 }: HslSphereProps) {
   const sphereSize = compact ? Math.round(size * 0.82) : size;
   const { hostRef, hostNode } = useCanvasHost<HTMLDivElement>();
@@ -155,13 +134,19 @@ export default function HslSphere({
     <div
       ref={hostRef}
       className={cn(
-        "pointer-events-none relative",
+        "pointer-events-auto relative overflow-hidden rounded-[28px] border border-sky-300/12 bg-[radial-gradient(circle_at_28%_22%,rgba(125,211,252,0.18),transparent_34%),linear-gradient(180deg,rgba(24,30,48,0.92),rgba(14,19,32,0.96))] shadow-[0_16px_34px_rgba(2,6,23,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-md",
         embedded ? "self-start" : null,
         anchorClassName,
         className,
       )}
       style={{ width: sphereSize, height: sphereSize }}
     >
+      <div className="pointer-events-none absolute inset-[8px] rounded-[22px] border border-white/6" />
+      <div className="pointer-events-none absolute inset-[16px] rounded-full border border-sky-300/14" />
+      <div className="pointer-events-none absolute inset-x-4 top-3 flex items-center justify-between text-[0.55rem] font-bold uppercase tracking-[0.24em] text-slate-300/78">
+        <span>HSL</span>
+        <span className="text-sky-200/78">Gizmo</span>
+      </div>
       {hostNode ? (
         <Canvas
           eventSource={hostNode}
@@ -181,7 +166,7 @@ export default function HslSphere({
           style={{
             width: sphereSize,
             height: sphereSize,
-            borderRadius: "50%",
+            borderRadius: 28,
             overflow: "hidden",
           }}
         >
@@ -189,6 +174,7 @@ export default function HslSphere({
             mainCameraRef={sceneRef}
             axisConvention={axisConvention}
             compact={compact}
+            onOrientationSnapshot={onOrientationSnapshot}
           />
         </Canvas>
       ) : null}
@@ -202,11 +188,17 @@ function HslSphereScene({
   mainCameraRef,
   axisConvention,
   compact,
+  onOrientationSnapshot,
 }: {
-  mainCameraRef: React.MutableRefObject<{ camera: THREE.Camera } | null>;
+  mainCameraRef: MutableRefObject<{ camera: THREE.Camera } | null>;
   axisConvention: AxisConvention;
   compact: boolean;
+  onOrientationSnapshot?: (snapshot: OrientationDebugSnapshot) => void;
 }) {
+  const glowGeo = useMemo(
+    () => new THREE.SphereGeometry(SPHERE_RADIUS * 1.06, SEGMENTS, SEGMENTS),
+    [],
+  );
   const sphereGeo = useMemo(() => {
     const geo = new THREE.SphereGeometry(SPHERE_RADIUS, SEGMENTS, SEGMENTS);
     const posAttr = geo.attributes.position;
@@ -229,12 +221,35 @@ function HslSphereScene({
     () => new THREE.MeshBasicMaterial({ vertexColors: true }),
     [],
   );
+  const glowMat = useMemo(
+    () => new THREE.MeshBasicMaterial({
+      color: "#8fd8ff",
+      transparent: true,
+      opacity: compact ? 0.06 : 0.09,
+      side: THREE.BackSide,
+      depthWrite: false,
+    }),
+    [compact],
+  );
+  const shellMat = useMemo(
+    () => new THREE.MeshBasicMaterial({
+      color: "#dff3ff",
+      wireframe: true,
+      transparent: true,
+      opacity: compact ? 0.1 : 0.14,
+      depthWrite: false,
+    }),
+    [compact],
+  );
   useEffect(() => {
     return () => {
+      glowGeo.dispose();
       sphereGeo.dispose();
+      glowMat.dispose();
+      shellMat.dispose();
       sphereMat.dispose();
     };
-  }, [sphereGeo, sphereMat]);
+  }, [glowGeo, glowMat, shellMat, sphereGeo, sphereMat]);
   const axisLabels = {
     screenX: sceneAxisDescriptor(0, axisConvention),
     screenY: sceneAxisDescriptor(1, axisConvention),
@@ -243,15 +258,18 @@ function HslSphereScene({
 
   return (
     <>
-      <CameraSync mainCameraRef={mainCameraRef} />
+      <CameraSync mainCameraRef={mainCameraRef} onOrientationSnapshot={onOrientationSnapshot} />
+
+      <mesh geometry={glowGeo} material={glowMat} />
 
       {/* Vertex-coloured sphere */}
       <mesh geometry={sphereGeo} material={sphereMat} />
+      <mesh geometry={sphereGeo} material={shellMat} />
 
       {/* Axis labels — visual XYZ reference for the active viewport convention */}
       {(() => {
-        const fs = compact ? 0.20 : 0.28;
-        const ld = compact ? 1.08 : LABEL_DIST;
+        const fs = compact ? 0.22 : 0.30;
+        const ld = compact ? 1.12 : 1.26;
         return (
           <>
             <AxisLabel text={`+${axisLabels.screenX.text}`} color={axisLabels.screenX.color} position={[ld, 0, 0]} fontSize={fs} />
@@ -266,25 +284,25 @@ function HslSphereScene({
 
       {/* Thin axis lines through sphere */}
       <Line
-        points={[[-1.05, 0, 0], [1.05, 0, 0]]}
+        points={[[-1.12, 0, 0], [1.12, 0, 0]]}
         color={axisLabels.screenX.color}
-        lineWidth={1}
+        lineWidth={1.4}
         transparent
-        opacity={0.5}
+        opacity={0.72}
       />
       <Line
-        points={[[0, -1.05, 0], [0, 1.05, 0]]}
+        points={[[0, -1.12, 0], [0, 1.12, 0]]}
         color={axisLabels.screenY.color}
-        lineWidth={1}
+        lineWidth={1.4}
         transparent
-        opacity={0.5}
+        opacity={0.72}
       />
       <Line
-        points={[[0, 0, -1.05], [0, 0, 1.05]]}
+        points={[[0, 0, -1.12], [0, 0, 1.12]]}
         color={axisLabels.depth.color}
-        lineWidth={1}
+        lineWidth={1.4}
         transparent
-        opacity={0.5}
+        opacity={0.72}
       />
     </>
   );

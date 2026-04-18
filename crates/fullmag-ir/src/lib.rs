@@ -608,6 +608,82 @@ pub enum CurrentModuleIR {
         #[serde(default = "default_antenna_air_box_factor")]
         air_box_factor: f64,
     },
+    CurrentTransport {
+        name: String,
+        model: CurrentTransportModelIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_density: Option<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        solve_region: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conductivity_s_per_m: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentTransportModelIR {
+    PrescribedDensity,
+    OhmicPoisson,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SpinTorqueModuleIR {
+    Slonczewski {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_density: Option<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_source: Option<String>,
+        degree: f64,
+        spin_polarization: [f64; 3],
+        lambda_asymmetry: f64,
+        #[serde(default)]
+        epsilon_prime: f64,
+    },
+    ZhangLi {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_density: Option<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_source: Option<String>,
+        degree: f64,
+        #[serde(default)]
+        beta: f64,
+    },
+    InterfaceCpp {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_density: Option<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_source: Option<String>,
+        degree: f64,
+        spin_polarization: [f64; 3],
+        interface_normal: [f64; 3],
+        lambda_asymmetry: f64,
+        #[serde(default)]
+        epsilon_prime: f64,
+    },
+    DriftDiffusion {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_density: Option<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_source: Option<String>,
+        degree: f64,
+        spin_polarization: [f64; 3],
+        #[serde(default)]
+        beta: f64,
+        spin_diffusion_length_m: f64,
+    },
+    SpinOrbitTorque {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        charge_current_density_a_per_m2: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_source: Option<String>,
+        damping_like_efficiency: f64,
+        #[serde(default)]
+        field_like_efficiency: f64,
+        spin_polarization: [f64; 3],
+        ferromagnet_thickness_m: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -667,6 +743,10 @@ pub enum EnergyTermIR {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         time_dependence: Option<TimeDependenceIR>,
     },
+    OerstedField {
+        model: OerstedFieldModelIR,
+        source: String,
+    },
     /// Magnetoelastic coupling energy between a magnet and an elastic body.
     Magnetoelastic {
         /// Name of the MagnetIR.
@@ -676,6 +756,12 @@ pub enum EnergyTermIR {
         /// Name of the MagnetostrictionLawIR.
         law: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OerstedFieldModelIR {
+    FromCurrentSolution,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -871,11 +957,12 @@ impl Default for ThermalSeedConfig {
     }
 }
 
-/// Oersted realization variant; currently only InfiniteCylinder is implemented.
+/// Oersted realization variant used by backend plans and provenance.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OerstedRealization {
     InfiniteCylinder,
+    BiotSavartMidpoint,
 }
 
 impl Default for OerstedRealization {
@@ -1889,6 +1976,8 @@ pub struct ProblemIR {
     pub current_modules: Vec<CurrentModuleIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excitation_analysis: Option<ExcitationAnalysisIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_torque_modules: Vec<SpinTorqueModuleIR>,
 
     /// Global current density for Zhang-Li STT [A/m^2]
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2081,6 +2170,9 @@ pub struct FdmPlanIR {
     /// Current-flow axis (unit vector).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oersted_axis: Option<[f64; 3]>,
+    /// Plan-only per-cell Oersted field used by generalized FDM lowering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_field_xyz: Option<Vec<[f64; 3]>>,
     /// Time-dependence kind: 0=constant, 1=sinusoidal, 2=pulse
     #[serde(default)]
     pub oersted_time_dep_kind: u32,
@@ -2099,6 +2191,9 @@ pub struct FdmPlanIR {
     /// Pulse: t_off [s]
     #[serde(default)]
     pub oersted_time_dep_t_off: f64,
+    /// Oersted field realization model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_realization: Option<OerstedRealization>,
 
     /// Temperature in Kelvin for Brown thermal field (sLLG). None or 0 = no thermal noise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2467,6 +2562,9 @@ pub struct FemPlanIR {
     pub oersted_center: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oersted_axis: Option<[f64; 3]>,
+    /// Plan-only per-node Oersted field used by generalized FEM lowering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_field_xyz: Option<Vec<f64>>,
     #[serde(default)]
     pub oersted_time_dep_kind: u32,
     #[serde(default)]
@@ -2765,6 +2863,7 @@ impl ProblemIR {
             },
             current_modules: Vec::new(),
             excitation_analysis: None,
+            spin_torque_modules: Vec::new(),
             current_density: None,
             stt_degree: None,
             stt_beta: None,
@@ -2811,6 +2910,10 @@ impl ProblemIR {
                 errors.extend(asset_errors);
             }
         }
+        validate_current_modules(self, &mut errors);
+        validate_oersted_energy_terms(self, &mut errors);
+        validate_legacy_spin_torque_fields(self, &mut errors);
+        validate_spin_torque_modules(self, &mut errors);
         if self.regions.is_empty() {
             errors.push("at least one region is required".to_string());
         }
@@ -3146,20 +3249,21 @@ impl ProblemIR {
             &mut errors,
         );
         validate_unique_names(
-            self.current_modules.iter().map(|module| match module {
-                CurrentModuleIR::AntennaFieldSource { name, .. } => name.as_str(),
-            }),
+            self.current_modules.iter().map(current_module_name),
             "current modules",
             &mut errors,
         );
 
         if let Some(analysis) = self.excitation_analysis.as_ref() {
-            let source_exists = self.current_modules.iter().any(|module| match module {
-                CurrentModuleIR::AntennaFieldSource { name, .. } => name == &analysis.source,
+            let source_exists = self.current_modules.iter().any(|module| {
+                matches!(
+                    module,
+                    CurrentModuleIR::AntennaFieldSource { name, .. } if name == &analysis.source
+                )
             });
             if !source_exists {
                 errors.push(format!(
-                    "excitation_analysis.source '{}' must reference one of current_modules",
+                    "excitation_analysis.source '{}' must reference an antenna_field_source current module",
                     analysis.source
                 ));
             }
@@ -3453,6 +3557,424 @@ fn default_antenna_air_box_factor() -> f64 {
     12.0
 }
 
+fn vector3_is_finite(vector: &[f64; 3]) -> bool {
+    vector.iter().all(|value| value.is_finite())
+}
+
+fn current_module_name(module: &CurrentModuleIR) -> &str {
+    match module {
+        CurrentModuleIR::AntennaFieldSource { name, .. }
+        | CurrentModuleIR::CurrentTransport { name, .. } => name.as_str(),
+    }
+}
+
+fn current_transport_exists(problem: &ProblemIR, name: &str) -> bool {
+    problem.current_modules.iter().any(|module| {
+        matches!(
+            module,
+            CurrentModuleIR::CurrentTransport { name: module_name, .. } if module_name == name
+        )
+    })
+}
+
+fn validate_oersted_energy_terms(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let mut oersted_term_count = 0usize;
+
+    for (index, term) in problem.energy_terms.iter().enumerate() {
+        match term {
+            EnergyTermIR::OerstedCylinder {
+                current,
+                radius,
+                center,
+                axis,
+                ..
+            } => {
+                oersted_term_count += 1;
+                if !current.is_finite() {
+                    errors.push(format!(
+                        "energy_terms[{index}] oersted_cylinder current must be finite"
+                    ));
+                }
+                if *radius <= 0.0 {
+                    errors.push(format!(
+                        "energy_terms[{index}] oersted_cylinder radius must be > 0"
+                    ));
+                }
+                if !vector3_is_finite(center) {
+                    errors.push(format!(
+                        "energy_terms[{index}] oersted_cylinder center must contain finite values"
+                    ));
+                }
+                if !vector3_is_finite(axis) {
+                    errors.push(format!(
+                        "energy_terms[{index}] oersted_cylinder axis must contain finite values"
+                    ));
+                } else {
+                    let norm_sq = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
+                    if norm_sq <= 1e-30 {
+                        errors.push(format!(
+                            "energy_terms[{index}] oersted_cylinder axis must be non-zero"
+                        ));
+                    }
+                }
+            }
+            EnergyTermIR::OerstedField { source, .. } => {
+                oersted_term_count += 1;
+                if source.trim().is_empty() {
+                    errors.push(format!(
+                        "energy_terms[{index}] oersted_field source must not be empty"
+                    ));
+                } else if !current_transport_exists(problem, source) {
+                    errors.push(format!(
+                        "energy_terms[{index}] oersted_field source '{}' must reference a current_transport module",
+                        source
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if oersted_term_count > 1 {
+        errors.push(
+            "at most one executable Oersted energy term is currently supported; use a single OerstedCylinder or OerstedField"
+                .to_string(),
+        );
+    }
+}
+
+fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<String>) {
+    for (index, module) in problem.current_modules.iter().enumerate() {
+        match module {
+            CurrentModuleIR::AntennaFieldSource {
+                solver,
+                air_box_factor,
+                ..
+            } => {
+                if solver.trim().is_empty() {
+                    errors.push(format!(
+                        "current_modules[{index}] antenna_field_source solver must not be empty"
+                    ));
+                }
+                if *air_box_factor <= 0.0 {
+                    errors.push(format!(
+                        "current_modules[{index}] antenna_field_source air_box_factor must be > 0"
+                    ));
+                }
+            }
+            CurrentModuleIR::CurrentTransport {
+                model,
+                current_density,
+                solve_region,
+                conductivity_s_per_m,
+                ..
+            } => {
+                if let Some(region) = solve_region {
+                    if region.trim().is_empty() {
+                        errors.push(format!(
+                            "current_modules[{index}] current_transport solve_region must not be empty"
+                        ));
+                    }
+                }
+                if let Some(conductivity) = conductivity_s_per_m {
+                    if *conductivity <= 0.0 {
+                        errors.push(format!(
+                            "current_modules[{index}] current_transport conductivity_s_per_m must be > 0"
+                        ));
+                    }
+                }
+                match model {
+                    CurrentTransportModelIR::PrescribedDensity => match current_density {
+                        Some(current_density) => {
+                            if !vector3_is_finite(current_density) {
+                                errors.push(format!(
+                                    "current_modules[{index}] current_transport current_density must contain finite values"
+                                ));
+                            }
+                        }
+                        None => errors.push(format!(
+                            "current_modules[{index}] current_transport prescribed_density requires current_density"
+                        )),
+                    },
+                    CurrentTransportModelIR::OhmicPoisson => {
+                        if current_density.is_some() {
+                            errors.push(format!(
+                                "current_modules[{index}] current_transport ohmic_poisson must not define current_density"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn validate_legacy_spin_torque_fields(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let has_legacy = problem.current_density.is_some()
+        || problem.stt_degree.is_some()
+        || problem.stt_beta.is_some()
+        || problem.stt_spin_polarization.is_some()
+        || problem.stt_lambda.is_some()
+        || problem.stt_epsilon_prime.is_some();
+    if !has_legacy {
+        return;
+    }
+
+    if problem.current_density.is_none() {
+        errors.push("legacy STT fields require current_density".to_string());
+    }
+    if let Some(current_density) = problem.current_density {
+        if !vector3_is_finite(&current_density) {
+            errors.push("legacy STT current_density must contain finite values".to_string());
+        }
+    }
+    if let Some(degree) = problem.stt_degree {
+        if !(0.0 < degree && degree <= 1.0) {
+            errors.push("legacy STT stt_degree must be in (0, 1]".to_string());
+        }
+    }
+    if let Some(beta) = problem.stt_beta {
+        if beta < 0.0 {
+            errors.push("legacy STT stt_beta must be >= 0".to_string());
+        }
+    }
+    if let Some(spin_polarization) = problem.stt_spin_polarization {
+        if !vector3_is_finite(&spin_polarization) {
+            errors.push("legacy STT stt_spin_polarization must contain finite values".to_string());
+        }
+    }
+    if let Some(lambda_asymmetry) = problem.stt_lambda {
+        if lambda_asymmetry < 1.0 {
+            errors.push("legacy STT stt_lambda must be >= 1".to_string());
+        }
+    }
+    if problem.stt_spin_polarization.is_some()
+        && (problem.stt_beta.is_some() || problem.stt_lambda.is_none())
+    {
+        errors.push(
+            "legacy STT fields mix Zhang-Li and Slonczewski parameters; use spin_torque_modules for explicit families".to_string(),
+        );
+    }
+}
+
+fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let validate_vector_binding = |index: usize,
+                                   label: &str,
+                                   current_density: &Option<[f64; 3]>,
+                                   current_source: &Option<String>,
+                                   errors: &mut Vec<String>| {
+        match (current_density, current_source.as_deref()) {
+                (Some(current_density), None) => {
+                    if !vector3_is_finite(current_density) {
+                        errors.push(format!(
+                            "spin_torque_modules[{index}] {label} current_density must contain finite values"
+                        ));
+                    }
+                }
+                (None, Some(source)) => {
+                    if source.trim().is_empty() {
+                        errors.push(format!(
+                            "spin_torque_modules[{index}] {label} current_source must not be empty"
+                        ));
+                    } else if !current_transport_exists(problem, source) {
+                        errors.push(format!(
+                            "spin_torque_modules[{index}] {label} current_source '{}' must reference a current_transport module",
+                            source
+                        ));
+                    }
+                }
+                (Some(_), Some(_)) => errors.push(format!(
+                    "spin_torque_modules[{index}] {label} must use either current_density or current_source, not both"
+                )),
+                (None, None) => errors.push(format!(
+                    "spin_torque_modules[{index}] {label} requires one of current_density or current_source"
+                )),
+            }
+    };
+
+    for (index, module) in problem.spin_torque_modules.iter().enumerate() {
+        match module {
+            SpinTorqueModuleIR::Slonczewski {
+                current_density,
+                current_source,
+                degree,
+                spin_polarization,
+                lambda_asymmetry,
+                ..
+            } => {
+                validate_vector_binding(
+                    index,
+                    "slonczewski",
+                    current_density,
+                    current_source,
+                    errors,
+                );
+                if !vector3_is_finite(spin_polarization) {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] slonczewski spin_polarization must contain finite values"
+                    ));
+                }
+                if !(0.0 < *degree && *degree <= 1.0) {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] slonczewski degree must be in (0, 1]"
+                    ));
+                }
+                if *lambda_asymmetry < 1.0 {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] slonczewski lambda_asymmetry must be >= 1"
+                    ));
+                }
+            }
+            SpinTorqueModuleIR::ZhangLi {
+                current_density,
+                current_source,
+                degree,
+                beta,
+            } => {
+                validate_vector_binding(index, "zhang_li", current_density, current_source, errors);
+                if !(0.0 < *degree && *degree <= 1.0) {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] zhang_li degree must be in (0, 1]"
+                    ));
+                }
+                if *beta < 0.0 {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] zhang_li beta must be >= 0"
+                    ));
+                }
+            }
+            SpinTorqueModuleIR::InterfaceCpp {
+                current_density,
+                current_source,
+                degree,
+                spin_polarization,
+                interface_normal,
+                lambda_asymmetry,
+                ..
+            } => {
+                validate_vector_binding(
+                    index,
+                    "interface_cpp",
+                    current_density,
+                    current_source,
+                    errors,
+                );
+                if !vector3_is_finite(spin_polarization) || !vector3_is_finite(interface_normal) {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] interface_cpp vectors must contain finite values"
+                    ));
+                }
+                if !(0.0 < *degree && *degree <= 1.0) {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] interface_cpp degree must be in (0, 1]"
+                    ));
+                }
+                if *lambda_asymmetry < 1.0 {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] interface_cpp lambda_asymmetry must be >= 1"
+                    ));
+                }
+            }
+            SpinTorqueModuleIR::DriftDiffusion {
+                current_density,
+                current_source,
+                degree,
+                spin_polarization,
+                beta,
+                spin_diffusion_length_m,
+            } => {
+                validate_vector_binding(
+                    index,
+                    "drift_diffusion",
+                    current_density,
+                    current_source,
+                    errors,
+                );
+                if !vector3_is_finite(spin_polarization) {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] drift_diffusion vectors must contain finite values"
+                    ));
+                }
+                if !(0.0 < *degree && *degree <= 1.0) {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] drift_diffusion degree must be in (0, 1]"
+                    ));
+                }
+                if *beta < 0.0 {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] drift_diffusion beta must be >= 0"
+                    ));
+                }
+                if *spin_diffusion_length_m <= 0.0 {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] drift_diffusion spin_diffusion_length_m must be > 0"
+                    ));
+                }
+            }
+            SpinTorqueModuleIR::SpinOrbitTorque {
+                charge_current_density_a_per_m2,
+                current_source,
+                spin_polarization,
+                ferromagnet_thickness_m,
+                ..
+            } => {
+                match (charge_current_density_a_per_m2, current_source.as_deref()) {
+                    (Some(current_density), None) => {
+                        if *current_density <= 0.0 {
+                            errors.push(format!(
+                                "spin_torque_modules[{index}] spin_orbit_torque charge_current_density_a_per_m2 must be > 0"
+                            ));
+                        }
+                    }
+                    (None, Some(source)) => {
+                        if source.trim().is_empty() {
+                            errors.push(format!(
+                                "spin_torque_modules[{index}] spin_orbit_torque current_source must not be empty"
+                            ));
+                        } else if !current_transport_exists(problem, source) {
+                            errors.push(format!(
+                                "spin_torque_modules[{index}] spin_orbit_torque current_source '{}' must reference a current_transport module",
+                                source
+                            ));
+                        }
+                    }
+                    (Some(_), Some(_)) => errors.push(format!(
+                        "spin_torque_modules[{index}] spin_orbit_torque must use either charge_current_density_a_per_m2 or current_source, not both"
+                    )),
+                    (None, None) => errors.push(format!(
+                        "spin_torque_modules[{index}] spin_orbit_torque requires one of charge_current_density_a_per_m2 or current_source"
+                    )),
+                }
+                if !vector3_is_finite(spin_polarization) {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] spin_orbit_torque spin_polarization must contain finite values"
+                    ));
+                }
+                if *ferromagnet_thickness_m <= 0.0 {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] spin_orbit_torque ferromagnet_thickness_m must be > 0"
+                    ));
+                }
+            }
+        }
+    }
+
+    if problem.spin_torque_modules.len() > 1 {
+        let has_legacy = problem.current_density.is_some()
+            || problem.stt_degree.is_some()
+            || problem.stt_beta.is_some()
+            || problem.stt_spin_polarization.is_some()
+            || problem.stt_lambda.is_some()
+            || problem.stt_epsilon_prime.is_some();
+        if has_legacy {
+            errors.push(
+                "legacy STT fields cannot represent more than one spin_torque_modules entry"
+                    .to_string(),
+            );
+        }
+    }
+}
+
 fn validate_unique_names<'a>(
     names: impl Iterator<Item = &'a str>,
     label: &str,
@@ -3725,12 +4247,14 @@ mod tests {
                 oersted_radius: None,
                 oersted_center: None,
                 oersted_axis: None,
+                oersted_field_xyz: None,
                 oersted_time_dep_kind: 0,
                 oersted_time_dep_freq: 0.0,
                 oersted_time_dep_phase: 0.0,
                 oersted_time_dep_offset: 0.0,
                 oersted_time_dep_t_on: 0.0,
                 oersted_time_dep_t_off: 0.0,
+                oersted_realization: None,
                 temperature: None,
                 interfacial_dmi: None,
                 bulk_dmi: None,
@@ -3893,6 +4417,98 @@ mod tests {
             error.contains(
                 "eigenmodes study requires at least one eigen_spectrum or eigen_mode output",
             )
+        }));
+    }
+
+    #[test]
+    fn spin_torque_current_source_must_reference_current_transport() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.spin_torque_modules = vec![SpinTorqueModuleIR::ZhangLi {
+            current_density: None,
+            current_source: Some("drive".to_string()),
+            degree: 0.4,
+            beta: 0.02,
+        }];
+
+        let errors = ir
+            .validate()
+            .expect_err("missing current transport source must fail validation");
+        assert!(errors.iter().any(|error| {
+            error.contains("current_source 'drive' must reference a current_transport module")
+        }));
+    }
+
+    #[test]
+    fn excitation_analysis_source_must_reference_antenna_module() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.current_modules.push(CurrentModuleIR::CurrentTransport {
+            name: "drive".to_string(),
+            model: CurrentTransportModelIR::PrescribedDensity,
+            current_density: Some([0.0, 0.0, 5e10]),
+            solve_region: None,
+            conductivity_s_per_m: None,
+        });
+        ir.excitation_analysis = Some(ExcitationAnalysisIR {
+            source: "drive".to_string(),
+            method: "source_k_profile".to_string(),
+            propagation_axis: [1.0, 0.0, 0.0],
+            k_max_rad_per_m: None,
+            samples: 256,
+        });
+
+        let errors = ir
+            .validate()
+            .expect_err("excitation analysis must stay antenna-only");
+        assert!(errors.iter().any(|error| {
+            error.contains("must reference an antenna_field_source current module")
+        }));
+    }
+
+    #[test]
+    fn oersted_field_source_must_reference_current_transport() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.energy_terms.push(EnergyTermIR::OerstedField {
+            model: OerstedFieldModelIR::FromCurrentSolution,
+            source: "drive".to_string(),
+        });
+
+        let errors = ir
+            .validate()
+            .expect_err("missing oersted current transport source must fail validation");
+        assert!(errors.iter().any(|error| {
+            error.contains("oersted_field source 'drive' must reference a current_transport module")
+        }));
+    }
+
+    #[test]
+    fn validation_rejects_multiple_oersted_terms() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.current_modules.push(CurrentModuleIR::CurrentTransport {
+            name: "drive".to_string(),
+            model: CurrentTransportModelIR::PrescribedDensity,
+            current_density: Some([0.0, 0.0, 5e10]),
+            solve_region: Some("box".to_string()),
+            conductivity_s_per_m: None,
+        });
+        ir.energy_terms = vec![
+            EnergyTermIR::OerstedCylinder {
+                current: 1.0,
+                radius: 10e-9,
+                center: [0.0, 0.0, 0.0],
+                axis: [0.0, 0.0, 1.0],
+                time_dependence: None,
+            },
+            EnergyTermIR::OerstedField {
+                model: OerstedFieldModelIR::FromCurrentSolution,
+                source: "drive".to_string(),
+            },
+        ];
+
+        let errors = ir
+            .validate()
+            .expect_err("multiple oersted terms must fail validation");
+        assert!(errors.iter().any(|error| {
+            error.contains("at most one executable Oersted energy term is currently supported")
         }));
     }
 }

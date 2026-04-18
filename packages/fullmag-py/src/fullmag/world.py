@@ -44,6 +44,7 @@ from fullmag.model.antenna import (
     RfDrive,
     SpinWaveExcitationAnalysis,
 )
+from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.energy import Demag, Exchange, InterfacialDMI, Zeeman
 from fullmag.model.dynamics import (
     ADAPTIVE_INTEGRATORS,
@@ -814,7 +815,7 @@ class _WorldState:
 
     # Outputs
     _outputs: list = field(default_factory=list)
-    _current_modules: list[AntennaFieldSource] = field(default_factory=list)
+    _current_modules: list[AntennaFieldSource | CurrentTransport] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
     _last_result: Any | None = None
     _last_step: Any | None = None
@@ -2213,6 +2214,23 @@ class StudyBuilder:
             air_box_factor=air_box_factor,
         )
 
+    def current_transport(
+        self,
+        *,
+        name: str,
+        model: str = "prescribed_density",
+        current_density: Sequence[float] | None = None,
+        solve_region: str | None = None,
+        conductivity_s_per_m: float | None = None,
+    ) -> CurrentTransport:
+        return current_transport(
+            name=name,
+            model=model,
+            current_density=current_density,
+            solve_region=solve_region,
+            conductivity_s_per_m=conductivity_s_per_m,
+        )
+
     def spin_wave_excitation(
         self,
         *,
@@ -3412,6 +3430,25 @@ def antenna_field_source(
     )
     _state._current_modules.append(source)
     return source
+
+
+def current_transport(
+    *,
+    name: str,
+    model: str = "prescribed_density",
+    current_density: Sequence[float] | None = None,
+    solve_region: str | None = None,
+    conductivity_s_per_m: float | None = None,
+) -> CurrentTransport:
+    module = CurrentTransport(
+        name=name,
+        model=model,
+        current_density=current_density,
+        solve_region=solve_region,
+        conductivity_s_per_m=conductivity_s_per_m,
+    )
+    _state._current_modules.append(module)
+    return module
 
 
 def spin_wave_excitation(

@@ -7,12 +7,15 @@ use fullmag_ir::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::current_transport::{resolve_current_transports, CurrentTransportExecutableLane};
 use crate::error::PlanError;
 use crate::geometry::{
     cell_for_magnet, extract_multilayer_geometry, fdm_default_cell, ir_to_shape,
     validate_realized_grid, voxelize_shape, GeometryShape, LoweredBody,
 };
 use crate::magnetization_textures::{sample_preset_texture, TextureSamplePoint};
+use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
+use crate::spin_torque::{resolve_legacy_spin_torque, SpinTorqueExecutableLane};
 use crate::util::{generate_random_unit_vectors, runtime_requests_cuda, MU0, PLACEMENT_TOLERANCE};
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
@@ -57,6 +60,12 @@ pub(crate) fn plan_fdm(
     let mut enable_exchange = false;
     let mut enable_demag = false;
     let mut external_field = None;
+    let enable_oersted = problem.energy_terms.iter().any(|term| {
+        matches!(
+            term,
+            EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. }
+        )
+    });
     for term in &problem.energy_terms {
         match term {
             EnergyTermIR::Exchange => {
@@ -79,6 +88,7 @@ pub(crate) fn plan_fdm(
             }
             // Terms handled in the post-plan mapping loop below:
             EnergyTermIR::OerstedCylinder { .. }
+            | EnergyTermIR::OerstedField { .. }
             | EnergyTermIR::InterfacialDmi { .. }
             | EnergyTermIR::BulkDmi { .. } => {}
             other => {
@@ -134,6 +144,7 @@ pub(crate) fn plan_fdm(
         enable_exchange,
         enable_demag,
         external_field.is_some(),
+        enable_oersted,
         false,
         &mut errors,
     );
@@ -325,6 +336,11 @@ pub(crate) fn plan_fdm(
         return Err(PlanError { reasons: errors });
     }
 
+    let current_transports =
+        resolve_current_transports(problem, CurrentTransportExecutableLane::Fdm)?;
+    let spin_torque =
+        resolve_legacy_spin_torque(problem, SpinTorqueExecutableLane::Fdm, &current_transports)?;
+
     let magnet = &problem.magnets[0];
     let material = problem
         .materials
@@ -466,7 +482,7 @@ pub(crate) fn plan_fdm(
         grid: GridDimensions { cells: grid_cells },
         cell_size,
         region_mask: vec![0; n_cells],
-        active_mask,
+        active_mask: active_mask.clone(),
         initial_magnetization,
         material: FdmMaterialIR {
             name: material.name.clone(),
@@ -514,23 +530,25 @@ pub(crate) fn plan_fdm(
             .and_then(|h| h.fdm.as_ref())
             .and_then(|fdm| fdm.boundary_delta_min),
         boundary_geometry: None,
-        current_density: problem.current_density,
-        stt_degree: problem.stt_degree,
-        stt_beta: problem.stt_beta,
-        stt_spin_polarization: problem.stt_spin_polarization,
-        stt_lambda: problem.stt_lambda,
-        stt_epsilon_prime: problem.stt_epsilon_prime,
+        current_density: spin_torque.current_density,
+        stt_degree: spin_torque.stt_degree,
+        stt_beta: spin_torque.stt_beta,
+        stt_spin_polarization: spin_torque.stt_spin_polarization,
+        stt_lambda: spin_torque.stt_lambda,
+        stt_epsilon_prime: spin_torque.stt_epsilon_prime,
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,
         oersted_center: None,
         oersted_axis: None,
+        oersted_field_xyz: None,
         oersted_time_dep_kind: 0,
         oersted_time_dep_freq: 0.0,
         oersted_time_dep_phase: 0.0,
         oersted_time_dep_offset: 0.0,
         oersted_time_dep_t_on: 0.0,
         oersted_time_dep_t_off: 0.0,
+        oersted_realization: None,
         temperature: problem.temperature,
         interfacial_dmi: None,
         bulk_dmi: None,
@@ -544,54 +562,81 @@ pub(crate) fn plan_fdm(
         sot_thickness: None,
     };
 
-    for term in &problem.energy_terms {
-        match term {
-            EnergyTermIR::OerstedCylinder {
-                current,
-                radius,
-                center,
-                axis,
-                time_dependence,
-            } => {
-                fdm_plan.has_oersted_cylinder = true;
-                fdm_plan.oersted_current = Some(*current);
-                fdm_plan.oersted_radius = Some(*radius);
-                fdm_plan.oersted_center = Some(*center);
-                fdm_plan.oersted_axis = Some(*axis);
-                if let Some(td) = time_dependence {
-                    match td {
-                        TimeDependenceIR::Constant => {
-                            fdm_plan.oersted_time_dep_kind = 0;
-                        }
-                        TimeDependenceIR::Sinusoidal {
-                            frequency_hz,
-                            phase_rad,
-                            offset,
-                        } => {
-                            fdm_plan.oersted_time_dep_kind = 1;
-                            fdm_plan.oersted_time_dep_freq = *frequency_hz;
-                            fdm_plan.oersted_time_dep_phase = *phase_rad;
-                            fdm_plan.oersted_time_dep_offset = *offset;
-                        }
-                        TimeDependenceIR::Pulse { t_on, t_off } => {
-                            fdm_plan.oersted_time_dep_kind = 2;
-                            fdm_plan.oersted_time_dep_t_on = *t_on;
-                            fdm_plan.oersted_time_dep_t_off = *t_off;
-                        }
-                        TimeDependenceIR::PiecewiseLinear { .. } => {
-                            // FEM-025 fix: reject unsupported time dependence
-                            // instead of silently falling back to constant.
-                            return Err(PlanError {
-                                reasons: vec![
-                                    "Oersted time dependence 'PiecewiseLinear' is not yet supported \
-                                     by the FDM backend; use 'Constant', 'Sinusoidal', or 'Pulse' instead"
-                                        .to_string(),
-                                ],
-                            });
+    for (term_index, term) in problem.energy_terms.iter().enumerate() {
+        if let Some(oersted) = resolve_fdm_oersted_term(
+            problem,
+            term_index,
+            term,
+            &current_transports,
+            grid_cells,
+            cell_size,
+            active_mask.as_deref(),
+        )? {
+            match oersted {
+                ResolvedOerstedTerm::Cylinder(oersted) => {
+                    fdm_plan.has_oersted_cylinder = true;
+                    fdm_plan.oersted_current = Some(oersted.current);
+                    fdm_plan.oersted_radius = Some(oersted.radius);
+                    fdm_plan.oersted_center = Some(oersted.center);
+                    fdm_plan.oersted_axis = Some(oersted.axis);
+                    fdm_plan.oersted_realization =
+                        Some(fullmag_ir::OerstedRealization::InfiniteCylinder);
+                    if let Some(td) = &oersted.time_dependence {
+                        fdm_plan.has_oersted_cylinder = true;
+                        match td {
+                            TimeDependenceIR::Constant => {
+                                fdm_plan.oersted_time_dep_kind = 0;
+                            }
+                            TimeDependenceIR::Sinusoidal {
+                                frequency_hz,
+                                phase_rad,
+                                offset,
+                            } => {
+                                fdm_plan.oersted_time_dep_kind = 1;
+                                fdm_plan.oersted_time_dep_freq = *frequency_hz;
+                                fdm_plan.oersted_time_dep_phase = *phase_rad;
+                                fdm_plan.oersted_time_dep_offset = *offset;
+                            }
+                            TimeDependenceIR::Pulse { t_on, t_off } => {
+                                fdm_plan.oersted_time_dep_kind = 2;
+                                fdm_plan.oersted_time_dep_t_on = *t_on;
+                                fdm_plan.oersted_time_dep_t_off = *t_off;
+                            }
+                            TimeDependenceIR::PiecewiseLinear { .. } => {
+                                return Err(PlanError {
+                                    reasons: vec![
+                                        "Oersted time dependence 'PiecewiseLinear' is not yet supported \
+                                         by the FDM backend; use 'Constant', 'Sinusoidal', or 'Pulse' instead"
+                                            .to_string(),
+                                    ],
+                                });
+                            }
                         }
                     }
                 }
+                ResolvedOerstedTerm::Field(field) => {
+                    fdm_plan.oersted_field_xyz = Some(
+                        field
+                            .field_xyz
+                            .chunks_exact(3)
+                            .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                            .collect(),
+                    );
+                    fdm_plan.oersted_realization =
+                        Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
+                    if runtime_requests_cuda(problem) {
+                        return Err(PlanError {
+                            reasons: vec![
+                                "general OerstedField(from_current_solution) midpoint lowering is currently available only on the CPU FDM reference runner; requested CUDA/native FDM execution is not yet implemented".to_string(),
+                            ],
+                        });
+                    }
+                }
             }
+            continue;
+        }
+
+        match term {
             EnergyTermIR::InterfacialDmi { d, .. } => {
                 fdm_plan.interfacial_dmi = Some(*d);
             }
@@ -794,6 +839,12 @@ pub(crate) fn plan_fdm_multilayer(
         enable_exchange,
         enable_demag,
         external_field.is_some(),
+        problem.energy_terms.iter().any(|term| {
+            matches!(
+                term,
+                EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. }
+            )
+        }),
         false,
         &mut errors,
     );

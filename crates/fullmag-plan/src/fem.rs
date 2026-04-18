@@ -6,6 +6,9 @@ use fullmag_ir::{
 };
 use std::collections::BTreeMap;
 
+use crate::current_transport::{
+    has_antenna_field_source, resolve_current_transports, CurrentTransportExecutableLane,
+};
 use crate::error::PlanError;
 use crate::mesh::{
     build_air_box_config, build_mesh_parts_from_segments, compatible_fem_material,
@@ -13,6 +16,8 @@ use crate::mesh::{
     resolve_fem_domain_mesh_asset, resolved_domain_mesh_mode, study_universe_planner_note,
     MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
 };
+use crate::oersted::{resolve_fem_oersted_term, ResolvedOerstedTerm};
+use crate::spin_torque::{resolve_legacy_spin_torque, SpinTorqueExecutableLane};
 use crate::util::{problem_domain_frame, runtime_requests_cuda, shared_domain_mesh_requested, MU0};
 use crate::validate::{
     planned_study_controls, validate_eigen_outputs, validate_executable_outputs,
@@ -496,7 +501,8 @@ pub(crate) fn plan_fem(
                 }
                 bulk_dmi = Some(*d);
             }
-            fullmag_ir::EnergyTermIR::OerstedCylinder { .. } => {
+            fullmag_ir::EnergyTermIR::OerstedCylinder { .. }
+            | fullmag_ir::EnergyTermIR::OerstedField { .. } => {
                 // Oersted field: extracted separately below.
             }
             other => {
@@ -536,7 +542,14 @@ pub(crate) fn plan_fem(
         enable_exchange,
         enable_demag,
         external_field.is_some(),
-        !problem.current_modules.is_empty(),
+        problem.energy_terms.iter().any(|term| {
+            matches!(
+                term,
+                fullmag_ir::EnergyTermIR::OerstedCylinder { .. }
+                    | fullmag_ir::EnergyTermIR::OerstedField { .. }
+            )
+        }),
+        has_antenna_field_source(problem),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
@@ -573,6 +586,11 @@ pub(crate) fn plan_fem(
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
+
+    let current_transports =
+        resolve_current_transports(problem, CurrentTransportExecutableLane::Fem)?;
+    let spin_torque =
+        resolve_legacy_spin_torque(problem, SpinTorqueExecutableLane::Fem, &current_transports)?;
 
     if has_heterogeneous_materials && !runtime_requests_cuda(problem) {
         return Err(PlanError {
@@ -816,17 +834,18 @@ pub(crate) fn plan_fem(
         dind_field: None,
         dbulk_field: None,
         temperature: problem.temperature,
-        current_density: problem.current_density,
-        stt_degree: problem.stt_degree,
-        stt_beta: problem.stt_beta,
-        stt_spin_polarization: problem.stt_spin_polarization,
-        stt_lambda: problem.stt_lambda,
-        stt_epsilon_prime: problem.stt_epsilon_prime,
+        current_density: spin_torque.current_density,
+        stt_degree: spin_torque.stt_degree,
+        stt_beta: spin_torque.stt_beta,
+        stt_spin_polarization: spin_torque.stt_spin_polarization,
+        stt_lambda: spin_torque.stt_lambda,
+        stt_epsilon_prime: spin_torque.stt_epsilon_prime,
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,
         oersted_center: None,
         oersted_axis: None,
+        oersted_field_xyz: None,
         oersted_time_dep_kind: 0,
         oersted_time_dep_freq: 0.0,
         oersted_time_dep_phase: 0.0,
@@ -847,50 +866,62 @@ pub(crate) fn plan_fem(
         use_consistent_mass: None,
     };
 
-    // ── Extract Oersted cylinder from energy terms ──
-    for term in &problem.energy_terms {
-        if let EnergyTermIR::OerstedCylinder {
-            current,
-            radius,
-            center,
-            axis,
-            time_dependence,
-        } = term
-        {
-            fem_plan.has_oersted_cylinder = true;
-            fem_plan.oersted_current = Some(*current);
-            fem_plan.oersted_radius = Some(*radius);
-            fem_plan.oersted_center = Some(*center);
-            fem_plan.oersted_axis = Some(*axis);
-            if let Some(td) = time_dependence {
-                match td {
-                    TimeDependenceIR::Constant => {
-                        fem_plan.oersted_time_dep_kind = 0;
+    // ── Extract Oersted realizations from energy terms ──
+    for (term_index, term) in problem.energy_terms.iter().enumerate() {
+        if let Some(oersted) = resolve_fem_oersted_term(
+            problem,
+            term_index,
+            term,
+            &current_transports,
+            &fem_plan.mesh,
+            &fem_plan.object_segments,
+            &fem_plan.mesh_parts,
+        )? {
+            match oersted {
+                ResolvedOerstedTerm::Cylinder(oersted) => {
+                    fem_plan.has_oersted_cylinder = true;
+                    fem_plan.oersted_current = Some(oersted.current);
+                    fem_plan.oersted_radius = Some(oersted.radius);
+                    fem_plan.oersted_center = Some(oersted.center);
+                    fem_plan.oersted_axis = Some(oersted.axis);
+                    fem_plan.oersted_realization =
+                        Some(fullmag_ir::OerstedRealization::InfiniteCylinder);
+                    if let Some(td) = &oersted.time_dependence {
+                        match td {
+                            TimeDependenceIR::Constant => {
+                                fem_plan.oersted_time_dep_kind = 0;
+                            }
+                            TimeDependenceIR::Sinusoidal {
+                                frequency_hz,
+                                phase_rad,
+                                offset,
+                            } => {
+                                fem_plan.oersted_time_dep_kind = 1;
+                                fem_plan.oersted_time_dep_freq = *frequency_hz;
+                                fem_plan.oersted_time_dep_phase = *phase_rad;
+                                fem_plan.oersted_time_dep_offset = *offset;
+                            }
+                            TimeDependenceIR::Pulse { t_on, t_off } => {
+                                fem_plan.oersted_time_dep_kind = 2;
+                                fem_plan.oersted_time_dep_t_on = *t_on;
+                                fem_plan.oersted_time_dep_t_off = *t_off;
+                            }
+                            TimeDependenceIR::PiecewiseLinear { .. } => {
+                                return Err(PlanError {
+                                    reasons: vec![
+                                        "Oersted time dependence 'PiecewiseLinear' is not yet supported \
+                                         by the FEM backend; use 'Constant', 'Sinusoidal', or 'Pulse' instead"
+                                            .to_string(),
+                                    ],
+                                });
+                            }
+                        }
                     }
-                    TimeDependenceIR::Sinusoidal {
-                        frequency_hz,
-                        phase_rad,
-                        offset,
-                    } => {
-                        fem_plan.oersted_time_dep_kind = 1;
-                        fem_plan.oersted_time_dep_freq = *frequency_hz;
-                        fem_plan.oersted_time_dep_phase = *phase_rad;
-                        fem_plan.oersted_time_dep_offset = *offset;
-                    }
-                    TimeDependenceIR::Pulse { t_on, t_off } => {
-                        fem_plan.oersted_time_dep_kind = 2;
-                        fem_plan.oersted_time_dep_t_on = *t_on;
-                        fem_plan.oersted_time_dep_t_off = *t_off;
-                    }
-                    TimeDependenceIR::PiecewiseLinear { .. } => {
-                        return Err(PlanError {
-                            reasons: vec![
-                                "Oersted time dependence 'PiecewiseLinear' is not yet supported \
-                                 by the FEM backend; use 'Constant', 'Sinusoidal', or 'Pulse' instead"
-                                    .to_string(),
-                            ],
-                        });
-                    }
+                }
+                ResolvedOerstedTerm::Field(field) => {
+                    fem_plan.oersted_field_xyz = Some(field.field_xyz);
+                    fem_plan.oersted_realization =
+                        Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
                 }
             }
             break;

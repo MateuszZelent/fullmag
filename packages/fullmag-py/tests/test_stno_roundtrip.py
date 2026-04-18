@@ -6,7 +6,7 @@ import unittest
 
 import fullmag as fm
 from fullmag.model.energy import OerstedCylinder, PiecewiseLinear, ThermalNoise
-from fullmag.model.spin_torque import SlonczewskiSTT, ZhangLiSTT
+from fullmag.model.spin_torque import InterfaceCppSTT, SlonczewskiSTT, ZhangLiSTT
 
 
 def _base_problem(**kwargs) -> fm.Problem:
@@ -36,6 +36,8 @@ class TestSTNOIRRoundtrip(unittest.TestCase):
         stt = SlonczewskiSTT([0, 0, 5e10], [0, 0, 1], degree=0.6)
         p = _base_problem(spin_torque=stt)
         ir = p.to_ir()
+        self.assertIn("spin_torque_modules", ir)
+        self.assertEqual(ir["spin_torque_modules"][0]["kind"], "slonczewski")  # type: ignore[index]
         self.assertIn("current_density", ir)
         self.assertIn("stt_degree", ir)
         self.assertIn("stt_spin_polarization", ir)
@@ -45,10 +47,36 @@ class TestSTNOIRRoundtrip(unittest.TestCase):
         stt = ZhangLiSTT([1e11, 0, 0], beta=0.04)
         p = _base_problem(spin_torque=stt)
         ir = p.to_ir()
+        self.assertIn("spin_torque_modules", ir)
+        self.assertEqual(ir["spin_torque_modules"][0]["kind"], "zhang_li")  # type: ignore[index]
         self.assertIn("current_density", ir)
         self.assertIn("stt_degree", ir)
         self.assertIn("stt_beta", ir)
         self.assertAlmostEqual(float(ir["stt_beta"]), 0.04)  # type: ignore[arg-type]
+
+    def test_canonical_spin_torque_modules_preserve_multi_module_authoring(self) -> None:
+        p = _base_problem(
+            spin_torques=[
+                SlonczewskiSTT([0, 0, 5e10], [0, 0, 1]),
+                InterfaceCppSTT(
+                    current_density=[0, 0, 5e10],
+                    spin_polarization=[0, 0, 1],
+                    interface_normal=[0, 0, 1],
+                ),
+            ]
+        )
+        ir = p.to_ir()
+        modules = ir.get("spin_torque_modules", [])
+        self.assertEqual(len(modules), 2)  # type: ignore[arg-type]
+        self.assertNotIn("current_density", ir)
+        self.assertNotIn("stt_spin_polarization", ir)
+
+    def test_legacy_and_canonical_spin_torque_shapes_are_mutually_exclusive(self) -> None:
+        with self.assertRaises(ValueError):
+            _base_problem(
+                spin_torque=SlonczewskiSTT([0, 0, 5e10], [0, 0, 1]),
+                spin_torques=[ZhangLiSTT([1e11, 0, 0])],
+            )
 
     def test_temperature_in_ir(self) -> None:
         p = _base_problem(temperature=300.0)
@@ -97,6 +125,7 @@ class TestSTNOIRRoundtrip(unittest.TestCase):
         )
         ir = p.to_ir()
         # STT fields
+        self.assertEqual(ir["spin_torque_modules"][0]["kind"], "slonczewski")  # type: ignore[index]
         self.assertIn("current_density", ir)
         self.assertIn("stt_spin_polarization", ir)
         # Temperature

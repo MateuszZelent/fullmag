@@ -19,10 +19,18 @@ from fullmag.model.antenna import (
     RfDrive,
     SpinWaveExcitationAnalysis,
 )
+from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.discretization import FDM, FEM, FemLinearSolverPolicy
+from fullmag.model.spin_torque import (
+    DriftDiffusionSpinTorque,
+    InterfaceCppSTT,
+    SlonczewskiSTT,
+    SpinOrbitTorque,
+    ZhangLiSTT,
+)
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds as shared_geometry_bounds
 from fullmag.model.dynamics import DEFAULT_GAMMA, LLG
-from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedCylinder, Pulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, Pulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.geometry import (
     Box,
     Cylinder,
@@ -101,6 +109,9 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         ],
         "current_modules": [
             _export_current_module_entry(module) for module in base_problem.current_modules
+        ],
+        "spin_torques": [
+            _export_spin_torque_entry(module) for module in base_problem.spin_torques
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
@@ -194,6 +205,11 @@ def render_loaded_problem_as_script(
     if current_module_lines:
         lines.append("")
         lines.extend(current_module_lines)
+
+    spin_torque_lines = _render_spin_torques(base_problem, surface=surface)
+    if spin_torque_lines:
+        lines.append("")
+        lines.extend(spin_torque_lines)
 
     demag_lines = _render_demag(base_problem, overrides=overrides, surface=surface)
     if demag_lines:
@@ -860,7 +876,7 @@ def _render_current_modules(
         modules = list(problem.current_modules)
     if not modules:
         return []
-    lines = ["# Antennas"]
+    lines = ["# Current modules"]
     for module in modules:
         if isinstance(module, AntennaFieldSource):
             kwargs = [
@@ -874,11 +890,119 @@ def _render_current_modules(
                 kwargs.append(f"air_box_factor={_py_number(module.air_box_factor)}")
             lines.append(f"{_surface_call(surface, 'antenna_field_source')}({', '.join(kwargs)})")
             continue
+        if isinstance(module, CurrentTransport):
+            kwargs = [
+                f"name={_py_repr(module.name)}",
+            ]
+            if module.model != "prescribed_density":
+                kwargs.append(f"model={_py_repr(module.model)}")
+            if module.current_density is not None:
+                kwargs.append(f"current_density={_py_tuple3(module.current_density)}")
+            if module.solve_region is not None:
+                kwargs.append(f"solve_region={_py_repr(module.solve_region)}")
+            if module.conductivity_s_per_m is not None:
+                kwargs.append(
+                    f"conductivity_s_per_m={_py_number(module.conductivity_s_per_m)}"
+                )
+            lines.append(f"{_surface_call(surface, 'current_transport')}({', '.join(kwargs)})")
+            continue
         if isinstance(module, dict):
             lines.append(_render_current_module_override(module, surface=surface))
             continue
         raise ValueError(
             f"canonical flat-script rewrite does not yet support current module {type(module).__name__}"
+        )
+    return lines
+
+
+def _render_spin_torques(
+    problem: Problem,
+    *,
+    surface: str,
+) -> list[str]:
+    """Render the spin_torques list as canonical script lines."""
+    if not problem.spin_torques:
+        return []
+    lines = ["# Spin torques"]
+    for module in problem.spin_torques:
+        if isinstance(module, SlonczewskiSTT):
+            kwargs = []
+            if module.current_density is not None:
+                kwargs.append(f"current_density={_py_tuple3(module.current_density)}")
+            if module.current_source is not None:
+                kwargs.append(f"current_source={_py_repr(module.current_source)}")
+            kwargs.append(f"spin_polarization={_py_tuple3(module.spin_polarization)}")
+            if module.degree != 0.4:
+                kwargs.append(f"degree={_py_number(module.degree)}")
+            if module.lambda_asymmetry != 1.0:
+                kwargs.append(f"lambda_asymmetry={_py_number(module.lambda_asymmetry)}")
+            if module.epsilon_prime != 0.0:
+                kwargs.append(f"epsilon_prime={_py_number(module.epsilon_prime)}")
+            lines.append(f"fm.SlonczewskiSTT({', '.join(kwargs)})")
+            continue
+        if isinstance(module, ZhangLiSTT):
+            kwargs = []
+            if module.current_density is not None:
+                kwargs.append(f"current_density={_py_tuple3(module.current_density)}")
+            if module.current_source is not None:
+                kwargs.append(f"current_source={_py_repr(module.current_source)}")
+            if module.degree != 0.4:
+                kwargs.append(f"degree={_py_number(module.degree)}")
+            if module.beta != 0.0:
+                kwargs.append(f"beta={_py_number(module.beta)}")
+            lines.append(f"fm.ZhangLiSTT({', '.join(kwargs)})")
+            continue
+        if isinstance(module, InterfaceCppSTT):
+            kwargs = []
+            if module.current_density is not None:
+                kwargs.append(f"current_density={_py_tuple3(module.current_density)}")
+            if module.current_source is not None:
+                kwargs.append(f"current_source={_py_repr(module.current_source)}")
+            kwargs.append(f"spin_polarization={_py_tuple3(module.spin_polarization)}")
+            kwargs.append(f"interface_normal={_py_tuple3(module.interface_normal)}")
+            if module.degree != 0.4:
+                kwargs.append(f"degree={_py_number(module.degree)}")
+            if module.lambda_asymmetry != 1.0:
+                kwargs.append(f"lambda_asymmetry={_py_number(module.lambda_asymmetry)}")
+            if module.epsilon_prime != 0.0:
+                kwargs.append(f"epsilon_prime={_py_number(module.epsilon_prime)}")
+            lines.append(f"fm.InterfaceCppSTT({', '.join(kwargs)})")
+            continue
+        if isinstance(module, DriftDiffusionSpinTorque):
+            kwargs = []
+            if module.current_density is not None:
+                kwargs.append(f"current_density={_py_tuple3(module.current_density)}")
+            if module.current_source is not None:
+                kwargs.append(f"current_source={_py_repr(module.current_source)}")
+            kwargs.append(f"spin_polarization={_py_tuple3(module.spin_polarization)}")
+            if module.degree != 0.4:
+                kwargs.append(f"degree={_py_number(module.degree)}")
+            if module.beta != 0.0:
+                kwargs.append(f"beta={_py_number(module.beta)}")
+            kwargs.append(f"spin_diffusion_length_m={_py_number(module.spin_diffusion_length_m)}")
+            lines.append(f"fm.DriftDiffusionSpinTorque({', '.join(kwargs)})")
+            continue
+        if isinstance(module, SpinOrbitTorque):
+            kwargs = []
+            if module.charge_current_density_a_per_m2 is not None:
+                kwargs.append(
+                    f"charge_current_density_a_per_m2={_py_number(module.charge_current_density_a_per_m2)}"
+                )
+            if module.current_source is not None:
+                kwargs.append(f"current_source={_py_repr(module.current_source)}")
+            kwargs.append(f"damping_like_efficiency={_py_number(module.damping_like_efficiency)}")
+            kwargs.append(f"spin_polarization={_py_tuple3(module.spin_polarization)}")
+            kwargs.append(
+                f"ferromagnet_thickness_m={_py_number(module.ferromagnet_thickness_m)}"
+            )
+            if module.field_like_efficiency != 0.0:
+                kwargs.append(
+                    f"field_like_efficiency={_py_number(module.field_like_efficiency)}"
+                )
+            lines.append(f"fm.SpinOrbitTorque({', '.join(kwargs)})")
+            continue
+        raise ValueError(
+            f"canonical flat-script rewrite does not yet support spin torque {type(module).__name__}"
         )
     return lines
 
@@ -1747,6 +1871,23 @@ def _render_antenna_expr(antenna: object) -> str:
 
 
 def _render_current_module_override(module: dict[str, object], *, surface: str) -> str:
+    kind = str(module.get("kind") or "antenna_field_source")
+    if kind == "current_transport":
+        kwargs = [f"name={_py_repr(str(module.get('name') or 'transport'))}"]
+        model = str(module.get("model") or "prescribed_density")
+        if model != "prescribed_density":
+            kwargs.append(f"model={_py_repr(model)}")
+        current_density = _optional_vec3(module.get("current_density"))
+        if current_density is not None:
+            kwargs.append(f"current_density={_py_tuple3(current_density)}")
+        solve_region = module.get("solve_region")
+        if isinstance(solve_region, str) and solve_region.strip():
+            kwargs.append(f"solve_region={_py_repr(solve_region.strip())}")
+        conductivity_s_per_m = _number_or_none(module.get("conductivity_s_per_m"))
+        if conductivity_s_per_m is not None:
+            kwargs.append(f"conductivity_s_per_m={_py_number(conductivity_s_per_m)}")
+        return f"{_surface_call(surface, 'current_transport')}({', '.join(kwargs)})"
+
     antenna_kind = str(module.get("antenna_kind") or "")
     antenna_params = _normalize_mapping(module.get("antenna_params"))
     drive = _normalize_mapping(module.get("drive"))
@@ -2403,6 +2544,19 @@ def _export_geometry_entry(
 
 
 def _export_current_module_entry(module: object) -> dict[str, object]:
+    if isinstance(module, CurrentTransport):
+        entry = {
+            "kind": "current_transport",
+            "name": module.name,
+            "model": module.model,
+        }
+        if module.current_density is not None:
+            entry["current_density"] = list(module.current_density)
+        if module.solve_region is not None:
+            entry["solve_region"] = module.solve_region
+        if module.conductivity_s_per_m is not None:
+            entry["conductivity_s_per_m"] = module.conductivity_s_per_m
+        return entry
     if not isinstance(module, AntennaFieldSource):
         raise ValueError(f"unsupported current module kind: {type(module).__name__}")
     antenna = module.antenna
@@ -2452,6 +2606,13 @@ def _export_excitation_analysis(problem: Problem) -> dict[str, object] | None:
     if analysis is None:
         return None
     return analysis.to_ir()
+
+
+def _export_spin_torque_entry(module: object) -> dict[str, object]:
+    """Export a spin-torque module as a JSON-serialisable builder draft entry."""
+    if hasattr(module, "to_ir_module"):
+        return module.to_ir_module()
+    raise ValueError(f"unsupported spin torque module kind: {type(module).__name__}")
 
 
 def _export_geometry_kind_params(geom: object) -> tuple[str, dict[str, object]]:
@@ -2903,6 +3064,7 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
         ],
         "energy_terms": [term.to_ir() for term in problem.energy],
         "current_modules": [module.to_ir() for module in problem.current_modules],
+        "spin_torque_modules": [module.to_ir_module() for module in problem.spin_torques],
         "excitation_analysis": problem.excitation_analysis.to_ir()
         if problem.excitation_analysis is not None
         else None,
@@ -2978,7 +3140,7 @@ def _validate_energy_terms(problem: Problem) -> None:
                     "canonical flat-script rewrite does not yet support explicit demag realizations"
                 )
             continue
-        if isinstance(term, (BulkDMI, OerstedCylinder, Magnetoelastic, UniaxialAnisotropy, CubicAnisotropy, ThermalNoise)):
+        if isinstance(term, (BulkDMI, OerstedCylinder, OerstedField, Magnetoelastic, UniaxialAnisotropy, CubicAnisotropy, ThermalNoise)):
             continue
         raise ValueError(
             f"canonical flat-script rewrite does not yet support energy term {type(term).__name__}"

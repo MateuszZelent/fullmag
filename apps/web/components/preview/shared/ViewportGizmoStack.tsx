@@ -40,7 +40,7 @@ export default function ViewportGizmoStack({
           sceneRef={sceneRef}
           axisConvention={orientationSphereAxisConvention}
           anchorClassName={orientationSpherePositionClassName}
-          size={compact ? 92 : 110}
+          size={compact ? 112 : 144}
           compact={compact}
           embedded={embedded}
         />

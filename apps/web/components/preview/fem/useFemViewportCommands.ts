@@ -9,6 +9,7 @@ import type {
   RenderMode,
 } from "./femMeshTypes";
 import type { ViewportSelectionScope } from "@/features/viewport-fem/model/femViewportSelection";
+import type { FemViewportOverlayPopover } from "./FemViewportTypes";
 
 interface UseFemViewportCommandsArgs {
   hasMeshParts: boolean;
@@ -42,23 +43,12 @@ interface UseFemViewportCommandsArgs {
   setField: Dispatch<SetStateAction<FemColorField>>;
   clipEnabled: boolean;
   partExplorerOpen: boolean;
-  setOpenPopover: Dispatch<SetStateAction<
-    "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "info" | "panels" | null
-  >>;
+  setOpenPopover: Dispatch<SetStateAction<FemViewportOverlayPopover>>;
   setLegendOpen: Dispatch<SetStateAction<boolean>>;
   setInternalPartExplorerOpen: Dispatch<SetStateAction<boolean>>;
 }
 
-type PopoverId =
-  | "quantity"
-  | "color"
-  | "clip"
-  | "display"
-  | "vectors"
-  | "camera"
-  | "info"
-  | "panels"
-  | null;
+type PopoverId = FemViewportOverlayPopover;
 
 export interface FemViewportCommands {
   applyToolbarRenderMode: (next: RenderMode) => void;

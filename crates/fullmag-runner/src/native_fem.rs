@@ -548,12 +548,43 @@ impl NativeFemBackend {
                 .kc3_field
                 .as_ref()
                 .map_or(0, |v| v.len() as u64),
+            has_zhang_li_stt: if plan.current_density.is_some()
+                && plan.stt_degree.is_some()
+                && plan.stt_beta.is_some()
+            {
+                1
+            } else {
+                0
+            },
+            has_slonczewski_stt: if plan.current_density.is_some()
+                && plan.stt_degree.is_some()
+                && plan.stt_spin_polarization.is_some()
+                && plan.stt_lambda.is_some()
+            {
+                1
+            } else {
+                0
+            },
+            stt_current_density_am2: plan.current_density.unwrap_or([0.0, 0.0, 0.0]),
+            stt_degree: plan.stt_degree.unwrap_or(0.0),
+            stt_beta: plan.stt_beta.unwrap_or(0.0),
+            stt_spin_polarization: plan.stt_spin_polarization.unwrap_or([0.0, 0.0, 1.0]),
+            stt_lambda: plan.stt_lambda.unwrap_or(1.0),
+            stt_epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),
             oersted_radius: plan.oersted_radius.unwrap_or(0.0),
             oersted_center: plan.oersted_center.unwrap_or([0.0, 0.0, 0.0]),
             oersted_axis: plan.oersted_axis.unwrap_or([0.0, 0.0, 1.0]),
+            oersted_field_xyz: plan
+                .oersted_field_xyz
+                .as_deref()
+                .map_or(std::ptr::null(), |values| values.as_ptr()),
+            oersted_field_len: plan
+                .oersted_field_xyz
+                .as_ref()
+                .map_or(0, |values| values.len() as u64),
             oersted_time_dep_kind: plan.oersted_time_dep_kind,
             oersted_time_dep_freq: plan.oersted_time_dep_freq,
             oersted_time_dep_phase: plan.oersted_time_dep_phase,
@@ -1351,7 +1382,7 @@ mod tests {
             },
             region_materials: Vec::new(),
             enable_exchange: true,
-            enable_demag: true,
+            enable_demag: false,
             external_field: Some([1.0, 2.0, 3.0]),
             current_modules: vec![],
             gyromagnetic_ratio: 2.211e5,
@@ -1360,10 +1391,12 @@ mod tests {
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
+            field_refresh: None,
             relaxation: None,
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            dmi_interface_normal: None,
             bulk_dmi: None,
             dind_field: None,
             dbulk_field: None,
@@ -1379,6 +1412,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
             oersted_time_dep_phase: 0.0,
@@ -1469,10 +1503,12 @@ mod tests {
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(2.5e-13),
             adaptive_timestep: None,
+            field_refresh: None,
             relaxation: None,
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            dmi_interface_normal: None,
             bulk_dmi: None,
             dind_field: None,
             dbulk_field: None,
@@ -1488,6 +1524,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
             oersted_time_dep_phase: 0.0,
@@ -1563,8 +1600,52 @@ mod tests {
                 exchange: plan.enable_exchange,
                 demag: plan.enable_demag,
                 external_field: plan.external_field,
-                per_node_field: None,
+                per_node_field: plan.oersted_field_xyz.as_ref().map(|field_xyz| {
+                    field_xyz
+                        .chunks_exact(3)
+                        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                        .collect()
+                }),
                 magnetoelastic: None,
+                uniaxial_anisotropy: None,
+                cubic_anisotropy: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+                zhang_li_stt: if plan.current_density.is_some()
+                    && plan.stt_degree.is_some()
+                    && plan.stt_beta.is_some()
+                {
+                    Some(fullmag_engine::ZhangLiSttConfig {
+                        current_density: plan.current_density.expect("current density"),
+                        spin_polarization: plan.stt_degree.expect("stt degree"),
+                        non_adiabaticity: plan.stt_beta.expect("stt beta"),
+                    })
+                } else {
+                    None
+                },
+                slonczewski_stt: if plan.current_density.is_some()
+                    && plan.stt_degree.is_some()
+                    && plan.stt_spin_polarization.is_some()
+                    && plan.stt_lambda.is_some()
+                {
+                    Some(fullmag_engine::SlonczewskiSttConfig {
+                        current_density_magnitude: {
+                            let j = plan.current_density.expect("current density");
+                            (j[0] * j[0] + j[1] * j[1] + j[2] * j[2]).sqrt()
+                        },
+                        spin_polarization_axis: plan
+                            .stt_spin_polarization
+                            .expect("stt spin polarization"),
+                        lambda: plan.stt_lambda.expect("stt lambda"),
+                        epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
+                        degree: plan.stt_degree.expect("stt degree"),
+                        thickness: effective_magnetic_thickness(&plan.mesh),
+                    })
+                } else {
+                    None
+                },
+                sot: None,
+                oersted_cylinder: None,
             },
         );
         let mut state =
@@ -1579,6 +1660,14 @@ mod tests {
             observables.effective_field,
             report,
         )
+    }
+
+    fn effective_magnetic_thickness(mesh: &MeshIR) -> f64 {
+        let (min_z, max_z) = mesh.nodes.iter().fold(
+            (f64::INFINITY, f64::NEG_INFINITY),
+            |(min_z, max_z), node| (min_z.min(node[2]), max_z.max(node[2])),
+        );
+        (max_z - min_z).abs().max(1e-12)
     }
 
     #[test]
@@ -1780,6 +1869,74 @@ mod tests {
             5e-8,
             1e-9,
         );
+        assert_scalar_close(
+            "max_rhs_amplitude",
+            stats.max_dm_dt,
+            expected_report.max_rhs_amplitude,
+            5e-8,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn native_fem_zhang_li_step_matches_cpu_reference_when_mfem_stack_is_available() {
+        if !is_gpu_available() {
+            eprintln!("skipping native FEM Zhang-Li parity test: MFEM stack unavailable");
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.current_density = Some([8.0e10, 0.0, 0.0]);
+        plan.stt_degree = Some(0.55);
+        plan.stt_beta = Some(0.08);
+
+        let (expected_m, _, expected_h_eff, expected_report) = cpu_reference_single_step(&plan);
+        let mut backend = NativeFemBackend::create(&plan).expect("native fem create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native zhang-li fem step");
+        let actual_m = backend.copy_m(plan.mesh.nodes.len()).expect("copy m");
+        let actual_h_eff = backend
+            .copy_h_eff(plan.mesh.nodes.len())
+            .expect("copy H_eff");
+
+        assert_vector_field_close("m", &actual_m, &expected_m, 5e-8, 1e-10);
+        assert_vector_field_close("H_eff", &actual_h_eff, &expected_h_eff, 5e-8, 1e-6);
+        assert_scalar_close(
+            "max_rhs_amplitude",
+            stats.max_dm_dt,
+            expected_report.max_rhs_amplitude,
+            5e-8,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn native_fem_slonczewski_step_matches_cpu_reference_when_mfem_stack_is_available() {
+        if !is_gpu_available() {
+            eprintln!("skipping native FEM Slonczewski parity test: MFEM stack unavailable");
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.current_density = Some([0.0, 0.0, 1.4e11]);
+        plan.stt_degree = Some(0.62);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.8);
+        plan.stt_epsilon_prime = Some(0.03);
+
+        let (expected_m, _, expected_h_eff, expected_report) = cpu_reference_single_step(&plan);
+        let mut backend = NativeFemBackend::create(&plan).expect("native fem create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native slonczewski fem step");
+        let actual_m = backend.copy_m(plan.mesh.nodes.len()).expect("copy m");
+        let actual_h_eff = backend
+            .copy_h_eff(plan.mesh.nodes.len())
+            .expect("copy H_eff");
+
+        assert_vector_field_close("m", &actual_m, &expected_m, 5e-8, 1e-10);
+        assert_vector_field_close("H_eff", &actual_h_eff, &expected_h_eff, 5e-8, 1e-6);
         assert_scalar_close(
             "max_rhs_amplitude",
             stats.max_dm_dt,

@@ -11,13 +11,16 @@ use fullmag_ir::{BackendTarget, ExecutionMode, ExecutionPlanIR, ProblemIR, Study
 #[cfg(test)]
 use fullmag_ir::*;
 
+mod current_transport;
 mod error;
 mod fdm;
 mod fem;
 mod geometry;
 mod magnetization_textures;
 mod mesh;
+mod oersted;
 pub mod quantities;
+mod spin_torque;
 mod util;
 mod validate;
 

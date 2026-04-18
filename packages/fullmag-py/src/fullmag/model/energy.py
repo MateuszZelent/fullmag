@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from fullmag._validation import as_vector3, require_positive
+from fullmag._validation import as_vector3, require_non_empty, require_positive
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +252,8 @@ class PiecewiseLinear:
 
 TimeDependence = Constant | Sinusoidal | Pulse | PiecewiseLinear
 
+OERSTED_FIELD_MODELS = frozenset({"from_current_solution"})
+
 
 @dataclass(frozen=True, slots=True)
 class OerstedCylinder:
@@ -307,6 +309,36 @@ class OerstedCylinder:
         if self.time_dependence is not None:
             ir["time_dependence"] = self.time_dependence.to_ir()
         return ir
+
+
+@dataclass(frozen=True, slots=True)
+class OerstedField:
+    """Oersted field driven by a named current-transport solution.
+
+    The current public executable subset is intentionally narrow:
+
+    - ``model="from_current_solution"`` only,
+    - ``source`` must reference a ``CurrentTransport``,
+    - planner execution is currently limited to uniform prescribed current
+      density in a cylindrical ``solve_region``.
+    """
+
+    source: str
+    model: str = "from_current_solution"
+
+    def __post_init__(self) -> None:
+        if self.model not in OERSTED_FIELD_MODELS:
+            raise ValueError(
+                f"OerstedField model must be one of {sorted(OERSTED_FIELD_MODELS)!r}, got {self.model!r}"
+            )
+        object.__setattr__(self, "source", require_non_empty(self.source, "source"))
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "oersted_field",
+            "model": self.model,
+            "source": self.source,
+        }
 
 
 @dataclass(frozen=True, slots=True)

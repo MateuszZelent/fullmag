@@ -2,10 +2,18 @@
 
 ## Overview
 
-Fullmag supports two spin-transfer torque models:
+Fullmag currently exposes a canonical spin-torque family with an executable public subset.
+
+Executable today:
 
 1. **Slonczewski STT** — for current-perpendicular-to-plane (CPP) geometries (MTJ, nanopillar)
 2. **Zhang–Li STT** — for current-in-plane (CIP) geometries (nanowire, domain wall track)
+
+Semantic-only placeholders today:
+
+3. **InterfaceCppSTT**
+4. **DriftDiffusionSpinTorque**
+5. **SpinOrbitTorque**
 
 Both are added to the LLG equation:
 
@@ -118,35 +126,41 @@ $$
 ```python
 from fullmag.model.spin_torque import SlonczewskiSTT
 
-stt = SlonczewskiSTT(
-    current_density=(0, 0, 1e10),       # J = 10¹⁰ A/m², along +z
-    spin_polarization=(1, 0, 0),        # reference layer along +x
-    degree=0.4,                          # P = 0.4
-    lambda_asymmetry=1.0,               # Λ = 1 (symmetric)
-    epsilon_prime=0.0,                   # no field-like term
-)
-
 problem = Problem(
     ...,
-    spin_torque=stt,
+    spin_torques=[
+        SlonczewskiSTT(
+            current_density=(0, 0, 1e10),    # J = 10¹⁰ A/m², along +z
+            spin_polarization=(1, 0, 0),     # reference layer along +x
+            degree=0.4,                      # P = 0.4
+            lambda_asymmetry=1.0,            # Λ = 1 (symmetric)
+            epsilon_prime=0.0,               # no field-like term
+        )
+    ],
     temperature=300.0,   # room temperature
 )
 ```
+
+Legacy compatibility:
+
+- `spin_torque=SlonczewskiSTT(...)` still works,
+- canonical authoring uses `spin_torques=[...]`,
+- the current public executable path supports one torque module at a time.
 
 ### Zhang–Li STT (for domain wall track)
 
 ```python
 from fullmag.model.spin_torque import ZhangLiSTT
 
-stt = ZhangLiSTT(
-    current_density=(5e11, 0, 0),       # J along +x
-    degree=0.4,
-    beta=0.02,
-)
-
 problem = Problem(
     ...,
-    spin_torque=stt,
+    spin_torques=[
+        ZhangLiSTT(
+            current_density=(5e11, 0, 0),   # J along +x
+            degree=0.4,
+            beta=0.02,
+        )
+    ],
 )
 ```
 

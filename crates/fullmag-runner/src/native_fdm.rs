@@ -214,6 +214,12 @@ impl NativeFdmBackend {
             None
         };
         let adaptive = plan.adaptive_timestep.as_ref();
+        let oersted_field_flat: Option<Vec<f64>> = plan.oersted_field_xyz.as_ref().map(|field| {
+            field
+                .iter()
+                .flat_map(|value| value.iter().copied())
+                .collect()
+        });
 
         // Build exchange LUT when region mask is present.
         // Default: A_ii = A_material, A_ij (i≠j) = 0 (no inter-region coupling).
@@ -291,6 +297,12 @@ impl NativeFdmBackend {
             oersted_time_dep_offset: plan.oersted_time_dep_offset,
             oersted_time_dep_t_on: plan.oersted_time_dep_t_on,
             oersted_time_dep_t_off: plan.oersted_time_dep_t_off,
+            oersted_field_xyz: oersted_field_flat
+                .as_ref()
+                .map_or(std::ptr::null(), |field| field.as_ptr()),
+            oersted_field_len: oersted_field_flat
+                .as_ref()
+                .map_or(0, |field| field.len() as u64),
 
             has_uniaxial_anisotropy: if plan.material.uniaxial_anisotropy_ku1.is_some() {
                 1
@@ -672,6 +684,14 @@ impl NativeFdmBackend {
         )
     }
 
+    #[allow(dead_code)]
+    pub fn copy_h_oe(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_field(
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
+            cell_count,
+        )
+    }
+
     pub fn copy_h_eff(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
@@ -797,6 +817,7 @@ impl NativeFdmBackend {
             "H_ex" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
             "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
             "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
+            "H_OE" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
             "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
             _ => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
         };
@@ -1283,6 +1304,7 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
         "H_ex" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
         "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
         "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
+        "H_OE" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
         "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
         _ => return None,
     })
@@ -1291,6 +1313,8 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use super::*;
+    use crate::preview::build_grid_preview_field;
+    use crate::types::LivePreviewRequest;
     use fullmag_engine::{
         CellSize, CubicAnisotropyConfig, EffectiveFieldTerms, ExchangeLlgProblem, LlgConfig,
         MaterialParameters, TimeIntegrator, UniaxialAnisotropyConfig,
@@ -1326,6 +1350,7 @@ mod tests {
                 saturation_magnetisation: 800e3,
                 exchange_stiffness: 13e-12,
                 damping: 0.1,
+                ..Default::default()
             },
             gyromagnetic_ratio: 2.211e5,
             precision,
@@ -1333,13 +1358,47 @@ mod tests {
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(2.5e-13),
             adaptive_timestep: None,
+            field_refresh: None,
             relaxation: None,
-            boundary_correction: None,
-            boundary_geometry: None,
             enable_exchange: true,
             enable_demag,
             external_field: Some([1.5e3, -2.0e3, 7.5e2]),
             inter_region_exchange: vec![],
+            periodicity: None,
+            boundary_correction: None,
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+            boundary_geometry: None,
+            current_density: None,
+            stt_degree: None,
+            stt_beta: None,
+            stt_spin_polarization: None,
+            stt_lambda: None,
+            stt_epsilon_prime: None,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            has_oersted_cylinder: false,
+            oersted_current: None,
+            oersted_radius: None,
+            oersted_center: None,
+            oersted_axis: None,
+            oersted_field_xyz: None,
+            oersted_time_dep_kind: 0,
+            oersted_time_dep_freq: 0.0,
+            oersted_time_dep_phase: 0.0,
+            oersted_time_dep_offset: 0.0,
+            oersted_time_dep_t_on: 0.0,
+            oersted_time_dep_t_off: 0.0,
+            oersted_realization: None,
+            temperature: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            mel_b1: None,
+            mel_b2: None,
+            mel_uniform_strain: None,
         }
     }
 
@@ -1373,6 +1432,7 @@ mod tests {
                 saturation_magnetisation: 800e3,
                 exchange_stiffness: 13e-12,
                 damping: 0.1,
+                ..Default::default()
             },
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -1380,13 +1440,47 @@ mod tests {
             integrator: IntegratorChoice::Heun,
             fixed_timestep: Some(2.0e-13),
             adaptive_timestep: None,
+            field_refresh: None,
             relaxation: None,
-            boundary_correction: None,
-            boundary_geometry: None,
             enable_exchange: true,
             enable_demag: true,
             external_field: Some([2.0e3, -1.0e3, 5.0e2]),
             inter_region_exchange: vec![],
+            periodicity: None,
+            boundary_correction: None,
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+            boundary_geometry: None,
+            current_density: None,
+            stt_degree: None,
+            stt_beta: None,
+            stt_spin_polarization: None,
+            stt_lambda: None,
+            stt_epsilon_prime: None,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            has_oersted_cylinder: false,
+            oersted_current: None,
+            oersted_radius: None,
+            oersted_center: None,
+            oersted_axis: None,
+            oersted_field_xyz: None,
+            oersted_time_dep_kind: 0,
+            oersted_time_dep_freq: 0.0,
+            oersted_time_dep_phase: 0.0,
+            oersted_time_dep_offset: 0.0,
+            oersted_time_dep_t_on: 0.0,
+            oersted_time_dep_t_off: 0.0,
+            oersted_realization: None,
+            temperature: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            mel_b1: None,
+            mel_b2: None,
+            mel_uniform_strain: None,
         }
     }
 
@@ -1402,6 +1496,7 @@ mod tests {
                 saturation_magnetisation: 800e3,
                 exchange_stiffness: 13e-12,
                 damping: 0.1,
+                ..Default::default()
             },
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -1424,8 +1519,41 @@ mod tests {
             enable_demag: false,
             external_field: Some([0.0, 0.0, 8.0e5]),
             inter_region_exchange: vec![],
+            periodicity: None,
             boundary_correction: None,
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
             boundary_geometry: None,
+            current_density: None,
+            stt_degree: None,
+            stt_beta: None,
+            stt_spin_polarization: None,
+            stt_lambda: None,
+            stt_epsilon_prime: None,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            has_oersted_cylinder: false,
+            oersted_current: None,
+            oersted_radius: None,
+            oersted_center: None,
+            oersted_axis: None,
+            oersted_field_xyz: None,
+            oersted_time_dep_kind: 0,
+            oersted_time_dep_freq: 0.0,
+            oersted_time_dep_phase: 0.0,
+            oersted_time_dep_offset: 0.0,
+            oersted_time_dep_t_on: 0.0,
+            oersted_time_dep_t_off: 0.0,
+            oersted_realization: None,
+            temperature: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            mel_b1: None,
+            mel_b2: None,
+            mel_uniform_strain: None,
         }
     }
 
@@ -1481,6 +1609,62 @@ mod tests {
             .fold(0.0, f64::max)
     }
 
+    fn masked_oersted_field(plan: &FdmPlanIR) -> Vec<[f64; 3]> {
+        let raw = plan
+            .oersted_field_xyz
+            .clone()
+            .expect("test plan should carry oersted field");
+        let active_mask = plan.active_mask.as_ref().expect("test plan should carry active mask");
+        raw.into_iter()
+            .zip(active_mask.iter())
+            .map(|(value, is_active)| if *is_active { value } else { [0.0, 0.0, 0.0] })
+            .collect()
+    }
+
+    fn generalized_oersted_preview_request() -> LivePreviewRequest {
+        LivePreviewRequest {
+            revision: 7,
+            quantity: "H_OE".to_string(),
+            component: "3D".to_string(),
+            layer: 0,
+            all_layers: false,
+            every_n: 1,
+            x_chosen_size: 3,
+            y_chosen_size: 3,
+            auto_scale_enabled: false,
+            max_points: 9,
+        }
+    }
+
+    fn decode_snapshot_payload(
+        info: NativeFieldSnapshotInfo,
+        payload: &[u8],
+    ) -> Vec<[f64; 3]> {
+        assert_eq!(info.component_count, 3, "expected vector snapshot payload");
+        let scalars = match info.scalar_type {
+            NativeFieldSnapshotScalarType::F32 => payload
+                .chunks_exact(std::mem::size_of::<f32>())
+                .map(|chunk| f64::from(f32::from_ne_bytes(chunk.try_into().unwrap())))
+                .collect::<Vec<_>>(),
+            NativeFieldSnapshotScalarType::F64 => payload
+                .chunks_exact(std::mem::size_of::<f64>())
+                .map(|chunk| f64::from_ne_bytes(chunk.try_into().unwrap()))
+                .collect::<Vec<_>>(),
+        };
+        assert_eq!(
+            scalars.len(),
+            info.cell_count * info.component_count,
+            "decoded snapshot scalar count should match descriptor"
+        );
+        let mut vectors = vec![[0.0, 0.0, 0.0]; info.cell_count];
+        for cell in 0..info.cell_count {
+            vectors[cell][0] = scalars[cell];
+            vectors[cell][1] = scalars[info.cell_count + cell];
+            vectors[cell][2] = scalars[(2 * info.cell_count) + cell];
+        }
+        vectors
+    }
+
     fn cpu_reference_single_step(
         plan: &FdmPlanIR,
     ) -> (
@@ -1524,7 +1708,7 @@ mod tests {
                 exchange: plan.enable_exchange,
                 demag: plan.enable_demag,
                 external_field: plan.external_field,
-                per_node_field: None,
+                per_node_field: plan.oersted_field_xyz.clone(),
                 magnetoelastic: None,
                 uniaxial_anisotropy: plan.material.uniaxial_anisotropy_ku1.map(|ku1| {
                     UniaxialAnisotropyConfig {
@@ -1549,6 +1733,10 @@ mod tests {
                 }),
                 interfacial_dmi: plan.interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
+                zhang_li_stt: None,
+                slonczewski_stt: None,
+                sot: None,
+                oersted_cylinder: None,
             },
             plan.active_mask.clone(),
         )
@@ -1741,6 +1929,169 @@ mod tests {
                 .any(|(value, is_active)| *is_active && *value != [0.0, 0.0, 0.0]),
             "expected at least one active cell to carry non-zero H_demag"
         );
+    }
+
+    #[test]
+    fn native_fdm_generalized_oersted_matches_cpu_reference_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM generalized Oersted parity test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.oersted_field_xyz = Some(vec![
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.5, 0.5, 0.5],
+            [0.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [-0.5, -0.5, -0.5],
+            [0.25, 0.0, 0.0],
+        ]);
+        plan.oersted_realization = Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
+        let cell_count = plan.initial_magnetization.len();
+
+        let (
+            expected_m,
+            expected_h_ex,
+            _expected_h_demag,
+            expected_h_ext,
+            expected_h_eff,
+            expected_report,
+        ) = cpu_reference_single_step(&plan);
+        let expected_h_oe = plan.oersted_field_xyz.clone().expect("oersted field");
+
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm step");
+        let actual_m = backend.copy_m(cell_count).expect("copy m");
+        let actual_h_ex = backend.copy_h_ex(cell_count).expect("copy H_ex");
+        let actual_h_ext = backend.copy_h_ext(cell_count).expect("copy H_ext");
+        let actual_h_oe = backend.copy_h_oe(cell_count).expect("copy H_OE");
+        let actual_h_eff = backend.copy_h_eff(cell_count).expect("copy H_eff");
+
+        assert_vector_field_close("m", &actual_m, &expected_m, 5e-6, 1e-8);
+        assert_vector_field_close("H_ex", &actual_h_ex, &expected_h_ex, 5e-5, 1e-2);
+        assert_vector_field_close("H_ext", &actual_h_ext, &expected_h_ext, 1e-12, 1e-12);
+        assert_vector_field_close("H_OE", &actual_h_oe, &expected_h_oe, 1e-12, 1e-12);
+        assert_vector_field_close("H_eff", &actual_h_eff, &expected_h_eff, 5e-5, 1e-2);
+
+        assert_scalar_close(
+            "time_seconds",
+            stats.time,
+            expected_report.time_seconds,
+            1e-12,
+            1e-18,
+        );
+    }
+
+    #[test]
+    fn native_fdm_generalized_oersted_preview_matches_expected_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM generalized Oersted preview test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.oersted_field_xyz = Some(vec![
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.5, 0.5, 0.5],
+            [0.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [-0.5, -0.5, -0.5],
+            [0.25, 0.0, 0.0],
+        ]);
+        plan.oersted_realization = Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
+
+        let request = generalized_oersted_preview_request();
+        let expected_preview = build_grid_preview_field(
+            &request,
+            &masked_oersted_field(&plan),
+            plan.grid.cells,
+            plan.active_mask.as_deref(),
+        );
+
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm step");
+
+        let actual_sync = backend
+            .copy_live_preview_field(&request, plan.grid.cells, plan.active_mask.as_deref())
+            .expect("copy preview");
+        let actual_async = backend
+            .begin_live_preview_snapshot(&request, plan.grid.cells)
+            .expect("begin preview snapshot")
+            .into_live_preview_field(plan.active_mask.as_deref())
+            .expect("collect preview snapshot");
+
+        assert_eq!(actual_sync.quantity, "H_OE");
+        assert_eq!(actual_sync.unit, expected_preview.unit);
+        assert_eq!(actual_sync.quantity_domain, expected_preview.quantity_domain);
+        assert_eq!(actual_sync.preview_grid, expected_preview.preview_grid);
+        assert_eq!(actual_sync.active_mask, expected_preview.active_mask);
+        assert_eq!(actual_async.active_mask, expected_preview.active_mask);
+        assert_eq!(
+            actual_sync.vector_field_values,
+            expected_preview.vector_field_values,
+            "synchronous preview should preserve H_OE values"
+        );
+        assert_eq!(
+            actual_async.vector_field_values,
+            expected_preview.vector_field_values,
+            "async preview snapshot should preserve H_OE values"
+        );
+    }
+
+    #[test]
+    fn native_fdm_generalized_oersted_field_snapshot_matches_expected_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM generalized Oersted field snapshot test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.oersted_field_xyz = Some(vec![
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.5, 0.5, 0.5],
+            [0.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [-0.5, -0.5, -0.5],
+            [0.25, 0.0, 0.0],
+        ]);
+        plan.oersted_realization = Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
+
+        let expected_h_oe = masked_oersted_field(&plan);
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm step");
+
+        let mut snapshot = backend
+            .begin_field_snapshot("H_OE", 3, 0.0, plan.fixed_timestep.unwrap_or(0.0))
+            .expect("begin H_OE field snapshot");
+        let _info = snapshot.info().expect("snapshot info");
+        let mut payload = Vec::new();
+        let written_info = snapshot.write_payload(&mut payload).expect("snapshot payload");
+        assert_eq!(written_info.cell_count, expected_h_oe.len());
+        assert_eq!(written_info.component_count, 3);
+        let decoded = decode_snapshot_payload(written_info, &payload);
+        assert_vector_field_close("H_OE.snapshot", &decoded, &expected_h_oe, 1e-12, 1e-12);
     }
 
     #[test]
