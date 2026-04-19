@@ -1260,21 +1260,6 @@ function VectorFieldView3DInner({
               onOrientationSnapshot={(snapshot) => updateRotationSnapshot("hsl", snapshot)}
             />
           ) : null}
-          {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showDataPlaneIndicator ? (
-            <div
-              className={cn(
-                "pointer-events-none",
-                fdmViewportFlags.showOrientationSphere && viewportVisible && !geometryMode
-                  ? "mt-3"
-                  : "",
-              )}
-            >
-              <DataPlaneCornerIndicator
-                lastDataTimestamp={dataTimestamp}
-                label={dataTimestampLabel}
-              />
-            </div>
-          ) : null}
         </ViewportOverlayLayout.BottomLeft>
 
         {/* ── 3dsmax-style interaction mode toolbar (only when texture gizmo available) ── */}
@@ -1369,6 +1354,13 @@ function VectorFieldView3DInner({
           </ViewportOverlayLayout.BottomCenter>
         )}
       </ViewportOverlayLayout>
+
+      <div className="pointer-events-none absolute bottom-3 left-3 z-30">
+        <DataPlaneCornerIndicator
+          lastDataTimestamp={dataTimestamp}
+          label={dataTimestampLabel}
+        />
+      </div>
 
       {/* ── R3F Canvas ────────────────────────────────────── */}
       <div ref={hostRef} className="absolute inset-0 pointer-events-none z-0">

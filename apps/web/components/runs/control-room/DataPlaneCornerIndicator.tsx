@@ -86,21 +86,21 @@ export const DataPlaneCornerIndicator = memo(function DataPlaneCornerIndicator({
   ]);
 
   return (
-    <div className="pointer-events-none rounded-full border border-border/35 bg-background/85 px-3 py-1.5 shadow-[0_4px_16px_rgba(0,0,0,0.35)] backdrop-blur-md">
+    <div className="pointer-events-none rounded-xl border border-emerald-400/45 bg-emerald-950/78 px-3 py-2 shadow-[0_8px_28px_rgba(16,185,129,0.22)] backdrop-blur-md">
       <div className="flex items-center gap-2">
         <span
           className={cn(
-            "h-2.5 w-2.5 rounded-full",
+            "h-2.5 w-2.5 shrink-0 rounded-full",
             indicator.tone === "ok" && "bg-emerald-400 shadow-[0_0_10px_rgba(74,222,128,0.65)]",
             indicator.tone === "warn" && "bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.55)]",
             indicator.tone === "error" && "bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.55)]",
           )}
         />
         <div className="flex min-w-0 flex-col">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-foreground">
+          <span className="text-[0.64rem] font-semibold uppercase tracking-[0.14em] text-emerald-50">
             {indicator.label}
           </span>
-          <span className="text-[0.58rem] text-muted-foreground">
+          <span className="text-[0.6rem] text-emerald-100/82">
             {indicator.detail}
           </span>
         </div>

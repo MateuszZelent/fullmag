@@ -12,7 +12,7 @@ import { extendRunGateWithBuilder } from "@/features/interaction/model/runGate";
 
 export function useBuilderRunGate() {
   const baseRunGate = useDirtyGraphStore((s) => s.runGate);
-  const builderActive = useGeometryBuilderStore((s) => s.builderMode.active);
+  const builderActive = useGeometryBuilderStore((s) => s.builderMode.enabled);
   const dirty = useGeometryBuilderStore((s) => s.dirty);
   const validateAll = useGeometryBuilderStore((s) => s.validateAll);
 

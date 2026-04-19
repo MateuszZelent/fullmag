@@ -205,9 +205,11 @@ function UniverseWireframe() {
 // ── Main Layer ────────────────────────────────────────────────
 
 export function BuilderViewportLayer() {
-  const builderEnabled = useGeometryBuilderStore((s) => s.builderMode.active);
+  const builderEnabled = useGeometryBuilderStore((s) => s.builderMode.enabled);
   const primitives = useGeometryBuilderStore((s) => s.getAllPrimitives());
-  const selectedId = useGeometryBuilderStore((s) => s.builderSelection?.primitiveId ?? null);
+  const selectedId = useGeometryBuilderStore((s) =>
+    s.builderSelection.type === "primitive" ? s.builderSelection.id : null,
+  );
   const selectBuilderTarget = useGeometryBuilderStore((s) => s.selectBuilderTarget);
   const setPrimitiveTransform = useGeometryBuilderStore((s) => s.setPrimitiveTransform);
   const selectedNode = useGeometryBuilderStore((s) =>
@@ -247,7 +249,7 @@ export function BuilderViewportLayer() {
               <BuilderPrimitiveMesh
                 node={node}
                 isSelected
-                onClick={() => selectBuilderTarget({ kind: "primitive", primitiveId: node.id })}
+                onClick={() => selectBuilderTarget({ type: "primitive", id: node.id })}
               />
             </TransformGizmoLayer>
           );
@@ -257,7 +259,7 @@ export function BuilderViewportLayer() {
             key={node.id}
             node={node}
             isSelected={false}
-            onClick={() => selectBuilderTarget({ kind: "primitive", primitiveId: node.id })}
+            onClick={() => selectBuilderTarget({ type: "primitive", id: node.id })}
           />
         );
       })}

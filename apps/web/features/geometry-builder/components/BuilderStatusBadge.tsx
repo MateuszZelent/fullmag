@@ -11,7 +11,7 @@ import { AlertTriangle, CheckCircle, Loader2 } from "lucide-react";
 import { useGeometryBuilderStore } from "../store/useGeometryBuilderStore";
 
 export function BuilderStatusBadge() {
-  const builderActive = useGeometryBuilderStore((s) => s.builderMode.active);
+  const builderActive = useGeometryBuilderStore((s) => s.builderMode.enabled);
   const dirty = useGeometryBuilderStore((s) => s.dirty);
   const isRunBlocked = useGeometryBuilderStore((s) => s.isRunBlocked());
   const reason = useGeometryBuilderStore((s) => s.getRunBlockedReason());

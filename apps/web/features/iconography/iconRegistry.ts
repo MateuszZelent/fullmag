@@ -262,6 +262,16 @@ const ICON_REGISTRY: Record<NodeKind, IconRegistryEntry> = {
 
   // Diagnostics
   "diagnostics.root":                      { token: "shield-check",     label: "Diagnostics" },
+
+  // Geometry Builder
+  "builder.root":                          { token: "package",          label: "Geometry Builder" },
+  "builder.universe":                      { token: "box",              label: "Builder Universe" },
+  "builder.primitives":                    { token: "layers",           label: "Builder Primitives" },
+  "builder.primitive":                     { token: "cube",             label: "Builder Primitive" },
+  "builder.primitive.params":              { token: "sliders",          label: "Builder Primitive Parameters" },
+  "builder.primitive.transform":           { token: "move",             label: "Builder Primitive Transform" },
+  "builder.primitive.material":            { token: "atom",             label: "Builder Primitive Material" },
+  "builder.lifecycle":                     { token: "workflow",         label: "Builder Lifecycle" },
 };
 
 // ---------------------------------------------------------------------------

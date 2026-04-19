@@ -1229,7 +1229,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         <div className="px-2.5 py-1.5 border-b border-border/40 bg-card/40 text-muted-foreground text-xs leading-snug">
           {ctx.previewMessage ??
             (ctx.previewIsBootstrapStale
-              ? "Showing bootstrap preview until first live preview sample arrives"
+              ? "Showing bootstrap preview until first live preview sample arrives 2"
               : "Preview update pending")}
         </div>
       )}

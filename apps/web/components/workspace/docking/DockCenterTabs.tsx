@@ -257,7 +257,7 @@ export default function DockCenterTabs() {
             <div className="border-b border-border/40 bg-card/40 px-2.5 py-1.5 text-xs leading-snug text-muted-foreground">
               {vp.previewMessage ??
                 (vp.previewIsBootstrapStale
-                  ? "Showing bootstrap preview until first live preview sample arrives"
+                  ? "Showing bootstrap preview until first live preview sample arrives 3"
                   : "Preview update pending")}
             </div>
           )}

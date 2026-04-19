@@ -8,6 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { WorkspaceMode } from "../runs/control-room/context-hooks";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
+import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import {
   parseStudyNodeContext,
 } from "@/lib/study-builder/node-context";
@@ -205,7 +206,16 @@ function contextualTabsForSelection(p: RibbonBarProps): ContextualRibbonTab[] {
 }
 
 /** Build a RibbonBuildContext from the current RibbonBarProps. */
-function buildContext(props: RibbonBarProps): RibbonBuildContext {
+function buildContext(
+  props: RibbonBarProps,
+  builderState: {
+    builderEnabled: boolean;
+    builderDirtyGeometry: boolean;
+    builderDirtyMesh: boolean;
+    builderHasRealization: boolean;
+    builderSelectedPrimitiveId: string | null;
+  },
+): RibbonBuildContext {
   const run = (command: RibbonCommand) => executeRibbonCommand(props, command);
   const can = (command: RibbonCommand) => canExecuteRibbonCommand(props, command);
 
@@ -242,6 +252,12 @@ function buildContext(props: RibbonBarProps): RibbonBuildContext {
 
     canSyncScriptBuilder: Boolean(props.canSyncScriptBuilder),
     scriptSyncBusy: Boolean(props.scriptSyncBusy),
+
+    builderEnabled: builderState.builderEnabled,
+    builderDirtyGeometry: builderState.builderDirtyGeometry,
+    builderDirtyMesh: builderState.builderDirtyMesh,
+    builderHasRealization: builderState.builderHasRealization,
+    builderSelectedPrimitiveId: builderState.builderSelectedPrimitiveId,
 
     run,
     can,
@@ -362,6 +378,15 @@ export default function RibbonBar(props: RibbonBarProps) {
   const setActiveCoreTab = useWorkspaceStore((s) => s.setActiveCoreTab);
   const activeContextualTab = useWorkspaceStore((s) => s.activeContextualTab);
   const setActiveContextualTab = useWorkspaceStore((s) => s.setActiveContextualTab);
+  const builderEnabled = useGeometryBuilderStore((s) => s.builderMode.enabled);
+  const builderDirtyGeometry = useGeometryBuilderStore(
+    (s) => s.dirty.geometryDraftDirty || s.dirty.geometryRealizationDirty,
+  );
+  const builderDirtyMesh = useGeometryBuilderStore((s) => s.dirty.meshDirty);
+  const builderHasRealization = useGeometryBuilderStore((s) => s.geometryRealization !== null);
+  const builderSelectedPrimitiveId = useGeometryBuilderStore((s) =>
+    s.builderSelection.type === "primitive" ? s.builderSelection.id : null,
+  );
   const workspaceStage = props.workspaceMode ?? currentStage;
   const visibleTabs = useMemo(() => tabsForMode(workspaceStage), [workspaceStage]);
   const defaultTab = defaultTabForMode(workspaceStage);
@@ -394,7 +419,13 @@ export default function RibbonBar(props: RibbonBarProps) {
   }, [activeContextualTab, contextualTabs, setActiveContextualTab]);
 
   const groups = useMemo(() => {
-    const ctx = buildContext(props);
+    const ctx = buildContext(props, {
+      builderEnabled,
+      builderDirtyGeometry,
+      builderDirtyMesh,
+      builderHasRealization,
+      builderSelectedPrimitiveId,
+    });
     const tabId = RIBBON_TAB_TO_ID[activeTab];
 
     // Resolve core tab groups from registry
@@ -456,6 +487,11 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.runAction,
     props.runLabel,
     props.previewPending,
+    builderEnabled,
+    builderDirtyGeometry,
+    builderDirtyMesh,
+    builderHasRealization,
+    builderSelectedPrimitiveId,
   ]);
 
   return (

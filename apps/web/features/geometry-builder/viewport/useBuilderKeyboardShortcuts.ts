@@ -11,8 +11,10 @@ import { useEffect, useCallback } from "react";
 import { useGeometryBuilderStore } from "../store/useGeometryBuilderStore";
 
 export function useBuilderKeyboardShortcuts() {
-  const builderActive = useGeometryBuilderStore((s) => s.builderMode.active);
-  const selectedPrimitiveId = useGeometryBuilderStore((s) => s.builderSelection?.primitiveId ?? null);
+  const builderActive = useGeometryBuilderStore((s) => s.builderMode.enabled);
+  const selectedPrimitiveId = useGeometryBuilderStore((s) =>
+    s.builderSelection.type === "primitive" ? s.builderSelection.id : null,
+  );
   const removePrimitive = useGeometryBuilderStore((s) => s.removePrimitive);
   const duplicatePrimitive = useGeometryBuilderStore((s) => s.duplicatePrimitive);
   const undo = useGeometryBuilderStore((s) => s.undo);
