@@ -326,7 +326,6 @@ export function FemArrows({
     filteredCandidateNodes,
     meshData.fieldData,
     meshData.nodes,
-    meshData.nNodes,
     meshData.quantityDomain,
     useVolumeCandidates,
     visible,
@@ -506,11 +505,13 @@ export function FemArrows({
   useLayoutEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
-
-    const instanceColor = mesh.instanceColor ?? instanceColorAttribute;
-    if (!instanceColor) return;
+    if (!mesh.instanceColor) {
+      mesh.instanceColor = instanceColorAttribute;
+    }
+    const meshInstanceColor = mesh.instanceColor;
+    if (!meshInstanceColor) return;
     const matrixArray = mesh.instanceMatrix.array as Float32Array;
-    const colorArray = instanceColor.array as Float32Array;
+    const colorArray = meshInstanceColor.array as Float32Array;
     colorArray.set(colors.subarray(0, count * 3), 0);
     const dummy = new THREE.Object3D();
     let matrixOffset = 0;
@@ -535,7 +536,7 @@ export function FemArrows({
 
     mesh.count = count;
     mesh.instanceMatrix.needsUpdate = true;
-    instanceColor.needsUpdate = true;
+    meshInstanceColor.needsUpdate = true;
     invalidate();
   }, [
     colors,

@@ -118,6 +118,7 @@ import {
   buildViewportDisplayReset,
   type ViewportDisplayDefaults,
 } from "../../../features/viewport-fem/model/femResetCommand";
+
 import {
   LOCAL_ACTIVE_VISUALIZATION_PRESET_STORAGE_KEY,
   LOCAL_VISUALIZATION_PRESETS_STORAGE_KEY,
@@ -167,9 +168,24 @@ import type {
   ResultWorkspaceKind,
 } from "./context-hooks";
 
+const FIELD_FRAME_ID_CACHE = new WeakMap<object, number>();
+let NEXT_FIELD_FRAME_ID = 1;
+
+function fieldFrameIdentity(value: object | null | undefined): string {
+  if (!value) {
+    return "none";
+  }
+  let id = FIELD_FRAME_ID_CACHE.get(value);
+  if (!id) {
+    id = NEXT_FIELD_FRAME_ID++;
+    FIELD_FRAME_ID_CACHE.set(value, id);
+  }
+  return String(id);
+}
+
 /* ── Provider ── */
 export function ControlRoomProvider({ children }: { children: ReactNode }) {
-  const { state, connection, error } = useCurrentLiveStream();
+  const { state, connection, error, refresh: refreshLiveState } = useCurrentLiveStream();
 
   // F-P1: sync live stream into the session-runtime Zustand store
   useSessionRuntimeBridge(state, connection, error);
@@ -1565,18 +1581,26 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const fieldDataRevision = useMemo(() => {
     if (!selectedFieldFrame || !selectedVectors?.length) {
       if (renderPreviewMatchesActiveQuantity && renderPreview?.source_step != null) {
-        return `${activeQuantityId}:${renderPreview.source_step}:${effectiveStep}`;
+        return `preview:${activeQuantityId}:${renderPreview.config_revision}:${renderPreview.source_step}:${renderPreview.vector_field_values ? fieldFrameIdentity(renderPreview.vector_field_values) : "none"}`;
       }
       return null;
     }
-    return `${selectedFieldFrame.quantity_id}:${selectedFieldFrame.n_comp}:${selectedFieldFrame.values.length}:${effectiveStep}`;
+    return [
+      "frame",
+      selectedFieldFrame.quantity_id,
+      selectedFieldFrame.n_comp,
+      selectedFieldFrame.values.length,
+      fieldFrameIdentity(selectedFieldFrame),
+      fieldFrameIdentity(selectedVectors),
+    ].join(":");
   }, [
     activeQuantityId,
-    effectiveStep,
+    renderPreview?.config_revision,
     renderPreview?.source_step,
+    renderPreview?.vector_field_values,
     renderPreviewMatchesActiveQuantity,
     selectedFieldFrame,
-    selectedVectors?.length,
+    selectedVectors,
   ]);
 
   const quantityDescriptor = useMemo(
@@ -1880,6 +1904,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
 
   const modelValue = useMemo<ModelContextValue>(() => ({
     sceneDocument: localBuilderDraft,
+    remoteSceneDocument,
     modelBuilderGraph,
     requestedRuntimeSelection: {
       requested_backend:
@@ -1954,7 +1979,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     activeResultWorkspaceId,
     workspaceTabs,
     activeWorkspaceTabId,
-    setSolverSettings, setSceneDocument, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis, setMeshRenderMode, setMeshOpacity, setMeshClipEnabled, setMeshClipAxis,
+    setSolverSettings, setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis, setMeshRenderMode, setMeshOpacity, setMeshClipEnabled, setMeshClipAxis,
     setMeshClipPos, setMeshShowArrows, setFemArrowColorMode, setFemArrowMonoColor, setFemArrowAlpha, setFemArrowLengthScale, setFemArrowThickness, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
     setFemVectorDomainFilter, setFemFerromagnetVisibilityMode,
     setSelectedSidebarNodeId, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setAirMeshVisible, setAirMeshOpacity, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
@@ -1962,7 +1987,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset,
     resetViewportDisplayState,
   }), [
-    localBuilderDraft, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
+    localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshShowArrows,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
     femVectorDomainFilter, femFerromagnetVisibilityMode,
@@ -1976,7 +2001,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     domainFrame, worldExtent, worldCenter, worldExtentSource, meshHmax, mesherBackend, mesherSourceKind, mesherCurrentSettings,
     meshWorkspacePreset,
     selectedSidebarNodeId, selectedObjectId, viewportScope, focusObjectRequest, objectViewMode, airMeshVisible, airMeshOpacity, meshEntityViewState, visibleSubmeshSnapshot, selectedEntityId, focusedEntityId, meshParts, visibleMeshPartIds, visibleMagneticObjectIds, selectedMeshPart, focusedMeshPart, magneticParts, airPart, interfaceParts, analyzeSelection, resultWorkspaceEntries, activeResultWorkspaceId, workspaceTabs, activeWorkspaceTabId, requestFocusObject,
-    setSceneDocument, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis,
+    setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis,
     handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset, createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     applyAntennaTranslation, applyGeometryTranslation, setMeshOptions, setSolverSettings, activeTransformScope,
     resetViewportDisplayState,

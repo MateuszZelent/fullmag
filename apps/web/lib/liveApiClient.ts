@@ -4,6 +4,7 @@ import { resolveApiBase } from "./apiBase";
 import { apiGet, apiGetOptional, apiPost } from "./api/client";
 import { ApiError } from "./api/errors";
 import type { MeshCommandTarget } from "./session/types";
+import type { SceneDocument } from "./session/types";
 
 type JsonObject = Record<string, unknown>;
 type JsonBody = unknown;
@@ -227,7 +228,7 @@ export function currentLiveApiClient() {
       return requestPost<JsonObject>(`${baseUrl}/v1/live/current/script/sync`, payload, options);
     },
     updateSceneDocument(payload: JsonBody, options?: RequestOptions) {
-      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/scene`, payload, options);
+      return requestPost<SceneDocument>(`${baseUrl}/v1/live/current/scene`, payload, options);
     },
     fetchGpuTelemetry(options?: RequestOptions) {
       return requestGet<GpuTelemetryResponse>(`${baseUrl}/v1/live/current/gpu/telemetry`, options);

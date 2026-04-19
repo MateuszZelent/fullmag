@@ -4,7 +4,6 @@
 import { cn } from "@/lib/utils";
 import { fmtTime, fmtDuration, fmtStepValue, fmtSIOrDash, fmtExpOrDash } from "@/lib/format";
 import type { ActivityInfo } from "@/components/runs/control-room/types";
-import { DEFAULT_CONVERGENCE_THRESHOLD } from "@/components/panels/SolverSettingsPanel";
 
 interface BottomTelemetryDockProps {
   activity: ActivityInfo | null;
@@ -18,7 +17,6 @@ interface BottomTelemetryDockProps {
   stepsPerSec: number;
   elapsed: number;
   hasSolverTelemetry: boolean;
-  convergenceThreshold?: number;
   eTotal: number;
   /** Activity detail or solver stage label */
   activityDetail: string | null;
@@ -59,7 +57,6 @@ export default function BottomTelemetryDock({
   stepsPerSec,
   elapsed,
   hasSolverTelemetry,
-  convergenceThreshold: convergenceThresholdProp,
   eTotal,
   activityDetail,
   solverIntegrator,
@@ -68,8 +65,6 @@ export default function BottomTelemetryDock({
   solverMaxDt,
   solverFixedDt,
 }: BottomTelemetryDockProps) {
-  const convergenceThreshold = convergenceThresholdProp ?? DEFAULT_CONVERGENCE_THRESHOLD;
-
   const statusClassName =
     workspaceStatus === "completed"
       ? "text-[--chart-emerald]"
@@ -81,15 +76,6 @@ export default function BottomTelemetryDock({
             ? "text-destructive"
             : undefined;
 
-  // Convergence metric
-  const LOG_DECADES = 7;
-  const dmDtLog = effectiveDmDt > 0 ? Math.log10(Math.max(effectiveDmDt, 1e-12)) : 0;
-  const convergencePct = Math.max(0, Math.min(100, ((LOG_DECADES + dmDtLog) / LOG_DECADES) * 100));
-  const convergenceDisplay = Math.max(0, Math.min(100, 100 - convergencePct));
-  const convergenceTone =
-    convergenceDisplay > 80 ? "success"
-      : convergenceDisplay > 40 ? "warn"
-      : "danger";
   const activityLabel = activity?.label ?? null;
 
   const telemetryCards: Array<{
@@ -152,10 +138,6 @@ export default function BottomTelemetryDock({
       hint: "Miara zbieżności: mniejsze wartości oznaczają stabilizację rozwiązania.",
       accent: "border-l-[--chart-emerald]",
       value: fmtExpOrDash(effectiveDmDt, hasSolverTelemetry),
-      valueClassName:
-        hasSolverTelemetry && effectiveDmDt < convergenceThreshold
-          ? "text-[--chart-emerald]"
-          : undefined,
     },
     {
       label: "max torque",
@@ -239,28 +221,6 @@ export default function BottomTelemetryDock({
             </div>
           ))}
 
-          {/* Convergence bar — spans full row */}
-          <div className="col-span-full rounded-md border-l-[3px] border-l-primary/50 bg-card/20 p-2 shadow-sm">
-            <div className="mb-1 flex items-center justify-between gap-3">
-              <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">
-                Convergence
-              </span>
-              <span className="text-[0.56rem] text-muted-foreground/80">
-                100% = solver poniżej progu zbieżności ({fmtExpOrDash(convergenceThreshold, true)})
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <progress
-                className="h-1.5 w-full appearance-none overflow-hidden rounded-full bg-muted fill-primary [&::-moz-progress-bar]:bg-primary [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary data-[tone=danger]:[&::-webkit-progress-value]:bg-destructive data-[tone=success]:[&::-webkit-progress-value]:bg-[--chart-emerald] data-[tone=warn]:[&::-webkit-progress-value]:bg-[--chart-amber]"
-                value={convergenceDisplay}
-                max={100}
-                data-tone={convergenceTone}
-              />
-              <span className="w-[44px] shrink-0 text-right font-mono text-[0.62rem] font-semibold text-muted-foreground">
-                {convergenceDisplay.toFixed(0)}%
-              </span>
-            </div>
-          </div>
         </div>
       </div>
     </div>

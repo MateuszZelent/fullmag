@@ -38,7 +38,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
   },
   viewportChrome: {
     showTelemetryHud: true,
-    showDataPlaneHud: true,
+    showDataPlaneIndicator: true,
     showAntennaPreviewBadge: true,
     showFemSelectionBadges: true,
     showFdmSelectionBadges: true,

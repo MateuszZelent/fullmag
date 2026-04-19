@@ -1226,6 +1226,7 @@ export interface UseSessionStreamResult {
   state: SessionState | null;
   connection: ConnectionStatus;
   error: string | null;
+  refresh: (options?: { forceBootstrap?: boolean }) => Promise<void>;
 }
 
 /* Internal event types used by the WS message dispatcher */

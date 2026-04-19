@@ -161,6 +161,25 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
     stateRef.current = state;
   }, [state]);
 
+  const applyRawSessionState = useCallback(
+    (raw: unknown, options?: { preserveNullSession?: boolean }) => {
+      const nextState = normalizeSessionState(raw);
+      if (!nextState.session) {
+        if (!options?.preserveNullSession && !stateRef.current?.session) {
+          setState(null);
+          stateRef.current = null;
+        }
+        return false;
+      }
+      if (nextState.live_state?.finished) {
+        finishedRef.current = true;
+      }
+      setState((prevState) => mergeSessionState(prevState, nextState));
+      return true;
+    },
+    [],
+  );
+
   useEffect(() => {
     executeConnectRef.current = () => {
       const nextGen = connectionGenerationRef.current + 1;
@@ -198,11 +217,7 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
             return;
           }
           if (raw) {
-            const nextState = normalizeSessionState(raw);
-            if (nextState.session) {
-              if (nextState.live_state?.finished) finishedRef.current = true;
-              setState((prevState) => mergeSessionState(prevState, nextState));
-            }
+            applyRawSessionState(raw, { preserveNullSession: true });
           }
           pollFailureStreakRef.current = 0;
           setError(null);
@@ -246,19 +261,12 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
             ) {
               return;
             }
-            const nextState = normalizeSessionState(raw);
-            if (!nextState.session) {
+            if (!applyRawSessionState(raw)) {
               // Keep previous snapshot on reconnect/bootstrap hiccups to avoid
               // full UI reset loops while the backend recovers.
-              if (!stateRef.current?.session) {
-                setState(null);
-                stateRef.current = null;
-              }
               setError(null);
               return;
             }
-            if (nextState.live_state?.finished) finishedRef.current = true;
-            setState((prevState) => mergeSessionState(prevState, nextState));
           })
           .catch((bootstrapError: unknown) => {
             if (
@@ -293,7 +301,55 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
         void pollOnce();
       }
     };
-  }, []);
+  }, [applyRawSessionState]);
+
+  const refresh = useCallback(async (options?: { forceBootstrap?: boolean }) => {
+    const client = currentLiveApiClient();
+    const connectionGeneration = connectionGenerationRef.current;
+    const currentState = stateRef.current;
+    const forceBootstrap = options?.forceBootstrap ?? true;
+
+    try {
+      const raw =
+        forceBootstrap || !currentState?.session
+          ? await client.fetchBootstrap()
+          : await client.fetchPoll({
+              sinceVersion: 0,
+              scalarRowsTotal: 0,
+            }) ?? await client.fetchBootstrap();
+
+      if (
+        unmountedRef.current ||
+        connectionGenerationRef.current !== connectionGeneration
+      ) {
+        return;
+      }
+
+      bootstrapCache.set(bootstrapCacheKeyFor(client.urls.bootstrap, currentState), {
+        raw,
+        fetchedAt: Date.now(),
+        inFlight: null,
+      });
+
+      if (applyRawSessionState(raw, { preserveNullSession: true })) {
+        setError(null);
+        setConnection("connected");
+      }
+    } catch (refreshError: unknown) {
+      if (
+        unmountedRef.current ||
+        connectionGenerationRef.current !== connectionGeneration
+      ) {
+        return;
+      }
+      setError(
+        refreshError instanceof Error
+          ? refreshError.message
+          : "Failed to refresh live state",
+      );
+      throw refreshError;
+    }
+  }, [applyRawSessionState]);
 
   const connect = useCallback(() => {
     executeConnectRef.current?.();
@@ -330,5 +386,5 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
     };
   }, [connect]);
 
-  return { state, connection, error };
+  return { state, connection, error, refresh };
 }

@@ -245,7 +245,6 @@ function FemMeshView3DInner({
   }
   const [field, setField] = useState<FemColorField>(colorField);
   const [internalPartExplorerOpen, setInternalPartExplorerOpen] = useState(true);
-
   const partExplorerOpen = controlledPartExplorerOpen ?? internalPartExplorerOpen;
 
   const [cameraFitGeneration, setCameraFitGeneration] = useState(0);
@@ -263,6 +262,7 @@ function FemMeshView3DInner({
   const viewCubeSceneRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const qualityProfileRef = useRef<ViewportQualityProfileId>("interactive");
+
   const {
     renderMode,
     opacity,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { ScalarRow } from "../types";
-import { mergeScalarRowsDelta } from "../merge";
+import type { ScalarRow, SessionState } from "../types";
+import { mergeScalarRowsDelta, mergeSessionState } from "../merge";
 
 function row(step: number, overrides: Partial<ScalarRow> = {}): ScalarRow {
   return {
@@ -74,5 +74,125 @@ describe("mergeScalarRowsDelta", () => {
     expect(merged).toHaveLength(10_001);
     expect(merged[0]?.step).toBe(0);
     expect(merged[10_000]?.step).toBe(10_000);
+  });
+});
+
+function makeSessionState(args: {
+  sceneRevision: number;
+  latestMagnetization?: number[];
+  liveMagnetization?: number[];
+}): SessionState {
+  const latestMagnetizationValues =
+    args.latestMagnetization != null ? new Float64Array(args.latestMagnetization) : null;
+  const liveMagnetizationValues =
+    args.liveMagnetization != null ? new Float64Array(args.liveMagnetization) : null;
+
+  return {
+    session: {
+      session_id: "sess-1",
+      run_id: "run-1",
+      status: "waiting",
+      interactive_session_requested: true,
+      script_path: "/tmp/test.py",
+      problem_name: "merge-test",
+      requested_backend: "fem",
+      explicit_selection: true,
+      requested_device: "cpu",
+      requested_precision: "double",
+      requested_mode: "strict",
+      execution_mode: "strict",
+      precision: "double",
+      artifact_dir: "/tmp",
+      started_at_unix_ms: 0,
+      finished_at_unix_ms: 0,
+      plan_summary: {},
+    },
+    run: null,
+    live_state: {
+      status: "waiting",
+      updated_at_unix_ms: 100,
+      step: 0,
+      time: 0,
+      dt: 0,
+      e_ex: 0,
+      e_demag: 0,
+      e_ext: 0,
+      e_ani: 0,
+      e_dmi: 0,
+      e_total: 0,
+      max_dm_dt: 0,
+      max_h_eff: 0,
+      max_h_demag: 0,
+      wall_time_ns: 0,
+      grid: [1, 1, 1],
+      preview_grid: null,
+      preview_data_points_count: null,
+      preview_max_points: null,
+      preview_auto_downscaled: false,
+      preview_auto_downscale_message: null,
+      fem_mesh: null,
+      magnetization: liveMagnetizationValues,
+      finished: false,
+    },
+    runtime_status: null,
+    capabilities: null,
+    metadata: null,
+    mesh_workspace: null,
+    stage_execution: null,
+    scene_document: { revision: args.sceneRevision } as any,
+    script_builder: null,
+    model_builder_graph: null,
+    scalar_rows: [],
+    scalar_rows_total: 0,
+    engine_log: [],
+    quantities: [],
+    fem_mesh: null,
+    latest_fields: {
+      frames:
+        latestMagnetizationValues != null
+          ? {
+              m: {
+                quantity_id: "m",
+                unit: "dimensionless",
+                n_comp: 3,
+                grid: [latestMagnetizationValues.length / 3, 1, 1],
+                values: latestMagnetizationValues,
+                active_mask: null,
+                location: "node",
+                domain: "magnetic_only",
+              },
+            }
+          : {},
+      grid: latestMagnetizationValues != null ? [latestMagnetizationValues.length / 3, 1, 1] : null,
+    },
+    artifacts: [],
+    display_selection: null,
+    preview_config: null,
+    preview: null,
+    command_status: null,
+    step_update_v2: null,
+  };
+}
+
+describe("mergeSessionState", () => {
+  it("refreshes latest magnetization frame from live_state when scene revision advances", () => {
+    const prev = makeSessionState({
+      sceneRevision: 2,
+      latestMagnetization: [1, 0, 0, 0, 1, 0],
+      liveMagnetization: [1, 0, 0, 0, 1, 0],
+    });
+    const next = makeSessionState({
+      sceneRevision: 3,
+      latestMagnetization: undefined,
+      liveMagnetization: [0, 0, 1, 0, 0, 1],
+    });
+
+    const merged = mergeSessionState(prev, next);
+
+    expect(Array.from(merged.latest_fields.frames.m?.values ?? [])).toEqual([
+      0, 0, 1, 0, 0, 1,
+    ]);
+    expect(merged.latest_fields.frames.m?.values).toBe(merged.live_state?.magnetization);
+    expect(merged.latest_fields.frames.m?.domain).toBe("magnetic_only");
   });
 });

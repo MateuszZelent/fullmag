@@ -163,19 +163,6 @@ export default function EngineConsole({
     scalarRows.length > 0 ||
     workspaceStatus === "completed" ||
     workspaceStatus === "failed";
-  // Convergence metric: normalize max_dm_dt to a 0-100 progress bar
-  // max_dm_dt < convergenceThreshold is "converged", > 1e2 is "diverged"
-  const LOG_DECADES = 7;          // display spans 7 decades (from LOG_FLOOR to LOG_FLOOR + 7)
-  const dmDtLog = liveState?.max_dm_dt
-    ? Math.log10(Math.max(liveState.max_dm_dt, 1e-12))
-    : 0;
-  const convergencePct = Math.max(0, Math.min(100, ((LOG_DECADES + dmDtLog) / LOG_DECADES) * 100));
-  // Lower dm/dt = more converged, so invert
-  const convergenceDisplay = Math.max(0, Math.min(100, 100 - convergencePct));
-  const convergenceTone =
-    convergenceDisplay > 80 ? "success"
-      : convergenceDisplay > 40 ? "warn"
-      : "danger";
   const throughputDisplay = Math.min(100, stepsPerSec);
   const throughputTone =
     stepsPerSec > 50 ? "success"
@@ -370,18 +357,6 @@ export default function EngineConsole({
                 />
               </div>
             ))}
-
-            {/* Convergence metric */}
-            <div className="grid grid-cols-[100px_1fr_70px] gap-2 items-center py-1 mt-2">
-              <span className="text-xs font-semibold text-muted-foreground">Convergence</span>
-              <progress
-                className="w-full h-1.5 rounded-full overflow-hidden bg-muted appearance-none fill-primary [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary data-[tone=success]:[&::-webkit-progress-value]:bg-emerald-500 data-[tone=warn]:[&::-webkit-progress-value]:bg-amber-500 data-[tone=danger]:[&::-webkit-progress-value]:bg-destructive"
-                value={convergenceDisplay}
-                max={100}
-                data-tone={convergenceTone}
-              />
-              <span className="font-mono text-[0.7rem] font-semibold text-muted-foreground text-right">{convergenceDisplay.toFixed(0)}%</span>
-            </div>
 
             {/* Key metrics */}
             <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2 p-0 mt-2">

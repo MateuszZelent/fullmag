@@ -18,6 +18,7 @@ import { Button } from "../../ui/button";
 import { currentLiveApiClient } from "../../../lib/liveApiClient";
 import type {
   MagnetizationAsset,
+  SceneDocument,
   SceneMaterialAsset,
   ScriptBuilderMagneticInteractionEntry,
   ScriptBuilderMagneticInteractionKind,
@@ -40,6 +41,12 @@ import {
 } from "../../../lib/session/magnetizationAssetActions";
 import { textureScaleSemantics } from "../../../lib/textureTransform";
 import { findSceneObjectByNodeId } from "./objectSelection";
+import {
+  buildMagnetizationAssetFingerprint,
+  DEFAULT_TEXTURE_MAPPING,
+  DEFAULT_TEXTURE_TRANSFORM,
+  describeMagnetizationApplyState,
+} from "./materialPanelMagnetization";
 import { SidebarSection, InfoRow, StatusBadge } from "./primitives";
 
 function fallbackMaterial(name: string): SceneMaterialAsset {
@@ -85,27 +92,16 @@ function fallbackMagnetization(name: string): MagnetizationAsset {
 }
 
 type NumericTransformMode = "translate" | "rotate" | "scale";
-type PresetTextureSyncStatus = "idle" | "syncing" | "done" | "error";
+type PresetTextureSyncStatus = "idle" | "syncing" | "refreshing" | "done" | "error";
 
 type PresetTextureSyncState = {
   status: PresetTextureSyncStatus;
   totalSpins: number | null;
   processedSpins: number | null;
   message: string | null;
+  canRetryRefresh: boolean;
 };
 
-const DEFAULT_TEXTURE_MAPPING = {
-  space: "object",
-  projection: "object_local",
-  clamp_mode: "none",
-} as const;
-
-const DEFAULT_TEXTURE_TRANSFORM = {
-  translation: [0, 0, 0] as [number, number, number],
-  rotation_quat: [0, 0, 0, 1] as [number, number, number, number],
-  scale: [1, 1, 1] as [number, number, number],
-  pivot: [0, 0, 0] as [number, number, number],
-} as const;
 function clampFinite(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
 }
@@ -184,6 +180,10 @@ export default function MaterialPanel({
   const { object: sceneObject, material, magnetization } = useMemo(
     () => findSceneObjectByNodeId(nodeId, model.sceneDocument),
     [model.sceneDocument, nodeId],
+  );
+  const { magnetization: remoteMagnetization } = useMemo(
+    () => findSceneObjectByNodeId(nodeId, model.remoteSceneDocument),
+    [model.remoteSceneDocument, nodeId],
   );
 
   const materialAsset = material ?? (sceneObject ? fallbackMaterial(sceneObject.name) : null);
@@ -538,13 +538,18 @@ export default function MaterialPanel({
     totalSpins: null,
     processedSpins: null,
     message: null,
+    canRetryRefresh: false,
   });
   const [presetTextureModalOpen, setPresetTextureModalOpen] = useState(false);
   const presetTextureSyncTickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const presetTextureSyncModalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const presetTextureSyncGenerationRef = useRef(0);
-  const lastSyncedPresetHashRef = useRef<string | null>(null);
-  const syncedPresetAssetIdRef = useRef<string | null>(null);
+  const pendingViewportRefreshRef = useRef<{
+    scene: SceneDocument;
+    magnetizationAssetHash: string;
+    totalSpins: number | null;
+    isPresetTexture: boolean;
+  } | null>(null);
   const [numericTransformOpen, setNumericTransformOpen] = useState(false);
   const [numericMode, setNumericMode] = useState<NumericTransformMode>("translate");
   const [numericAbsolute, setNumericAbsolute] = useState<[number, number, number]>([0, 0, 0]);
@@ -568,28 +573,27 @@ export default function MaterialPanel({
     if (!sceneObject || !magnetizationAsset) {
       return null;
     }
-    return JSON.stringify({
+    return buildMagnetizationAssetFingerprint({
       objectId: sceneObject.id,
-      assetId: magnetizationAsset.id,
-      kind: magnetizationAsset.kind,
-      value: magnetizationAsset.value ?? null,
-      seed: magnetizationAsset.seed ?? null,
-      sourcePath: magnetizationAsset.source_path ?? null,
-      sourceFormat: magnetizationAsset.source_format ?? null,
-      dataset: magnetizationAsset.dataset ?? null,
-      sampleIndex: magnetizationAsset.sample_index ?? null,
-      presetKind: magnetizationAsset.preset_kind,
-      presetParams: magnetizationAsset.preset_params ?? {},
-      mapping: magnetizationAsset.mapping ?? DEFAULT_TEXTURE_MAPPING,
-      textureTransform: magnetizationAsset.texture_transform ?? DEFAULT_TEXTURE_TRANSFORM,
+      asset: magnetizationAsset,
     });
   }, [magnetizationAsset, sceneObject]);
+  const remoteMagnetizationAssetHash = useMemo(() => {
+    if (!sceneObject || !remoteMagnetization) {
+      return null;
+    }
+    return buildMagnetizationAssetFingerprint({
+      objectId: sceneObject.id,
+      asset: remoteMagnetization,
+    });
+  }, [remoteMagnetization, sceneObject]);
   const isMagnetizationDirty =
     magnetizationAssetHash != null &&
-    magnetizationAssetHash !== lastSyncedPresetHashRef.current;
+    magnetizationAssetHash !== remoteMagnetizationAssetHash;
   const presetTextureSyncPercent = useMemo(() => {
     if (presetTextureSync.status === "done") return 100;
     if (presetTextureSync.status === "error") return 100;
+    if (presetTextureSync.status === "refreshing") return 88;
     if (presetTextureSync.status !== "syncing") return 0;
     if (
       presetTextureSync.totalSpins != null &&
@@ -603,6 +607,114 @@ export default function MaterialPanel({
     }
     return 55;
   }, [presetTextureSync]);
+  const isMagnetizationSyncBusy =
+    presetTextureSync.status === "syncing" || presetTextureSync.status === "refreshing";
+  const magnetizationApplyState = useMemo(
+    () =>
+      describeMagnetizationApplyState({
+        isDirty: isMagnetizationDirty,
+        isSyncBusy: isMagnetizationSyncBusy,
+        hasSceneDocument: model.sceneDocument != null,
+        kind: magnetizationAsset?.kind ?? "uniform",
+      }),
+    [isMagnetizationDirty, isMagnetizationSyncBusy, magnetizationAsset?.kind, model.sceneDocument],
+  );
+  const refreshViewportAfterMagnetizationCommit = useCallback(
+    async ({
+      committedScene,
+      generation,
+      totalSpins,
+      isPresetTexture,
+      nextMagnetizationHash,
+    }: {
+      committedScene: SceneDocument;
+      generation: number;
+      totalSpins: number | null;
+      isPresetTexture: boolean;
+      nextMagnetizationHash: string;
+    }) => {
+      if (presetTextureSyncGenerationRef.current !== generation) {
+        return;
+      }
+
+      pendingViewportRefreshRef.current = {
+        scene: committedScene,
+        magnetizationAssetHash: nextMagnetizationHash,
+        totalSpins,
+        isPresetTexture,
+      };
+      model.setSceneDocument(committedScene);
+      setPresetTextureSync({
+        status: "refreshing",
+        totalSpins,
+        processedSpins: totalSpins,
+        message: "Backend potwierdzil zapis. Odswiezam live snapshot i viewport…",
+        canRetryRefresh: false,
+      });
+
+      try {
+        await model.refreshLiveState({ forceBootstrap: true });
+        if (presetTextureSyncGenerationRef.current !== generation) {
+          return;
+        }
+        pendingViewportRefreshRef.current = null;
+        setPresetTextureSync({
+          status: "done",
+          totalSpins,
+          processedSpins: totalSpins,
+          message:
+            totalSpins != null
+              ? `Gotowe. Viewport odswiezony po synchronizacji ${totalSpins.toLocaleString()} spinow.`
+              : "Gotowe. Live snapshot i viewport zostaly odswiezone.",
+          canRetryRefresh: false,
+        });
+        if (isPresetTexture) {
+          presetTextureSyncModalTimerRef.current = setTimeout(() => {
+            setPresetTextureModalOpen(false);
+            presetTextureSyncModalTimerRef.current = null;
+          }, 1800);
+        }
+      } catch (refreshError) {
+        if (presetTextureSyncGenerationRef.current !== generation) {
+          return;
+        }
+        setPresetTextureSync({
+          status: "error",
+          totalSpins,
+          processedSpins: totalSpins,
+          message:
+            refreshError instanceof Error
+              ? `Backend zapisany, ale odswiezenie viewportu nie powiodlo sie: ${refreshError.message}`
+              : "Backend zapisany, ale odswiezenie viewportu nie powiodlo sie.",
+          canRetryRefresh: true,
+        });
+        if (isPresetTexture) {
+          setPresetTextureModalOpen(true);
+        }
+      }
+    },
+    [model, setPresetTextureModalOpen],
+  );
+  const retryMagnetizationViewportRefresh = useCallback(() => {
+    const pendingRefresh = pendingViewportRefreshRef.current;
+    if (!pendingRefresh) {
+      return;
+    }
+    const generation = presetTextureSyncGenerationRef.current + 1;
+    presetTextureSyncGenerationRef.current = generation;
+    if (presetTextureSyncModalTimerRef.current) {
+      clearTimeout(presetTextureSyncModalTimerRef.current);
+      presetTextureSyncModalTimerRef.current = null;
+    }
+    setPresetTextureModalOpen(pendingRefresh.isPresetTexture);
+    void refreshViewportAfterMagnetizationCommit({
+      committedScene: pendingRefresh.scene,
+      generation,
+      totalSpins: pendingRefresh.totalSpins,
+      isPresetTexture: pendingRefresh.isPresetTexture,
+      nextMagnetizationHash: pendingRefresh.magnetizationAssetHash,
+    });
+  }, [refreshViewportAfterMagnetizationCommit, setPresetTextureModalOpen]);
   const applyMagnetizationChanges = useCallback(() => {
     if (!magnetizationAssetHash || !model.sceneDocument) {
       return;
@@ -612,6 +724,7 @@ export default function MaterialPanel({
     const scenePayload = model.sceneDocument;
     const generation = presetTextureSyncGenerationRef.current + 1;
     presetTextureSyncGenerationRef.current = generation;
+    pendingViewportRefreshRef.current = null;
     if (presetTextureSyncTickerRef.current) {
       clearInterval(presetTextureSyncTickerRef.current);
       presetTextureSyncTickerRef.current = null;
@@ -629,6 +742,7 @@ export default function MaterialPanel({
       message: isPresetTexture
         ? "Trwa tworzenie tekstury magnetycznej…"
         : "Trwa synchronizacja magnetyzacji…",
+      canRetryRefresh: false,
     });
 
     if (totalSpins != null && totalSpins > 0) {
@@ -652,7 +766,7 @@ export default function MaterialPanel({
 
     void liveApi
       .updateSceneDocument(scenePayload)
-      .then(() => {
+      .then((committedScene) => {
         if (presetTextureSyncGenerationRef.current !== generation) {
           return;
         }
@@ -660,22 +774,13 @@ export default function MaterialPanel({
           clearInterval(presetTextureSyncTickerRef.current);
           presetTextureSyncTickerRef.current = null;
         }
-        lastSyncedPresetHashRef.current = magnetizationAssetHash;
-        setPresetTextureSync({
-          status: "done",
+        void refreshViewportAfterMagnetizationCommit({
+          committedScene,
+          generation,
           totalSpins,
-          processedSpins: totalSpins,
-          message:
-            totalSpins != null
-              ? `Gotowe. Zsynchronizowano ${totalSpins.toLocaleString()} spinów.`
-              : "Gotowe. Magnetyzacja została zsynchronizowana z backendem.",
+          isPresetTexture,
+          nextMagnetizationHash: magnetizationAssetHash,
         });
-        if (isPresetTexture) {
-          presetTextureSyncModalTimerRef.current = setTimeout(() => {
-            setPresetTextureModalOpen(false);
-            presetTextureSyncModalTimerRef.current = null;
-          }, 1800);
-        }
       })
       .catch((error) => {
         if (presetTextureSyncGenerationRef.current !== generation) {
@@ -693,10 +798,12 @@ export default function MaterialPanel({
             error instanceof Error
               ? `Błąd synchronizacji magnetyzacji: ${error.message}`
               : "Błąd synchronizacji magnetyzacji z backendem.",
+          canRetryRefresh: false,
         });
         setPresetTextureModalOpen(true);
       });
   }, [
+    refreshViewportAfterMagnetizationCommit,
     magnetizationAsset?.kind,
     magnetizationAssetHash,
     liveApi,
@@ -705,19 +812,6 @@ export default function MaterialPanel({
     setPresetTextureSync,
     targetSpinCount,
   ]);
-
-  useEffect(() => {
-    if (!magnetizationAssetHash) {
-      syncedPresetAssetIdRef.current = null;
-      lastSyncedPresetHashRef.current = null;
-      return;
-    }
-    const assetId = magnetizationAsset?.id ?? null;
-    if (syncedPresetAssetIdRef.current !== assetId) {
-      syncedPresetAssetIdRef.current = assetId;
-      lastSyncedPresetHashRef.current = magnetizationAssetHash;
-    }
-  }, [magnetizationAsset?.id, magnetizationAssetHash]);
 
   useEffect(() => {
     return () => {
@@ -771,15 +865,6 @@ export default function MaterialPanel({
         ? "texture"
         : "camera";
   const scaleInputUnit = metricScalePreset ? "×" : "m";
-  const applyHint =
-    mag.kind === "preset_texture"
-      ? isMagnetizationDirty
-        ? "Masz niezastosowane zmiany tekstury."
-        : "Brak niezastosowanych zmian tekstury."
-      : isMagnetizationDirty
-        ? "Masz niezastosowane zmiany magnetyzacji."
-        : "Brak niezastosowanych zmian magnetyzacji.";
-
   const openNumericTransform = (mode: NumericTransformMode) => {
     setNumericMode(mode);
     if (mode === "rotate") {
@@ -1041,27 +1126,27 @@ export default function MaterialPanel({
 
           {mag.kind === "uniform" && (
             <div className="grid grid-cols-3 gap-3">
-              <TextField label="m_x" defaultValue={value[0]} onBlur={(e) => handleMagUniform(0, e.target.value)} mono tooltip="Normalized X component." />
-              <TextField label="m_y" defaultValue={value[1]} onBlur={(e) => handleMagUniform(1, e.target.value)} mono tooltip="Normalized Y component." />
-              <TextField label="m_z" defaultValue={value[2]} onBlur={(e) => handleMagUniform(2, e.target.value)} mono tooltip="Normalized Z component." />
+              <TextField label="m_x" defaultValue={value[0]} onchange={(e) => handleMagUniform(0, e.target.value)} mono tooltip="Normalized X component." />
+              <TextField label="m_y" defaultValue={value[1]} onchange={(e) => handleMagUniform(1, e.target.value)} mono tooltip="Normalized Y component." />
+              <TextField label="m_z" defaultValue={value[2]} onchange={(e) => handleMagUniform(2, e.target.value)} mono tooltip="Normalized Z component." />
             </div>
           )}
 
           {(mag.kind === "file" || mag.kind === "sampled") && (
             <div className="flex flex-col gap-3">
-              <TextField label="Source File Path" placeholder="e.g., m0.ovf or ground_state.vtk" defaultValue={mag.source_path ?? ""} onBlur={(e) => handleMagStr("source_path", e.target.value)} mono tooltip="Path to an .ovf, .omf, or .vtk file containing the continuous vector field." />
+              <TextField label="Source File Path" placeholder="e.g., m0.ovf or ground_state.vtk" defaultValue={mag.source_path ?? ""} onchange={(e) => handleMagStr("source_path", e.target.value)} mono tooltip="Path to an .ovf, .omf, or .vtk file containing the continuous vector field." />
               <div className="grid grid-cols-2 gap-3">
-                <TextField label="Source Format" placeholder="(optional)" defaultValue={mag.source_format ?? ""} onBlur={(e) => handleMagStr("source_format", e.target.value)} mono tooltip="Optional explicit parser hint." />
-                <TextField label="Dataset Key" placeholder="(optional)" defaultValue={mag.dataset ?? ""} onBlur={(e) => handleMagStr("dataset", e.target.value)} mono tooltip="Specify the internal dataset name if the file contains multiple." />
+                <TextField label="Source Format" placeholder="(optional)" defaultValue={mag.source_format ?? ""} onchange={(e) => handleMagStr("source_format", e.target.value)} mono tooltip="Optional explicit parser hint." />
+                <TextField label="Dataset Key" placeholder="(optional)" defaultValue={mag.dataset ?? ""} onchange={(e) => handleMagStr("dataset", e.target.value)} mono tooltip="Specify the internal dataset name if the file contains multiple." />
               </div>
               {mag.kind === "sampled" && (
-                <TextField label="Sample Index" placeholder="(optional)" defaultValue={mag.sample_index?.toString() ?? ""} onBlur={(e) => handleMagNum("sample_index", e.target.value)} mono tooltip="Index within the dataset if storing a time series." />
+                <TextField label="Sample Index" placeholder="(optional)" defaultValue={mag.sample_index?.toString() ?? ""} onchange={(e) => handleMagNum("sample_index", e.target.value)} mono tooltip="Index within the dataset if storing a time series." />
               )}
             </div>
           )}
 
           {mag.kind === "random" && (
-            <TextField label="Random Seed" placeholder="Random (Auto)" defaultValue={mag.seed?.toString() ?? ""} onBlur={(e) => handleMagNum("seed", e.target.value)} mono tooltip="Fixed integer seed to reproduce the exact same thermalized noise pattern." />
+            <TextField label="Random Seed" placeholder="Random (Auto)" defaultValue={mag.seed?.toString() ?? ""} onchange={(e) => handleMagNum("seed", e.target.value)} mono tooltip="Fixed integer seed to reproduce the exact same thermalized noise pattern." />
           )}
 
           {mag.kind === "preset_texture" && (
@@ -1072,9 +1157,11 @@ export default function MaterialPanel({
                     <div className="text-xs font-medium text-foreground">
                       {presetTextureSync.status === "syncing"
                         ? "Trwa tworzenie tekstury magnetycznej…"
+                        : presetTextureSync.status === "refreshing"
+                          ? "Backend zapisany. Odswiezanie viewportu…"
                         : presetTextureSync.status === "done"
                           ? "Synchronizacja tekstury zakończona"
-                          : presetTextureSync.status === "error"
+                        : presetTextureSync.status === "error"
                             ? "Błąd synchronizacji tekstury"
                             : "Synchronizacja tekstury z backendem"}
                     </div>
@@ -1441,11 +1528,16 @@ export default function MaterialPanel({
           <div className="sticky bottom-0 z-20 rounded-xl border border-border/30 bg-background/90 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-background/70">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="text-[0.72rem] text-muted-foreground">{applyHint}</div>
+                <div className="text-[0.72rem] text-muted-foreground">{magnetizationApplyState.hint}</div>
+                {!magnetizationApplyState.canApply && magnetizationApplyState.disabledReason ? (
+                  <div className="mt-1 text-[0.72rem] text-amber-200/90">
+                    {magnetizationApplyState.disabledReason}
+                  </div>
+                ) : null}
                 {mag.kind !== "preset_texture" &&
                 presetTextureSync.status !== "idle" &&
                 presetTextureSync.message &&
-                (!isMagnetizationDirty || presetTextureSync.status === "error") ? (
+                (isMagnetizationSyncBusy || !isMagnetizationDirty || presetTextureSync.status === "error") ? (
                   <div
                     className={`mt-1 text-[0.72rem] ${
                       presetTextureSync.status === "error" ? "text-red-300" : "text-muted-foreground"
@@ -1454,15 +1546,46 @@ export default function MaterialPanel({
                     {presetTextureSync.message}
                   </div>
                 ) : null}
+                {mag.kind !== "preset_texture" && presetTextureSync.status !== "idle" ? (
+                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded bg-muted/40">
+                    <div
+                      className={`h-full transition-all duration-150 ${
+                        presetTextureSync.status === "error"
+                          ? "bg-red-400"
+                          : presetTextureSync.status === "done"
+                            ? "bg-emerald-400"
+                            : "bg-primary"
+                      }`}
+                      style={{ width: `${presetTextureSyncPercent}%` }}
+                    />
+                  </div>
+                ) : null}
               </div>
-              <Button
-                size="sm"
-                type="button"
-                disabled={!isMagnetizationDirty || presetTextureSync.status === "syncing"}
-                onClick={applyMagnetizationChanges}
-              >
-                {presetTextureSync.status === "syncing" ? "Applying…" : "Apply"}
-              </Button>
+              <div className="flex items-center gap-2">
+                {presetTextureSync.canRetryRefresh ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    type="button"
+                    disabled={isMagnetizationSyncBusy}
+                    onClick={retryMagnetizationViewportRefresh}
+                  >
+                    Refresh View
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  type="button"
+                  disabled={!magnetizationApplyState.canApply}
+                  onClick={applyMagnetizationChanges}
+                >
+                  {presetTextureSync.status === "syncing"
+                    ? "Applying…"
+                    : presetTextureSync.status === "refreshing"
+                      ? "Refreshing…"
+                      : "Apply"}
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -1477,6 +1600,8 @@ export default function MaterialPanel({
             <div className="text-sm font-medium text-foreground">
               {presetTextureSync.status === "syncing"
                 ? "Trwa przypisywanie tekstury magnetycznej do spinów/węzłów…"
+                : presetTextureSync.status === "refreshing"
+                  ? "Backend zapisal zmiany. Odswiezam live snapshot i viewport…"
                 : presetTextureSync.status === "done"
                   ? "Przypisanie tekstury zakończone."
                   : "Nie udało się przypisać tekstury."}
@@ -1508,14 +1633,26 @@ export default function MaterialPanel({
               <div className="mt-2 text-[0.8rem] text-muted-foreground">{presetTextureSync.message}</div>
             ) : null}
             <div className="mt-4 flex justify-end">
+              {presetTextureSync.canRetryRefresh ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  className="mr-2"
+                  disabled={isMagnetizationSyncBusy}
+                  onClick={retryMagnetizationViewportRefresh}
+                >
+                  Retry Refresh
+                </Button>
+              ) : null}
               <Button
                 size="sm"
                 variant="outline"
                 type="button"
-                disabled={presetTextureSync.status === "syncing"}
+                disabled={isMagnetizationSyncBusy}
                 onClick={() => setPresetTextureModalOpen(false)}
               >
-                {presetTextureSync.status === "syncing" ? "Applying…" : "Close"}
+                {isMagnetizationSyncBusy ? "Working…" : "Close"}
               </Button>
             </div>
           </div>

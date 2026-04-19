@@ -271,6 +271,7 @@ export interface CommandContextValue {
 /* ── Model: structural/static model data ── */
 export interface ModelContextValue {
   sceneDocument: SceneDocument | null;
+  remoteSceneDocument: SceneDocument | null;
   modelBuilderGraph: ModelBuilderGraphV2 | null;
   requestedRuntimeSelection: {
     requested_backend: string;
@@ -371,6 +372,7 @@ export interface ModelContextValue {
   /* Actions */
   setSolverSettings: React.Dispatch<React.SetStateAction<SolverSettingsState>>;
   setSceneDocument: React.Dispatch<React.SetStateAction<SceneDocument | null>>;
+  refreshLiveState: (options?: { forceBootstrap?: boolean }) => Promise<void>;
   setRequestedRuntimeSelection: React.Dispatch<
     React.SetStateAction<{
       requested_backend: string;

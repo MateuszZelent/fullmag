@@ -46,10 +46,22 @@ export function CameraAutoFit({
   controlsRef?: React.MutableRefObject<any>;
 }) {
   const { camera, invalidate } = useThree();
+  const lastAppliedRef = useRef<{ generation: number; camera: THREE.Camera | null }>({
+    generation: 0,
+    camera: null,
+  });
+
   useEffect(() => {
     if (maxDim <= 0 || generation === 0) {
       return;
     }
+    if (
+      lastAppliedRef.current.generation === generation &&
+      lastAppliedRef.current.camera === camera
+    ) {
+      return;
+    }
+    lastAppliedRef.current = { generation, camera };
 
     let raf = 0;
     let disposed = false;

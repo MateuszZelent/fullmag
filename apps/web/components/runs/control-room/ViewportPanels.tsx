@@ -18,8 +18,8 @@ import PreviewScalarField2D from "../../preview/PreviewScalarField2D";
 import BoundsPreview3D from "../../preview/BoundsPreview3D";
 import EmptyState from "../../ui/EmptyState";
 import AnalyzeViewport from "./AnalyzeViewport";
+import { DataPlaneCornerIndicator } from "./DataPlaneCornerIndicator";
 import ResultNodeViewport from "./ResultNodeViewport";
-import { DataPlaneHud } from "./DataPlaneHud";
 import {
   fmtExp,
   fmtSI,
@@ -501,7 +501,6 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       },
     } as typeof ctx.femMeshData;
   }, [ctx.femMeshData, scaleFactor]);
-
   const viewportFitSeed = useMemo(() => {
     const sampleKey =
       scaledFemMeshData
@@ -940,10 +939,8 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             }}
             overlays={{
               telemetryHudVisible: FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showTelemetryHud,
-              dataPlaneHudVisible: FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showDataPlaneHud,
               overlays: [
                 { id: "telemetry", kind: "telemetry-hud", visible: FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showTelemetryHud },
-                { id: "data-plane", kind: "data-plane-hud", visible: FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showDataPlaneHud },
               ],
             }}
             diagnosticFlags={{
@@ -1203,8 +1200,11 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
 
   return (
     <div className="flex flex-col flex-1 h-full min-h-0 min-w-0 relative overflow-hidden [&>*]:min-w-0 [&>*]:min-h-0 [&>*:not(.viewportOverlay)]:flex-1 [&>*:not(.viewportOverlay)]:w-full">
-      {/* Data-plane HUD overlay (dev-only, flag-gated) */}
-      <DataPlaneHud />
+      {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showDataPlaneIndicator ? (
+        <div className="viewportOverlay absolute left-4 top-4 z-[--z-viewport-badge]">
+          <DataPlaneCornerIndicator />
+        </div>
+      ) : null}
       {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showAntennaPreviewBadge && antennaPreviewBadgeVisible ? (
         <div className="viewportOverlay absolute right-4 top-4 z-[--z-viewport-badge] rounded-full border border-primary/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-primary shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
           physics 2.5D · preview extruded

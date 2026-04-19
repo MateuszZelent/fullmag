@@ -2155,6 +2155,9 @@ async fn update_current_live_scene(
             &snapshot.preview_config,
         )
         .or(previous_preview);
+        // Polling clients gate updates on `state_version`, so scene-authoring
+        // changes must advance it just like solver publishes do.
+        snapshot.state_version = snapshot.state_version.wrapping_add(1);
         let session_state_messages = build_current_live_ws_messages(&state, snapshot)?;
         let public_json = serialize_current_live_response(snapshot, true)?;
         let preset_texture_change_logs =

@@ -3,6 +3,7 @@
 
 import type {
   EngineLogEntry,
+  LatestFieldFrame,
   PreviewState,
   ScalarRow,
   SessionState,
@@ -30,6 +31,49 @@ function compareLexicographic(
     if (lhs[i] < rhs[i]) return -1;
   }
   return 0;
+}
+
+function syncLatestMagnetizationFrameFromLiveState(
+  state: SessionState,
+  fallbackFrame?: LatestFieldFrame | null,
+) {
+  const magnetization = state.live_state?.magnetization;
+  if (!magnetization || magnetization.length === 0 || magnetization.length % 3 !== 0) {
+    return;
+  }
+
+  const nodeCount = magnetization.length / 3;
+  const nextGrid: [number, number, number] =
+    state.latest_fields.frames.m?.grid ??
+    fallbackFrame?.grid ??
+    [nodeCount, 1, 1];
+
+  state.latest_fields = {
+    ...state.latest_fields,
+    grid: state.latest_fields.grid ?? nextGrid,
+    frames: {
+      ...state.latest_fields.frames,
+      m: {
+        quantity_id: "m",
+        unit: state.latest_fields.frames.m?.unit ?? fallbackFrame?.unit ?? "dimensionless",
+        n_comp: 3,
+        grid: nextGrid,
+        values: magnetization,
+        active_mask:
+          state.latest_fields.frames.m?.active_mask ??
+          fallbackFrame?.active_mask ??
+          null,
+        location:
+          state.latest_fields.frames.m?.location ??
+          fallbackFrame?.location ??
+          null,
+        domain:
+          state.latest_fields.frames.m?.domain ??
+          fallbackFrame?.domain ??
+          "magnetic_only",
+      },
+    },
+  };
 }
 
 /**
@@ -129,6 +173,9 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
   }
 
   const merged: SessionState = { ...next, session: effectiveSession };
+  const prevSceneRevision = prev.scene_document?.revision ?? -1;
+  const nextSceneRevision = next.scene_document?.revision ?? -1;
+  const sceneRevisionAdvanced = nextSceneRevision > prevSceneRevision;
 
   // ── Sparse envelope carry-forward ──
   // When the backend omits heavy static fields from a WS delta event,
@@ -269,6 +316,16 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
     !liveRegressed
   ) {
     merged.latest_fields = prev.latest_fields;
+  }
+
+  if (
+    merged.live_state?.magnetization &&
+    (sceneRevisionAdvanced || !merged.latest_fields.frames.m)
+  ) {
+    syncLatestMagnetizationFrameFromLiveState(
+      merged,
+      prev.latest_fields.frames.m ?? null,
+    );
   }
 
   const prevLogTs = lastLogTimestamp(prev.engine_log);

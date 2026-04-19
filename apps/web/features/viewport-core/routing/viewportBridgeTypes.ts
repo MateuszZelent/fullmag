@@ -35,14 +35,14 @@ export interface ViewportSelectionBridgeActions {
 /** Minimal description of a HUD overlay shown on top of the viewport. */
 export interface ViewportOverlayDescriptor {
   id: string;
-  kind: "telemetry-hud" | "data-plane-hud" | "object-label" | "gizmo" | "selection-rect";
+  kind: "telemetry-hud" | "object-label" | "gizmo" | "selection-rect";
   visible: boolean;
 }
 
 export interface ViewportOverlayBridgeState {
   overlays: readonly ViewportOverlayDescriptor[];
+  /** Whether the telemetry HUD is visible. */
   telemetryHudVisible: boolean;
-  dataPlaneHudVisible?: boolean;
 }
 
 // ── Diagnostics Bridge ───────────────────────────────────────

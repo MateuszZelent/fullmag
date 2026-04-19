@@ -187,10 +187,11 @@ export function getSharedVertexColors(args: {
 
   if (cacheableField) {
     const fieldDataId = fieldDataCacheId(meshData.fieldData);
+    const fieldRevision = meshData.fieldRevision ?? "none";
     const cacheKey =
       field === "none"
         ? (uniformColor ? `none:uniform:${uniformColor}` : "none:default")
-        : `field:${field}:ncomp:${meshData.fieldNComp ?? 3}:data:${fieldDataId}`;
+        : `field:${field}:ncomp:${meshData.fieldNComp ?? 3}:rev:${fieldRevision}:data:${fieldDataId}`;
     const cached = baseVertexColorCache.get(cacheKey);
     if (cached && cached.length === nNodes * 3) {
       return cached;
