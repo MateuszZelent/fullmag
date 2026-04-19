@@ -272,22 +272,11 @@ export default function MaterialPanel({
       if (!descriptor || !sceneObject || !magnetizationRef) return;
       model.setSceneDocument((prev) =>
         prev
-          ? (() => {
-              const next = assignMagneticPreset(prev, magnetizationRef, descriptor, {
-                objectId: sceneObject.id,
-              });
-              return {
-                ...next,
-                editor: {
-                  ...next.editor,
-                  active_transform_scope: "texture",
-                  gizmo_mode: "translate",
-                },
-              };
-            })()
+          ? assignMagneticPreset(prev, magnetizationRef, descriptor, {
+              objectId: sceneObject.id,
+            })
           : prev,
       );
-      model.setActiveTransformScope("texture");
     },
     [model, sceneObject],
   );
@@ -313,9 +302,31 @@ export default function MaterialPanel({
     [updateMagnetization],
   );
 
+  const setViewportControlScope = useCallback(
+    (scope: "camera" | "object" | "texture") => {
+      const nextScope = scope === "camera" ? null : scope;
+      model.setActiveTransformScope(nextScope);
+      model.setSceneDocument((prev) =>
+        prev
+          ? {
+              ...prev,
+              editor: {
+                ...prev.editor,
+                active_transform_scope: nextScope,
+                ...(scope === "texture" && !prev.editor.gizmo_mode
+                  ? { gizmo_mode: "translate" }
+                  : {}),
+              },
+            }
+          : prev,
+      );
+    },
+    [model],
+  );
+
   const setTextureGizmoMode = useCallback(
     (mode: "translate" | "rotate" | "scale") => {
-      model.setActiveTransformScope("texture");
+      setViewportControlScope("texture");
       model.setSceneDocument((prev) =>
         prev
           ? {
@@ -329,7 +340,7 @@ export default function MaterialPanel({
           : prev,
       );
     },
-    [model],
+    [model, setViewportControlScope],
   );
 
   const handleTextureTransformVectorBlur = useCallback(
@@ -390,7 +401,6 @@ export default function MaterialPanel({
         ? fitTextureToObject(prev, sceneObject.id, magnetizationRef)
         : prev,
     );
-    model.setActiveTransformScope("texture");
   }, [model, sceneObject]);
 
   const handleResetTextureTransform = useCallback(() => {
@@ -401,7 +411,6 @@ export default function MaterialPanel({
         ? resetTextureTransform(prev, magnetizationRef)
         : prev,
     );
-    model.setActiveTransformScope("texture");
   }, [model, sceneObject]);
 
   useEffect(() => {
@@ -535,7 +544,7 @@ export default function MaterialPanel({
   const presetTextureSyncModalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const presetTextureSyncGenerationRef = useRef(0);
   const lastSyncedPresetHashRef = useRef<string | null>(null);
-  const autoApplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const syncedPresetAssetIdRef = useRef<string | null>(null);
   const [numericTransformOpen, setNumericTransformOpen] = useState(false);
   const [numericMode, setNumericMode] = useState<NumericTransformMode>("translate");
   const [numericAbsolute, setNumericAbsolute] = useState<[number, number, number]>([0, 0, 0]);
@@ -569,7 +578,8 @@ export default function MaterialPanel({
       textureTransform: magnetizationAsset.texture_transform ?? DEFAULT_TEXTURE_TRANSFORM,
     });
   }, [magnetizationAsset, sceneObject]);
-  const isPresetTextureDirty = Boolean(presetTextureHash);
+  const isPresetTextureDirty =
+    presetTextureHash != null && presetTextureHash !== lastSyncedPresetHashRef.current;
   const presetTextureSyncPercent = useMemo(() => {
     if (presetTextureSync.status === "done") return 100;
     if (presetTextureSync.status === "error") return 100;
@@ -640,6 +650,7 @@ export default function MaterialPanel({
           clearInterval(presetTextureSyncTickerRef.current);
           presetTextureSyncTickerRef.current = null;
         }
+        lastSyncedPresetHashRef.current = presetTextureHash;
         setPresetTextureSync({
           status: "done",
           totalSpins,
@@ -684,9 +695,17 @@ export default function MaterialPanel({
   ]);
 
   useEffect(() => {
-    if (model.activeTransformScope != null) return;
-    model.setActiveTransformScope("texture");
-  }, [magnetizationAsset?.kind, model, model.activeTransformScope, sceneObject]);
+    if (!presetTextureHash) {
+      syncedPresetAssetIdRef.current = null;
+      lastSyncedPresetHashRef.current = null;
+      return;
+    }
+    const assetId = magnetizationAsset?.id ?? null;
+    if (syncedPresetAssetIdRef.current !== assetId) {
+      syncedPresetAssetIdRef.current = assetId;
+      lastSyncedPresetHashRef.current = presetTextureHash;
+    }
+  }, [magnetizationAsset?.id, presetTextureHash]);
 
   useEffect(() => {
     return () => {
@@ -696,38 +715,8 @@ export default function MaterialPanel({
       if (presetTextureSyncModalTimerRef.current) {
         clearTimeout(presetTextureSyncModalTimerRef.current);
       }
-      if (autoApplyTimerRef.current) {
-        clearTimeout(autoApplyTimerRef.current);
-      }
     };
   }, []);
-
-  // Auto-apply: when the preset texture hash changes (new preset chosen or
-  // params/transform edited), debounce-push to the backend automatically.
-  useEffect(() => {
-    if (!presetTextureHash) {
-      lastSyncedPresetHashRef.current = null;
-      return;
-    }
-    if (presetTextureHash === lastSyncedPresetHashRef.current) return;
-    if (presetTextureSync.status === "syncing") return;
-
-    if (autoApplyTimerRef.current) {
-      clearTimeout(autoApplyTimerRef.current);
-    }
-    autoApplyTimerRef.current = setTimeout(() => {
-      autoApplyTimerRef.current = null;
-      lastSyncedPresetHashRef.current = presetTextureHash;
-      applyPresetTextureChanges();
-    }, 350);
-
-    return () => {
-      if (autoApplyTimerRef.current) {
-        clearTimeout(autoApplyTimerRef.current);
-        autoApplyTimerRef.current = null;
-      }
-    };
-  }, [applyPresetTextureChanges, presetTextureHash, presetTextureSync.status]);
 
   if (!sceneObject || !materialAsset || !magnetizationAsset) {
     if (!model.material) {
@@ -763,6 +752,12 @@ export default function MaterialPanel({
     ...DEFAULT_TEXTURE_MAPPING,
   };
   const activeTextureMode = model.sceneDocument?.editor.gizmo_mode ?? "translate";
+  const activeViewportControl =
+    model.activeTransformScope === "object"
+      ? "object"
+      : model.activeTransformScope === "texture"
+        ? "texture"
+        : "camera";
   const scaleInputUnit = metricScalePreset ? "×" : "m";
 
   const openNumericTransform = (mode: NumericTransformMode) => {
@@ -1201,10 +1196,34 @@ export default function MaterialPanel({
                   <div>
                     <div className="text-sm font-medium text-foreground">Texture Transform</div>
                     <div className="text-[0.72rem] text-muted-foreground">
-                      Operates in object-local metres. Use Move/Rotate/Scale for viewport gizmo.
+                      Rozdziel nawigację kamerą od edycji obiektu i tekstury. Kamera wyłącza gizmo, Texture włącza Move/Rotate/Scale.
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
+                    <Button
+                      size="sm"
+                      variant={activeViewportControl === "camera" ? "default" : "outline"}
+                      type="button"
+                      onClick={() => setViewportControlScope("camera")}
+                    >
+                      Camera
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={activeViewportControl === "object" ? "default" : "outline"}
+                      type="button"
+                      onClick={() => setViewportControlScope("object")}
+                    >
+                      Object
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={activeViewportControl === "texture" ? "default" : "outline"}
+                      type="button"
+                      onClick={() => setViewportControlScope("texture")}
+                    >
+                      Texture
+                    </Button>
                     <Button size="sm" variant="outline" type="button" onClick={handleFitTextureTransform}>
                       Fit
                     </Button>

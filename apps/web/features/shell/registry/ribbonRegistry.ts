@@ -136,6 +136,7 @@ export interface RibbonBuildContext {
   selectedObjectId: string | null;
   selectedNodeId: string | null;
   selectedNodeKind: NodeKind | null;
+  activeTransformScope: "object" | "texture" | null;
 
   // ── Viewport state ──
   viewMode: string | null;

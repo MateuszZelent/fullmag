@@ -313,10 +313,9 @@ export function useFemSceneGeometry({
     if (!enableCameraFitEffect) {
       return;
     }
-    const m = dynamicMaxDim;
-    const c = dynamicGeomCenter;
-    const fitSeed = viewportFitSeed == null ? "default" : String(viewportFitSeed);
-    const sig = `${m.toFixed(6)}_${c.x.toFixed(6)}_${c.y.toFixed(6)}_${c.z.toFixed(6)}_${fitSeed}`;
+    const fitSeed = viewportFitSeed == null ? null : String(viewportFitSeed);
+    const sig = fitSeed
+      ?? `${dynamicMaxDim.toFixed(6)}_${dynamicGeomCenter.x.toFixed(6)}_${dynamicGeomCenter.y.toFixed(6)}_${dynamicGeomCenter.z.toFixed(6)}`;
     if (lastFittedGeomRef.current !== sig) {
       lastFittedGeomRef.current = sig;
       setCameraFitGeneration((g) => g + 1);

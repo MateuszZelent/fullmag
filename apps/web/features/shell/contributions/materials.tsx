@@ -193,9 +193,67 @@ function buildMaterialsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     {
       id: "materials-transform",
       title: "Texture Transform",
-      subtitle: "Map on object",
+      subtitle: "Camera vs object vs texture",
       tone: "neutral",
       actions: [
+        {
+          id: "materials-transform-camera",
+          icon: <Target size={20} />,
+          label: "Camera",
+          tooltip: "Return viewport controls to camera navigation",
+          active: ctx.activeTransformScope == null,
+          disabled: !ctx.can({
+            id: "viewport.set-transform-scope",
+            scope: "camera",
+          }),
+          action: () => {
+            ctx.run({
+              id: "viewport.set-transform-scope",
+              scope: "camera",
+            });
+          },
+          iconColor: "text-slate-300",
+        },
+        selectionAction(objectId, {
+          id: "materials-transform-object-scope",
+          icon: <Move size={20} />,
+          label: "Object",
+          tooltip: "Switch viewport controls to object editing scope",
+          active: ctx.activeTransformScope === "object",
+          disabled:
+            !objectId ||
+            !ctx.can({
+              id: "viewport.set-transform-scope",
+              scope: "object",
+            }),
+          action: () => {
+            ctx.run({
+              id: "viewport.set-transform-scope",
+              scope: "object",
+            });
+          },
+          iconColor: "text-amber-300",
+        }),
+        selectionAction(objectId, {
+          id: "materials-transform-texture-scope",
+          icon: <Magnet size={20} />,
+          label: "Texture",
+          tooltip: "Switch viewport controls to texture editing scope",
+          active: ctx.activeTransformScope === "texture",
+          disabled:
+            !objectId ||
+            !ctx.can({
+              id: "viewport.set-transform-scope",
+              scope: "texture",
+            }),
+          action: () => {
+            ctx.run({
+              id: "viewport.set-transform-scope",
+              scope: "texture",
+            });
+          },
+          iconColor: "text-sky-300",
+        }),
         selectionAction(objectId, {
           id: "materials-transform-move",
           icon: <Move size={20} />,

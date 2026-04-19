@@ -4,7 +4,6 @@ import { useCallback, useMemo } from "react";
 
 import EngineConsole from "@/components/panels/EngineConsole";
 import SettingsPanel from "@/components/panels/SettingsPanel";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import type { RightInspectorTab } from "@/lib/workspace/workspace-store";
@@ -160,7 +159,7 @@ function WorkspaceRightToolbox() {
   );
 
   return (
-    <div className="flex h-full flex-col overflow-hidden border-l border-border/30 bg-card/20">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto overflow-x-hidden border-l border-border/30 bg-card/20">
       <Tabs
         className="flex h-full min-h-0 flex-col"
         value={rightInspectorTab}
@@ -183,17 +182,17 @@ function WorkspaceRightToolbox() {
           </TabsList>
         </div>
 
-        <TabsContent value="properties" className="mt-0 flex min-h-0 flex-1 flex-col">
-          <ScrollArea className="flex-1">
+        <TabsContent value="properties" className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
             <div className="p-1">
               <SettingsPanel nodeId={selectedNodeId} />
             </div>
-          </ScrollArea>
+          </div>
         </TabsContent>
 
-        <TabsContent value="selected-submeshes" className="mt-0 flex min-h-0 flex-1 flex-col px-0 py-0">
+        <TabsContent value="selected-submeshes" className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden px-0 py-0">
           {snapshot && snapshot.items.length > 0 ? (
-            <ScrollArea className="flex-1 px-2 py-2">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 py-2">
               <FemPartExplorerPanel
                 className="max-h-none max-w-none rounded-xl"
                 meshParts={meshParts}
@@ -212,7 +211,7 @@ function WorkspaceRightToolbox() {
                 onPatchPart={(partId, patch) => patchMeshPartViewState([partId], patch)}
                 onRoleVisibility={handleRoleVisibility}
               />
-            </ScrollArea>
+            </div>
           ) : (
             <div className="flex flex-1 items-center justify-center px-4 text-center">
               <div className="rounded-xl border border-border/25 bg-background/35 px-4 py-3 text-[0.75rem] text-muted-foreground">
@@ -224,8 +223,8 @@ function WorkspaceRightToolbox() {
           )}
         </TabsContent>
 
-        <TabsContent value="tools" className="mt-0 flex min-h-0 flex-1 flex-col">
-          <ScrollArea className="flex-1 px-3 py-3">
+        <TabsContent value="tools" className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 py-3">
             <div className="space-y-3">
               <div className="rounded-xl border border-border/30 bg-background/35 p-3">
                 <div className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
@@ -262,10 +261,10 @@ function WorkspaceRightToolbox() {
                 </div>
               </div>
             </div>
-          </ScrollArea>
+          </div>
         </TabsContent>
 
-        <TabsContent value="console" className="mt-0 flex min-h-0 flex-1 flex-col">
+        <TabsContent value="console" className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden">
           <EngineConsole
             session={command.session ?? null}
             run={command.run ?? null}

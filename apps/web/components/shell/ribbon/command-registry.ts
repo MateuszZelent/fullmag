@@ -27,6 +27,7 @@ export interface RibbonCommandContext {
   canSyncScriptBuilder?: boolean;
   scriptSyncBusy?: boolean;
   selectedObjectId?: string | null;
+  activeTransformScope?: "object" | "texture" | null;
   onAddGeometryPreset?: (preset: GeometryPresetKind) => void;
   onViewChange?: (mode: string) => void;
   onSidebarToggle?: () => void;
@@ -72,6 +73,9 @@ export interface RibbonCommandContext {
   onAssignMagnetizationPreset?: (
     objectId: string,
     kind: MagneticPresetKind,
+  ) => void;
+  onSetTransformScope?: (
+    scope: "camera" | "object" | "texture",
   ) => void;
   onSetTextureTransformMode?: (
     objectId: string,
@@ -160,6 +164,10 @@ export type RibbonCommand =
       kind: MagneticPresetKind;
     }
   | {
+      id: "viewport.set-transform-scope";
+      scope: "camera" | "object" | "texture";
+    }
+  | {
       id: "object.set-texture-transform-mode";
       objectId: string;
       mode: "translate" | "rotate" | "scale";
@@ -228,6 +236,8 @@ export function canExecuteRibbonCommand(
       return Boolean(command.objectId) && typeof ctx.onObjectAddInteraction === "function";
     case "object.assign-magnetization-preset":
       return Boolean(command.objectId) && typeof ctx.onAssignMagnetizationPreset === "function";
+    case "viewport.set-transform-scope":
+      return typeof ctx.onSetTransformScope === "function";
     case "object.set-texture-transform-mode":
       return Boolean(command.objectId) && typeof ctx.onSetTextureTransformMode === "function";
     case "results.add-analysis":
@@ -322,6 +332,9 @@ export function executeRibbonCommand(
       return;
     case "object.assign-magnetization-preset":
       ctx.onAssignMagnetizationPreset?.(command.objectId, command.kind);
+      return;
+    case "viewport.set-transform-scope":
+      ctx.onSetTransformScope?.(command.scope);
       return;
     case "object.set-texture-transform-mode":
       ctx.onSetTextureTransformMode?.(command.objectId, command.mode);

@@ -543,7 +543,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       ctx.handleViewModeChange("3D");
       ctx.setSelectedObjectId(objectId);
       ctx.setSelectedSidebarNodeId(`mag-${objectId}`);
-      ctx.setActiveTransformScope("texture");
       ctx.setSceneDocument((prev) => {
         if (!prev) return prev;
         const target = prev.objects.find(
@@ -554,18 +553,30 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         if (!magnetizationRef) return prev;
         const descriptor = MAGNETIC_PRESET_CATALOG.find((entry) => entry.kind === kind);
         if (!descriptor) return prev;
-        const next = assignMagneticPreset(prev, magnetizationRef, descriptor, {
+        return assignMagneticPreset(prev, magnetizationRef, descriptor, {
           objectId,
         });
-        return {
-          ...next,
-          editor: {
-            ...next.editor,
-            active_transform_scope: "texture",
-            gizmo_mode: "translate",
-          },
-        };
       });
+    },
+    [ctx],
+  );
+
+  const handleSetTransformScope = useCallback(
+    (scope: "camera" | "object" | "texture") => {
+      ctx.handleViewModeChange("3D");
+      const nextScope = scope === "camera" ? null : scope;
+      ctx.setActiveTransformScope(nextScope);
+      ctx.setSceneDocument((prev) =>
+        prev
+          ? {
+              ...prev,
+              editor: {
+                ...prev.editor,
+                active_transform_scope: nextScope,
+              },
+            }
+          : prev,
+      );
     },
     [ctx],
   );
@@ -1296,6 +1307,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onAddResultAnalysis={handleAddResultAnalysis}
         onObjectAddInteraction={handleObjectAddInteraction}
         onAssignMagnetizationPreset={handleAssignMagnetizationPreset}
+        activeTransformScope={ctx.activeTransformScope}
+        onSetTransformScope={handleSetTransformScope}
         onSetTextureTransformMode={handleSetTextureTransformMode}
       /> : null}
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showBackendErrorNotice && activeBackendError ? (
@@ -1365,10 +1378,13 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
                 maxSize={rightInspectorMaxSize}
                 collapsible
                 collapsedSize={0}
+                className="h-full min-h-0 overflow-y-auto overflow-x-hidden"
               >
-                {ctx.workspaceMode === "build" && <BuildRightInspector />}
-                {ctx.workspaceMode === "study" && <StudyRightInspector />}
-                {ctx.workspaceMode === "analyze" && <AnalyzeRightInspector />}
+                <div className="h-full min-h-0">
+                  {ctx.workspaceMode === "build" && <BuildRightInspector />}
+                  {ctx.workspaceMode === "study" && <StudyRightInspector />}
+                  {ctx.workspaceMode === "analyze" && <AnalyzeRightInspector />}
+                </div>
               </Panel>
             </>
           ) : null}

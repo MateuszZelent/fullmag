@@ -1447,3 +1447,39 @@ th {
 .workspace-docking .flexlayout__splitter_edge {
   cursor: col-resize;
 }
+
+/* ── FEM viewport gizmo skin (shared) ─────────────────────── */
+
+@layer base {
+  :root {
+    --fem-gizmo-surface-bg: linear-gradient(150deg, rgba(50, 62, 82, 0.90) 0%, rgba(32, 42, 58, 0.94) 45%, rgba(20, 28, 42, 0.97) 100%);
+    --fem-gizmo-surface-border: rgba(120, 140, 165, 0.30);
+    --fem-gizmo-surface-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), inset 0 -1px 0 rgba(0, 0, 0, 0.24), 0 10px 22px rgba(2, 6, 23, 0.35);
+    --fem-gizmo-frame-border: rgba(148, 163, 184, 0.15);
+    --fem-gizmo-ring-border: rgba(148, 163, 184, 0.12);
+    --fem-gizmo-title: rgba(203, 213, 225, 0.78);
+    --fem-gizmo-title-accent: rgba(226, 232, 240, 0.78);
+  }
+}
+
+.fem-hsl-gizmo {
+  background: var(--fem-gizmo-surface-bg);
+  border-color: var(--fem-gizmo-surface-border);
+  box-shadow: var(--fem-gizmo-surface-shadow);
+}
+
+.fem-hsl-gizmo__frame {
+  border-color: var(--fem-gizmo-frame-border);
+}
+
+.fem-hsl-gizmo__ring {
+  border-color: var(--fem-gizmo-ring-border);
+}
+
+.fem-hsl-gizmo__title {
+  color: var(--fem-gizmo-title);
+}
+
+.fem-hsl-gizmo__title-accent {
+  color: var(--fem-gizmo-title-accent);
+}

@@ -163,7 +163,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     };
   }, [selectedSceneObject]);
   const activeTextureTransform =
-    selectedMagnetizationAsset?.kind === "preset_texture" && ctx.activeTransformScope !== "object"
+    selectedMagnetizationAsset?.kind === "preset_texture" && ctx.activeTransformScope === "texture"
       ? (() => {
           const base =
             localTextureTransform ??
@@ -502,47 +502,22 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   }, [ctx.femMeshData, scaleFactor]);
 
   const viewportFitSeed = useMemo(() => {
-    const sampleKey = scaledFemMeshData
-      ? `${scaledFemMeshData.nNodes}:${scaledFemMeshData.nElements}:${scaledFemMeshData.boundaryFaces.length}`
-      : "none";
+    const sampleKey =
+      scaledFemMeshData
+        ? `${scaledFemMeshData.nNodes}:${scaledFemMeshData.nElements}:${scaledFemMeshData.boundaryFaces.length}`
+        : "none";
     return [
       effectiveViewMode,
       ctx.femTopologyKey ?? "no-topology",
       sampleKey,
-      ctx.objectViewMode,
-      ctx.selectedObjectId ?? "none",
-      ctx.focusedEntityId ?? "none",
-      ctx.airMeshVisible ? "air:on" : "air:off",
-      String(ctx.airMeshOpacity),
-      ctx.selectedSidebarNodeId ?? "none",
-      ctx.worldExtent ? ctx.worldExtent.join("|") : "no-extent",
-      ctx.worldCenter ? ctx.worldCenter.join("|") : "no-center",
       ctx.focusObjectRequest?.objectId ?? "none",
       String(ctx.focusObjectRequest?.revision ?? 0),
-      selectedSubmeshesToolboxOpen ? "submesh-open" : "submesh-closed",
-      selectedFemObjectId ?? "none",
-      ctx.requestedPreviewQuantity ?? "none",
-      String(ctx.previewGrid?.[0] ?? 0),
-      String(ctx.previewGrid?.[1] ?? 0),
-      String(ctx.previewGrid?.[2] ?? 0),
     ].join("|");
   }, [
     scaledFemMeshData,
     effectiveViewMode,
-    ctx.airMeshOpacity,
-    ctx.airMeshVisible,
     ctx.femTopologyKey,
-    ctx.focusedEntityId,
-    ctx.objectViewMode,
     ctx.focusObjectRequest,
-    ctx.previewGrid,
-    ctx.requestedPreviewQuantity,
-    ctx.selectedObjectId,
-    ctx.selectedSidebarNodeId,
-    ctx.worldCenter,
-    ctx.worldExtent,
-    selectedFemObjectId,
-    selectedSubmeshesToolboxOpen,
   ]);
 
 

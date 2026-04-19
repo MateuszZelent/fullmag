@@ -46,7 +46,6 @@ const GEOMETRIES: ScriptBuilderGeometryEntry[] = [
     physics_stack: [
       { kind: "exchange", enabled: true, params: null },
       { kind: "demag", enabled: true, params: null },
-      { kind: "interfacial_dmi", enabled: true, params: { dind: 1e-3 } },
     ],
     magnetization: {
       kind: "uniform",
@@ -96,6 +95,62 @@ describe("buildFullmagModelTree physics/study structure", () => {
     expect(findNode(demagNode?.children ?? [], "physics-module-demag-boundary")).not.toBeNull();
 
     const sotNode = findNode(physicsNode?.children ?? [], "physics-module-spin_orbit_torque");
-    expect(sotNode?.badge).toBe("unavailable");
+    expect(sotNode).toBeNull();
+  });
+
+  it("shows backend-only interaction only when active in runtime metadata", () => {
+    const roots = buildFullmagModelTree({
+      backend: "FEM",
+      capabilities: CAPABILITIES,
+      geometries: GEOMETRIES,
+      demagRealization: "poisson_robin",
+      exchangeEnabled: true,
+      demagEnabled: true,
+      metadata: { sot_active: true },
+      scalarRowCount: 0,
+      studyStageStatuses: ["pending"],
+    });
+
+    const physicsNode = findNode(roots, "physics");
+    expect(physicsNode).not.toBeNull();
+    const sotNode = findNode(physicsNode?.children ?? [], "physics-module-spin_orbit_torque");
+    expect(sotNode).not.toBeNull();
+    expect(sotNode?.badge).toBe("active · unsupported");
+  });
+
+  it("does not show exchange/demag as unsupported when runtime enables them", () => {
+    const roots = buildFullmagModelTree({
+      backend: "FEM",
+      capabilities: null,
+      geometries: GEOMETRIES,
+      demagRealization: "poisson_robin",
+      exchangeEnabled: true,
+      demagEnabled: true,
+      scalarRowCount: 0,
+      studyStageStatuses: ["pending"],
+    });
+
+    const physicsNode = findNode(roots, "physics");
+    expect(physicsNode).not.toBeNull();
+    const exchangeNode = findNode(physicsNode?.children ?? [], "physics-module-exchange");
+    const demagNode = findNode(physicsNode?.children ?? [], "physics-module-demag");
+    expect(exchangeNode?.badge).toBe("active");
+    expect(demagNode?.badge).toBe("active");
+  });
+
+  it("does not show zeeman as unsupported when non-zero external field is set", () => {
+    const roots = buildFullmagModelTree({
+      backend: "FEM",
+      capabilities: null,
+      geometries: GEOMETRIES,
+      zeemanField: [0, 0, 0.02],
+      scalarRowCount: 0,
+      studyStageStatuses: ["pending"],
+    });
+
+    const physicsNode = findNode(roots, "physics");
+    expect(physicsNode).not.toBeNull();
+    const zeemanNode = findNode(physicsNode?.children ?? [], "physics-module-zeeman");
+    expect(zeemanNode?.badge).toBe("active");
   });
 });

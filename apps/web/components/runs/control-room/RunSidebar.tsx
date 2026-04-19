@@ -781,6 +781,15 @@ export default function RunSidebar() {
           else vp.handleViewModeChange("3D");
           return;
         }
+        const isPhysicsNode =
+          id === "physics" ||
+          id === "physics-solver" ||
+          id.startsWith("physics-module-") ||
+          id.startsWith("phys-");
+        if (isPhysicsNode) {
+          // Physics inspector navigation should not implicitly change the rendered viewport quantity.
+          return;
+        }
         const previewTarget = previewQuantityForTreeNode(id);
         if (previewTarget && vp.quickPreviewTargets.some((t) => t.id === previewTarget && t.available)) {
           vp.requestPreviewQuantity(previewTarget);

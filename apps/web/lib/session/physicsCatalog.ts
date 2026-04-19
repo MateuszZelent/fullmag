@@ -193,10 +193,24 @@ export function buildPhysicsCapabilityView(
   capabilities: BackendCapabilities | null | undefined,
   physicsStack: readonly ScriptBuilderMagneticInteractionEntry[] | null | undefined = null,
 ): PhysicsCapabilityViewEntry[] {
+  const supportedTerms = Array.isArray(capabilities?.supported_terms)
+    ? capabilities.supported_terms
+    : [];
+  const supportedDemagRealizations = Array.isArray(capabilities?.supported_demag_realizations)
+    ? capabilities.supported_demag_realizations
+    : [];
+  const hasCapabilityProfile =
+    supportedTerms.length > 0 || supportedDemagRealizations.length > 0;
   const availableIds = new Set<PhysicsCatalogId>();
-  for (const term of capabilities?.supported_terms ?? []) {
+  for (const term of supportedTerms) {
     const id = mapBackendTermToCatalogId(term);
     if (id) availableIds.add(id);
+  }
+  if (
+    supportedTerms.includes("demag")
+    || supportedDemagRealizations.length > 0
+  ) {
+    availableIds.add("demag");
   }
 
   const activeKinds = new Set(
@@ -211,6 +225,8 @@ export function buildPhysicsCapabilityView(
       objectKind != null
         ? activeKinds.has(objectKind) || Boolean(entry.defaultRequired)
         : false;
+    const requiredByDefault = Boolean(entry.defaultRequired);
+    const available = availableIds.has(entry.id) || (!hasCapabilityProfile && requiredByDefault);
 
     return {
       id: entry.id,
@@ -218,10 +234,10 @@ export function buildPhysicsCapabilityView(
       description: entry.description,
       detail: entry.detail,
       scope: entry.scope,
-      available: availableIds.has(entry.id),
+      available,
       active,
       authorableInObjectPanel: objectKind != null,
-      required: Boolean(entry.defaultRequired),
+      required: requiredByDefault,
       backendTerms: entry.backendTerms,
       parameterHints: entry.parameterHints ?? [],
     };

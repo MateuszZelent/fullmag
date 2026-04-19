@@ -23,7 +23,7 @@ body.alpha = 0.01
 body.m = fm.random(seed=2)
 
 # External field
-study.b_ext(0, 0, 0.02)
+study.b_ext(0, 0, 1.02)
 
 # Outer boundary / demag
 study.demag(realization="poisson_robin")

@@ -138,6 +138,10 @@ interface RibbonBarProps {
     objectId: string,
     kind: MagneticPresetKind,
   ) => void;
+  activeTransformScope?: "object" | "texture" | null;
+  onSetTransformScope?: (
+    scope: "camera" | "object" | "texture",
+  ) => void;
   onSetTextureTransformMode?: (
     objectId: string,
     mode: "translate" | "rotate" | "scale",
@@ -222,6 +226,7 @@ function buildContext(props: RibbonBarProps): RibbonBuildContext {
     selectedObjectId: props.selectedObjectId ?? null,
     selectedNodeId: props.selectedNodeId ?? null,
     selectedNodeKind: null, // resolved from handle if needed
+    activeTransformScope: props.activeTransformScope ?? null,
 
     viewMode: props.viewMode ?? null,
     sidebarVisible: Boolean(props.sidebarVisible),

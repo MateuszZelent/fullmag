@@ -64,4 +64,41 @@ describe("physicsCatalog", () => {
       authorableInObjectPanel: false,
     });
   });
+
+  it("treats demag as available when only demag realizations are reported", () => {
+    const entries = buildPhysicsCapabilityView(
+      {
+        ...CUDA_CAPABILITIES,
+        supported_terms: [],
+        supported_demag_realizations: ["poisson_robin"],
+      },
+      [],
+    );
+
+    expect(entries.find((entry) => entry.id === "demag")).toMatchObject({
+      available: true,
+    });
+  });
+
+  it("does not mark required terms unsupported when capability profile is missing", () => {
+    const entries = buildPhysicsCapabilityView(
+      {
+        ...CUDA_CAPABILITIES,
+        supported_terms: [],
+        supported_demag_realizations: [],
+      },
+      [],
+    );
+
+    expect(entries.find((entry) => entry.id === "exchange")).toMatchObject({
+      required: true,
+      active: true,
+      available: true,
+    });
+    expect(entries.find((entry) => entry.id === "demag")).toMatchObject({
+      required: true,
+      active: true,
+      available: true,
+    });
+  });
 });

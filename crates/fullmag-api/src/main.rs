@@ -868,7 +868,12 @@ async fn publish_current_live_state(
 
         // ── Sparse latest_fields: only send when content hash changed ──
         let current_fields_hash = next.latest_fields.content_hash();
-        let latest_fields_changed = current_fields_hash != next.ws_sent_latest_fields_hash;
+        // Important: latest_fields.content_hash() is intentionally cheap
+        // (keys + shape), so value-only updates may keep the same hash.
+        // When the publish payload carries latest_fields, treat that as a
+        // definitive signal that field buffers changed and must be broadcast.
+        let latest_fields_changed =
+            has_latest_fields_update || current_fields_hash != next.ws_sent_latest_fields_hash;
 
         // ── Sparse envelope: only send heavy static fields when version changed ──
         let envelope_changed = next.envelope_version != next.ws_sent_envelope_version;
@@ -2128,7 +2133,21 @@ async fn update_current_live_scene(
         };
         snapshot.builder_adapter = Some(builder_state);
         snapshot.scene_document = Some(scene_document.clone());
-        let live_rebuild_stats = rebuild_live_scene_magnetization(snapshot);
+        let allow_live_magnetization_rebuild = snapshot
+            .live_state
+            .as_ref()
+            .map(|live_state| {
+                !matches!(
+                    live_state.status.as_str(),
+                    "running" | "materializing_script"
+                )
+            })
+            .unwrap_or(true);
+        let live_rebuild_stats = if allow_live_magnetization_rebuild {
+            rebuild_live_scene_magnetization(snapshot)
+        } else {
+            None
+        };
         let previous_preview = snapshot.preview.clone();
         snapshot.preview = build_preview_state(
             snapshot,

@@ -134,18 +134,21 @@ export default function HslSphere({
     <div
       ref={hostRef}
       className={cn(
-        "pointer-events-auto relative overflow-hidden rounded-[28px] border border-sky-300/12 bg-[radial-gradient(circle_at_28%_22%,rgba(125,211,252,0.18),transparent_34%),linear-gradient(180deg,rgba(24,30,48,0.92),rgba(14,19,32,0.96))] shadow-[0_16px_34px_rgba(2,6,23,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-md",
+        "fem-hsl-gizmo pointer-events-auto relative overflow-hidden rounded-[28px] border backdrop-blur-md",
         embedded ? "self-start" : null,
         anchorClassName,
         className,
       )}
-      style={{ width: sphereSize, height: sphereSize }}
+      style={{
+        width: sphereSize,
+        height: sphereSize,
+      }}
     >
-      <div className="pointer-events-none absolute inset-[8px] rounded-[22px] border border-white/6" />
-      <div className="pointer-events-none absolute inset-[16px] rounded-full border border-sky-300/14" />
-      <div className="pointer-events-none absolute inset-x-4 top-3 flex items-center justify-between text-[0.55rem] font-bold uppercase tracking-[0.24em] text-slate-300/78">
+      <div className="fem-hsl-gizmo__frame pointer-events-none absolute inset-[8px] rounded-[22px] border" />
+      <div className="fem-hsl-gizmo__ring pointer-events-none absolute inset-[16px] rounded-full border" />
+      <div className="fem-hsl-gizmo__title pointer-events-none absolute inset-x-4 top-3 flex items-center justify-between text-[0.55rem] font-bold uppercase tracking-[0.24em]">
         <span>HSL</span>
-        <span className="text-sky-200/78">Gizmo</span>
+        <span className="fem-hsl-gizmo__title-accent">Gizmo</span>
       </div>
       {hostNode ? (
         <Canvas

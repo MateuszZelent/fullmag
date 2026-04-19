@@ -365,17 +365,30 @@ function enrichPhysicsCapabilityEntries(
     zeemanField?: readonly number[] | null;
     exchangeEnabled?: boolean;
     demagEnabled?: boolean;
+    interfacialDmiFromMaterial?: boolean;
     metadata?: Record<string, unknown> | null;
   },
 ): PhysicsCapabilityViewEntry[] {
   return entries.map((entry) => {
     let active = entry.active;
+    let available = entry.available;
     if (entry.id === "zeeman") {
       active = hasNonZeroField(opts.zeemanField);
+      if (active) {
+        available = true;
+      }
     } else if (entry.id === "exchange") {
       active = opts.exchangeEnabled ?? entry.active;
+      if (opts.exchangeEnabled === true) {
+        available = true;
+      }
     } else if (entry.id === "demag") {
       active = opts.demagEnabled ?? entry.active;
+      if (opts.demagEnabled === true) {
+        available = true;
+      }
+    } else if (entry.id === "interfacial_dmi") {
+      active = entry.active || opts.interfacialDmiFromMaterial === true;
     } else if (entry.id === "thermal_noise") {
       active = opts.metadata?.thermal_active === true;
     } else if (entry.id === "spin_transfer_torque") {
@@ -385,14 +398,22 @@ function enrichPhysicsCapabilityEntries(
     } else if (entry.id === "oersted") {
       active = opts.metadata?.oersted_active === true;
     }
-    return { ...entry, active };
+    return { ...entry, active, available };
   });
 }
 
 function physicsModuleNodeStatus(entry: PhysicsCapabilityViewEntry): NodeStatus {
+  if (entry.active && !entry.available) return "error";
   if (entry.active) return "ready";
   if (entry.available) return "pending";
   return "pending";
+}
+
+function physicsModuleNodeBadge(entry: PhysicsCapabilityViewEntry): string {
+  if (entry.active && !entry.available) return "active · unsupported";
+  if (entry.active) return "active";
+  if (entry.available) return "available";
+  return "unavailable";
 }
 
 interface ModelTreeProps {
@@ -1003,9 +1024,13 @@ export function buildFullmagModelTree(opts: {
       zeemanField: opts.zeemanField,
       exchangeEnabled: opts.exchangeEnabled,
       demagEnabled: opts.demagEnabled,
+      interfacialDmiFromMaterial: geos.some(
+        (geometry) => Math.abs(Number(geometry.material.Dind ?? 0)) > 0,
+      ),
       metadata: opts.metadata,
     },
   );
+  const visiblePhysicsCapabilityEntries = physicsCapabilityEntries.filter((entry) => entry.active);
   const demagBoundaryLabel =
     opts.demagRealization == null || opts.demagRealization === "auto"
       ? "Auto"
@@ -1022,7 +1047,7 @@ export function buildFullmagModelTree(opts: {
       status: "ready",
       badge: opts.solverIntegrator ? opts.solverIntegrator.toUpperCase() : "auto",
     },
-    ...physicsCapabilityEntries.map((entry) => ({
+    ...visiblePhysicsCapabilityEntries.map((entry) => ({
       id: `physics-module-${entry.id}`,
       label: entry.label,
       icon:
@@ -1042,7 +1067,7 @@ export function buildFullmagModelTree(opts: {
                       ? "diamond"
                       : "zap",
       status: physicsModuleNodeStatus(entry),
-      badge: entry.active ? "active" : (entry.available ? "available" : "unavailable"),
+      badge: physicsModuleNodeBadge(entry),
       children:
         entry.id === "demag"
           ? [
