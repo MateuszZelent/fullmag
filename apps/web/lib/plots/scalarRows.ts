@@ -25,6 +25,18 @@ function asNumber(value: unknown): number {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+/**
+ * CH-001 fix: coerce optional fields — returns undefined when the
+ * source value is absent, null, or not a finite number, so that
+ * downstream consumers (ScalarPlot, columnHasData) can distinguish
+ * "missing" from "zero".
+ */
+function asOptionalNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
 export function coerceScalarRow(raw: unknown): ScalarRow {
   const row =
     raw !== null && typeof raw === "object"
@@ -47,8 +59,8 @@ export function coerceScalarRow(raw: unknown): ScalarRow {
     max_dm_dt: asNumber(row.max_dm_dt),
     max_h_eff: asNumber(row.max_h_eff),
     max_h_demag: asNumber(row.max_h_demag),
-    max_torque_Apm: asNumber(row.max_torque_Apm),
-    max_torque_T: asNumber(row.max_torque_T),
+    max_torque_Apm: asOptionalNumber(row.max_torque_Apm),
+    max_torque_T: asOptionalNumber(row.max_torque_T),
   };
 }
 

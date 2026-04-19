@@ -29,6 +29,8 @@ export interface FemMeshData {
   fieldData?: { x: ArrayLike<number>; y: ArrayLike<number>; z: ArrayLike<number> };
   fieldNComp?: number;
   fieldRevision?: number | string | null;
+  /** Backend-assigned mesh generation id. Used as primary topology cache key. */
+  meshGenerationId?: string | null;
   activeMask?: boolean[] | null;
   quantityDomain?: "magnetic_only" | "full_domain" | "surface_only" | null;
 }

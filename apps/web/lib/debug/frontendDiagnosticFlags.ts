@@ -38,6 +38,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
   },
   viewportChrome: {
     showTelemetryHud: true,
+    showDataPlaneHud: true,
     showAntennaPreviewBadge: true,
     showFemSelectionBadges: true,
     showFdmSelectionBadges: true,
@@ -143,6 +144,37 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     showViewCube: true,
     showOrientationSphere: true,
     showTextureModeToolbar: true,
+  },
+  /**
+   * Phased rollout flags for the FEM data-plane refactor (P7).
+   * Each flag gates one deliverable. All default to the safe
+   * (non-breaking) setting; flip in localStorage or dev panel.
+   */
+  dataPlaneRollout: {
+    /** PR-4: Use FieldFrameEnvelope in session runtime store. */
+    fieldFrameEnvelopeV1: true,
+    /** PR-5: Binary field transport (format=bin). */
+    binaryFieldTransport: false,
+    /** PR-1/PR-2: Monotonic frame guard active. */
+    monotonicFrameGuard: true,
+    /** PR-6: Split topology / field caches in viewport. */
+    viewportSplitTopologyFieldCache: false,
+    /** PR-7: Semantic chart time series. */
+    chartSemanticSeries: false,
+    /** PR-7: Worker-based chart decimation. */
+    chartWorkerDecimation: false,
+    /** PR-1: Frontend diagnostics panel. */
+    frontendDiagnosticsPanel: true,
+  },
+  /**
+   * Interaction refactoring flags (P1–P7).
+   * Gates the interaction trace bus and selection/focus separation.
+   */
+  interactions: {
+    /** Enable the centralised interaction trace bus (dev-only console output). */
+    trace: false,
+    /** Show the dev-only interaction HUD overlay. */
+    showHud: false,
   },
 };
 

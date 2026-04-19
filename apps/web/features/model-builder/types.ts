@@ -132,7 +132,16 @@ export type NodeKind =
   | "visualization.preset.project"
   | "visualization.preset.local"
   // Diagnostics
-  | "diagnostics.root";
+  | "diagnostics.root"
+  // Geometry Builder
+  | "builder.root"
+  | "builder.universe"
+  | "builder.primitives"
+  | "builder.primitive"
+  | "builder.primitive.params"
+  | "builder.primitive.transform"
+  | "builder.primitive.material"
+  | "builder.lifecycle";
 
 // ---------------------------------------------------------------------------
 // NodeDomain — workspace stage during which the node is primarily relevant

@@ -12,7 +12,8 @@ This document describes the physical models implemented in fullmag for **spin-to
 Canonical benchmark note:
 
 - the current reference benchmark is [`examples/stno_vortex_ref_minimal.py`](../../examples/stno_vortex_ref_minimal.py),
-- the builder-generated [`examples/stno_vortex_mtj_workflow.py`](../../examples/stno_vortex_mtj_workflow.py) remains a workflow example, not the golden benchmark.
+- [`examples/stno_vortex_mtj_workflow.py`](../../examples/stno_vortex_mtj_workflow.py) is the broader executable workflow example with artifact-backed post-processing,
+- the workflow example is not the golden benchmark and must not be treated as the parity oracle.
 
 ---
 
@@ -91,7 +92,8 @@ Legacy compatibility note:
 
 - `spin_torque=SlonczewskiSTT(...)` still works,
 - canonical authoring now uses `spin_torques=[...]`,
-- the current public executable path still supports one torque module at a time.
+- the current public executable path supports both `spin_torque=...` and `spin_torques=[single_module]` on the FDM STNO slice,
+- multi-module `spin_torques=[...]` composition remains non-executable on the current public STNO path.
 
 ### 2.2 Zhang–Li STT (CIP)
 

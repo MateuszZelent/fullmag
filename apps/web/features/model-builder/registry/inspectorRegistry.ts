@@ -80,6 +80,9 @@ export const PanelKey = {
   OBJECT_MESH:         "object-mesh",
   REGION:              "region",
   OBJ_GEO_MESH:       "obj-geo-mesh",
+  BUILDER_OVERVIEW:    "builder-overview",
+  BUILDER_PRIMITIVE:   "builder-primitive",
+  BUILDER_UNIVERSE:    "builder-universe",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -345,6 +348,28 @@ const RULES: RegistryRule[] = [
   {
     kinds: ["diagnostics.root"],
     panelKey: PanelKey.GEOMETRY,
+    props: passNodeId,
+  },
+
+  // ── Geometry Builder ──
+  {
+    kinds: ["builder.root", "builder.primitives", "builder.lifecycle"],
+    panelKey: PanelKey.BUILDER_OVERVIEW,
+    props: noProps,
+  },
+  {
+    kinds: ["builder.universe"],
+    panelKey: PanelKey.BUILDER_UNIVERSE,
+    props: noProps,
+  },
+  {
+    kinds: [
+      "builder.primitive",
+      "builder.primitive.params",
+      "builder.primitive.transform",
+      "builder.primitive.material",
+    ],
+    panelKey: PanelKey.BUILDER_PRIMITIVE,
     props: passNodeId,
   },
 ];

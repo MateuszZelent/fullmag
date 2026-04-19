@@ -12,12 +12,13 @@ import type { ObjectViewMode } from "../../../components/runs/control-room/share
 import type { FemFerromagnetVisibilityMode, FemVectorDomainFilter } from "../../../components/preview/FemMeshView3D";
 import type { PartRenderData } from "./femTopologyCache";
 import { partMeshTint, partEdgeTint } from "../../../components/preview/fem/femColorUtils";
+import { DEFAULT_VIEWPORT_VISUAL_PROFILE } from "../../../lib/profiles/frontendRuntimeProfiles";
 
-/* ── Constants ── */
-const DIMMED_MIN_MAGNETIC = 14;
-const DIMMED_MIN_AIR = 8;
-const SELECTED_LIFT_MAGNETIC = 96;
-const SELECTED_LIFT_AIR = 52;
+/* ── Constants (sourced from viewport visual profile) ── */
+const DIMMED_MIN_MAGNETIC = DEFAULT_VIEWPORT_VISUAL_PROFILE.dimmedMinMagnetic;
+const DIMMED_MIN_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.dimmedMinAir;
+const SELECTED_LIFT_MAGNETIC = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftMagnetic;
+const SELECTED_LIFT_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftAir;
 
 export interface RenderLayer {
   part: FemMeshPart;

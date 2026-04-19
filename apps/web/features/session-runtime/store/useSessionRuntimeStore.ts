@@ -27,6 +27,7 @@ import type {
   EngineLogEntry,
   StepUpdateV2,
 } from "@/lib/session/types";
+import type { FieldFrameEnvelope } from "@/lib/fieldFrame/types";
 import type {
   LiveState,
   PreviewState,
@@ -61,6 +62,8 @@ interface SessionRuntimeStoreState {
   stepUpdateV2: StepUpdateV2 | null;
   workspaceStatus: string;
   isFemBackend: boolean;
+  /** Canonical field-frame envelope (synthesized from legacy state). */
+  fieldFrameEnvelope: FieldFrameEnvelope | null;
 
   /** Timestamps */
   bootstrapTimestamp: number | null;
@@ -94,6 +97,7 @@ const INITIAL_STATE: Omit<SessionRuntimeStoreState,
   stepUpdateV2: null,
   workspaceStatus: "idle",
   isFemBackend: false,
+  fieldFrameEnvelope: null,
   bootstrapTimestamp: null,
   lastUpdateTimestamp: null,
 };
@@ -129,3 +133,4 @@ export const selectArtifacts = (s: SessionRuntimeStoreState) => s.artifacts;
 export const selectScriptBuilder = (s: SessionRuntimeStoreState) => s.scriptBuilder;
 export const selectMeshWorkspace = (s: SessionRuntimeStoreState) => s.meshWorkspace;
 export const selectStepUpdateV2 = (s: SessionRuntimeStoreState) => s.stepUpdateV2;
+export const selectFieldFrameEnvelope = (s: SessionRuntimeStoreState) => s.fieldFrameEnvelope;

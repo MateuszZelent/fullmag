@@ -2,6 +2,7 @@ import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
 import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
 import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
 import type { GeometryPresetKind } from "@/lib/geometryPresetCatalog";
+import type { PrimitiveKind } from "@/features/geometry-builder/model/types";
 
 export type ResultAnalysisKind =
   | "spectrum"
@@ -82,6 +83,26 @@ export interface RibbonCommandContext {
     mode: "translate" | "rotate" | "scale",
   ) => void;
   onAddResultAnalysis?: (kind: ResultAnalysisKind) => void;
+
+  // ── Geometry builder callbacks ──────────────────────────
+  onBuilderAddPrimitive?: (kind: PrimitiveKind) => void;
+  onBuilderRemovePrimitive?: (id: string) => void;
+  onBuilderDuplicatePrimitive?: (id: string) => void;
+  onBuilderBuildGeometry?: () => void;
+  onBuilderBuildMesh?: () => void;
+  onBuilderBuildAll?: () => void;
+  onBuilderValidateGeometry?: () => void;
+  onBuilderSetViewportMode?: (mode: "camera" | "manipulate") => void;
+  onBuilderSetTransformTool?: (tool: "move" | "rotate" | "scale") => void;
+  onBuilderToggleSnap?: () => void;
+  onBuilderFocusSelected?: () => void;
+  onBuilderFrameAll?: () => void;
+  onBuilderCenterInUniverse?: (id: string) => void;
+  builderEnabled?: boolean;
+  builderDirtyGeometry?: boolean;
+  builderDirtyMesh?: boolean;
+  builderHasRealization?: boolean;
+  builderSelectedPrimitiveId?: string | null;
 }
 
 type CanonicalViewportMode = "3D" | "2D" | "Mesh" | "Analyze" | "charts";
@@ -172,7 +193,21 @@ export type RibbonCommand =
       objectId: string;
       mode: "translate" | "rotate" | "scale";
     }
-  | { id: "results.add-analysis"; kind: ResultAnalysisKind };
+  | { id: "results.add-analysis"; kind: ResultAnalysisKind }
+  // ── Geometry Builder commands ────────────────────────────
+  | { id: "builder.add-primitive"; primitiveKind: PrimitiveKind }
+  | { id: "builder.remove-primitive"; primitiveId: string }
+  | { id: "builder.duplicate-primitive"; primitiveId: string }
+  | { id: "builder.build-geometry" }
+  | { id: "builder.build-mesh" }
+  | { id: "builder.build-all" }
+  | { id: "builder.validate-geometry" }
+  | { id: "builder.set-viewport-mode"; mode: "camera" | "manipulate" }
+  | { id: "builder.set-transform-tool"; tool: "move" | "rotate" | "scale" }
+  | { id: "builder.toggle-snap" }
+  | { id: "builder.focus-selected" }
+  | { id: "builder.frame-all" }
+  | { id: "builder.center-in-universe"; primitiveId: string };
 
 export function canExecuteRibbonCommand(
   ctx: RibbonCommandContext,
@@ -242,6 +277,33 @@ export function canExecuteRibbonCommand(
       return Boolean(command.objectId) && typeof ctx.onSetTextureTransformMode === "function";
     case "results.add-analysis":
       return typeof ctx.onAddResultAnalysis === "function";
+    // ── Geometry Builder ──────────────────────────────────
+    case "builder.add-primitive":
+      return typeof ctx.onBuilderAddPrimitive === "function";
+    case "builder.remove-primitive":
+      return typeof ctx.onBuilderRemovePrimitive === "function" && Boolean(command.primitiveId);
+    case "builder.duplicate-primitive":
+      return typeof ctx.onBuilderDuplicatePrimitive === "function" && Boolean(command.primitiveId);
+    case "builder.build-geometry":
+      return typeof ctx.onBuilderBuildGeometry === "function" && Boolean(ctx.builderDirtyGeometry);
+    case "builder.build-mesh":
+      return typeof ctx.onBuilderBuildMesh === "function" && Boolean(ctx.builderHasRealization) && Boolean(ctx.builderDirtyMesh);
+    case "builder.build-all":
+      return typeof ctx.onBuilderBuildAll === "function" && Boolean(ctx.builderDirtyGeometry || ctx.builderDirtyMesh);
+    case "builder.validate-geometry":
+      return typeof ctx.onBuilderValidateGeometry === "function";
+    case "builder.set-viewport-mode":
+      return typeof ctx.onBuilderSetViewportMode === "function";
+    case "builder.set-transform-tool":
+      return typeof ctx.onBuilderSetTransformTool === "function";
+    case "builder.toggle-snap":
+      return typeof ctx.onBuilderToggleSnap === "function";
+    case "builder.focus-selected":
+      return typeof ctx.onBuilderFocusSelected === "function" && Boolean(ctx.builderSelectedPrimitiveId);
+    case "builder.frame-all":
+      return typeof ctx.onBuilderFrameAll === "function";
+    case "builder.center-in-universe":
+      return typeof ctx.onBuilderCenterInUniverse === "function" && Boolean(command.primitiveId);
   }
 }
 
@@ -341,6 +403,46 @@ export function executeRibbonCommand(
       return;
     case "results.add-analysis":
       ctx.onAddResultAnalysis?.(command.kind);
+      return;
+    // ── Geometry Builder ──────────────────────────────────
+    case "builder.add-primitive":
+      ctx.onBuilderAddPrimitive?.(command.primitiveKind);
+      return;
+    case "builder.remove-primitive":
+      ctx.onBuilderRemovePrimitive?.(command.primitiveId);
+      return;
+    case "builder.duplicate-primitive":
+      ctx.onBuilderDuplicatePrimitive?.(command.primitiveId);
+      return;
+    case "builder.build-geometry":
+      ctx.onBuilderBuildGeometry?.();
+      return;
+    case "builder.build-mesh":
+      ctx.onBuilderBuildMesh?.();
+      return;
+    case "builder.build-all":
+      ctx.onBuilderBuildAll?.();
+      return;
+    case "builder.validate-geometry":
+      ctx.onBuilderValidateGeometry?.();
+      return;
+    case "builder.set-viewport-mode":
+      ctx.onBuilderSetViewportMode?.(command.mode);
+      return;
+    case "builder.set-transform-tool":
+      ctx.onBuilderSetTransformTool?.(command.tool);
+      return;
+    case "builder.toggle-snap":
+      ctx.onBuilderToggleSnap?.();
+      return;
+    case "builder.focus-selected":
+      ctx.onBuilderFocusSelected?.();
+      return;
+    case "builder.frame-all":
+      ctx.onBuilderFrameAll?.();
+      return;
+    case "builder.center-in-universe":
+      ctx.onBuilderCenterInUniverse?.(command.primitiveId);
       return;
   }
 }

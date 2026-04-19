@@ -143,6 +143,8 @@ export function useScalarChartHistory({
   );
   const liveRowsRef = useRef(liveRows);
   const fetchedSessionRef = useRef<string | null>(null);
+  /** Track last fetched total so we can refetch when backend publishes more rows. */
+  const fetchedTotalRef = useRef<number>(0);
 
   useEffect(() => {
     liveRowsRef.current = liveRows;
@@ -150,6 +152,7 @@ export function useScalarChartHistory({
 
   useEffect(() => {
     fetchedSessionRef.current = null;
+    fetchedTotalRef.current = 0;
     dispatch({
       type: "session_reset",
       sessionKey,
@@ -173,10 +176,17 @@ export function useScalarChartHistory({
       return undefined;
     }
     if (fetchedSessionRef.current === sessionKey) {
-      return undefined;
+      // CH-004 fix: allow refetch when scalarRowsTotal has grown significantly
+      // beyond what we previously fetched (at least 10% more rows or 100+ new rows).
+      const growth = scalarRowsTotal - fetchedTotalRef.current;
+      const significantGrowth = growth > 100 || growth > fetchedTotalRef.current * 0.1;
+      if (!significantGrowth) {
+        return undefined;
+      }
     }
     if (scalarRowsTotal <= liveRows.length) {
       fetchedSessionRef.current = sessionKey;
+      fetchedTotalRef.current = scalarRowsTotal;
       startTransition(() => {
         dispatch({ type: "hydrate_live_window", sessionKey });
       });
@@ -195,6 +205,7 @@ export function useScalarChartHistory({
           return;
         }
         fetchedSessionRef.current = sessionKey;
+        fetchedTotalRef.current = scalarRowsTotal;
         const fetchedRows = coerceScalarRows(response.scalar_rows);
         startTransition(() => {
           dispatch({
@@ -209,7 +220,8 @@ export function useScalarChartHistory({
         if (abortController.signal.aborted) {
           return;
         }
-        fetchedSessionRef.current = sessionKey;
+        // CH-004 fix: Do NOT set fetchedSessionRef on failure — this allows
+        // automatic retry when scalarRowsTotal grows or the effect re-fires.
         const message =
           fetchError instanceof Error
             ? fetchError.message

@@ -337,6 +337,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
           : null,
       quantityDomain: selectedFieldDomain ?? spatialPreview?.quantity_domain ?? "full_domain",
       fieldRevision: fieldDataRevision,
+      meshGenerationId: effectiveFemMesh?.generation_id ?? effectiveFemMesh?.mesh_id ?? null,
     };
   }, [
     activeMask,
@@ -346,6 +347,8 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
     selectedFieldDomain,
     selectedFieldNComp,
     spatialPreview?.quantity_domain,
+    effectiveFemMesh?.generation_id,
+    effectiveFemMesh?.mesh_id,
   ]);
   useEffect(() => {
     femMeshDataRef.current = femMeshData;
@@ -368,11 +371,32 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
 
   const femTopologyKey = useMemo(() => {
     if (!effectiveFemMesh) return null;
+
+    // VP-001 fix: prefer backend-assigned generation_id or mesh_id over
+    // heuristic count-based signatures. The old approach could miss topology
+    // changes when node/element/face counts stayed identical.
+    const generationId: string | null =
+      effectiveFemMesh.generation_id ?? effectiveFemMesh.mesh_id ?? null;
+    if (generationId) {
+      return `gen:${generationId}`;
+    }
+
+    // Legacy fallback — log a diagnostic warning so we can track how often
+    // the code still reaches this path.
+    if (typeof console !== "undefined" && FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[femTopologyKey] Using legacy heuristic topology signature — " +
+        "backend did not provide generation_id or mesh_id.",
+      );
+    }
+
     const firstNode = effectiveFemMesh.nodes[0]?.join(",") ?? "";
     const middleNode = effectiveFemMesh.nodes[Math.floor(effectiveFemMesh.nodes.length / 2)]?.join(",") ?? "";
     const lastNode = effectiveFemMesh.nodes[effectiveFemMesh.nodes.length - 1]?.join(",") ?? "";
     const firstElement = effectiveFemMesh.elements[0]?.join(",") ?? "";
     return [
+      "legacy",
       effectiveFemMesh.nodes.length,
       femMesh?.elements.length ?? effectiveFemMesh.elements.length,
       effectiveFemMesh.boundary_faces.length,

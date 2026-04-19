@@ -1935,8 +1935,10 @@ export function normalizeSessionState(
           max_dm_dt: Number(row?.max_dm_dt ?? 0),
           max_h_eff: Number(row?.max_h_eff ?? 0),
           max_h_demag: Number(row?.max_h_demag ?? 0),
-          max_torque_Apm: Number(row?.max_torque_Apm ?? 0),
-          max_torque_T: Number(row?.max_torque_T ?? 0),
+          // CH-001/CH-002: preserve undefined for optional torque fields
+          // so downstream consumers can distinguish "missing" from "zero".
+          max_torque_Apm: typeof row?.max_torque_Apm === "number" ? Number(row.max_torque_Apm) : undefined,
+          max_torque_T: typeof row?.max_torque_T === "number" ? Number(row.max_torque_T) : undefined,
         })),
     // Server-side total row count (used by merge logic to distinguish "empty delta" from no data).
     scalar_rows_total: typeof raw.scalar_rows_total === "number" ? raw.scalar_rows_total : rawScalarRowsForMerge.length,

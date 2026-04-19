@@ -38,6 +38,7 @@ import { useFemSceneGeometry } from "./fem/useFemSceneGeometry";
 import { useFemFaceInteraction } from "./fem/useFemFaceInteraction";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
+import { DEFAULT_VIEWPORT_VISUAL_PROFILE } from "@/lib/profiles/frontendRuntimeProfiles";
 import {
   captureOrientationDebugSnapshot,
   type OrientationDebugSnapshot,
@@ -66,11 +67,11 @@ import type {
   FemFerromagnetVisibilityMode,
 } from "./fem/femMeshTypes";
 
-/* ── Opacity constants (extracted from hardcoded values) ── */
-const DIMMED_MIN_MAGNETIC = 14;
-const DIMMED_MIN_AIR = 8;
-const SELECTED_LIFT_MAGNETIC = 96;
-const SELECTED_LIFT_AIR = 52;
+/* ── Opacity constants (sourced from viewport visual profile) ── */
+const DIMMED_MIN_MAGNETIC = DEFAULT_VIEWPORT_VISUAL_PROFILE.dimmedMinMagnetic;
+const DIMMED_MIN_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.dimmedMinAir;
+const SELECTED_LIFT_MAGNETIC = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftMagnetic;
+const SELECTED_LIFT_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftAir;
 
 interface Props {
   meshData: FemMeshData;
@@ -406,8 +407,31 @@ function FemMeshView3DInner({
     shouldRenderMagneticGeometryResolved,
     shouldRenderAirGeometry,
   } = vectorDomain;
-  
-  const topologySignature = topologyKey ?? `${meshData.nNodes}:${meshData.nElements}:${meshData.boundaryFaces.length}`;
+
+  // VP-001: Require a proper topologyKey from caller. Fall back to a
+  // coordinate-sampled hash only as a last resort (logged as warning).
+  const topologySignature = (() => {
+    if (topologyKey) return topologyKey;
+    if (process.env.NODE_ENV === "development") {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[FemMeshView3D] topologyKey not provided — using coordinate-sampled fallback. " +
+        "This path should be eliminated once all callers pass topologyKey.",
+      );
+    }
+    const n = meshData.nNodes;
+    const e = meshData.nElements;
+    const b = meshData.boundaryFaces.length;
+    // Include coordinate samples to detect topology changes that
+    // preserve counts but alter geometry.
+    const posArr = meshData.nodes;
+    const sampleFirst = posArr.length >= 3 ? `${posArr[0].toFixed(6)},${posArr[1].toFixed(6)},${posArr[2].toFixed(6)}` : "";
+    const mid = Math.floor(posArr.length / 6) * 3;
+    const sampleMid = posArr.length >= mid + 3 ? `${posArr[mid].toFixed(6)},${posArr[mid+1].toFixed(6)},${posArr[mid+2].toFixed(6)}` : "";
+    const last = (posArr.length >= 3) ? posArr.length - 3 : 0;
+    const sampleLast = posArr.length >= last + 3 ? `${posArr[last].toFixed(6)},${posArr[last+1].toFixed(6)},${posArr[last+2].toFixed(6)}` : "";
+    return `fallback:${n}:${e}:${b}:${sampleFirst}:${sampleMid}:${sampleLast}`;
+  })();
   const {
     hoveredFace,
     ctxMenu,

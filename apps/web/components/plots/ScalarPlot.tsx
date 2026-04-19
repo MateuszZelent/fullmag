@@ -6,8 +6,9 @@ import Plot from "./DynamicPlot";
 import { scalarSeriesList, type ScalarSeriesMeta } from "../../lib/quantities/scalars";
 import { normalizeUnitLabel } from "../../lib/format";
 import { scalarRowsTipFingerprint } from "@/lib/plots/scalarRows";
+import { DEFAULT_CHART_DECIMATION_PROFILE } from "@/lib/profiles/frontendRuntimeProfiles";
 
-export const MAX_VISIBLE_POINTS = 2400;
+export const MAX_VISIBLE_POINTS = DEFAULT_CHART_DECIMATION_PROFILE.maxVisiblePoints;
 
 const SERIES_COLORS = [
   "#60a5fa", "#34d399", "#f472b6", "#fbbf24",
@@ -20,10 +21,25 @@ function isMagnetizationAverageColumn(col: string): boolean {
   return col === "mx" || col === "my" || col === "mz";
 }
 
-const accessor = (row: ScalarRow, key: string): number => {
+const accessor = (row: ScalarRow, key: string): number | null => {
   const value = Reflect.get(row, key);
-  return typeof value === "number" ? value : 0;
+  return typeof value === "number" ? value : null;
 };
+
+/**
+ * CH-001 fix: Detect whether a column has any real data in the rows.
+ * Returns false if every row yields null for this key.
+ */
+function columnHasData(rows: ScalarRow[], key: string): boolean {
+  // Sample up to 50 rows evenly spaced for performance on large datasets.
+  const step = Math.max(1, Math.floor(rows.length / 50));
+  for (let i = 0; i < rows.length; i += step) {
+    if (accessor(rows[i], key) !== null) return true;
+  }
+  // Always check the last row in case sampling missed it.
+  if (rows.length > 0 && accessor(rows[rows.length - 1], key) !== null) return true;
+  return false;
+}
 
 interface TimeScale {
   factor: number;
@@ -122,29 +138,36 @@ const ScalarPlot = memo(function ScalarPlot({
     [quantities, yColumns],
   );
 
+  // CH-001 fix: filter out series whose columns have no data in the rows,
+  // so we don't draw misleading zero lines for missing quantities.
+  const availableSeriesMeta = useMemo(
+    () => seriesMeta.filter((meta) => columnHasData(rowsForPlot, meta.key)),
+    [seriesMeta, rowsForPlot],
+  );
+
   const magnetizationOnly =
-    seriesMeta.length > 0 && seriesMeta.every((meta) => isMagnetizationAverageColumn(meta.key));
+    availableSeriesMeta.length > 0 && availableSeriesMeta.every((meta) => isMagnetizationAverageColumn(meta.key));
 
   const timeScale = useMemo((): TimeScale | null => {
     if (!isTimeColumn || rowsForPlot.length === 0) return null;
-    const maxT = rowsForPlot.reduce((max, r) => Math.max(max, Math.abs(accessor(r, "time"))), 0);
+    const maxT = rowsForPlot.reduce((max, r) => Math.max(max, Math.abs(accessor(r, "time") ?? 0)), 0);
     return chooseTimeScale(maxT);
   }, [isTimeColumn, rowsForPlot]);
 
   const xValues = useMemo(() => {
     if (xColumn === "time" && timeScale) {
-      return rowsForPlot.map((r) => accessor(r, "time") * timeScale.factor);
+      return rowsForPlot.map((r) => (accessor(r, "time") ?? 0) * timeScale.factor);
     }
     return rowsForPlot.map((r) => accessor(r, xColumn));
   }, [rowsForPlot, xColumn, timeScale]);
 
   const yByKey = useMemo(() => {
-    const grouped = new Map<string, number[]>();
-    for (const series of seriesMeta) {
+    const grouped = new Map<string, (number | null)[]>();
+    for (const series of availableSeriesMeta) {
       grouped.set(series.key, rowsForPlot.map((r) => accessor(r, series.key)));
     }
     return grouped;
-  }, [rowsForPlot, seriesMeta]);
+  }, [rowsForPlot, availableSeriesMeta]);
 
   const xLabel = useMemo(() => {
     if (timeScale) return `Time (${timeScale.unit})`;
@@ -154,7 +177,7 @@ const ScalarPlot = memo(function ScalarPlot({
   const unitGroups = useMemo(() => {
     const grouped = new Map<string, string[]>();
     const unitByKey = new Map<string, string>();
-    for (const series of seriesMeta) {
+    for (const series of availableSeriesMeta) {
       const normalizedUnit = normalizeUnitLabel(series.unit) || "arb.";
       unitByKey.set(series.key, normalizedUnit);
       const existing = grouped.get(normalizedUnit) ?? [];
@@ -167,7 +190,7 @@ const ScalarPlot = memo(function ScalarPlot({
       rightUnit: orderedUnits[1] ?? "",
       unitByKey,
     };
-  }, [seriesMeta]);
+  }, [availableSeriesMeta]);
 
   const traces = useMemo(() => {
     const mode =
@@ -175,7 +198,7 @@ const ScalarPlot = memo(function ScalarPlot({
         ? (showMarkers ? ("lines+markers" as const) : ("lines" as const))
         : ("markers" as const);
 
-    return seriesMeta.map((series, i) => ({
+    return availableSeriesMeta.map((series, i) => ({
       x: xValues,
       y: yByKey.get(series.key) ?? [],
       type: "scattergl" as const,
@@ -202,7 +225,7 @@ const ScalarPlot = memo(function ScalarPlot({
     xValues,
     yByKey,
     rowsForPlot.length,
-    seriesMeta,
+    availableSeriesMeta,
     magnetizationOnly,
     seriesColors,
     showMarkers,
@@ -269,8 +292,8 @@ const ScalarPlot = memo(function ScalarPlot({
       yaxis: {
         title: {
           text:
-            seriesMeta.length === 1
-              ? buildAxisLabel(seriesMeta[0])
+            availableSeriesMeta.length === 1
+              ? buildAxisLabel(availableSeriesMeta[0])
               : unitGroups.leftUnit
                 ? `Value (${unitGroups.leftUnit})`
                 : "Value",
@@ -348,7 +371,7 @@ const ScalarPlot = memo(function ScalarPlot({
     [
       xLabel,
       magnetizationOnly,
-      seriesMeta,
+      availableSeriesMeta,
       chartTitle,
       timeScale,
       unitGroups.leftUnit,

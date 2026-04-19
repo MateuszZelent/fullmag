@@ -6,6 +6,7 @@ import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "reac
 import AppBar from "../shell/AppBar";
 import RibbonBar from "../shell/RibbonBar";
 import StatusBar from "../shell/StatusBar";
+import { DataPlaneStatusBadges } from "./control-room/DataPlaneStatusBadges";
 import RunSidebar from "./control-room/RunSidebar";
 import { ViewportBar, ViewportCanvasArea } from "./control-room/ViewportPanels";
 import FullmagLogo from "../brand/FullmagLogo";
@@ -1453,6 +1454,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
             ? `${ctx.totalCells.toLocaleString()} cells`
             : undefined}
       /> : null}
+
+      {/* FE-005: Data-plane status badges (production-safe, compact) */}
+      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showStatusBar ? <DataPlaneStatusBadges /> : null}
 
       <MeshBuildModal
         open={meshBuildDialogOpen}

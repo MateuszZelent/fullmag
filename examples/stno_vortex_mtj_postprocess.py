@@ -4,7 +4,7 @@ Usage:
     python examples/stno_vortex_mtj_postprocess.py [artifact_dir]
 
 Default artifact directory:
-    run_output/stno_vortex_ref_minimal
+    run_output/stno_vortex_mtj_workflow
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from fullmag.analysis import analyze_stno_artifacts, write_stno_report
 
 
 def main(argv: list[str]) -> int:
-    artifact_dir = Path(argv[1]) if len(argv) > 1 else Path("run_output/stno_vortex_ref_minimal")
+    artifact_dir = Path(argv[1]) if len(argv) > 1 else Path("run_output/stno_vortex_mtj_workflow")
     report = analyze_stno_artifacts(artifact_dir)
     json_path, markdown_path = write_stno_report(artifact_dir, report=report)
 

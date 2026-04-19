@@ -73,6 +73,22 @@ const bootstrapCache = new Map<string, BootstrapCacheEntry>();
 const BOOTSTRAP_CACHE_TTL_MS = 4000;
 const BOOTSTRAP_RECONNECT_TTL_MS = 15000;
 
+/**
+ * Build a cache key that includes session/run identity when available,
+ * so a session or run change invalidates stale bootstrap snapshots.
+ * See: FE-002 in fullmag-fem-regression-p6-frontend-hardening.mdx
+ */
+function bootstrapCacheKeyFor(
+  baseUrl: string,
+  state: { session?: { session_id?: string } | null; run?: { run_id?: string } | null } | null,
+): string {
+  const sid = state?.session?.session_id;
+  const rid = state?.run?.run_id;
+  if (sid && rid) return `${baseUrl}::${sid}::${rid}`;
+  if (sid) return `${baseUrl}::${sid}`;
+  return baseUrl;
+}
+
 function bootstrapCacheAge(cacheKey: string): number | null {
   const cached = bootstrapCache.get(cacheKey);
   if (!cached || !cached.fetchedAt) {
@@ -157,7 +173,7 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
         pollTimerRef.current = null;
       }
 
-      const cacheKey = client.urls.bootstrap;
+      const cacheKey = bootstrapCacheKeyFor(client.urls.bootstrap, stateRef.current);
       const hasSessionState = Boolean(stateRef.current?.session);
       const ageMs = bootstrapCacheAge(cacheKey);
       const shouldFetchBootstrap =

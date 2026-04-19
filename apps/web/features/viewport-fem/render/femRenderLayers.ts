@@ -6,6 +6,8 @@
  * can toggle/clip/style independently.
  */
 
+import { DEFAULT_VIEWPORT_VISUAL_PROFILE } from "../../../lib/profiles/frontendRuntimeProfiles";
+
 export type FemLayerKind =
   | "surface"
   | "edges"
@@ -35,10 +37,10 @@ export interface FemRenderLayerSet {
 export function createDefaultLayerSet(): FemRenderLayerSet {
   return {
     surface: { kind: "surface", visible: true, opacity: 1, order: 0 },
-    edges: { kind: "edges", visible: true, opacity: 0.4, order: 1 },
-    arrows: { kind: "arrows", visible: false, opacity: 1, order: 2 },
+    edges: { kind: "edges", visible: true, opacity: DEFAULT_VIEWPORT_VISUAL_PROFILE.edgeLayerOpacity, order: 1 },
+    arrows: { kind: "arrows", visible: DEFAULT_VIEWPORT_VISUAL_PROFILE.defaultArrowVisibility, opacity: 1, order: 2 },
     clipPlane: { kind: "clip-plane", visible: false, opacity: 1, order: 3 },
-    airGhost: { kind: "air-ghost", visible: false, opacity: 0.15, order: 4 },
+    airGhost: { kind: "air-ghost", visible: false, opacity: DEFAULT_VIEWPORT_VISUAL_PROFILE.airGhostOpacity, order: 4 },
     selectionHighlight: { kind: "selection-highlight", visible: false, opacity: 1, order: 5 },
     boundary: { kind: "boundary", visible: false, opacity: 0.3, order: 6 },
   };

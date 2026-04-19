@@ -24,6 +24,8 @@ import type {
   ScriptBuilderState,
 } from "@/lib/useSessionStream";
 import type { SessionState } from "@/lib/session/types";
+import type { FieldFrameEnvelope } from "@/lib/fieldFrame/types";
+import { buildEnvelopeFromLegacyState } from "@/lib/fieldFrame/envelopeAdapter";
 
 // Empty stable arrays to avoid unnecessary re-renders
 const EMPTY_SCALAR_ROWS: ScalarRow[] = [];
@@ -49,6 +51,8 @@ export interface NormalizedSessionState {
   stepUpdateV2: StepUpdateV2 | null;
   workspaceStatus: string;
   isFemBackend: boolean;
+  /** Canonical field-frame envelope synthesized from legacy state. */
+  fieldFrameEnvelope: FieldFrameEnvelope | null;
 }
 
 /**
@@ -78,6 +82,7 @@ export function deriveSessionReadModel(
       stepUpdateV2: null,
       workspaceStatus: "idle",
       isFemBackend: false,
+      fieldFrameEnvelope: null,
     };
   }
 
@@ -137,5 +142,15 @@ export function deriveSessionReadModel(
     stepUpdateV2,
     workspaceStatus,
     isFemBackend,
+    fieldFrameEnvelope: buildEnvelopeFromLegacyState({
+      sessionId: session?.session_id ?? null,
+      runId: run?.run_id ?? null,
+      liveState,
+      femMesh,
+      preview,
+      stepUpdateV2,
+      isFemBackend,
+      quantityId: "m",
+    }),
   };
 }

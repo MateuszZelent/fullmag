@@ -1,0 +1,142 @@
+import { describe, expect, it } from "vitest";
+
+import { buildEnvelopeFromLegacyState, type EnvelopeAdapterInput } from "../envelopeAdapter";
+
+function makeInput(overrides: Partial<EnvelopeAdapterInput> = {}): EnvelopeAdapterInput {
+  return {
+    sessionId: "session-1",
+    runId: "run-1",
+    liveState: {
+      status: "running",
+      updated_at_unix_ms: Date.now(),
+      step: 42,
+      time: 1e-10,
+      dt: 1e-13,
+      e_ex: 0,
+      e_demag: 0,
+      e_ext: 0,
+      e_ani: 0,
+      e_dmi: 0,
+      e_total: 0,
+      max_dm_dt: 0,
+      max_h_eff: 0,
+      max_h_demag: 0,
+      wall_time_ns: 0,
+      grid: [32, 32, 1] as [number, number, number],
+      preview_grid: null,
+      preview_data_points_count: null,
+      preview_max_points: null,
+      preview_auto_downscaled: false,
+      preview_auto_downscale_message: null,
+      fem_mesh: null,
+      magnetization: null,
+      finished: false,
+    },
+    femMesh: null,
+    preview: null,
+    stepUpdateV2: null,
+    isFemBackend: false,
+    quantityId: "m",
+    ...overrides,
+  };
+}
+
+describe("buildEnvelopeFromLegacyState", () => {
+  it("returns null when sessionId is missing", () => {
+    const result = buildEnvelopeFromLegacyState(makeInput({ sessionId: null }));
+    expect(result).toBeNull();
+  });
+
+  it("returns null when runId is missing", () => {
+    const result = buildEnvelopeFromLegacyState(makeInput({ runId: null }));
+    expect(result).toBeNull();
+  });
+
+  it("returns null when both liveState and stepUpdateV2 are null", () => {
+    const result = buildEnvelopeFromLegacyState(
+      makeInput({ liveState: null, stepUpdateV2: null }),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("builds envelope from liveState for FDM", () => {
+    const result = buildEnvelopeFromLegacyState(makeInput());
+    expect(result).not.toBeNull();
+    expect(result!.sessionId).toBe("session-1");
+    expect(result!.runId).toBe("run-1");
+    expect(result!.sourceStep).toBe(42);
+    expect(result!.location).toBe("grid_cell");
+    expect(result!.quantityId).toBe("m");
+    expect(result!.domain).toBe("magnetic_only");
+    expect(result!.backendEpoch).toBe(0);
+  });
+
+  it("uses mesh generation id from femMesh for FEM", () => {
+    const result = buildEnvelopeFromLegacyState(
+      makeInput({
+        isFemBackend: true,
+        femMesh: {
+          nodes: [],
+          elements: [],
+          boundary_faces: [],
+          generation_id: "gen-42",
+        },
+      }),
+    );
+    expect(result).not.toBeNull();
+    expect(result!.meshGenerationId).toBe("gen-42");
+    expect(result!.location).toBe("node");
+  });
+
+  it("falls back to mesh_id when generation_id is absent", () => {
+    const result = buildEnvelopeFromLegacyState(
+      makeInput({
+        isFemBackend: true,
+        femMesh: {
+          nodes: [],
+          elements: [],
+          boundary_faces: [],
+          mesh_id: "mesh-99",
+        },
+      }),
+    );
+    expect(result).not.toBeNull();
+    expect(result!.meshGenerationId).toBe("mesh-99");
+  });
+
+  it("prefers stepUpdateV2 diagnostics over liveState", () => {
+    const result = buildEnvelopeFromLegacyState(
+      makeInput({
+        stepUpdateV2: {
+          diagnostics: {
+            step: 100,
+            time: 5e-10,
+            dt: 2e-13,
+            wall_time_ns: 1000,
+          },
+          scalars: {
+            step: 100,
+            time: 5e-10,
+            mx: 0,
+            my: 0,
+            mz: 1,
+            e_ex: 0,
+            e_demag: 0,
+            e_ext: 0,
+            e_ani: 0,
+            e_dmi: 0,
+            e_total: 0,
+            max_dm_dt: 0,
+            max_h_eff: 0,
+            max_h_demag: 0,
+          },
+          frames: [],
+          finished: false,
+        },
+      }),
+    );
+    expect(result).not.toBeNull();
+    expect(result!.sourceStep).toBe(100);
+    expect(result!.sourceTime).toBe(5e-10);
+  });
+});

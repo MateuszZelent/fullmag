@@ -171,6 +171,13 @@ export interface RibbonBuildContext {
   run: (command: RibbonCommand) => void;
   /** Check whether a command can currently execute. */
   can: (command: RibbonCommand) => boolean;
+
+  // ── Geometry Builder state ──
+  builderEnabled: boolean;
+  builderDirtyGeometry: boolean;
+  builderDirtyMesh: boolean;
+  builderHasRealization: boolean;
+  builderSelectedPrimitiveId: string | null;
 }
 
 // ---------------------------------------------------------------------------
