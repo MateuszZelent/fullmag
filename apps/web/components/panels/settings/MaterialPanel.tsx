@@ -9,7 +9,7 @@ import {
   type MagneticPresetDescriptor,
   type MagneticPresetKind,
 } from "../../../lib/magnetizationPresetCatalog";
-import { useCommand } from "../../runs/control-room/context-hooks";
+import { useCommand, useViewport } from "../../runs/control-room/context-hooks";
 import { useModel } from "../../runs/control-room/ControlRoomContext";
 import { fmtSI } from "../../runs/control-room/shared";
 import { TextField } from "../../ui/TextField";
@@ -172,11 +172,16 @@ function eulerDegFromQuat(
 
 export default function MaterialPanel({
   nodeId,
+  mode = "magneticParameters",
 }: {
   nodeId?: string;
+  mode?: "magneticParameters" | "magneticTexture";
 }) {
   const cmd = useCommand();
+  const viewport = useViewport();
   const model = useModel();
+  const showMagneticParametersPanel = mode === "magneticParameters";
+  const showMagneticTexturePanel = mode === "magneticTexture";
 
   const { object: sceneObject, material, magnetization } = useMemo(
     () => findSceneObjectByNodeId(nodeId, model.sceneDocument),
@@ -784,7 +789,7 @@ export default function MaterialPanel({
       processedSpins: totalSpins != null ? 0 : null,
       message: isPresetTexture
         ? "Trwa tworzenie tekstury magnetycznej…"
-        : "Trwa synchronizacja magnetyzacji…",
+        : "Trwa synchronizacja magnetic texture…",
       canRetryRefresh: false,
     });
 
@@ -839,8 +844,8 @@ export default function MaterialPanel({
           processedSpins: null,
           message:
             error instanceof Error
-              ? `Błąd synchronizacji magnetyzacji: ${error.message}`
-              : "Błąd synchronizacji magnetyzacji z backendem.",
+              ? `Błąd synchronizacji magnetic texture: ${error.message}`
+              : "Błąd synchronizacji magnetic texture z backendem.",
           canRetryRefresh: false,
         });
         setPresetTextureModalOpen(true);
@@ -855,9 +860,61 @@ export default function MaterialPanel({
     setPresetTextureSync,
     targetSpinCount,
   ]);
+  const lastAutoAppliedMagnetizationHashRef = useRef<string | null>(null);
+  const requestAutoApplyMagnetization = useCallback(() => {
+    if (
+      !showMagneticTexturePanel ||
+      !isMagnetizationDirty ||
+      isMagnetizationSyncBusy ||
+      !magnetizationAssetHash ||
+      !model.sceneDocument
+    ) {
+      return;
+    }
+    if (lastAutoAppliedMagnetizationHashRef.current === magnetizationAssetHash) {
+      return;
+    }
+    lastAutoAppliedMagnetizationHashRef.current = magnetizationAssetHash;
+    const scenePayload = model.sceneDocument;
+    void liveApi
+      .updateSceneDocument(scenePayload)
+      .then(async (committedScene) => {
+        model.setSceneDocument(committedScene);
+        await model.refreshLiveState({ forceBootstrap: true });
+      })
+      .catch(() => {
+        lastAutoAppliedMagnetizationHashRef.current = null;
+      });
+  }, [
+    isMagnetizationDirty,
+    isMagnetizationSyncBusy,
+    liveApi,
+    magnetizationAssetHash,
+    model,
+    showMagneticTexturePanel,
+  ]);
+  useEffect(() => {
+    if (!isMagnetizationDirty) {
+      lastAutoAppliedMagnetizationHashRef.current = null;
+    }
+  }, [isMagnetizationDirty, magnetizationAssetHash]);
+  const previousViewportModeRef = useRef(viewport.workspaceMode);
+  const previousTexturePanelVisibilityRef = useRef(showMagneticTexturePanel);
+  useEffect(() => {
+    const leftBuild =
+      previousViewportModeRef.current === "build" && viewport.workspaceMode !== "build";
+    const leftTexturePanel =
+      previousTexturePanelVisibilityRef.current && !showMagneticTexturePanel;
+    if (leftBuild || leftTexturePanel) {
+      requestAutoApplyMagnetization();
+    }
+    previousViewportModeRef.current = viewport.workspaceMode;
+    previousTexturePanelVisibilityRef.current = showMagneticTexturePanel;
+  }, [requestAutoApplyMagnetization, showMagneticTexturePanel, viewport.workspaceMode]);
 
   useEffect(() => {
     return () => {
+      requestAutoApplyMagnetization();
       if (presetTextureSyncTickerRef.current) {
         clearInterval(presetTextureSyncTickerRef.current);
       }
@@ -865,14 +922,23 @@ export default function MaterialPanel({
         clearTimeout(presetTextureSyncModalTimerRef.current);
       }
     };
-  }, []);
+  }, [requestAutoApplyMagnetization]);
 
   if (!sceneObject || !materialAsset || !magnetizationAsset) {
     if (!model.material) {
-      return <div className="font-mono text-xs text-foreground">Material metadata not available yet.</div>;
+      return (
+        <div className="font-mono text-xs text-foreground">
+          {showMagneticTexturePanel
+            ? "Magnetic texture metadata not available yet."
+            : "Magnetic parameter metadata not available yet."}
+        </div>
+      );
     }
     return (
-      <SidebarSection title="Material" defaultOpen={true}>
+      <SidebarSection
+        title={showMagneticTexturePanel ? "Magnetic Texture" : "Magnetic Parameters"}
+        defaultOpen={true}
+      >
         <div className="flex flex-col gap-0.5">
           <InfoRow label="M_sat" value={model.material.msat != null ? fmtSI(model.material.msat, "A/m") : "—"} />
           <InfoRow label="A_ex" value={model.material.aex != null ? fmtSI(model.material.aex, "J/m") : "—"} />
@@ -1002,6 +1068,8 @@ export default function MaterialPanel({
 
   return (
     <div className="flex flex-col px-2 pt-4">
+      {showMagneticParametersPanel ? (
+        <>
       <SidebarSection title="Material Constants" defaultOpen={true}>
         <div className="grid grid-cols-2 gap-3">
           <TextField label="Ms (Saturation)" defaultValue={mat.Ms ?? ""} onBlur={(e) => handleMatNum("Ms", e.target.value)} unit="A/m" mono tooltip="Saturation magnetization of the material." />
@@ -1123,11 +1191,14 @@ export default function MaterialPanel({
           ) : null}
         </div>
       </SidebarSection>
+        </>
+      ) : null}
 
-      <SidebarSection title="Initial Magnetization (m0)" defaultOpen={true}>
+      {showMagneticTexturePanel ? (
+      <SidebarSection title="Magnetic Texture (m0)" defaultOpen={true}>
         <div className="flex flex-col gap-4">
           <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2 text-xs text-muted-foreground">
-            This editor updates the same magnetization asset referenced by the selected object and its region node.
+            This editor updates the magnetic texture asset referenced by the selected object.
           </div>
 
           {showMagnetizationOverview ? (
@@ -1135,7 +1206,7 @@ export default function MaterialPanel({
               <div className="rounded-xl border border-border/30 bg-card/15 p-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-medium text-foreground">Magnetization Overview</div>
+                    <div className="text-sm font-medium text-foreground">Magnetic Texture Overview</div>
                     <div className="text-[0.72rem] text-muted-foreground">
                       Jeden asset steruje zarówno węzłem obiektu, jak i regionem. Szczegóły otwieraj przez osobne podwęzły `Texture` i `Transform`.
                     </div>
@@ -1192,7 +1263,7 @@ export default function MaterialPanel({
                 </div>
                 {!transformAvailable ? (
                   <div className="mt-3 rounded-lg border border-border/25 bg-background/30 px-3 py-2 text-[0.72rem] text-muted-foreground">
-                    Transform tekstury magnetyzacji jest osobnym modułem względem transformacji geometrii i uaktywnia się dopiero dla `Preset Texture`.
+                    Transform magnetic texture jest osobnym modułem względem transformacji geometrii i uaktywnia się dopiero dla `Preset Texture`.
                   </div>
                 ) : null}
               </div>
@@ -1251,7 +1322,7 @@ export default function MaterialPanel({
                 />
               </div>
               <div className="rounded-lg border border-border/30 bg-background/35 px-3 py-2 text-[0.72rem] text-muted-foreground">
-                Biblioteka presetów i edytor poniżej operują na tym samym assetcie. Transform tekstury ma osobny widok, więc tutaj edytujesz tylko typ i parametry magnetyzacji.
+                Biblioteka presetów i edytor poniżej operują na tym samym assetcie. Transform tekstury ma osobny widok, więc tutaj edytujesz tylko typ i parametry magnetic texture.
               </div>
               <SelectField
                 label="Texture Kind"
@@ -1444,7 +1515,7 @@ export default function MaterialPanel({
                     <div>
                       <div className="text-sm font-medium text-foreground">Texture Transform</div>
                       <div className="text-[0.72rem] text-muted-foreground">
-                        Transform magnetyzacji jest osobnym modułem od transform geometrii obiektu. Ten widok steruje tylko przestrzennym osadzeniem tekstury m0.
+                        Transform magnetic texture jest osobnym modułem od transform geometrii obiektu. Ten widok steruje tylko przestrzennym osadzeniem tekstury m0.
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
@@ -1617,7 +1688,7 @@ export default function MaterialPanel({
                       ))}
                     </div>
                     <div className="mt-3 rounded-lg border border-border/20 bg-background/20 px-3 py-2 text-[0.72rem] text-muted-foreground">
-                      `Translate` przesuwa teksturę magnetyzacji względem obiektu. Nie zmienia geometrii obiektu ani jego placementu w scenie.
+                      `Translate` przesuwa magnetic texture względem obiektu. Nie zmienia geometrii obiektu ani jego placementu w scenie.
                     </div>
                   </div>
                 ) : null}
@@ -1763,12 +1834,13 @@ export default function MaterialPanel({
           </div>
         </div>
       </SidebarSection>
-      {mag.kind === "preset_texture" && presetTextureModalOpen && typeof document !== "undefined"
+      ) : null}
+      {showMagneticTexturePanel && mag.kind === "preset_texture" && presetTextureModalOpen && typeof document !== "undefined"
         ? createPortal(
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
           <div className="w-full max-w-lg rounded-2xl border border-border/40 bg-background/95 p-4 shadow-[0_20px_90px_rgba(0,0,0,0.55)]">
             <div className="mb-2 text-[0.72rem] font-semibold uppercase tracking-[0.14em] text-primary/90">
-              Magnetization Texture Apply
+              Magnetic Texture Apply
             </div>
             <div className="text-sm font-medium text-foreground">
               {presetTextureSync.status === "syncing"
@@ -1833,7 +1905,7 @@ export default function MaterialPanel({
         document.body,
       )
         : null}
-      {numericTransformOpen ? (
+      {showMagneticTexturePanel && numericTransformOpen ? (
         <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/65 px-6 py-8 backdrop-blur-sm">
           <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/12 bg-[linear-gradient(180deg,rgba(20,26,42,0.98),rgba(10,14,24,0.99))] shadow-[0_24px_120px_rgba(0,0,0,0.58)]">
             <div className="border-b border-white/10 px-5 py-3.5">

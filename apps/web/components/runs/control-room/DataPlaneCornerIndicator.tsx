@@ -1,49 +1,89 @@
 "use client";
 
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
 import { cn } from "@/lib/utils";
 
 type IndicatorTone = "ok" | "warn" | "error";
 
-export const DataPlaneCornerIndicator = memo(function DataPlaneCornerIndicator() {
+export const DataPlaneCornerIndicator = memo(function DataPlaneCornerIndicator({
+  lastDataTimestamp,
+  label = "Backend refreshed",
+}: {
+  lastDataTimestamp?: number | null;
+  label?: string;
+}) {
   const connection = useSessionRuntimeStore((s) => s.connection);
   const liveState = useSessionRuntimeStore((s) => s.liveState);
   const stepUpdateV2 = useSessionRuntimeStore((s) => s.stepUpdateV2);
   const isFemBackend = useSessionRuntimeStore((s) => s.isFemBackend);
   const femMesh = useSessionRuntimeStore((s) => s.femMesh);
+  const lastUpdateTimestamp = useSessionRuntimeStore((s) => s.lastUpdateTimestamp);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const indicator = useMemo(() => {
     const step = stepUpdateV2?.diagnostics?.step ?? liveState?.step ?? null;
     const meshGen = isFemBackend ? femMesh?.generation_id ?? femMesh?.mesh_id ?? null : null;
+    const effectiveTimestamp = lastDataTimestamp ?? lastUpdateTimestamp;
+    const ageMs = effectiveTimestamp != null ? Math.max(0, now - effectiveTimestamp) : null;
+    const ageLabel =
+      ageMs == null
+        ? "waiting for backend"
+        : ageMs < 1000
+          ? `${ageMs} ms ago`
+          : `${(ageMs / 1000).toFixed(ageMs < 10_000 ? 1 : 0)} s ago`;
 
     if (connection === "disconnected") {
       return {
-        label: "Live disconnected",
-        detail: step != null ? `last step ${step}` : "waiting for reconnect",
+        label: "Backend offline",
+        detail: step != null ? `last step ${step} • ${ageLabel}` : ageLabel,
         tone: "error" as IndicatorTone,
       };
     }
     if (connection === "connecting") {
       return {
-        label: "Live connecting",
-        detail: step != null ? `step ${step}` : "syncing snapshot",
+        label: "Backend syncing",
+        detail: step != null ? `step ${step} • ${ageLabel}` : ageLabel,
         tone: "warn" as IndicatorTone,
       };
     }
+    const tone: IndicatorTone =
+      ageMs == null
+        ? "warn"
+        : ageMs < 1500
+          ? "ok"
+          : ageMs < 5000
+            ? "warn"
+            : "error";
     return {
-      label: "Live synced",
+      label,
       detail:
-        meshGen != null
-          ? `step ${step ?? 0} • mesh ${String(meshGen).slice(0, 6)}`
+        meshGen != null && step != null
+          ? `${ageLabel} • step ${step} • mesh ${String(meshGen).slice(0, 6)}`
           : step != null
-            ? `step ${step}`
-            : isFemBackend
-              ? "FEM snapshot ready"
-              : "FDM snapshot ready",
-      tone: "ok" as IndicatorTone,
+            ? `${ageLabel} • step ${step}`
+            : ageLabel,
+      tone,
     };
-  }, [connection, femMesh?.generation_id, femMesh?.mesh_id, isFemBackend, liveState?.step, stepUpdateV2?.diagnostics?.step]);
+  }, [
+    connection,
+    femMesh?.generation_id,
+    femMesh?.mesh_id,
+    isFemBackend,
+    label,
+    lastDataTimestamp,
+    lastUpdateTimestamp,
+    liveState?.step,
+    now,
+    stepUpdateV2?.diagnostics?.step,
+  ]);
 
   return (
     <div className="pointer-events-none rounded-full border border-border/35 bg-background/85 px-3 py-1.5 shadow-[0_4px_16px_rgba(0,0,0,0.35)] backdrop-blur-md">

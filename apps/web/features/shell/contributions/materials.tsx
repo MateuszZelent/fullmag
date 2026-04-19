@@ -40,26 +40,15 @@ function buildMaterialsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
       tone: "selection",
       actions: [
         selectionAction(objectId, {
-          id: "materials-open-material",
+          id: "materials-open-parameters",
           icon: <FlaskConical size={20} />,
-          label: "Material",
-          tooltip: "Open material constants for the selected ferromagnet",
-          action: () => {
-            if (!objectId) return;
-            ctx.run({ id: "navigation.select-node", nodeId: `mat-${objectId}` });
-          },
-          iconColor: "text-amber-400",
-        }),
-        selectionAction(objectId, {
-          id: "materials-open-physics",
-          icon: <Magnet size={20} />,
-          label: "Physics",
-          tooltip: "Open the magnetic interactions stack for the selected ferromagnet",
+          label: "Parameters",
+          tooltip: "Open magnetic parameters for the selected ferromagnet",
           action: () => {
             if (!objectId) return;
             ctx.run({ id: "navigation.select-node", nodeId: `physobj-${objectId}` });
           },
-          iconColor: "text-violet-400",
+          iconColor: "text-amber-400",
         }),
         selectionAction(objectId, {
           id: "materials-add-dmi",
@@ -109,15 +98,15 @@ function buildMaterialsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     },
     {
       id: "materials-magnetization",
-      title: "Magnetization",
+      title: "Magnetic Texture",
       subtitle: "Texture presets",
       tone: "authoring",
       actions: [
         selectionAction(objectId, {
-          id: "materials-open-magnetization",
+          id: "materials-open-texture",
           icon: <Magnet size={20} />,
           label: "Inspector",
-          tooltip: "Open magnetization authoring for the selected ferromagnet",
+          tooltip: "Open magnetic texture authoring for the selected ferromagnet",
           action: () => {
             if (!objectId) return;
             ctx.run({ id: "navigation.select-node", nodeId: `mag-${objectId}` });
@@ -128,7 +117,7 @@ function buildMaterialsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           id: "materials-mag-uniform",
           icon: <Magnet size={20} />,
           label: "Uniform",
-          tooltip: "Assign uniform magnetization texture",
+          tooltip: "Assign uniform magnetic texture",
           action: () => {
             if (!objectId) return;
             ctx.run({
@@ -144,7 +133,7 @@ function buildMaterialsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           id: "materials-mag-vortex",
           icon: <Sparkles size={20} />,
           label: "Vortex",
-          tooltip: "Assign vortex magnetization texture",
+          tooltip: "Assign vortex magnetic texture",
           action: () => {
             if (!objectId) return;
             ctx.run({
@@ -160,7 +149,7 @@ function buildMaterialsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           id: "materials-mag-bloch",
           icon: <Target size={20} />,
           label: "Bloch Sky",
-          tooltip: "Assign Bloch skyrmion magnetization texture",
+          tooltip: "Assign Bloch skyrmion magnetic texture",
           action: () => {
             if (!objectId) return;
             ctx.run({
@@ -176,7 +165,7 @@ function buildMaterialsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           id: "materials-mag-neel",
           icon: <Target size={20} />,
           label: "Neel Sky",
-          tooltip: "Assign Neel skyrmion magnetization texture",
+          tooltip: "Assign Neel skyrmion magnetic texture",
           action: () => {
             if (!objectId) return;
             ctx.run({

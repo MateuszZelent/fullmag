@@ -114,6 +114,8 @@ export interface TransportContextValue {
   eTotalSpark: number[];
   preview: PreviewState | null;
   selectedVectors: Float64Array | null;
+  fieldDataRevision: string | null;
+  fieldDataTimestamp: number | null;
   fieldStats: FieldStats | null;
   hasSolverTelemetry: boolean;
 }
@@ -346,6 +348,7 @@ export interface ModelContextValue {
   meshWorkspacePreset: MeshWorkspacePresetId;
   selectedSidebarNodeId: string | null;
   selectedObjectId: string | null;
+  viewportSelectedObjectId: string | null;
   viewportScope: ViewportScope;
   focusObjectRequest: FocusObjectRequest | null;
   objectViewMode: ObjectViewMode;

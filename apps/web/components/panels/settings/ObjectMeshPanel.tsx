@@ -104,6 +104,21 @@ function createInheritedMeshState(): ScriptBuilderPerGeometryMeshEntry {
   };
 }
 
+function coerceObjectMeshState(
+  mesh: ScriptBuilderPerGeometryMeshEntry | null | undefined,
+): ScriptBuilderPerGeometryMeshEntry {
+  const fallback = createInheritedMeshState();
+  if (!mesh) {
+    return fallback;
+  }
+  return {
+    ...fallback,
+    ...mesh,
+    size_fields: Array.isArray(mesh.size_fields) ? mesh.size_fields : fallback.size_fields,
+    operations: Array.isArray(mesh.operations) ? mesh.operations : fallback.operations,
+  };
+}
+
 function mapObjectMeshToOptions(
   mesh: ScriptBuilderPerGeometryMeshEntry | null | undefined,
   globalOptions: MeshOptionsState,
@@ -115,87 +130,88 @@ function mapObjectMeshToOptions(
   if (!mesh) {
     return effective;
   }
+  const safeMesh = coerceObjectMeshState(mesh);
   const transitionGrowthText =
-    typeof mesh.transition_growth === "number" && Number.isFinite(mesh.transition_growth)
-      ? String(mesh.transition_growth)
+    typeof safeMesh.transition_growth === "number" && Number.isFinite(safeMesh.transition_growth)
+      ? String(safeMesh.transition_growth)
       : "";
 
   return {
     ...effective,
     hmax:
-      (mesh.maximum_element_size ?? mesh.hmax).trim().length > 0
-        ? (mesh.maximum_element_size ?? mesh.hmax)
+      (safeMesh.maximum_element_size ?? safeMesh.hmax).trim().length > 0
+        ? (safeMesh.maximum_element_size ?? safeMesh.hmax)
         : effective.hmax,
     hmin:
-      (mesh.minimum_element_size ?? mesh.hmin).trim().length > 0
-        ? (mesh.minimum_element_size ?? mesh.hmin)
+      (safeMesh.minimum_element_size ?? safeMesh.hmin).trim().length > 0
+        ? (safeMesh.minimum_element_size ?? safeMesh.hmin)
         : effective.hmin,
-    sizeControlMode: mesh.size_mode === "custom" ? "custom" : effective.sizeControlMode,
+    sizeControlMode: safeMesh.size_mode === "custom" ? "custom" : effective.sizeControlMode,
     calibrateFor:
-      typeof mesh.calibrate_for === "string" && mesh.calibrate_for.trim().length > 0
-        ? mesh.calibrate_for
+      typeof safeMesh.calibrate_for === "string" && safeMesh.calibrate_for.trim().length > 0
+        ? safeMesh.calibrate_for
         : effective.calibrateFor,
     sizePreset:
-      typeof mesh.size_preset === "string" && mesh.size_preset.trim().length > 0
-        ? mesh.size_preset
+      typeof safeMesh.size_preset === "string" && safeMesh.size_preset.trim().length > 0
+        ? safeMesh.size_preset
         : effective.sizePreset,
     maximumElementSize:
-      (mesh.maximum_element_size ?? mesh.hmax).trim().length > 0
-        ? (mesh.maximum_element_size ?? mesh.hmax)
+      (safeMesh.maximum_element_size ?? safeMesh.hmax).trim().length > 0
+        ? (safeMesh.maximum_element_size ?? safeMesh.hmax)
         : effective.maximumElementSize,
     minimumElementSize:
-      (mesh.minimum_element_size ?? mesh.hmin).trim().length > 0
-        ? (mesh.minimum_element_size ?? mesh.hmin)
+      (safeMesh.minimum_element_size ?? safeMesh.hmin).trim().length > 0
+        ? (safeMesh.minimum_element_size ?? safeMesh.hmin)
         : effective.minimumElementSize,
-    algorithm2d: mesh.algorithm_2d ?? effective.algorithm2d,
-    algorithm3d: mesh.algorithm_3d ?? effective.algorithm3d,
-    sizeFactor: mesh.size_factor ?? effective.sizeFactor,
-    sizeFromCurvature: mesh.size_from_curvature ?? effective.sizeFromCurvature,
+    algorithm2d: safeMesh.algorithm_2d ?? effective.algorithm2d,
+    algorithm3d: safeMesh.algorithm_3d ?? effective.algorithm3d,
+    sizeFactor: safeMesh.size_factor ?? effective.sizeFactor,
+    sizeFromCurvature: safeMesh.size_from_curvature ?? effective.sizeFromCurvature,
     curvatureFactor:
-      mesh.curvature_factor?.trim().length
-        ? mesh.curvature_factor
+      safeMesh.curvature_factor?.trim().length
+        ? safeMesh.curvature_factor
         : effective.curvatureFactor,
-    growthRate: mesh.growth_rate.trim().length > 0 ? mesh.growth_rate : effective.growthRate,
+    growthRate: safeMesh.growth_rate.trim().length > 0 ? safeMesh.growth_rate : effective.growthRate,
     maximumElementGrowthRate:
-      mesh.maximum_element_growth_rate?.trim().length
-        ? mesh.maximum_element_growth_rate
+      safeMesh.maximum_element_growth_rate?.trim().length
+        ? safeMesh.maximum_element_growth_rate
         : effective.maximumElementGrowthRate,
-    narrowRegions: mesh.narrow_regions ?? effective.narrowRegions,
+    narrowRegions: safeMesh.narrow_regions ?? effective.narrowRegions,
     narrowRegionResolution:
-      mesh.narrow_region_resolution?.trim().length
-        ? mesh.narrow_region_resolution
+      safeMesh.narrow_region_resolution?.trim().length
+        ? safeMesh.narrow_region_resolution
         : effective.narrowRegionResolution,
     resolvedSizeFromCurvature:
-      mesh.resolved_size_from_curvature ?? effective.resolvedSizeFromCurvature,
-    resolvedNarrowRegions: mesh.resolved_narrow_regions ?? effective.resolvedNarrowRegions,
+      safeMesh.resolved_size_from_curvature ?? effective.resolvedSizeFromCurvature,
+    resolvedNarrowRegions: safeMesh.resolved_narrow_regions ?? effective.resolvedNarrowRegions,
     resolvedGrowthRate:
-      mesh.resolved_growth_rate?.trim().length
-        ? mesh.resolved_growth_rate
+      safeMesh.resolved_growth_rate?.trim().length
+        ? safeMesh.resolved_growth_rate
         : effective.resolvedGrowthRate,
     interfaceHMax:
-      mesh.interface_hmax?.trim().length
-        ? mesh.interface_hmax
+      safeMesh.interface_hmax?.trim().length
+        ? safeMesh.interface_hmax
         : effective.interfaceHMax,
     interfaceThickness:
-      mesh.interface_thickness?.trim().length
-        ? mesh.interface_thickness
+      safeMesh.interface_thickness?.trim().length
+        ? safeMesh.interface_thickness
         : effective.interfaceThickness,
     transitionDistance:
-      mesh.transition_distance?.trim().length
-        ? mesh.transition_distance
+      safeMesh.transition_distance?.trim().length
+        ? safeMesh.transition_distance
         : effective.transitionDistance,
     transitionGrowth:
       transitionGrowthText.trim().length > 0
         ? transitionGrowthText
         : effective.transitionGrowth,
-    smoothingSteps: mesh.smoothing_steps ?? effective.smoothingSteps,
-    optimize: mesh.optimize ?? effective.optimize,
-    optimizeIters: mesh.optimize_iterations ?? effective.optimizeIters,
-    computeQuality: mesh.compute_quality ?? effective.computeQuality,
-    perElementQuality: mesh.per_element_quality ?? effective.perElementQuality,
+    smoothingSteps: safeMesh.smoothing_steps ?? effective.smoothingSteps,
+    optimize: safeMesh.optimize ?? effective.optimize,
+    optimizeIters: safeMesh.optimize_iterations ?? effective.optimizeIters,
+    computeQuality: safeMesh.compute_quality ?? effective.computeQuality,
+    perElementQuality: safeMesh.per_element_quality ?? effective.perElementQuality,
     refinementZones:
-      mesh.size_fields.length > 0
-        ? mesh.size_fields.map((field) => ({
+      safeMesh.size_fields.length > 0
+        ? safeMesh.size_fields.map((field) => ({
             kind: field.kind,
             params: field.params as Record<string, string | number | number[]>,
           }))
@@ -358,10 +374,10 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
     [geoIndex, model],
   );
 
-  const mesh = geo?.mesh ?? createInheritedMeshState();
+  const mesh = useMemo(() => coerceObjectMeshState(geo?.mesh), [geo?.mesh]);
   const effectiveOptions = useMemo(
-    () => mapObjectMeshToOptions(geo?.mesh, model.meshOptions),
-    [geo?.mesh, model.meshOptions],
+    () => mapObjectMeshToOptions(mesh, model.meshOptions),
+    [mesh, model.meshOptions],
   );
   const effectiveOrder = mesh.order ?? model.meshFeOrder ?? null;
   const effectiveSource = mesh.source ?? model.meshSource ?? null;

@@ -153,6 +153,10 @@ export type {
 } from "./context-hooks";
 import { useModelBuilderActions } from "./hooks/useModelBuilderActions";
 import {
+  resolveViewportSelectedObjectId,
+  selectViewportVectorField,
+} from "./viewportSelection";
+import {
   TransportCtx,
   ViewportCtx,
   CommandCtx,
@@ -294,6 +298,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     selectedFaceIndices: [],
     primaryFaceIndex: null,
   });
+  const stickyViewportObjectIdRef = useRef<string | null>(null);
+  const lastFieldDataRevisionRef = useRef<string | null>(null);
+  const fieldDataTimestampRef = useRef<number | null>(null);
 
   const activeWorkspaceTab = useMemo(
     () => workspaceTabs.find((tab) => tab.id === activeWorkspaceTabId) ?? null,
@@ -764,6 +771,29 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     }
     setSelectedObjectId(null);
   }, [sceneObjects, selectedObjectId]);
+  useEffect(() => {
+    if (selectedObjectId) {
+      stickyViewportObjectIdRef.current = selectedObjectId;
+      return;
+    }
+    const viewportSelection = resolveViewportSelectedObjectId({
+      selectedObjectId,
+      selectedSidebarNodeId,
+      stickyObjectId: stickyViewportObjectIdRef.current,
+    });
+    if (!viewportSelection) {
+      stickyViewportObjectIdRef.current = null;
+    }
+  }, [selectedObjectId, selectedSidebarNodeId]);
+  const viewportSelectedObjectId = useMemo(
+    () =>
+      resolveViewportSelectedObjectId({
+        selectedObjectId,
+        selectedSidebarNodeId,
+        stickyObjectId: stickyViewportObjectIdRef.current,
+      }),
+    [selectedObjectId, selectedSidebarNodeId],
+  );
   const localBuilderSignature = useMemo(
     () =>
       sceneDocumentDraft != null
@@ -1556,36 +1586,31 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const selectedFieldDomain =
     (selectedFieldFrame?.domain as "magnetic_only" | "full_domain" | "surface_only" | null | undefined)
     ?? null;
-  const renderPreviewMatchesActiveQuantity = renderPreview?.quantity === activeQuantityId;
-
-  const selectedVectors = useMemo(() => {
-    if (isGlobalScalarQuantity(activeQuantityId)) return null;
-    const liveField = fieldMap[activeQuantityId] ?? null;
-    // If the server-provided render preview explicitly matches the active quantity,
-    // prefer using the preview payload first. This ensures UI-driven texture/preview
-    // edits take immediate effect even when a live_field exists (FEM workflows
-    // frequently rely on preview frames which may be higher-resolution or more
-    // up-to-date right after user edits).
-    if (renderPreviewMatchesActiveQuantity && renderPreview?.vector_field_values) {
-      return renderPreview.vector_field_values;
-    }
-    // Otherwise, fall back to full-resolution live vectors from latest_fields/live_state
-    // (useful for FEM when no active preview is targeted).
-    if (isFemBackend && liveField && liveField.length > 0) {
-      return liveField;
-    }
-    return liveField;
+  const selectedVectorSource = useMemo(() => {
+    const liveField = activeQuantityId ? fieldMap[activeQuantityId] ?? null : null;
+    return selectViewportVectorField({
+      activeQuantityId,
+      requestedPreviewQuantity,
+      previewControlsActive,
+      renderPreview,
+      liveField,
+      isGlobalScalarQuantity,
+    });
   }, [
     activeQuantityId,
     fieldMap,
-    isFemBackend,
     isGlobalScalarQuantity,
-    renderPreviewMatchesActiveQuantity,
-    renderPreview?.vector_field_values,
+    previewControlsActive,
+    renderPreview,
+    requestedPreviewQuantity,
   ]);
+  const selectedVectors = selectedVectorSource.vectors;
   const fieldDataRevision = useMemo(() => {
     if (!selectedFieldFrame || !selectedVectors?.length) {
-      if (renderPreviewMatchesActiveQuantity && renderPreview?.source_step != null) {
+      if (
+        selectedVectorSource.source === "preview" &&
+        renderPreview?.source_step != null
+      ) {
         return [
           "preview",
           activeQuantityId,
@@ -1616,10 +1641,15 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     renderPreview?.source_step,
     renderPreview?.source_time,
     renderPreview?.vector_field_values,
-    renderPreviewMatchesActiveQuantity,
+    selectedVectorSource.source,
     selectedFieldFrame,
     selectedVectors,
   ]);
+  if (fieldDataRevision && fieldDataRevision !== lastFieldDataRevisionRef.current) {
+    lastFieldDataRevisionRef.current = fieldDataRevision;
+    fieldDataTimestampRef.current = Date.now();
+  }
+  const fieldDataTimestamp = fieldDataTimestampRef.current;
 
   const quantityDescriptor = useMemo(
     () => (activeQuantityId ? quantityDescriptorById.get(activeQuantityId) ?? null : null),
@@ -1819,14 +1849,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     elapsed, stepsPerSec,
     liveState, effectiveLiveState, scalarRows, scalarRowsTotal,
     dmDtSpark, dtSpark, eTotalSpark,
-    preview, selectedVectors, fieldStats, hasSolverTelemetry,
+    preview, selectedVectors, fieldDataRevision, fieldDataTimestamp, fieldStats, hasSolverTelemetry,
   }), [
     effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag,
     effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
     elapsed, stepsPerSec,
     liveState, effectiveLiveState, scalarRows, scalarRowsTotal,
     dmDtSpark, dtSpark, eTotalSpark,
-    preview, selectedVectors, fieldStats, hasSolverTelemetry,
+    preview, selectedVectors, fieldDataRevision, fieldDataTimestamp, fieldStats, hasSolverTelemetry,
   ]);
 
   const viewportValue = useMemo<ViewportContextValue>(() => ({
@@ -1974,6 +2004,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshWorkspacePreset,
     selectedSidebarNodeId,
     selectedObjectId,
+    viewportSelectedObjectId,
     viewportScope,
     focusObjectRequest,
     objectViewMode,
@@ -2018,7 +2049,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshSummary, meshName, meshSource, meshExtent, meshBoundsMin, meshBoundsMax, meshFeOrder, liveMeshName,
     domainFrame, worldExtent, worldCenter, worldExtentSource, meshHmax, mesherBackend, mesherSourceKind, mesherCurrentSettings,
     meshWorkspacePreset,
-    selectedSidebarNodeId, selectedObjectId, viewportScope, focusObjectRequest, objectViewMode, airMeshVisible, airMeshOpacity, meshEntityViewState, visibleSubmeshSnapshot, selectedEntityId, focusedEntityId, meshParts, visibleMeshPartIds, visibleMagneticObjectIds, selectedMeshPart, focusedMeshPart, magneticParts, airPart, interfaceParts, analyzeSelection, resultWorkspaceEntries, activeResultWorkspaceId, workspaceTabs, activeWorkspaceTabId, requestFocusObject,
+    selectedSidebarNodeId, selectedObjectId, viewportSelectedObjectId, viewportScope, focusObjectRequest, objectViewMode, airMeshVisible, airMeshOpacity, meshEntityViewState, visibleSubmeshSnapshot, selectedEntityId, focusedEntityId, meshParts, visibleMeshPartIds, visibleMagneticObjectIds, selectedMeshPart, focusedMeshPart, magneticParts, airPart, interfaceParts, analyzeSelection, resultWorkspaceEntries, activeResultWorkspaceId, workspaceTabs, activeWorkspaceTabId, requestFocusObject,
     setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis,
     handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset, createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     applyAntennaTranslation, applyGeometryTranslation, setMeshOptions, setSolverSettings, activeTransformScope,

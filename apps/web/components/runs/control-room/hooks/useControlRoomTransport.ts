@@ -125,6 +125,8 @@ export function useControlRoomTransport(state: SessionState | null): TransportCo
     eTotalSpark,
     preview,
     selectedVectors: null,
+    fieldDataRevision: null,
+    fieldDataTimestamp: null,
     fieldStats: null,
     hasSolverTelemetry,
   }), [

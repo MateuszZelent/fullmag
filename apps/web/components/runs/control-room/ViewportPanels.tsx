@@ -112,13 +112,14 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const spatialPreview = ctx.preview?.kind === "spatial" ? ctx.preview : null;
   const globalScalarPreview = ctx.preview?.kind === "global_scalar" ? ctx.preview : null;
   const hasVectorData = Boolean(ctx.selectedVectors && ctx.selectedVectors.length > 0);
+  const viewportSelectedObjectId = ctx.viewportSelectedObjectId;
   const selectedMagnetizationAsset = useMemo(() => {
-    if (!ctx.sceneDocument || !ctx.selectedObjectId) {
+    if (!ctx.sceneDocument || !viewportSelectedObjectId) {
       return null;
     }
     const selectedObject = ctx.sceneDocument.objects.find(
       (object) =>
-        object.id === ctx.selectedObjectId || object.name === ctx.selectedObjectId,
+        object.id === viewportSelectedObjectId || object.name === viewportSelectedObjectId,
     );
     if (!selectedObject) {
       return null;
@@ -128,18 +129,18 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         (asset) => asset.id === selectedObject.magnetization_ref,
       ) ?? null
     );
-  }, [ctx.sceneDocument, ctx.selectedObjectId]);
+  }, [ctx.sceneDocument, viewportSelectedObjectId]);
   const selectedSceneObject = useMemo(() => {
-    if (!ctx.sceneDocument || !ctx.selectedObjectId) {
+    if (!ctx.sceneDocument || !viewportSelectedObjectId) {
       return null;
     }
     return (
       ctx.sceneDocument.objects.find(
         (object) =>
-          object.id === ctx.selectedObjectId || object.name === ctx.selectedObjectId,
+          object.id === viewportSelectedObjectId || object.name === viewportSelectedObjectId,
       ) ?? null
     );
-  }, [ctx.sceneDocument, ctx.selectedObjectId]);
+  }, [ctx.sceneDocument, viewportSelectedObjectId]);
   const activeTextureMappingSpace =
     selectedMagnetizationAsset?.mapping?.space === "world" ? "world" : "object";
   const localTextureTransform = useMemo(
@@ -192,7 +193,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         ? "scale"
         : "translate";
   const applyTextureTransform = (next: PreviewTextureTransform3D) => {
-    if (!ctx.selectedObjectId) {
+    if (!viewportSelectedObjectId) {
       return;
     }
     ctx.setSceneDocument((previousScene) => {
@@ -201,7 +202,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       }
       const selectedObject = previousScene.objects.find(
         (object) =>
-          object.id === ctx.selectedObjectId || object.name === ctx.selectedObjectId,
+          object.id === viewportSelectedObjectId || object.name === viewportSelectedObjectId,
       );
       if (!selectedObject) {
         return previousScene;
@@ -271,7 +272,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const antennaPreviewBadgeVisible =
     ctx.antennaOverlays.length > 0 &&
     (ctx.requestedPreviewQuantity === "H_ant" || selectedAntennaName != null);
-  const selectedFemObjectId = ctx.selectedObjectId;
+  const selectedFemObjectId = viewportSelectedObjectId;
   const selectedObjectOverlay = useMemo(
     () =>
       selectedFemObjectId
@@ -918,7 +919,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
               discretization: ctx.isFemBackend ? "fem" : "fdm",
             }}
             selection={{
-              selectedObjectId: ctx.selectedObjectId,
+              selectedObjectId: viewportSelectedObjectId,
               selectedEntityId: ctx.selectedEntityId,
               focusedEntityId: ctx.focusedEntityId,
               selectedSidebarNodeId: ctx.selectedSidebarNodeId,
@@ -965,12 +966,14 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                       <VectorFieldView3D
                         grid={ctx.previewGrid}
                         vectors={scaledVectors}
+                        dataTimestamp={ctx.fieldDataTimestamp}
+                        dataTimestampLabel="Texture / arrows"
                         fieldLabel={ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity}
                         geometryMode={false}
                         activeMask={ctx.activeMask}
                         worldExtent={ctx.worldExtent}
                         objectOverlays={ctx.objectOverlays}
-                        selectedObjectId={ctx.selectedObjectId}
+                        selectedObjectId={viewportSelectedObjectId}
                         universeCenter={ctx.worldCenter}
                         focusObjectRequest={ctx.focusObjectRequest}
                         objectViewMode={ctx.objectViewMode}
@@ -1200,8 +1203,15 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
 
   return (
     <div className="flex flex-col flex-1 h-full min-h-0 min-w-0 relative overflow-hidden [&>*]:min-w-0 [&>*]:min-h-0 [&>*:not(.viewportOverlay)]:flex-1 [&>*:not(.viewportOverlay)]:w-full">
-      {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showDataPlaneIndicator ? (
-        <div className="viewportOverlay absolute left-4 top-4 z-[--z-viewport-badge]">
+      {!showFdm3D && FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showDataPlaneIndicator ? (
+        <div
+          className={cn(
+            "viewportOverlay absolute left-4 z-[--z-viewport-badge]",
+            showFdm3D && FRONTEND_DIAGNOSTIC_FLAGS.fdmViewport.showOrientationSphere
+              ? "bottom-[10.5rem]"
+              : "bottom-4",
+          )}
+        >
           <DataPlaneCornerIndicator />
         </div>
       ) : null}
@@ -1270,17 +1280,17 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             </div>
           ) : null}
         </div>
-      ) : FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showFdmSelectionBadges && ctx.selectedObjectId ? (
+      ) : FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showFdmSelectionBadges && viewportSelectedObjectId ? (
         <div className="viewportOverlay absolute right-4 top-14 z-[--z-viewport-badge] flex items-center gap-2">
           <button
             type="button"
             className="pointer-events-auto rounded-full border border-warning/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-warning shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md transition-colors hover:bg-warning/20"
             onClick={() => {
               ctx.handleViewModeChange("3D");
-              ctx.requestFocusObject(ctx.selectedObjectId!);
+              ctx.requestFocusObject(viewportSelectedObjectId);
             }}
           >
-            Focus {ctx.selectedObjectId}
+            Focus {viewportSelectedObjectId}
           </button>
           <div className="pointer-events-auto flex overflow-hidden rounded-full border border-border/40 bg-background/85 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
             <button
@@ -1322,6 +1332,8 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
           <VectorFieldView3D
             grid={ctx.previewGrid}
             vectors={isFdm3DActive ? ctx.selectedVectors : null}
+            dataTimestamp={ctx.fieldDataTimestamp}
+            dataTimestampLabel="Texture / arrows"
             fieldLabel={
               isFdmMeshActive
                 ? "Geometry"
@@ -1331,7 +1343,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             activeMask={ctx.activeMask}
             worldExtent={ctx.worldExtent}
             objectOverlays={ctx.objectOverlays}
-            selectedObjectId={ctx.selectedObjectId}
+            selectedObjectId={viewportSelectedObjectId}
             universeCenter={ctx.worldCenter}
             focusObjectRequest={ctx.focusObjectRequest}
             objectViewMode={ctx.objectViewMode}

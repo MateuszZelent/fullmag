@@ -1823,7 +1823,6 @@ function _buildObjectNode(objectNode: {
 }): TreeNodeData {
   const geo = objectNode.geometry;
   const geometryId = objectNode.tree.geometry;
-  const materialId = objectNode.tree.material;
   const regionId = objectNode.tree.region;
   const meshId = objectNode.tree.mesh;
 
@@ -1876,14 +1875,13 @@ function _buildObjectNode(objectNode: {
         children: geometryChildren,
       },
       _buildRegionNode(geo, regionId),
-      _buildMaterialNode(geo, materialId),
-      _buildObjectPhysicsNode(geo, objectNode.name),
+      _buildMagneticParametersNode(geo, objectNode.name),
       {
         id: `mag-${objectNode.name}`,
         label:
           geo.magnetization.kind === "preset_texture"
-            ? `Magnetization — ${_magnetizationLabel(geo.magnetization)}`
-            : "Magnetization",
+            ? `Magnetic Texture — ${_magnetizationLabel(geo.magnetization)}`
+            : "Magnetic Texture",
         icon: "🧭",
         status: "ready",
         badge:
@@ -1931,59 +1929,6 @@ function _buildObjectNode(objectNode: {
       },
       meshNode,
     ],
-  };
-}
-
-function _buildObjectPhysicsNode(
-  geo: ScriptBuilderGeometryEntry,
-  objectName: string,
-): TreeNodeData {
-  const stack = ensureObjectPhysicsStack(geo.physics_stack, geo.material.Dind);
-  const interactionChildren: TreeNodeData[] = stack.map((entry) => {
-    if (entry.kind === "interfacial_dmi") {
-      const dind = Number(entry.params?.dind ?? geo.material.Dind ?? 0);
-      return {
-        id: `physobj-${objectName}-interfacial_dmi`,
-        label:
-          dind !== 0
-            ? `Interfacial DMI · D = ${dind.toExponential(2)} J/m²`
-            : "Interfacial DMI",
-        icon: "𝐷",
-        status: entry.enabled ? "ready" : "pending",
-        badge: entry.enabled ? undefined : "disabled",
-      };
-    }
-    if (entry.kind === "uniaxial_anisotropy") {
-      const ku1 = Number(entry.params?.ku1 ?? 0);
-      return {
-        id: `physobj-${objectName}-uniaxial_anisotropy`,
-        label:
-          ku1 !== 0
-            ? `Uniaxial Ku · ${ku1.toExponential(2)} J/m³`
-            : "Uniaxial Ku",
-        icon: "K",
-        status: entry.enabled ? "ready" : "pending",
-        badge: entry.enabled ? undefined : "disabled",
-      };
-    }
-    return {
-      id: `physobj-${objectName}-${entry.kind}`,
-      label: magneticInteractionLabel(entry.kind),
-      icon: entry.kind === "exchange" ? "↔" : "🧲",
-      status: entry.enabled ? "ready" : "pending",
-      badge: entry.enabled ? undefined : "disabled",
-    };
-  });
-  const optionalCount = stack.filter(
-    (entry) => entry.kind !== "exchange" && entry.kind !== "demag",
-  ).length;
-  return {
-    id: `physobj-${objectName}`,
-    label: "Magnetic Parameters",
-    icon: "🧲",
-    status: "ready",
-    badge: optionalCount > 0 ? `+${optionalCount}` : "core",
-    children: interactionChildren,
   };
 }
 
@@ -2074,76 +2019,35 @@ function _buildRegionNode(
         id: `${regionId}-item`,
         label: regionName,
         icon: "◫",
-        badge:
-          geo.magnetization.kind === "preset_texture"
-            ? geo.magnetization.preset_kind ?? "preset"
-            : geo.magnetization.kind,
         status: "ready",
-        children: [
-          {
-            id: `${regionId}-texture`,
-            label: `m₀: ${_magnetizationLabel(geo.magnetization)}`,
-            icon: "🧭",
-            status: "ready",
-          },
-	          ...(geo.magnetization.kind === "preset_texture"
-	            ? [
-	                {
-	                  id: `${regionId}-texture-transform`,
-	                  label: "Texture Transform",
-	                  icon: "⟳",
-	                  status: "ready" as const,
-	                  children: [
-	                    {
-	                      id: `${regionId}-texture-transform-translate`,
-	                      label: "Translate",
-	                      icon: "↔",
-	                      status: "ready" as const,
-	                    },
-	                    {
-	                      id: `${regionId}-texture-transform-rotate`,
-	                      label: "Rotate",
-	                      icon: "⤾",
-	                      status: "ready" as const,
-	                    },
-	                    {
-	                      id: `${regionId}-texture-transform-scale`,
-	                      label: "Scale",
-	                      icon: "⬚",
-	                      status: "ready" as const,
-	                    },
-	                  ],
-	                },
-	              ]
-	            : []),
-        ],
+        children: [],
       },
     ],
   };
 }
 
-function _buildMaterialNode(
+function _buildMagneticParametersNode(
   geo: ScriptBuilderGeometryEntry,
-  materialId = `mat-${geo.name}`,
+  objectName: string,
 ): TreeNodeData {
   const mat = geo.material;
-  const mag = geo.magnetization;
+  const stack = ensureObjectPhysicsStack(geo.physics_stack, geo.material.Dind);
 
-  const matChildren: TreeNodeData[] = [
+  const children: TreeNodeData[] = [
     {
-      id: `${materialId}-ms`,
+      id: `physobj-${objectName}-ms`,
       label: mat.Ms != null ? `Ms = ${fmtCompact(mat.Ms)} A/m` : "Ms (saturation)",
       icon: "𝑀",
       status: mat.Ms != null ? "ready" : "pending",
     },
     {
-      id: `${materialId}-aex`,
+      id: `physobj-${objectName}-aex`,
       label: mat.Aex != null ? `A = ${mat.Aex.toExponential(1)} J/m` : "A (exchange)",
       icon: "𝐴",
       status: mat.Aex != null ? "ready" : "pending",
     },
     {
-      id: `${materialId}-alpha`,
+      id: `physobj-${objectName}-alpha`,
       label: `α = ${mat.alpha}`,
       icon: "α",
       status: "ready",
@@ -2151,30 +2055,63 @@ function _buildMaterialNode(
   ];
 
   if (mat.Dind != null) {
-    matChildren.push({
-      id: `${materialId}-dind`,
+    children.push({
+      id: `physobj-${objectName}-dind`,
       label: `Dind = ${mat.Dind.toExponential(1)} J/m²`,
       icon: "𝐷",
       status: "ready",
     });
   }
 
-  // Magnetization node
-  const magLabel = _magnetizationLabel(mag);
-  matChildren.push({
-    id: `${materialId}-m0`,
-    label: `m₀: ${magLabel}`,
-    icon: "🧭",
-    status: "ready",
-    badge: mag.kind,
-  });
+  children.push(
+    ...stack.map((entry): TreeNodeData => {
+      if (entry.kind === "interfacial_dmi") {
+        const dind = Number(entry.params?.dind ?? geo.material.Dind ?? 0);
+        return {
+          id: `physobj-${objectName}-interfacial_dmi`,
+          label:
+            dind !== 0
+              ? `Interfacial DMI · D = ${dind.toExponential(2)} J/m²`
+              : "Interfacial DMI",
+          icon: "𝐷",
+          status: entry.enabled ? "ready" : "pending",
+          badge: entry.enabled ? undefined : "disabled",
+        };
+      }
+      if (entry.kind === "uniaxial_anisotropy") {
+        const ku1 = Number(entry.params?.ku1 ?? 0);
+        return {
+          id: `physobj-${objectName}-uniaxial_anisotropy`,
+          label:
+            ku1 !== 0
+              ? `Uniaxial Ku · ${ku1.toExponential(2)} J/m³`
+              : "Uniaxial Ku",
+          icon: "K",
+          status: entry.enabled ? "ready" : "pending",
+          badge: entry.enabled ? undefined : "disabled",
+        };
+      }
+      return {
+        id: `physobj-${objectName}-${entry.kind}`,
+        label: magneticInteractionLabel(entry.kind),
+        icon: entry.kind === "exchange" ? "↔" : "🧲",
+        status: entry.enabled ? "ready" : "pending",
+        badge: entry.enabled ? undefined : "disabled",
+      };
+    }),
+  );
+
+  const optionalCount = stack.filter(
+    (entry) => entry.kind !== "exchange" && entry.kind !== "demag",
+  ).length;
 
   return {
-    id: materialId,
-    label: "Material & State",
-    icon: "●",
+    id: `physobj-${objectName}`,
+    label: "Magnetic Parameters",
+    icon: "🧲",
     status: mat.Ms != null ? "ready" : "pending",
-    children: matChildren,
+    badge: optionalCount > 0 ? `+${optionalCount}` : "core",
+    children,
   };
 }
 

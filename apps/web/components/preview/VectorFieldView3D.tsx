@@ -61,6 +61,7 @@ import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 import { TransformGizmoLayer } from "./transform/TransformGizmoLayer";
 import { axisLabelsForConvention } from "./transform/axisConvention";
 import { useSceneCameraChange } from "./camera/useSceneCameraChange";
+import { DataPlaneCornerIndicator } from "../runs/control-room/DataPlaneCornerIndicator";
 
 const FDM_AXIS_CONVENTION = "swapYZ" as const;
 
@@ -68,6 +69,8 @@ const FDM_AXIS_CONVENTION = "swapYZ" as const;
 interface Props {
   grid: [number, number, number];
   vectors: Float64Array | null;
+  dataTimestamp?: number | null;
+  dataTimestampLabel?: string;
   fieldLabel?: string;
   geometryMode?: boolean;
   activeMask?: boolean[] | null;
@@ -104,6 +107,14 @@ export type TopoComponent = "x" | "y" | "z";
 
 const DEFAULT_CAMERA_DIRECTION: [number, number, number] = [0, 1, 0];
 const DEFAULT_CAMERA_UP: [number, number, number] = [0, 0, -1];
+const FDM_CAMERA_STATE_CACHE = new Map<
+  string,
+  {
+    position: [number, number, number];
+    up: [number, number, number];
+    target: [number, number, number];
+  }
+>();
 
 // ─── localStorage persistence ───────────────────────────────────────
 const STORAGE_KEYS = {
@@ -647,6 +658,8 @@ function FdmAntennaOverlayMeshes({
 function VectorFieldView3DInner({
   grid,
   vectors,
+  dataTimestamp = null,
+  dataTimestampLabel = "Viewport data",
   fieldLabel = "Vector Field",
   geometryMode = false,
   activeMask = null,
@@ -747,6 +760,11 @@ function VectorFieldView3DInner({
     viewCube: null,
     hsl: null,
   });
+  const cameraPersistenceKey = useMemo(
+    () => `fdm:${geometryMode ? "mesh" : "3d"}:${grid.join("x")}`,
+    [geometryMode, grid],
+  );
+  const cameraRestoreReadyRef = useRef(false);
 
   const [nx, ny, nz] = grid;
   const { cx, cy, cz, orbitDist } = useMemo(() => ({
@@ -772,7 +790,69 @@ function VectorFieldView3DInner({
     }
     updateRotationSnapshot("viewport", captureOrientationDebugSnapshot(bridge.camera));
   }, [updateRotationSnapshot]);
-  useSceneCameraChange(viewCubeSceneRef, syncViewportRotationSnapshot);
+  const persistCameraState = useCallback(() => {
+    if (!cameraRestoreReadyRef.current) {
+      return;
+    }
+    const bridge = viewCubeSceneRef.current;
+    if (!bridge?.camera || !bridge?.controls) {
+      return;
+    }
+    FDM_CAMERA_STATE_CACHE.set(cameraPersistenceKey, {
+      position: [
+        bridge.camera.position.x,
+        bridge.camera.position.y,
+        bridge.camera.position.z,
+      ],
+      up: [bridge.camera.up.x, bridge.camera.up.y, bridge.camera.up.z],
+      target: [
+        bridge.controls.target.x,
+        bridge.controls.target.y,
+        bridge.controls.target.z,
+      ],
+    });
+  }, [cameraPersistenceKey]);
+  const handleSceneCameraChange = useCallback(() => {
+    syncViewportRotationSnapshot();
+    persistCameraState();
+  }, [persistCameraState, syncViewportRotationSnapshot]);
+  useSceneCameraChange(viewCubeSceneRef, handleSceneCameraChange);
+  useEffect(() => {
+    cameraRestoreReadyRef.current = false;
+    let raf = 0;
+    let disposed = false;
+
+    const restore = () => {
+      if (disposed) {
+        return;
+      }
+      const bridge = viewCubeSceneRef.current;
+      if (!bridge?.camera || !bridge?.controls) {
+        raf = window.requestAnimationFrame(restore);
+        return;
+      }
+      const saved = FDM_CAMERA_STATE_CACHE.get(cameraPersistenceKey);
+      if (saved) {
+        bridge.camera.position.set(...saved.position);
+        bridge.camera.up.set(...saved.up);
+        bridge.controls.target.set(...saved.target);
+        bridge.camera.lookAt(...saved.target);
+        bridge.controls.update();
+      }
+      cameraRestoreReadyRef.current = true;
+      syncViewportRotationSnapshot();
+    };
+
+    restore();
+
+    return () => {
+      disposed = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+      persistCameraState();
+    };
+  }, [cameraPersistenceKey, persistCameraState, syncViewportRotationSnapshot]);
 
   // Persist settings changes
   const update = useCallback((patch: Partial<Settings>) => {
@@ -1179,6 +1259,21 @@ function VectorFieldView3DInner({
               size={156}
               onOrientationSnapshot={(snapshot) => updateRotationSnapshot("hsl", snapshot)}
             />
+          ) : null}
+          {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showDataPlaneIndicator ? (
+            <div
+              className={cn(
+                "pointer-events-none",
+                fdmViewportFlags.showOrientationSphere && viewportVisible && !geometryMode
+                  ? "mt-3"
+                  : "",
+              )}
+            >
+              <DataPlaneCornerIndicator
+                lastDataTimestamp={dataTimestamp}
+                label={dataTimestampLabel}
+              />
+            </div>
           ) : null}
         </ViewportOverlayLayout.BottomLeft>
 

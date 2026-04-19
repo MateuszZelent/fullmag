@@ -764,6 +764,12 @@ export default function RunSidebar() {
           vp.handleViewModeChange("3D");
           return;
         }
+        const isMagneticTextureNode = id.startsWith("mag-");
+        if (isMagneticTextureNode) {
+          // Magnetic-texture authoring should only update tree selection/inspector.
+          // It must not mutate viewport mode or carry mesh-workspace render presets into 3D.
+          return;
+        }
         // Per-object mesh nodes (e.g. "geo-nanoflower-mesh") → open mesh workspace
         const isObjectMeshNode = id.startsWith("geo-") && id.endsWith("-mesh");
         if (isObjectMeshNode) {
