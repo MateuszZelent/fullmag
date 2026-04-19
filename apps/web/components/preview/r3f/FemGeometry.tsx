@@ -145,18 +145,14 @@ export const FemGeometry = memo(function FemGeometry({
   const centerZ = globalCenter?.z ?? null;
   const hasFieldColormap = field !== "none";
   const resolvedEdgeColor = useMemo(
-    () => (hasFieldColormap ? "#d1d5db" : edgeColor ?? uniformColor ?? "#dbeafe"),
-    [edgeColor, hasFieldColormap, uniformColor],
+    () =>
+      highlight
+        ? edgeColor ?? "#67e8f9"
+        : hasFieldColormap
+          ? "#d1d5db"
+          : edgeColor ?? uniformColor ?? "#dbeafe",
+    [edgeColor, hasFieldColormap, highlight, uniformColor],
   );
-  const usesNeutralSelectionHighlight = highlight && hasFieldColormap;
-  const resolvedHighlightEmissive = useMemo(() => {
-    if (usesNeutralSelectionHighlight) {
-      return "#f8fafc";
-    }
-    const color = new THREE.Color(uniformColor ?? "#cbd5e1");
-    color.lerp(new THREE.Color("#ffffff"), 0.42);
-    return `#${color.getHexString()}`;
-  }, [uniformColor, usesNeutralSelectionHighlight]);
 
   // ── Topology memo: only rebuilds when mesh structure changes ─────
   // Aux geometries (edges, tetra, points) are split into separate memos
@@ -775,18 +771,18 @@ export const FemGeometry = memo(function FemGeometry({
   const showWire = renderMode === "surface+edges";
   const showVolumeWire = renderMode === "wireframe";
   const showPoints = renderMode === "points" && showPointsPass;
+  const showSelectionWireOverlay = highlight && showSurface && edgesGeometry != null;
 
   const isTransparent = opacity < 100;
   const opacityVal = opacity / 100;
   const surfacePolicy =
-    highlight
-      ? RENDER_POLICIES_V2.selectionShell
-      : isTransparent
-        ? RENDER_POLICIES_V2.contextSurface
-        : RENDER_POLICIES_V2.solidSurface;
+    isTransparent
+      ? RENDER_POLICIES_V2.contextSurface
+      : RENDER_POLICIES_V2.solidSurface;
   const edgePolicy = RENDER_POLICIES_V2.featureEdges;
   const hiddenEdgePolicy = RENDER_POLICIES_V2.hiddenEdges;
   const pointPolicy = RENDER_POLICIES_V2.points;
+  const selectionEdgePolicy = RENDER_POLICIES_V2.selectionShell;
   const remapFaceIndex = useCallback((faceIndex: number | null | undefined) => {
     if (faceIndex == null) {
       return faceIndex ?? null;
@@ -858,10 +854,10 @@ export const FemGeometry = memo(function FemGeometry({
               color={enableGeometryVertexColors ? undefined : uniformColor ?? "#94a3b8"}
               side={surfacePolicy.side}
               flatShading={false}
-              roughness={highlight ? 0.34 : 0.52}
-              metalness={highlight ? 0.08 : 0.03}
-              emissive={highlight ? resolvedHighlightEmissive : "#000000"}
-              emissiveIntensity={highlight ? (usesNeutralSelectionHighlight ? 0.12 : 0.34) : 0.02}
+              roughness={0.52}
+              metalness={0.03}
+              emissive="#000000"
+              emissiveIntensity={0.02}
               transparent={surfacePolicy.transparent}
               opacity={opacityVal}
               depthWrite={surfacePolicy.depthWrite}
@@ -913,6 +909,18 @@ export const FemGeometry = memo(function FemGeometry({
           ) : null}
         </>
       )}
+
+      {showSelectionWireOverlay ? (
+        <lineSegments geometry={edgesGeometry!} renderOrder={selectionEdgePolicy.renderOrder}>
+          <lineBasicMaterial
+            color={resolvedEdgeColor}
+            opacity={0.98}
+            transparent={selectionEdgePolicy.transparent}
+            depthWrite={selectionEdgePolicy.depthWrite}
+            depthTest={false}
+          />
+        </lineSegments>
+      ) : null}
 
       {showVolumeWire && (tetraEdgesGeometry ?? edgesGeometry) != null && (
         <>

@@ -2434,10 +2434,15 @@ fn execute_native_fem(
             }
         }
     } else {
+        let until_label = if until_seconds.is_finite() {
+            format!("{until_seconds:.4e}")
+        } else {
+            "unbounded".to_string()
+        };
         eprintln!(
-            "[fullmag-runner] native-fem LLG loop: until={:.4e} dt_initial={:.4e} \
+            "[fullmag-runner] native-fem LLG loop: until={} dt_initial={:.4e} \
              max_steps={} torque_tol={:.4e} adaptive={}",
-            until_seconds,
+            until_label,
             dt,
             plan.relaxation
                 .as_ref()
@@ -2627,10 +2632,15 @@ fn execute_native_fem(
             }
         }
         if !cancelled {
+            let until_label = if until_seconds.is_finite() {
+                format!("{until_seconds:.4e}")
+            } else {
+                "unbounded".to_string()
+            };
             eprintln!(
-                "[fullmag-runner] native-fem loop exited: time={:.4e} until={:.4e} (time_limit_reached={})",
+                "[fullmag-runner] native-fem loop exited: time={:.4e} until={} (time_limit_reached={})",
                 current_time,
-                until_seconds,
+                until_label,
                 current_time >= until_seconds,
             );
         }

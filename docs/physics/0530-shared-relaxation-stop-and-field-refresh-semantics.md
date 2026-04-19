@@ -62,6 +62,9 @@ the execution control explicit.
 2. `demag_interval_s` is an execution-policy control, not a new physical
    observable.
 3. Fullmag public and IR units remain SI-clean. Any ps display is UI-only.
+4. If neither `max_pseudotime_s` nor `max_physical_time_s` is provided, the
+   relax stage is not implicitly time-bounded. `max_steps` remains an iteration
+   cap only and must not be converted into a synthetic pseudo-time budget.
 
 ## 3. Numerical interpretation
 
@@ -124,6 +127,9 @@ scalar fields spread across layers.
 
 - Planner materialization must preserve `field_refresh` and `stop` into
   backend plans.
+- Absence of a time stop in `RelaxStop` must remain semantically unbounded
+  across Python, CLI, planner, runner, and UI. No layer may silently inject a
+  fallback like `dt_initial * max_steps`.
 - Capability language remains shared; no UI-only relaxation semantics are
   permitted.
 - The capability matrix must describe this as shared executable relaxation

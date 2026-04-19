@@ -233,7 +233,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
               case PanelKey.ENERGY:          return <EnergyPanel />;
               case PanelKey.STATE_IO:        return <StateIoPanel />;
               case PanelKey.MATERIAL:        return <MaterialPanel nodeId={panelProps.nodeId as string} />;
-              case PanelKey.MATERIAL_MAG:    return <MaterialPanel nodeId={panelProps.nodeId as string} view="magnetization" />;
+              case PanelKey.MATERIAL_MAG:    return <MaterialPanel nodeId={panelProps.nodeId as string} />;
               case PanelKey.OBJECT_MESH:     return <ObjectMeshPanel nodeId={panelProps.nodeId as string} />;
               case PanelKey.REGION:          return <RegionPanel nodeId={panelProps.nodeId as string} />;
               case PanelKey.MESH:            return <MeshPanel />;

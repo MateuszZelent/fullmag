@@ -344,42 +344,13 @@ pub(crate) fn resolve_script_until_seconds(
     }
 }
 
-fn resolve_relaxation_pseudo_time_seconds(
-    dynamics: &fullmag_ir::DynamicsIR,
-    max_steps: u64,
-) -> f64 {
-    let dt = match dynamics {
-        fullmag_ir::DynamicsIR::Llg {
-            fixed_timestep,
-            adaptive_timestep,
-            ..
-        } => fixed_timestep
-            .or_else(|| {
-                adaptive_timestep.as_ref().and_then(|cfg| {
-                    let dt_initial = cfg.dt_initial?;
-                    if (dt_initial - cfg.dt_min).abs() <= f64::EPSILON {
-                        None
-                    } else {
-                        Some(dt_initial)
-                    }
-                })
-            })
-            .unwrap_or(1e-13),
-    };
-    dt * (max_steps as f64)
-}
-
 fn resolve_relaxation_until_seconds(
-    dynamics: &fullmag_ir::DynamicsIR,
+    _dynamics: &fullmag_ir::DynamicsIR,
     stop: &fullmag_ir::RelaxStopIR,
 ) -> f64 {
     stop.max_physical_time_s
         .or(stop.max_pseudotime_s)
-        .or_else(|| {
-            stop.max_steps
-                .map(|max_steps| resolve_relaxation_pseudo_time_seconds(dynamics, max_steps))
-        })
-        .unwrap_or_else(|| resolve_relaxation_pseudo_time_seconds(dynamics, 50_000))
+        .unwrap_or(f64::INFINITY)
 }
 
 pub(crate) fn materialize_script_stages(
@@ -2541,7 +2512,7 @@ mod tests {
     }
 
     #[test]
-    fn materialize_pipeline_relax_uses_explicit_adaptive_dt_initial_for_default_until() {
+    fn materialize_pipeline_relax_without_time_budget_is_unbounded() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir_with_adaptive_relax_dt(3e-16),
             shared_geometry_assets: None,
@@ -2573,11 +2544,11 @@ mod tests {
         let stages = materialize_script_stages(config).expect("pipeline should materialize");
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].entrypoint_kind, "pipeline_relax");
-        assert!((stages[0].until_seconds - (25.0 * 3e-16)).abs() < 1e-30);
+        assert!(stages[0].until_seconds.is_infinite());
     }
 
     #[test]
-    fn materialize_pipeline_relax_falls_back_when_adaptive_dt_initial_matches_dt_min() {
+    fn materialize_pipeline_relax_without_time_budget_ignores_dt_seed_fallback() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir_with_adaptive_relax_dt_limits(3e-16, 3e-16),
             shared_geometry_assets: None,
@@ -2609,11 +2580,11 @@ mod tests {
         let stages = materialize_script_stages(config).expect("pipeline should materialize");
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].entrypoint_kind, "pipeline_relax");
-        assert!((stages[0].until_seconds - (25.0 * 1e-13)).abs() < 1e-24);
+        assert!(stages[0].until_seconds.is_infinite());
     }
 
     #[test]
-    fn build_interactive_relax_uses_explicit_adaptive_dt_initial_for_default_until() {
+    fn build_interactive_relax_without_time_budget_is_unbounded() {
         let base_problem = sample_problem_ir_with_adaptive_relax_dt(4e-16);
         let command = crate::types::SessionCommand {
             seq: 1,
@@ -2646,11 +2617,11 @@ mod tests {
             .expect("relax command should materialize a stage");
 
         assert_eq!(stage.entrypoint_kind, "interactive_relax");
-        assert!((stage.until_seconds - (20.0 * 4e-16)).abs() < 1e-30);
+        assert!(stage.until_seconds.is_infinite());
     }
 
     #[test]
-    fn build_interactive_relax_falls_back_when_adaptive_dt_initial_matches_dt_min() {
+    fn build_interactive_relax_without_time_budget_ignores_dt_seed_fallback() {
         let base_problem = sample_problem_ir_with_adaptive_relax_dt_limits(4e-16, 4e-16);
         let command = crate::types::SessionCommand {
             seq: 1,
@@ -2683,7 +2654,7 @@ mod tests {
             .expect("relax command should materialize a stage");
 
         assert_eq!(stage.entrypoint_kind, "interactive_relax");
-        assert!((stage.until_seconds - (20.0 * 1e-13)).abs() < 1e-24);
+        assert!(stage.until_seconds.is_infinite());
     }
 
     #[test]

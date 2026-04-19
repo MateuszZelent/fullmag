@@ -3610,7 +3610,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(captured["until_seconds"], 2.5e-12)
 
-    def test_cli_derives_until_from_relaxation_study(self) -> None:
+    def test_cli_leaves_relaxation_without_time_budget_unbounded(self) -> None:
         script = """
         import fullmag as fm
 
@@ -3655,9 +3655,9 @@ class ProblemApiTests(unittest.TestCase):
                 exit_code = runtime_cli.main([str(path), "--json"])
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(captured["until_seconds"], 250 * 2e-13)
+        self.assertEqual(captured["until_seconds"], float("inf"))
 
-    def test_cli_derives_until_from_adaptive_relaxation_initial_timestep(self) -> None:
+    def test_cli_ignores_adaptive_relaxation_dt_seed_when_no_time_budget(self) -> None:
         script = """
         import fullmag as fm
 
@@ -3705,7 +3705,7 @@ class ProblemApiTests(unittest.TestCase):
                 exit_code = runtime_cli.main([str(path), "--json"])
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(captured["until_seconds"], 250 * 3e-13)
+        self.assertEqual(captured["until_seconds"], float("inf"))
 
     def test_helper_exports_ir_for_rust_host(self) -> None:
         script = """

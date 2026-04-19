@@ -24,8 +24,6 @@ import type { NodeKind, NodeHandle } from "../types";
 /** Props every inspector panel can receive. */
 export interface InspectorPanelProps {
   nodeId: string;
-  /** Discriminated view hint for MaterialPanel-like situations. */
-  view?: string;
 }
 
 /**
@@ -106,7 +104,6 @@ interface RegistryRule {
 // ------------ helpers -------------------------------------------------------
 const noProps = () => ({});
 const passNodeId = (ctx: InspectorContext) => ({ nodeId: ctx.nodeId });
-const passNodeIdMag = (ctx: InspectorContext) => ({ nodeId: ctx.nodeId, view: "magnetization" });
 
 const MESH_INFO_BANNER_DEFAULTS =
   "These settings define shared object defaults for the next study-domain remesh. They do not create a third standalone mesh, and airbox sizing is still configured separately under Universe → Airbox.";
@@ -316,7 +313,7 @@ const RULES: RegistryRule[] = [
   {
     kinds: ["object.initial_state", "object.initial_state.texture", "object.initial_state.texture_transform"],
     panelKey: PanelKey.MATERIAL_MAG,
-    props: passNodeIdMag,
+    props: passNodeId,
   },
   {
     kinds: ["object.geometry.mesh", "object.mesh"],

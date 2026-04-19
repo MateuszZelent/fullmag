@@ -1561,13 +1561,18 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const selectedVectors = useMemo(() => {
     if (isGlobalScalarQuantity(activeQuantityId)) return null;
     const liveField = fieldMap[activeQuantityId] ?? null;
-    // In FEM mode prefer full-resolution live vectors from latest_fields/live_state.
-    // Preview payloads can be decimated or stale right after scene-document texture edits.
-    if (isFemBackend && liveField && liveField.length > 0) {
-      return liveField;
-    }
+    // If the server-provided render preview explicitly matches the active quantity,
+    // prefer using the preview payload first. This ensures UI-driven texture/preview
+    // edits take immediate effect even when a live_field exists (FEM workflows
+    // frequently rely on preview frames which may be higher-resolution or more
+    // up-to-date right after user edits).
     if (renderPreviewMatchesActiveQuantity && renderPreview?.vector_field_values) {
       return renderPreview.vector_field_values;
+    }
+    // Otherwise, fall back to full-resolution live vectors from latest_fields/live_state
+    // (useful for FEM when no active preview is targeted).
+    if (isFemBackend && liveField && liveField.length > 0) {
+      return liveField;
     }
     return liveField;
   }, [

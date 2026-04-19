@@ -168,14 +168,11 @@ function eulerDegFromQuat(
 
 export default function MaterialPanel({
   nodeId,
-  view = "full",
 }: {
   nodeId?: string;
-  view?: "full" | "magnetization";
 }) {
   const cmd = useCommand();
   const model = useModel();
-  const showFullSections = view !== "magnetization";
 
   const { object: sceneObject, material, magnetization } = useMemo(
     () => findSceneObjectByNodeId(nodeId, model.sceneDocument),
@@ -947,136 +944,142 @@ export default function MaterialPanel({
 
   return (
     <div className="flex flex-col px-2 pt-4">
-      {showFullSections && (
-        <SidebarSection title="Material Constants" defaultOpen={true}>
-          <div className="grid grid-cols-2 gap-3">
-            <TextField label="Ms (Saturation)" defaultValue={mat.Ms ?? ""} onBlur={(e) => handleMatNum("Ms", e.target.value)} unit="A/m" mono tooltip="Saturation magnetization of the material." />
-            <TextField label="Aex (Exchange)" defaultValue={mat.Aex ?? ""} onBlur={(e) => handleMatNum("Aex", e.target.value)} unit="J/m" mono tooltip="Exchange stiffness constant coupling adjacent spins." />
-            <TextField label="α (Damping)" defaultValue={mat.alpha ?? ""} onBlur={(e) => handleMatNum("alpha", e.target.value)} mono tooltip="Gilbert damping parameter governing spin relaxation rate." />
-            <TextField label="Dind (DMI)" defaultValue={mat.Dind ?? ""} onBlur={(e) => handleMatNum("Dind", e.target.value)} unit="J/m²" mono tooltip="Interfacial Dzyaloshinskii-Moriya interaction strength." />
-          </div>
-        </SidebarSection>
-      )}
+      <SidebarSection title="Material Constants" defaultOpen={true}>
+        <div className="grid grid-cols-2 gap-3">
+          <TextField label="Ms (Saturation)" defaultValue={mat.Ms ?? ""} onBlur={(e) => handleMatNum("Ms", e.target.value)} unit="A/m" mono tooltip="Saturation magnetization of the material." />
+          <TextField label="Aex (Exchange)" defaultValue={mat.Aex ?? ""} onBlur={(e) => handleMatNum("Aex", e.target.value)} unit="J/m" mono tooltip="Exchange stiffness constant coupling adjacent spins." />
+          <TextField label="α (Damping)" defaultValue={mat.alpha ?? ""} onBlur={(e) => handleMatNum("alpha", e.target.value)} mono tooltip="Gilbert damping parameter governing spin relaxation rate." />
+          <TextField label="Dind (DMI)" defaultValue={mat.Dind ?? ""} onBlur={(e) => handleMatNum("Dind", e.target.value)} unit="J/m²" mono tooltip="Interfacial Dzyaloshinskii-Moriya interaction strength." />
+        </div>
+      </SidebarSection>
 
-      {showFullSections && (
-        <SidebarSection title="Magnetic Interactions" defaultOpen={true}>
-          <div className="flex flex-col gap-3">
-            <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2 text-[0.72rem] text-muted-foreground">
-              Exchange i demag są zawsze aktywne dla ferromagnetyka. Interakcje opcjonalne możesz dodawać i konfigurować poniżej.
-            </div>
-            <div className="grid gap-2">
-              {physicsStack.map((interaction) => (
-                <div key={interaction.kind} className="rounded-lg border border-border/35 bg-background/35 px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    <div className="text-xs font-semibold text-foreground">
-                      {magneticInteractionLabel(interaction.kind)}
-                    </div>
-                    {(interaction.kind === "exchange" || interaction.kind === "demag") ? (
-                      <span className="rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[0.6rem] uppercase tracking-[0.1em] text-emerald-300">
-                        required
-                      </span>
+      <SidebarSection title="Magnetic Interactions" defaultOpen={true}>
+        <div className="flex flex-col gap-3">
+          <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2 text-[0.72rem] text-muted-foreground">
+            Exchange i demag są zawsze aktywne dla ferromagnetyka. Interakcje opcjonalne możesz dodawać i konfigurować poniżej.
+          </div>
+          <div className="grid gap-2">
+            {physicsStack.map((interaction) => (
+              <div key={interaction.kind} className="rounded-lg border border-border/35 bg-background/35 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <div className="text-xs font-semibold text-foreground">
+                    {magneticInteractionLabel(interaction.kind)}
+                  </div>
+                  {(interaction.kind === "exchange" || interaction.kind === "demag") ? (
+                    <span className="rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[0.6rem] uppercase tracking-[0.1em] text-emerald-300">
+                      required
+                    </span>
+                  ) : null}
+                  <div className="ml-auto flex items-center gap-1">
+                    <SelectField
+                      label=""
+                      value={interaction.enabled ? "on" : "off"}
+                      onchange={(value) => toggleInteraction(interaction.kind, value === "on")}
+                      options={[
+                        { value: "on", label: "Enabled" },
+                        { value: "off", label: "Disabled" },
+                      ]}
+                    />
+                    {(interaction.kind !== "exchange" && interaction.kind !== "demag") ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        type="button"
+                        onClick={() => removeInteraction(interaction.kind)}
+                      >
+                        Remove
+                      </Button>
                     ) : null}
-                    <div className="ml-auto flex items-center gap-1">
-                      <SelectField
-                        label=""
-                        value={interaction.enabled ? "on" : "off"}
-                        onchange={(value) => toggleInteraction(interaction.kind, value === "on")}
-                        options={[
-                          { value: "on", label: "Enabled" },
-                          { value: "off", label: "Disabled" },
-                        ]}
-                      />
-                      {(interaction.kind !== "exchange" && interaction.kind !== "demag") ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          type="button"
-                          onClick={() => removeInteraction(interaction.kind)}
-                        >
-                          Remove
-                        </Button>
-                      ) : null}
+                  </div>
+                </div>
+                {getPhysicsCatalogEntry(interaction.kind)?.description ? (
+                  <div className="mt-2 text-[0.72rem] text-muted-foreground">
+                    {getPhysicsCatalogEntry(interaction.kind)?.description}
+                  </div>
+                ) : null}
+                {interaction.kind === "interfacial_dmi" ? (
+                  <div className="mt-2 text-[0.72rem] text-muted-foreground">
+                    Uses <span className="font-mono text-foreground">Dind</span> from Material Constants.
+                  </div>
+                ) : null}
+                {interaction.kind === "uniaxial_anisotropy" ? (
+                  <div className="mt-2 grid grid-cols-2 gap-3">
+                    <TextField
+                      label="Ku1"
+                      defaultValue={uniaxialKu1}
+                      onBlur={(event) => {
+                        const parsed = Number.parseFloat(event.target.value);
+                        if (!Number.isFinite(parsed)) return;
+                        updateUniaxialParam("ku1", parsed);
+                      }}
+                      unit="J/m³"
+                      mono
+                    />
+                    <div className="grid grid-cols-3 gap-2">
+                      {[0, 1, 2].map((axis) => (
+                        <TextField
+                          key={`ku-axis-${axis}`}
+                          label={`Axis ${["X", "Y", "Z"][axis]}`}
+                          defaultValue={uniaxialAxis[axis]}
+                          onBlur={(event) => {
+                            const parsed = Number.parseFloat(event.target.value);
+                            if (!Number.isFinite(parsed)) return;
+                            const nextAxis = [...uniaxialAxis] as [number, number, number];
+                            nextAxis[axis] = parsed;
+                            updateUniaxialParam("axis", nextAxis);
+                          }}
+                          mono
+                        />
+                      ))}
                     </div>
                   </div>
-                  {getPhysicsCatalogEntry(interaction.kind)?.description ? (
-                    <div className="mt-2 text-[0.72rem] text-muted-foreground">
-                      {getPhysicsCatalogEntry(interaction.kind)?.description}
-                    </div>
-                  ) : null}
-                  {interaction.kind === "interfacial_dmi" ? (
-                    <div className="mt-2 text-[0.72rem] text-muted-foreground">
-                      Uses <span className="font-mono text-foreground">Dind</span> from Material Constants.
-                    </div>
-                  ) : null}
-                  {interaction.kind === "uniaxial_anisotropy" ? (
-                    <div className="mt-2 grid grid-cols-2 gap-3">
-                      <TextField
-                        label="Ku1"
-                        defaultValue={uniaxialKu1}
-                        onBlur={(event) => {
-                          const parsed = Number.parseFloat(event.target.value);
-                          if (!Number.isFinite(parsed)) return;
-                          updateUniaxialParam("ku1", parsed);
-                        }}
-                        unit="J/m³"
-                        mono
-                      />
-                      <div className="grid grid-cols-3 gap-2">
-                        {[0, 1, 2].map((axis) => (
-                          <TextField
-                            key={`ku-axis-${axis}`}
-                            label={`Axis ${["X", "Y", "Z"][axis]}`}
-                            defaultValue={uniaxialAxis[axis]}
-                            onBlur={(event) => {
-                              const parsed = Number.parseFloat(event.target.value);
-                              if (!Number.isFinite(parsed)) return;
-                              const nextAxis = [...uniaxialAxis] as [number, number, number];
-                              nextAxis[axis] = parsed;
-                              updateUniaxialParam("axis", nextAxis);
-                            }}
-                            mono
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                type="button"
-                disabled={hasDmi}
-                onClick={() => addInteraction("interfacial_dmi")}
-              >
-                Add DMI
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                type="button"
-                disabled={hasUniaxial}
-                onClick={() => addInteraction("uniaxial_anisotropy")}
-              >
-                Add Uniaxial Ku
-              </Button>
-            </div>
-            {backendOnlyTerms.length > 0 ? (
-              <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[0.72rem] text-amber-100/90">
-                Current backend also exposes: {backendOnlyTerms.map((entry) => entry.label).join(", ")}.
-                These semantics exist in runtime/Python, but this object panel still lacks first-class editors for them.
+                ) : null}
               </div>
-            ) : null}
+            ))}
           </div>
-        </SidebarSection>
-      )}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              disabled={hasDmi}
+              onClick={() => addInteraction("interfacial_dmi")}
+            >
+              Add DMI
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              disabled={hasUniaxial}
+              onClick={() => addInteraction("uniaxial_anisotropy")}
+            >
+              Add Uniaxial Ku
+            </Button>
+          </div>
+          {backendOnlyTerms.length > 0 ? (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[0.72rem] text-amber-100/90">
+              Current backend also exposes: {backendOnlyTerms.map((entry) => entry.label).join(", ")}.
+              These semantics exist in runtime/Python, but this object panel still lacks first-class editors for them.
+            </div>
+          ) : null}
+        </div>
+      </SidebarSection>
 
       <SidebarSection title="Initial Magnetization (m0)" defaultOpen={true}>
         <div className="flex flex-col gap-4">
           <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2 text-xs text-muted-foreground">
             This editor updates the same magnetization asset referenced by the selected object and its region node.
+          </div>
+          <div className="rounded-xl border border-border/30 bg-card/15 p-2">
+            <MagneticTextureLibraryPanel
+              selectedKind={mag.kind === "preset_texture" ? selectedPresetKind : null}
+              onCreatePreset={handlePresetCardSelect}
+              onSelectKind={handlePresetCardSelect}
+            />
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/35 px-3 py-2 text-[0.72rem] text-muted-foreground">
+            Biblioteka presetów i edytor poniżej operują na tym samym assetcie. Kliknięcie karty przełącza `Texture Kind` na `Preset Texture`, po czym możesz dalej użyć `Move`, `Rotate`, `Scale` i `Apply`.
           </div>
           <SelectField
             label="Texture Kind"
@@ -1192,14 +1195,6 @@ export default function MaterialPanel({
                   )}
                 </div>
               )}
-
-                <div className="rounded-xl border border-border/30 bg-card/15 p-2">
-                  <MagneticTextureLibraryPanel
-                    selectedKind={selectedPresetKind}
-                    onCreatePreset={handlePresetCardSelect}
-                    onSelectKind={handlePresetCardSelect}
-                  />
-                </div>
 
               {selectedPresetDescriptor && (
                 <div className="rounded-xl border border-border/30 bg-card/15 p-3">

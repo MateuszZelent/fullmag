@@ -214,12 +214,7 @@ def _resolve_until_seconds(study, default_until_seconds: float | None) -> float 
             return study.max_physical_time_s
         if study.max_pseudotime_s is not None:
             return study.max_pseudotime_s
-        fixed_timestep = study.dynamics.fixed_timestep
-        adaptive_timestep = study.dynamics.adaptive_timestep
-        initial_timestep = fixed_timestep
-        if initial_timestep is None and adaptive_timestep is not None:
-            initial_timestep = adaptive_timestep.dt_initial
-        return (initial_timestep or 1e-13) * float(study.max_steps or 50_000)
+        return float("inf")
     if isinstance(study, Eigenmodes):
         return 0.0
     return None

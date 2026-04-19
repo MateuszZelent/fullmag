@@ -444,10 +444,15 @@ fn execute_reference_fem_impl(
         &plan.object_segments,
     );
 
+    let until_label = if until_seconds.is_finite() {
+        format!("{until_seconds:.4e}")
+    } else {
+        "unbounded".to_string()
+    };
     eprintln!(
-        "[fullmag-runner] reference-fem LLG loop: until={:.4e} dt_initial={:.4e} \
+        "[fullmag-runner] reference-fem LLG loop: until={} dt_initial={:.4e} \
          max_steps={} torque_tol={}",
-        until_seconds,
+        until_label,
         dt,
         plan.relaxation
             .as_ref()
@@ -755,11 +760,16 @@ fn execute_reference_fem_impl(
         }
     }
     if !cancelled {
+        let until_label = if until_seconds.is_finite() {
+            format!("{until_seconds:.4e}")
+        } else {
+            "unbounded".to_string()
+        };
         eprintln!(
-            "[fullmag-runner] reference-fem loop exited: step={} time={:.4e} until={:.4e} (time_limit_reached={})",
+            "[fullmag-runner] reference-fem loop exited: step={} time={:.4e} until={} (time_limit_reached={})",
             step_count,
             state.time_seconds,
-            until_seconds,
+            until_label,
             state.time_seconds >= until_seconds,
         );
     }

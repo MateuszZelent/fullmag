@@ -440,7 +440,8 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
   // D-02 fix: Don't reduce object selection to a single part for toolbar scope.
   // selectedObjectId remains the owner of scope for composite objects.
   // selectedEntityId is set only for airbox or explicit part selection.
-  // focusedEntityId is set for camera anchor purposes only.
+  // focusedEntityId must stay reserved for explicit camera focus actions,
+  // not passive tree selection.
   useEffect(() => {
     if (!meshParts.length) {
       return;
@@ -452,16 +453,13 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
       selectedSidebarNodeId === "universe-airbox-mesh"
     ) {
       nextEntityId = airPart?.id ?? null;
-      nextFocusId = nextEntityId;
+      nextFocusId = null;
     } else if (selectedObjectId) {
       // D-02 fix: Do NOT set selectedEntityId to first part of the object.
       // The object-level scope is handled via selectedObjectId + visibleLayers.isSelected.
-      // Only set focusedEntityId for camera anchor.
+      // Passive selection must not set a focus anchor or move the camera.
       nextEntityId = null;
-      nextFocusId = meshParts.find(
-        (part) =>
-          part.role === "magnetic_object" && part.object_id === selectedObjectId,
-      )?.id ?? null;
+      nextFocusId = null;
     }
     if (nextEntityId !== selectedEntityId) {
       setSelectedEntityId(nextEntityId);

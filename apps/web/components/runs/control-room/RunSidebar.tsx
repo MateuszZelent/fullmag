@@ -628,16 +628,14 @@ export default function RunSidebar() {
     if (id === "universe-airbox" || id === "universe-airbox-mesh") {
       const airPartId = model.airPart?.id ?? null;
       model.setSelectedEntityId(airPartId);
-      model.setFocusedEntityId(airPartId);
+      model.setFocusedEntityId(null);
       return;
     }
     if (objectId) {
-      const partId =
-        model.meshParts.find(
-          (part) => part.role === "magnetic_object" && part.object_id === objectId,
-        )?.id ?? null;
-      model.setSelectedEntityId(partId);
-      model.setFocusedEntityId(partId);
+      // Tree selection should only change selection/highlight state.
+      // Camera focus stays reserved for explicit actions like "Focus in 3D".
+      model.setSelectedEntityId(null);
+      model.setFocusedEntityId(null);
       return;
     }
     model.setSelectedEntityId(null);

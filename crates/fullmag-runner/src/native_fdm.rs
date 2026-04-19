@@ -1614,7 +1614,10 @@ mod tests {
             .oersted_field_xyz
             .clone()
             .expect("test plan should carry oersted field");
-        let active_mask = plan.active_mask.as_ref().expect("test plan should carry active mask");
+        let active_mask = plan
+            .active_mask
+            .as_ref()
+            .expect("test plan should carry active mask");
         raw.into_iter()
             .zip(active_mask.iter())
             .map(|(value, is_active)| if *is_active { value } else { [0.0, 0.0, 0.0] })
@@ -1636,10 +1639,7 @@ mod tests {
         }
     }
 
-    fn decode_snapshot_payload(
-        info: NativeFieldSnapshotInfo,
-        payload: &[u8],
-    ) -> Vec<[f64; 3]> {
+    fn decode_snapshot_payload(info: NativeFieldSnapshotInfo, payload: &[u8]) -> Vec<[f64; 3]> {
         assert_eq!(info.component_count, 3, "expected vector snapshot payload");
         let scalars = match info.scalar_type {
             NativeFieldSnapshotScalarType::F32 => payload
@@ -2037,18 +2037,19 @@ mod tests {
 
         assert_eq!(actual_sync.quantity, "H_OE");
         assert_eq!(actual_sync.unit, expected_preview.unit);
-        assert_eq!(actual_sync.quantity_domain, expected_preview.quantity_domain);
+        assert_eq!(
+            actual_sync.quantity_domain,
+            expected_preview.quantity_domain
+        );
         assert_eq!(actual_sync.preview_grid, expected_preview.preview_grid);
         assert_eq!(actual_sync.active_mask, expected_preview.active_mask);
         assert_eq!(actual_async.active_mask, expected_preview.active_mask);
         assert_eq!(
-            actual_sync.vector_field_values,
-            expected_preview.vector_field_values,
+            actual_sync.vector_field_values, expected_preview.vector_field_values,
             "synchronous preview should preserve H_OE values"
         );
         assert_eq!(
-            actual_async.vector_field_values,
-            expected_preview.vector_field_values,
+            actual_async.vector_field_values, expected_preview.vector_field_values,
             "async preview snapshot should preserve H_OE values"
         );
     }
@@ -2087,7 +2088,9 @@ mod tests {
             .expect("begin H_OE field snapshot");
         let _info = snapshot.info().expect("snapshot info");
         let mut payload = Vec::new();
-        let written_info = snapshot.write_payload(&mut payload).expect("snapshot payload");
+        let written_info = snapshot
+            .write_payload(&mut payload)
+            .expect("snapshot payload");
         assert_eq!(written_info.cell_count, expected_h_oe.len());
         assert_eq!(written_info.component_count, 3);
         let decoded = decode_snapshot_payload(written_info, &payload);
