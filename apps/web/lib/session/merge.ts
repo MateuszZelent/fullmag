@@ -71,6 +71,21 @@ function syncLatestMagnetizationFrameFromLiveState(
           state.latest_fields.frames.m?.domain ??
           fallbackFrame?.domain ??
           "magnetic_only",
+        field_revision:
+          state.latest_fields.frames.m?.field_revision ??
+          fallbackFrame?.field_revision ??
+          state.live_state?.step ??
+          null,
+        source_step:
+          state.latest_fields.frames.m?.source_step ??
+          fallbackFrame?.source_step ??
+          state.live_state?.step ??
+          null,
+        source_time:
+          state.latest_fields.frames.m?.source_time ??
+          fallbackFrame?.source_time ??
+          state.live_state?.time ??
+          null,
       },
     },
   };

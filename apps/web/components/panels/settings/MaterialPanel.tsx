@@ -47,6 +47,10 @@ import {
   DEFAULT_TEXTURE_TRANSFORM,
   describeMagnetizationApplyState,
 } from "./materialPanelMagnetization";
+import {
+  buildMagnetizationInspectorNodeIds,
+  resolveMagnetizationInspectorView,
+} from "./materialPanelNodeRouting";
 import { SidebarSection, InfoRow, StatusBadge } from "./primitives";
 
 function fallbackMaterial(name: string): SceneMaterialAsset {
@@ -551,6 +555,18 @@ export default function MaterialPanel({
   const [numericMode, setNumericMode] = useState<NumericTransformMode>("translate");
   const [numericAbsolute, setNumericAbsolute] = useState<[number, number, number]>([0, 0, 0]);
   const [numericOffset, setNumericOffset] = useState<[number, number, number]>([0, 0, 0]);
+  const magnetizationInspectorView = resolveMagnetizationInspectorView(nodeId);
+  const activeTransformSubpanel =
+    magnetizationInspectorView === "transform_translate"
+      ? "translate"
+      : magnetizationInspectorView === "transform_rotate"
+        ? "rotate"
+        : magnetizationInspectorView === "transform_scale"
+          ? "scale"
+          : null;
+  const magnetizationNodeIds = sceneObject
+    ? buildMagnetizationInspectorNodeIds(nodeId, sceneObject.name)
+    : null;
   const targetSpinCount = useMemo(() => {
     if (!sceneObject) return null;
     const objectId = sceneObject.id;
@@ -616,6 +632,36 @@ export default function MaterialPanel({
       }),
     [isMagnetizationDirty, isMagnetizationSyncBusy, magnetizationAsset?.kind, model.sceneDocument],
   );
+  const jumpToMagnetizationNode = (
+    target:
+      | "overview"
+      | "texture"
+      | "transformOverview"
+      | "transformTranslate"
+      | "transformRotate"
+      | "transformScale"
+      | null,
+  ) => {
+    if (!target || !magnetizationNodeIds) {
+      return;
+    }
+    model.setSelectedSidebarNodeId(magnetizationNodeIds[target]);
+  };
+  useEffect(() => {
+    if (!sceneObject || !activeTransformSubpanel) {
+      return;
+    }
+    const currentMode = model.sceneDocument?.editor.gizmo_mode ?? "translate";
+    if (currentMode === activeTransformSubpanel) {
+      return;
+    }
+    setTextureGizmoMode(activeTransformSubpanel);
+  }, [
+    activeTransformSubpanel,
+    model.sceneDocument?.editor.gizmo_mode,
+    sceneObject,
+    setTextureGizmoMode,
+  ]);
   const refreshViewportAfterMagnetizationCommit = useCallback(
     async ({
       committedScene,
@@ -861,6 +907,18 @@ export default function MaterialPanel({
       : model.activeTransformScope === "texture"
         ? "texture"
         : "camera";
+  const transformAvailable = mag.kind === "preset_texture";
+  const showMagnetizationOverview = magnetizationInspectorView === "overview";
+  const showTextureEditor = magnetizationInspectorView === "texture";
+  const showTransformOverview = magnetizationInspectorView === "transform_overview";
+  const showTransformTranslate = magnetizationInspectorView === "transform_translate";
+  const showTransformRotate = magnetizationInspectorView === "transform_rotate";
+  const showTransformScale = magnetizationInspectorView === "transform_scale";
+  const showAnyTransformEditor =
+    showTransformOverview ||
+    showTransformTranslate ||
+    showTransformRotate ||
+    showTransformScale;
   const scaleInputUnit = metricScalePreset ? "×" : "m";
   const openNumericTransform = (mode: NumericTransformMode) => {
     setNumericMode(mode);
@@ -1071,454 +1129,574 @@ export default function MaterialPanel({
           <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2 text-xs text-muted-foreground">
             This editor updates the same magnetization asset referenced by the selected object and its region node.
           </div>
-          <div className="rounded-xl border border-border/30 bg-card/15 p-2">
-            <MagneticTextureLibraryPanel
-              selectedKind={mag.kind === "preset_texture" ? selectedPresetKind : null}
-              onCreatePreset={handlePresetCardSelect}
-              onSelectKind={handlePresetCardSelect}
-            />
-          </div>
-          <div className="rounded-lg border border-border/30 bg-background/35 px-3 py-2 text-[0.72rem] text-muted-foreground">
-            Biblioteka presetów i edytor poniżej operują na tym samym assetcie. Kliknięcie karty przełącza `Texture Kind` na `Preset Texture`, po czym możesz dalej użyć `Move`, `Rotate`, `Scale` i `Apply`.
-          </div>
-          <SelectField
-            label="Texture Kind"
-            value={mag.kind}
-            onchange={(val) =>
-              updateMagnetization((asset) => ({
-                ...asset,
-                kind: val,
-                value: val === "uniform" ? (asset.value ?? [0, 0, 1]) : null,
-                seed: val === "random" ? (asset.seed ?? 1) : null,
-                source_path: val === "file" || val === "sampled" ? asset.source_path : null,
-                source_format: val === "file" || val === "sampled" ? asset.source_format ?? null : null,
-                dataset: val === "sampled" ? asset.dataset ?? null : null,
-                sample_index: val === "sampled" ? asset.sample_index ?? null : null,
-                preset_kind:
-                  val === "preset_texture"
-                    ? asset.preset_kind ?? "uniform"
-                    : null,
-                preset_params:
-                  val === "preset_texture"
-                    ? asset.preset_params ?? structuredClone(MAGNETIC_PRESET_CATALOG[0]?.defaultParams ?? {})
-                    : null,
-                mapping:
-                  val === "preset_texture"
-                    ? asset.mapping ?? { ...DEFAULT_TEXTURE_MAPPING }
-                    : asset.mapping,
-                texture_transform:
-                  val === "preset_texture"
-                    ? asset.texture_transform ?? { ...DEFAULT_TEXTURE_TRANSFORM }
-                    : asset.texture_transform,
-                preset_version: val === "preset_texture" ? asset.preset_version ?? 1 : null,
-                ui_label:
-                  val === "preset_texture"
-                    ? asset.ui_label ?? selectedPresetDescriptor?.label ?? "Preset texture"
-                    : null,
-              }))
-            }
-            options={[
-              { label: "Uniform (Vector)", value: "uniform" },
-              { label: "Random", value: "random" },
-              { label: "File Source", value: "file" },
-              { label: "Sampled Dataset", value: "sampled" },
-              { label: "Preset Texture", value: "preset_texture" },
-            ]}
-            tooltip="Spatial distribution of the starting magnetization vectors."
-          />
 
-          {mag.kind === "uniform" && (
-            <div className="grid grid-cols-3 gap-3">
-              <TextField label="m_x" defaultValue={value[0]} onchange={(e) => handleMagUniform(0, e.target.value)} mono tooltip="Normalized X component." />
-              <TextField label="m_y" defaultValue={value[1]} onchange={(e) => handleMagUniform(1, e.target.value)} mono tooltip="Normalized Y component." />
-              <TextField label="m_z" defaultValue={value[2]} onchange={(e) => handleMagUniform(2, e.target.value)} mono tooltip="Normalized Z component." />
-            </div>
-          )}
-
-          {(mag.kind === "file" || mag.kind === "sampled") && (
+          {showMagnetizationOverview ? (
             <div className="flex flex-col gap-3">
-              <TextField label="Source File Path" placeholder="e.g., m0.ovf or ground_state.vtk" defaultValue={mag.source_path ?? ""} onchange={(e) => handleMagStr("source_path", e.target.value)} mono tooltip="Path to an .ovf, .omf, or .vtk file containing the continuous vector field." />
-              <div className="grid grid-cols-2 gap-3">
-                <TextField label="Source Format" placeholder="(optional)" defaultValue={mag.source_format ?? ""} onchange={(e) => handleMagStr("source_format", e.target.value)} mono tooltip="Optional explicit parser hint." />
-                <TextField label="Dataset Key" placeholder="(optional)" defaultValue={mag.dataset ?? ""} onchange={(e) => handleMagStr("dataset", e.target.value)} mono tooltip="Specify the internal dataset name if the file contains multiple." />
-              </div>
-              {mag.kind === "sampled" && (
-                <TextField label="Sample Index" placeholder="(optional)" defaultValue={mag.sample_index?.toString() ?? ""} onchange={(e) => handleMagNum("sample_index", e.target.value)} mono tooltip="Index within the dataset if storing a time series." />
-              )}
-            </div>
-          )}
-
-          {mag.kind === "random" && (
-            <TextField label="Random Seed" placeholder="Random (Auto)" defaultValue={mag.seed?.toString() ?? ""} onchange={(e) => handleMagNum("seed", e.target.value)} mono tooltip="Fixed integer seed to reproduce the exact same thermalized noise pattern." />
-          )}
-
-          {mag.kind === "preset_texture" && (
-            <div className="@container grid grid-cols-1 gap-4">
-              {presetTextureSync.status !== "idle" && (
-                <div className="rounded-xl border border-border/30 bg-card/15 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-medium text-foreground">
-                      {presetTextureSync.status === "syncing"
-                        ? "Trwa tworzenie tekstury magnetycznej…"
-                        : presetTextureSync.status === "refreshing"
-                          ? "Backend zapisany. Odswiezanie viewportu…"
-                        : presetTextureSync.status === "done"
-                          ? "Synchronizacja tekstury zakończona"
-                        : presetTextureSync.status === "error"
-                            ? "Błąd synchronizacji tekstury"
-                            : "Synchronizacja tekstury z backendem"}
-                    </div>
-                    {presetTextureSync.totalSpins != null && (
-                      <div className="text-[0.68rem] font-mono text-muted-foreground">
-                        {Math.max(0, presetTextureSync.processedSpins ?? 0).toLocaleString()}
-                        {" / "}
-                        {presetTextureSync.totalSpins.toLocaleString()} spinów
-                      </div>
-                    )}
-                  </div>
-                  <div className="mt-2 h-2 w-full overflow-hidden rounded bg-muted/40">
-                    <div
-                      className={`h-full transition-all duration-150 ${
-                        presetTextureSync.status === "error"
-                          ? "bg-red-400"
-                          : presetTextureSync.status === "done"
-                            ? "bg-emerald-400"
-                            : "bg-primary"
-                      }`}
-                      style={{ width: `${presetTextureSyncPercent}%` }}
-                    />
-                  </div>
-                  {presetTextureSync.message && (
-                    <div className="mt-2 text-[0.72rem] text-muted-foreground">
-                      {presetTextureSync.message}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {selectedPresetDescriptor && (
-                <div className="rounded-xl border border-border/30 bg-card/15 p-3">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium text-foreground">
-                        {selectedPresetDescriptor.label}
-                      </div>
-                      <div className="text-[0.72rem] text-muted-foreground">
-                        Proxy: {selectedPresetDescriptor.previewProxy}
-                      </div>
-                    </div>
-                    <div className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-primary">
-                      Live preset editor
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-3 @[560px]:grid-cols-2">
-                    {selectedPresetDescriptor.parameters.map((parameter) => {
-                      const rawValue =
-                        presetParams[parameter.key] ?? selectedPresetDescriptor.defaultParams[parameter.key];
-
-                      if (parameter.type === "vector3") {
-                        const vector = Array.isArray(rawValue) ? rawValue : [0, 0, 0];
-                        return (
-                          <div key={parameter.key} className="grid grid-cols-1 gap-2 @[860px]:col-span-2 @[860px]:grid-cols-3">
-                            {[0, 1, 2].map((axis) => (
-                              <TextField
-                                key={`${parameter.key}-${axis}`}
-                                label={`${parameter.label} ${["X", "Y", "Z"][axis]}`}
-                                defaultValue={String(Number(vector[axis] ?? 0))}
-                                onBlur={(event) => {
-                                  const next = [...vector] as [number, number, number];
-                                  const parsed = Number.parseFloat(event.target.value);
-                                  if (!Number.isFinite(parsed)) return;
-                                  next[axis] = parsed;
-                                  updatePresetParam(parameter.key, next);
-                                }}
-                                unit={parameter.unit}
-                                mono
-                              />
-                            ))}
-                          </div>
-                        );
-                      }
-
-                      if (parameter.type === "enum") {
-                        return (
-                          <SelectField
-                            key={parameter.key}
-                            label={parameter.label}
-                            value={String(rawValue)}
-                            onchange={(value) => updatePresetParam(parameter.key, value)}
-                            options={(parameter.options ?? []).map((option) => ({
-                              label: option.label,
-                              value: String(option.value),
-                            }))}
-                          />
-                        );
-                      }
-
-                      if (parameter.type === "boolean") {
-                        return (
-                          <SelectField
-                            key={parameter.key}
-                            label={parameter.label}
-                            value={rawValue ? "true" : "false"}
-                            onchange={(value) => updatePresetParam(parameter.key, value === "true")}
-                            options={[
-                              { label: "True", value: "true" },
-                              { label: "False", value: "false" },
-                            ]}
-                          />
-                        );
-                      }
-
-                      const isInteger = parameter.type === "integer";
-                      return (
-                        <TextField
-                          key={parameter.key}
-                          label={parameter.label}
-                          defaultValue={String(rawValue ?? "")}
-                          onBlur={(event) => {
-                            const parsed = isInteger
-                              ? Number.parseInt(event.target.value, 10)
-                              : Number.parseFloat(event.target.value);
-                            if (!Number.isFinite(parsed)) return;
-                            updatePresetParam(parameter.key, parsed);
-                          }}
-                          unit={parameter.unit}
-                          mono
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               <div className="rounded-xl border border-border/30 bg-card/15 p-3">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-medium text-foreground">Texture Transform</div>
+                    <div className="text-sm font-medium text-foreground">Magnetization Overview</div>
                     <div className="text-[0.72rem] text-muted-foreground">
-                      Rozdziel nawigację kamerą od edycji obiektu i tekstury. Kamera wyłącza gizmo, Texture włącza Move/Rotate/Scale.
+                      Jeden asset steruje zarówno węzłem obiektu, jak i regionem. Szczegóły otwieraj przez osobne podwęzły `Texture` i `Transform`.
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
+                    <StatusBadge label={`Kind: ${mag.kind}`} tone="info" />
+                    {mag.kind === "preset_texture" && selectedPresetDescriptor ? (
+                      <StatusBadge label={selectedPresetDescriptor.label} tone="accent" />
+                    ) : null}
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-2 @[720px]:grid-cols-2">
+                  <Button size="sm" type="button" onClick={() => jumpToMagnetizationNode("texture")}>
+                    Open Texture Editor
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    type="button"
+                    disabled={!transformAvailable}
+                    onClick={() => jumpToMagnetizationNode("transformOverview")}
+                  >
+                    Open Transform Editor
+                  </Button>
+                </div>
+                <div className="mt-2 grid grid-cols-1 gap-2 @[720px]:grid-cols-3">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    type="button"
+                    disabled={!transformAvailable}
+                    onClick={() => jumpToMagnetizationNode("transformTranslate")}
+                  >
+                    Translate
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    type="button"
+                    disabled={!transformAvailable}
+                    onClick={() => jumpToMagnetizationNode("transformRotate")}
+                  >
+                    Rotate
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    type="button"
+                    disabled={!transformAvailable}
+                    onClick={() => jumpToMagnetizationNode("transformScale")}
+                  >
+                    Scale
+                  </Button>
+                </div>
+                {!transformAvailable ? (
+                  <div className="mt-3 rounded-lg border border-border/25 bg-background/30 px-3 py-2 text-[0.72rem] text-muted-foreground">
+                    Transform tekstury magnetyzacji jest osobnym modułem względem transformacji geometrii i uaktywnia się dopiero dla `Preset Texture`.
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {(showTextureEditor || showAnyTransformEditor) && transformAvailable && presetTextureSync.status !== "idle" ? (
+            <div className="rounded-xl border border-border/30 bg-card/15 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-medium text-foreground">
+                  {presetTextureSync.status === "syncing"
+                    ? "Trwa tworzenie tekstury magnetycznej…"
+                    : presetTextureSync.status === "refreshing"
+                      ? "Backend zapisany. Odswiezanie viewportu…"
+                      : presetTextureSync.status === "done"
+                        ? "Synchronizacja tekstury zakończona"
+                        : presetTextureSync.status === "error"
+                          ? "Błąd synchronizacji tekstury"
+                          : "Synchronizacja tekstury z backendem"}
+                </div>
+                {presetTextureSync.totalSpins != null ? (
+                  <div className="text-[0.68rem] font-mono text-muted-foreground">
+                    {Math.max(0, presetTextureSync.processedSpins ?? 0).toLocaleString()}
+                    {" / "}
+                    {presetTextureSync.totalSpins.toLocaleString()} spinów
+                  </div>
+                ) : null}
+              </div>
+              <div className="mt-2 h-2 w-full overflow-hidden rounded bg-muted/40">
+                <div
+                  className={`h-full transition-all duration-150 ${
+                    presetTextureSync.status === "error"
+                      ? "bg-red-400"
+                      : presetTextureSync.status === "done"
+                        ? "bg-emerald-400"
+                        : "bg-primary"
+                  }`}
+                  style={{ width: `${presetTextureSyncPercent}%` }}
+                />
+              </div>
+              {presetTextureSync.message ? (
+                <div className="mt-2 text-[0.72rem] text-muted-foreground">
+                  {presetTextureSync.message}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {showTextureEditor ? (
+            <div className="flex flex-col gap-4">
+              <div className="rounded-xl border border-border/30 bg-card/15 p-2">
+                <MagneticTextureLibraryPanel
+                  selectedKind={mag.kind === "preset_texture" ? selectedPresetKind : null}
+                  onCreatePreset={handlePresetCardSelect}
+                  onSelectKind={handlePresetCardSelect}
+                />
+              </div>
+              <div className="rounded-lg border border-border/30 bg-background/35 px-3 py-2 text-[0.72rem] text-muted-foreground">
+                Biblioteka presetów i edytor poniżej operują na tym samym assetcie. Transform tekstury ma osobny widok, więc tutaj edytujesz tylko typ i parametry magnetyzacji.
+              </div>
+              <SelectField
+                label="Texture Kind"
+                value={mag.kind}
+                onchange={(val) =>
+                  updateMagnetization((asset) => ({
+                    ...asset,
+                    kind: val,
+                    value: val === "uniform" ? (asset.value ?? [0, 0, 1]) : null,
+                    seed: val === "random" ? (asset.seed ?? 1) : null,
+                    source_path: val === "file" || val === "sampled" ? asset.source_path : null,
+                    source_format: val === "file" || val === "sampled" ? asset.source_format ?? null : null,
+                    dataset: val === "sampled" ? asset.dataset ?? null : null,
+                    sample_index: val === "sampled" ? asset.sample_index ?? null : null,
+                    preset_kind: val === "preset_texture" ? asset.preset_kind ?? "uniform" : null,
+                    preset_params:
+                      val === "preset_texture"
+                        ? asset.preset_params ?? structuredClone(MAGNETIC_PRESET_CATALOG[0]?.defaultParams ?? {})
+                        : null,
+                    mapping:
+                      val === "preset_texture"
+                        ? asset.mapping ?? { ...DEFAULT_TEXTURE_MAPPING }
+                        : asset.mapping,
+                    texture_transform:
+                      val === "preset_texture"
+                        ? asset.texture_transform ?? { ...DEFAULT_TEXTURE_TRANSFORM }
+                        : asset.texture_transform,
+                    preset_version: val === "preset_texture" ? asset.preset_version ?? 1 : null,
+                    ui_label:
+                      val === "preset_texture"
+                        ? asset.ui_label ?? selectedPresetDescriptor?.label ?? "Preset texture"
+                        : null,
+                  }))
+                }
+                options={[
+                  { label: "Uniform (Vector)", value: "uniform" },
+                  { label: "Random", value: "random" },
+                  { label: "File Source", value: "file" },
+                  { label: "Sampled Dataset", value: "sampled" },
+                  { label: "Preset Texture", value: "preset_texture" },
+                ]}
+                tooltip="Spatial distribution of the starting magnetization vectors."
+              />
+
+              {mag.kind === "uniform" ? (
+                <div className="grid grid-cols-3 gap-3">
+                  <TextField label="m_x" defaultValue={value[0]} onchange={(e) => handleMagUniform(0, e.target.value)} mono tooltip="Normalized X component." />
+                  <TextField label="m_y" defaultValue={value[1]} onchange={(e) => handleMagUniform(1, e.target.value)} mono tooltip="Normalized Y component." />
+                  <TextField label="m_z" defaultValue={value[2]} onchange={(e) => handleMagUniform(2, e.target.value)} mono tooltip="Normalized Z component." />
+                </div>
+              ) : null}
+
+              {(mag.kind === "file" || mag.kind === "sampled") ? (
+                <div className="flex flex-col gap-3">
+                  <TextField label="Source File Path" placeholder="e.g., m0.ovf or ground_state.vtk" defaultValue={mag.source_path ?? ""} onchange={(e) => handleMagStr("source_path", e.target.value)} mono tooltip="Path to an .ovf, .omf, or .vtk file containing the continuous vector field." />
+                  <div className="grid grid-cols-2 gap-3">
+                    <TextField label="Source Format" placeholder="(optional)" defaultValue={mag.source_format ?? ""} onchange={(e) => handleMagStr("source_format", e.target.value)} mono tooltip="Optional explicit parser hint." />
+                    <TextField label="Dataset Key" placeholder="(optional)" defaultValue={mag.dataset ?? ""} onchange={(e) => handleMagStr("dataset", e.target.value)} mono tooltip="Specify the internal dataset name if the file contains multiple." />
+                  </div>
+                  {mag.kind === "sampled" ? (
+                    <TextField label="Sample Index" placeholder="(optional)" defaultValue={mag.sample_index?.toString() ?? ""} onchange={(e) => handleMagNum("sample_index", e.target.value)} mono tooltip="Index within the dataset if storing a time series." />
+                  ) : null}
+                </div>
+              ) : null}
+
+              {mag.kind === "random" ? (
+                <TextField label="Random Seed" placeholder="Random (Auto)" defaultValue={mag.seed?.toString() ?? ""} onchange={(e) => handleMagNum("seed", e.target.value)} mono tooltip="Fixed integer seed to reproduce the exact same thermalized noise pattern." />
+              ) : null}
+
+              {mag.kind === "preset_texture" && selectedPresetDescriptor ? (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" type="button" onClick={() => jumpToMagnetizationNode("transformOverview")}>
+                      Open Transform
+                    </Button>
+                    <Button size="sm" variant="outline" type="button" onClick={() => jumpToMagnetizationNode("transformTranslate")}>
+                      Translate
+                    </Button>
+                    <Button size="sm" variant="outline" type="button" onClick={() => jumpToMagnetizationNode("transformRotate")}>
+                      Rotate
+                    </Button>
+                    <Button size="sm" variant="outline" type="button" onClick={() => jumpToMagnetizationNode("transformScale")}>
+                      Scale
+                    </Button>
+                  </div>
+                  <div className="rounded-xl border border-border/30 bg-card/15 p-3">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-foreground">
+                          {selectedPresetDescriptor.label}
+                        </div>
+                        <div className="text-[0.72rem] text-muted-foreground">
+                          Proxy: {selectedPresetDescriptor.previewProxy}
+                        </div>
+                      </div>
+                      <div className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-primary">
+                        Live preset editor
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 @[560px]:grid-cols-2">
+                      {selectedPresetDescriptor.parameters.map((parameter) => {
+                        const rawValue =
+                          presetParams[parameter.key] ?? selectedPresetDescriptor.defaultParams[parameter.key];
+
+                        if (parameter.type === "vector3") {
+                          const vector = Array.isArray(rawValue) ? rawValue : [0, 0, 0];
+                          return (
+                            <div key={parameter.key} className="grid grid-cols-1 gap-2 @[860px]:col-span-2 @[860px]:grid-cols-3">
+                              {[0, 1, 2].map((axis) => (
+                                <TextField
+                                  key={`${parameter.key}-${axis}`}
+                                  label={`${parameter.label} ${["X", "Y", "Z"][axis]}`}
+                                  defaultValue={String(Number(vector[axis] ?? 0))}
+                                  onBlur={(event) => {
+                                    const next = [...vector] as [number, number, number];
+                                    const parsed = Number.parseFloat(event.target.value);
+                                    if (!Number.isFinite(parsed)) return;
+                                    next[axis] = parsed;
+                                    updatePresetParam(parameter.key, next);
+                                  }}
+                                  unit={parameter.unit}
+                                  mono
+                                />
+                              ))}
+                            </div>
+                          );
+                        }
+
+                        if (parameter.type === "enum") {
+                          return (
+                            <SelectField
+                              key={parameter.key}
+                              label={parameter.label}
+                              value={String(rawValue)}
+                              onchange={(value) => updatePresetParam(parameter.key, value)}
+                              options={(parameter.options ?? []).map((option) => ({
+                                label: option.label,
+                                value: String(option.value),
+                              }))}
+                            />
+                          );
+                        }
+
+                        if (parameter.type === "boolean") {
+                          return (
+                            <SelectField
+                              key={parameter.key}
+                              label={parameter.label}
+                              value={rawValue ? "true" : "false"}
+                              onchange={(value) => updatePresetParam(parameter.key, value === "true")}
+                              options={[
+                                { label: "True", value: "true" },
+                                { label: "False", value: "false" },
+                              ]}
+                            />
+                          );
+                        }
+
+                        const isInteger = parameter.type === "integer";
+                        return (
+                          <TextField
+                            key={parameter.key}
+                            label={parameter.label}
+                            defaultValue={String(rawValue ?? "")}
+                            onBlur={(event) => {
+                              const parsed = isInteger
+                                ? Number.parseInt(event.target.value, 10)
+                                : Number.parseFloat(event.target.value);
+                              if (!Number.isFinite(parsed)) return;
+                              updatePresetParam(parameter.key, parsed);
+                            }}
+                            unit={parameter.unit}
+                            mono
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+
+          {showAnyTransformEditor ? (
+            transformAvailable ? (
+              <div className="@container grid grid-cols-1 gap-4">
+                <div className="rounded-xl border border-border/30 bg-card/15 p-3">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-medium text-foreground">Texture Transform</div>
+                      <div className="text-[0.72rem] text-muted-foreground">
+                        Transform magnetyzacji jest osobnym modułem od transform geometrii obiektu. Ten widok steruje tylko przestrzennym osadzeniem tekstury m0.
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Button
+                        size="sm"
+                        variant={activeViewportControl === "camera" ? "default" : "outline"}
+                        type="button"
+                        onClick={() => setViewportControlScope("camera")}
+                      >
+                        Camera
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={activeViewportControl === "object" ? "default" : "outline"}
+                        type="button"
+                        onClick={() => setViewportControlScope("object")}
+                      >
+                        Object
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={activeViewportControl === "texture" ? "default" : "outline"}
+                        type="button"
+                        onClick={() => setViewportControlScope("texture")}
+                      >
+                        Texture
+                      </Button>
+                      <Button size="sm" variant="outline" type="button" onClick={handleFitTextureTransform}>
+                        Fit
+                      </Button>
+                      <Button size="sm" variant="outline" type="button" onClick={handleResetTextureTransform}>
+                        Reset
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        type="button"
+                        onClick={() =>
+                          openNumericTransform((activeTransformSubpanel ?? activeTextureMode) as NumericTransformMode)
+                        }
+                      >
+                        Numeric
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-4">
                     <Button
                       size="sm"
-                      variant={activeViewportControl === "camera" ? "default" : "outline"}
+                      variant={showTransformOverview ? "default" : "outline"}
                       type="button"
-                      onClick={() => setViewportControlScope("camera")}
+                      onClick={() => jumpToMagnetizationNode("transformOverview")}
                     >
-                      Camera
+                      Overview
                     </Button>
                     <Button
                       size="sm"
-                      variant={activeViewportControl === "object" ? "default" : "outline"}
+                      variant={showTransformTranslate ? "default" : "outline"}
                       type="button"
-                      onClick={() => setViewportControlScope("object")}
+                      onClick={() => jumpToMagnetizationNode("transformTranslate")}
                     >
-                      Object
+                      Translate
                     </Button>
                     <Button
                       size="sm"
-                      variant={activeViewportControl === "texture" ? "default" : "outline"}
+                      variant={showTransformRotate ? "default" : "outline"}
                       type="button"
-                      onClick={() => setViewportControlScope("texture")}
-                    >
-                      Texture
-                    </Button>
-                    <Button size="sm" variant="outline" type="button" onClick={handleFitTextureTransform}>
-                      Fit
-                    </Button>
-                    <Button size="sm" variant="outline" type="button" onClick={handleResetTextureTransform}>
-                      Reset
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={activeTextureMode === "translate" ? "default" : "outline"}
-                      type="button"
-                      onClick={() => setTextureGizmoMode("translate")}
-                    >
-                      Move
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={activeTextureMode === "rotate" ? "default" : "outline"}
-                      type="button"
-                      onClick={() => setTextureGizmoMode("rotate")}
+                      onClick={() => jumpToMagnetizationNode("transformRotate")}
                     >
                       Rotate
                     </Button>
                     <Button
                       size="sm"
-                      variant={activeTextureMode === "scale" ? "default" : "outline"}
+                      variant={showTransformScale ? "default" : "outline"}
                       type="button"
-                      onClick={() => setTextureGizmoMode("scale")}
+                      onClick={() => jumpToMagnetizationNode("transformScale")}
                     >
                       Scale
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      type="button"
-                      onClick={() => openNumericTransform(activeTextureMode as NumericTransformMode)}
-                    >
-                      Numeric
                     </Button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3">
-                  <div className="grid grid-cols-1 gap-2 rounded-lg border border-border/25 bg-background/30 p-2.5">
-                    <div className="text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
-                      Mapping
+                {showTransformOverview ? (
+                  <div className="grid grid-cols-1 gap-3">
+                    <div className="grid grid-cols-1 gap-2 rounded-lg border border-border/25 bg-background/30 p-2.5">
+                      <div className="text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
+                        Mapping
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 @[720px]:grid-cols-3">
+                        <SelectField
+                          label="Space"
+                          value={textureMapping.space}
+                          onchange={(value) =>
+                            updateMagnetization((asset) => ({
+                              ...asset,
+                              mapping: {
+                                ...(asset.mapping ?? textureMapping),
+                                space: value,
+                              },
+                            }))
+                          }
+                          options={[
+                            { label: "Object", value: "object" },
+                            { label: "World", value: "world" },
+                          ]}
+                        />
+                        <SelectField
+                          label="Projection"
+                          value={textureMapping.projection}
+                          onchange={(value) =>
+                            updateMagnetization((asset) => ({
+                              ...asset,
+                              mapping: {
+                                ...(asset.mapping ?? textureMapping),
+                                projection: value,
+                              },
+                            }))
+                          }
+                          options={[
+                            { label: "Object Local", value: "object_local" },
+                            { label: "Planar XY", value: "planar_xy" },
+                            { label: "Planar XZ", value: "planar_xz" },
+                            { label: "Planar YZ", value: "planar_yz" },
+                          ]}
+                        />
+                        <SelectField
+                          label="Clamp"
+                          value={textureMapping.clamp_mode}
+                          onchange={(value) =>
+                            updateMagnetization((asset) => ({
+                              ...asset,
+                              mapping: {
+                                ...(asset.mapping ?? textureMapping),
+                                clamp_mode: value,
+                              },
+                            }))
+                          }
+                          options={[
+                            { label: "None", value: "none" },
+                            { label: "Clamp", value: "clamp" },
+                            { label: "Repeat", value: "repeat" },
+                            { label: "Mirror", value: "mirror" },
+                          ]}
+                        />
+                      </div>
                     </div>
-                    <div className="grid grid-cols-1 gap-2 @[720px]:grid-cols-3">
-                      <SelectField
-                        label="Space"
-                        value={textureMapping.space}
-                        onchange={(value) =>
-                          updateMagnetization((asset) => ({
-                            ...asset,
-                            mapping: {
-                              ...(asset.mapping ?? textureMapping),
-                              space: value,
-                            },
-                          }))
-                        }
-                        options={[
-                          { label: "Object", value: "object" },
-                          { label: "World", value: "world" },
-                        ]}
-                      />
-                      <SelectField
-                        label="Projection"
-                        value={textureMapping.projection}
-                        onchange={(value) =>
-                          updateMagnetization((asset) => ({
-                            ...asset,
-                            mapping: {
-                              ...(asset.mapping ?? textureMapping),
-                              projection: value,
-                            },
-                          }))
-                        }
-                        options={[
-                          { label: "Object Local", value: "object_local" },
-                          { label: "Planar XY", value: "planar_xy" },
-                          { label: "Planar XZ", value: "planar_xz" },
-                          { label: "Planar YZ", value: "planar_yz" },
-                        ]}
-                      />
-                      <SelectField
-                        label="Clamp"
-                        value={textureMapping.clamp_mode}
-                        onchange={(value) =>
-                          updateMagnetization((asset) => ({
-                            ...asset,
-                            mapping: {
-                              ...(asset.mapping ?? textureMapping),
-                              clamp_mode: value,
-                            },
-                          }))
-                        }
-                        options={[
-                          { label: "None", value: "none" },
-                          { label: "Clamp", value: "clamp" },
-                          { label: "Repeat", value: "repeat" },
-                          { label: "Mirror", value: "mirror" },
-                        ]}
-                      />
+                    <div className="rounded-lg border border-border/25 bg-background/30 p-3 text-[0.72rem] text-muted-foreground">
+                      Wybierz `Translate`, `Rotate` albo `Scale`, żeby edytować dokładne wartości. Ten widok ogólny pełni rolę toolbaru i ustawień mapowania, podobnie do zaawansowanych CAD/CAE inspectorów.
                     </div>
                   </div>
+                ) : null}
 
+                {showTransformTranslate ? (
                   <div className="rounded-lg border border-border/25 bg-background/30 p-2.5">
                     <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
                       Translate
                     </div>
                     <div className="grid grid-cols-1 gap-2 @[720px]:grid-cols-3">
-                    {[0, 1, 2].map((axis) => (
-                      <TextField
-                        key={`tx-translation-${axis}-${textureTransform.translation[axis]}`}
-                        label={`Translate ${["X", "Y", "Z"][axis]}`}
-                        defaultValue={textureTransform.translation[axis]}
-                        onBlur={(event) =>
-                          handleTextureTransformVectorBlur("translation", axis, event.target.value)
-                        }
-                        unit="m"
-                        mono
-                      />
-                    ))}
+                      {[0, 1, 2].map((axis) => (
+                        <TextField
+                          key={`tx-translation-${axis}-${textureTransform.translation[axis]}`}
+                          label={`Translate ${["X", "Y", "Z"][axis]}`}
+                          defaultValue={textureTransform.translation[axis]}
+                          onBlur={(event) =>
+                            handleTextureTransformVectorBlur("translation", axis, event.target.value)
+                          }
+                          unit="m"
+                          mono
+                        />
+                      ))}
+                    </div>
+                    <div className="mt-3 rounded-lg border border-border/20 bg-background/20 px-3 py-2 text-[0.72rem] text-muted-foreground">
+                      `Translate` przesuwa teksturę magnetyzacji względem obiektu. Nie zmienia geometrii obiektu ani jego placementu w scenie.
                     </div>
                   </div>
+                ) : null}
 
-                  <div className="rounded-lg border border-border/25 bg-background/30 p-2.5">
-                    <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
-                      Rotation (Quaternion)
+                {showTransformRotate ? (
+                  <div className="grid grid-cols-1 gap-3">
+                    <div className="rounded-lg border border-border/25 bg-background/30 p-2.5">
+                      <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
+                        Rotation (Quaternion)
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 @[720px]:grid-cols-2 @[980px]:grid-cols-4">
+                        {[0, 1, 2, 3].map((axis) => (
+                          <TextField
+                            key={`tx-rotation-${axis}-${textureTransform.rotation_quat[axis]}`}
+                            label={`Quat ${["X", "Y", "Z", "W"][axis]}`}
+                            defaultValue={textureTransform.rotation_quat[axis]}
+                            onBlur={(event) => handleTextureRotationQuatBlur(axis, event.target.value)}
+                            mono
+                          />
+                        ))}
+                      </div>
                     </div>
-                    <div className="grid grid-cols-1 gap-2 @[720px]:grid-cols-2 @[980px]:grid-cols-4">
-                    {[0, 1, 2, 3].map((axis) => (
-                      <TextField
-                        key={`tx-rotation-${axis}-${textureTransform.rotation_quat[axis]}`}
-                        label={`Quat ${["X", "Y", "Z", "W"][axis]}`}
-                        defaultValue={textureTransform.rotation_quat[axis]}
-                        onBlur={(event) => handleTextureRotationQuatBlur(axis, event.target.value)}
-                        mono
-                      />
-                    ))}
+                    <div className="rounded-lg border border-border/25 bg-background/30 p-2.5">
+                      <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
+                        Pivot
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 @[720px]:grid-cols-3">
+                        {[0, 1, 2].map((axis) => (
+                          <TextField
+                            key={`tx-pivot-${axis}-${displayedPivot[axis]}`}
+                            label={`Pivot ${["X", "Y", "Z"][axis]}`}
+                            defaultValue={displayedPivot[axis]}
+                            onBlur={(event) =>
+                              handleTextureTransformVectorBlur("pivot", axis, event.target.value)
+                            }
+                            disabled={pivotLockedToVortexCore}
+                            unit="m"
+                            mono
+                          />
+                        ))}
+                      </div>
                     </div>
                   </div>
+                ) : null}
 
+                {showTransformScale ? (
                   <div className="rounded-lg border border-border/25 bg-background/30 p-2.5">
                     <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
                       Scale
                     </div>
                     {metricScalePreset ? (
                       <div className="mb-2 text-[0.68rem] text-muted-foreground">
-                        Dla tej tekstury skala jest bezwymiarowa i powinna pozostać równa 1.
-                        Rozmiar kontrolujesz przez parametry presetu (np. radius/core_radius).
+                        Dla tej tekstury skala jest bezwymiarowa i powinna pozostać równa 1. Rozmiar kontrolujesz przez parametry presetu, nie przez skalowanie transformu.
                       </div>
                     ) : null}
                     <div className="grid grid-cols-1 gap-2 @[720px]:grid-cols-3">
-                    {[0, 1, 2].map((axis) => (
-                      <TextField
-                        key={`tx-scale-${axis}-${textureTransform.scale[axis]}`}
-                        label={`Scale ${["X", "Y", "Z"][axis]}`}
-                        defaultValue={textureTransform.scale[axis]}
-                        onBlur={(event) =>
-                          handleTextureTransformVectorBlur("scale", axis, event.target.value)
-                        }
-                        disabled={metricScalePreset}
-                        unit={scaleInputUnit}
-                        mono
-                      />
-                    ))}
+                      {[0, 1, 2].map((axis) => (
+                        <TextField
+                          key={`tx-scale-${axis}-${textureTransform.scale[axis]}`}
+                          label={`Scale ${["X", "Y", "Z"][axis]}`}
+                          defaultValue={textureTransform.scale[axis]}
+                          onBlur={(event) =>
+                            handleTextureTransformVectorBlur("scale", axis, event.target.value)
+                          }
+                          disabled={metricScalePreset}
+                          unit={scaleInputUnit}
+                          mono
+                        />
+                      ))}
                     </div>
                   </div>
-
-                  <div className="rounded-lg border border-border/25 bg-background/30 p-2.5">
-                    <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
-                      Pivot
-                    </div>
-                    <div className="grid grid-cols-1 gap-2 @[720px]:grid-cols-3">
-                    {[0, 1, 2].map((axis) => (
-                      <TextField
-                        key={`tx-pivot-${axis}-${displayedPivot[axis]}`}
-                        label={`Pivot ${["X", "Y", "Z"][axis]}`}
-                        defaultValue={displayedPivot[axis]}
-                        onBlur={(event) =>
-                          handleTextureTransformVectorBlur("pivot", axis, event.target.value)
-                        }
-                        disabled={pivotLockedToVortexCore}
-                        unit="m"
-                        mono
-                      />
-                    ))}
-                    </div>
-                  </div>
-                </div>
+                ) : null}
               </div>
-            </div>
-          )}
+            ) : (
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-3 text-[0.74rem] text-amber-100/90">
+                Transform tekstury jest dostępny dopiero dla `Preset Texture`. Najpierw otwórz `Texture Editor`, wybierz preset magnetyczny, a potem wróć do `Transform`.
+              </div>
+            )
+          ) : null}
 
           <div className="sticky bottom-0 z-20 rounded-xl border border-border/30 bg-background/90 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-background/70">
             <div className="flex items-center justify-between gap-3">

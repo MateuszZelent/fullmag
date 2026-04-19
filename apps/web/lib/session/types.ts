@@ -281,6 +281,9 @@ export interface LatestFieldFrame {
   active_mask?: Uint8Array | null;
   location?: string | null;
   domain?: string | null;
+  field_revision?: number | null;
+  source_step?: number | null;
+  source_time?: number | null;
 }
 
 export interface LatestFields {
@@ -1294,6 +1297,9 @@ export interface LiveQuantityFrame {
   n_comp: number;
   values: number[];
   active_mask?: boolean[] | null;
+  field_revision?: number | null;
+  source_step?: number | null;
+  source_time?: number | null;
 }
 
 /** V2 step update — cleanly separates diagnostics, scalars, and spatial frames. */

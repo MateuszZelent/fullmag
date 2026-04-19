@@ -311,7 +311,14 @@ const RULES: RegistryRule[] = [
     props: passNodeId,
   },
   {
-    kinds: ["object.initial_state", "object.initial_state.texture", "object.initial_state.texture_transform"],
+    kinds: [
+      "object.initial_state",
+      "object.initial_state.texture",
+      "object.initial_state.texture_transform",
+      "object.initial_state.texture_transform.translate",
+      "object.initial_state.texture_transform.rotate",
+      "object.initial_state.texture_transform.scale",
+    ],
     panelKey: PanelKey.MATERIAL_MAG,
     props: passNodeId,
   },

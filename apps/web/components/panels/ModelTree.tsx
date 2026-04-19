@@ -1897,16 +1897,36 @@ function _buildObjectNode(objectNode: {
             icon: geo.magnetization.kind === "preset_texture" ? "◉" : "◢",
             status: "ready",
           },
-          ...(geo.magnetization.kind === "preset_texture"
-            ? [
-                {
-                  id: `mag-${objectNode.name}-transform`,
-                  label: "Texture Transform",
-                  icon: "⟳",
-                  status: "ready" as const,
-                },
-              ]
-            : []),
+	          ...(geo.magnetization.kind === "preset_texture"
+	            ? [
+	                {
+	                  id: `mag-${objectNode.name}-transform`,
+	                  label: "Texture Transform",
+	                  icon: "⟳",
+	                  status: "ready" as const,
+	                  children: [
+	                    {
+	                      id: `mag-${objectNode.name}-transform-translate`,
+	                      label: "Translate",
+	                      icon: "↔",
+	                      status: "ready" as const,
+	                    },
+	                    {
+	                      id: `mag-${objectNode.name}-transform-rotate`,
+	                      label: "Rotate",
+	                      icon: "⤾",
+	                      status: "ready" as const,
+	                    },
+	                    {
+	                      id: `mag-${objectNode.name}-transform-scale`,
+	                      label: "Scale",
+	                      icon: "⬚",
+	                      status: "ready" as const,
+	                    },
+	                  ],
+	                },
+	              ]
+	            : []),
         ],
       },
       meshNode,
@@ -2066,16 +2086,36 @@ function _buildRegionNode(
             icon: "🧭",
             status: "ready",
           },
-          ...(geo.magnetization.kind === "preset_texture"
-            ? [
-                {
-                  id: `${regionId}-texture-transform`,
-                  label: "Texture Transform",
-                  icon: "⟳",
-                  status: "ready" as const,
-                },
-              ]
-            : []),
+	          ...(geo.magnetization.kind === "preset_texture"
+	            ? [
+	                {
+	                  id: `${regionId}-texture-transform`,
+	                  label: "Texture Transform",
+	                  icon: "⟳",
+	                  status: "ready" as const,
+	                  children: [
+	                    {
+	                      id: `${regionId}-texture-transform-translate`,
+	                      label: "Translate",
+	                      icon: "↔",
+	                      status: "ready" as const,
+	                    },
+	                    {
+	                      id: `${regionId}-texture-transform-rotate`,
+	                      label: "Rotate",
+	                      icon: "⤾",
+	                      status: "ready" as const,
+	                    },
+	                    {
+	                      id: `${regionId}-texture-transform-scale`,
+	                      label: "Scale",
+	                      icon: "⬚",
+	                      status: "ready" as const,
+	                    },
+	                  ],
+	                },
+	              ]
+	            : []),
         ],
       },
     ],

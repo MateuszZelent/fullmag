@@ -33,10 +33,16 @@ describe("normalizeSessionState", () => {
           active_mask: [true, false],
           location: "cell",
           domain: "magnetic_only",
+          field_revision: 7,
+          source_step: 7,
+          source_time: 1.5e-12,
         },
       },
       step_update_v2: {
-        diagnostics: {},
+        diagnostics: {
+          step: 12,
+          time: 3.5e-12,
+        },
         scalars: {},
         frames: [
           {
@@ -46,6 +52,7 @@ describe("normalizeSessionState", () => {
             grid: [2, 1, 1],
             values: [1, 0, 0, 0, 1, 0],
             active_mask: [true, true],
+            field_revision: 12,
           },
         ],
         finished: false,
@@ -57,8 +64,14 @@ describe("normalizeSessionState", () => {
     expect(state.latest_fields.frames.eden_total.n_comp).toBe(1);
     expect(Array.from(state.latest_fields.frames.eden_total.values)).toEqual([1, 2]);
     expect(Array.from(state.latest_fields.frames.eden_total.active_mask ?? [])).toEqual([1, 0]);
+    expect(state.latest_fields.frames.eden_total.field_revision).toBe(7);
+    expect(state.latest_fields.frames.eden_total.source_step).toBe(7);
+    expect(state.latest_fields.frames.eden_total.source_time).toBe(1.5e-12);
     expect(state.latest_fields.frames.m.unit).toBe("dimensionless");
     expect(state.latest_fields.frames.m.n_comp).toBe(3);
     expect(Array.from(state.latest_fields.frames.m.values)).toEqual([1, 0, 0, 0, 1, 0]);
+    expect(state.latest_fields.frames.m.field_revision).toBe(12);
+    expect(state.latest_fields.frames.m.source_step).toBe(12);
+    expect(state.latest_fields.frames.m.source_time).toBe(3.5e-12);
   });
 });

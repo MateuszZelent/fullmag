@@ -1586,22 +1586,35 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const fieldDataRevision = useMemo(() => {
     if (!selectedFieldFrame || !selectedVectors?.length) {
       if (renderPreviewMatchesActiveQuantity && renderPreview?.source_step != null) {
-        return `preview:${activeQuantityId}:${renderPreview.config_revision}:${renderPreview.source_step}:${renderPreview.vector_field_values ? fieldFrameIdentity(renderPreview.vector_field_values) : "none"}`;
+        return [
+          "preview",
+          activeQuantityId,
+          renderPreview.config_revision,
+          renderPreview.source_step,
+          renderPreview.source_time,
+          renderPreview.vector_field_values ? fieldFrameIdentity(renderPreview.vector_field_values) : "none",
+        ].join(":");
       }
       return null;
     }
+    const canonicalFieldRevision =
+      selectedFieldFrame.field_revision
+      ?? selectedFieldFrame.source_step
+      ?? null;
     return [
       "frame",
       selectedFieldFrame.quantity_id,
       selectedFieldFrame.n_comp,
       selectedFieldFrame.values.length,
-      fieldFrameIdentity(selectedFieldFrame),
+      canonicalFieldRevision ?? "none",
+      selectedFieldFrame.source_time ?? "none",
       fieldFrameIdentity(selectedVectors),
     ].join(":");
   }, [
     activeQuantityId,
     renderPreview?.config_revision,
     renderPreview?.source_step,
+    renderPreview?.source_time,
     renderPreview?.vector_field_values,
     renderPreviewMatchesActiveQuantity,
     selectedFieldFrame,

@@ -161,6 +161,18 @@ function normalizeLatestFieldFrame(
     active_mask: normalizeActiveMask(raw.active_mask),
     location: typeof raw.location === "string" ? raw.location : null,
     domain: typeof raw.domain === "string" ? raw.domain : null,
+    field_revision:
+      typeof raw.field_revision === "number" && Number.isFinite(raw.field_revision)
+        ? Math.trunc(raw.field_revision)
+        : null,
+    source_step:
+      typeof raw.source_step === "number" && Number.isFinite(raw.source_step)
+        ? Math.trunc(raw.source_step)
+        : null,
+    source_time:
+      typeof raw.source_time === "number" && Number.isFinite(raw.source_time)
+        ? Number(raw.source_time)
+        : null,
   };
 }
 
@@ -1792,6 +1804,24 @@ export function normalizeSessionState(
           active_mask: normalizeActiveMask(frame.active_mask),
           location: null,
           domain: null,
+          field_revision:
+            typeof frame.field_revision === "number" && Number.isFinite(frame.field_revision)
+              ? Math.trunc(frame.field_revision)
+              : typeof rawStepV2.diagnostics?.step === "number" && Number.isFinite(rawStepV2.diagnostics.step)
+                ? Math.trunc(rawStepV2.diagnostics.step)
+                : null,
+          source_step:
+            typeof frame.source_step === "number" && Number.isFinite(frame.source_step)
+              ? Math.trunc(frame.source_step)
+              : typeof rawStepV2.diagnostics?.step === "number" && Number.isFinite(rawStepV2.diagnostics.step)
+                ? Math.trunc(rawStepV2.diagnostics.step)
+                : null,
+          source_time:
+            typeof frame.source_time === "number" && Number.isFinite(frame.source_time)
+              ? Number(frame.source_time)
+              : typeof rawStepV2.diagnostics?.time === "number" && Number.isFinite(rawStepV2.diagnostics.time)
+                ? Number(rawStepV2.diagnostics.time)
+                : null,
         };
         if (!latestFields.grid) {
           latestFields.grid = latestFields.frames[frame.quantity_id].grid;

@@ -678,7 +678,53 @@ function resolveStudyStageHandle(id: string): NodeHandle | null {
 // Texture / mesh suffix refinement for reg- and geo- nodes
 // ---------------------------------------------------------------------------
 
+function refineMagnetizationHandle(id: string, base: NodeHandle): NodeHandle {
+  if (id.endsWith("-transform-translate")) {
+    return {
+      ...base,
+      nodeKind: "object.initial_state.texture_transform.translate",
+    };
+  }
+  if (id.endsWith("-transform-rotate")) {
+    return {
+      ...base,
+      nodeKind: "object.initial_state.texture_transform.rotate",
+    };
+  }
+  if (id.endsWith("-transform-scale")) {
+    return {
+      ...base,
+      nodeKind: "object.initial_state.texture_transform.scale",
+    };
+  }
+  if (id.endsWith("-transform")) {
+    return { ...base, nodeKind: "object.initial_state.texture_transform" };
+  }
+  if (id.endsWith("-kind")) {
+    return { ...base, nodeKind: "object.initial_state.texture" };
+  }
+  return base;
+}
+
 function refineRegionHandle(id: string, base: NodeHandle): NodeHandle {
+  if (id.endsWith("-texture-transform-translate")) {
+    return {
+      ...base,
+      nodeKind: "object.initial_state.texture_transform.translate",
+    };
+  }
+  if (id.endsWith("-texture-transform-rotate")) {
+    return {
+      ...base,
+      nodeKind: "object.initial_state.texture_transform.rotate",
+    };
+  }
+  if (id.endsWith("-texture-transform-scale")) {
+    return {
+      ...base,
+      nodeKind: "object.initial_state.texture_transform.scale",
+    };
+  }
   if (id.endsWith("-texture-transform")) {
     return { ...base, nodeKind: "object.initial_state.texture_transform" };
   }
@@ -732,6 +778,7 @@ export function resolveNodeHandle(nodeId: string): NodeHandle {
       };
 
       // Apply refinements based on suffix patterns
+      if (rule.prefix === "mag-") return refineMagnetizationHandle(nodeId, base);
       if (rule.prefix === "reg-") return refineRegionHandle(nodeId, base);
       if (rule.prefix === "geo-") return refineGeometryHandle(nodeId, base);
 
