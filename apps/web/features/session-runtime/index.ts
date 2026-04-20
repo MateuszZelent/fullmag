@@ -2,6 +2,9 @@ export type { SessionRuntimeSnapshot, SessionEvent, ConnectionStatus } from "./m
 export { deriveSessionReadModel } from "./model/deriveSessionReadModel";
 export type { NormalizedSessionState } from "./model/deriveSessionReadModel";
 export { useSessionRuntimeBridge } from "./hooks/useSessionRuntimeBridge";
+export { useNewApiBridge } from "./hooks/useNewApiBridge";
+export { useSessionRuntimeBridgeRouter } from "./hooks/useSessionRuntimeBridgeRouter";
+export { useDataPlaneBridge } from "./hooks/useDataPlaneBridge";
 export {
   useSessionRuntimeStore,
   selectConnection,
