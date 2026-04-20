@@ -18,7 +18,6 @@ import PreviewScalarField2D from "../../preview/PreviewScalarField2D";
 import BoundsPreview3D from "../../preview/BoundsPreview3D";
 import EmptyState from "../../ui/EmptyState";
 import AnalyzeViewport from "./AnalyzeViewport";
-import { DataPlaneCornerIndicator } from "./DataPlaneCornerIndicator";
 import ResultNodeViewport from "./ResultNodeViewport";
 import {
   fmtExp,
@@ -78,6 +77,78 @@ function summarizeTransform(transform: {
     scale: transform.scale,
   };
 }
+
+function formatRenderDebugScalar(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) {
+    return "-";
+  }
+  const abs = Math.abs(value);
+  if (abs >= 1_000 || (abs > 0 && abs < 1e-3)) {
+    return value.toExponential(3);
+  }
+  return value.toFixed(6);
+}
+
+function formatRenderDebugVector(value: readonly [number, number, number] | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+  return `[${formatRenderDebugScalar(value[0])}, ${formatRenderDebugScalar(value[1])}, ${formatRenderDebugScalar(value[2])}]`;
+}
+
+function averageFemFieldComponents(
+  fieldData: { x: ArrayLike<number>; y: ArrayLike<number>; z: ArrayLike<number> } | null | undefined,
+): [number, number, number] | null {
+  if (!fieldData) {
+    return null;
+  }
+  const vectorCount = Math.min(fieldData.x?.length ?? 0, fieldData.y?.length ?? 0, fieldData.z?.length ?? 0);
+  if (vectorCount <= 0) {
+    return null;
+  }
+  let sumX = 0;
+  let sumY = 0;
+  let sumZ = 0;
+  for (let index = 0; index < vectorCount; index += 1) {
+    sumX += Number(fieldData.x[index] ?? 0);
+    sumY += Number(fieldData.y[index] ?? 0);
+    sumZ += Number(fieldData.z[index] ?? 0);
+  }
+  return [sumX / vectorCount, sumY / vectorCount, sumZ / vectorCount];
+}
+
+function sampleFemFieldRows(fieldData: { x: ArrayLike<number>; y: ArrayLike<number>; z: ArrayLike<number> } | null | undefined): string[] {
+  if (!fieldData) {
+    return [];
+  }
+  const vectorCount = Math.min(fieldData.x?.length ?? 0, fieldData.y?.length ?? 0, fieldData.z?.length ?? 0);
+  if (vectorCount <= 0) {
+    return [];
+  }
+  const sampleIndices = vectorCount <= 8
+    ? Array.from({ length: vectorCount }, (_, index) => index)
+    : [0, 1, 2, Math.floor(vectorCount / 4), Math.floor(vectorCount / 2), Math.floor((3 * vectorCount) / 4), vectorCount - 2, vectorCount - 1];
+  const unique = Array.from(new Set(sampleIndices.filter((index) => index >= 0 && index < vectorCount))).sort((lhs, rhs) => lhs - rhs);
+  const width = String(Math.max(vectorCount - 1, 0)).length;
+  return unique.map((index) =>
+    `${String(index).padStart(width, "0")} | [${formatRenderDebugScalar(Number(fieldData.x[index] ?? 0))}, ${formatRenderDebugScalar(Number(fieldData.y[index] ?? 0))}, ${formatRenderDebugScalar(Number(fieldData.z[index] ?? 0))}]`,
+  );
+}
+
+function formatRenderDebugTimestamp(timestamp: number | null | undefined): string {
+  if (timestamp == null || !Number.isFinite(timestamp)) {
+    return "-";
+  }
+  return new Date(timestamp).toLocaleTimeString("pl-PL", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+const VIEWPORT_BADGE_STYLE = { zIndex: "var(--z-viewport-badge)" } as const;
+const ALWAYS_VISIBLE_DEBUG_OVERLAY_STYLE = { zIndex: 9999 } as const;
 
 export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   /* Granular hooks replacing useControlRoom */
@@ -488,6 +559,21 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     }
     return arr;
   }, [ctx.selectedVectors, scaleFactor]);
+  const liveRenderDebugData = useMemo(() => ({
+    source: ctx.selectedVectorSourceKind,
+    fieldDataRevision: ctx.fieldDataRevision,
+    fieldDataTimestamp: ctx.fieldDataTimestamp,
+    liveFieldSourceStep: ctx.liveFieldSourceStep,
+    previewSourceStep: ctx.previewSourceStep,
+    effectiveStep: ctx.effectiveStep,
+  }), [
+    ctx.selectedVectorSourceKind,
+    ctx.fieldDataRevision,
+    ctx.fieldDataTimestamp,
+    ctx.liveFieldSourceStep,
+    ctx.previewSourceStep,
+    ctx.effectiveStep,
+  ]);
 
   const scaledFemMeshData = useMemo(() => {
     if (!ctx.femMeshData || scaleFactor === 1.0 || !ctx.femMeshData.fieldData) return ctx.femMeshData;
@@ -538,6 +624,26 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     !ctx.femMeshData &&
     (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
     displayObjectOverlays.length > 0;
+  const showFemLiveRenderDebugOverlay = true;
+  const femRenderedVectorSample = useMemo(
+    () => sampleFemFieldRows(scaledFemMeshData?.fieldData),
+    [scaledFemMeshData?.fieldData],
+  );
+  const femRenderedVectorAverage = useMemo(
+    () => averageFemFieldComponents(scaledFemMeshData?.fieldData),
+    [scaledFemMeshData?.fieldData],
+  );
+  const femRenderedSourceStep =
+    ctx.selectedVectorSourceKind === "live"
+      ? ctx.liveFieldSourceStep
+      : ctx.selectedVectorSourceKind === "preview"
+        ? ctx.previewSourceStep
+        : null;
+  const femRenderedVectorCount = Math.min(
+    scaledFemMeshData?.fieldData?.x?.length ?? 0,
+    scaledFemMeshData?.fieldData?.y?.length ?? 0,
+    scaledFemMeshData?.fieldData?.z?.length ?? 0,
+  );
 
   /* ── Determine what goes into the conditional slot ── */
   let conditionalContent: React.ReactNode = null;
@@ -966,9 +1072,8 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                       <VectorFieldView3D
                         grid={ctx.previewGrid}
                         vectors={scaledVectors}
-                        dataTimestamp={ctx.fieldDataTimestamp}
-                        dataTimestampLabel="Texture / arrows"
                         fieldLabel={ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity}
+                        liveRenderDebugData={liveRenderDebugData}
                         geometryMode={false}
                         activeMask={ctx.activeMask}
                         worldExtent={ctx.worldExtent}
@@ -1203,25 +1308,74 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
 
   return (
     <div className="flex flex-col flex-1 h-full min-h-0 min-w-0 relative overflow-hidden [&>*]:min-w-0 [&>*]:min-h-0 [&>*:not(.viewportOverlay)]:flex-1 [&>*:not(.viewportOverlay)]:w-full">
-      {!showFdm3D && FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showDataPlaneIndicator ? (
+      {showFemLiveRenderDebugOverlay ? (
         <div
-          className={cn(
-            "viewportOverlay absolute left-4 z-[--z-viewport-badge]",
-            showFdm3D && FRONTEND_DIAGNOSTIC_FLAGS.fdmViewport.showOrientationSphere
-              ? "bottom-[10.5rem]"
-              : "bottom-4",
-          )}
+          className="viewportOverlay pointer-events-auto absolute left-4 top-4 w-[min(32rem,calc(100vw-2rem))] max-h-[min(36rem,calc(100%-2rem))] overflow-hidden rounded-xl border border-emerald-400/35 bg-slate-950/92 shadow-[0_20px_45px_rgba(0,0,0,0.42)] ring-1 ring-emerald-300/40 backdrop-blur-md"
+          style={ALWAYS_VISIBLE_DEBUG_OVERLAY_STYLE}
         >
-          <DataPlaneCornerIndicator />
+          <div className="border-b border-emerald-400/20 px-4 py-3">
+            <div className="text-[0.65rem] font-bold uppercase tracking-[0.2em] text-emerald-300">
+              Live Render Debug
+            </div>
+            <div className="mt-1 text-[0.72rem] text-slate-200">
+              Zawsze widoczny panel debugowy bufora renderowanego w viewportcie
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 px-4 py-3 text-[0.68rem]">
+            <span className="text-slate-400">Backend</span>
+            <span className="font-mono text-right text-slate-100">{ctx.isFemBackend ? "fem" : "fdm/other"}</span>
+            <span className="text-slate-400">View mode</span>
+            <span className="font-mono text-right text-slate-100">{ctx.effectiveViewMode}</span>
+            <span className="text-slate-400">Field</span>
+            <span className="font-mono text-right text-slate-100">{ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}</span>
+            <span className="text-slate-400">Viewport</span>
+            <span className="font-mono text-right text-slate-100">{ctx.isFemBackend ? "FEM meshData" : "Generic viewport"}</span>
+            <span className="text-slate-400">Transport</span>
+            <span className="font-mono text-right text-slate-100">{ctx.selectedVectorSourceKind}</span>
+            <span className="text-slate-400">Solver step</span>
+            <span className="font-mono text-right text-slate-100">{ctx.effectiveStep}</span>
+            <span className="text-slate-400">Buffer source step</span>
+            <span className="font-mono text-right text-slate-100">{femRenderedSourceStep ?? "-"}</span>
+            <span className="text-slate-400">Live field step</span>
+            <span className="font-mono text-right text-slate-100">{ctx.liveFieldSourceStep ?? "-"}</span>
+            <span className="text-slate-400">Preview step</span>
+            <span className="font-mono text-right text-slate-100">{ctx.previewSourceStep ?? "-"}</span>
+            <span className="text-slate-400">Vectors</span>
+            <span className="font-mono text-right text-slate-100">{femRenderedVectorCount}</span>
+            <span className="text-slate-400">Mean [mx,my,mz]</span>
+            <span className="font-mono text-right text-slate-100">{formatRenderDebugVector(femRenderedVectorAverage)}</span>
+            <span className="text-slate-400">FieldData</span>
+            <span className="font-mono text-right text-slate-100">{scaledFemMeshData?.fieldData ? "yes" : "no"}</span>
+            <span className="text-slate-400">Revision</span>
+            <span className="font-mono text-right text-slate-100">{scaledFemMeshData?.fieldRevision ?? ctx.fieldDataRevision ?? "-"}</span>
+            <span className="text-slate-400">Updated</span>
+            <span className="font-mono text-right text-slate-100">{formatRenderDebugTimestamp(ctx.fieldDataTimestamp)}</span>
+          </div>
+          <div className="border-t border-emerald-400/12 px-4 py-3">
+            <div className="mb-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              Rendered buffer sample
+            </div>
+            <pre className="max-h-56 overflow-auto rounded-lg border border-white/8 bg-black/30 px-3 py-2 text-[0.68rem] leading-5 text-emerald-100">
+{femRenderedVectorSample.length > 0
+  ? femRenderedVectorSample.join("\n")
+  : "Brak FEM fieldData przekazanego do renderera."}
+            </pre>
+          </div>
         </div>
       ) : null}
       {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showAntennaPreviewBadge && antennaPreviewBadgeVisible ? (
-        <div className="viewportOverlay absolute right-4 top-4 z-[--z-viewport-badge] rounded-full border border-primary/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-primary shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
+        <div
+          className="viewportOverlay absolute right-4 top-4 rounded-full border border-primary/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-primary shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md"
+          style={VIEWPORT_BADGE_STYLE}
+        >
           physics 2.5D · preview extruded
         </div>
       ) : null}
       {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showFemSelectionBadges && ctx.isFemBackend ? (
-        <div className="viewportOverlay absolute right-4 top-14 z-[--z-viewport-badge] flex items-center gap-2">
+        <div
+          className="viewportOverlay absolute right-4 top-14 flex items-center gap-2"
+          style={VIEWPORT_BADGE_STYLE}
+        >
           {ctx.selectedMeshPart || selectedFemObjectId ? (
             <div className="pointer-events-auto flex overflow-hidden rounded-full border border-border/40 bg-background/85 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
               <button
@@ -1281,7 +1435,10 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
           ) : null}
         </div>
       ) : FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showFdmSelectionBadges && viewportSelectedObjectId ? (
-        <div className="viewportOverlay absolute right-4 top-14 z-[--z-viewport-badge] flex items-center gap-2">
+        <div
+          className="viewportOverlay absolute right-4 top-14 flex items-center gap-2"
+          style={VIEWPORT_BADGE_STYLE}
+        >
           <button
             type="button"
             className="pointer-events-auto rounded-full border border-warning/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-warning shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md transition-colors hover:bg-warning/20"
@@ -1332,13 +1489,12 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
           <VectorFieldView3D
             grid={ctx.previewGrid}
             vectors={isFdm3DActive ? ctx.selectedVectors : null}
-            dataTimestamp={ctx.fieldDataTimestamp}
-            dataTimestampLabel="Texture / arrows"
             fieldLabel={
               isFdmMeshActive
                 ? "Geometry"
                 : ctx.quantityDescriptor?.label ?? spatialPreview?.quantity ?? ctx.selectedQuantity
             }
+            liveRenderDebugData={liveRenderDebugData}
             geometryMode={isFdmMeshActive}
             activeMask={ctx.activeMask}
             worldExtent={ctx.worldExtent}

@@ -34,6 +34,7 @@ const EMPTY_QUANTITIES: QuantityDescriptor[] = [];
 const EMPTY_ARTIFACTS: ArtifactEntry[] = [];
 
 export interface NormalizedSessionState {
+  stateVersion: number | null;
   session: SessionManifest | null;
   run: RunManifest | null;
   metadata: Record<string, unknown> | null;
@@ -61,10 +62,10 @@ export interface NormalizedSessionState {
  */
 export function deriveSessionReadModel(
   state: SessionState | null,
-  connection: "connecting" | "connected" | "disconnected",
 ): NormalizedSessionState {
   if (!state) {
     return {
+      stateVersion: null,
       session: null,
       run: null,
       metadata: null,
@@ -125,6 +126,7 @@ export function deriveSessionReadModel(
     (spatialPreview as Record<string, unknown> | null)?.spatial_kind === "mesh";
 
   return {
+    stateVersion: typeof state.state_version === "number" ? state.state_version : null,
     session,
     run,
     metadata,

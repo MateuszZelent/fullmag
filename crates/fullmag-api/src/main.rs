@@ -446,9 +446,35 @@ async fn get_current_live_bootstrap(
         // Update the cached snapshot opportunistically for SSE consumers.
         *state.current_live_public_snapshot.write().await = Some(public_json.clone());
         let current_version = live.state_version;
+        let (preview_source_step, preview_vector_len, preview_vector_avg) =
+            preview_debug_metrics(live.preview.as_ref());
+        let live_mag_len = live
+            .live_state
+            .as_ref()
+            .and_then(|state| state.latest_step.magnetization.as_ref())
+            .map(|values| values.len())
+            .unwrap_or(0);
+        let live_mag_avg = live
+            .live_state
+            .as_ref()
+            .and_then(|state| state.latest_step.magnetization.as_ref())
+            .and_then(|values| average_vector_components(values, 3));
         state
             .current_live_snapshot_version
             .store(current_version, std::sync::atomic::Ordering::Relaxed);
+        eprintln!(
+            "[fullmag-api] TX -> frontend bootstrap version={} step={} scalar_rows={} live_mag_len={} live_mag_avg={} preview={} preview_step={} preview_vec_len={} preview_vec_avg={} fields={}",
+            current_version,
+            live.live_state.as_ref().map(|state| state.latest_step.step).unwrap_or(0),
+            live.scalar_rows.len(),
+            live_mag_len,
+            format_debug_vector_average(live_mag_avg),
+            live.preview.is_some(),
+            preview_source_step,
+            preview_vector_len,
+            format_debug_vector_average(preview_vector_avg),
+            live.latest_fields.len(),
+        );
         let json = bootstrap_workspace_payload(&public_json)?;
         return Ok(([(CONTENT_TYPE, "application/json")], json).into_response());
     }
@@ -596,6 +622,41 @@ async fn get_current_live_poll(
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
     let scalar_rows_delta_start = query.scalar_rows_total.unwrap_or(0);
+    let scalar_rows_delta = snapshot
+        .scalar_rows
+        .len()
+        .saturating_sub(scalar_rows_delta_start);
+    let (preview_source_step, preview_vector_len, preview_vector_avg) =
+        preview_debug_metrics(snapshot.preview.as_ref());
+    let live_mag_len = snapshot
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.magnetization.as_ref())
+        .map(|values| values.len())
+        .unwrap_or(0);
+    let live_mag_avg = snapshot
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.magnetization.as_ref())
+        .and_then(|values| average_vector_components(values, 3));
+    eprintln!(
+        "[fullmag-api] TX -> frontend poll version={} since={} delta_rows={} step={} live_mag_len={} live_mag_avg={} preview={} preview_step={} preview_vec_len={} preview_vec_avg={} fields={}",
+        snapshot.state_version,
+        query.since_version.unwrap_or(0),
+        scalar_rows_delta,
+        snapshot
+            .live_state
+            .as_ref()
+            .map(|state| state.latest_step.step)
+            .unwrap_or(0),
+        live_mag_len,
+        format_debug_vector_average(live_mag_avg),
+        snapshot.preview.is_some(),
+        preview_source_step,
+        preview_vector_len,
+        format_debug_vector_average(preview_vector_avg),
+        snapshot.latest_fields.len(),
+    );
     let json = serialize_current_live_poll_response(snapshot, scalar_rows_delta_start)?;
     Ok(([(CONTENT_TYPE, "application/json")], json).into_response())
 }
@@ -933,7 +994,40 @@ async fn publish_current_live_state(
     // Lazy memoization: bump state version and only rebuild full JSON snapshot
     // when requested by HTTP endpoints (bootstrap / state).
     next.state_version = next.state_version.wrapping_add(1);
-    let _current_state_version = next.state_version;
+    let current_state_version = next.state_version;
+    let (preview_source_step, preview_vector_len, preview_vector_avg) =
+        preview_debug_metrics(next.preview.as_ref());
+    let live_mag_len = next
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.magnetization.as_ref())
+        .map(|values| values.len())
+        .unwrap_or(0);
+    let live_mag_avg = next
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.magnetization.as_ref())
+        .and_then(|values| average_vector_components(values, 3));
+    eprintln!(
+        "[fullmag-api] publish -> live snapshot version={} session={} run={} step={} scalar_rows={} live_mag_len={} live_mag_avg={} preview={} preview_step={} preview_vec_len={} preview_vec_avg={} fields={} ws_messages={}",
+        current_state_version,
+        next.session.session_id,
+        next.run.as_ref().map(|run| run.run_id.as_str()).unwrap_or("-"),
+        next
+            .live_state
+            .as_ref()
+            .map(|state| state.latest_step.step)
+            .unwrap_or(0),
+        next.scalar_rows.len(),
+        live_mag_len,
+        format_debug_vector_average(live_mag_avg),
+        next.preview.is_some(),
+        preview_source_step,
+        preview_vector_len,
+        format_debug_vector_average(preview_vector_avg),
+        next.latest_fields.len(),
+        session_state_messages.len(),
+    );
     *current = Some(next);
     drop(current);
 
@@ -2969,6 +3063,59 @@ fn preview_vector_values(preview: Option<&PreviewState>) -> Option<&[f64]> {
     match preview {
         Some(PreviewState::Spatial(state)) => state.vector_field_values.as_deref(),
         _ => None,
+    }
+}
+
+fn average_vector_components(values: &[f64], n_comp: usize) -> Option<[f64; 3]> {
+    if values.is_empty() || n_comp == 0 || values.len() < n_comp {
+        return None;
+    }
+    let vector_count = values.len() / n_comp;
+    if vector_count == 0 {
+        return None;
+    }
+    let mut sum_x = 0.0;
+    let mut sum_y = 0.0;
+    let mut sum_z = 0.0;
+    for chunk in values.chunks_exact(n_comp) {
+        sum_x += chunk[0];
+        if n_comp > 1 {
+            sum_y += chunk[1];
+        }
+        if n_comp > 2 {
+            sum_z += chunk[2];
+        }
+    }
+    Some([
+        sum_x / vector_count as f64,
+        sum_y / vector_count as f64,
+        sum_z / vector_count as f64,
+    ])
+}
+
+fn format_debug_vector_average(mean: Option<[f64; 3]>) -> String {
+    match mean {
+        Some([mx, my, mz]) => format!("[{mx:.6e}, {my:.6e}, {mz:.6e}]"),
+        None => "-".to_string(),
+    }
+}
+
+fn preview_debug_metrics(preview: Option<&PreviewState>) -> (u64, usize, Option<[f64; 3]>) {
+    match preview {
+        Some(PreviewState::Spatial(state)) => (
+            state.source_step,
+            state
+                .vector_field_values
+                .as_ref()
+                .map(|values| values.len())
+                .unwrap_or(0),
+            state
+                .vector_field_values
+                .as_ref()
+                .and_then(|values| average_vector_components(values, state.n_comp)),
+        ),
+        Some(PreviewState::GlobalScalar(state)) => (state.source_step, 0, None),
+        None => (0, 0, None),
     }
 }
 

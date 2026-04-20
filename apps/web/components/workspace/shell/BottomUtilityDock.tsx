@@ -1,9 +1,13 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import { fmtTime, fmtDuration, fmtStepValue, fmtSIOrDash, fmtExpOrDash } from "@/lib/format";
 import type { ActivityInfo } from "@/components/runs/control-room/types";
+import { useViewport } from "@/components/runs/control-room/context-hooks";
+import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
+import { useViewportTelemetrySnapshot, type ViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 
 interface BottomTelemetryDockProps {
   activity: ActivityInfo | null;
@@ -45,6 +49,80 @@ function fmtSolverIntegrator(v: string | null | undefined): string {
   return alias[normalized] ?? v;
 }
 
+function formatAgeLabel(ageMs: number | null): string {
+  if (ageMs == null) {
+    return "waiting";
+  }
+  if (ageMs < 1000) {
+    return `${Math.round(ageMs)} ms`;
+  }
+  if (ageMs < 10_000) {
+    return `${(ageMs / 1000).toFixed(1)} s`;
+  }
+  return `${Math.round(ageMs / 1000)} s`;
+}
+
+function ageTone(ageMs: number | null): "ok" | "warn" | "error" {
+  if (ageMs == null) {
+    return "warn";
+  }
+  if (ageMs < 1500) {
+    return "ok";
+  }
+  if (ageMs < 5000) {
+    return "warn";
+  }
+  return "error";
+}
+
+function ageValueClassName(tone: "ok" | "warn" | "error"): string {
+  switch (tone) {
+    case "ok":
+      return "text-emerald-300";
+    case "warn":
+      return "text-amber-300";
+    case "error":
+      return "text-rose-300";
+  }
+}
+
+function telemetryAccentClassName(tone: "ok" | "warn" | "error"): string {
+  switch (tone) {
+    case "ok":
+      return "border-l-[--chart-emerald]";
+    case "warn":
+      return "border-l-[--chart-amber]";
+    case "error":
+      return "border-l-[--chart-rose]";
+  }
+}
+
+function selectPrimary3dViewportEntry(
+  entries: ViewportTelemetryEntry[],
+  isFemBackend: boolean,
+): ViewportTelemetryEntry | null {
+  const matching = entries.filter((entry) => {
+    if (entry.renderer !== "webgl") {
+      return false;
+    }
+    if (entry.label === "bounds-preview") {
+      return false;
+    }
+    return isFemBackend ? entry.label.startsWith("fem-") : entry.label === "fdm-viewport";
+  });
+  if (matching.length === 0) {
+    return null;
+  }
+  const visible = matching.filter((entry) => !entry.hidden);
+  const pool = visible.length > 0 ? visible : matching;
+  return pool.reduce<ViewportTelemetryEntry | null>((latest, entry) => {
+    if (!latest) {
+      return entry;
+    }
+    return entry.lastFrameAtUnixMs >= latest.lastFrameAtUnixMs ? entry : latest;
+  }, null);
+}
+
 export default function BottomTelemetryDock({
   activity,
   workspaceStatus,
@@ -65,6 +143,20 @@ export default function BottomTelemetryDock({
   solverMaxDt,
   solverFixedDt,
 }: BottomTelemetryDockProps) {
+  const viewport = useViewport();
+  const connection = useSessionRuntimeStore((state) => state.connection);
+  const isFemBackend = useSessionRuntimeStore((state) => state.isFemBackend);
+  const lastUpdateTimestamp = useSessionRuntimeStore((state) => state.lastUpdateTimestamp);
+  const viewportEntries = useViewportTelemetrySnapshot();
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+    }, 200);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const statusClassName =
     workspaceStatus === "completed"
       ? "text-[--chart-emerald]"
@@ -77,6 +169,20 @@ export default function BottomTelemetryDock({
             : undefined;
 
   const activityLabel = activity?.label ?? null;
+  const backendAgeMs = useMemo(
+    () => (lastUpdateTimestamp != null ? Math.max(0, now - lastUpdateTimestamp) : null),
+    [lastUpdateTimestamp, now],
+  );
+  const primary3dViewportEntry = useMemo(
+    () => selectPrimary3dViewportEntry(viewportEntries, isFemBackend),
+    [isFemBackend, viewportEntries],
+  );
+  const viewportAgeMs = useMemo(() => {
+    const timestamp = primary3dViewportEntry?.lastFrameAtUnixMs;
+    return timestamp != null && timestamp > 0 ? Math.max(0, now - timestamp) : null;
+  }, [now, primary3dViewportEntry?.lastFrameAtUnixMs]);
+  const backendAgeClassName = ageValueClassName(ageTone(backendAgeMs));
+  const viewportAgeClassName = ageValueClassName(ageTone(viewportAgeMs));
 
   const telemetryCards: Array<{
     label: string;
@@ -85,6 +191,26 @@ export default function BottomTelemetryDock({
     value: string;
     valueClassName?: string;
   }> = [
+    {
+      label: "Backend → FE",
+      hint:
+        connection === "connected"
+          ? "Czas od ostatniego napływu danych z backendu do frontendu."
+          : "Backend nie jest obecnie w pełni połączony z frontendem.",
+      accent: telemetryAccentClassName(ageTone(backendAgeMs)),
+      value: formatAgeLabel(backendAgeMs),
+      valueClassName: backendAgeClassName,
+    },
+    {
+      label: "3D render age",
+      hint:
+        viewport.effectiveViewMode === "3D"
+          ? "Czas od ostatniego realnego frame/renderu głównego viewportu 3D."
+          : "Czas od ostatniego renderu viewportu 3D; gdy 3D nie jest aktywne, licznik naturalnie rośnie.",
+      accent: telemetryAccentClassName(ageTone(viewportAgeMs)),
+      value: formatAgeLabel(viewportAgeMs),
+      valueClassName: viewportAgeClassName,
+    },
     {
       label: "Step",
       hint: "Aktualny krok integratora (licznik iteracji solvera).",

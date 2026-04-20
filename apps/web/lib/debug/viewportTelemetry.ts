@@ -22,6 +22,7 @@ export interface ViewportTelemetryEntry {
   height: number;
   dpr: number;
   lastFrameAt: number;
+  lastFrameAtUnixMs: number;
   mountedAt: number;
 }
 
@@ -121,6 +122,7 @@ export function useViewportTelemetryEntry(args: {
       height: 0,
       dpr: 1,
       lastFrameAt: 0,
+      lastFrameAtUnixMs: 0,
       mountedAt: 0,
     });
     updateViewportTelemetry(id, {

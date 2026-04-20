@@ -679,12 +679,11 @@ pub(crate) fn execute_reference_fdm(
                 let preview_targets_global_scalar = display_selection
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
-                let magnetization =
-                    if live.display_selection.is_none() && step_count % heavy_payload_every == 0 {
-                        Some(flatten_vectors(&observables.magnetization))
-                    } else {
-                        None
-                    };
+                let magnetization = if step_count % heavy_payload_every == 0 {
+                    Some(flatten_vectors(&observables.magnetization))
+                } else {
+                    None
+                };
                 let preview_field = if preview_due && !preview_targets_global_scalar {
                     let selection = display_selection.as_ref().expect("checked preview_due");
                     let request = selection.preview_request();

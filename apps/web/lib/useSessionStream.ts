@@ -63,11 +63,52 @@ import type {
 import { normalizeSessionState } from "./session/normalize";
 import { mergeSessionState } from "./session/merge";
 
+const ENABLE_LIVE_DEBUG_LOGS =
+  typeof process !== "undefined" && process.env.NODE_ENV !== "production";
+
 type BootstrapCacheEntry = {
   raw: unknown | null;
   fetchedAt: number;
   inFlight: Promise<unknown> | null;
 };
+
+function logLiveSnapshot(
+  source: "bootstrap" | "poll" | "refresh",
+  nextState: SessionState,
+): void {
+  if (!ENABLE_LIVE_DEBUG_LOGS) {
+    return;
+  }
+  console.info("[fullmag-debug][live-stream] RX <- backend snapshot", {
+    source,
+    stateVersion: nextState.state_version ?? null,
+    sessionId: nextState.session?.session_id ?? null,
+    runId: nextState.run?.run_id ?? null,
+    sessionStatus: nextState.session?.status ?? null,
+    liveStep: nextState.live_state?.step ?? null,
+    scalarRows: nextState.scalar_rows?.length ?? 0,
+    scalarRowsTotal:
+      typeof nextState.scalar_rows_total === "number"
+        ? nextState.scalar_rows_total
+        : nextState.scalar_rows?.length ?? 0,
+    hasPreview: nextState.preview != null,
+    liveMagnetizationLength: nextState.live_state?.magnetization?.length ?? 0,
+    previewSourceStep:
+      nextState.preview?.kind === "spatial" || nextState.preview?.kind === "global_scalar"
+        ? nextState.preview.source_step ?? null
+        : null,
+    previewVectorLength:
+      nextState.preview?.kind === "spatial"
+        ? nextState.preview.vector_field_values?.length ?? 0
+        : 0,
+    latestFieldFrames: Object.keys(nextState.latest_fields?.frames ?? {}).length,
+    stepUpdateFrames: nextState.step_update_v2?.frames?.length ?? 0,
+    stepUpdateFrameQuantities:
+      Array.isArray(nextState.step_update_v2?.frames)
+        ? nextState.step_update_v2.frames.map((frame) => frame.quantity_id)
+        : [],
+  });
+}
 
 const bootstrapCache = new Map<string, BootstrapCacheEntry>();
 const BOOTSTRAP_CACHE_TTL_MS = 4000;
@@ -162,7 +203,13 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
   }, [state]);
 
   const applyRawSessionState = useCallback(
-    (raw: unknown, options?: { preserveNullSession?: boolean }) => {
+    (
+      raw: unknown,
+      options?: {
+        preserveNullSession?: boolean;
+        source?: "bootstrap" | "poll" | "refresh";
+      },
+    ) => {
       const nextState = normalizeSessionState(raw);
       if (!nextState.session) {
         if (!options?.preserveNullSession && !stateRef.current?.session) {
@@ -174,6 +221,7 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
       if (nextState.live_state?.finished) {
         finishedRef.current = true;
       }
+      logLiveSnapshot(options?.source ?? "poll", nextState);
       setState((prevState) => mergeSessionState(prevState, nextState));
       return true;
     },
@@ -217,7 +265,10 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
             return;
           }
           if (raw) {
-            applyRawSessionState(raw, { preserveNullSession: true });
+            applyRawSessionState(raw, {
+              preserveNullSession: true,
+              source: "poll",
+            });
           }
           pollFailureStreakRef.current = 0;
           setError(null);
@@ -261,7 +312,7 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
             ) {
               return;
             }
-            if (!applyRawSessionState(raw)) {
+            if (!applyRawSessionState(raw, { source: "bootstrap" })) {
               // Keep previous snapshot on reconnect/bootstrap hiccups to avoid
               // full UI reset loops while the backend recovers.
               setError(null);
@@ -331,7 +382,10 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
         inFlight: null,
       });
 
-      if (applyRawSessionState(raw, { preserveNullSession: true })) {
+      if (applyRawSessionState(raw, {
+        preserveNullSession: true,
+        source: forceBootstrap ? "refresh" : "poll",
+      })) {
         setError(null);
         setConnection("connected");
       }

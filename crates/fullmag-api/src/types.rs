@@ -568,6 +568,10 @@ impl LatestFields {
         self.0.get(quantity)
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub(crate) fn extend(&mut self, incoming: Self) {
         self.0.extend(incoming.0);
     }

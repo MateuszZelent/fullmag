@@ -61,7 +61,6 @@ import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 import { TransformGizmoLayer } from "./transform/TransformGizmoLayer";
 import { axisLabelsForConvention } from "./transform/axisConvention";
 import { useSceneCameraChange } from "./camera/useSceneCameraChange";
-import { DataPlaneCornerIndicator } from "../runs/control-room/DataPlaneCornerIndicator";
 
 const FDM_AXIS_CONVENTION = "swapYZ" as const;
 
@@ -69,9 +68,15 @@ const FDM_AXIS_CONVENTION = "swapYZ" as const;
 interface Props {
   grid: [number, number, number];
   vectors: Float64Array | null;
-  dataTimestamp?: number | null;
-  dataTimestampLabel?: string;
   fieldLabel?: string;
+  liveRenderDebugData?: {
+    source: "preview" | "live" | "none";
+    fieldDataRevision: string | null;
+    fieldDataTimestamp: number | null;
+    liveFieldSourceStep: number | null;
+    previewSourceStep: number | null;
+    effectiveStep: number | null;
+  } | null;
   geometryMode?: boolean;
   activeMask?: boolean[] | null;
   /** Physical extent [x, y, z] in metres — enables in-scene axis labels */
@@ -220,6 +225,58 @@ function formatVector(values: readonly number[], digits = 3): string {
 
 function formatCssTransform(transform: string): string {
   return transform.length > 92 ? `${transform.slice(0, 92)}...` : transform;
+}
+
+function formatDebugScalar(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) {
+    return "-";
+  }
+  const abs = Math.abs(value);
+  if (abs >= 1_000 || (abs > 0 && abs < 1e-3)) {
+    return value.toExponential(3);
+  }
+  return value.toFixed(6);
+}
+
+function sampledVectorRowIndices(vectorCount: number, sampleCount = 8): number[] {
+  if (vectorCount <= 0) {
+    return [];
+  }
+  if (vectorCount <= sampleCount) {
+    return Array.from({ length: vectorCount }, (_, index) => index);
+  }
+  const lastIndex = vectorCount - 1;
+  const indices = new Set<number>([0, 1, 2, lastIndex]);
+  const interiorSamples = Math.max(sampleCount - indices.size, 0);
+  for (let sampleIndex = 1; sampleIndex <= interiorSamples; sampleIndex += 1) {
+    const normalized = sampleIndex / (interiorSamples + 1);
+    indices.add(Math.round(lastIndex * normalized));
+  }
+  return Array.from(indices).sort((lhs, rhs) => lhs - rhs);
+}
+
+function buildRenderedVectorSample(vectors: Float64Array | null): string[] {
+  if (!vectors || vectors.length < 3) {
+    return [];
+  }
+  const vectorCount = Math.floor(vectors.length / 3);
+  const width = String(Math.max(vectorCount - 1, 0)).length;
+  return sampledVectorRowIndices(vectorCount).map((rowIndex) => {
+    const base = rowIndex * 3;
+    return `${String(rowIndex).padStart(width, "0")} | [${formatDebugScalar(vectors[base])}, ${formatDebugScalar(vectors[base + 1])}, ${formatDebugScalar(vectors[base + 2])}]`;
+  });
+}
+
+function formatDebugTimestamp(timestamp: number | null | undefined): string {
+  if (timestamp == null || !Number.isFinite(timestamp)) {
+    return "-";
+  }
+  return new Date(timestamp).toLocaleTimeString("pl-PL", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function RotationDebugBlock({
@@ -658,9 +715,8 @@ function FdmAntennaOverlayMeshes({
 function VectorFieldView3DInner({
   grid,
   vectors,
-  dataTimestamp = null,
-  dataTimestampLabel = "Viewport data",
   fieldLabel = "Vector Field",
+  liveRenderDebugData = null,
   geometryMode = false,
   activeMask = null,
   worldExtent = null,
@@ -748,6 +804,11 @@ function VectorFieldView3DInner({
     interactionMode === "scale"  ? "scale"  : "translate";
   const deferredVectors = useDeferredValue(vectors);
   const deferredSettings = useDeferredValue(settings);
+  const renderedVectorSample = useMemo(
+    () => buildRenderedVectorSample(deferredVectors),
+    [deferredVectors],
+  );
+  const renderedVectorCount = deferredVectors ? Math.floor(deferredVectors.length / 3) : 0;
 
   const controlsRef = useRef<any>(null);
   const viewCubeSceneRef = useRef<any>(null);
@@ -1262,6 +1323,52 @@ function VectorFieldView3DInner({
           ) : null}
         </ViewportOverlayLayout.BottomLeft>
 
+        <ViewportOverlayLayout.BottomRight>
+          <div className="pointer-events-auto w-[min(28rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-emerald-400/35 bg-slate-950/86 shadow-[0_20px_45px_rgba(0,0,0,0.42)] backdrop-blur-md">
+            <div className="border-b border-emerald-400/20 px-4 py-3">
+              <div className="text-[0.65rem] font-bold uppercase tracking-[0.2em] text-emerald-300">
+                Live Render Debug
+              </div>
+              <div className="mt-1 text-[0.72rem] text-slate-200">
+                Fragment bufora przekazywanego do renderera 3D
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 px-4 py-3 text-[0.68rem]">
+              <span className="text-slate-400">Field</span>
+              <span className="font-mono text-right text-slate-100">{fieldLabel}</span>
+              <span className="text-slate-400">Source</span>
+              <span className="font-mono text-right text-slate-100">{liveRenderDebugData?.source ?? "none"}</span>
+              <span className="text-slate-400">Step</span>
+              <span className="font-mono text-right text-slate-100">{liveRenderDebugData?.effectiveStep ?? "-"}</span>
+              <span className="text-slate-400">Vectors</span>
+              <span className="font-mono text-right text-slate-100">{renderedVectorCount}</span>
+              <span className="text-slate-400">Raw values</span>
+              <span className="font-mono text-right text-slate-100">{deferredVectors?.length ?? 0}</span>
+              <span className="text-slate-400">Updated</span>
+              <span className="font-mono text-right text-slate-100">
+                {formatDebugTimestamp(liveRenderDebugData?.fieldDataTimestamp ?? null)}
+              </span>
+              <span className="text-slate-400">Live step</span>
+              <span className="font-mono text-right text-slate-100">{liveRenderDebugData?.liveFieldSourceStep ?? "-"}</span>
+              <span className="text-slate-400">Preview step</span>
+              <span className="font-mono text-right text-slate-100">{liveRenderDebugData?.previewSourceStep ?? "-"}</span>
+            </div>
+            <div className="border-t border-emerald-400/12 px-4 py-3">
+              <div className="mb-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                Rendered buffer sample
+              </div>
+              <pre className="max-h-56 overflow-auto rounded-lg border border-white/8 bg-black/30 px-3 py-2 text-[0.68rem] leading-5 text-emerald-100">
+{renderedVectorSample.length > 0
+  ? renderedVectorSample.join("\n")
+  : "Brak danych wektorowych przekazanych do renderera."}
+              </pre>
+              <div className="mt-2 text-[0.62rem] text-slate-500">
+                Revision: {liveRenderDebugData?.fieldDataRevision ?? "none"}
+              </div>
+            </div>
+          </div>
+        </ViewportOverlayLayout.BottomRight>
+
         {/* ── 3dsmax-style interaction mode toolbar (only when texture gizmo available) ── */}
         {fdmViewportFlags.showTextureModeToolbar && (activeTextureTransform || activeTransformScope === "texture") && (
           <ViewportOverlayLayout.BottomCenter>
@@ -1355,13 +1462,6 @@ function VectorFieldView3DInner({
         )}
       </ViewportOverlayLayout>
 
-      <div className="pointer-events-none absolute bottom-3 left-3 z-30">
-        <DataPlaneCornerIndicator
-          lastDataTimestamp={dataTimestamp}
-          label={dataTimestampLabel}
-        />
-      </div>
-
       {/* ── R3F Canvas ────────────────────────────────────── */}
       <div ref={hostRef} className="absolute inset-0 pointer-events-none z-0">
         {hostNode ? (
@@ -1393,6 +1493,7 @@ function VectorFieldView3DInner({
             style={{ background: `#${BG_COLOR.toString(16).padStart(6, "0")}` }}
           >
             <ViewportTelemetryProbe
+              label="fdm-viewport"
               dpr={canvasDpr}
               hidden={!viewportVisible}
               onStats={telemetry.update}

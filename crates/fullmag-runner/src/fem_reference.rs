@@ -592,12 +592,11 @@ fn execute_reference_fem_impl(
             if let Some(live) = live.as_mut() {
                 let heavy_payload_every = live.field_every_n.max(1);
                 let display_selection = display_selection;
-                let magnetization =
-                    if live.display_selection.is_none() && step_count % heavy_payload_every == 0 {
-                        Some(flatten_vectors(state.magnetization()))
-                    } else {
-                        None
-                    };
+                let magnetization = if step_count % heavy_payload_every == 0 {
+                    Some(flatten_vectors(state.magnetization()))
+                } else {
+                    None
+                };
                 let preview_field = if preview_due && !preview_targets_global_scalar {
                     let selection = display_selection.as_ref().expect("checked preview_due");
                     let request = selection.preview_request();
@@ -657,12 +656,11 @@ fn execute_reference_fem_impl(
             let preview_targets_global_scalar = display_selection
                 .as_ref()
                 .is_some_and(display_is_global_scalar);
-            let magnetization =
-                if live.display_selection.is_none() && step_count % heavy_payload_every == 0 {
-                    Some(flatten_vectors(state.magnetization()))
-                } else {
-                    None
-                };
+            let magnetization = if step_count % heavy_payload_every == 0 {
+                Some(flatten_vectors(state.magnetization()))
+            } else {
+                None
+            };
             let preview_field = if preview_due && !preview_targets_global_scalar {
                 let selection = display_selection.as_ref().expect("checked preview_due");
                 let request = selection.preview_request();

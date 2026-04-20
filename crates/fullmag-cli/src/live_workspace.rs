@@ -158,6 +158,60 @@ fn merge_preview_field_payloads(
     (!merged.is_empty()).then(|| merged.into_values().collect())
 }
 
+fn preserve_pending_live_step_payload(
+    existing: &LiveStepView,
+    incoming: &mut LiveStepView,
+    allow_previous_preview: bool,
+) {
+    if incoming.magnetization.is_none() {
+        incoming.magnetization = existing.magnetization.clone();
+    }
+    if incoming.fem_mesh.is_none() {
+        incoming.fem_mesh = existing.fem_mesh.clone();
+    }
+    if allow_previous_preview && incoming.preview_field.is_none() {
+        incoming.preview_field = existing.preview_field.clone();
+    }
+}
+
+fn merge_pending_publish_payload(
+    slot: &mut CurrentLivePublishPayload,
+    mut incoming: CurrentLivePublishPayload,
+    should_merge_pending: bool,
+) {
+    let allow_previous_preview = should_merge_pending && !incoming.clear_preview_cache;
+    let merged_preview_fields = if incoming.clear_preview_cache {
+        incoming.preview_fields.clone()
+    } else if should_merge_pending {
+        merge_preview_field_payloads(slot.preview_fields.take(), incoming.preview_fields.clone())
+    } else {
+        incoming.preview_fields.clone()
+    };
+    let clear_preview_cache =
+        (should_merge_pending && slot.clear_preview_cache) || incoming.clear_preview_cache;
+
+    if should_merge_pending {
+        if incoming.fem_mesh.is_none() {
+            incoming.fem_mesh = slot.fem_mesh.clone();
+        }
+        match (slot.live_state.as_ref(), incoming.live_state.as_mut()) {
+            (Some(existing_state), Some(incoming_state)) => preserve_pending_live_step_payload(
+                &existing_state.latest_step,
+                &mut incoming_state.latest_step,
+                allow_previous_preview,
+            ),
+            (Some(existing_state), None) => {
+                incoming.live_state = Some(existing_state.clone());
+            }
+            _ => {}
+        }
+    }
+
+    *slot = incoming;
+    slot.preview_fields = merged_preview_fields;
+    slot.clear_preview_cache = clear_preview_cache;
+}
+
 #[derive(Clone)]
 pub(crate) struct CurrentLivePublisher {
     pending: Arc<AtomicBool>,
@@ -210,25 +264,131 @@ impl CurrentLivePublisher {
 
     pub fn replace(&self, payload: CurrentLivePublishPayload) {
         if let Ok(mut slot) = self.payload.lock() {
-            let should_merge_preview =
+            let should_merge_pending =
                 self.pending.load(Ordering::Acquire) || self.sending.load(Ordering::Acquire);
-            let merged_preview_fields = if payload.clear_preview_cache {
-                payload.preview_fields.clone()
-            } else if should_merge_preview {
-                merge_preview_field_payloads(
-                    slot.preview_fields.take(),
-                    payload.preview_fields.clone(),
-                )
-            } else {
-                payload.preview_fields.clone()
-            };
-            let clear_preview_cache =
-                (should_merge_preview && slot.clear_preview_cache) || payload.clear_preview_cache;
-            *slot = payload;
-            slot.preview_fields = merged_preview_fields;
-            slot.clear_preview_cache = clear_preview_cache;
+            merge_pending_publish_payload(&mut slot, payload, should_merge_pending);
         }
         self.request_publish();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bootstrap_live_state, merge_pending_publish_payload, CurrentLivePublishPayload};
+
+    fn preview_field(quantity: &str, revision: u64, z: f64) -> fullmag_runner::LivePreviewField {
+        fullmag_runner::LivePreviewField {
+            config_revision: revision,
+            quantity: quantity.to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "mesh".to_string(),
+            quantity_domain: "vector".to_string(),
+            preview_grid: [1, 1, 1],
+            original_grid: [1, 1, 1],
+            vector_field_values: vec![0.0, 0.0, z],
+            x_chosen_size: 1,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 1,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        }
+    }
+
+    fn fem_mesh(generation_id: &str) -> fullmag_runner::FemMeshPayload {
+        fullmag_runner::FemMeshPayload {
+            mesh_name: "mesh".to_string(),
+            mesh_id: "mesh-id".to_string(),
+            nodes: vec![[0.0, 0.0, 0.0]],
+            elements: vec![[0, 0, 0, 0]],
+            element_markers: Vec::new(),
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: None,
+            domain_frame: None,
+            generation_id: Some(generation_id.to_string()),
+            per_domain_quality: std::collections::HashMap::new(),
+        }
+    }
+
+    fn payload_with_live_step(
+        step: u64,
+        preview: Option<fullmag_runner::LivePreviewField>,
+        magnetization: Option<Vec<f64>>,
+        fem_mesh: Option<fullmag_runner::FemMeshPayload>,
+        preview_fields: Option<Vec<fullmag_runner::LivePreviewField>>,
+    ) -> CurrentLivePublishPayload {
+        let mut live_state = bootstrap_live_state("running");
+        live_state.latest_step.step = step;
+        live_state.latest_step.preview_field = preview;
+        live_state.latest_step.magnetization = magnetization;
+        CurrentLivePublishPayload {
+            live_state: Some(live_state),
+            fem_mesh,
+            preview_fields,
+            ..CurrentLivePublishPayload::default()
+        }
+    }
+
+    #[test]
+    fn merge_pending_publish_payload_preserves_heavy_step_data_until_sent() {
+        let mut slot = payload_with_live_step(
+            1,
+            Some(preview_field("m", 7, 1.0)),
+            Some(vec![0.0, 0.0, 1.0]),
+            Some(fem_mesh("mesh-gen-1")),
+            Some(vec![preview_field("m", 7, 1.0)]),
+        );
+        let incoming = payload_with_live_step(2, None, None, None, None);
+
+        merge_pending_publish_payload(&mut slot, incoming, true);
+
+        let live_state = slot.live_state.as_ref().expect("live state preserved");
+        assert_eq!(live_state.latest_step.step, 2);
+        assert!(live_state.latest_step.preview_field.is_some());
+        assert_eq!(
+            live_state.latest_step.magnetization.as_deref(),
+            Some(&[0.0, 0.0, 1.0][..])
+        );
+        assert_eq!(
+            slot.fem_mesh
+                .as_ref()
+                .and_then(|mesh| mesh.generation_id.as_deref()),
+            Some("mesh-gen-1")
+        );
+        assert_eq!(
+            slot.preview_fields.as_ref().map(|fields| fields.len()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn merge_pending_publish_payload_respects_preview_cache_clear() {
+        let mut slot = payload_with_live_step(
+            1,
+            Some(preview_field("m", 7, 1.0)),
+            Some(vec![0.0, 0.0, 1.0]),
+            None,
+            Some(vec![preview_field("m", 7, 1.0)]),
+        );
+        let mut incoming = payload_with_live_step(2, None, None, None, None);
+        incoming.clear_preview_cache = true;
+
+        merge_pending_publish_payload(&mut slot, incoming, true);
+
+        let live_state = slot.live_state.as_ref().expect("live state preserved");
+        assert_eq!(live_state.latest_step.step, 2);
+        assert!(live_state.latest_step.preview_field.is_none());
+        assert!(slot.preview_fields.is_none());
+        assert!(slot.clear_preview_cache);
+        assert_eq!(
+            live_state.latest_step.magnetization.as_deref(),
+            Some(&[0.0, 0.0, 1.0][..])
+        );
     }
 }
 

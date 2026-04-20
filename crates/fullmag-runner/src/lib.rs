@@ -441,12 +441,7 @@ pub fn run_problem_with_callback(
             BackendPlanIR::FemEigen(eigen) => Some(FemMeshPayload::from(eigen)),
             BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
         },
-        magnetization: match &plan.backend_plan {
-            BackendPlanIR::Fdm(_) => Some(final_m),
-            BackendPlanIR::FdmMultilayer(_)
-            | BackendPlanIR::Fem(_)
-            | BackendPlanIR::FemEigen(_) => None,
-        },
+        magnetization: Some(final_m),
         preview_field: None,
         cached_preview_fields: None,
         scalar_row_due: true,

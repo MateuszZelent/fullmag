@@ -362,6 +362,7 @@ export default function ScientificViewportShell({
         />
       ) : null}
       <ViewportTelemetryProbe
+        label={telemetryLabel}
         dpr={effectiveDpr}
         hidden={resolvedHidden}
         onStats={telemetry.update}

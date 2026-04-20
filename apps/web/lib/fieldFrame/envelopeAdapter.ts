@@ -78,7 +78,7 @@ export function buildEnvelopeFromLegacyState(
     backendEpoch: 0, // Legacy path has no epoch concept — always 0
     meshGenerationId,
     topologyHash: null,
-    fieldRevision: configRevision || sourceStep,
+    fieldRevision: sourceStep > 0 ? sourceStep : (configRevision || 1),
     sourceStep,
     sourceTime: time,
     quantityId,

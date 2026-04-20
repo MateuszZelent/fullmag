@@ -174,6 +174,8 @@ import type {
 
 const FIELD_FRAME_ID_CACHE = new WeakMap<object, number>();
 let NEXT_FIELD_FRAME_ID = 1;
+const ENABLE_VIEWPORT_DATA_DEBUG_LOGS =
+  typeof process !== "undefined" && process.env.NODE_ENV !== "production";
 
 function fieldFrameIdentity(value: object | null | undefined): string {
   if (!value) {
@@ -185,6 +187,13 @@ function fieldFrameIdentity(value: object | null | undefined): string {
     FIELD_FRAME_ID_CACHE.set(value, id);
   }
   return String(id);
+}
+
+function vectorHead(values: Float64Array | null | undefined): [number, number, number] | null {
+  if (!values || values.length < 3) {
+    return null;
+  }
+  return [values[0] ?? 0, values[1] ?? 0, values[2] ?? 0];
 }
 
 /* ── Provider ── */
@@ -1583,6 +1592,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const selectedFieldNComp =
     selectedFieldFrame?.n_comp
     ?? (activeQuantityId ? quantityDescriptorById.get(activeQuantityId)?.n_comp ?? 3 : 3);
+  const liveFieldSourceStep =
+    selectedFieldFrame?.source_step
+    ?? selectedFieldFrame?.field_revision
+    ?? null;
+  const previewSourceStep = renderPreview?.source_step ?? null;
   const selectedFieldDomain =
     (selectedFieldFrame?.domain as "magnetic_only" | "full_domain" | "surface_only" | null | undefined)
     ?? null;
@@ -1594,13 +1608,17 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       previewControlsActive,
       renderPreview,
       liveField,
+      liveFieldSourceStep,
+      previewSourceStep,
       isGlobalScalarQuantity,
     });
   }, [
     activeQuantityId,
     fieldMap,
     isGlobalScalarQuantity,
+    liveFieldSourceStep,
     previewControlsActive,
+    previewSourceStep,
     renderPreview,
     requestedPreviewQuantity,
   ]);
@@ -1650,6 +1668,35 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     fieldDataTimestampRef.current = Date.now();
   }
   const fieldDataTimestamp = fieldDataTimestampRef.current;
+
+  useEffect(() => {
+    if (!ENABLE_VIEWPORT_DATA_DEBUG_LOGS) {
+      return;
+    }
+    if (!fieldDataRevision || !selectedVectors?.length) {
+      return;
+    }
+    console.info("[fullmag-debug][viewport-data] vector payload selected", {
+      source: selectedVectorSource.source,
+      quantity: activeQuantityId,
+      effectiveStep,
+      liveFieldSourceStep,
+      previewSourceStep,
+      vectorLength: selectedVectors.length,
+      vectorIdentity: fieldFrameIdentity(selectedVectors),
+      vectorHead: vectorHead(selectedVectors),
+      previewGrid: renderPreview?.preview_grid ?? null,
+    });
+  }, [
+    activeQuantityId,
+    effectiveStep,
+    fieldDataRevision,
+    liveFieldSourceStep,
+    previewSourceStep,
+    renderPreview?.preview_grid,
+    selectedVectorSource.source,
+    selectedVectors,
+  ]);
 
   const quantityDescriptor = useMemo(
     () => (activeQuantityId ? quantityDescriptorById.get(activeQuantityId) ?? null : null),
@@ -1849,14 +1896,30 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     elapsed, stepsPerSec,
     liveState, effectiveLiveState, scalarRows, scalarRowsTotal,
     dmDtSpark, dtSpark, eTotalSpark,
-    preview, selectedVectors, fieldDataRevision, fieldDataTimestamp, fieldStats, hasSolverTelemetry,
+    preview,
+    selectedVectors,
+    selectedVectorSourceKind: selectedVectorSource.source,
+    liveFieldSourceStep,
+    previewSourceStep,
+    fieldDataRevision,
+    fieldDataTimestamp,
+    fieldStats,
+    hasSolverTelemetry,
   }), [
     effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag,
     effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
     elapsed, stepsPerSec,
     liveState, effectiveLiveState, scalarRows, scalarRowsTotal,
     dmDtSpark, dtSpark, eTotalSpark,
-    preview, selectedVectors, fieldDataRevision, fieldDataTimestamp, fieldStats, hasSolverTelemetry,
+    preview,
+    selectedVectors,
+    selectedVectorSource.source,
+    liveFieldSourceStep,
+    previewSourceStep,
+    fieldDataRevision,
+    fieldDataTimestamp,
+    fieldStats,
+    hasSolverTelemetry,
   ]);
 
   const viewportValue = useMemo<ViewportContextValue>(() => ({

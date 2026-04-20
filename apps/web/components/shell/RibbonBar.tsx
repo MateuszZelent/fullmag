@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useEffect, useCallback, useRef } from "react";
+import React, { useMemo, useCallback, useRef } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Tooltip, TooltipTrigger, TooltipContent, TooltipProvider,
@@ -308,6 +308,7 @@ const RibbonActionTrigger = React.forwardRef<
     <button
       ref={ref}
       {...props}
+      type={props.type ?? "button"}
       className={cn(
         "flex min-h-[52px] min-w-[58px] flex-col items-center justify-center gap-1 rounded-md border p-1 transition-all",
         action.active
@@ -399,24 +400,12 @@ export default function RibbonBar(props: RibbonBarProps) {
   const activeTab = activeCoreTab && visibleTabs.includes(activeCoreTab as RibbonTab)
     ? (activeCoreTab as RibbonTab)
     : defaultTab;
-
-  useEffect(() => {
-    if (!activeCoreTab || !visibleTabs.includes(activeCoreTab as RibbonTab)) {
-      setActiveCoreTab(defaultTab);
-    }
-  }, [activeCoreTab, defaultTab, setActiveCoreTab, visibleTabs]);
-
-  useEffect(() => {
-    if (contextualTabs.length === 0) {
-      if (activeContextualTab !== null) {
-        setActiveContextualTab(null);
-      }
-      return;
-    }
-    if (!activeContextualTab || !contextualTabs.some((tab) => tab.id === activeContextualTab)) {
-      setActiveContextualTab(contextualTabs[0]?.id ?? null);
-    }
-  }, [activeContextualTab, contextualTabs, setActiveContextualTab]);
+  const activeContextualTabId =
+    contextualTabs.length === 0
+      ? null
+      : activeContextualTab && contextualTabs.some((tab) => tab.id === activeContextualTab)
+        ? activeContextualTab
+        : contextualTabs[0]?.id ?? null;
 
   const groups = useMemo(() => {
     const ctx = buildContext(props, {
@@ -432,7 +421,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     const baseGroups = resolveRibbonGroups(tabId, ctx);
 
     // Resolve active contextual tab groups
-    const ctxTabId = activeContextualTab as ContextualTabId | null;
+    const ctxTabId = activeContextualTabId as ContextualTabId | null;
     const contextualGroups = ctxTabId
       ? resolveRibbonGroups(ctxTabId, ctx)
       : [];
@@ -454,7 +443,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     activeTab,
-    activeContextualTab,
+    activeContextualTabId,
     props.workspaceMode,
     props.viewMode,
     props.isFemBackend,
@@ -540,7 +529,7 @@ export default function RibbonBar(props: RibbonBarProps) {
                   type="button"
                   className={cn(
                     "rounded-md border px-2 py-1 text-[0.63rem] font-semibold tracking-wide transition-colors",
-                    activeContextualTab === tab.id
+                    activeContextualTabId === tab.id
                       ? "border-primary/30 bg-primary/12 text-primary"
                       : "border-border/30 bg-background/30 text-muted-foreground hover:bg-muted/40 hover:text-foreground",
                   )}
@@ -643,20 +632,24 @@ export default function RibbonBar(props: RibbonBarProps) {
                           </DropdownMenu.Content>
                         </DropdownMenu.Portal>
                       </DropdownMenu.Root>
-                    ) : (
+                    ) : action.tooltip ? (
                       <Tooltip key={action.id}>
                         <TooltipTrigger asChild>
                           <RibbonActionTrigger action={action} previewPending={props.previewPending} />
                         </TooltipTrigger>
-                        {action.tooltip && (
-                          <TooltipContent side="bottom" className="text-xs border border-border shadow-xl">
-                            <span className="font-semibold">{action.tooltip}</span>
-                            {action.shortcut && (
-                              <kbd className="opacity-80 font-mono text-[10px] bg-muted px-1.5 py-0.5 rounded ml-2 border border-border">{action.shortcut}</kbd>
-                            )}
-                          </TooltipContent>
-                        )}
+                        <TooltipContent side="bottom" className="text-xs border border-border shadow-xl">
+                          <span className="font-semibold">{action.tooltip}</span>
+                          {action.shortcut && (
+                            <kbd className="opacity-80 font-mono text-[10px] bg-muted px-1.5 py-0.5 rounded ml-2 border border-border">{action.shortcut}</kbd>
+                          )}
+                        </TooltipContent>
                       </Tooltip>
+                    ) : (
+                      <RibbonActionTrigger
+                        key={action.id}
+                        action={action}
+                        previewPending={props.previewPending}
+                      />
                     ),
                   )}
                 </div>

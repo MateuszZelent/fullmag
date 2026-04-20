@@ -3,11 +3,16 @@
 import { useEffect, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 
+const ENABLE_VIEWPORT_DEBUG_LOGS =
+  typeof process !== "undefined" && process.env.NODE_ENV !== "production";
+
 export default function ViewportTelemetryProbe({
+  label = "viewport",
   dpr,
   hidden,
   onStats,
 }: {
+  label?: string;
   dpr: number;
   hidden: boolean;
   onStats: (stats: {
@@ -21,32 +26,16 @@ export default function ViewportTelemetryProbe({
     height: number;
     dpr: number;
     lastFrameAt: number;
+    lastFrameAtUnixMs: number;
   }) => void;
 }) {
   const { gl, size } = useThree();
   const lastReportedAtRef = useRef(0);
+  const lastDebugLoggedAtRef = useRef(0);
 
   useEffect(() => {
-    onStats({
-      drawCalls: gl.info.render.calls,
-      triangles: gl.info.render.triangles,
-      lines: gl.info.render.lines,
-      points: gl.info.render.points,
-      geometries: gl.info.memory.geometries,
-      textures: gl.info.memory.textures,
-      width: size.width,
-      height: size.height,
-      dpr,
-      lastFrameAt: typeof performance !== "undefined" ? performance.now() : Date.now(),
-    });
-  }, [dpr, gl, onStats, size.height, size.width]);
-
-  useFrame(() => {
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-    if (hidden || now - lastReportedAtRef.current < 250) {
-      return;
-    }
-    lastReportedAtRef.current = now;
+    const wallClockNow = Date.now();
     onStats({
       drawCalls: gl.info.render.calls,
       triangles: gl.info.render.triangles,
@@ -58,7 +47,45 @@ export default function ViewportTelemetryProbe({
       height: size.height,
       dpr,
       lastFrameAt: now,
+      lastFrameAtUnixMs: wallClockNow,
     });
+  }, [dpr, gl, onStats, size.height, size.width]);
+
+  useFrame(() => {
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (hidden || now - lastReportedAtRef.current < 250) {
+      return;
+    }
+    lastReportedAtRef.current = now;
+    const wallClockNow = Date.now();
+    onStats({
+      drawCalls: gl.info.render.calls,
+      triangles: gl.info.render.triangles,
+      lines: gl.info.render.lines,
+      points: gl.info.render.points,
+      geometries: gl.info.memory.geometries,
+      textures: gl.info.memory.textures,
+      width: size.width,
+      height: size.height,
+      dpr,
+      lastFrameAt: now,
+      lastFrameAtUnixMs: wallClockNow,
+    });
+    if (
+      ENABLE_VIEWPORT_DEBUG_LOGS &&
+      wallClockNow - lastDebugLoggedAtRef.current >= 1000
+    ) {
+      lastDebugLoggedAtRef.current = wallClockNow;
+      console.info("[fullmag-debug][viewport] frame rendered", {
+        label,
+        drawCalls: gl.info.render.calls,
+        triangles: gl.info.render.triangles,
+        width: size.width,
+        height: size.height,
+        dpr,
+        lastFrameAtUnixMs: wallClockNow,
+      });
+    }
   });
 
   return null;

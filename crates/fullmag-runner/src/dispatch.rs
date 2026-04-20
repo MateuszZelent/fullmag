@@ -1911,19 +1911,18 @@ fn execute_cuda_fdm(
             let preview_targets_global_scalar = display_selection
                 .as_ref()
                 .is_some_and(display_is_global_scalar);
-            let magnetization =
-                if live.display_selection.is_none() && stats.step % heavy_payload_every == 0 {
-                    if magnetization_cache.is_none() {
-                        magnetization_cache = Some(backend.copy_m(cell_count)?);
-                    }
-                    Some(flatten_vectors(
-                        magnetization_cache
-                            .as_deref()
-                            .expect("magnetization cache initialized"),
-                    ))
-                } else {
-                    None
-                };
+            let magnetization = if stats.step % heavy_payload_every == 0 {
+                if magnetization_cache.is_none() {
+                    magnetization_cache = Some(backend.copy_m(cell_count)?);
+                }
+                Some(flatten_vectors(
+                    magnetization_cache
+                        .as_deref()
+                        .expect("magnetization cache initialized"),
+                ))
+            } else {
+                None
+            };
             let preview_field = if preview_due && !preview_targets_global_scalar {
                 let selection = display_selection.as_ref().expect("checked preview_due");
                 let request = selection.preview_request();
@@ -2221,11 +2220,27 @@ fn execute_native_fem(
                     } else {
                         None
                     };
+                    if current_stats.step <= 2 || preview_due {
+                        eprintln!(
+                            "[fullmag-runner] native-fem bootstrap live update step={} every_n={} preview_due={} preview_quantity={} preview_field={} cached_preview_fields={} global_scalar={} mag_len={}",
+                            current_stats.step,
+                            u64::from(display_selection.selection.every_n.max(1)),
+                            preview_due,
+                            display_selection.selection.quantity.as_str(),
+                            preview_field.is_some(),
+                            cached_preview_fields
+                                .as_ref()
+                                .map(|fields| fields.len())
+                                .unwrap_or(0),
+                            preview_targets_global_scalar,
+                            node_count.saturating_mul(3),
+                        );
+                    }
                     let action = (live.on_step)(StepUpdate {
                         stats: current_stats.clone(),
                         grid: live.grid,
                         fem_mesh: Some(crate::types::FemMeshPayload::from(plan)),
-                        magnetization: None,
+                        magnetization: Some(flatten_vectors(&m)),
                         preview_field,
                         cached_preview_fields,
                         scalar_row_due: preview_due && preview_targets_global_scalar,
@@ -2480,7 +2495,7 @@ fn execute_native_fem(
                         grid: live.grid,
                         fem_mesh: (current_stats.step == 0)
                             .then_some(crate::types::FemMeshPayload::from(plan)),
-                        magnetization: None,
+                        magnetization: Some(flatten_vectors(&backend.copy_m(node_count)?)),
                         preview_field,
                         cached_preview_fields,
                         scalar_row_due: preview_due && preview_targets_global_scalar,
@@ -2528,12 +2543,11 @@ fn execute_native_fem(
                 let preview_targets_global_scalar = display_selection
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
-                let magnetization =
-                    if live.display_selection.is_none() && stats.step % heavy_payload_every == 0 {
-                        Some(flatten_vectors(&backend.copy_m(node_count)?))
-                    } else {
-                        None
-                    };
+                let magnetization = if stats.step % heavy_payload_every == 0 {
+                    Some(flatten_vectors(&backend.copy_m(node_count)?))
+                } else {
+                    None
+                };
                 let preview_field = if preview_due && !preview_targets_global_scalar {
                     let selection = display_selection.as_ref().expect("checked preview_due");
                     let request = selection.preview_request();
@@ -2548,6 +2562,31 @@ fn execute_native_fem(
                 } else {
                     None
                 };
+                if stats.step <= 2 || preview_due {
+                    eprintln!(
+                        "[fullmag-runner] native-fem live update step={} every_n={} preview_due={} preview_quantity={} preview_field={} cached_preview_fields={} global_scalar={} mag_len={}",
+                        stats.step,
+                        display_selection
+                            .as_ref()
+                            .map(|selection| u64::from(selection.selection.every_n.max(1)))
+                            .unwrap_or(0),
+                        preview_due,
+                        display_selection
+                            .as_ref()
+                            .map(|selection| selection.selection.quantity.as_str())
+                            .unwrap_or("-"),
+                        preview_field.is_some(),
+                        cached_preview_fields
+                            .as_ref()
+                            .map(|fields| fields.len())
+                            .unwrap_or(0),
+                        preview_targets_global_scalar,
+                        magnetization
+                            .as_ref()
+                            .map(|values| values.len())
+                            .unwrap_or(0),
+                    );
+                }
                 let action = (live.on_step)(StepUpdate {
                     stats: stats.clone(),
                     grid: live.grid,

@@ -33,22 +33,24 @@ use crate::DisplaySelectionState;
 pub(crate) fn display_refresh_due(
     last_preview_revision: Option<u64>,
     display_state: &DisplaySelectionState,
-    _local_step: u64,
+    local_step: u64,
 ) -> bool {
-    // Poll-only FE model: refresh active preview only on explicit selection/config
-    // changes (revision bump) instead of periodic per-step cadence.
+    let cadence = u64::from(display_state.selection.every_n.max(1));
     last_preview_revision != Some(display_state.revision)
+        || local_step <= 1
+        || local_step % cadence == 0
 }
 
 pub(crate) fn cached_preview_refresh_due(
     last_cached_preview_revision: Option<u64>,
     display_state: &DisplaySelectionState,
-    _local_step: u64,
-    _field_every_n: u64,
+    local_step: u64,
+    field_every_n: u64,
 ) -> bool {
-    // Poll-only FE model: cached preview quantities are refreshed only on
-    // explicit preview revision changes, never periodically in the step loop.
+    let cadence = field_every_n.max(1);
     last_cached_preview_revision != Some(display_state.revision)
+        || local_step <= 1
+        || local_step % cadence == 0
 }
 
 pub(crate) fn cached_preview_quantities_for(
@@ -117,6 +119,42 @@ pub(crate) fn display_is_global_scalar(display_state: &DisplaySelectionState) ->
         display_state.selection.kind,
         crate::DisplayKind::GlobalScalar
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cached_preview_refresh_due, display_refresh_due};
+    use crate::interactive::display::DisplaySelectionState;
+
+    #[test]
+    fn display_refresh_due_honors_selection_revision_and_every_n() {
+        let mut display_state = DisplaySelectionState::default();
+        display_state.revision = 7;
+        display_state.selection.every_n = 50;
+
+        assert!(display_refresh_due(None, &display_state, 0));
+        assert!(display_refresh_due(Some(6), &display_state, 13));
+        assert!(display_refresh_due(Some(7), &display_state, 0));
+        assert!(display_refresh_due(Some(7), &display_state, 1));
+        assert!(!display_refresh_due(Some(7), &display_state, 2));
+        assert!(!display_refresh_due(Some(7), &display_state, 49));
+        assert!(display_refresh_due(Some(7), &display_state, 50));
+        assert!(display_refresh_due(Some(7), &display_state, 100));
+    }
+
+    #[test]
+    fn cached_preview_refresh_due_honors_field_every_n() {
+        let mut display_state = DisplaySelectionState::default();
+        display_state.revision = 3;
+
+        assert!(cached_preview_refresh_due(None, &display_state, 0, 25));
+        assert!(cached_preview_refresh_due(Some(2), &display_state, 17, 25));
+        assert!(cached_preview_refresh_due(Some(3), &display_state, 0, 25));
+        assert!(cached_preview_refresh_due(Some(3), &display_state, 1, 25));
+        assert!(!cached_preview_refresh_due(Some(3), &display_state, 2, 25));
+        assert!(!cached_preview_refresh_due(Some(3), &display_state, 24, 25));
+        assert!(cached_preview_refresh_due(Some(3), &display_state, 25, 25));
+    }
 }
 
 pub struct InteractiveFdmPreviewRuntime {

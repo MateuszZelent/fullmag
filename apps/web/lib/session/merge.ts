@@ -333,9 +333,11 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
     merged.latest_fields = prev.latest_fields;
   }
 
+  const liveStepAdvanced = nextLiveStep > prevLiveStep;
+
   if (
     merged.live_state?.magnetization &&
-    (sceneRevisionAdvanced || !merged.latest_fields.frames.m)
+    (sceneRevisionAdvanced || liveStepAdvanced || !merged.latest_fields.frames.m)
   ) {
     syncLatestMagnetizationFrameFromLiveState(
       merged,

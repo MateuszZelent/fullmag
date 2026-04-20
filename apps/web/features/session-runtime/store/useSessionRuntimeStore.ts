@@ -40,6 +40,7 @@ import type {
 } from "@/lib/useSessionStream";
 
 interface SessionRuntimeStoreState {
+  stateVersion: number | null;
   /** Connection */
   connection: ConnectionStatus;
   error: string | null;
@@ -78,6 +79,7 @@ interface SessionRuntimeStoreState {
 const INITIAL_STATE: Omit<SessionRuntimeStoreState,
   "applyNormalizedState" | "setConnection" | "reset"
 > = {
+  stateVersion: null,
   connection: "connecting",
   error: null,
   session: null,
@@ -105,9 +107,23 @@ const INITIAL_STATE: Omit<SessionRuntimeStoreState,
 export const useSessionRuntimeStore = create<SessionRuntimeStoreState>((set) => ({
   ...INITIAL_STATE,
   applyNormalizedState: (normalized: NormalizedSessionState) =>
-    set({
-      ...normalized,
-      lastUpdateTimestamp: Date.now(),
+    set((previous) => {
+      const sessionChanged =
+        previous.session?.session_id !== normalized.session?.session_id ||
+        previous.run?.run_id !== normalized.run?.run_id;
+      const versionChanged =
+        normalized.stateVersion != null &&
+        normalized.stateVersion !== previous.stateVersion;
+      const shouldStampUpdate =
+        sessionChanged ||
+        versionChanged ||
+        (previous.lastUpdateTimestamp == null && normalized.session != null);
+      return {
+        ...normalized,
+        lastUpdateTimestamp: shouldStampUpdate
+          ? Date.now()
+          : previous.lastUpdateTimestamp,
+      };
     }),
   setConnection: (connection, error = null) =>
     set({ connection, error }),

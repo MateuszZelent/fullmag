@@ -114,6 +114,9 @@ export interface TransportContextValue {
   eTotalSpark: number[];
   preview: PreviewState | null;
   selectedVectors: Float64Array | null;
+  selectedVectorSourceKind: "preview" | "live" | "none";
+  liveFieldSourceStep: number | null;
+  previewSourceStep: number | null;
   fieldDataRevision: string | null;
   fieldDataTimestamp: number | null;
   fieldStats: FieldStats | null;

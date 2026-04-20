@@ -113,6 +113,28 @@ describe("selectViewportVectorField", () => {
     expect(result.vectors).toBe(liveVectors);
   });
 
+  it("prefers live vectors for any quantity when they are at least as fresh as the preview", () => {
+    const previewVectors = new Float64Array([0, 1, 0]);
+    const liveVectors = new Float64Array([1, 0, 0]);
+    const result = selectViewportVectorField({
+      activeQuantityId: "h_eff",
+      requestedPreviewQuantity: "h_eff",
+      previewControlsActive: true,
+      renderPreview: makePreview({
+        quantity: "h_eff",
+        source_step: 12,
+        vector_field_values: previewVectors,
+      }),
+      liveField: liveVectors,
+      liveFieldSourceStep: 12,
+      previewSourceStep: 12,
+      isGlobalScalarQuantity: () => false,
+    });
+
+    expect(result.source).toBe("live");
+    expect(result.vectors).toBe(liveVectors);
+  });
+
   it("returns no vectors for global scalar quantities", () => {
     const result = selectViewportVectorField({
       activeQuantityId: "e_total",

@@ -258,17 +258,61 @@ fn publish_live_step_update(
     include_scalar_row: bool,
 ) {
     live_workspace.update(|state| {
-        state.session.status = if update.finished {
-            "completed".to_string()
-        } else {
-            "running".to_string()
-        };
-        state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, update);
-        state.live_state = live_state_manifest_from_update(update);
-        if include_scalar_row {
-            set_latest_scalar_row_if_due(state, update);
-        }
+        apply_live_step_update_to_workspace_state(
+            state,
+            run_id,
+            session_id,
+            artifact_dir,
+            update,
+            include_scalar_row,
+        );
     });
+}
+
+fn apply_live_step_update_to_workspace_state(
+    state: &mut LocalLiveWorkspaceState,
+    run_id: &str,
+    session_id: &str,
+    artifact_dir: &Path,
+    update: &fullmag_runner::StepUpdate,
+    include_scalar_row: bool,
+) {
+    let cached_preview_count = update
+        .cached_preview_fields
+        .as_ref()
+        .map(|fields| fields.len())
+        .unwrap_or(0);
+    if update.stats.step <= 2 || update.preview_field.is_some() || cached_preview_count > 0 {
+        eprintln!(
+            "[fullmag-cli] live step ingest step={} mag_len={} preview_field={} preview_quantity={} cached_preview_fields={} scalar_row_due={} finished={}",
+            update.stats.step,
+            update
+                .magnetization
+                .as_ref()
+                .map(|values| values.len())
+                .unwrap_or(0),
+            update.preview_field.is_some(),
+            update
+                .preview_field
+                .as_ref()
+                .map(|field| field.quantity.as_str())
+                .unwrap_or("-"),
+            cached_preview_count,
+            update.scalar_row_due,
+            update.finished,
+        );
+    }
+    state.session.status = if update.finished {
+        "completed".to_string()
+    } else {
+        "running".to_string()
+    };
+    state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, update);
+    state.live_state = live_state_manifest_from_update(update);
+    merge_cached_preview_fields_from_update(state, update);
+    if include_scalar_row {
+        set_latest_scalar_row_if_due(state, update);
+    }
 }
 
 fn saturating_nanos_u64(duration: Duration) -> u64 {
@@ -5631,11 +5675,16 @@ pub(crate) fn prepare_live_workspace_for_ui(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_current_fem_overrides, default_domain_region_markers, execute_synthetic_stage,
-        fem_mesh_payload_from_backend_plan, has_heavy_live_payload, wait_for_solve_prompt,
-        wait_for_solve_supported, LiveProgressCadence, LIVE_PROGRESS_PUBLISH_INTERVAL,
+        apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
+        default_domain_region_markers, execute_synthetic_stage, fem_mesh_payload_from_backend_plan,
+        has_heavy_live_payload, wait_for_solve_prompt, wait_for_solve_supported,
+        LiveProgressCadence, LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
-    use crate::types::ResolvedScriptStageAction;
+    use crate::live_workspace::bootstrap_live_state;
+    use crate::types::{
+        CurrentLiveLatestFields, CurrentLivePreviewFieldCache, ResolvedScriptStageAction,
+        RunManifest, SessionManifest,
+    };
     use fullmag_ir::{
         BackendPlanIR, BackendPolicyIR, BackendTarget, DiscretizationHintsIR, DynamicsIR,
         ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision, FdmMaterialIR, FdmPlanIR,
@@ -5662,6 +5711,85 @@ mod tests {
             cached_preview_fields: None,
             scalar_row_due: false,
             finished: false,
+        }
+    }
+
+    fn test_preview_field(quantity: &str, revision: u64, z: f64) -> LivePreviewField {
+        LivePreviewField {
+            config_revision: revision,
+            quantity: quantity.to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "mesh".to_string(),
+            quantity_domain: "vector".to_string(),
+            preview_grid: [1, 1, 1],
+            original_grid: [1, 1, 1],
+            vector_field_values: vec![0.0, 0.0, z],
+            x_chosen_size: 1,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 1,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        }
+    }
+
+    fn test_workspace_state() -> crate::live_workspace::LocalLiveWorkspaceState {
+        crate::live_workspace::LocalLiveWorkspaceState {
+            session: SessionManifest {
+                session_id: "session-test".to_string(),
+                run_id: "run-test".to_string(),
+                status: "bootstrapping".to_string(),
+                interactive_session_requested: true,
+                script_path: "examples/test.py".to_string(),
+                problem_name: "test".to_string(),
+                requested_backend: "fem".to_string(),
+                explicit_selection: true,
+                requested_device: "cpu".to_string(),
+                requested_precision: "double".to_string(),
+                requested_mode: "strict".to_string(),
+                requested_cpu_threads: None,
+                execution_mode: "strict".to_string(),
+                precision: "double".to_string(),
+                resolved_backend: Some("fem".to_string()),
+                resolved_device: Some("cpu".to_string()),
+                resolved_precision: Some("double".to_string()),
+                resolved_mode: Some("strict".to_string()),
+                resolved_runtime_family: None,
+                resolved_engine_id: None,
+                resolved_worker: None,
+                resolved_cpu_threads: None,
+                resolved_fallback: None,
+                artifact_dir: "/tmp/artifacts".to_string(),
+                started_at_unix_ms: 0,
+                finished_at_unix_ms: 0,
+                plan_summary: serde_json::json!({}),
+            },
+            run: RunManifest {
+                run_id: "run-test".to_string(),
+                session_id: "session-test".to_string(),
+                status: "bootstrapping".to_string(),
+                total_steps: 0,
+                final_time: None,
+                final_e_ex: None,
+                final_e_demag: None,
+                final_e_ext: None,
+                final_e_ani: None,
+                final_e_dmi: None,
+                final_e_total: None,
+                artifact_dir: "/tmp/artifacts".to_string(),
+            },
+            live_state: bootstrap_live_state("bootstrapping"),
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            latest_scalar_row: None,
+            latest_fields: CurrentLiveLatestFields::default(),
+            preview_fields: CurrentLivePreviewFieldCache::default(),
+            pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            clear_preview_cache: false,
+            engine_log: Vec::new(),
         }
     }
 
@@ -5704,6 +5832,35 @@ mod tests {
 
         cadence.last_publish_at = Some(Instant::now() - LIVE_PROGRESS_PUBLISH_INTERVAL);
         assert!(cadence.should_publish(&update));
+    }
+
+    #[test]
+    fn publish_live_step_update_tracks_preview_cache_from_runner_updates() {
+        let mut state = test_workspace_state();
+        let mut update = test_step_update(12);
+        update.preview_field = Some(test_preview_field("m", 3, 1.0));
+        update.cached_preview_fields = Some(vec![
+            test_preview_field("m", 3, 1.0),
+            test_preview_field("h_eff", 3, 2.0),
+        ]);
+
+        apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &update,
+            true,
+        );
+
+        assert_eq!(state.live_state.latest_step.step, 12);
+        assert!(state.live_state.latest_step.preview_field.is_some());
+        assert_eq!(state.preview_fields.to_vec().len(), 2);
+        assert_eq!(state.pending_preview_fields.to_vec().len(), 2);
+        assert_eq!(
+            state.latest_scalar_row.as_ref().map(|row| row.step),
+            Some(12)
+        );
     }
 
     fn tiny_fdm_plan() -> BackendPlanIR {
@@ -6058,6 +6215,7 @@ mod tests {
                 execution_mode: ExecutionMode::Strict,
             },
             current_modules: Vec::new(),
+            spin_torque_modules: Vec::new(),
             excitation_analysis: None,
             current_density: None,
             stt_degree: None,

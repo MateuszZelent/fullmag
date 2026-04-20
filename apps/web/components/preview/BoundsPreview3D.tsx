@@ -415,7 +415,12 @@ export default function BoundsPreview3D({
           frameloop="demand"
           camera={{ position: [3, 2.4, 3], fov: 45, near: 0.0001, far: 10000 }}
         >
-          <ViewportTelemetryProbe dpr={1} hidden={false} onStats={telemetry.update} />
+          <ViewportTelemetryProbe
+            label="bounds-preview"
+            dpr={1}
+            hidden={false}
+            onStats={telemetry.update}
+          />
           <color attach="background" args={[0x1e1e2e]} />
           <ambientLight intensity={0.45} />
           <directionalLight position={[1, 2, 3]} intensity={0.8} />

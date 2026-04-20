@@ -129,6 +129,8 @@ Vec3 scale3(const Vec3 &a, double s) {
     return {a[0] * s, a[1] * s, a[2] * s};
 }
 
+} // namespace
+
 const char *configured_mfem_device_string() {
     const char *raw = std::getenv("FULLMAG_FEM_MFEM_DEVICE");
     if (raw != nullptr && *raw != '\0') {
@@ -187,6 +189,8 @@ bool mfem_device_requests_gpu(const Context &ctx) {
     const char *device = configured_mfem_device_string(ctx);
     return is_gpu_device_string(device);
 }
+
+namespace {
 
 bool env_flag_enabled(const char *name) {
     const char *raw = std::getenv(name);
