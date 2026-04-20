@@ -38,8 +38,11 @@ mod assets;
 mod error;
 mod feature_flags;
 mod field_store;
+mod openapi;
 mod preview;
 mod quantities;
+mod router_v1;
+mod schemas;
 mod script;
 mod session;
 mod session_persistence;
@@ -464,6 +467,11 @@ async fn main() {
         // ── WebSocket ──────────────────────────────────────────────────
         .route("/ws/live/current", get(ws_current_live))
         .route("/ws/live/:run_id", get(ws_live))
+        // ── New resource-first API (v1) ────────────────────────────────
+        .merge(router_v1::build_v1_router())
+        // ── OpenAPI / Swagger ──────────────────────────────────────────
+        .merge(utoipa_swagger_ui::SwaggerUi::new("/v1/docs/swagger")
+            .url("/v1/openapi.json", <openapi::ApiDoc as utoipa::OpenApi>::openapi()))
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(cors)
         .with_state(state);
@@ -551,7 +559,7 @@ async fn get_current_gpu_telemetry() -> Result<Json<GpuTelemetryResponse>, ApiEr
     Ok(Json(output))
 }
 
-fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
+pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
     let output = Command::new("nvidia-smi")
         .args([
             "--query-gpu=index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu",

@@ -187,7 +187,7 @@ fn json_field_grid(raw: &Value) -> Option<[u32; 3]> {
         })
 }
 
-fn serialize_field_vector_binary_v2(
+pub(crate) fn serialize_field_vector_binary_v2(
     quantity_id: &str,
     n_comp: usize,
     grid: [u32; 3],
@@ -217,7 +217,7 @@ fn serialize_field_vector_binary_v2(
     out
 }
 
-fn serialize_fem_mesh_topology_binary_v1(mesh: &fullmag_runner::FemMeshPayload) -> Vec<u8> {
+pub(crate) fn serialize_fem_mesh_topology_binary_v1(mesh: &fullmag_runner::FemMeshPayload) -> Vec<u8> {
     let mut out = Vec::with_capacity(
         FEM_MESH_TOPOLOGY_BINARY_HEADER_LEN
             + mesh.nodes.len() * 3 * std::mem::size_of::<f64>()
