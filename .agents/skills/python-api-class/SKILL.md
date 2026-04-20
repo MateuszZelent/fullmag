@@ -25,6 +25,7 @@ Keep the chain coherent:
 5. Export the class from the public `fullmag` namespace
 6. Add or update tests, including serialization or round-trip coverage when the public surface changes
 7. Add or update an example when the public surface changes
+8. Record control-room export/sync impact when the class changes scene/script interoperability
 
 ## Naming rules
 

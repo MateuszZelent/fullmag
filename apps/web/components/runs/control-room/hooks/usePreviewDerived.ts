@@ -13,6 +13,10 @@ import {
 } from "../shared";
 import type { VectorComponent, ViewportMode } from "../shared";
 import type { FieldStats } from "../types";
+import {
+  buildRequestedDisplaySelection,
+  previewComponentFromDisplaySelection,
+} from "../helpers";
 
 export interface UsePreviewDerivedParams {
   displaySelection: CurrentDisplaySelection | null;
@@ -76,58 +80,21 @@ export function usePreviewDerived({
   );
 
   const requestedDisplaySelection = useMemo<DisplaySelection>(() => {
-    if (optimisticDisplaySelection) {
-      return optimisticDisplaySelection;
-    }
-    const quantity =
-      displaySelection?.selection.quantity ?? previewConfig?.quantity ?? preview?.quantity ?? "m";
-    return {
-      quantity,
-      kind: displaySelection?.selection.kind ?? kindForQuantity(quantity),
-      component:
-        displaySelection?.selection.component ??
-        previewConfig?.component ??
-        spatialPreview?.component ??
-        "3D",
-      layer:
-        displaySelection?.selection.layer ??
-        previewConfig?.layer ??
-        spatialPreview?.layer ??
-        0,
-      all_layers:
-        displaySelection?.selection.all_layers ??
-        previewConfig?.all_layers ??
-        spatialPreview?.all_layers ??
-        false,
-      x_chosen_size:
-        displaySelection?.selection.x_chosen_size ??
-        previewConfig?.x_chosen_size ??
-        spatialPreview?.x_chosen_size ??
-        0,
-      y_chosen_size:
-        displaySelection?.selection.y_chosen_size ??
-        previewConfig?.y_chosen_size ??
-        spatialPreview?.y_chosen_size ??
-        0,
-      every_n:
-        displaySelection?.selection.every_n ?? previewConfig?.every_n ?? PREVIEW_EVERY_N_DEFAULT,
-      max_points:
-        displaySelection?.selection.max_points ??
-        previewConfig?.max_points ??
-        spatialPreview?.max_points ??
-        PREVIEW_MAX_POINTS_DEFAULT,
-      auto_scale_enabled:
-        displaySelection?.selection.auto_scale_enabled ??
-        previewConfig?.auto_scale_enabled ??
-        spatialPreview?.auto_scale_enabled ??
-        true,
-    };
+    return buildRequestedDisplaySelection({
+      optimisticDisplaySelection,
+      displaySelection,
+      previewConfig,
+      preview,
+      spatialPreview,
+      kindForQuantity,
+    });
   }, [displaySelection, kindForQuantity, optimisticDisplaySelection, preview, previewConfig, spatialPreview]);
 
   const currentPreviewRevision = displaySelection?.revision ?? previewConfig?.revision ?? null;
   const previewControlsActive = Boolean(displaySelection ?? previewConfig ?? preview);
   const requestedPreviewQuantity = requestedDisplaySelection.quantity;
-  const requestedPreviewComponent = requestedDisplaySelection.component;
+  const requestedPreviewComponent =
+    previewComponentFromDisplaySelection(requestedDisplaySelection);
   const requestedPreviewLayer = requestedDisplaySelection.layer;
   const requestedPreviewAllLayers = requestedDisplaySelection.all_layers;
   const requestedPreviewEveryN = requestedDisplaySelection.every_n;

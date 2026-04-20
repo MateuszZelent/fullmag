@@ -47,7 +47,8 @@ export interface SolverSummary {
 
 export interface DisplaySelection {
   active_quantity_id: string;
-  component: string;
+  view_mode: "2d" | "3d";
+  field_component: "x" | "y" | "z" | "magnitude";
   colormap: string;
   auto_contrast: boolean;
   contrast_min: number | null;
@@ -56,6 +57,9 @@ export interface DisplaySelection {
   vector_density: number;
   slice_mode: string;
   slice_layer: number;
+  max_points: number;
+  x_chosen_size: number;
+  y_chosen_size: number;
 }
 
 export interface DomainSummary {
@@ -187,7 +191,8 @@ export interface ScalarWindow {
 
 export interface DisplayUpdate {
   active_quantity_id?: string;
-  component?: string;
+  view_mode?: "2d" | "3d";
+  field_component?: "x" | "y" | "z" | "magnitude";
   colormap?: string;
   auto_contrast?: boolean;
   contrast_min?: number | null;
@@ -196,6 +201,9 @@ export interface DisplayUpdate {
   vector_density?: number;
   slice_mode?: string;
   slice_layer?: number;
+  max_points?: number;
+  x_chosen_size?: number;
+  y_chosen_size?: number;
 }
 
 // ── Commands ──────────────────────────────────────────────────────────

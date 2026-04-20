@@ -9,6 +9,10 @@ build/
 *.md
 !docs/*.md
 !docs/**/*.md
+!/AGENTS.md
+!/readme.md
+!.agents/**/*.md
+!.github/**/*.md
 *.zip
 *.patch
 *.tar.gz

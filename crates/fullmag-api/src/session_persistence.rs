@@ -447,7 +447,7 @@ pub(crate) async fn import_session_commit(
     }))
 }
 
-/// `GET /v1/live/current/checkpoints`
+/// `GET /v1/live/current/session/checkpoints`
 pub(crate) async fn list_checkpoints(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CheckpointListResponse>, ApiError> {
@@ -477,7 +477,7 @@ pub(crate) async fn list_checkpoints(
     Ok(Json(CheckpointListResponse { checkpoints }))
 }
 
-/// `GET /v1/live/current/recovery`
+/// `GET /v1/live/current/session/recovery`
 pub(crate) async fn list_recovery(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RecoveryListResponse>, ApiError> {
@@ -498,7 +498,7 @@ pub(crate) async fn list_recovery(
     Ok(Json(RecoveryListResponse { snapshots }))
 }
 
-/// `POST /v1/live/current/recovery/clear`
+/// `POST /v1/live/current/session/recovery/clear`
 pub(crate) async fn clear_recovery(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RecoveryClearResponse>, ApiError> {

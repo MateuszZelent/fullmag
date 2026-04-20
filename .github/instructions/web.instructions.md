@@ -11,6 +11,12 @@ description: "Use when editing the Fullmag web app. Keep the web layer as the co
   solver semantics.
 - Web authoring flows must converge with Python authoring through canonical `ProblemIR` and support
   canonical Python script export when they create or edit simulations.
+- The local control-room API is resource-first: thin `status`, on-demand resource fetching, JSON
+  control plane, binary data plane.
+- React components should not call `fetch()` directly; use the shared typed API client, codecs,
+  resource hooks, and caches.
+- Keep FDM/FEM differences in capability guards and domain adapters, not in separate top-level
+  component trees.
 - Preserve explicit requested vs resolved execution in launch flows, run summaries, badges, and
   provenance views.
 - Use UI language that matches the domain: problem, study, session, run, backend, device, mode,

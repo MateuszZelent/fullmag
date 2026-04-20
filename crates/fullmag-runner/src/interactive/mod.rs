@@ -21,7 +21,10 @@ pub use checkpoints::RunOutcome;
 pub use commands::{
     parse_session_command, LiveControlCommand, RuntimeControlOutcome, SequenceStage,
 };
-pub use display::{DisplayKind, DisplayPayload, DisplaySelection, DisplaySelectionState};
+pub use display::{
+    DisplayFieldComponent, DisplayKind, DisplayPayload, DisplaySelection, DisplaySelectionState,
+    DisplayViewMode,
+};
 pub use events::{
     CommandAckEvent, CommandCompletedEvent, CommandRejectedEvent, DisplayUpdatedEvent,
     RuntimeEventEnvelope, RuntimeStatus, RuntimeStatusChangedEvent, StepDeltaEvent,

@@ -1,4 +1,4 @@
-import type { CommandResponse } from "../../types";
+import type { CommandResponse } from "../../generated/openapi-types";
 import type { LiveApiClient } from "../LiveApiClient";
 
 export class CommandsModule {

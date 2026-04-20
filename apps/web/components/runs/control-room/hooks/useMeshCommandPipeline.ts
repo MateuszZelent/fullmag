@@ -13,6 +13,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { MeshOptionsState, SizeFieldSpec } from "../../../panels/MeshSettingsPanel";
 import type { DisplaySelection, MeshCommandTarget, SceneDocument } from "../../../../lib/session/types";
 import type { FemMeshData } from "../../../preview/FemMeshView3D";
+import type { DisplayUpdate } from "@/src/api/generated/openapi-types";
 import { parseOptionalFiniteNumberText } from "../controlRoomUtils";
 import type { currentLiveApiClient } from "../../../../lib/liveApiClient";
 import type { useBuilderAutoSync } from "./useBuilderAutoSync";
@@ -89,6 +90,43 @@ export function useMeshCommandPipeline({
   setScriptSyncBusy,
   setScriptSyncMessage,
 }: UseMeshCommandPipelineParams): UseMeshCommandPipelineReturn {
+  const componentPayloadToSelection = useCallback(
+    (
+      component: unknown,
+      selection: DisplaySelection,
+    ): Pick<DisplaySelection, "view_mode" | "field_component"> => {
+      if (component === "3D") {
+        return {
+          view_mode: "3d",
+          field_component: selection.field_component,
+        };
+      }
+      return {
+        view_mode: "2d",
+        field_component:
+          component === "x" || component === "y" || component === "z"
+            ? component
+            : "magnitude",
+      };
+    },
+    [],
+  );
+
+  const selectionToDisplayUpdate = useCallback(
+    (selection: DisplaySelection): DisplayUpdate => ({
+      active_quantity_id: selection.quantity,
+      view_mode: selection.view_mode,
+      field_component: selection.field_component,
+      auto_contrast: selection.auto_scale_enabled,
+      vector_density: selection.every_n,
+      slice_mode: selection.all_layers ? "all" : "single",
+      slice_layer: selection.layer,
+      max_points: selection.max_points,
+      x_chosen_size: selection.x_chosen_size,
+      y_chosen_size: selection.y_chosen_size,
+    }),
+    [],
+  );
 
   const appendFrontendTrace = useCallback((level: string, message: string) => {
     if (level === "error") {
@@ -233,55 +271,82 @@ export function useMeshCommandPipeline({
       console.trace(`[fullmag-diag] updatePreview path=${path}`, payload);
     }
     const nextSelection: DisplaySelection = { ...requestedDisplaySelection };
+    let displayUpdate: DisplayUpdate | null = null;
     switch (path) {
       case "/quantity":
         nextSelection.quantity = typeof payload.quantity === "string" ? payload.quantity : nextSelection.quantity;
         nextSelection.kind = kindForQuantity(nextSelection.quantity) as DisplaySelection["kind"];
+        if (nextSelection.kind !== "vector_field") {
+          nextSelection.view_mode = "2d";
+          nextSelection.field_component = "magnitude";
+        }
+        displayUpdate = selectionToDisplayUpdate(nextSelection);
         break;
       case "/component":
-        nextSelection.component = typeof payload.component === "string" ? payload.component : nextSelection.component;
+        Object.assign(
+          nextSelection,
+          componentPayloadToSelection(payload.component, nextSelection),
+        );
+        displayUpdate = {
+          view_mode: nextSelection.view_mode,
+          field_component: nextSelection.field_component,
+        };
         break;
       case "/layer":
         nextSelection.layer = Number(payload.layer ?? nextSelection.layer);
+        displayUpdate = { slice_layer: nextSelection.layer };
         break;
       case "/allLayers":
         nextSelection.all_layers = Boolean(payload.allLayers ?? nextSelection.all_layers);
+        displayUpdate = {
+          slice_mode: nextSelection.all_layers ? "all" : "single",
+        };
         break;
       case "/everyN":
         nextSelection.every_n = Number(payload.everyN ?? nextSelection.every_n);
+        displayUpdate = { vector_density: nextSelection.every_n };
         break;
       case "/XChosenSize":
         nextSelection.x_chosen_size = Number(payload.xChosenSize ?? nextSelection.x_chosen_size);
+        displayUpdate = { x_chosen_size: nextSelection.x_chosen_size };
         break;
       case "/YChosenSize":
         nextSelection.y_chosen_size = Number(payload.yChosenSize ?? nextSelection.y_chosen_size);
+        displayUpdate = { y_chosen_size: nextSelection.y_chosen_size };
         break;
       case "/autoScaleEnabled":
         nextSelection.auto_scale_enabled = Boolean(payload.autoScaleEnabled ?? nextSelection.auto_scale_enabled);
+        displayUpdate = { auto_contrast: nextSelection.auto_scale_enabled };
         break;
       case "/maxPoints":
         nextSelection.max_points = Number(payload.maxPoints ?? nextSelection.max_points);
+        displayUpdate = { max_points: nextSelection.max_points };
+        break;
+      case "/refresh":
+        displayUpdate = selectionToDisplayUpdate(nextSelection);
         break;
       default:
-        setPreviewPostInFlight(true);
-        setPreviewMessage(null);
-        try { await liveApi.updatePreview(path, payload); }
-        catch (e) { setPreviewMessage(e instanceof Error ? e.message : "Failed to update preview"); }
-        finally { setPreviewPostInFlight(false); }
+        setPreviewMessage(`Unsupported display mutation: ${path}`);
         return;
     }
     setOptimisticDisplaySelection(nextSelection);
     setPreviewPostInFlight(true);
     setPreviewMessage(`Switching to ${nextSelection.quantity}`);
     try {
-      await liveApi.updateDisplaySelection(nextSelection);
+      await liveApi.updateDisplay(displayUpdate ?? selectionToDisplayUpdate(nextSelection));
     }
     catch (e) {
       setOptimisticDisplaySelection(null);
       setPreviewMessage(e instanceof Error ? e.message : "Failed to update preview");
     }
     finally { setPreviewPostInFlight(false); }
-  }, [kindForQuantity, liveApi, requestedDisplaySelection]);
+  }, [
+    componentPayloadToSelection,
+    kindForQuantity,
+    liveApi,
+    requestedDisplaySelection,
+    selectionToDisplayUpdate,
+  ]);
 
   const meshGenTopologyRef = useRef<string | null>(null);
   const meshGenGenerationRef = useRef<string | null>(null);

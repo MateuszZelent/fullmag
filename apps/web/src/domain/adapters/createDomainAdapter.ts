@@ -2,7 +2,7 @@
  * Factory: create the appropriate SpatialDomainAdapter from DomainMeta.
  */
 
-import type { DomainMeta } from "../../api/types";
+import type { DomainMeta } from "../../api/generated/openapi-types";
 import type { DecodedTopology } from "../../api/codecs/types";
 import type { SpatialDomainAdapter } from "./SpatialDomainAdapter";
 import { FdmDomainAdapter } from "./FdmDomainAdapter";

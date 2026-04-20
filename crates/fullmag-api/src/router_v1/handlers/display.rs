@@ -7,8 +7,9 @@ use axum::Json;
 
 use crate::error::ApiError;
 use crate::schemas::display::DisplayUpdate;
-use crate::schemas::status::DisplaySelection;
+use crate::schemas::status::{DisplaySelection, DisplayViewMode, FieldComponent};
 use crate::types::AppState;
+use fullmag_runner::{DisplayFieldComponent, DisplayViewMode as RunnerDisplayViewMode};
 
 #[utoipa::path(
     put,
@@ -53,8 +54,19 @@ async fn apply_display_update(
     if let Some(q) = update.active_quantity_id {
         sel.selection.quantity = q;
     }
-    if let Some(c) = update.component {
-        sel.selection.component = c;
+    if let Some(view_mode) = update.view_mode {
+        sel.selection.view_mode = match view_mode {
+            DisplayViewMode::TwoD => RunnerDisplayViewMode::TwoD,
+            DisplayViewMode::ThreeD => RunnerDisplayViewMode::ThreeD,
+        };
+    }
+    if let Some(field_component) = update.field_component {
+        sel.selection.field_component = match field_component {
+            FieldComponent::X => DisplayFieldComponent::X,
+            FieldComponent::Y => DisplayFieldComponent::Y,
+            FieldComponent::Z => DisplayFieldComponent::Z,
+            FieldComponent::Magnitude => DisplayFieldComponent::Magnitude,
+        };
     }
     if let Some(ac) = update.auto_contrast {
         sel.selection.auto_scale_enabled = ac;
@@ -68,11 +80,30 @@ async fn apply_display_update(
     if let Some(sm) = update.slice_mode {
         sel.selection.all_layers = sm == "all";
     }
+    if let Some(max_points) = update.max_points {
+        sel.selection.max_points = max_points;
+    }
+    if let Some(x_chosen_size) = update.x_chosen_size {
+        sel.selection.x_chosen_size = x_chosen_size;
+    }
+    if let Some(y_chosen_size) = update.y_chosen_size {
+        sel.selection.y_chosen_size = y_chosen_size;
+    }
+    sel.selection.canonicalize();
 
     sel.revision = sel.revision.wrapping_add(1);
     let response = DisplaySelection {
         active_quantity_id: sel.selection.quantity.clone(),
-        component: sel.selection.component.clone(),
+        view_mode: match sel.selection.view_mode {
+            RunnerDisplayViewMode::TwoD => DisplayViewMode::TwoD,
+            RunnerDisplayViewMode::ThreeD => DisplayViewMode::ThreeD,
+        },
+        field_component: match sel.selection.field_component {
+            DisplayFieldComponent::X => FieldComponent::X,
+            DisplayFieldComponent::Y => FieldComponent::Y,
+            DisplayFieldComponent::Z => FieldComponent::Z,
+            DisplayFieldComponent::Magnitude => FieldComponent::Magnitude,
+        },
         colormap: update.colormap.unwrap_or_else(|| "viridis".to_string()),
         auto_contrast: sel.selection.auto_scale_enabled,
         contrast_min: update.contrast_min,
@@ -85,6 +116,9 @@ async fn apply_display_update(
             "single".into()
         },
         slice_layer: sel.selection.layer as i32,
+        max_points: sel.selection.max_points,
+        x_chosen_size: sel.selection.x_chosen_size,
+        y_chosen_size: sel.selection.y_chosen_size,
     };
 
     Ok(Json(response))

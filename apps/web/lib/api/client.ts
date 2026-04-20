@@ -10,8 +10,10 @@
  */
 
 import { ApiError, NetworkError } from './errors';
+import { EXPECTED_API_CONTRACT_VERSION } from '@/src/config/featureFlags';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+const CONTRACT_HEADER = "x-api-contract-version";
 type ApiRequestOptions = { timeoutMs?: number; signal?: AbortSignal };
 
 function normalizeOptions(options?: number | ApiRequestOptions): ApiRequestOptions {
@@ -57,6 +59,18 @@ function extractErrorMessage(payload: unknown, status: number): string {
   return `HTTP ${status}`;
 }
 
+function assertContractVersion(response: Response): void {
+  const actual = response.headers.get(CONTRACT_HEADER);
+  if (!actual) {
+    return;
+  }
+  if (actual !== EXPECTED_API_CONTRACT_VERSION) {
+    throw new NetworkError(
+      `API contract version mismatch: expected ${EXPECTED_API_CONTRACT_VERSION}, got ${actual}`,
+    );
+  }
+}
+
 /**
  * Perform a GET request and parse the JSON response.
  *
@@ -70,6 +84,7 @@ export async function apiGet<T>(url: string, options?: number | ApiRequestOption
     timeoutMs: resolved.timeoutMs,
     signal: resolved.signal,
   });
+  assertContractVersion(response);
 
   let payload: unknown = null;
   try {
@@ -104,6 +119,7 @@ export async function apiGetArrayBuffer(
     timeoutMs: resolved.timeoutMs,
     signal: resolved.signal,
   });
+  assertContractVersion(response);
 
   if (!response.ok) {
     let payload: unknown = null;
@@ -134,6 +150,7 @@ export async function apiGetOptional<T>(url: string, options?: number | ApiReque
     timeoutMs: resolved.timeoutMs,
     signal: resolved.signal,
   });
+  assertContractVersion(response);
 
   if (response.status === 204) {
     return null;
@@ -176,6 +193,7 @@ export async function apiPost<T = unknown>(
     timeoutMs: resolved.timeoutMs,
     signal: resolved.signal,
   });
+  assertContractVersion(response);
 
   let payload: unknown = null;
   try {
@@ -210,6 +228,7 @@ export async function apiDelete(url: string, options?: number | ApiRequestOption
     timeoutMs: resolved.timeoutMs,
     signal: resolved.signal,
   });
+  assertContractVersion(response);
 
   if (!response.ok) {
     let msg = `HTTP ${response.status}`;

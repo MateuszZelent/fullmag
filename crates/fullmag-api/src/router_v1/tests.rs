@@ -46,6 +46,7 @@ fn test_app_state() -> Arc<AppState> {
         current_live_vector_payload_seq: Arc::new(AtomicU32::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
+        current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: control_events_tx,
         current_control_next_seq: Arc::new(Mutex::new(0)),
         current_live_snapshot_version: Arc::new(AtomicU64::new(0)),
@@ -248,6 +249,7 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         current_live_vector_payload_seq: Arc::new(AtomicU32::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
+        current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: control_events_tx,
         current_control_next_seq: Arc::new(Mutex::new(0)),
         current_live_snapshot_version: Arc::new(AtomicU64::new(0)),
@@ -538,6 +540,11 @@ async fn status_returns_200_with_live_session() {
     assert_eq!(json["session"]["session_id"], "test-session");
     assert!(json["solver"].is_object());
     assert!(json["display"].is_object());
+    assert_eq!(json["display"]["view_mode"], "3d");
+    assert_eq!(json["display"]["field_component"], "magnitude");
+    assert!(json["display"]["max_points"].is_number());
+    assert!(json["display"]["x_chosen_size"].is_number());
+    assert!(json["display"]["y_chosen_size"].is_number());
     assert!(json["domain"].is_object());
     assert!(json["resources"].is_object());
     assert!(json["capabilities"].is_object());
@@ -639,6 +646,40 @@ async fn display_put_accepts_partial_update() {
 }
 
 #[tokio::test]
+async fn display_patch_updates_view_mode_and_field_component() {
+    let state = test_app_state();
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/live/current/display")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "view_mode": "2d",
+                        "field_component": "z"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["view_mode"], "2d");
+    assert_eq!(json["field_component"], "z");
+
+    let sel = state.current_display_selection.read().await;
+    assert_eq!(sel.selection.preview_component(), "z");
+    assert_eq!(sel.revision, 1);
+}
+
+#[tokio::test]
 async fn display_patch_accepts_partial_update() {
     let state = test_app_state();
     let app = build_v1_router().with_state(state.clone());
@@ -652,7 +693,10 @@ async fn display_patch_accepts_partial_update() {
                 .body(Body::from(
                     serde_json::json!({
                         "active_quantity_id": "h_demag",
-                        "slice_layer": 4
+                        "slice_layer": 4,
+                        "max_points": 4096,
+                        "x_chosen_size": 32,
+                        "y_chosen_size": 16
                     })
                     .to_string(),
                 ))
@@ -666,6 +710,9 @@ async fn display_patch_accepts_partial_update() {
     let sel = state.current_display_selection.read().await;
     assert_eq!(sel.selection.quantity, "h_demag");
     assert_eq!(sel.selection.layer, 4);
+    assert_eq!(sel.selection.max_points, 4096);
+    assert_eq!(sel.selection.x_chosen_size, 32);
+    assert_eq!(sel.selection.y_chosen_size, 16);
     assert_eq!(sel.revision, 1);
 }
 
@@ -690,6 +737,102 @@ async fn display_put_rejects_invalid_json() {
         "expected 4xx for invalid JSON, got {}",
         response.status()
     );
+}
+
+// ─── commands endpoint ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn commands_endpoint_enqueues_single_command() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "command": "run",
+                        "params": {
+                            "until_seconds": 1.0
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let queue = state.current_control_queue.lock().await;
+    assert_eq!(queue.len(), 1);
+    assert_eq!(
+        queue.front().map(|command| command.kind.as_str()),
+        Some("run")
+    );
+}
+
+#[tokio::test]
+async fn commands_endpoint_reuses_response_for_same_request_id() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v1_router().with_state(state.clone());
+
+    let first_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/commands")
+                .header("x-request-id", "cmd-dedupe-1")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "command": "run",
+                        "params": {
+                            "until_seconds": 1.0
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let second_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/commands")
+                .header("x-request-id", "cmd-dedupe-1")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "command": "run",
+                        "params": {
+                            "until_seconds": 1.0
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first_response.status(), StatusCode::OK);
+    assert_eq!(second_response.status(), StatusCode::OK);
+
+    let first_json = body_json(first_response).await;
+    let second_json = body_json(second_response).await;
+    assert_eq!(first_json["command_id"], second_json["command_id"]);
+
+    let queue = state.current_control_queue.lock().await;
+    assert_eq!(queue.len(), 1);
 }
 
 // ─── session endpoints ──────────────────────────────────────────────────────
@@ -742,7 +885,9 @@ async fn session_export_returns_fms_payload_with_session() {
     let json = body_json(response).await;
     assert_eq!(json["session_id"], "test-session");
     assert_eq!(json["profile"], "compact");
-    assert!(json["fms_base64"].as_str().is_some_and(|value| !value.is_empty()));
+    assert!(json["fms_base64"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     assert!(json["size_bytes"].as_u64().unwrap_or(0) > 0);
 
     let _ = fs::remove_dir_all(&repo_root);
@@ -752,6 +897,7 @@ async fn session_export_returns_fms_payload_with_session() {
 async fn session_import_inspect_round_trips_exported_session() {
     let (app, repo_root) = test_router_with_session_store().await;
     let export_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -805,6 +951,7 @@ async fn session_import_inspect_round_trips_exported_session() {
 async fn session_import_commit_round_trips_exported_session() {
     let (app, repo_root) = test_router_with_session_store().await;
     let export_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")

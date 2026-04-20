@@ -1,4 +1,4 @@
-import type { DomainMeta } from "../../types";
+import type { DomainMeta } from "../../generated/openapi-types";
 import type { LiveApiClient } from "../LiveApiClient";
 
 export class DomainModule {

@@ -1,4 +1,4 @@
-import type { FieldCatalog, FieldMeta } from "../../types";
+import type { FieldCatalog, FieldMeta } from "../../generated/openapi-types";
 import type { DecodedFieldVector } from "../../codecs/types";
 import { decodeFieldVector } from "../../codecs/fieldVectorCodec";
 import type { LiveApiClient } from "../LiveApiClient";

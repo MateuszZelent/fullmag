@@ -60,6 +60,15 @@ function mapSolverStateToRuntimeStatus(
   };
 }
 
+function displayComponentFromStatus(
+  display: LiveStatus["display"] | null | undefined,
+): "3D" | "x" | "y" | "z" | "magnitude" {
+  if (!display) {
+    return "3D";
+  }
+  return display.view_mode === "3d" ? "3D" : display.field_component;
+}
+
 // ── LiveStatus → SessionManifest ────────────────────────────────────
 
 function mapSessionManifest(status: LiveStatus): SessionManifest {
@@ -170,7 +179,7 @@ function mapPreviewState(status: LiveStatus): PreviewState | null {
     quantity: ds.active_quantity_id,
     unit: "",
     quantity_domain: "magnetic_only",
-    component: ds.component ?? "3D",
+    component: displayComponentFromStatus(ds),
     layer: ds.slice_layer ?? 0,
     all_layers: ds.slice_mode === "all",
     type: "vector",
@@ -180,12 +189,12 @@ function mapPreviewState(status: LiveStatus): PreviewState | null {
     min: ds.contrast_min ?? 0,
     max: ds.contrast_max ?? 1,
     n_comp: 3,
-    max_points: 0,
+    max_points: ds.max_points ?? 0,
     data_points_count: 0,
     x_possible_sizes: [],
     y_possible_sizes: [],
-    x_chosen_size: 0,
-    y_chosen_size: 0,
+    x_chosen_size: ds.x_chosen_size ?? 0,
+    y_chosen_size: ds.y_chosen_size ?? 0,
     applied_x_chosen_size: 0,
     applied_y_chosen_size: 0,
     applied_layer_stride: 0,
@@ -209,7 +218,7 @@ function mapFieldFrameEnvelope(
 
   const ds = status.display;
   const quantityId = ds?.active_quantity_id ?? "m";
-  const component = ds?.component ?? "3D";
+  const component = displayComponentFromStatus(ds);
 
   return {
     sessionId: status.session.session_id,

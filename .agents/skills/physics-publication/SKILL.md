@@ -24,8 +24,9 @@ Enforce the project rule: physics first, implementation second.
 4. Python API, UI authoring, and script-export impact
 5. `ProblemIR` impact
 6. Planner, capability-matrix, and runtime-selection impact
-7. Validation strategy, observables, tolerances, and provenance expectations
-8. Completeness checklist and deferred work
+7. Control-room resource/API impact when live quantities, stage state, or runtime metadata changes
+8. Validation strategy, observables, tolerances, and provenance expectations
+9. Completeness checklist and deferred work
 
 ## Blocker policy
 
@@ -38,3 +39,4 @@ After this skill completes, run:
 1. `problem-ir-design`
 2. `python-api-class`
 3. `capability-matrix-check`
+4. `resource-first-api-check` when browser/API/runtime resources are affected

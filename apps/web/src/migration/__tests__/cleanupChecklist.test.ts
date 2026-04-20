@@ -40,7 +40,8 @@ describe("cleanupChecklist", () => {
     const ids = getActiveDeprecations().map((i) => i.id);
     expect(ids).toContain("bootstrap-endpoint");
     expect(ids).toContain("poll-endpoint");
-    expect(ids).toContain("preview-component");
+    expect(ids).not.toContain("preview-component");
+    expect(ids).toContain("normalize-ts");
     expect(ids).toContain("binary-preview-codec");
   });
 });

@@ -63,7 +63,8 @@ pub use interactive::commands::{
     parse_session_command, LiveControlCommand, RuntimeControlOutcome, SequenceStage,
 };
 pub use interactive::display::{
-    DisplayKind, DisplayPayload, DisplaySelection, DisplaySelectionState,
+    DisplayFieldComponent, DisplayKind, DisplayPayload, DisplaySelection, DisplaySelectionState,
+    DisplayViewMode,
 };
 pub use interactive::events::{
     CommandAckEvent, CommandCompletedEvent, CommandRejectedEvent, DisplayUpdatedEvent,

@@ -51,6 +51,9 @@ Heavy data is fetched lazily from dedicated resource endpoints:
 | Field vector | `GET /fields/{id}/vector` | Binary FMVP v2 |
 | Scalar history | `GET /scalars?since_revision=X` | JSON |
 
+Control-plane JSON and data-plane binary are separate by design.
+`status` remains thin; field vectors and topology stay out of the status payload.
+
 ### 3. Revision-based cache
 
 Every resource carries a revision (`field_revision`, `domain_generation_id`,
@@ -62,6 +65,10 @@ the status endpoint reports a newer revision.
 Domain endpoints are discretization-neutral. `/domain/meta` returns a
 `DiscretizationKind` field and the adapter layer on the frontend decides how
 to interpret coordinates and topology.
+
+The control room keeps one UI tree.
+FDM/FEM differences are handled through capability maps and domain adapters, not through separate
+product branches.
 
 ### 5. Consolidated display control
 
@@ -85,6 +92,10 @@ A `FULLMAG_NEW_API` / `NEXT_PUBLIC_USE_NEW_API` flag allows running old and
 new API in parallel during migration. Legacy code is removed once the new
 path is validated.
 
+Feature flags are migration scaffolding, not a permanent architecture layer.
+The canonical end-state is one resource-first stack with no long-lived dual
+operation of bootstrap/poll and resource-first flows.
+
 ## Consequences
 
 ### Positive
@@ -103,6 +114,15 @@ path is validated.
 ### Neutral
 - Binary protocols (FMVP v2, FMMT v1) are unchanged.
 - WebSocket endpoints remain deprecated (polling is the active path).
+
+## Follow-up rule
+
+When the local browser API, cache semantics, OpenAPI contract, or FDM/FEM
+adapter boundary changes, update:
+
+- `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/session-run-api-v1.md` when runtime semantics changed
+- agent guidance in `AGENTS.md`, `.agents/`, and `.github/`
 
 ## Migration plan
 

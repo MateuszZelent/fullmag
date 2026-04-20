@@ -9,6 +9,19 @@
 import { useCallback } from "react";
 import type { DisplayUpdate } from "../../../src/api/types";
 
+function componentToDisplayUpdate(component: string): DisplayUpdate {
+  if (component === "3D") {
+    return { view_mode: "3d" };
+  }
+  return {
+    view_mode: "2d",
+    field_component:
+      component === "x" || component === "y" || component === "z"
+        ? component
+        : "magnitude",
+  };
+}
+
 export function useUnifiedDisplayControls(
   legacyUpdatePreview:
     | ((path: string, payload?: Record<string, unknown>) => Promise<void>)
@@ -18,7 +31,7 @@ export function useUnifiedDisplayControls(
   const setComponent = useCallback(
     (component: string) => {
       if (newDisplayUpdate) {
-        return newDisplayUpdate({ component });
+        return newDisplayUpdate(componentToDisplayUpdate(component));
       }
       return legacyUpdatePreview?.("/component", { component });
     },
@@ -38,7 +51,7 @@ export function useUnifiedDisplayControls(
   const setMaxPoints = useCallback(
     (maxPoints: number) => {
       if (newDisplayUpdate) {
-        return Promise.resolve(void maxPoints);
+        return newDisplayUpdate({ max_points: maxPoints });
       }
       return legacyUpdatePreview?.("/maxPoints", { maxPoints });
     },

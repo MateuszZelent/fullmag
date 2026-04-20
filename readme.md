@@ -79,6 +79,13 @@ Requested backend/device/precision intent and resolved execution reality must bo
 ### 6. Honest status
 Bootstrap, transitional, reference, and production states must be clearly distinguished.
 
+### 7. Resource-first control room API
+The local browser contract is resource-first and revision-driven, not a monolithic bootstrap blob.
+
+### 8. One frontend access path
+The control room uses one typed API client, one resource-hook layer, and one capability/adapter
+boundary.
+
 ---
 
 ## The application model
@@ -126,6 +133,18 @@ fullmag script.py
   - artifact inspection,
   - script export,
   - future advanced analysis workflows
+
+### Current browser contract
+- thin `status` resource plus on-demand domain/field/scalar/artifact resources,
+- JSON control plane and binary data plane,
+- one unified UI tree for FDM and FEM, with differences handled by capabilities and domain adapters,
+- OpenAPI/Swagger as the authoritative JSON contract.
+
+See:
+
+- `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/session-run-api-v1.md`
+- `docs/adr/0011-resource-first-api.md`
 
 ---
 
@@ -356,7 +375,9 @@ The browser is a first-class control room.
 - invent UI-only physics semantics,
 - hide backend limitations,
 - treat already-computed fields as slow preview commands,
-- silently drift from the Python / `ProblemIR` model.
+- silently drift from the Python / `ProblemIR` model,
+- call `fetch()` directly from React components,
+- split into separate FDM and FEM product trees.
 
 ---
 
@@ -366,6 +387,7 @@ For live visualization, Fullmag should increasingly use a **field-store architec
 
 ### Required direction
 - solver publishes live fields,
+- API exposes a thin status resource with explicit revisions,
 - API exposes a field catalog,
 - topology and field values are separated,
 - field revisions are independent from mesh revisions,
@@ -396,6 +418,7 @@ That requires discipline in three places.
 
 ## 3. Browser/runtime transport
 - no giant JSON payloads for heavy vector fields,
+- no monolithic bootstrap / poll blob as the canonical browser model,
 - no accidental topology rebuilds on quantity changes,
 - no preview-control path where a field-store read is enough.
 

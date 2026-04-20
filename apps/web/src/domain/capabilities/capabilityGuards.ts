@@ -1,4 +1,4 @@
-import type { CapabilityMap } from "../../api/types";
+import type { CapabilityMap } from "../../api/generated/openapi-types";
 
 export function shouldFetchTopology(caps: CapabilityMap): boolean {
   return caps.explicit_topology;

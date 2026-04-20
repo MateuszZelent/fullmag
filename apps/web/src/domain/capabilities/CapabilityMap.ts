@@ -1,1 +1,1 @@
-export type { CapabilityMap } from "../../api/types";
+export type { CapabilityMap } from "../../api/generated/openapi-types";

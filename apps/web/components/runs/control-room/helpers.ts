@@ -2,8 +2,11 @@
  * Stateless functions extracted from ControlRoomContext.tsx to reduce file size. */
 
 import type {
+  CurrentDisplaySelection,
   DisplaySelection,
   EngineLogEntry,
+  PreviewConfig,
+  PreviewState,
   ScriptBuilderStageState,
   ScriptBuilderState,
   SessionManifest,
@@ -23,6 +26,7 @@ import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
 import { DEFAULT_MESH_OPTIONS } from "@/lib/mesh/options";
 import type { MeshOptionsState } from "@/lib/mesh/options";
 import type { BackendErrorInfo, SolverPlanSummary } from "./types";
+import type { VectorComponent } from "./shared";
 
 /* ── Record / typing helpers ── */
 
@@ -54,7 +58,8 @@ export function sameDisplaySelection(
   return (
     left.quantity === right.quantity &&
     left.kind === right.kind &&
-    left.component === right.component &&
+    left.view_mode === right.view_mode &&
+    left.field_component === right.field_component &&
     left.layer === right.layer &&
     left.all_layers === right.all_layers &&
     left.x_chosen_size === right.x_chosen_size &&
@@ -63,6 +68,134 @@ export function sameDisplaySelection(
     left.max_points === right.max_points &&
     left.auto_scale_enabled === right.auto_scale_enabled
   );
+}
+
+function displayFieldComponentFromPreviewComponent(
+  component: string | null | undefined,
+): DisplaySelection["field_component"] {
+  switch (component) {
+    case "x":
+    case "y":
+    case "z":
+      return component;
+    default:
+      return "magnitude";
+  }
+}
+
+function displayViewModeFromPreviewComponent(
+  component: string | null | undefined,
+): DisplaySelection["view_mode"] {
+  return component === "3D" ? "3d" : "2d";
+}
+
+export function previewComponentFromDisplaySelection(
+  selection: Pick<DisplaySelection, "view_mode" | "field_component">,
+): "3D" | VectorComponent {
+  return selection.view_mode === "3d" ? "3D" : selection.field_component;
+}
+
+export function buildRequestedDisplaySelection({
+  optimisticDisplaySelection,
+  displaySelection,
+  previewConfig,
+  preview,
+  spatialPreview,
+  kindForQuantity,
+}: {
+  optimisticDisplaySelection: DisplaySelection | null;
+  displaySelection: CurrentDisplaySelection | null;
+  previewConfig: Partial<
+    Pick<
+      PreviewConfig,
+      | "quantity"
+      | "component"
+      | "layer"
+      | "all_layers"
+      | "every_n"
+      | "max_points"
+      | "x_chosen_size"
+      | "y_chosen_size"
+      | "auto_scale_enabled"
+    >
+  > | null;
+  preview: PreviewState | null;
+  spatialPreview: Partial<
+    Pick<
+      Extract<PreviewState, { kind: "spatial" }>,
+      | "component"
+      | "layer"
+      | "all_layers"
+      | "max_points"
+      | "x_chosen_size"
+      | "y_chosen_size"
+      | "auto_scale_enabled"
+    >
+  > | null;
+  kindForQuantity: (quantity: string) => DisplaySelection["kind"];
+}): DisplaySelection {
+  if (optimisticDisplaySelection) {
+    return optimisticDisplaySelection;
+  }
+
+  const quantity =
+    displaySelection?.selection.quantity ??
+    previewConfig?.quantity ??
+    preview?.quantity ??
+    "m";
+  const fallbackComponent =
+    previewConfig?.component ?? spatialPreview?.component ?? "3D";
+  const nextSelection: DisplaySelection = {
+    quantity,
+    kind: displaySelection?.selection.kind ?? kindForQuantity(quantity),
+    view_mode:
+      displaySelection?.selection.view_mode ??
+      displayViewModeFromPreviewComponent(fallbackComponent),
+    field_component:
+      displaySelection?.selection.field_component ??
+      displayFieldComponentFromPreviewComponent(fallbackComponent),
+    layer:
+      displaySelection?.selection.layer ??
+      previewConfig?.layer ??
+      spatialPreview?.layer ??
+      0,
+    all_layers:
+      displaySelection?.selection.all_layers ??
+      previewConfig?.all_layers ??
+      spatialPreview?.all_layers ??
+      false,
+    x_chosen_size:
+      displaySelection?.selection.x_chosen_size ??
+      previewConfig?.x_chosen_size ??
+      spatialPreview?.x_chosen_size ??
+      0,
+    y_chosen_size:
+      displaySelection?.selection.y_chosen_size ??
+      previewConfig?.y_chosen_size ??
+      spatialPreview?.y_chosen_size ??
+      0,
+    every_n:
+      displaySelection?.selection.every_n ??
+      previewConfig?.every_n ??
+      50,
+    max_points:
+      displaySelection?.selection.max_points ??
+      previewConfig?.max_points ??
+      spatialPreview?.max_points ??
+      16_384,
+    auto_scale_enabled:
+      displaySelection?.selection.auto_scale_enabled ??
+      previewConfig?.auto_scale_enabled ??
+      spatialPreview?.auto_scale_enabled ??
+      true,
+  };
+
+  if (nextSelection.kind !== "vector_field") {
+    nextSelection.view_mode = "2d";
+    nextSelection.field_component = "magnitude";
+  }
+
+  return nextSelection;
 }
 
 /* ── Command kind label ── */

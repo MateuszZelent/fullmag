@@ -2,7 +2,7 @@
  * Adapts legacy command payloads to the new CommandRequest format
  * expected by CommandsModule.submit().
  */
-import type { CommandRequest } from "../../types";
+import type { CommandRequest } from "../../generated/openapi-types";
 
 /**
  * Converts a legacy command payload ({ kind: "pause", ... })

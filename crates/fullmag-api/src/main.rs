@@ -27,10 +27,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
 use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
-use fullmag_runner::{
-    CommandAckEvent, DisplaySelection, FemMeshPayload, LivePreviewField, MeshCommandTargetEvent,
-    RuntimeEventEnvelope, StepUpdate,
-};
+use fullmag_runner::{FemMeshPayload, LivePreviewField, StepUpdate};
 
 mod artifacts;
 mod assets;
@@ -288,6 +285,7 @@ async fn main() {
         current_live_vector_payload_seq: Arc::new(AtomicU32::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
+        current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: watch::channel(0).0,
         current_control_next_seq: Arc::new(Mutex::new(0)),
         current_live_snapshot_version: Arc::new(AtomicU64::new(0)),
@@ -310,46 +308,6 @@ async fn main() {
         .route(
             "/v1/live/current/create",
             post(create_current_live_workspace),
-        )
-        .route(
-            "/v1/live/current/preview/quantity",
-            post(set_current_preview_quantity),
-        )
-        .route(
-            "/v1/live/current/preview/component",
-            post(set_current_preview_component),
-        )
-        .route(
-            "/v1/live/current/preview/XChosenSize",
-            post(set_current_preview_x_chosen_size),
-        )
-        .route(
-            "/v1/live/current/preview/everyN",
-            post(set_current_preview_every_n),
-        )
-        .route(
-            "/v1/live/current/preview/YChosenSize",
-            post(set_current_preview_y_chosen_size),
-        )
-        .route(
-            "/v1/live/current/preview/autoScaleEnabled",
-            post(set_current_preview_auto_scale),
-        )
-        .route(
-            "/v1/live/current/preview/maxPoints",
-            post(set_current_preview_max_points),
-        )
-        .route(
-            "/v1/live/current/preview/layer",
-            post(set_current_preview_layer),
-        )
-        .route(
-            "/v1/live/current/preview/allLayers",
-            post(set_current_preview_all_layers),
-        )
-        .route(
-            "/v1/live/current/preview/refresh",
-            post(refresh_current_preview),
         )
         // ── Data-plane field store (read-only, no command queue) ───────
         // ── Feature flags (diagnostics) ──────────────────────────────
@@ -869,59 +827,6 @@ async fn take_next_current_control_command_after(
     None
 }
 
-fn build_preview_control_command(
-    display_selection: &CurrentDisplaySelection,
-    refresh_only: bool,
-) -> SessionCommand {
-    let preview_config = display_selection.preview_request();
-    SessionCommand {
-        seq: 0,
-        command_id: format!(
-            "cmd-{}",
-            if refresh_only {
-                format!("preview-refresh-{}", uuid_v4_hex())
-            } else {
-                format!("display-selection-{}", uuid_v4_hex())
-            }
-        ),
-        kind: if refresh_only {
-            "preview_refresh".to_string()
-        } else {
-            "display_selection_update".to_string()
-        },
-        created_at_unix_ms: unix_time_millis_now(),
-        until_seconds: None,
-        max_steps: None,
-        torque_tolerance: None,
-        energy_tolerance: None,
-        integrator: None,
-        fixed_timestep: None,
-        max_error: None,
-        relax_algorithm: None,
-        relax_alpha: None,
-        mesh_options: None,
-        mesh_target: None,
-        mesh_reason: None,
-        state_path: None,
-        state_format: None,
-        state_dataset: None,
-        state_sample_index: None,
-        display_selection: Some(display_selection.clone()),
-        preview_config: Some(preview_config),
-        stages: None,
-    }
-}
-
-fn canonicalize_display_selection(selection: &mut DisplaySelection) -> Result<(), ApiError> {
-    selection.kind = DisplaySelection::kind_for_quantity(&selection.quantity);
-    if selection.component.trim().is_empty()
-        && !matches!(selection.kind, fullmag_runner::DisplayKind::GlobalScalar)
-    {
-        selection.component = "3D".to_string();
-    }
-    Ok(())
-}
-
 async fn publish_current_live_state(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CurrentLivePublishRequest>,
@@ -942,6 +847,7 @@ async fn publish_current_live_state(
         let display_selection = CurrentDisplaySelection::default();
         *state.current_display_selection.write().await = display_selection.clone();
         state.current_control_queue.lock().await.clear();
+        state.current_command_responses.lock().await.clear();
         *state.current_control_next_seq.lock().await = 0;
         let _ = state.current_control_events.send(0);
         let _ = std::fs::remove_dir_all(&state.current_workspace_root);
@@ -1149,142 +1055,6 @@ async fn publish_current_live_state(
     }
 
     Ok(Json(serde_json::json!({ "status": "ok" })))
-}
-
-async fn set_current_preview_quantity(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<PreviewQuantityRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(
-        &state,
-        PreviewControlMode::Update,
-        "quantity",
-        move |config| {
-            config.quantity = req.quantity;
-        },
-    )
-    .await
-}
-
-async fn set_current_preview_component(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<PreviewComponentRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(
-        &state,
-        PreviewControlMode::Update,
-        "component",
-        move |config| {
-            config.component = req.component;
-        },
-    )
-    .await
-}
-
-async fn set_current_preview_x_chosen_size(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<PreviewXChosenSizeRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(
-        &state,
-        PreviewControlMode::Update,
-        "x_chosen_size",
-        move |config| {
-            config.x_chosen_size = req.x_chosen_size as u32;
-        },
-    )
-    .await
-}
-
-async fn set_current_preview_every_n(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<PreviewEveryNRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(
-        &state,
-        PreviewControlMode::Update,
-        "every_n",
-        move |config| {
-            config.every_n = req.every_n.clamp(1, u32::MAX as usize) as u32;
-        },
-    )
-    .await
-}
-
-async fn set_current_preview_y_chosen_size(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<PreviewYChosenSizeRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(
-        &state,
-        PreviewControlMode::Update,
-        "y_chosen_size",
-        move |config| {
-            config.y_chosen_size = req.y_chosen_size as u32;
-        },
-    )
-    .await
-}
-
-async fn set_current_preview_auto_scale(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<PreviewAutoScaleRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(
-        &state,
-        PreviewControlMode::Update,
-        "auto_scale",
-        move |config| {
-            config.auto_scale_enabled = req.auto_scale_enabled;
-        },
-    )
-    .await
-}
-
-async fn set_current_preview_max_points(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<PreviewMaxPointsRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(
-        &state,
-        PreviewControlMode::Update,
-        "max_points",
-        move |config| {
-            config.max_points = req.max_points.min(u32::MAX as usize) as u32;
-        },
-    )
-    .await
-}
-
-async fn set_current_preview_layer(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<PreviewLayerRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Update, "layer", move |config| {
-        config.layer = req.layer as u32;
-    })
-    .await
-}
-
-async fn set_current_preview_all_layers(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<PreviewAllLayersRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(
-        &state,
-        PreviewControlMode::Update,
-        "all_layers",
-        move |config| {
-            config.all_layers = req.all_layers;
-        },
-    )
-    .await
-}
-
-async fn refresh_current_preview(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(&state, PreviewControlMode::Refresh, "refresh", |_config| {}).await
 }
 
 async fn dequeue_current_live_command(
@@ -2817,69 +2587,6 @@ async fn list_physics_docs(
     Ok(Json(docs))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PreviewControlMode {
-    Update,
-    Refresh,
-}
-
-async fn mutate_current_preview<F>(
-    state: &Arc<AppState>,
-    control_mode: PreviewControlMode,
-    caller: &str,
-    mutate: F,
-) -> Result<Json<serde_json::Value>, ApiError>
-where
-    F: FnOnce(&mut DisplaySelection),
-{
-    eprintln!("[fullmag-api] mutate_current_preview caller={}", caller);
-    let display_selection = {
-        let mut current = state.current_display_selection.write().await;
-        mutate(&mut current.selection);
-        canonicalize_display_selection(&mut current.selection)?;
-        current.revision = current.revision.saturating_add(1);
-        current.clone()
-    };
-    let preview_config = display_selection.preview_request();
-
-    let (session_id, session_state_messages, public_json) = {
-        let mut current = state.current_live_state.write().await;
-        let snapshot = current
-            .as_mut()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        let previous_preview = snapshot.preview.clone();
-        snapshot.display_selection = display_selection.clone();
-        snapshot.preview_config = preview_config.clone();
-        snapshot.preview =
-            build_preview_state(snapshot, &snapshot.display_selection, &preview_config)
-                .or(previous_preview);
-        let public_json = serialize_current_live_response(snapshot, true, false, false)?;
-        (
-            snapshot.session.session_id.clone(),
-            build_current_live_ws_messages(&state, snapshot)?,
-            public_json,
-        )
-    };
-    *state.current_live_public_snapshot.write().await = Some(public_json);
-
-    let command = enqueue_current_control_command(
-        state,
-        build_preview_control_command(
-            &display_selection,
-            matches!(control_mode, PreviewControlMode::Refresh),
-        ),
-    )
-    .await;
-    let ack_json = serialize_runtime_event(&build_command_ack_event(&session_id, &command))?;
-    let _ = state
-        .current_live_events
-        .send(CurrentLiveWireMessage::Text(ack_json));
-    send_current_live_ws_messages(&state, session_state_messages);
-    Ok(Json(
-        serde_json::json!({ "status": "ok", "control_seq": command.seq }),
-    ))
-}
-
 const CURRENT_LIVE_VECTOR_FRAME_MAGIC: [u8; 4] = *b"FMVP";
 const CURRENT_LIVE_VECTOR_FRAME_VERSION: u8 = 1;
 const CURRENT_LIVE_VECTOR_FRAME_KIND_F64: u8 = 1;
@@ -3375,36 +3082,6 @@ async fn serialize_current_live_response_from_state(state: &AppState) -> Result<
     serialize_current_live_response(snapshot, true, false, false)
 }
 
-fn serialize_runtime_event(event: &RuntimeEventEnvelope) -> Result<String, ApiError> {
-    serde_json::to_string(event).map_err(|error| {
-        ApiError::internal(format!("failed to serialize runtime event: {}", error))
-    })
-}
-
-fn build_command_ack_event(session_id: &str, command: &SessionCommand) -> RuntimeEventEnvelope {
-    RuntimeEventEnvelope::CommandAck(CommandAckEvent {
-        session_id: session_id.to_string(),
-        seq: command.seq,
-        command_id: command.command_id.clone(),
-        command_kind: command.kind.clone(),
-        issued_at_unix_ms: command.created_at_unix_ms,
-        mesh_target: command.mesh_target.as_ref().map(mesh_command_target_event),
-        mesh_reason: command.mesh_reason.clone(),
-        display_selection: command.display_selection.clone(),
-    })
-}
-
-fn mesh_command_target_event(target: &MeshCommandTarget) -> MeshCommandTargetEvent {
-    match target {
-        MeshCommandTarget::StudyDomain => MeshCommandTargetEvent::StudyDomain,
-        MeshCommandTarget::AdaptiveFollowup => MeshCommandTargetEvent::AdaptiveFollowup,
-        MeshCommandTarget::Airbox => MeshCommandTargetEvent::Airbox,
-        MeshCommandTarget::ObjectMesh { object_id } => MeshCommandTargetEvent::ObjectMesh {
-            object_id: object_id.clone(),
-        },
-    }
-}
-
 fn live_state_has_fresh_preview(live_state: Option<&LiveState>) -> bool {
     live_state
         .and_then(|state| state.latest_step.preview_field.as_ref())
@@ -3433,7 +3110,7 @@ fn build_spatial_preview_state(
 ) -> Option<PreviewState> {
     let selection = &display_selection.selection;
     let quantity = resolve_preview_quantity(current, &selection.quantity)?;
-    let component = normalize_preview_component(&selection.component);
+    let component = normalize_preview_component(selection.preview_component());
     let (source_step, source_time) = current_preview_source(current);
 
     if let Some(field) = current

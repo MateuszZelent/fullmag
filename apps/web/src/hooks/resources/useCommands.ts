@@ -5,7 +5,7 @@
  */
 
 import { useState, useCallback } from "react";
-import type { CommandResponse } from "../../api/types";
+import type { CommandResponse } from "../../api/generated/openapi-types";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 

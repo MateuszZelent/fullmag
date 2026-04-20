@@ -17,6 +17,8 @@ description: "Use when introducing or changing Fullmag ProblemIR semantics after
 4. Serialization and normalization notes
 5. Required Python API mappings in `packages/fullmag-py/` and any UI round-trip or script-export constraints
 6. IR compatibility or migration notes if the change is breaking
+7. Resource/API consequences if the IR change affects domain, field, scalar, stage, or provenance
+   exposure in the control room
 
 ## Core rules
 
@@ -25,3 +27,4 @@ description: "Use when introducing or changing Fullmag ProblemIR semantics after
 - The shared IR must not contain grid internals, raw GPU details, or FEM-only implementation detail.
 - Backend or device specificity belongs in explicit hint or runtime-policy surfaces, not as ambient
   leakage into shared semantics.
+- IR changes must not force the control room into backend-specific wire shapes or duplicated UI trees.

@@ -1,11 +1,14 @@
 "use client";
 
 /**
- * Hook: provides updateDisplay() for PUT /display.
+ * Hook: provides updateDisplay() for PATCH /display.
  */
 
 import { useState, useCallback } from "react";
-import type { DisplaySelection, DisplayUpdate } from "../../api/types";
+import type {
+  DisplaySelection,
+  DisplayUpdate,
+} from "../../api/generated/openapi-types";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 

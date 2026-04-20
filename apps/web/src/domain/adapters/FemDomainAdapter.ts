@@ -3,7 +3,7 @@
  * Wraps decoded topology with Float32 positions for rendering.
  */
 
-import type { DomainMeta } from "../../api/types";
+import type { DomainMeta } from "../../api/generated/openapi-types";
 import type { DecodedTopology } from "../../api/codecs/types";
 import type {
   SpatialDomainAdapter,

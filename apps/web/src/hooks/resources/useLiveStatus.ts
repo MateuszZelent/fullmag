@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { LiveStatus } from "../../api/types";
+import type { LiveStatus } from "../../api/generated/openapi-types";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 

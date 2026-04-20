@@ -379,7 +379,8 @@ export type DisplayKind = "vector_field" | "spatial_scalar" | "global_scalar";
 export interface DisplaySelection {
   quantity: string;
   kind: DisplayKind;
-  component: string;
+  view_mode: "2d" | "3d";
+  field_component: "x" | "y" | "z" | "magnitude";
   layer: number;
   all_layers: boolean;
   x_chosen_size: number;

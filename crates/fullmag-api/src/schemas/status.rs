@@ -2,6 +2,23 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub enum DisplayViewMode {
+    #[serde(rename = "2d")]
+    TwoD,
+    #[serde(rename = "3d")]
+    ThreeD,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldComponent {
+    X,
+    Y,
+    Z,
+    Magnitude,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct LiveStatus {
     pub api_contract_version: String,
     pub runtime_bundle_version: String,
@@ -48,7 +65,8 @@ pub struct SolverSummary {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct DisplaySelection {
     pub active_quantity_id: String,
-    pub component: String,
+    pub view_mode: DisplayViewMode,
+    pub field_component: FieldComponent,
     pub colormap: String,
     pub auto_contrast: bool,
     pub contrast_min: Option<f64>,
@@ -57,6 +75,9 @@ pub struct DisplaySelection {
     pub vector_density: u32,
     pub slice_mode: String,
     pub slice_layer: i32,
+    pub max_points: u32,
+    pub x_chosen_size: u32,
+    pub y_chosen_size: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

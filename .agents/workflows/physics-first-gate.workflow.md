@@ -12,10 +12,12 @@ Mandatory gate before implementing any physics-facing or numerics-facing change.
 4. Make Python API, UI authoring, script-export, and `ProblemIR` impact explicit.
 5. Run `problem-ir-design`.
 6. Run `capability-matrix-check`.
-7. Only then begin implementation work.
+7. Run `resource-first-api-check` when the feature changes control-room resources, live quantities,
+   session/runtime API, or frontend data flow.
+8. Only then begin implementation work.
 
 ## Exit criteria
 
 - the physics note exists and is complete,
 - Python API, UI authoring, and `ProblemIR` impact are explicit,
-- capability, runtime-selection, and validation implications are explicit.
+- capability, runtime-selection, control-room/API, and validation implications are explicit.

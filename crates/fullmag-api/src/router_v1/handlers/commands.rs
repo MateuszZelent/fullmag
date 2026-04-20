@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::Json;
 
 use crate::error::ApiError;
@@ -21,6 +22,7 @@ use crate::types::{AppState, MeshCommandTarget, SessionCommand};
 )]
 pub async fn submit_command(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<CommandRequest>,
 ) -> Result<Json<CommandResponse>, ApiError> {
     let _guard = state.current_live_state.read().await;
@@ -28,6 +30,19 @@ pub async fn submit_command(
         return Err(ApiError::not_found("no active local live workspace"));
     }
     drop(_guard);
+
+    if let Some(idempotency_key) = command_request_key(&headers) {
+        let cached = {
+            let responses = state.current_command_responses.lock().await;
+            responses
+                .iter()
+                .find(|(key, _)| key == &idempotency_key)
+                .map(|(_, response)| response.clone())
+        };
+        if let Some(response) = cached {
+            return Ok(Json(response));
+        }
+    }
 
     let command_id = format!("fm-{}", uuid::Uuid::new_v4());
     let now = std::time::SystemTime::now()
@@ -100,9 +115,32 @@ pub async fn submit_command(
     state.current_control_queue.lock().await.push_back(enqueued);
     let _ = state.current_control_events.send(seq);
 
-    Ok(Json(CommandResponse {
+    let response = CommandResponse {
         accepted: true,
         command_id,
         error: None,
-    }))
+    };
+
+    if let Some(idempotency_key) = command_request_key(&headers) {
+        let mut responses = state.current_command_responses.lock().await;
+        responses.push_back((idempotency_key, response.clone()));
+        while responses.len() > 128 {
+            responses.pop_front();
+        }
+    }
+
+    Ok(Json(response))
+}
+
+fn command_request_key(headers: &HeaderMap) -> Option<String> {
+    ["idempotency-key", "x-request-id"]
+        .into_iter()
+        .find_map(|name| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
 }

@@ -1,4 +1,4 @@
-import type { ArtifactEntry } from "../../types";
+import type { ArtifactEntry } from "../../generated/openapi-types";
 import type { LiveApiClient } from "../LiveApiClient";
 
 export class ArtifactsModule {

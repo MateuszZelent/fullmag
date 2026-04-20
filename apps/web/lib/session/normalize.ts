@@ -704,7 +704,22 @@ export function normalizeDisplaySelection(raw: any): CurrentDisplaySelection | n
     selection: {
       quantity: String(selection.quantity ?? "m"),
       kind: normalizeDisplayKind(selection.kind),
-      component: String(selection.component ?? "3D"),
+      view_mode:
+        selection.view_mode === "2d"
+          ? "2d"
+          : selection.component === "3D"
+            ? "3d"
+            : "2d",
+      field_component:
+        selection.field_component === "x" ||
+        selection.field_component === "y" ||
+        selection.field_component === "z"
+          ? selection.field_component
+          : selection.component === "x" ||
+              selection.component === "y" ||
+              selection.component === "z"
+            ? selection.component
+            : "magnitude",
       layer: Number(selection.layer ?? 0),
       all_layers: Boolean(selection.all_layers),
       x_chosen_size: Number(selection.x_chosen_size ?? 0),
@@ -757,7 +772,10 @@ function previewConfigFromDisplaySelection(
   return {
     revision: displaySelection.revision,
     quantity: displaySelection.selection.quantity,
-    component: displaySelection.selection.component,
+    component:
+      displaySelection.selection.view_mode === "3d"
+        ? "3D"
+        : displaySelection.selection.field_component,
     layer: displaySelection.selection.layer,
     all_layers: displaySelection.selection.all_layers,
     every_n: displaySelection.selection.every_n,

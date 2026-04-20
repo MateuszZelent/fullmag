@@ -2,6 +2,53 @@ use crate::quantities::{global_scalar_value, quantity_spec, QuantityKind};
 use crate::types::{LivePreviewField, StepStats};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DisplayViewMode {
+    #[serde(rename = "2d")]
+    TwoD,
+    #[serde(rename = "3d")]
+    ThreeD,
+}
+
+impl DisplayViewMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TwoD => "2d",
+            Self::ThreeD => "3d",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayFieldComponent {
+    X,
+    Y,
+    Z,
+    Magnitude,
+}
+
+impl DisplayFieldComponent {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::X => "x",
+            Self::Y => "y",
+            Self::Z => "z",
+            Self::Magnitude => "magnitude",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "x" => Some(Self::X),
+            "y" => Some(Self::Y),
+            "z" => Some(Self::Z),
+            "magnitude" => Some(Self::Magnitude),
+            _ => None,
+        }
+    }
+}
+
 /// The kind of display a quantity produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -22,7 +69,8 @@ pub enum DisplayKind {
 pub struct DisplaySelection {
     pub quantity: String,
     pub kind: DisplayKind,
-    pub component: String,
+    pub view_mode: DisplayViewMode,
+    pub field_component: DisplayFieldComponent,
     pub layer: u32,
     pub all_layers: bool,
     pub x_chosen_size: u32,
@@ -37,7 +85,8 @@ impl Default for DisplaySelection {
         Self {
             quantity: "m".to_string(),
             kind: DisplayKind::VectorField,
-            component: "3D".to_string(),
+            view_mode: DisplayViewMode::ThreeD,
+            field_component: DisplayFieldComponent::Magnitude,
             layer: 0,
             all_layers: false,
             x_chosen_size: 0,
@@ -99,7 +148,7 @@ impl DisplaySelection {
         crate::types::LivePreviewRequest {
             revision,
             quantity: self.quantity.clone(),
-            component: self.component.clone(),
+            component: self.preview_component().to_string(),
             layer: self.layer,
             all_layers: self.all_layers,
             every_n: self.every_n,
@@ -112,10 +161,16 @@ impl DisplaySelection {
 
     /// Create from an existing `LivePreviewRequest`.
     pub fn from_preview_request(request: &crate::types::LivePreviewRequest) -> Self {
-        Self {
+        let mut selection = Self {
             quantity: request.quantity.clone(),
             kind: Self::kind_for_quantity(&request.quantity),
-            component: request.component.clone(),
+            view_mode: if request.component == "3D" {
+                DisplayViewMode::ThreeD
+            } else {
+                DisplayViewMode::TwoD
+            },
+            field_component: DisplayFieldComponent::parse(&request.component)
+                .unwrap_or(DisplayFieldComponent::Magnitude),
             layer: request.layer,
             all_layers: request.all_layers,
             x_chosen_size: request.x_chosen_size,
@@ -123,6 +178,29 @@ impl DisplaySelection {
             every_n: request.every_n,
             max_points: request.max_points,
             auto_scale_enabled: request.auto_scale_enabled,
+        };
+        selection.canonicalize();
+        selection
+    }
+
+    pub fn preview_component(&self) -> &'static str {
+        if matches!(self.kind, DisplayKind::VectorField)
+            && matches!(self.view_mode, DisplayViewMode::ThreeD)
+        {
+            "3D"
+        } else {
+            self.field_component.as_str()
+        }
+    }
+
+    pub fn canonicalize(&mut self) {
+        self.kind = Self::kind_for_quantity(&self.quantity);
+        match self.kind {
+            DisplayKind::VectorField => {}
+            DisplayKind::SpatialScalar | DisplayKind::GlobalScalar => {
+                self.view_mode = DisplayViewMode::TwoD;
+                self.field_component = DisplayFieldComponent::Magnitude;
+            }
         }
     }
 }

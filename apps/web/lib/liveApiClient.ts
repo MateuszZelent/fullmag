@@ -9,7 +9,7 @@ import {
 } from "@/src/api/client/LiveApiClient";
 import { adaptLegacyCommand } from "@/src/api/client/modules/CommandAdapter";
 import { scalarWindowToRows } from "@/src/api/client/modules/ScalarHistoryAdapter";
-import { legacyPreviewToDisplayUpdate } from "@/src/api/client/modules/DisplayConsolidation";
+import type { DisplayUpdate } from "@/src/api/generated/openapi-types";
 import type { MeshCommandTarget } from "./session/types";
 import type { SceneDocument } from "./session/types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "./debug/frontendDiagnosticFlags";
@@ -190,8 +190,6 @@ export function currentLiveApiClient() {
       poll: withSnapshotTransport(`${baseUrl}/v1/live/current/poll`),
       runtimeCapabilities: `${baseUrl}/v1/capabilities`,
       commands: `${baseUrl}/v1/live/current/commands`,
-      preview: (path: string) => `${baseUrl}/v1/live/current/preview${path}`,
-      previewSelection: `${baseUrl}/v1/live/current/display`,
       importAsset: `${baseUrl}/v1/live/current/assets/import`,
       exportState: `${baseUrl}/v1/live/current/state/export`,
       importState: `${baseUrl}/v1/live/current/state/import`,
@@ -254,25 +252,6 @@ export function currentLiveApiClient() {
         mesh_reason: meshReason,
       }).then((response) => response as unknown as JsonObject);
     },
-    updatePreview(path: string, payload: JsonBody = {}, options?: RequestOptions) {
-      const update = legacyPreviewToDisplayUpdate(
-        path,
-        (payload as Record<string, unknown> | undefined) ?? {},
-      );
-      if (Object.keys(update).length > 0) {
-        const client = ensureResourceClient();
-        return client.display.update(update).then((response) => response as unknown as JsonObject);
-      }
-      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/preview${path}`, payload, options);
-    },
-    updateDisplaySelection(payload: JsonBody, options?: RequestOptions) {
-      const update = legacyPreviewToDisplayUpdate(
-        "/selection",
-        (payload as Record<string, unknown> | undefined) ?? {},
-      );
-      const client = ensureResourceClient();
-      return client.display.update(update).then((response) => response as unknown as JsonObject);
-    },
     importAsset(payload: JsonBody, options?: RequestOptions) {
       return requestPost<JsonObject>(`${baseUrl}/v1/live/current/assets/import`, payload, options);
     },
@@ -284,6 +263,12 @@ export function currentLiveApiClient() {
     },
     syncScript(payload: JsonBody = {}, options?: RequestOptions) {
       return requestPost<JsonObject>(`${baseUrl}/v1/live/current/script/sync`, payload, options);
+    },
+    updateDisplay(payload: DisplayUpdate, options?: RequestOptions) {
+      const client = ensureResourceClient();
+      return client.display.update(payload).then(
+        (response) => response as unknown as JsonObject,
+      );
     },
     updateSceneDocument(payload: JsonBody, options?: RequestOptions) {
       return requestPost<SceneDocument>(`${baseUrl}/v1/live/current/scene`, payload, options);

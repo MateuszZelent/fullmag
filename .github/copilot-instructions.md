@@ -11,9 +11,12 @@
 - Python and UI authoring flows must converge to canonical `ProblemIR`; Rust validates, normalizes, plans, and orchestrates execution.
 - UI-authored simulations must be exportable as canonical, human-editable Python scripts.
 - The shared API must describe physics and runtime truth, not grid internals, raw GPU arrays, or FEM-only implementation details.
+- The canonical local browser contract is resource-first: thin `status`, on-demand resources, JSON control plane, binary data plane.
+- Frontend components should go through one typed API client and one resource-hook layer; avoid direct `fetch()` calls in React components.
+- FDM/FEM control-room differences belong in capability guards and domain adapters, not duplicated UI trees.
 - Current execution priority is calibrated GPU-first FDM/CUDA, but the product shell must remain modular and backend-neutral enough for explicit CPU/GPU and FDM/FEM selection.
 - Requested execution intent and resolved execution reality must stay explicit across user surfaces, planning, and provenance.
-- Treat `docs/specs/fullmag-application-architecture-v2.md`, `docs/specs/session-run-api-v1.md`, `docs/specs/runtime-distribution-and-managed-backends-v1.md`, `docs/physics/`, and ADRs as canonical architecture references.
+- Treat `docs/specs/fullmag-application-architecture-v2.md`, `docs/specs/resource-first-control-room-api-v1.md`, `docs/specs/session-run-api-v1.md`, `docs/specs/runtime-distribution-and-managed-backends-v1.md`, `docs/physics/`, and ADRs as canonical architecture references.
 - Assume container-first verification and prefer canonical `just` workflows over ad-hoc commands.
 - Prefer `justfile` as the primary build/run task layer:
   - `just build fullmag`

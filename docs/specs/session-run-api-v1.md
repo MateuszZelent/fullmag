@@ -1,7 +1,7 @@
 # Session and Run API v1
 
 - Status: draft stable runtime contract
-- Last updated: 2026-03-23
+- Last updated: 2026-04-20
 - Parent architecture: `docs/specs/fullmag-application-architecture-v2.md`
 
 ## 1. Purpose
@@ -22,6 +22,7 @@ This spec covers:
 - session identity and lifecycle,
 - run identity and relationship to sessions,
 - session and run endpoints,
+- the relationship between session/run semantics and the local `/v1/live/current/*` control-room API,
 - event stream semantics,
 - browser/runtime ownership boundaries.
 
@@ -32,6 +33,10 @@ This spec does not define:
 - backend-native ABI,
 - artifact container schemas,
 - detailed `.zarr`, `.h5`, or OVF layouts.
+
+The concrete local resource-first browser contract is specified in:
+
+- `docs/specs/resource-first-control-room-api-v1.md`
 
 Cluster-specific scheduler/runtime semantics are expanded in:
 
@@ -238,6 +243,30 @@ GET    /v1/docs/physics
 GET    /v1/docs/physics/:slug
 ```
 
+### 8.4 Current local-live resource-first endpoints
+
+For the current singleton control room, the canonical local API is the resource-first family:
+
+```text
+GET    /v1/live/current/status
+GET    /v1/live/current/domain/*
+GET    /v1/live/current/fields/*
+GET    /v1/live/current/scalars
+PUT    /v1/live/current/display
+POST   /v1/live/current/commands
+GET    /v1/live/current/artifacts*
+GET    /v1/live/current/eigen/*
+POST   /v1/live/current/session/*
+GET    /v1/capabilities
+GET    /v1/openapi.json
+```
+
+Rules:
+
+- it is the canonical current local browser contract,
+- it is resource-first and revision-driven,
+- it is subordinate to the broader session/run model, not contradictory to it.
+
 ## 9. Event stream contract
 
 The event stream is the live runtime channel for one session.
@@ -288,23 +317,26 @@ Field data is fetched on demand through run endpoints.
 
 ### 9.5 Local current-live projection
 
-Local interactive control-room deployments may additionally expose a singleton projection such as:
+Local interactive control-room deployments use a singleton resource-first projection such as:
 
 ```text
-GET    /v1/live/current/bootstrap
-GET    /ws/live/current
+GET    /v1/live/current/status
+GET    /v1/live/current/domain/*
+GET    /v1/live/current/fields/*
+GET    /v1/live/current/scalars
 POST   /v1/live/current/commands
-POST   /v1/live/current/preview/selection
+PUT    /v1/live/current/display
+GET    /ws/live/current    (optional accelerator, not required)
 ```
 
 Rules for this projection:
 
 - it is a convenience view over the active local workspace, not a replacement for the canonical
   session/run resource model,
-- the browser may consume a canonical `session_state` snapshot message instead of many small
-  per-field events,
-- heavy live preview vectors may be delivered as binary WebSocket frames associated with that
-  snapshot,
+- the browser consumes thin status plus on-demand resources instead of one monolithic bootstrap
+  blob,
+- WebSocket or SSE may deliver revision notices, but heavy data still remains resource-fetched by
+  default,
 - the browser must not require URL-level `?session=` routing for this singleton local-live flow.
 
 ## 10. Browser contract
@@ -341,6 +373,6 @@ This spec assumes:
 
 - one session maps to one run,
 - local CLI execution is the first concrete deployment mode,
-- current field and scalar access may be backed by bootstrap JSON/CSV,
+- current local control-room transport is thin JSON status plus on-demand resource fetching,
 - long-term sampled scientific data still targets `.zarr` and `.h5`,
 - session semantics must remain valid when remote execution is added later.

@@ -12,6 +12,22 @@ Agents must preserve one semantic core across Python authoring, UI authoring, `P
 session/run APIs, and backend execution.
 If the UI creates or edits a simulation, it must remain exportable as canonical Python.
 
+## Control-room API rule
+
+The canonical local browser contract is the resource-first API described in:
+
+- `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/session-run-api-v1.md`
+- `docs/adr/0011-resource-first-api.md`
+
+Rules:
+
+- `status` stays thin and revision-driven,
+- heavy numerical payloads use binary data-plane transports,
+- React components do not call `fetch()` directly,
+- FDM/FEM differences stay in capability guards and domain adapters,
+- old `bootstrap` / `poll` / `preview/*` flows are legacy, not target architecture.
+
 ## Build and run rule
 
 When a repository-level `justfile` recipe exists for a build/run/package task, agents should use it

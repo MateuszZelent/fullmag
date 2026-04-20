@@ -1,4 +1,7 @@
-import type { HealthResponse, RuntimeCapabilityMatrix } from "../../types";
+import type {
+  HealthResponse,
+  RuntimeCapabilityMatrix,
+} from "../../generated/openapi-types";
 import type { LiveApiClient } from "../LiveApiClient";
 
 export class SystemModule {

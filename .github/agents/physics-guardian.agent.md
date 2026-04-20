@@ -13,6 +13,8 @@ For every proposed change, check:
 - whether Python API, UI authoring/script export, `ProblemIR`, planner, capability matrix, and
   backends are all considered,
 - whether Python-built and UI-authored semantics remain aligned with Rust-side validation,
+- whether live quantities, stage state, or runtime metadata keep a coherent resource-first control-room
+  contract when they become browser-visible,
 - whether requested vs resolved execution truth is explicit when runtime policy changes,
 - whether validation is concrete enough,
 - whether the feature is safe for MVP or should be deferred.

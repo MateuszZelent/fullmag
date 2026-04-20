@@ -8,6 +8,7 @@ use axum::Json;
 use crate::error::ApiError;
 use crate::schemas::status::*;
 use crate::types::AppState;
+use fullmag_runner::{DisplayFieldComponent, DisplayViewMode as RunnerDisplayViewMode};
 
 #[utoipa::path(
     get,
@@ -63,7 +64,16 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
 
     let display = DisplaySelection {
         active_quantity_id: display_sel.selection.quantity.clone(),
-        component: display_sel.selection.component.clone(),
+        view_mode: match display_sel.selection.view_mode {
+            RunnerDisplayViewMode::TwoD => DisplayViewMode::TwoD,
+            RunnerDisplayViewMode::ThreeD => DisplayViewMode::ThreeD,
+        },
+        field_component: match display_sel.selection.field_component {
+            DisplayFieldComponent::X => FieldComponent::X,
+            DisplayFieldComponent::Y => FieldComponent::Y,
+            DisplayFieldComponent::Z => FieldComponent::Z,
+            DisplayFieldComponent::Magnitude => FieldComponent::Magnitude,
+        },
         colormap: "viridis".into(),
         auto_contrast: display_sel.selection.auto_scale_enabled,
         contrast_min: None,
@@ -76,6 +86,9 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
             "single".into()
         },
         slice_layer: display_sel.selection.layer as i32,
+        max_points: display_sel.selection.max_points,
+        x_chosen_size: display_sel.selection.x_chosen_size,
+        y_chosen_size: display_sel.selection.y_chosen_size,
     };
 
     let is_fem = snapshot.fem_mesh.is_some();

@@ -1,5 +1,6 @@
 //! API request/response types and view models.
 
+use crate::schemas::commands::CommandResponse;
 use fullmag_authoring::{SceneDocument, ScriptBuilderState};
 use fullmag_runner::{
     BackendCapabilities, DisplaySelectionState, FemMeshPayload, LivePreviewField,
@@ -44,6 +45,8 @@ pub(crate) struct AppState {
     pub current_display_selection: Arc<RwLock<CurrentDisplaySelection>>,
     /// In-memory sequenced control queue for the root local-live workspace.
     pub current_control_queue: Arc<Mutex<VecDeque<SessionCommand>>>,
+    /// Recent idempotent command responses keyed by request identity.
+    pub current_command_responses: Arc<Mutex<VecDeque<(String, CommandResponse)>>>,
     /// Latest queued control sequence number.
     pub current_control_events: watch::Sender<u64>,
     /// Monotonic sequence generator for the current session control stream.
@@ -740,40 +743,6 @@ pub(crate) struct RuntimeStatusView {
     pub can_accept_commands: bool,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct PreviewQuantityRequest {
-    pub quantity: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PreviewComponentRequest {
-    pub component: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PreviewXChosenSizeRequest {
-    #[serde(rename = "xChosenSize")]
-    pub x_chosen_size: usize,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PreviewEveryNRequest {
-    #[serde(rename = "everyN")]
-    pub every_n: usize,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PreviewYChosenSizeRequest {
-    #[serde(rename = "yChosenSize")]
-    pub y_chosen_size: usize,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PreviewAutoScaleRequest {
-    #[serde(rename = "autoScaleEnabled")]
-    pub auto_scale_enabled: bool,
-}
-
 const fn default_preview_wait_timeout_ms() -> u64 {
     15_000
 }
@@ -784,23 +753,6 @@ pub(crate) struct ControlWaitQuery {
     pub after_seq: u64,
     #[serde(rename = "timeoutMs", default = "default_preview_wait_timeout_ms")]
     pub timeout_ms: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PreviewMaxPointsRequest {
-    #[serde(rename = "maxPoints")]
-    pub max_points: usize,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PreviewLayerRequest {
-    pub layer: usize,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PreviewAllLayersRequest {
-    #[serde(rename = "allLayers")]
-    pub all_layers: bool,
 }
 
 #[derive(Debug, Deserialize)]

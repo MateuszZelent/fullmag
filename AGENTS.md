@@ -92,6 +92,17 @@ The following are non-negotiable:
 7. **One capability language**
    - Python, UI, planner, runner, docs, and provenance must speak the same capability vocabulary.
 
+8. **One resource-first control-room API**
+   - The local browser contract is versioned, resource-scoped, and revision-driven.
+
+9. **One control-plane / data-plane split**
+   - Thin JSON carries state, capabilities, commands, and diagnostics; binary transport carries
+     heavy numerical payloads.
+
+10. **One frontend access path**
+   - Components and hooks go through one typed API client, one resource-hook layer, and one
+     capability/adapter boundary.
+
 **Round-trip drift is a product bug.**
 
 ---
@@ -229,6 +240,37 @@ flowchart TD
 | Native backends | high-performance compute | define public product semantics |
 | Control room | observability + live authoring + export | bypass canonical model |
 
+### 9.1 Control-room API invariant
+
+The current local browser contract is the resource-first API documented in:
+
+- `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/session-run-api-v1.md`
+- `docs/adr/0011-resource-first-api.md`
+
+Rules:
+
+- `GET /v1/live/current/status` stays thin and revision-driven,
+- domain, field, scalar, artifact, and session data are fetched as named resources,
+- heavy fields and topology belong on the binary data plane, not inside status,
+- JSON contract changes must be reflected in OpenAPI and shared frontend types.
+
+### 9.2 Frontend architecture invariant
+
+The control room must use:
+
+- one typed API client,
+- one resource-hook layer,
+- one capability vocabulary,
+- one domain-adapter layer,
+- one unified UI tree.
+
+The control room must not:
+
+- call `fetch()` directly from React components,
+- fork the product tree into separate FDM and FEM applications,
+- treat old `bootstrap` / `poll` / `preview/*` flows as canonical architecture.
+
 ---
 
 ## 10. Execution-selection doctrine
@@ -320,9 +362,11 @@ Fullmag aims for top-tier computational performance, but never through semantic 
 
 ### Runtime / data plane
 - heavy field payloads must not ride on JSON if binary transport is appropriate,
+- status/control-plane payloads must stay thin and revision-driven,
 - live quantity switching must prefer field-store reads over preview recompute,
 - mesh/topology must be separated from field values,
-- expensive operators should be cached and keyed by valid provenance signatures.
+- expensive operators should be cached and keyed by valid provenance signatures,
+- request correlation and contract-version headers must remain first-class for browser/API work.
 
 ### UI
 - no accidental always-on rendering without reason,
@@ -363,8 +407,9 @@ Implications:
 
 - stages must have explicit lifecycle,
 - commands must have explicit intent and completion status,
-- live state must distinguish compute state from preview state,
-- fields, previews, scalars, and artifacts must have stable contracts.
+- live state must distinguish compute state from display-selection state,
+- fields, scalars, artifacts, and display resources must have stable contracts,
+- local current-live API must expose revisions and capabilities as first-class runtime truth.
 
 ## 13.4 Provenance invariant
 
@@ -471,10 +516,11 @@ The browser must treat already-computed quantities as data, not as preview comma
 ### Required end-state
 
 - solver/runtime publishes hot fields continuously,
-- API exposes a read-optimized field catalog and field buffers,
+- API exposes a read-optimized thin status plus field catalog and field buffers,
 - warm quantity switching is local and near-instant,
 - geometry/topology revision is separate from field revision,
-- statistics needed for legends/scales should be precomputed where possible.
+- statistics needed for legends/scales should be precomputed where possible,
+- legacy bootstrap/poll/preview transports must not define the browser contract.
 
 ### Anti-regression rule
 
@@ -603,6 +649,10 @@ Performance work does not justify monoliths.
    - scene/model logic,
    - transport/state logic,
    - UI overlays and controls.
+9. Keep one typed frontend API client and resource-hook layer; React components do not talk to the
+   network directly.
+10. Keep FDM/FEM differences inside capability guards and domain adapters, not duplicated control-room
+   trees.
 
 ### File size rule
 
@@ -659,11 +709,12 @@ Every serious feature should follow this sequence:
 2. update or add architecture/spec note if needed,
 3. update Python/API surface,
 4. update IR / planner / runtime contracts,
-5. update native backend behavior,
-6. update session/live state if user-visible,
-7. update UI and script export,
-8. add tests,
-9. update AGENTS/README/specs if project direction changed.
+5. update live API / OpenAPI / capability / adapter contracts when control-room behavior changes,
+6. update native backend behavior,
+7. update session/live state if user-visible,
+8. update UI and script export,
+9. add tests,
+10. update AGENTS/README/specs if project direction changed.
 
 Skipping steps 3–7 and only “making the backend work” is not acceptable for user-facing features.
 
@@ -711,6 +762,15 @@ A feature is only done when all applicable layers are done.
 - screenshot/capture path preserved,
 - warnings and degraded states explicit.
 
+### 26.5 Control-room API feature done
+- thin status remains thin,
+- revisions and generation ids are explicit,
+- OpenAPI and shared types are updated,
+- binary codecs cover heavy resources,
+- one API client / resource-hook path is preserved,
+- FDM/FEM differences stay inside capability/adapters,
+- legacy bootstrap/poll/preview dependencies are retired or explicitly transitional.
+
 ---
 
 ## 27. Must-have test classes
@@ -742,6 +802,10 @@ Every major subsystem should have tests from the relevant groups below.
 - shared-domain conformity
 
 ### UI / control room
+- API contract coverage for status/domain/fields/scalars/display/commands
+- binary codec tests and malformed-payload rejection
+- cache invalidation by revision and generation
+- capability/adapters coverage across FDM and FEM
 - stage status updates
 - quantity switching
 - viewport revision handling
@@ -758,8 +822,12 @@ The following stale concepts should be actively retired when encountered:
 |---|---|
 | anonymous final mesh blob | explicit universe/object/shared-domain mesh semantics |
 | preview mutation as quantity switch | field-store data plane |
+| monolithic bootstrap / poll session blob | thin status + on-demand resource families |
 | hidden solver fallback | explicit requested vs resolved execution |
 | UI-only mesh semantics | canonical script + IR + runtime contract |
+| direct `fetch()` in React components | typed shared API client + resource hooks |
+| FDM/FEM UI forks | capability guards + domain adapters + one UI tree |
+| long-lived old/new API dual stack | one canonical resource-first stack after migration |
 | dense eigensolver as default future path | matrix-free Krylov operator architecture |
 | “relax = run with another stop” | explicit relax semantics and stop reason |
 | monolithic viewport file | split model/hooks/overlays/scene |

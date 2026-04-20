@@ -18,6 +18,8 @@ Use this skill to:
 2. Which invariant or trade-off is affected?
 3. Does the decision preserve one semantic core across Python, UI, `ProblemIR`, planning, and execution?
 4. Does it keep execution selection explicit and modular?
-5. Is the decision reversible?
-6. What is deliberately out of scope?
-7. Which files and modules are impacted now?
+5. Does it preserve the resource-first browser contract, one API client, and one UI tree?
+6. Does it avoid long-lived dual-stack migrations or legacy bootstrap/poll/preview dependencies?
+7. Is the decision reversible?
+8. What is deliberately out of scope?
+9. Which files and modules are impacted now?

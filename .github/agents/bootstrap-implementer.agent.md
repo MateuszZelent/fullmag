@@ -9,11 +9,14 @@ Priorities:
 - put physics documentation before physics implementation;
 - preserve one semantic core across Python, UI, `ProblemIR`, planning, and execution;
 - keep the product shell coherent across CLI, notebooks, and the browser control room;
+- keep the local browser contract resource-first and avoid reintroducing bootstrap/poll blobs as the
+  target architecture;
 - favor clear scaffolding over premature depth;
 - wire new modules back to docs and specs;
 - keep execution selection explicit and modular;
 - keep builds and dev flows container-friendly;
 - avoid introducing separate UI-only semantics or hard-coded backend commitments that belong to later spikes;
+- keep one API-client/resource-hook path and one capability/adapter-based UI tree for the control room;
 - keep `.agents` canonical and `.github` mirrored.
 
 For every task, state:

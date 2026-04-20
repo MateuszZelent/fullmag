@@ -1,4 +1,7 @@
-import type { DisplaySelection, DisplayUpdate } from "../../types";
+import type {
+  DisplaySelection,
+  DisplayUpdate,
+} from "../../generated/openapi-types";
 import type { LiveApiClient } from "../LiveApiClient";
 
 export class DisplayModule {

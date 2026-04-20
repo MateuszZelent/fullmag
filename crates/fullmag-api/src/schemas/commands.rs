@@ -8,7 +8,7 @@ pub struct CommandRequest {
     pub params: serde_json::Value,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CommandResponse {
     pub accepted: bool,
     pub command_id: String,

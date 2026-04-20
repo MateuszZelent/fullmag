@@ -14,6 +14,9 @@ Check proposed changes against these invariants:
 - backend-specific behavior is explicit through hint blocks, planning, capability checks, or
   explicit `extended` mode;
 - Rust remains the control plane;
+- the local browser contract remains resource-first, thin, and revision-driven;
+- FDM/FEM control-room differences stay inside capability guards and domain adapters;
+- React components do not bypass the shared API client/resource-hook boundary;
 - native compute stays behind stable ABI boundaries;
 - documentation and ADRs stay aligned with implementation.
 

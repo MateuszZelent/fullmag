@@ -1,7 +1,7 @@
 # Fullmag Application Architecture v2
 
 - Status: canonical target architecture
-- Last updated: 2026-03-23
+- Last updated: 2026-04-20
 
 ## 1. Why this document exists
 
@@ -644,7 +644,37 @@ This one abstraction unifies local CLI, Jupyter monitoring, and future remote ex
 
 The browser must consume a stable API instead of reading files ad hoc.
 
-## 14.1 Session endpoints
+The current canonical local-live browser contract is the resource-first API documented in:
+
+- `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/adr/0011-resource-first-api.md`
+
+Longer-term session-oriented routes remain valid product architecture for multi-session and managed
+runtime scenarios, but they do not replace the current singleton local control-room contract.
+
+## 14.1 Local current-live resource endpoints
+
+```text
+GET    /v1/live/current/status
+GET    /v1/live/current/domain/meta
+GET    /v1/live/current/domain/topology
+GET    /v1/live/current/domain/coordinates
+GET    /v1/live/current/fields/catalog
+GET    /v1/live/current/fields/:quantity_id/meta
+GET    /v1/live/current/fields/:quantity_id/vector
+GET    /v1/live/current/scalars
+PUT    /v1/live/current/display
+POST   /v1/live/current/commands
+```
+
+Rules:
+
+- `status` is thin and revision-driven,
+- heavy field and topology data is fetched on demand,
+- FDM and FEM share one domain/resource model,
+- binary transport is preferred for heavy numerical payloads.
+
+## 14.2 Session/run-oriented routes
 
 ```text
 GET    /v1/sessions
@@ -652,11 +682,6 @@ POST   /v1/sessions
 GET    /v1/sessions/:id
 GET    /v1/sessions/:id/events
 POST   /v1/sessions/:id/cancel
-```
-
-## 14.2 Run endpoints
-
-```text
 GET    /v1/runs/:id/summary
 GET    /v1/runs/:id/metadata
 GET    /v1/runs/:id/scalars
@@ -666,26 +691,39 @@ GET    /v1/runs/:id/artifacts
 GET    /v1/runs/:id/artifacts/:path
 ```
 
-## 14.3 Compile / validate / plan endpoints
+These remain important for the broader runtime model, remote execution, and historical run access.
+
+## 14.3 Additional local resource families
 
 ```text
+GET    /v1/live/current/artifacts
+GET    /v1/live/current/artifacts/:id
+GET    /v1/live/current/eigen/*
+GET    /v1/live/current/logs/*
+POST   /v1/live/current/scene
+POST   /v1/live/current/script/sync
+POST   /v1/live/current/session/*
+```
+
+## 14.4 Docs and contract endpoints
+
+```text
+GET    /v1/capabilities
+GET    /v1/openapi.json
+GET    /v1/docs/swagger
 POST   /v1/compile/script
 POST   /v1/validate/script
 POST   /v1/plan/script
-```
-
-## 14.4 Docs endpoints
-
-```text
 GET    /v1/docs/physics
 GET    /v1/docs/physics/:slug
 ```
 
 ---
 
-## 15. Event stream contract
+## 15. Event and polling contract
 
-The browser should subscribe to one event stream per session.
+The browser may use polling, SSE, or WebSocket transport depending on deployment, but the
+resource-first contract remains canonical.
 
 Event kinds:
 
@@ -698,14 +736,15 @@ Event kinds:
 - `run_completed`
 - `run_failed`
 
-Heavy field payloads are **not** pushed through the event stream.
-Only metadata and availability notices are streamed.
-Field data is fetched on demand.
+Heavy field payloads are **not** the source of truth of the stream.
+Only metadata, revision changes, and availability notices are streamed.
+Field data is fetched on demand through resource endpoints.
 
-For the current singleton local-live control room, the implementation may expose a separate
-projection stream such as `/ws/live/current` with a canonical `session_state` envelope and binary
-preview payloads for the active live display. That projection is a local UX transport, not a
-replacement for the longer-term session/run resource model.
+For the current singleton local-live control room:
+
+- `GET /v1/live/current/status` is the required thin status/polling resource,
+- optional event streams may accelerate update detection,
+- legacy `bootstrap` / `poll` / multi-endpoint `preview/*` flows are not canonical architecture.
 
 ---
 
@@ -744,6 +783,22 @@ The first real run page must show:
 
 The browser editor is useful, but it is not the primary workflow.
 User flow begins in terminal or notebook.
+
+## 16.4 Frontend architecture rules
+
+The control room must use:
+
+- one typed API client,
+- one resource-hook layer,
+- one capability vocabulary,
+- one domain-adapter layer,
+- one unified viewport tree.
+
+The control room must not:
+
+- call `fetch()` directly inside React components,
+- duplicate the product tree into separate FDM and FEM viewport applications,
+- reintroduce monolithic bootstrap normalization as the main state model.
 
 ---
 
