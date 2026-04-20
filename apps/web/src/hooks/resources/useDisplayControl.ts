@@ -1,0 +1,48 @@
+"use client";
+
+/**
+ * Hook: provides updateDisplay() for PUT /display.
+ */
+
+import { useState, useCallback } from "react";
+import type { DisplaySelection, DisplayUpdate } from "../../api/types";
+import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { LiveApiError } from "../../api/client/errors/LiveApiError";
+
+interface UseDisplayControlResult {
+  selection: DisplaySelection | null;
+  loading: boolean;
+  error: LiveApiError | null;
+  updateDisplay: (update: DisplayUpdate) => Promise<DisplaySelection | null>;
+}
+
+export function useDisplayControl(): UseDisplayControlResult {
+  const [selection, setSelection] = useState<DisplaySelection | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<LiveApiError | null>(null);
+
+  const updateDisplay = useCallback(
+    async (update: DisplayUpdate): Promise<DisplaySelection | null> => {
+      setLoading(true);
+      setError(null);
+      try {
+        const client = getLiveApiClient();
+        const result = await client.display.update(update);
+        setSelection(result);
+        setLoading(false);
+        return result;
+      } catch (err) {
+        const apiErr =
+          err instanceof LiveApiError
+            ? err
+            : LiveApiError.networkError("display", err);
+        setError(apiErr);
+        setLoading(false);
+        return null;
+      }
+    },
+    [],
+  );
+
+  return { selection, loading, error, updateDisplay };
+}
