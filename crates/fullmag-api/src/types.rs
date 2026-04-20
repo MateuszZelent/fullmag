@@ -500,6 +500,7 @@ pub(crate) struct SessionStateEventView<'a> {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 pub(crate) struct SessionStateResponseView<'a> {
     pub session: &'a SessionManifest,
     pub run: Option<&'a RunManifest>,
@@ -531,6 +532,10 @@ pub(crate) struct CurrentLivePollQuery {
     pub since_version: Option<u64>,
     #[serde(default)]
     pub scalar_rows_total: Option<usize>,
+    #[serde(default)]
+    pub field_transport: Option<String>,
+    #[serde(default)]
+    pub mesh_transport: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -595,6 +600,33 @@ impl LatestFields {
             }
         }
         h.finish()
+    }
+
+    pub(crate) fn metadata_only_json(&self) -> Value {
+        let mut out = serde_json::Map::new();
+        for (quantity, value) in &self.0 {
+            let mut field = serde_json::Map::new();
+            if let Some(object) = value.as_object() {
+                for key in [
+                    "unit",
+                    "n_comp",
+                    "grid",
+                    "layout",
+                    "location",
+                    "domain",
+                    "field_revision",
+                    "source_step",
+                    "source_time",
+                ] {
+                    if let Some(entry) = object.get(key) {
+                        field.insert(key.to_string(), entry.clone());
+                    }
+                }
+            }
+            field.insert("transport".to_string(), Value::String("binary".to_string()));
+            out.insert(quantity.clone(), Value::Object(field));
+        }
+        Value::Object(out)
     }
 }
 

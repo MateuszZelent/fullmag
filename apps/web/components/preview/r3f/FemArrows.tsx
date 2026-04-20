@@ -82,7 +82,7 @@ function useArrowTemplate(maxDim: number) {
 
 /* ── Sample candidate nodes adaptively ─────────────────────────────── */
 function sampleCandidateNodes(
-  nodes: number[], 
+  nodes: ArrayLike<number>,
   candidateNodes: readonly number[],
   targetDensity: number,
 ): number[] {

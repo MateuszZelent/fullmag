@@ -2,6 +2,7 @@ export const LIVE_POLL_INTERVAL_STORAGE_KEY = "fullmag.live.poll_interval_ms";
 export const LIVE_POLL_INTERVAL_DEFAULT_MS = 1000;
 export const LIVE_POLL_INTERVAL_MIN_MS = 250;
 export const LIVE_POLL_INTERVAL_MAX_MS = 5000;
+export const LIVE_POLL_INTERVAL_HIDDEN_MULTIPLIER = 4;
 
 export function clampLivePollIntervalMs(value: number): number {
   if (!Number.isFinite(value)) return LIVE_POLL_INTERVAL_DEFAULT_MS;
@@ -16,6 +17,14 @@ export function getLivePollIntervalMs(): number {
   const raw = window.localStorage.getItem(LIVE_POLL_INTERVAL_STORAGE_KEY);
   if (!raw) return LIVE_POLL_INTERVAL_DEFAULT_MS;
   return clampLivePollIntervalMs(Number(raw));
+}
+
+export function getEffectiveLivePollIntervalMs(options?: { hidden?: boolean }): number {
+  const base = getLivePollIntervalMs();
+  if (!options?.hidden) {
+    return base;
+  }
+  return clampLivePollIntervalMs(base * LIVE_POLL_INTERVAL_HIDDEN_MULTIPLIER);
 }
 
 export function setLivePollIntervalMs(value: number): number {

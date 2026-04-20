@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import {
   Box,
+  Bug,
   Grid3X3,
   Grid2X2,
   Grip,
@@ -34,6 +34,11 @@ import {
   GLYPH_BUDGET_MIN,
   GLYPH_BUDGET_STEP,
 } from "./vectorDensityBudget";
+import {
+  FemLiveRenderDebugPanel,
+  type FemLiveRenderDebugData,
+} from "./FemLiveRenderDebugPanel";
+import { FemRotationDebugPanel } from "./FemRotationDebugPanel";
 
 export interface FemViewportToolbarProps {
   renderMode: RenderMode;
@@ -123,6 +128,7 @@ export interface FemViewportToolbarProps {
     hsl: OrientationDebugSnapshot | null;
   };
   onApplyRotationEuler?: (nextEulerDeg: [number, number, number]) => void;
+  liveRenderDebugData?: FemLiveRenderDebugData | null;
 }
 
 const RENDER_OPTIONS: { value: RenderMode; icon: React.ReactNode; label: string; title: string }[] = [
@@ -161,36 +167,6 @@ const QUALITY_PROFILES: { value: ViewportQualityProfileId; label: string }[] = [
 
 const POPOVER_OPTION_CLASSNAME =
   "border border-transparent bg-transparent text-muted-foreground hover:text-foreground hover:bg-muted/40 text-[0.65rem] font-semibold uppercase rounded px-2 py-1 transition-colors data-[active=true]:border-primary/45 data-[active=true]:bg-primary/18 data-[active=true]:text-primary";
-
-function formatVector(values: readonly number[], digits = 3): string {
-  return values.map((value) => value.toFixed(digits)).join(", ");
-}
-
-function RotationSnapshotCard({
-  label,
-  snapshot,
-}: {
-  label: string;
-  snapshot: OrientationDebugSnapshot | null | undefined;
-}) {
-  return (
-    <div className="rounded-md border border-border/35 bg-background/35 px-2 py-2">
-      <div className="text-[0.58rem] font-bold uppercase tracking-[0.16em] text-foreground/90">
-        {label}
-      </div>
-      {snapshot ? (
-        <div className="mt-1 space-y-1 text-[0.6rem] leading-4 text-muted-foreground">
-          <div><span className="text-foreground/80">Euler</span>: {formatVector(snapshot.eulerDeg, 1)}</div>
-          <div><span className="text-foreground/80">Quat</span>: {formatVector(snapshot.quaternion, 4)}</div>
-          <div><span className="text-foreground/80">Up</span>: {formatVector(snapshot.up, 3)}</div>
-          <div><span className="text-foreground/80">Sig</span>: <span className="break-all">{snapshot.signature}</span></div>
-        </div>
-      ) : (
-        <div className="mt-1 text-[0.6rem] text-muted-foreground">Brak danych.</div>
-      )}
-    </div>
-  );
-}
 
 export function FemViewportToolbar({
   renderMode,
@@ -269,6 +245,7 @@ export function FemViewportToolbar({
   interactionSimplified = false,
   rotationSnapshots,
   onApplyRotationEuler,
+  liveRenderDebugData = null,
 }: FemViewportToolbarProps) {
   const effectiveDensity = effectiveArrowDensity ?? arrowDensity;
   const availableQuantities = quantityOptions.filter((o) => o.available);
@@ -294,14 +271,6 @@ export function FemViewportToolbar({
   const activeArrowColorOpt =
     dynamicArrowColorOptions.find((o) => o.value === arrowColorMode)
     ?? dynamicArrowColorOptions[0];
-  const [rotationDraft, setRotationDraft] = useState<[string, string, string]>(["0.0", "0.0", "0.0"]);
-  const primeRotationDraft = () => {
-    const source = rotationSnapshots?.viewport ?? rotationSnapshots?.viewCube ?? rotationSnapshots?.hsl ?? null;
-    if (!source) {
-      return;
-    }
-    setRotationDraft(source.eulerDeg.map((value) => value.toFixed(1)) as [string, string, string]);
-  };
 
   return (
     <ViewportToolbar3D
@@ -839,7 +808,6 @@ export function FemViewportToolbar({
                 onOpenPopoverChange(null);
                 return;
               }
-              primeRotationDraft();
               onOpenPopoverChange("rotation");
             }}
             title="Rotation Debug"
@@ -850,62 +818,39 @@ export function FemViewportToolbar({
               title="Rotation Debug"
               className="w-[min(42rem,calc(100vw-1rem))] max-w-[min(42rem,calc(100vw-1rem))]"
             >
-              <div className="space-y-3 text-[0.66rem] text-muted-foreground">
-                <div className="grid grid-cols-3 gap-2">
-                  <RotationSnapshotCard label="Viewport" snapshot={rotationSnapshots?.viewport} />
-                  <RotationSnapshotCard label="ViewCube" snapshot={rotationSnapshots?.viewCube} />
-                  <RotationSnapshotCard label="HSL" snapshot={rotationSnapshots?.hsl} />
-                </div>
-                <div className="rounded-md border border-border/35 bg-background/40 px-3 py-3">
-                  <div className="mb-2 text-[0.58rem] font-bold uppercase tracking-[0.16em] text-foreground/90">
-                    Set Common Rotation
-                  </div>
-                  <div className="grid grid-cols-[auto_1fr_auto_1fr_auto_1fr_auto] items-center gap-2">
-                    <span className="text-muted-foreground">X</span>
-                    <input
-                      value={rotationDraft[0]}
-                      onChange={(event) => setRotationDraft(([, y, z]) => [event.target.value, y, z])}
-                      className="h-8 rounded border border-border/40 bg-background/70 px-2 font-mono text-[0.72rem] text-foreground outline-none focus:border-primary/50"
-                    />
-                    <span className="text-muted-foreground">Y</span>
-                    <input
-                      value={rotationDraft[1]}
-                      onChange={(event) => setRotationDraft(([x, , z]) => [x, event.target.value, z])}
-                      className="h-8 rounded border border-border/40 bg-background/70 px-2 font-mono text-[0.72rem] text-foreground outline-none focus:border-primary/50"
-                    />
-                    <span className="text-muted-foreground">Z</span>
-                    <input
-                      value={rotationDraft[2]}
-                      onChange={(event) => setRotationDraft(([x, y]) => [x, y, event.target.value])}
-                      className="h-8 rounded border border-border/40 bg-background/70 px-2 font-mono text-[0.72rem] text-foreground outline-none focus:border-primary/50"
-                    />
-                    <button
-                      className={POPOVER_OPTION_CLASSNAME}
-                      onClick={() => {
-                        const nextEuler = rotationDraft.map((value) => Number.parseFloat(value)) as [number, number, number];
-                        if (nextEuler.every((value) => Number.isFinite(value))) {
-                          onApplyRotationEuler?.(nextEuler);
-                        }
-                      }}
-                    >
-                      Apply
-                    </button>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-md border border-border/30 bg-background/40 px-3 py-2">
-                  <span className="text-muted-foreground">Projection</span>
-                  <span className="font-mono text-right">{projection}</span>
-                  <span className="text-muted-foreground">Navigation</span>
-                  <span className="font-mono text-right">{navigation}</span>
-                  <span className="text-muted-foreground">Render</span>
-                  <span className="font-mono text-right">{renderMode}</span>
-                  <span className="text-muted-foreground">Quantity</span>
-                  <span className="font-mono text-right">{activeQuantity?.shortLabel ?? "n/a"}</span>
-                </div>
-              </div>
+              <FemRotationDebugPanel
+                rotationSnapshots={rotationSnapshots}
+                projection={projection}
+                navigation={navigation}
+                renderMode={renderMode}
+                quantityLabel={activeQuantity?.shortLabel ?? "n/a"}
+                onApplyRotationEuler={onApplyRotationEuler}
+                actionClassName={POPOVER_OPTION_CLASSNAME}
+              />
             </ViewportPopoverPanel>
           )}
         </ViewportPopoverTrigger>
+
+        {liveRenderDebugData ? (
+          <ViewportPopoverTrigger preferredHorizontal="right" preferredVertical="bottom">
+            <ViewportIconAction
+              icon={<Bug size={14} />}
+              label="D"
+              active={openPopover === "debug"}
+              onClick={() => onOpenPopoverChange(openPopover === "debug" ? null : "debug")}
+              title="Live Render Debug"
+            />
+            {openPopover === "debug" && (
+              <ViewportPopoverPanel
+                anchorRef={{ current: null }}
+                title="Live Render Debug"
+                className="w-[min(42rem,calc(100vw-1rem))] max-w-[min(42rem,calc(100vw-1rem))]"
+              >
+                <FemLiveRenderDebugPanel debugData={liveRenderDebugData} />
+              </ViewportPopoverPanel>
+            )}
+          </ViewportPopoverTrigger>
+        ) : null}
 
         <ViewportPopoverTrigger preferredHorizontal="right" preferredVertical="bottom">
           <ViewportIconAction

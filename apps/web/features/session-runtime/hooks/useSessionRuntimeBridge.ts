@@ -48,15 +48,27 @@ export function useSessionRuntimeBridge(
 
   // Sync normalized state
   useEffect(() => {
+    const nextStateVersion =
+      typeof state?.state_version === "number" ? state.state_version : null;
+    if (
+      nextStateVersion != null &&
+      prevAppliedVersionRef.current === nextStateVersion
+    ) {
+      return;
+    }
     const normalized = deriveSessionReadModel(state);
+    if (
+      normalized.stateVersion != null &&
+      prevAppliedVersionRef.current === normalized.stateVersion
+    ) {
+      return;
+    }
     applyNormalizedState(normalized);
     if (!ENABLE_LIVE_DEBUG_LOGS) {
+      prevAppliedVersionRef.current = normalized.stateVersion;
       return;
     }
     if (normalized.stateVersion == null) {
-      return;
-    }
-    if (prevAppliedVersionRef.current === normalized.stateVersion) {
       return;
     }
     prevAppliedVersionRef.current = normalized.stateVersion;
@@ -70,5 +82,5 @@ export function useSessionRuntimeBridge(
       scalarRows: normalized.scalarRows.length,
       hasPreview: normalized.preview != null,
     });
-  }, [state, connection, applyNormalizedState]);
+  }, [state, applyNormalizedState]);
 }

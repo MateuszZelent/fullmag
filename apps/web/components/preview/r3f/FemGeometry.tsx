@@ -94,6 +94,20 @@ function collectElementNodeIndices(
   return Array.from(unique);
 }
 
+function isValidNodeIndex(nodeIndex: number, nNodes: number): boolean {
+  return Number.isInteger(nodeIndex) && nodeIndex >= 0 && nodeIndex < nNodes;
+}
+
+function hasFinitePositionTriples(values: Float32Array | ArrayLike<number>): boolean {
+  for (let i = 0; i < values.length; i += 1) {
+    const value = values[i];
+    if (!Number.isFinite(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /* ── Helper: compute vertex colors from field data ─────────────────── */
 export const FemGeometry = memo(function FemGeometry({
   meshData,
@@ -198,7 +212,22 @@ export const FemGeometry = memo(function FemGeometry({
       ? flattenBoundaryFaces(customBoundaryFaces)
       : meshBoundaryFaces;
     const positions = new Float32Array(nNodes * 3);
-    for (let i = 0; i < nNodes * 3; i++) positions[i] = nodes[i];
+    for (let i = 0; i < nNodes * 3; i++) positions[i] = Number(nodes[i] ?? 0);
+    if (!hasFinitePositionTriples(positions)) {
+      return {
+        geometry: new THREE.BufferGeometry(),
+        center: new THREE.Vector3(),
+        maxDim: 0,
+        geoSize: new THREE.Vector3(),
+        vertexMap: null,
+        displayedToOriginalFace: null,
+        _positions: new Float32Array(0),
+        _activeElementOffsets: [] as number[],
+        _doShrink: false,
+        _preferredFaceIndices: null as number[] | null,
+        _resolvedBoundaryFaces: new Uint32Array(0),
+      };
+    }
 
     // D-03 fix: Distinguish null (full mesh), [] (empty — render nothing), and [a,b,c] (subset).
     // Previously [] was collapsed to null which caused full-mesh fallback for empty subsets.
@@ -251,15 +280,21 @@ export const FemGeometry = memo(function FemGeometry({
           return unique.size > 0 ? Array.from(unique) : null;
         })()
       : null;
+    let foundBBoxNode = false;
     if (bboxNodeIndices) {
       for (const nodeIndex of bboxNodeIndices) {
+        if (!isValidNodeIndex(nodeIndex, nNodes)) {
+          continue;
+        }
         const offset = nodeIndex * 3;
         const x = positions[offset], y = positions[offset + 1], z = positions[offset + 2];
         if (x < minX) minX = x; if (x > maxX) maxX = x;
         if (y < minY) minY = y; if (y > maxY) maxY = y;
         if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        foundBBoxNode = true;
       }
-    } else {
+    }
+    if (!foundBBoxNode) {
       for (let nodeIndex = 0; nodeIndex < nNodes; nodeIndex += 1) {
         const offset = nodeIndex * 3;
         const x = positions[offset], y = positions[offset + 1], z = positions[offset + 2];
@@ -277,6 +312,21 @@ export const FemGeometry = memo(function FemGeometry({
     const subX = centerX ?? cX;
     const subY = centerY ?? cY;
     const subZ = centerZ ?? cZ;
+    if (![subX, subY, subZ].every(Number.isFinite)) {
+      return {
+        geometry: new THREE.BufferGeometry(),
+        center: new THREE.Vector3(),
+        maxDim: 0,
+        geoSize: new THREE.Vector3(),
+        vertexMap: null,
+        displayedToOriginalFace: null,
+        _positions: new Float32Array(0),
+        _activeElementOffsets: [] as number[],
+        _doShrink: false,
+        _preferredFaceIndices: null as number[] | null,
+        _resolvedBoundaryFaces: new Uint32Array(0),
+      };
+    }
     for (let i = 0; i < nNodes * 3; i += 3) {
       positions[i] -= subX; positions[i + 1] -= subY; positions[i + 2] -= subZ;
     }
@@ -771,6 +821,16 @@ export const FemGeometry = memo(function FemGeometry({
   const showWire = renderMode === "surface+edges";
   const showVolumeWire = renderMode === "wireframe";
   const showPoints = renderMode === "points" && showPointsPass;
+  const showSurfaceEdgeFallback =
+    showWire &&
+    edgesGeometry != null &&
+    !showSurfaceHiddenEdgesPass &&
+    !showSurfaceVisibleEdgesPass;
+  const showVolumeEdgeFallback =
+    showVolumeWire &&
+    (tetraEdgesGeometry ?? edgesGeometry) != null &&
+    !showVolumeHiddenEdgesPass &&
+    !showVolumeVisibleEdgesPass;
   const showSelectionWireOverlay = highlight && showSurface && edgesGeometry != null;
 
   const isTransparent = opacity < 100;
@@ -885,6 +945,17 @@ export const FemGeometry = memo(function FemGeometry({
       
       {showWire && edgesGeometry && (
         <>
+          {showSurfaceEdgeFallback ? (
+            <lineSegments geometry={edgesGeometry} renderOrder={edgePolicy.renderOrder}>
+              <lineBasicMaterial
+                color={resolvedEdgeColor}
+                opacity={(highlight ? 0.95 : 0.58) * opacityVal}
+                transparent={edgePolicy.transparent}
+                depthWrite={edgePolicy.depthWrite}
+                depthTest={edgePolicy.depthTest}
+              />
+            </lineSegments>
+          ) : null}
           {showSurfaceHiddenEdgesPass ? (
             <lineSegments geometry={edgesGeometry} renderOrder={hiddenEdgePolicy.renderOrder}>
               <lineBasicMaterial
@@ -924,6 +995,20 @@ export const FemGeometry = memo(function FemGeometry({
 
       {showVolumeWire && (tetraEdgesGeometry ?? edgesGeometry) != null && (
         <>
+          {showVolumeEdgeFallback ? (
+            <lineSegments
+              geometry={(tetraEdgesGeometry ?? edgesGeometry)!}
+              renderOrder={edgePolicy.renderOrder}
+            >
+              <lineBasicMaterial
+                color={resolvedEdgeColor}
+                opacity={(highlight ? 0.72 : 0.32) * opacityVal}
+                transparent={edgePolicy.transparent}
+                depthWrite={edgePolicy.depthWrite}
+                depthTest={edgePolicy.depthTest}
+              />
+            </lineSegments>
+          ) : null}
           {showVolumeHiddenEdgesPass ? (
             <lineSegments
               geometry={(tetraEdgesGeometry ?? edgesGeometry)!}

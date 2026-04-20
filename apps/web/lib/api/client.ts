@@ -89,6 +89,40 @@ export async function apiGet<T>(url: string, options?: number | ApiRequestOption
 }
 
 /**
+ * Perform a GET request and return the raw ArrayBuffer response body.
+ *
+ * @throws {ApiError}    on non-2xx HTTP status
+ * @throws {NetworkError} on network / timeout / body read failure
+ */
+export async function apiGetArrayBuffer(
+  url: string,
+  options?: number | ApiRequestOptions,
+): Promise<ArrayBuffer> {
+  const resolved = normalizeOptions(options);
+  const response = await fetchWithTimeout(url, {
+    cache: 'no-store',
+    timeoutMs: resolved.timeoutMs,
+    signal: resolved.signal,
+  });
+
+  if (!response.ok) {
+    let payload: unknown = null;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new ApiError(response.status, `HTTP ${response.status}`);
+    }
+    throw new ApiError(response.status, extractErrorMessage(payload, response.status));
+  }
+
+  try {
+    return await response.arrayBuffer();
+  } catch (error) {
+    throw new NetworkError(`Failed to read binary response from ${url}`, error);
+  }
+}
+
+/**
  * Perform a GET request that may validly return 204 No Content.
  *
  * Returns `null` for 204 responses.

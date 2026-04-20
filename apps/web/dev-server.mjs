@@ -247,7 +247,10 @@ async function main() {
       return;
     }
 
-    handle(req, res);
+    handle(req, res).catch((err) => {
+      console.error("[dev-server] Next.js handler error:", err);
+      writeHttpError(res, err);
+    });
   });
 
   server.on("upgrade", (req, socket, head) => {

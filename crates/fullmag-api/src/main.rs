@@ -13,7 +13,7 @@ use base64::Engine;
 use fullmag_authoring::{MagnetizationAsset, SceneDocument, ScriptBuilderInitialState};
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
 use fullmag_plan::{generate_random_unit_vectors, sample_preset_texture, TextureSamplePoint};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::convert::Infallible;
@@ -29,7 +29,7 @@ use tracing::info;
 
 use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
 use fullmag_runner::{
-    CommandAckEvent, DisplaySelection, LivePreviewField, MeshCommandTargetEvent,
+    CommandAckEvent, DisplaySelection, FemMeshPayload, LivePreviewField, MeshCommandTargetEvent,
     RuntimeEventEnvelope, StepUpdate,
 };
 
@@ -44,6 +44,190 @@ mod script;
 mod session;
 mod session_persistence;
 mod types;
+
+#[derive(Debug, Deserialize, Default)]
+struct CurrentLiveSnapshotQuery {
+    #[serde(default)]
+    field_transport: Option<String>,
+    #[serde(default)]
+    mesh_transport: Option<String>,
+}
+
+fn binary_field_transport_requested(mode: Option<&str>) -> bool {
+    matches!(mode, Some("bin"))
+}
+
+fn binary_mesh_transport_requested(mode: Option<&str>) -> bool {
+    matches!(mode, Some("bin"))
+}
+
+fn latest_fields_wire_value(
+    snapshot: &SessionStateResponse,
+    binary_field_transport: bool,
+) -> Result<Value, ApiError> {
+    if binary_field_transport {
+        let mut metadata = snapshot.latest_fields.metadata_only_json();
+        if metadata
+            .as_object()
+            .is_some_and(|fields| !fields.contains_key("m"))
+        {
+            if let Some(magnetization_field) = live_magnetization_field_metadata(snapshot) {
+                if let Some(fields) = metadata.as_object_mut() {
+                    fields.insert("m".to_string(), magnetization_field);
+                }
+            }
+        }
+        return Ok(metadata);
+    }
+    serde_json::to_value(&snapshot.latest_fields)
+        .map_err(|error| ApiError::internal(format!("failed to serialize latest_fields: {}", error)))
+}
+
+fn live_magnetization_field_metadata(snapshot: &SessionStateResponse) -> Option<Value> {
+    let live_state = snapshot.live_state.as_ref()?;
+    let magnetization = live_state.latest_step.magnetization.as_ref()?;
+    if magnetization.is_empty() || magnetization.len() % 3 != 0 {
+        return None;
+    }
+    let node_count = (magnetization.len() / 3) as u32;
+    let grid = if live_state.latest_step.grid.iter().any(|value| *value > 0) {
+        live_state.latest_step.grid
+    } else {
+        [node_count, 1, 1]
+    };
+    Some(json!({
+        "unit": fullmag_quantities::quantity_unit("m"),
+        "n_comp": fullmag_quantities::quantity_spec("m")
+            .map(|spec| spec.n_comp)
+            .unwrap_or(3),
+        "grid": grid,
+        "domain": "magnetic_only",
+        "field_revision": live_state.latest_step.step,
+        "source_step": live_state.latest_step.step,
+        "source_time": live_state.latest_step.time,
+        "transport": "binary",
+    }))
+}
+
+fn fem_mesh_wire_value(
+    fem_mesh: Option<&FemMeshPayload>,
+    binary_mesh_transport: bool,
+) -> Result<Option<Value>, ApiError> {
+    let Some(fem_mesh) = fem_mesh else {
+        return Ok(None);
+    };
+    if !binary_mesh_transport {
+        return serde_json::to_value(fem_mesh)
+            .map(Some)
+            .map_err(|error| ApiError::internal(format!("failed to serialize fem_mesh: {}", error)));
+    }
+    Ok(Some(json!({
+        "mesh_name": fem_mesh.mesh_name,
+        "mesh_id": fem_mesh.mesh_id,
+        "generation_id": fem_mesh.generation_id,
+        "mesh_parts": fem_mesh.mesh_parts,
+        "object_segments": fem_mesh.object_segments,
+        "domain_mesh_mode": fem_mesh.domain_mesh_mode,
+        "domain_frame": fem_mesh.domain_frame,
+        "per_domain_quality": fem_mesh.per_domain_quality,
+        "node_count": fem_mesh.nodes.len(),
+        "element_count": fem_mesh.elements.len(),
+        "boundary_face_count": fem_mesh.boundary_faces.len(),
+        "transport": "binary",
+    })))
+}
+
+fn preview_wire_value(
+    preview: Option<&PreviewState>,
+    binary_field_transport: bool,
+) -> Result<Option<Value>, ApiError> {
+    let Some(preview) = preview else {
+        return Ok(None);
+    };
+    let mut value = serde_json::to_value(preview)
+        .map_err(|error| ApiError::internal(format!("failed to serialize preview: {}", error)))?;
+    if binary_field_transport
+        && matches!(preview, PreviewState::Spatial(_))
+    {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("vector_field_values".to_string(), Value::Null);
+        }
+    }
+    Ok(Some(value))
+}
+
+fn live_state_wire_value(
+    live_state: Option<&LiveState>,
+    binary_field_transport: bool,
+    binary_mesh_transport: bool,
+) -> Result<Option<Value>, ApiError> {
+    let Some(live_state) = live_state else {
+        return Ok(None);
+    };
+    let mut value = serde_json::to_value(live_state)
+        .map_err(|error| ApiError::internal(format!("failed to serialize live_state: {}", error)))?;
+    if binary_field_transport {
+        if let Some(object) = value.as_object_mut() {
+            if let Some(latest_step) = object.get_mut("latest_step").and_then(Value::as_object_mut) {
+                latest_step.insert("magnetization".to_string(), Value::Null);
+                if binary_mesh_transport {
+                    latest_step.insert("fem_mesh".to_string(), Value::Null);
+                }
+            }
+        }
+    }
+    if binary_mesh_transport {
+        if let Some(object) = value.as_object_mut() {
+            if let Some(latest_step) = object.get_mut("latest_step").and_then(Value::as_object_mut) {
+                latest_step.insert("fem_mesh".to_string(), Value::Null);
+            }
+        }
+    }
+    Ok(Some(value))
+}
+
+fn step_update_v2_wire_value(
+    step_update_v2: Option<fullmag_quantities::StepUpdateV2>,
+    binary_field_transport: bool,
+) -> Result<Option<Value>, ApiError> {
+    let Some(step_update_v2) = step_update_v2 else {
+        return Ok(None);
+    };
+    let mut value = serde_json::to_value(step_update_v2)
+        .map_err(|error| ApiError::internal(format!("failed to serialize step_update_v2: {}", error)))?;
+    if binary_field_transport {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("frames".to_string(), Value::Array(Vec::new()));
+        }
+    }
+    Ok(Some(value))
+}
+
+#[derive(Debug, Serialize)]
+struct SessionStateResponseWire<'a> {
+    session: &'a SessionManifest,
+    run: Option<&'a RunManifest>,
+    live_state: Option<Value>,
+    runtime_status: &'a RuntimeStatusView,
+    metadata: Option<&'a Value>,
+    mesh_workspace: Option<&'a Value>,
+    stage_execution: Option<&'a StageExecutionState>,
+    scene_document: Option<&'a SceneDocument>,
+    scalar_rows: &'a [ScalarRow],
+    scalar_rows_total: usize,
+    engine_log: &'a [EngineLogEntry],
+    quantities: &'a [QuantityDescriptor],
+    fem_mesh: Option<Value>,
+    latest_fields: Value,
+    artifacts: &'a [ArtifactEntry],
+    display_selection: &'a CurrentDisplaySelection,
+    preview_config: &'a CurrentPreviewConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    step_update_v2: Option<Value>,
+    state_version: u64,
+}
 use artifacts::*;
 use assets::*;
 use error::ApiError;
@@ -191,6 +375,10 @@ async fn main() {
         .route(
             "/v1/live/current/fields/:quantity/meta",
             get(get_live_field_meta),
+        )
+        .route(
+            "/v1/live/current/fem-mesh/topology",
+            get(get_live_fem_mesh_topology),
         )
         .route(
             "/v1/live/current/commands",
@@ -436,12 +624,20 @@ fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
 
 async fn get_current_live_bootstrap(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<CurrentLiveSnapshotQuery>,
 ) -> Result<Response, ApiError> {
+    let binary_field_transport = binary_field_transport_requested(query.field_transport.as_deref());
+    let binary_mesh_transport = binary_mesh_transport_requested(query.mesh_transport.as_deref());
     // Try to serve from the live state directly (serialize on-demand).
     // The publish hot path no longer eagerly serializes the full snapshot,
     // so we serialize here when the HTTP endpoint is actually called.
     if let Some(live) = state.current_live_state.read().await.as_ref() {
-        let public_json = serialize_current_live_response(live, true)
+        let public_json = serialize_current_live_response(
+            live,
+            true,
+            binary_field_transport,
+            binary_mesh_transport,
+        )
             .map_err(|e| ApiError::internal(format!("failed to serialize live state: {}", e)))?;
         // Update the cached snapshot opportunistically for SSE consumers.
         *state.current_live_public_snapshot.write().await = Some(public_json.clone());
@@ -548,7 +744,7 @@ async fn auto_create_workspace(state: &AppState) -> Result<String, ApiError> {
 
     let next = default_current_live_state(&publish_req);
     let ws_messages = build_current_live_ws_messages(state, &next)?;
-    let public_json = serialize_current_live_response(&next, true)?;
+    let public_json = serialize_current_live_response(&next, true, false, false)?;
     *state.current_live_state.write().await = Some(next);
     *state.current_live_public_snapshot.write().await = Some(public_json.clone());
     send_current_live_ws_messages(state, ws_messages);
@@ -592,7 +788,7 @@ async fn create_current_live_workspace(
 ) -> Result<Response, ApiError> {
     // If a workspace already exists, serialize and return its bootstrap payload.
     if let Some(live) = state.current_live_state.read().await.as_ref() {
-        let public_json = serialize_current_live_response(live, true)
+        let public_json = serialize_current_live_response(live, true, false, false)
             .map_err(|e| ApiError::internal(format!("failed to serialize live state: {}", e)))?;
         let json = bootstrap_workspace_payload(&public_json)?;
         return Ok(([(CONTENT_TYPE, "application/json")], json).into_response());
@@ -603,8 +799,11 @@ async fn create_current_live_workspace(
     Ok(([(CONTENT_TYPE, "application/json")], payload).into_response())
 }
 
-async fn get_current_live_state(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
-    get_current_live_bootstrap(State(state)).await
+async fn get_current_live_state(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<CurrentLiveSnapshotQuery>,
+) -> Result<Response, ApiError> {
+    get_current_live_bootstrap(State(state), Query(query)).await
 }
 
 async fn get_current_live_poll(
@@ -657,7 +856,12 @@ async fn get_current_live_poll(
         format_debug_vector_average(preview_vector_avg),
         snapshot.latest_fields.len(),
     );
-    let json = serialize_current_live_poll_response(snapshot, scalar_rows_delta_start)?;
+    let json = serialize_current_live_poll_response(
+        snapshot,
+        scalar_rows_delta_start,
+        binary_field_transport_requested(query.field_transport.as_deref()),
+        binary_mesh_transport_requested(query.mesh_transport.as_deref()),
+    )?;
     Ok(([(CONTENT_TYPE, "application/json")], json).into_response())
 }
 
@@ -1724,7 +1928,7 @@ async fn import_asset_for_current_workspace(
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
         snapshot.artifacts = artifacts;
         let messages = build_current_live_ws_messages(&state, snapshot)?;
-        let public_json = serialize_current_live_response(snapshot, true)?;
+        let public_json = serialize_current_live_response(snapshot, true, false, false)?;
         (messages, public_json)
     };
     *state.current_live_public_snapshot.write().await = Some(public_json);
@@ -1954,7 +2158,7 @@ async fn export_magnetization_state_for_current_workspace(
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
         snapshot.artifacts = artifacts;
         let messages = build_current_live_ws_messages(&state, snapshot)?;
-        let public_json = serialize_current_live_response(snapshot, true)?;
+        let public_json = serialize_current_live_response(snapshot, true, false, false)?;
         (messages, public_json)
     };
     *state.current_live_public_snapshot.write().await = Some(public_json);
@@ -2086,7 +2290,7 @@ async fn import_magnetization_state_for_current_workspace(
             }
         }
         let messages = build_current_live_ws_messages(&state, snapshot)?;
-        let public_json = serialize_current_live_response(snapshot, true)?;
+        let public_json = serialize_current_live_response(snapshot, true, false, false)?;
         (messages, public_json)
     };
     *state.current_live_public_snapshot.write().await = Some(public_json);
@@ -2253,7 +2457,7 @@ async fn update_current_live_scene(
         // changes must advance it just like solver publishes do.
         snapshot.state_version = snapshot.state_version.wrapping_add(1);
         let session_state_messages = build_current_live_ws_messages(&state, snapshot)?;
-        let public_json = serialize_current_live_response(snapshot, true)?;
+        let public_json = serialize_current_live_response(snapshot, true, false, false)?;
         let preset_texture_change_logs =
             detect_preset_texture_changes(previous_scene.as_ref(), &scene_document);
         (
@@ -3000,7 +3204,7 @@ where
         snapshot.preview =
             build_preview_state(snapshot, &snapshot.display_selection, &preview_config)
                 .or(previous_preview);
-        let public_json = serialize_current_live_response(snapshot, true)?;
+        let public_json = serialize_current_live_response(snapshot, true, false, false)?;
         (
             snapshot.session.session_id.clone(),
             build_current_live_ws_messages(&state, snapshot)?,
@@ -3436,12 +3640,18 @@ fn serialize_current_live_session_event(
 pub(crate) fn serialize_current_live_response(
     snapshot: &SessionStateResponse,
     include_preview: bool,
+    binary_field_transport: bool,
+    binary_mesh_transport: bool,
 ) -> Result<String, ApiError> {
     let step_update_v2 = snapshot.build_step_update_v2();
-    serde_json::to_string(&SessionStateResponseView {
+    serde_json::to_string(&SessionStateResponseWire {
         session: &snapshot.session,
         run: snapshot.run.as_ref(),
-        live_state: snapshot.live_state.as_ref(),
+        live_state: live_state_wire_value(
+            snapshot.live_state.as_ref(),
+            binary_field_transport,
+            binary_mesh_transport,
+        )?,
         runtime_status: &snapshot.runtime_status,
         metadata: snapshot.metadata.as_ref(),
         mesh_workspace: snapshot.mesh_workspace.as_ref(),
@@ -3451,15 +3661,17 @@ pub(crate) fn serialize_current_live_response(
         scalar_rows_total: snapshot.scalar_rows.len(),
         engine_log: &snapshot.engine_log,
         quantities: &snapshot.quantities,
-        fem_mesh: snapshot.fem_mesh.as_ref(),
-        latest_fields: &snapshot.latest_fields,
+        fem_mesh: fem_mesh_wire_value(snapshot.fem_mesh.as_ref(), binary_mesh_transport)?,
+        latest_fields: latest_fields_wire_value(snapshot, binary_field_transport)?,
         artifacts: &snapshot.artifacts,
         display_selection: &snapshot.display_selection,
         preview_config: &snapshot.preview_config,
-        preview: include_preview
-            .then_some(snapshot.preview.as_ref())
-            .flatten(),
-        step_update_v2,
+        preview: if include_preview {
+            preview_wire_value(snapshot.preview.as_ref(), binary_field_transport)?
+        } else {
+            None
+        },
+        step_update_v2: step_update_v2_wire_value(step_update_v2, binary_field_transport)?,
         state_version: snapshot.state_version,
     })
     .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
@@ -3468,13 +3680,19 @@ pub(crate) fn serialize_current_live_response(
 fn serialize_current_live_poll_response(
     snapshot: &SessionStateResponse,
     scalar_rows_delta_start: usize,
+    binary_field_transport: bool,
+    binary_mesh_transport: bool,
 ) -> Result<String, ApiError> {
     let step_update_v2 = snapshot.build_step_update_v2();
     let delta_start = scalar_rows_delta_start.min(snapshot.scalar_rows.len());
-    serde_json::to_string(&SessionStateResponseView {
+    serde_json::to_string(&SessionStateResponseWire {
         session: &snapshot.session,
         run: snapshot.run.as_ref(),
-        live_state: snapshot.live_state.as_ref(),
+        live_state: live_state_wire_value(
+            snapshot.live_state.as_ref(),
+            binary_field_transport,
+            binary_mesh_transport,
+        )?,
         runtime_status: &snapshot.runtime_status,
         metadata: snapshot.metadata.as_ref(),
         mesh_workspace: snapshot.mesh_workspace.as_ref(),
@@ -3484,13 +3702,13 @@ fn serialize_current_live_poll_response(
         scalar_rows_total: snapshot.scalar_rows.len(),
         engine_log: &snapshot.engine_log,
         quantities: &snapshot.quantities,
-        fem_mesh: snapshot.fem_mesh.as_ref(),
-        latest_fields: &snapshot.latest_fields,
+        fem_mesh: fem_mesh_wire_value(snapshot.fem_mesh.as_ref(), binary_mesh_transport)?,
+        latest_fields: latest_fields_wire_value(snapshot, binary_field_transport)?,
         artifacts: &snapshot.artifacts,
         display_selection: &snapshot.display_selection,
         preview_config: &snapshot.preview_config,
-        preview: snapshot.preview.as_ref(),
-        step_update_v2,
+        preview: preview_wire_value(snapshot.preview.as_ref(), binary_field_transport)?,
+        step_update_v2: step_update_v2_wire_value(step_update_v2, binary_field_transport)?,
         state_version: snapshot.state_version,
     })
     .map_err(|error| ApiError::internal(format!("failed to serialize poll state: {}", error)))
@@ -3505,7 +3723,7 @@ async fn serialize_current_live_response_from_state(state: &AppState) -> Result<
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::internal("no live state to serialize".to_string()))?;
-    serialize_current_live_response(snapshot, true)
+    serialize_current_live_response(snapshot, true, false, false)
 }
 
 fn serialize_runtime_event(event: &RuntimeEventEnvelope) -> Result<String, ApiError> {

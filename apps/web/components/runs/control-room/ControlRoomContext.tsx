@@ -14,6 +14,11 @@ import {
   type GpuTelemetryResponse,
 } from "../../../lib/liveApiClient";
 import { useCurrentLiveStream } from "../../../lib/useSessionStream";
+import { decodePreviewBinaryFrame } from "../../../lib/session/binary-preview";
+import {
+  decodeFemMeshTopologyBinary,
+  hydrateFemMeshTopology,
+} from "../../../lib/session/binary-fem-mesh";
 import { useSessionRuntimeBridge } from "../../../features/session-runtime/hooks/useSessionRuntimeBridge";
 import { useWorkspaceStore } from "../../../lib/workspace/workspace-store";
 import { useBuilderAutoSync } from "./hooks/useBuilderAutoSync";
@@ -45,6 +50,7 @@ import { scalarRowsTipFingerprint } from "@/lib/plots/scalarRows";
 import type {
   DisplaySelection,
   EngineLogEntry,
+  FemLiveMesh,
   MeshWorkspaceState,
   ScriptBuilderStageState,
 } from "../../../lib/useSessionStream";
@@ -175,7 +181,9 @@ import type {
 const FIELD_FRAME_ID_CACHE = new WeakMap<object, number>();
 let NEXT_FIELD_FRAME_ID = 1;
 const ENABLE_VIEWPORT_DATA_DEBUG_LOGS =
-  typeof process !== "undefined" && process.env.NODE_ENV !== "production";
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  typeof process !== "undefined" &&
+  process.env.NODE_ENV !== "production";
 
 function fieldFrameIdentity(value: object | null | undefined): string {
   if (!value) {
@@ -196,9 +204,36 @@ function vectorHead(values: Float64Array | null | undefined): [number, number, n
   return [values[0] ?? 0, values[1] ?? 0, values[2] ?? 0];
 }
 
+type BinaryFieldFrame = {
+  key: string;
+  quantityId: string;
+  values: Float64Array;
+  nComp: number;
+  grid: [number, number, number];
+};
+
+function femMeshTransportKey(mesh: FemLiveMesh | null): string | null {
+  if (!mesh) {
+    return null;
+  }
+  if (mesh.generation_id && mesh.generation_id.length > 0) {
+    return `gen:${mesh.generation_id}`;
+  }
+  if (mesh.mesh_id && mesh.mesh_id.length > 0) {
+    return `mesh:${mesh.mesh_id}`;
+  }
+  return [
+    "counts",
+    mesh.node_count ?? mesh.nodes.length,
+    mesh.element_count ?? mesh.elements.length,
+    mesh.boundary_face_count ?? mesh.boundary_faces.length,
+  ].join(":");
+}
+
 /* ── Provider ── */
 export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const { state, connection, error, refresh: refreshLiveState } = useCurrentLiveStream();
+  const liveApi = useMemo(() => currentLiveApiClient(), []);
 
   // F-P1: sync live stream into the session-runtime Zustand store
   useSessionRuntimeBridge(state, connection, error);
@@ -423,7 +458,67 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const preview = state?.preview ?? null;
   const spatialPreview = preview?.kind === "spatial" ? preview : null;
   const globalScalarPreview = preview?.kind === "global_scalar" ? preview : null;
-  const femMesh = state?.fem_mesh ?? liveState?.fem_mesh ?? null;
+  const streamFemMesh = state?.fem_mesh ?? liveState?.fem_mesh ?? null;
+  const binaryFemTopologyTransportEnabled =
+    FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFemTopologyTransport;
+  const femMeshTopologyCacheRef = useRef<Map<string, FemLiveMesh>>(new Map());
+  const [hydratedFemMesh, setHydratedFemMesh] = useState<FemLiveMesh | null>(null);
+  const streamFemMeshKey = useMemo(() => femMeshTransportKey(streamFemMesh), [streamFemMesh]);
+  const needsBinaryFemTopologyHydration =
+    binaryFemTopologyTransportEnabled &&
+    streamFemMesh?.topology_transport === "binary" &&
+    !streamFemMesh.topology_buffers;
+
+  useEffect(() => {
+    if (!needsBinaryFemTopologyHydration || !streamFemMesh || !streamFemMeshKey) {
+      setHydratedFemMesh(null);
+      return;
+    }
+    const cached = femMeshTopologyCacheRef.current.get(streamFemMeshKey) ?? null;
+    if (cached) {
+      setHydratedFemMesh(cached);
+      return;
+    }
+    setHydratedFemMesh(null);
+    const controller = new AbortController();
+    void liveApi
+      .getFemMeshTopologyBinary(streamFemMesh.generation_id ?? null, {
+        signal: controller.signal,
+      })
+      .then((buffer) => {
+        const decoded = decodeFemMeshTopologyBinary(buffer);
+        const nextMesh = hydrateFemMeshTopology(streamFemMesh, decoded);
+        const cache = femMeshTopologyCacheRef.current;
+        cache.set(streamFemMeshKey, nextMesh);
+        while (cache.size > 2) {
+          const oldestKey = cache.keys().next().value;
+          if (!oldestKey) {
+            break;
+          }
+          cache.delete(oldestKey);
+        }
+        if (!controller.signal.aborted) {
+          startTransition(() => setHydratedFemMesh(nextMesh));
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setHydratedFemMesh(null);
+        }
+      });
+    return () => controller.abort();
+  }, [
+    binaryFemTopologyTransportEnabled,
+    liveApi,
+    needsBinaryFemTopologyHydration,
+    streamFemMesh,
+    streamFemMeshKey,
+  ]);
+
+  const femMesh =
+    hydratedFemMesh && streamFemMeshKey && femMeshTransportKey(hydratedFemMesh) === streamFemMeshKey
+      ? hydratedFemMesh
+      : streamFemMesh;
   const remoteSceneDocument = state?.scene_document ?? null;
   const meshConfigSignature = useMemo(
     () => buildMeshConfigurationSignature(sceneDocumentDraft ?? remoteSceneDocument),
@@ -512,7 +607,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const runtimeEngineDeviceName =
     typeof runtimeEngine?.device_name === "string" ? runtimeEngine.device_name : null;
   const [gpuTelemetry, setGpuTelemetry] = useState<GpuTelemetryResponse | null>(null);
-  const liveApi = useMemo(() => currentLiveApiClient(), []);
   const latestEngineMessage = engineLog.length > 0 ? engineLog[engineLog.length - 1]?.message ?? null : null;
   const workspaceStatus =
     runtimeStatus?.code ?? liveState?.status ?? session?.status ?? run?.status ?? "idle";
@@ -1578,6 +1672,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   }, [requestedPreviewQuantity]);
 
   const latestFieldFrames = state?.latest_fields.frames ?? {};
+  const binaryFieldTransportEnabled =
+    FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFieldTransport;
+  const binaryFieldCacheRef = useRef<Map<string, BinaryFieldFrame>>(new Map());
+  const [selectedBinaryFieldFrame, setSelectedBinaryFieldFrame] =
+    useState<BinaryFieldFrame | null>(null);
   const fieldMap = useMemo<Record<string, Float64Array | null>>(
     () =>
       Object.fromEntries(
@@ -1600,27 +1699,113 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const selectedFieldDomain =
     (selectedFieldFrame?.domain as "magnetic_only" | "full_domain" | "surface_only" | null | undefined)
     ?? null;
+  const selectedFieldTransportKey = useMemo(() => {
+    if (!binaryFieldTransportEnabled || !activeQuantityId || !selectedFieldFrame) {
+      return null;
+    }
+    const revision =
+      selectedFieldFrame.field_revision
+      ?? selectedFieldFrame.source_step
+      ?? selectedFieldFrame.source_time
+      ?? "none";
+    return [
+      activeQuantityId,
+      revision,
+      selectedFieldFrame.n_comp,
+      selectedFieldFrame.grid.join("x"),
+    ].join(":");
+  }, [activeQuantityId, binaryFieldTransportEnabled, selectedFieldFrame]);
+
+  useEffect(() => {
+    if (
+      !binaryFieldTransportEnabled ||
+      !activeQuantityId ||
+      !selectedFieldFrame ||
+      selectedFieldFrame.values.length > 0
+    ) {
+      setSelectedBinaryFieldFrame(null);
+      return;
+    }
+    if (!selectedFieldTransportKey) {
+      setSelectedBinaryFieldFrame(null);
+      return;
+    }
+    const cached = binaryFieldCacheRef.current.get(selectedFieldTransportKey) ?? null;
+    if (cached) {
+      setSelectedBinaryFieldFrame(cached);
+      return;
+    }
+    setSelectedBinaryFieldFrame(null);
+    const controller = new AbortController();
+    void liveApi
+      .getFieldVectorBinary(activeQuantityId, { signal: controller.signal })
+      .then((buffer) => {
+        const decoded = decodePreviewBinaryFrame(buffer);
+        if (!decoded || !("version" in decoded) || decoded.version !== 2) {
+          return;
+        }
+        const resolvedQuantityId =
+          decoded.quantityId.trim().length > 0 ? decoded.quantityId : activeQuantityId;
+        const nextFrame: BinaryFieldFrame = {
+          key: selectedFieldTransportKey,
+          quantityId: resolvedQuantityId,
+          values: decoded.vectorFieldValues,
+          nComp: decoded.nComp,
+          grid: decoded.grid,
+        };
+        const cache = binaryFieldCacheRef.current;
+        cache.set(selectedFieldTransportKey, nextFrame);
+        while (cache.size > 4) {
+          const firstKey = cache.keys().next().value;
+          if (!firstKey) {
+            break;
+          }
+          cache.delete(firstKey);
+        }
+        if (!controller.signal.aborted) {
+          setSelectedBinaryFieldFrame(nextFrame);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setSelectedBinaryFieldFrame(null);
+        }
+      });
+    return () => controller.abort();
+  }, [
+    activeQuantityId,
+    binaryFieldTransportEnabled,
+    liveApi,
+    selectedFieldFrame,
+    selectedFieldTransportKey,
+  ]);
+
+  const selectedLiveField =
+    selectedBinaryFieldFrame?.key === selectedFieldTransportKey
+      ? selectedBinaryFieldFrame.values
+      : activeQuantityId
+        ? fieldMap[activeQuantityId] ?? null
+        : null;
   const selectedVectorSource = useMemo(() => {
-    const liveField = activeQuantityId ? fieldMap[activeQuantityId] ?? null : null;
     return selectViewportVectorField({
       activeQuantityId,
       requestedPreviewQuantity,
       previewControlsActive,
       renderPreview,
-      liveField,
+      liveField: selectedLiveField,
       liveFieldSourceStep,
       previewSourceStep,
       isGlobalScalarQuantity,
     });
   }, [
     activeQuantityId,
-    fieldMap,
     isGlobalScalarQuantity,
     liveFieldSourceStep,
     previewControlsActive,
     previewSourceStep,
     renderPreview,
     requestedPreviewQuantity,
+    selectedLiveField,
   ]);
   const selectedVectors = selectedVectorSource.vectors;
   const fieldDataRevision = useMemo(() => {
@@ -1648,7 +1833,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       "frame",
       selectedFieldFrame.quantity_id,
       selectedFieldFrame.n_comp,
-      selectedFieldFrame.values.length,
+      selectedVectors.length,
       canonicalFieldRevision ?? "none",
       selectedFieldFrame.source_time ?? "none",
       fieldFrameIdentity(selectedVectors),

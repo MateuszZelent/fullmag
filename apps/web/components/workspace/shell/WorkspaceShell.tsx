@@ -1,17 +1,48 @@
 "use client";
 
-import { ControlRoomProvider } from "@/components/runs/control-room/ControlRoomContext";
-import { ControlRoomShell } from "@/components/runs/RunControlRoom";
+import dynamic from "next/dynamic";
 import type { WorkspaceMode } from "@/components/runs/control-room/context-hooks";
-import StandaloneThreeDiagnosticViewport from "./StandaloneThreeDiagnosticViewport";
-import StandaloneR3fDiagnosticViewport from "./StandaloneR3fDiagnosticViewport";
-import StandaloneFemDiagnosticViewport from "./StandaloneFemDiagnosticViewport";
-import StandaloneFemSceneDiagnosticViewport from "./StandaloneFemSceneDiagnosticViewport";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
 interface WorkspaceShellProps {
   initialStage: WorkspaceMode;
 }
+
+function WorkspaceLoadingShell({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-[40vh] w-full items-center justify-center text-sm text-muted-foreground">
+      {label}
+    </div>
+  );
+}
+
+const RunControlRoom = dynamic(() => import("@/components/runs/RunControlRoom"), {
+  ssr: false,
+  loading: () => <WorkspaceLoadingShell label="Loading control room..." />,
+});
+
+const StandaloneThreeDiagnosticViewport = dynamic(() => import("./StandaloneThreeDiagnosticViewport"), {
+  ssr: false,
+  loading: () => <WorkspaceLoadingShell label="Loading three.js diagnostic viewport..." />,
+});
+
+const StandaloneR3fDiagnosticViewport = dynamic(() => import("./StandaloneR3fDiagnosticViewport"), {
+  ssr: false,
+  loading: () => <WorkspaceLoadingShell label="Loading R3F diagnostic viewport..." />,
+});
+
+const StandaloneFemDiagnosticViewport = dynamic(() => import("./StandaloneFemDiagnosticViewport"), {
+  ssr: false,
+  loading: () => <WorkspaceLoadingShell label="Loading FEM diagnostic viewport..." />,
+});
+
+const StandaloneFemSceneDiagnosticViewport = dynamic(
+  () => import("./StandaloneFemSceneDiagnosticViewport"),
+  {
+    ssr: false,
+    loading: () => <WorkspaceLoadingShell label="Loading FEM scene diagnostic viewport..." />,
+  },
+);
 
 export default function WorkspaceShell({ initialStage }: WorkspaceShellProps) {
   const diagnosticMode = String(
@@ -29,9 +60,5 @@ export default function WorkspaceShell({ initialStage }: WorkspaceShellProps) {
   if (diagnosticMode === "fem-scene") {
     return <StandaloneFemSceneDiagnosticViewport />;
   }
-  return (
-    <ControlRoomProvider>
-      <ControlRoomShell initialWorkspaceMode={initialStage} />
-    </ControlRoomProvider>
-  );
+  return <RunControlRoom initialWorkspaceMode={initialStage} />;
 }

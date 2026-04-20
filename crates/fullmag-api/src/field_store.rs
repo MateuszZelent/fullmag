@@ -9,10 +9,12 @@ use crate::error::ApiError;
 use crate::preview::{quantity_spatial_domain, quantity_unit};
 use crate::types::*;
 use axum::extract::{Path as AxumPath, Query, State};
+use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
 use axum::Json;
 use fullmag_quantities::quantity_spec;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 
 // ── Catalog entry ───────────────────────────────────────────────────────
@@ -91,6 +93,23 @@ fn compute_stats(values: &[f64], n_comp: usize) -> Option<FieldStats> {
     })
 }
 
+fn live_magnetization_snapshot(
+    snapshot: &SessionStateResponse,
+) -> Option<(&[f64], [u32; 3], usize)> {
+    let live_state = snapshot.live_state.as_ref()?;
+    let magnetization = live_state.latest_step.magnetization.as_deref()?;
+    if magnetization.is_empty() || magnetization.len() % 3 != 0 {
+        return None;
+    }
+    let node_count = magnetization.len() / 3;
+    let grid = if live_state.latest_step.grid.iter().any(|value| *value > 0) {
+        live_state.latest_step.grid
+    } else {
+        [node_count as u32, 1, 1]
+    };
+    Some((magnetization, grid, node_count))
+}
+
 // ── Vector response ─────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -113,7 +132,133 @@ pub(crate) struct LiveFieldVectorResponse {
 pub(crate) struct FieldVectorQuery {
     #[serde(default)]
     #[allow(dead_code)]
-    pub format: Option<String>, // "json" (default) | "bin" (future)
+    pub format: Option<String>, // "json" (default) | "bin"
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct FemMeshTopologyQuery {
+    #[serde(default)]
+    pub generation_id: Option<String>,
+    #[serde(default)]
+    pub format: Option<String>, // "bin" (default)
+}
+
+const FIELD_VECTOR_BINARY_HEADER_LEN: usize = 48;
+const FIELD_VECTOR_BINARY_VERSION: u8 = 2;
+const FIELD_VECTOR_BINARY_KIND_F64: u8 = 1;
+const FIELD_VECTOR_BINARY_QUANTITY_ID_LEN: usize = 16;
+const FEM_MESH_TOPOLOGY_BINARY_HEADER_LEN: usize = 32;
+const FEM_MESH_TOPOLOGY_BINARY_VERSION: u8 = 1;
+const FEM_MESH_TOPOLOGY_BINARY_KIND_F64_U32: u8 = 1;
+
+fn flatten_json_field_values(raw: &Value) -> Vec<f64> {
+    raw.get("values")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .flat_map(|v| {
+                    if let Some(inner) = v.as_array() {
+                        inner.iter().filter_map(|c| c.as_f64()).collect::<Vec<_>>()
+                    } else if let Some(f) = v.as_f64() {
+                        vec![f]
+                    } else {
+                        vec![]
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn json_field_grid(raw: &Value) -> Option<[u32; 3]> {
+    raw.get("layout")
+        .and_then(|l| l.get("grid_cells"))
+        .and_then(|g| g.as_array())
+        .and_then(|g| {
+            if g.len() == 3 {
+                Some([
+                    g[0].as_u64().unwrap_or(0) as u32,
+                    g[1].as_u64().unwrap_or(0) as u32,
+                    g[2].as_u64().unwrap_or(0) as u32,
+                ])
+            } else {
+                None
+            }
+        })
+}
+
+fn serialize_field_vector_binary_v2(
+    quantity_id: &str,
+    n_comp: usize,
+    grid: [u32; 3],
+    values: &[f64],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(FIELD_VECTOR_BINARY_HEADER_LEN + values.len() * 8);
+    out.extend_from_slice(b"FMVP");
+    out.push(FIELD_VECTOR_BINARY_VERSION);
+    out.push(FIELD_VECTOR_BINARY_KIND_F64);
+    out.push(n_comp.min(u8::MAX as usize) as u8);
+    out.push(0u8);
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&(values.len() as u32).to_le_bytes());
+    out.extend_from_slice(&grid[0].to_le_bytes());
+    out.extend_from_slice(&grid[1].to_le_bytes());
+    out.extend_from_slice(&grid[2].to_le_bytes());
+    let id_bytes = quantity_id.as_bytes();
+    let copy_len = id_bytes.len().min(FIELD_VECTOR_BINARY_QUANTITY_ID_LEN);
+    out.extend_from_slice(&id_bytes[..copy_len]);
+    for _ in copy_len..FIELD_VECTOR_BINARY_QUANTITY_ID_LEN {
+        out.push(0u8);
+    }
+    out.extend_from_slice(&[0u8; 4]);
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
+fn serialize_fem_mesh_topology_binary_v1(mesh: &fullmag_runner::FemMeshPayload) -> Vec<u8> {
+    let mut out = Vec::with_capacity(
+        FEM_MESH_TOPOLOGY_BINARY_HEADER_LEN
+            + mesh.nodes.len() * 3 * std::mem::size_of::<f64>()
+            + mesh.elements.len() * 4 * std::mem::size_of::<u32>()
+            + mesh.boundary_faces.len() * 3 * std::mem::size_of::<u32>()
+            + mesh.element_markers.len() * std::mem::size_of::<u32>()
+            + mesh.boundary_markers.len() * std::mem::size_of::<u32>(),
+    );
+    out.extend_from_slice(b"FMMT");
+    out.push(FEM_MESH_TOPOLOGY_BINARY_VERSION);
+    out.push(FEM_MESH_TOPOLOGY_BINARY_KIND_F64_U32);
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&(mesh.nodes.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(mesh.elements.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(mesh.boundary_faces.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(mesh.element_markers.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(mesh.boundary_markers.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    for node in &mesh.nodes {
+        out.extend_from_slice(&node[0].to_le_bytes());
+        out.extend_from_slice(&node[1].to_le_bytes());
+        out.extend_from_slice(&node[2].to_le_bytes());
+    }
+    for element in &mesh.elements {
+        out.extend_from_slice(&element[0].to_le_bytes());
+        out.extend_from_slice(&element[1].to_le_bytes());
+        out.extend_from_slice(&element[2].to_le_bytes());
+        out.extend_from_slice(&element[3].to_le_bytes());
+    }
+    for face in &mesh.boundary_faces {
+        out.extend_from_slice(&face[0].to_le_bytes());
+        out.extend_from_slice(&face[1].to_le_bytes());
+        out.extend_from_slice(&face[2].to_le_bytes());
+    }
+    for marker in &mesh.element_markers {
+        out.extend_from_slice(&marker.to_le_bytes());
+    }
+    for marker in &mesh.boundary_markers {
+        out.extend_from_slice(&marker.to_le_bytes());
+    }
+    out
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────
@@ -232,6 +377,29 @@ pub(crate) async fn get_live_field_catalog(
         });
     }
 
+    if !entries.iter().any(|entry| entry.quantity_id == "m") {
+        if let Some((magnetization, grid, node_count)) = live_magnetization_snapshot(snapshot) {
+            let n_comp = quantity_spec("m").map(|spec| spec.n_comp as usize).unwrap_or(3);
+            entries.push(LiveFieldCatalogEntry {
+                quantity_id: "m".to_string(),
+                label: quantity_spec("m")
+                    .map(|spec| spec.label.to_string())
+                    .unwrap_or_else(|| "m".to_string()),
+                kind: quantity_spec("m")
+                    .map(|spec| spec.shape.as_api_kind().to_string())
+                    .unwrap_or_else(|| "vector_field".to_string()),
+                unit: quantity_unit("m").to_string(),
+                spatial_domain: quantity_spatial_domain("m").to_string(),
+                n_comp,
+                source: "live_state".to_string(),
+                available: true,
+                element_count: node_count,
+                grid: Some(grid),
+                stats: compute_stats(magnetization, n_comp),
+            });
+        }
+    }
+
     Ok(Json(entries))
 }
 
@@ -244,7 +412,7 @@ pub(crate) async fn get_live_field_vector(
     AxumPath(quantity): AxumPath<String>,
     Query(query): Query<FieldVectorQuery>,
 ) -> Result<axum::response::Response, ApiError> {
-    let _ = query; // `format` param reserved for future binary transport
+    let wants_binary = matches!(query.format.as_deref(), Some("bin"));
 
     let current = state.current_live_state.read().await;
     let snapshot = current
@@ -255,25 +423,7 @@ pub(crate) async fn get_live_field_vector(
     if let Some(raw) = snapshot.latest_fields.get(&quantity) {
         let spec = quantity_spec(&quantity);
         let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
-
-        // Extract flat f64 values from JSON
-        let values: Vec<f64> = raw
-            .get("values")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .flat_map(|v| {
-                        if let Some(inner) = v.as_array() {
-                            inner.iter().filter_map(|c| c.as_f64()).collect::<Vec<_>>()
-                        } else if let Some(f) = v.as_f64() {
-                            vec![f]
-                        } else {
-                            vec![]
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let values = flatten_json_field_values(raw);
 
         let element_count = if n_comp > 0 {
             values.len() / n_comp
@@ -281,21 +431,17 @@ pub(crate) async fn get_live_field_vector(
             values.len()
         };
 
-        let grid = raw
-            .get("layout")
-            .and_then(|l| l.get("grid_cells"))
-            .and_then(|g| g.as_array())
-            .and_then(|g| {
-                if g.len() == 3 {
-                    Some([
-                        g[0].as_u64().unwrap_or(0) as u32,
-                        g[1].as_u64().unwrap_or(0) as u32,
-                        g[2].as_u64().unwrap_or(0) as u32,
-                    ])
-                } else {
-                    None
-                }
-            });
+        let grid = json_field_grid(raw);
+
+        if wants_binary {
+            let binary = serialize_field_vector_binary_v2(
+                &quantity,
+                n_comp,
+                grid.unwrap_or([element_count as u32, 1, 1]),
+                &values,
+            );
+            return Ok(([(CONTENT_TYPE, "application/octet-stream")], binary).into_response());
+        }
 
         let resp = LiveFieldVectorResponse {
             quantity_id: quantity.clone(),
@@ -320,6 +466,16 @@ pub(crate) async fn get_live_field_vector(
             field.vector_field_values.len()
         };
 
+        if wants_binary {
+            let binary = serialize_field_vector_binary_v2(
+                &quantity,
+                n_comp,
+                field.preview_grid,
+                &field.vector_field_values,
+            );
+            return Ok(([(CONTENT_TYPE, "application/octet-stream")], binary).into_response());
+        }
+
         let resp = LiveFieldVectorResponse {
             quantity_id: quantity.clone(),
             unit: field.unit.clone(),
@@ -331,6 +487,29 @@ pub(crate) async fn get_live_field_vector(
             source: "preview_cache".to_string(),
         };
         return Ok(Json(resp).into_response());
+    }
+
+    if quantity == "m" {
+        if let Some((magnetization, grid, node_count)) = live_magnetization_snapshot(snapshot) {
+            let n_comp = quantity_spec("m").map(|spec| spec.n_comp as usize).unwrap_or(3);
+            if wants_binary {
+                let binary =
+                    serialize_field_vector_binary_v2("m", n_comp, grid, magnetization);
+                return Ok(([(CONTENT_TYPE, "application/octet-stream")], binary).into_response());
+            }
+
+            let resp = LiveFieldVectorResponse {
+                quantity_id: "m".to_string(),
+                unit: quantity_unit("m").to_string(),
+                n_comp,
+                element_count: node_count,
+                grid: Some(grid),
+                values: magnetization.to_vec(),
+                active_mask: None,
+                source: "live_state".to_string(),
+            };
+            return Ok(Json(resp).into_response());
+        }
     }
 
     Err(ApiError::not_found(&format!(
@@ -444,8 +623,66 @@ pub(crate) async fn get_live_field_meta(
         }));
     }
 
+    if quantity == "m" {
+        if let Some((magnetization, grid, node_count)) = live_magnetization_snapshot(snapshot) {
+            let stats = compute_stats(magnetization, n_comp);
+            return Ok(Json(LiveFieldCatalogEntry {
+                quantity_id: quantity,
+                label,
+                kind,
+                unit,
+                spatial_domain,
+                n_comp,
+                source: "live_state".to_string(),
+                available: true,
+                element_count: node_count,
+                grid: Some(grid),
+                stats,
+            }));
+        }
+    }
+
     Err(ApiError::not_found(&format!(
         "field '{}' not available in memory",
         quantity
     )))
+}
+
+/// `GET /v1/live/current/fem-mesh/topology`
+///
+/// Returns the active FEM topology as a compact binary blob, separate from
+/// the JSON session snapshot. This keeps bootstrap/poll payloads metadata-only
+/// while the frontend hydrates topology once per mesh generation.
+pub(crate) async fn get_live_fem_mesh_topology(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FemMeshTopologyQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    if query.format.as_deref().is_some_and(|format| format != "bin") {
+        return Err(ApiError::bad_request(
+            "unsupported fem mesh topology format (expected 'bin')",
+        ));
+    }
+
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let mesh = snapshot
+        .fem_mesh
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active FEM mesh topology in memory"))?;
+
+    if let Some(requested_generation_id) = query.generation_id.as_deref() {
+        if let Some(current_generation_id) = mesh.generation_id.as_deref() {
+            if current_generation_id != requested_generation_id {
+                return Err(ApiError::bad_request(format!(
+                    "requested FEM mesh generation '{}' is no longer current (current='{}')",
+                    requested_generation_id, current_generation_id
+                )));
+            }
+        }
+    }
+
+    let binary = serialize_fem_mesh_topology_binary_v1(mesh);
+    Ok(([(CONTENT_TYPE, "application/octet-stream")], binary).into_response())
 }

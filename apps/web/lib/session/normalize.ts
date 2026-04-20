@@ -22,12 +22,18 @@ import type {
   ScriptBuilderState,
   SessionState,
 } from "./types";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "../debug/frontendDiagnosticFlags";
 import { createModelBuilderGraphV2 } from "./modelBuilderGraph";
 import {
   buildSceneDocumentFromScriptBuilder,
   buildScriptBuilderFromSceneDocument,
 } from "./sceneDocument";
 import { ensureObjectPhysicsStack } from "./magneticPhysics";
+
+const ENABLE_LIVE_DEBUG_LOGS =
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  typeof process !== "undefined" &&
+  process.env.NODE_ENV !== "production";
 
 function normalizeSessionManifest(raw: any) {
   if (!raw || typeof raw !== "object") {
@@ -141,9 +147,9 @@ function normalizeLatestFieldFrame(
   if (!raw || typeof raw !== "object") {
     return null;
   }
-  const values = normalizeVectorFieldValues(raw.values);
+  const values = normalizeVectorFieldValues(raw.values) ?? new Float64Array(0);
   const grid = fieldGrid(raw);
-  if (!values || !grid) {
+  if (!grid) {
     return null;
   }
   const nComp =
@@ -195,6 +201,56 @@ function normalizeLatestFields(raw: any): LatestFields {
   }
 
   return { frames, grid };
+}
+
+function ensureLatestMagnetizationFrame(
+  latestFields: LatestFields,
+  liveState: LiveState | null,
+): LatestFields {
+  const magnetization = liveState?.magnetization ?? null;
+  if (!magnetization || magnetization.length === 0 || magnetization.length % 3 !== 0) {
+    return latestFields;
+  }
+
+  const existingFrame = latestFields.frames.m ?? null;
+  if (existingFrame && existingFrame.values.length > 0) {
+    return latestFields;
+  }
+
+  const nodeCount = Math.trunc(magnetization.length / 3);
+  const nextGrid =
+    existingFrame?.grid ??
+    latestFields.grid ??
+    (nodeCount > 0 ? [nodeCount, 1, 1] : null);
+  if (!nextGrid) {
+    return latestFields;
+  }
+
+  return {
+    grid: latestFields.grid ?? nextGrid,
+    frames: {
+      ...latestFields.frames,
+      m: {
+        quantity_id: "m",
+        unit: existingFrame?.unit ?? "dimensionless",
+        n_comp: existingFrame?.n_comp ?? 3,
+        grid: nextGrid,
+        values: magnetization,
+        active_mask: existingFrame?.active_mask ?? null,
+        location: existingFrame?.location ?? null,
+        domain: existingFrame?.domain ?? "magnetic_only",
+        field_revision:
+          existingFrame?.field_revision ??
+          (typeof liveState?.step === "number" ? liveState.step : null),
+        source_step:
+          existingFrame?.source_step ??
+          (typeof liveState?.step === "number" ? liveState.step : null),
+        source_time:
+          existingFrame?.source_time ??
+          (typeof liveState?.time === "number" ? liveState.time : null),
+      },
+    },
+  };
 }
 
 /* ── Enum-like normalizers ── */
@@ -378,6 +434,25 @@ function normalizeFemLiveMesh(raw: unknown): FemLiveMesh | null {
       : [],
     object_segments: normalizeFemLiveMeshObjectSegments(mesh.object_segments),
     mesh_parts: normalizeMeshParts(mesh.mesh_parts),
+    topology_buffers: null,
+    topology_transport:
+      mesh.transport === "binary"
+        ? "binary"
+        : mesh.transport === "json"
+          ? "json"
+          : null,
+    node_count:
+      typeof mesh.node_count === "number" && Number.isFinite(mesh.node_count)
+        ? Math.max(0, Math.trunc(mesh.node_count))
+        : nodes.length,
+    element_count:
+      typeof mesh.element_count === "number" && Number.isFinite(mesh.element_count)
+        ? Math.max(0, Math.trunc(mesh.element_count))
+        : elements.length,
+    boundary_face_count:
+      typeof mesh.boundary_face_count === "number" && Number.isFinite(mesh.boundary_face_count)
+        ? Math.max(0, Math.trunc(mesh.boundary_face_count))
+        : boundaryFaces.length,
     domain_mesh_mode:
       typeof mesh.domain_mesh_mode === "string" ? mesh.domain_mesh_mode : null,
     domain_frame: normalizeDomainFrame(mesh.domain_frame),
@@ -1862,7 +1937,7 @@ export function normalizeSessionState(
     }
   }
 
-  if (typeof process !== "undefined" && process.env.NODE_ENV !== "production") {
+  if (ENABLE_LIVE_DEBUG_LOGS) {
     const rawScalarRows = raw.scalar_rows;
     const rawDeltaRows = Array.isArray(rawScalarRows) ? rawScalarRows.length : "?";
     console.debug(
@@ -1927,6 +2002,7 @@ export function normalizeSessionState(
         finished: Boolean(rawLive.latest_step?.finished),
       }
     : null;
+  const hydratedLatestFields = ensureLatestMagnetizationFrame(latestFields, liveState);
 
   return {
     state_version:
@@ -1996,7 +2072,7 @@ export function normalizeSessionState(
         }))
       : [],
     fem_mesh: normalizeFemLiveMesh(raw.fem_mesh ?? raw.live_state?.latest_step?.fem_mesh),
-    latest_fields: latestFields,
+    latest_fields: hydratedLatestFields,
     artifacts: Array.isArray(raw.artifacts) ? raw.artifacts : [],
     display_selection: displaySelection,
     preview_config:

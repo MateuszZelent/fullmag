@@ -44,6 +44,110 @@ import {
 } from "../../../../features/viewport-fem/model/femArrowVisibility";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "../../../../lib/debug/frontendDiagnosticFlags";
 
+function flattenTriples(values: ArrayLike<ArrayLike<number>>): number[] {
+  const flat = new Array(values.length * 3);
+  let offset = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    flat[offset] = Number(value?.[0] ?? 0);
+    flat[offset + 1] = Number(value?.[1] ?? 0);
+    flat[offset + 2] = Number(value?.[2] ?? 0);
+    offset += 3;
+  }
+  return flat;
+}
+
+function flattenQuads(values: ArrayLike<ArrayLike<number>>): number[] {
+  const flat = new Array(values.length * 4);
+  let offset = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    flat[offset] = Number(value?.[0] ?? 0);
+    flat[offset + 1] = Number(value?.[1] ?? 0);
+    flat[offset + 2] = Number(value?.[2] ?? 0);
+    flat[offset + 3] = Number(value?.[3] ?? 0);
+    offset += 4;
+  }
+  return flat;
+}
+
+function resolveFemTopologyCacheKey(mesh: any): string | null {
+  if (!mesh) {
+    return null;
+  }
+  const generationId = mesh.generation_id ?? mesh.mesh_id ?? null;
+  if (typeof generationId === "string" && generationId.length > 0) {
+    return `gen:${generationId}`;
+  }
+  const nodeCount = mesh.node_count ?? mesh.nodes?.length ?? 0;
+  const elementCount = mesh.element_count ?? mesh.elements?.length ?? 0;
+  const boundaryFaceCount = mesh.boundary_face_count ?? mesh.boundary_faces?.length ?? 0;
+  const firstNode = mesh.nodes?.[0]?.join(",") ?? "";
+  const middleNode = mesh.nodes?.[Math.floor((mesh.nodes?.length ?? 0) / 2)]?.join(",") ?? "";
+  const lastNode = mesh.nodes?.[(mesh.nodes?.length ?? 1) - 1]?.join(",") ?? "";
+  const firstElement = mesh.elements?.[0]?.join(",") ?? "";
+  return [
+    "legacy",
+    nodeCount,
+    elementCount,
+    boundaryFaceCount,
+    firstNode,
+    middleNode,
+    lastNode,
+    firstElement,
+  ].join(":");
+}
+
+function hasBinaryTopologyBuffers(mesh: any): boolean {
+  const topologyBuffers = mesh?.topology_buffers;
+  if (!topologyBuffers) {
+    return false;
+  }
+  return (
+    topologyBuffers.nodes instanceof Float64Array &&
+    topologyBuffers.elements instanceof Uint32Array &&
+    topologyBuffers.boundary_faces instanceof Uint32Array &&
+    topologyBuffers.nodes.length > 0 &&
+    topologyBuffers.elements.length > 0 &&
+    topologyBuffers.boundary_faces.length > 0
+  );
+}
+
+function hasInlineTopologyArrays(mesh: any): boolean {
+  if (!mesh) {
+    return false;
+  }
+  const nodeCount = mesh.node_count ?? mesh.nodes?.length ?? 0;
+  const elementCount = mesh.element_count ?? mesh.elements?.length ?? 0;
+  const boundaryFaceCount = mesh.boundary_face_count ?? mesh.boundary_faces?.length ?? 0;
+  const isExplicitlyEmpty =
+    nodeCount === 0 &&
+    elementCount === 0 &&
+    boundaryFaceCount === 0;
+  if (isExplicitlyEmpty) {
+    return true;
+  }
+  return (
+    Array.isArray(mesh.nodes) &&
+    Array.isArray(mesh.elements) &&
+    Array.isArray(mesh.boundary_faces) &&
+    mesh.nodes.length > 0 &&
+    mesh.elements.length > 0 &&
+    mesh.boundary_faces.length > 0
+  );
+}
+
+function topologySnapshotKey(mesh: any, topologyKey: string): string {
+  const topologyBuffers = mesh?.topology_buffers;
+  return [
+    topologyKey,
+    topologyBuffers ? "binary" : "json",
+    topologyBuffers?.nodes?.length ?? mesh?.nodes?.length ?? 0,
+    topologyBuffers?.elements?.length ?? (mesh?.elements?.length ?? 0) * 4,
+    topologyBuffers?.boundary_faces?.length ?? (mesh?.boundary_faces?.length ?? 0) * 3,
+  ].join(":");
+}
+
 // ---------------------------------------------------------------------------
 // Params
 // ---------------------------------------------------------------------------
@@ -275,54 +379,99 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
     () => buildObjectOverlays(scriptBuilderGeometries ?? [], effectiveFemMesh),
     [effectiveFemMesh, scriptBuilderGeometries],
   );
+  const topologyBuffersRef = useRef<{
+    cacheKey: string;
+    nodes: ArrayLike<number>;
+    boundaryFaces: ArrayLike<number>;
+    elements: ArrayLike<number>;
+    nNodes: number;
+    nElements: number;
+  } | null>(null);
 
   // -------------------------------------------------------------------------
   // Memos: FEM mesh data composition
   // -------------------------------------------------------------------------
 
-  const [flatNodes, flatFaces, flatElements] = useMemo(() => {
-    if (!effectiveFemMesh) return [null, null, null];
-    return [
-      effectiveFemMesh.nodes.flatMap((n: number[]) => n),
-      effectiveFemMesh.boundary_faces.flatMap((f: number[]) => f),
-      effectiveFemMesh.elements.flatMap((element: number[]) => element),
-    ];
-  }, [effectiveFemMesh]);
+  const femTopologyKey = useMemo(
+    () => resolveFemTopologyCacheKey(effectiveFemMesh),
+    [effectiveFemMesh],
+  );
+  const topologyBuffers = useMemo(() => {
+    if (!effectiveFemMesh || !femTopologyKey) {
+      topologyBuffersRef.current = null;
+      return null;
+    }
+    const topologyReady =
+      hasBinaryTopologyBuffers(effectiveFemMesh) || hasInlineTopologyArrays(effectiveFemMesh);
+    if (!topologyReady) {
+      topologyBuffersRef.current = null;
+      return null;
+    }
+    const snapshotKey = topologySnapshotKey(effectiveFemMesh, femTopologyKey);
+    if (topologyBuffersRef.current?.cacheKey === snapshotKey) {
+      return topologyBuffersRef.current;
+    }
+    const topologyBuffers = effectiveFemMesh.topology_buffers;
+    const nNodes =
+      effectiveFemMesh.node_count
+      ?? (topologyBuffers ? Math.floor(topologyBuffers.nodes.length / 3) : effectiveFemMesh.nodes.length);
+    const nElements =
+      effectiveFemMesh.element_count
+      ?? (topologyBuffers ? Math.floor(topologyBuffers.elements.length / 4) : effectiveFemMesh.elements.length);
+    const next = {
+      cacheKey: snapshotKey,
+      nodes: topologyBuffers?.nodes ?? flattenTriples(effectiveFemMesh.nodes),
+      boundaryFaces:
+        topologyBuffers?.boundary_faces ?? flattenTriples(effectiveFemMesh.boundary_faces),
+      elements: topologyBuffers?.elements ?? flattenQuads(effectiveFemMesh.elements),
+      nNodes,
+      nElements,
+    };
+    topologyBuffersRef.current = next;
+    return next;
+  }, [effectiveFemMesh, femTopologyKey]);
 
   // Topology base: stable reference that only changes when mesh structure changes.
   // This prevents full geometry rebuild (and camera reset) on every field data update.
   const femMeshBase = useMemo<Omit<FemMeshData, "fieldData" | "activeMask" | "quantityDomain"> | null>(() => {
-    if (!effectiveFemMesh || !flatNodes || !flatFaces || !flatElements) return null;
-    const nNodes = effectiveFemMesh.nodes.length;
-    const nElements = effectiveFemMesh.elements.length;
-    return { nodes: flatNodes, elements: flatElements, boundaryFaces: flatFaces, nNodes, nElements };
-  }, [effectiveFemMesh, flatNodes, flatFaces, flatElements]);
+    if (!topologyBuffers) {
+      return null;
+    }
+    const { nodes, elements, boundaryFaces, nNodes, nElements } = topologyBuffers;
+    return { nodes, elements, boundaryFaces, nNodes, nElements };
+  }, [topologyBuffers]);
 
   // Field data: updated on every solver tick when selectedVectors changes.
   const femFieldData = useMemo<FemMeshData["fieldData"] | undefined>(() => {
     if (!femMeshBase || !selectedVectors) return undefined;
     const nNodes = femMeshBase.nNodes;
+    let buffers = femFieldBuffersRef.current;
+    if (!buffers || buffers.nNodes !== nNodes) {
+      buffers = {
+        nNodes,
+        x: new Float64Array(nNodes),
+        y: new Float64Array(nNodes),
+        z: new Float64Array(nNodes),
+      };
+      femFieldBuffersRef.current = buffers;
+    }
     if (selectedFieldNComp <= 1) {
       if (selectedVectors.length < nNodes) return undefined;
-      const x = new Float64Array(nNodes);
-      const y = new Float64Array(nNodes);
-      const z = new Float64Array(nNodes);
       for (let i = 0; i < nNodes; i++) {
-        x[i] = selectedVectors[i] ?? 0;
+        buffers.x[i] = selectedVectors[i] ?? 0;
       }
-      return { x, y, z };
+      buffers.y.fill(0);
+      buffers.z.fill(0);
+      return buffers;
     }
     if (selectedVectors.length < femMeshBase.nNodes * 3) return undefined;
-    const x = new Float64Array(nNodes);
-    const y = new Float64Array(nNodes);
-    const z = new Float64Array(nNodes);
     for (let i = 0; i < nNodes; i++) {
-      x[i] = selectedVectors[i * 3] ?? 0;
-      y[i] = selectedVectors[i * 3 + 1] ?? 0;
-      z[i] = selectedVectors[i * 3 + 2] ?? 0;
+      buffers.x[i] = selectedVectors[i * 3] ?? 0;
+      buffers.y[i] = selectedVectors[i * 3 + 1] ?? 0;
+      buffers.z[i] = selectedVectors[i * 3 + 2] ?? 0;
     }
-    return { x, y, z };
-  }, [femMeshBase, selectedFieldNComp, selectedVectors, fieldDataRevision]);
+    return buffers;
+  }, [femFieldBuffersRef, femMeshBase, selectedFieldNComp, selectedVectors, fieldDataRevision]);
 
   // Combined: new object only when topology OR field data changes
   const femMeshData = useMemo<FemMeshData | null>(() => {
@@ -368,44 +517,6 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
   // -------------------------------------------------------------------------
   // Memos: topology key
   // -------------------------------------------------------------------------
-
-  const femTopologyKey = useMemo(() => {
-    if (!effectiveFemMesh) return null;
-
-    // VP-001 fix: prefer backend-assigned generation_id or mesh_id over
-    // heuristic count-based signatures. The old approach could miss topology
-    // changes when node/element/face counts stayed identical.
-    const generationId: string | null =
-      effectiveFemMesh.generation_id ?? effectiveFemMesh.mesh_id ?? null;
-    if (generationId) {
-      return `gen:${generationId}`;
-    }
-
-    // Legacy fallback — log a diagnostic warning so we can track how often
-    // the code still reaches this path.
-    if (typeof console !== "undefined" && FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[femTopologyKey] Using legacy heuristic topology signature — " +
-        "backend did not provide generation_id or mesh_id.",
-      );
-    }
-
-    const firstNode = effectiveFemMesh.nodes[0]?.join(",") ?? "";
-    const middleNode = effectiveFemMesh.nodes[Math.floor(effectiveFemMesh.nodes.length / 2)]?.join(",") ?? "";
-    const lastNode = effectiveFemMesh.nodes[effectiveFemMesh.nodes.length - 1]?.join(",") ?? "";
-    const firstElement = effectiveFemMesh.elements[0]?.join(",") ?? "";
-    return [
-      "legacy",
-      effectiveFemMesh.nodes.length,
-      femMesh?.elements.length ?? effectiveFemMesh.elements.length,
-      effectiveFemMesh.boundary_faces.length,
-      firstNode,
-      middleNode,
-      lastNode,
-      firstElement,
-    ].join(":");
-  }, [effectiveFemMesh, femMesh?.elements.length]);
 
   // -------------------------------------------------------------------------
   // Effects: sync mesh entity view state

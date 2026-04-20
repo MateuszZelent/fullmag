@@ -94,6 +94,17 @@ export interface FemLiveMesh {
   element_markers?: number[];
   boundary_faces: [number, number, number][];
   boundary_markers?: number[];
+  topology_buffers?: {
+    nodes: Float64Array;
+    elements: Uint32Array;
+    boundary_faces: Uint32Array;
+    element_markers: Uint32Array;
+    boundary_markers: Uint32Array;
+  } | null;
+  topology_transport?: "json" | "binary" | null;
+  node_count?: number | null;
+  element_count?: number | null;
+  boundary_face_count?: number | null;
   object_segments?: FemLiveMeshObjectSegment[];
   mesh_parts?: FemMeshPart[];
   domain_mesh_mode?: string | null;

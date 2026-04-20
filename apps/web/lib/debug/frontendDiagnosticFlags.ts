@@ -37,7 +37,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableBoundsPreview: true,
   },
   viewportChrome: {
-    showTelemetryHud: true,
+    showTelemetryHud: false,
     showDataPlaneIndicator: true,
     showAntennaPreviewBadge: true,
     showFemSelectionBadges: true,
@@ -53,8 +53,8 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableCanvasContextMenuHandler: true,
     enableCanvasCreatedHandler: true,
     enableBridgeSync: true,
-    forceDpr: null,
-    frameloopMode: "always",
+    forceDpr: 1,
+    frameloopMode: "demand",
   },
   renderDebug: {
     enableRenderLogging: false,
@@ -79,7 +79,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableCameraFitEffect: true,
     enableScreenshotCapture: true,
     // keep FEM responsive under heavy React tree updates
-    forceViewportAlwaysRender: true,
+    forceViewportAlwaysRender: false,
     forceViewportControlsOn: true,
     forceViewportLightsOff: false,
   },
@@ -109,19 +109,19 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     showOrientationSphere: true,
     showFieldLegend: true,
     showSelectionHud: true,
-    showPartExplorer: true,
+    showPartExplorer: false,
     showCameraAutoFit: true,
-    showClipPlanesHelper: true,
+    showClipPlanesHelper: false,
     showSceneGeometry: true,
     showPerPartGeometry: true,
     showAirGeometry: true,
     showMagneticGeometry: true,
     showSurfacePass: true,
-    showSurfaceHiddenEdgesPass: true,
-    showSurfaceVisibleEdgesPass: true,
-    showVolumeHiddenEdgesPass: true,
-    showVolumeVisibleEdgesPass: true,
-    showPointsPass: true,
+    showSurfaceHiddenEdgesPass: false,
+    showSurfaceVisibleEdgesPass: false,
+    showVolumeHiddenEdgesPass: false,
+    showVolumeVisibleEdgesPass: false,
+    showPointsPass: false,
     airboxDisabledByDefault: true,
     enableGeometryCompaction: true,
     enableGeometryNormals: true,
@@ -129,12 +129,14 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableGeometryPointerInteractions: true,
     enableGeometryHoverInteractions: false,
     enableGeometryPerfLogging: false,
+    // Keep the layer available so the toolbar toggle can actually show vectors.
+    // The arrows are still off by default at the viewport state level.
     showArrowLayer: true,
     showSelectionHighlight: true,
     showAntennaOverlays: true,
     showSceneAxes: true,
     showTextureTransformGizmo: true,
-    showHoverTooltip: true,
+    showHoverTooltip: false,
     showContextMenu: true,
     showStatusBar: true,
   },
@@ -154,7 +156,9 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     /** PR-4: Use FieldFrameEnvelope in session runtime store. */
     fieldFrameEnvelopeV1: true,
     /** PR-5: Binary field transport (format=bin). */
-    binaryFieldTransport: false,
+    binaryFieldTransport: true,
+    /** PR-8: Binary FEM topology transport (mesh_transport=bin). */
+    binaryFemTopologyTransport: true,
     /** PR-1/PR-2: Monotonic frame guard active. */
     monotonicFrameGuard: true,
     /** PR-6: Split topology / field caches in viewport. */

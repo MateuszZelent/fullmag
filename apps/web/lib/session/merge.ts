@@ -3,11 +3,16 @@
 
 import type {
   EngineLogEntry,
+  FemLiveMesh,
   LatestFieldFrame,
+  LatestFields,
   PreviewState,
+  SceneDocument,
   ScalarRow,
   SessionState,
+  ScriptBuilderState,
 } from "./types";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "../debug/frontendDiagnosticFlags";
 
 function lastScalarStep(rows: ScalarRow[]): number {
   return rows.length > 0 ? rows[rows.length - 1]?.step ?? -1 : -1;
@@ -16,6 +21,11 @@ function lastScalarStep(rows: ScalarRow[]): number {
 function lastLogTimestamp(entries: EngineLogEntry[]): number {
   return entries.length > 0 ? entries[entries.length - 1]?.timestamp_unix_ms ?? -1 : -1;
 }
+
+const ENABLE_LIVE_DEBUG_LOGS =
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  typeof process !== "undefined" &&
+  process.env.NODE_ENV !== "production";
 
 function previewSequence(preview: PreviewState | null): [number, number, number] {
   if (!preview) return [-1, -1, -1];
@@ -31,6 +41,130 @@ function compareLexicographic(
     if (lhs[i] < rhs[i]) return -1;
   }
   return 0;
+}
+
+function femMeshIdentity(mesh: FemLiveMesh | null): string | null {
+  if (!mesh) return null;
+  if (mesh.generation_id) return `gen:${mesh.generation_id}`;
+  if (mesh.mesh_id) return `mesh:${mesh.mesh_id}`;
+  return [
+    mesh.nodes.length,
+    mesh.elements.length,
+    mesh.boundary_faces.length,
+  ].join(":");
+}
+
+function sameFemMeshIdentity(lhs: FemLiveMesh | null, rhs: FemLiveMesh | null): boolean {
+  const left = femMeshIdentity(lhs);
+  const right = femMeshIdentity(rhs);
+  return left != null && left === right;
+}
+
+function samePreviewIdentity(lhs: PreviewState | null, rhs: PreviewState | null): boolean {
+  if (!lhs || !rhs || lhs.kind !== rhs.kind) {
+    return false;
+  }
+  if (lhs.kind === "spatial" && rhs.kind === "spatial") {
+    return (
+      lhs.quantity === rhs.quantity &&
+      lhs.component === rhs.component &&
+      lhs.spatial_kind === rhs.spatial_kind &&
+      compareLexicographic(previewSequence(lhs), previewSequence(rhs)) === 0
+    );
+  }
+  if (lhs.kind === "global_scalar" && rhs.kind === "global_scalar") {
+    return (
+      lhs.quantity === rhs.quantity &&
+      lhs.config_revision === rhs.config_revision &&
+      lhs.source_step === rhs.source_step &&
+      lhs.source_time === rhs.source_time
+    );
+  }
+  return false;
+}
+
+function sameSceneRevision(
+  lhs: SceneDocument | null | undefined,
+  rhs: SceneDocument | null | undefined,
+): boolean {
+  return Boolean(lhs && rhs && lhs.revision === rhs.revision);
+}
+
+function sameScriptRevision(
+  lhs: ScriptBuilderState | null | undefined,
+  rhs: ScriptBuilderState | null | undefined,
+): boolean {
+  return Boolean(lhs && rhs && lhs.revision === rhs.revision);
+}
+
+function sameVec3(
+  lhs: [number, number, number] | null | undefined,
+  rhs: [number, number, number] | null | undefined,
+): boolean {
+  if (lhs === rhs) {
+    return true;
+  }
+  if (!lhs || !rhs) {
+    return lhs == null && rhs == null;
+  }
+  return lhs[0] === rhs[0] && lhs[1] === rhs[1] && lhs[2] === rhs[2];
+}
+
+function sameLatestFieldFrameIdentity(
+  lhs: LatestFieldFrame | null | undefined,
+  rhs: LatestFieldFrame | null | undefined,
+): boolean {
+  if (lhs === rhs) {
+    return true;
+  }
+  if (!lhs || !rhs) {
+    return false;
+  }
+  return (
+    lhs.quantity_id === rhs.quantity_id &&
+    lhs.unit === rhs.unit &&
+    lhs.n_comp === rhs.n_comp &&
+    sameVec3(lhs.grid, rhs.grid) &&
+    lhs.location === rhs.location &&
+    lhs.domain === rhs.domain &&
+    lhs.field_revision === rhs.field_revision &&
+    lhs.source_step === rhs.source_step &&
+    lhs.source_time === rhs.source_time &&
+    lhs.values.length === rhs.values.length &&
+    (lhs.active_mask?.length ?? -1) === (rhs.active_mask?.length ?? -1)
+  );
+}
+
+function reuseLatestFieldsReferences(
+  prev: LatestFields,
+  next: LatestFields,
+): LatestFields {
+  const prevKeys = Object.keys(prev.frames);
+  const nextKeys = Object.keys(next.frames);
+  let changed =
+    prevKeys.length !== nextKeys.length ||
+    !sameVec3(prev.grid, next.grid);
+  const nextFrames: Record<string, LatestFieldFrame> = {};
+
+  for (const key of nextKeys) {
+    const nextFrame = next.frames[key];
+    const prevFrame = prev.frames[key];
+    if (sameLatestFieldFrameIdentity(prevFrame, nextFrame)) {
+      nextFrames[key] = prevFrame;
+    } else {
+      nextFrames[key] = nextFrame;
+      changed = true;
+    }
+  }
+
+  if (!changed && prevKeys.every((key) => key in next.frames)) {
+    return prev;
+  }
+
+  return {
+    frames: nextFrames,
+    grid: sameVec3(prev.grid, next.grid) ? prev.grid : next.grid,
+  };
 }
 
 function syncLatestMagnetizationFrameFromLiveState(
@@ -203,6 +337,8 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
 
   if (!merged.fem_mesh && prev.fem_mesh) {
     merged.fem_mesh = prev.fem_mesh;
+  } else if (sameFemMeshIdentity(prev.fem_mesh, merged.fem_mesh)) {
+    merged.fem_mesh = prev.fem_mesh;
   } else if (
     merged.fem_mesh?.generation_id &&
     prev.fem_mesh?.generation_id &&
@@ -263,6 +399,8 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
     previewOrdering < 0;
   if (previewRegressed || (prev.preview != null && next.preview == null)) {
     merged.preview = prev.preview;
+  } else if (samePreviewIdentity(prev.preview, merged.preview)) {
+    merged.preview = prev.preview;
   }
 
   if (prev.runtime_status && !next.runtime_status) {
@@ -279,6 +417,8 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
     merged.scene_document = prev.scene_document;
     merged.script_builder = prev.script_builder;
     merged.model_builder_graph = prev.model_builder_graph;
+  } else if (sameSceneRevision(prev.scene_document, merged.scene_document)) {
+    merged.scene_document = prev.scene_document;
   }
 
   if (
@@ -288,6 +428,8 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
       next.script_builder.revision < prev.script_builder.revision
     )
   ) {
+    merged.script_builder = prev.script_builder;
+  } else if (sameScriptRevision(prev.script_builder, merged.script_builder)) {
     merged.script_builder = prev.script_builder;
   }
 
@@ -299,6 +441,12 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
     )
   ) {
     merged.model_builder_graph = prev.model_builder_graph;
+  } else if (
+    prev.model_builder_graph &&
+    merged.model_builder_graph &&
+    prev.model_builder_graph.revision === merged.model_builder_graph.revision
+  ) {
+    merged.model_builder_graph = prev.model_builder_graph;
   }
 
   merged.scalar_rows = mergeScalarRowsDelta(
@@ -308,7 +456,7 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
   );
   // else: next has more rows than prev AND starts before prevScalarStep → full snapshot → use next as-is.
 
-  if (typeof process !== "undefined" && process.env.NODE_ENV !== "production") {
+  if (ENABLE_LIVE_DEBUG_LOGS) {
     const v2Step = next.step_update_v2?.scalars?.step ?? null;
     console.debug(
       `[merge] prev=${prev.scalar_rows.length} next_raw=${next.scalar_rows.length}` +
@@ -331,6 +479,8 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
     !liveRegressed
   ) {
     merged.latest_fields = prev.latest_fields;
+  } else if (Object.keys(prev.latest_fields.frames).length > 0) {
+    merged.latest_fields = reuseLatestFieldsReferences(prev.latest_fields, merged.latest_fields);
   }
 
   const liveStepAdvanced = nextLiveStep > prevLiveStep;

@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { currentLiveApiClient } from "./liveApiClient";
 import { recordFrontendDebugEvent } from "./workspace/navigation-debug";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "./debug/frontendDiagnosticFlags";
-import { getLivePollIntervalMs } from "./livePolling";
+import { getEffectiveLivePollIntervalMs } from "./livePolling";
 
 /* ── Re-export all types ── */
 export type {
@@ -64,7 +64,9 @@ import { normalizeSessionState } from "./session/normalize";
 import { mergeSessionState } from "./session/merge";
 
 const ENABLE_LIVE_DEBUG_LOGS =
-  typeof process !== "undefined" && process.env.NODE_ENV !== "production";
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  typeof process !== "undefined" &&
+  process.env.NODE_ENV !== "production";
 
 type BootstrapCacheEntry = {
   raw: unknown | null;
@@ -211,10 +213,31 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
       },
     ) => {
       const nextState = normalizeSessionState(raw);
+      const previousState = stateRef.current;
       if (!nextState.session) {
-        if (!options?.preserveNullSession && !stateRef.current?.session) {
+        if (!options?.preserveNullSession && !previousState?.session) {
           setState(null);
           stateRef.current = null;
+        }
+        return false;
+      }
+      const previousVersion =
+        typeof previousState?.state_version === "number" ? previousState.state_version : null;
+      const nextVersion =
+        typeof nextState.state_version === "number" ? nextState.state_version : null;
+      if (
+        previousState &&
+        previousVersion != null &&
+        nextVersion != null &&
+        nextVersion <= previousVersion
+      ) {
+        if (ENABLE_LIVE_DEBUG_LOGS) {
+          console.info("[fullmag-debug][live-stream] ignored stale-or-duplicate snapshot", {
+            source: options?.source ?? "poll",
+            previousVersion,
+            nextVersion,
+            sessionId: nextState.session.session_id,
+          });
         }
         return false;
       }
@@ -222,7 +245,11 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
         finishedRef.current = true;
       }
       logLiveSnapshot(options?.source ?? "poll", nextState);
-      setState((prevState) => mergeSessionState(prevState, nextState));
+      setState((prevState) => {
+        const mergedState = mergeSessionState(prevState, nextState);
+        stateRef.current = mergedState;
+        return mergedState;
+      });
       return true;
     },
     [],
@@ -292,7 +319,9 @@ export function useCurrentLiveStream(): UseSessionStreamResult {
           if (unmountedRef.current || connectionGenerationRef.current !== connectionGeneration) {
             return;
           }
-          const intervalMs = getLivePollIntervalMs();
+          const intervalMs = getEffectiveLivePollIntervalMs({
+            hidden: typeof document !== "undefined" ? document.hidden : false,
+          });
           pollTimerRef.current = setTimeout(pollOnce, intervalMs);
         }
       };

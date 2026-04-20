@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useMemo, useCallback, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 
 import { MAGNETIC_PRESET_CATALOG } from "@/lib/magnetizationPresetCatalog";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
@@ -9,16 +10,12 @@ import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import type { TextureTransform3D as PreviewTextureTransform3D } from "@/lib/textureTransform";
 import type { TextureGizmoMode } from "../../preview/TextureTransformGizmo";
+import type { FemLiveRenderDebugData } from "../../preview/fem/FemLiveRenderDebugPanel";
 import MagnetizationSlice2D from "../../preview/MagnetizationSlice2D";
 import VectorFieldView3D from "../../preview/VectorFieldView3D";
 import FemMeshView3D from "../../preview/FemMeshView3D";
 import { ViewportErrorBoundary } from "../../preview/ViewportErrorBoundary";
-import FemMeshSlice2D from "../../preview/FemMeshSlice2DPlotly";
-import PreviewScalarField2D from "../../preview/PreviewScalarField2D";
-import BoundsPreview3D from "../../preview/BoundsPreview3D";
 import EmptyState from "../../ui/EmptyState";
-import AnalyzeViewport from "./AnalyzeViewport";
-import ResultNodeViewport from "./ResultNodeViewport";
 import {
   fmtExp,
   fmtSI,
@@ -38,7 +35,42 @@ import {
 import type { Vec3, Quat } from "./viewportUtils";
 export { ViewportBar } from "./ViewportBar";
 
-const DEBUG_GIZMO_SYNC = process.env.NODE_ENV !== "production";
+const DEBUG_GIZMO_SYNC =
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  process.env.NODE_ENV !== "production";
+
+function ViewportModuleLoading({ label }: { label: string }) {
+  return (
+    <div className="flex h-full w-full items-center justify-center text-sm text-muted-foreground">
+      {label}
+    </div>
+  );
+}
+
+const FemMeshSlice2D = dynamic(() => import("../../preview/FemMeshSlice2DPlotly"), {
+  ssr: false,
+  loading: () => <ViewportModuleLoading label="Loading FEM slice viewport..." />,
+});
+
+const PreviewScalarField2D = dynamic(() => import("../../preview/PreviewScalarField2D"), {
+  ssr: false,
+  loading: () => <ViewportModuleLoading label="Loading scalar viewport..." />,
+});
+
+const BoundsPreview3D = dynamic(() => import("../../preview/BoundsPreview3D"), {
+  ssr: false,
+  loading: () => <ViewportModuleLoading label="Loading bounds preview..." />,
+});
+
+const AnalyzeViewport = dynamic(() => import("./AnalyzeViewport"), {
+  ssr: false,
+  loading: () => <ViewportModuleLoading label="Loading analyze viewport..." />,
+});
+
+const ResultNodeViewport = dynamic(() => import("./ResultNodeViewport"), {
+  ssr: false,
+  loading: () => <ViewportModuleLoading label="Loading result viewport..." />,
+});
 
 function quatToEulerDeg(
   q: [number, number, number, number],
@@ -78,77 +110,7 @@ function summarizeTransform(transform: {
   };
 }
 
-function formatRenderDebugScalar(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) {
-    return "-";
-  }
-  const abs = Math.abs(value);
-  if (abs >= 1_000 || (abs > 0 && abs < 1e-3)) {
-    return value.toExponential(3);
-  }
-  return value.toFixed(6);
-}
-
-function formatRenderDebugVector(value: readonly [number, number, number] | null | undefined): string {
-  if (!value) {
-    return "-";
-  }
-  return `[${formatRenderDebugScalar(value[0])}, ${formatRenderDebugScalar(value[1])}, ${formatRenderDebugScalar(value[2])}]`;
-}
-
-function averageFemFieldComponents(
-  fieldData: { x: ArrayLike<number>; y: ArrayLike<number>; z: ArrayLike<number> } | null | undefined,
-): [number, number, number] | null {
-  if (!fieldData) {
-    return null;
-  }
-  const vectorCount = Math.min(fieldData.x?.length ?? 0, fieldData.y?.length ?? 0, fieldData.z?.length ?? 0);
-  if (vectorCount <= 0) {
-    return null;
-  }
-  let sumX = 0;
-  let sumY = 0;
-  let sumZ = 0;
-  for (let index = 0; index < vectorCount; index += 1) {
-    sumX += Number(fieldData.x[index] ?? 0);
-    sumY += Number(fieldData.y[index] ?? 0);
-    sumZ += Number(fieldData.z[index] ?? 0);
-  }
-  return [sumX / vectorCount, sumY / vectorCount, sumZ / vectorCount];
-}
-
-function sampleFemFieldRows(fieldData: { x: ArrayLike<number>; y: ArrayLike<number>; z: ArrayLike<number> } | null | undefined): string[] {
-  if (!fieldData) {
-    return [];
-  }
-  const vectorCount = Math.min(fieldData.x?.length ?? 0, fieldData.y?.length ?? 0, fieldData.z?.length ?? 0);
-  if (vectorCount <= 0) {
-    return [];
-  }
-  const sampleIndices = vectorCount <= 8
-    ? Array.from({ length: vectorCount }, (_, index) => index)
-    : [0, 1, 2, Math.floor(vectorCount / 4), Math.floor(vectorCount / 2), Math.floor((3 * vectorCount) / 4), vectorCount - 2, vectorCount - 1];
-  const unique = Array.from(new Set(sampleIndices.filter((index) => index >= 0 && index < vectorCount))).sort((lhs, rhs) => lhs - rhs);
-  const width = String(Math.max(vectorCount - 1, 0)).length;
-  return unique.map((index) =>
-    `${String(index).padStart(width, "0")} | [${formatRenderDebugScalar(Number(fieldData.x[index] ?? 0))}, ${formatRenderDebugScalar(Number(fieldData.y[index] ?? 0))}, ${formatRenderDebugScalar(Number(fieldData.z[index] ?? 0))}]`,
-  );
-}
-
-function formatRenderDebugTimestamp(timestamp: number | null | undefined): string {
-  if (timestamp == null || !Number.isFinite(timestamp)) {
-    return "-";
-  }
-  return new Date(timestamp).toLocaleTimeString("pl-PL", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
 const VIEWPORT_BADGE_STYLE = { zIndex: "var(--z-viewport-badge)" } as const;
-const ALWAYS_VISIBLE_DEBUG_OVERLAY_STYLE = { zIndex: 9999 } as const;
 
 export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   /* Granular hooks replacing useControlRoom */
@@ -624,25 +586,43 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     !ctx.femMeshData &&
     (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
     displayObjectOverlays.length > 0;
-  const showFemLiveRenderDebugOverlay = true;
-  const femRenderedVectorSample = useMemo(
-    () => sampleFemFieldRows(scaledFemMeshData?.fieldData),
-    [scaledFemMeshData?.fieldData],
-  );
-  const femRenderedVectorAverage = useMemo(
-    () => averageFemFieldComponents(scaledFemMeshData?.fieldData),
-    [scaledFemMeshData?.fieldData],
-  );
-  const femRenderedSourceStep =
-    ctx.selectedVectorSourceKind === "live"
-      ? ctx.liveFieldSourceStep
-      : ctx.selectedVectorSourceKind === "preview"
-        ? ctx.previewSourceStep
-        : null;
-  const femRenderedVectorCount = Math.min(
-    scaledFemMeshData?.fieldData?.x?.length ?? 0,
-    scaledFemMeshData?.fieldData?.y?.length ?? 0,
-    scaledFemMeshData?.fieldData?.z?.length ?? 0,
+  const femLiveRenderDebugData = useMemo<FemLiveRenderDebugData | null>(
+    () =>
+      ctx.isFemBackend
+        ? {
+            backendLabel: "fem",
+            viewMode: ctx.effectiveViewMode,
+            fieldLabel: ctx.quantityDescriptor?.label ?? ctx.selectedQuantity,
+            viewportLabel: "FEM meshData",
+            transportLabel: ctx.selectedVectorSourceKind,
+            solverStep: ctx.effectiveStep,
+            bufferSourceStep:
+              ctx.selectedVectorSourceKind === "live"
+                ? ctx.liveFieldSourceStep
+                : ctx.selectedVectorSourceKind === "preview"
+                  ? ctx.previewSourceStep
+                  : null,
+            liveFieldSourceStep: ctx.liveFieldSourceStep,
+            previewSourceStep: ctx.previewSourceStep,
+            fieldData: scaledFemMeshData?.fieldData,
+            fieldRevision: scaledFemMeshData?.fieldRevision ?? ctx.fieldDataRevision ?? null,
+            fieldDataTimestamp: ctx.fieldDataTimestamp ?? null,
+          }
+        : null,
+    [
+      ctx.effectiveStep,
+      ctx.effectiveViewMode,
+      ctx.fieldDataRevision,
+      ctx.fieldDataTimestamp,
+      ctx.isFemBackend,
+      ctx.liveFieldSourceStep,
+      ctx.previewSourceStep,
+      ctx.quantityDescriptor?.label,
+      ctx.selectedQuantity,
+      ctx.selectedVectorSourceKind,
+      scaledFemMeshData?.fieldData,
+      scaledFemMeshData?.fieldRevision,
+    ],
   );
 
   /* ── Determine what goes into the conditional slot ── */
@@ -857,6 +837,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
         viewportFitSeed={viewportFitSeed}
         fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
+        liveRenderDebugData={femLiveRenderDebugData}
         quantityId={ctx.requestedPreviewQuantity}
         quantityOptions={femQuantityOptions}
         colorField={ctx.femColorField}
@@ -1174,6 +1155,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
                         viewportFitSeed={viewportFitSeed}
                         fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
+                        liveRenderDebugData={femLiveRenderDebugData}
                         quantityId={ctx.requestedPreviewQuantity}
                         quantityOptions={femQuantityOptions}
                         colorField={ctx.femColorField}
@@ -1308,61 +1290,6 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
 
   return (
     <div className="flex flex-col flex-1 h-full min-h-0 min-w-0 relative overflow-hidden [&>*]:min-w-0 [&>*]:min-h-0 [&>*:not(.viewportOverlay)]:flex-1 [&>*:not(.viewportOverlay)]:w-full">
-      {showFemLiveRenderDebugOverlay ? (
-        <div
-          className="viewportOverlay pointer-events-auto absolute left-4 top-4 w-[min(32rem,calc(100vw-2rem))] max-h-[min(36rem,calc(100%-2rem))] overflow-hidden rounded-xl border border-emerald-400/35 bg-slate-950/92 shadow-[0_20px_45px_rgba(0,0,0,0.42)] ring-1 ring-emerald-300/40 backdrop-blur-md"
-          style={ALWAYS_VISIBLE_DEBUG_OVERLAY_STYLE}
-        >
-          <div className="border-b border-emerald-400/20 px-4 py-3">
-            <div className="text-[0.65rem] font-bold uppercase tracking-[0.2em] text-emerald-300">
-              Live Render Debug
-            </div>
-            <div className="mt-1 text-[0.72rem] text-slate-200">
-              Zawsze widoczny panel debugowy bufora renderowanego w viewportcie
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-1 px-4 py-3 text-[0.68rem]">
-            <span className="text-slate-400">Backend</span>
-            <span className="font-mono text-right text-slate-100">{ctx.isFemBackend ? "fem" : "fdm/other"}</span>
-            <span className="text-slate-400">View mode</span>
-            <span className="font-mono text-right text-slate-100">{ctx.effectiveViewMode}</span>
-            <span className="text-slate-400">Field</span>
-            <span className="font-mono text-right text-slate-100">{ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}</span>
-            <span className="text-slate-400">Viewport</span>
-            <span className="font-mono text-right text-slate-100">{ctx.isFemBackend ? "FEM meshData" : "Generic viewport"}</span>
-            <span className="text-slate-400">Transport</span>
-            <span className="font-mono text-right text-slate-100">{ctx.selectedVectorSourceKind}</span>
-            <span className="text-slate-400">Solver step</span>
-            <span className="font-mono text-right text-slate-100">{ctx.effectiveStep}</span>
-            <span className="text-slate-400">Buffer source step</span>
-            <span className="font-mono text-right text-slate-100">{femRenderedSourceStep ?? "-"}</span>
-            <span className="text-slate-400">Live field step</span>
-            <span className="font-mono text-right text-slate-100">{ctx.liveFieldSourceStep ?? "-"}</span>
-            <span className="text-slate-400">Preview step</span>
-            <span className="font-mono text-right text-slate-100">{ctx.previewSourceStep ?? "-"}</span>
-            <span className="text-slate-400">Vectors</span>
-            <span className="font-mono text-right text-slate-100">{femRenderedVectorCount}</span>
-            <span className="text-slate-400">Mean [mx,my,mz]</span>
-            <span className="font-mono text-right text-slate-100">{formatRenderDebugVector(femRenderedVectorAverage)}</span>
-            <span className="text-slate-400">FieldData</span>
-            <span className="font-mono text-right text-slate-100">{scaledFemMeshData?.fieldData ? "yes" : "no"}</span>
-            <span className="text-slate-400">Revision</span>
-            <span className="font-mono text-right text-slate-100">{scaledFemMeshData?.fieldRevision ?? ctx.fieldDataRevision ?? "-"}</span>
-            <span className="text-slate-400">Updated</span>
-            <span className="font-mono text-right text-slate-100">{formatRenderDebugTimestamp(ctx.fieldDataTimestamp)}</span>
-          </div>
-          <div className="border-t border-emerald-400/12 px-4 py-3">
-            <div className="mb-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-slate-400">
-              Rendered buffer sample
-            </div>
-            <pre className="max-h-56 overflow-auto rounded-lg border border-white/8 bg-black/30 px-3 py-2 text-[0.68rem] leading-5 text-emerald-100">
-{femRenderedVectorSample.length > 0
-  ? femRenderedVectorSample.join("\n")
-  : "Brak FEM fieldData przekazanego do renderera."}
-            </pre>
-          </div>
-        </div>
-      ) : null}
       {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showAntennaPreviewBadge && antennaPreviewBadgeVisible ? (
         <div
           className="viewportOverlay absolute right-4 top-4 rounded-full border border-primary/30 bg-background/85 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-primary shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md"

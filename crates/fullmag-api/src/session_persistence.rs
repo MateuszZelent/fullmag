@@ -418,7 +418,7 @@ pub(crate) async fn import_session_commit(
                 *selection = restored.display_selection.clone();
             }
             // Refresh HTTP bootstrap/state payload.
-            let public = serialize_current_live_response(&restored, true)
+            let public = serialize_current_live_response(&restored, true, false, false)
                 .map_err(|e| ApiError::internal(format!("serializing restored snapshot: {e:?}")))?;
             {
                 let mut public_guard = state.current_live_public_snapshot.write().await;

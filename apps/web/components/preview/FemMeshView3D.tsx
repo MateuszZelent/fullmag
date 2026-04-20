@@ -7,6 +7,7 @@ import { useFemViewportModel } from "./fem/useFemViewportModel";
 import { useFemViewportCommands } from "./fem/useFemViewportCommands";
 import { useFemViewportDerivedModel } from "./fem/useFemViewportDerivedModel";
 import { useFemViewportPresenter } from "./fem/useFemViewportPresenter";
+import type { FemLiveRenderDebugData } from "./fem/FemLiveRenderDebugPanel";
 import type {
   FemLiveMeshObjectSegment,
   FemMeshPart,
@@ -158,6 +159,7 @@ interface Props {
   onTogglePartExplorer?: () => void;
   onVisibleSubmeshSnapshotChange?: (snapshot: VisibleSubmeshSnapshot | null) => void;
   selectedSidebarNodeId?: string | null;
+  liveRenderDebugData?: FemLiveRenderDebugData | null;
 }
 
 /* ── Component ─────────────────────────────────────────────────────── */
@@ -234,6 +236,7 @@ function FemMeshView3DInner({
   onTogglePartExplorer,
   onVisibleSubmeshSnapshotChange,
   selectedSidebarNodeId = null,
+  liveRenderDebugData = null,
 }: Props) {
   if (FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging) {
     recordFrontendRender("FemMeshView3DInner", {
@@ -665,6 +668,7 @@ function FemMeshView3DInner({
     openPopover,
     selectedFaces,
     showOrientationLegend,
+    liveRenderDebugData,
     arrowField,
     legendField,
     fieldLabel,

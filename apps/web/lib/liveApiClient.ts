@@ -1,10 +1,11 @@
 "use client";
 
 import { resolveApiBase } from "./apiBase";
-import { apiGet, apiGetOptional, apiPost } from "./api/client";
+import { apiGet, apiGetArrayBuffer, apiGetOptional, apiPost } from "./api/client";
 import { ApiError } from "./api/errors";
 import type { MeshCommandTarget } from "./session/types";
 import type { SceneDocument } from "./session/types";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "./debug/frontendDiagnosticFlags";
 
 type JsonObject = Record<string, unknown>;
 type JsonBody = unknown;
@@ -145,13 +146,33 @@ async function requestPost<T>(url: string, body: JsonBody, options?: RequestOpti
   }
 }
 
+async function requestGetArrayBuffer(url: string, options?: RequestOptions): Promise<ArrayBuffer> {
+  try {
+    return await apiGetArrayBuffer(url, options);
+  } catch (error) {
+    normalizeApiError(error);
+  }
+}
+
 export function currentLiveApiClient() {
   const baseUrl = resolveApiBase();
+  const binaryFieldTransportEnabled =
+    FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFieldTransport;
+  const binaryFemTopologyTransportEnabled =
+    FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFemTopologyTransport;
+  const fieldTransportMode = binaryFieldTransportEnabled ? "bin" : "json";
+  const meshTransportMode = binaryFemTopologyTransportEnabled ? "bin" : "json";
+  const withSnapshotTransport = (path: string) => {
+    const url = new URL(path);
+    url.searchParams.set("field_transport", fieldTransportMode);
+    url.searchParams.set("mesh_transport", meshTransportMode);
+    return url.toString();
+  };
 
   return {
     urls: {
-      bootstrap: `${baseUrl}/v1/live/current/bootstrap`,
-      poll: `${baseUrl}/v1/live/current/poll`,
+      bootstrap: withSnapshotTransport(`${baseUrl}/v1/live/current/bootstrap`),
+      poll: withSnapshotTransport(`${baseUrl}/v1/live/current/poll`),
       runtimeCapabilities: `${baseUrl}/v1/runtime/capabilities`,
       commands: `${baseUrl}/v1/live/current/commands`,
       preview: (path: string) => `${baseUrl}/v1/live/current/preview${path}`,
@@ -170,10 +191,10 @@ export function currentLiveApiClient() {
       quantitiesCatalog: `${baseUrl}/v1/quantities/catalog`,
     },
     fetchBootstrap<T = JsonObject>(options?: RequestOptions) {
-      return requestGet<T>(`${baseUrl}/v1/live/current/bootstrap`, options);
+      return requestGet<T>(withSnapshotTransport(`${baseUrl}/v1/live/current/bootstrap`), options);
     },
     async fetchPoll(params: { sinceVersion: number; scalarRowsTotal: number }, options?: RequestOptions) {
-      const url = new URL(`${baseUrl}/v1/live/current/poll`);
+      const url = new URL(withSnapshotTransport(`${baseUrl}/v1/live/current/poll`));
       url.searchParams.set("since_version", String(params.sinceVersion));
       url.searchParams.set("scalar_rows_total", String(params.scalarRowsTotal));
       return requestGetOptional<JsonObject>(url.toString(), options);
@@ -268,6 +289,21 @@ export function currentLiveApiClient() {
         `${baseUrl}/v1/live/current/fields/${encodeURIComponent(quantityId)}/vector`,
         options,
       );
+    },
+    getFieldVectorBinary(quantityId: string, options?: RequestOptions) {
+      const url = new URL(
+        `${baseUrl}/v1/live/current/fields/${encodeURIComponent(quantityId)}/vector`,
+      );
+      url.searchParams.set("format", "bin");
+      return requestGetArrayBuffer(url.toString(), options);
+    },
+    getFemMeshTopologyBinary(generationId?: string | null, options?: RequestOptions) {
+      const url = new URL(`${baseUrl}/v1/live/current/fem-mesh/topology`);
+      url.searchParams.set("format", "bin");
+      if (generationId && generationId.trim().length > 0) {
+        url.searchParams.set("generation_id", generationId);
+      }
+      return requestGetArrayBuffer(url.toString(), options);
     },
     getFieldMeta(quantityId: string, options?: RequestOptions) {
       return requestGet<LiveFieldCatalogEntry>(

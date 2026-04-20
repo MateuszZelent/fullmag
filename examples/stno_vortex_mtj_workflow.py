@@ -1,7 +1,7 @@
 """Canonical Fullmag script generated from the model builder.
 
 Source: stno_vortex_mtj_workflow.py
-Entrypoint: flat_workspace
+Entrypoint: flat_relax
 """
 
 import fullmag as fm
@@ -23,7 +23,7 @@ body.alpha = 0.01
 body.m = fm.random(seed=2)
 
 # External field
-study.b_ext(0, 0, 0.02)
+study.b_ext(0, 0, 1.02)
 
 # Outer boundary / demag
 study.demag(realization="poisson_robin")
@@ -42,4 +42,4 @@ study.save("mx", every=1e-14)
 study.save("E_total", every=1e-14)
 
 # Stages
-study.relax(algorithm="llg_overdamped", tol=1e-06, max_steps=10000)
+study.stages.add_relax(algorithm="llg_overdamped", tol=1e-06, max_steps=10000)

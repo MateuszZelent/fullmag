@@ -1323,6 +1323,7 @@ function VectorFieldView3DInner({
           ) : null}
         </ViewportOverlayLayout.BottomLeft>
 
+        {FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging && (
         <ViewportOverlayLayout.BottomRight>
           <div className="pointer-events-auto w-[min(28rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-emerald-400/35 bg-slate-950/86 shadow-[0_20px_45px_rgba(0,0,0,0.42)] backdrop-blur-md">
             <div className="border-b border-emerald-400/20 px-4 py-3">
@@ -1368,6 +1369,7 @@ function VectorFieldView3DInner({
             </div>
           </div>
         </ViewportOverlayLayout.BottomRight>
+        )}
 
         {/* ── 3dsmax-style interaction mode toolbar (only when texture gizmo available) ── */}
         {fdmViewportFlags.showTextureModeToolbar && (activeTextureTransform || activeTransformScope === "texture") && (

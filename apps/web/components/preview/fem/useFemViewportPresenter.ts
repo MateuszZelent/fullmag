@@ -4,6 +4,7 @@ import { useFemOverlayItems } from "./useFemOverlayItems";
 import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles";
 import type { ViewportOverlayDescriptor } from "../ViewportOverlayManager";
 import type { FemViewportOverlayPopover } from "./FemViewportTypes";
+import type { FemLiveRenderDebugData } from "./FemLiveRenderDebugPanel";
 import type { OrientationDebugSnapshot } from "../camera/cameraOrientation";
 import type { ArrowSamplingMode, FemColorField, FemMeshData, RenderMode, ClipAxis, FemArrowColorMode, FemVectorDomainFilter, FemFerromagnetVisibilityMode } from "./femMeshTypes";
 import type { FemMeshPart } from "../../../lib/session/types";
@@ -63,6 +64,7 @@ interface UseFemViewportPresenterArgs {
   openPopover: FemViewportOverlayPopover;
   selectedFaces: number[];
   showOrientationLegend?: boolean;
+  liveRenderDebugData?: FemLiveRenderDebugData | null;
   arrowField: FemColorField;
   legendField: FemColorField;
   fieldLabel?: string;
@@ -229,6 +231,7 @@ export function useFemViewportPresenter(args: UseFemViewportPresenterArgs): {
     selectedFaces: args.selectedFaces,
     effectiveShowOrientationLegend,
     interactionActive: args.interactionActive,
+    liveRenderDebugData: args.liveRenderDebugData,
     arrowField: args.arrowField,
     legendField: args.legendField,
     fieldLabel: args.fieldLabel,

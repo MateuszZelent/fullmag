@@ -21,9 +21,9 @@ export interface RenderLayer {
 }
 
 export interface FemMeshData {
-  nodes: number[];
-  elements: number[];
-  boundaryFaces: number[];
+  nodes: ArrayLike<number>;
+  elements: ArrayLike<number>;
+  boundaryFaces: ArrayLike<number>;
   nNodes: number;
   nElements: number;
   fieldData?: { x: ArrayLike<number>; y: ArrayLike<number>; z: ArrayLike<number> };

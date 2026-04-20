@@ -21,6 +21,7 @@ import { FieldLegend } from "../field/FieldLegend";
 import HslSphere from "../HslSphere";
 import ViewCube from "../ViewCube";
 import type { FemViewportOverlayPopover } from "./FemViewportTypes";
+import type { FemLiveRenderDebugData } from "./FemLiveRenderDebugPanel";
 import type {
   ArrowSamplingMode,
   FemColorField,
@@ -95,10 +96,22 @@ export interface UseFemOverlayItemsArgs {
   labeledMode: boolean;
   legendOpen: boolean;
   partExplorerOpen?: boolean;
-  openPopover: "quantity" | "color" | "clip" | "display" | "vectors" | "camera" | "rotation" | "info" | "panels" | null;
+  openPopover:
+    | "quantity"
+    | "color"
+    | "clip"
+    | "display"
+    | "vectors"
+    | "camera"
+    | "rotation"
+    | "debug"
+    | "info"
+    | "panels"
+    | null;
   selectedFaces: number[];
   effectiveShowOrientationLegend: boolean;
   interactionActive: boolean;
+  liveRenderDebugData?: FemLiveRenderDebugData | null;
 
   // Legend data
   arrowField: FemColorField;
@@ -369,6 +382,7 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
             interactionSimplified={args.interactionActive}
             rotationSnapshots={args.rotationSnapshots}
             onApplyRotationEuler={args.applyRotationEuler}
+            liveRenderDebugData={args.liveRenderDebugData}
           />
         ),
       });
