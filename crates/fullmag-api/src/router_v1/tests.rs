@@ -14,6 +14,7 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
 use std::collections::{HashMap, VecDeque};
+use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::Arc;
@@ -136,6 +137,91 @@ fn test_router() -> axum::Router {
 
 async fn test_router_with_session() -> axum::Router {
     build_v1_router().with_state(test_app_state_with_live_session().await)
+}
+
+async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) {
+    let state = test_app_state();
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "fullmag-api-router-v1-assets-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos(),
+    ));
+    fs::create_dir_all(&artifact_dir).expect("failed to create artifact dir");
+
+    let session = SessionManifest {
+        session_id: "test-session".into(),
+        run_id: "test-run".into(),
+        status: "running".into(),
+        interactive_session_requested: false,
+        script_path: "test.py".into(),
+        problem_name: "contract-test".into(),
+        requested_backend: "cpu-fdm".into(),
+        explicit_selection: false,
+        requested_device: "auto".into(),
+        requested_precision: "double".into(),
+        requested_mode: "strict".into(),
+        requested_cpu_threads: None,
+        execution_mode: "strict".into(),
+        precision: "double".into(),
+        resolved_backend: Some("cpu-fdm".into()),
+        resolved_device: Some("cpu".into()),
+        resolved_precision: Some("double".into()),
+        resolved_mode: Some("strict".into()),
+        resolved_runtime_family: None,
+        resolved_engine_id: None,
+        resolved_worker: None,
+        resolved_cpu_threads: None,
+        resolved_fallback: None,
+        artifact_dir: artifact_dir.display().to_string(),
+        started_at_unix_ms: 1_700_000_000_000,
+        finished_at_unix_ms: 0,
+        plan_summary: serde_json::json!({}),
+    };
+
+    let snapshot = SessionStateResponse {
+        session_protocol_version: "1.0.0".into(),
+        capability_profile_version: "1.0.0".into(),
+        session,
+        run: None,
+        live_state: None,
+        runtime_status: RuntimeStatusView {
+            kind: RuntimeStatus::AwaitingCommand,
+            code: "awaiting_command".into(),
+            is_busy: false,
+            can_accept_commands: true,
+        },
+        capabilities: None,
+        metadata: None,
+        mesh_workspace: None,
+        stage_execution: None,
+        scene_document: None,
+        scalar_rows: Vec::new(),
+        engine_log: Vec::new(),
+        quantities: Vec::new(),
+        fem_mesh: None,
+        latest_fields: LatestFields::default(),
+        preview_cache: Default::default(),
+        artifacts: Vec::new(),
+        display_selection: CurrentDisplaySelection::default(),
+        preview_config: Default::default(),
+        preview: None,
+        builder_adapter: None,
+        scalar_rows_ws_cursor: 0,
+        quantities_ws_hash: 0,
+        ws_sent_fem_mesh_generation: None,
+        ws_sent_preview_fingerprint: None,
+        ws_sent_latest_fields_hash: 0,
+        state_version: 0,
+        ws_sent_envelope_version: 0,
+        envelope_version: 0,
+    };
+
+    *state.current_live_state.write().await = Some(snapshot);
+
+    (build_v1_router().with_state(state), artifact_dir)
 }
 
 /// Read the response body into bytes.
@@ -466,6 +552,37 @@ async fn display_put_accepts_partial_update() {
 }
 
 #[tokio::test]
+async fn display_patch_accepts_partial_update() {
+    let state = test_app_state();
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/live/current/display")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "active_quantity_id": "h_demag",
+                        "slice_layer": 4
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let sel = state.current_display_selection.read().await;
+    assert_eq!(sel.selection.quantity, "h_demag");
+    assert_eq!(sel.selection.layer, 4);
+    assert_eq!(sel.revision, 1);
+}
+
+#[tokio::test]
 async fn display_put_rejects_invalid_json() {
     let app = test_router();
     let response = app
@@ -544,6 +661,41 @@ async fn session_commit_returns_200_with_session() {
 
     let json = body_json(response).await;
     assert_eq!(json["committed"], false);
+}
+
+#[tokio::test]
+async fn assets_import_returns_200_with_session() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/assets/import")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "file_name": "note.txt",
+                        "content_base64": "aGVsbG8=",
+                        "target_realization": "geometry"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert!(json["asset_id"].is_string());
+    assert_eq!(json["target_realization"], "geometry");
+    assert_eq!(json["summary"]["file_name"], "note.txt");
+
+    let imports_dir = artifact_dir.join("imports");
+    assert!(imports_dir.exists(), "asset import should create imports dir");
+
+    let _ = fs::remove_dir_all(&artifact_dir);
 }
 
 // ─── engine log endpoint ────────────────────────────────────────────────────

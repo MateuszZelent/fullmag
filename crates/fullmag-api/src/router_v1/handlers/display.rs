@@ -1,4 +1,4 @@
-//! PUT /v1/live/current/display — update display selection.
+//! Display mutation endpoints.
 
 use std::sync::Arc;
 
@@ -23,6 +23,30 @@ use crate::types::AppState;
 pub async fn update_display(
     State(state): State<Arc<AppState>>,
     Json(update): Json<DisplayUpdate>,
+) -> Result<Json<DisplaySelection>, ApiError> {
+    apply_display_update(state, update).await
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v1/live/current/display",
+    request_body = DisplayUpdate,
+    responses(
+        (status = 200, description = "Display patched", body = DisplaySelection),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "display"
+)]
+pub async fn patch_display(
+    State(state): State<Arc<AppState>>,
+    Json(update): Json<DisplayUpdate>,
+) -> Result<Json<DisplaySelection>, ApiError> {
+    apply_display_update(state, update).await
+}
+
+async fn apply_display_update(
+    state: Arc<AppState>,
+    update: DisplayUpdate,
 ) -> Result<Json<DisplaySelection>, ApiError> {
     let mut sel = state.current_display_selection.write().await;
 

@@ -5,7 +5,7 @@ pub mod middleware;
 mod tests;
 
 use axum::{
-    routing::{get, post, put},
+    routing::{get, patch, post, put},
     Router,
 };
 use std::sync::Arc;
@@ -46,11 +46,16 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/v1/live/current/display",
-            put(handlers::display::update_display),
+            put(handlers::display::update_display)
+                .patch(handlers::display::patch_display),
         )
         .route(
             "/v1/live/current/commands",
             post(handlers::commands::submit_command),
+        )
+        .route(
+            "/v1/live/current/assets/import",
+            post(handlers::assets::import_asset),
         )
         .route(
             "/v1/live/current/artifacts",

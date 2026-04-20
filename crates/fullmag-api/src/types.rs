@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Mutex, RwLock};
+use utoipa::ToSchema;
 
 pub(crate) type CurrentPreviewConfig = LivePreviewRequest;
 pub(crate) type CurrentDisplaySelection = DisplaySelectionState;
@@ -810,7 +811,7 @@ pub(crate) struct RunRequest {
     pub output_dir: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct ImportSessionAssetRequest {
     pub file_name: String,
     pub content_base64: String,
@@ -868,7 +869,7 @@ const fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SessionAssetImportResponse {
     pub asset_id: String,
     pub session_id: String,
@@ -1002,7 +1003,7 @@ pub(crate) struct SessionCommand {
     pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ImportedAssetSummary {
     pub file_name: String,
     pub file_bytes: usize,
@@ -1021,7 +1022,7 @@ pub(crate) struct ImportedAssetSummary {
     pub note: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct BoundsSummary {
     pub min: [f64; 3],
     pub max: [f64; 3],

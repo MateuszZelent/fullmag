@@ -1,3 +1,4 @@
+pub mod assets;
 pub mod artifacts;
 pub mod commands;
 pub mod display;

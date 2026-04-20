@@ -5,7 +5,7 @@ export class DisplayModule {
   constructor(private client: LiveApiClient) {}
 
   async update(update: DisplayUpdate): Promise<DisplaySelection> {
-    return this.client.put<DisplaySelection>(
+    return this.client.patch<DisplaySelection>(
       "/v1/live/current/display",
       update,
     );

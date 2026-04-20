@@ -94,13 +94,25 @@ export class LiveApiClient {
 
   async post<T>(path: string, body: unknown, opts?: RequestOptions): Promise<T> {
     const url = this.resolveUrl(path);
-    const response = await this.executeRequest("POST", url, body, opts);
+    const response = await this.executeRequest("POST", url, body, opts, {
+      retryable: false,
+    });
     return this.parseJson<T>(response, url);
   }
 
   async put<T>(path: string, body: unknown, opts?: RequestOptions): Promise<T> {
     const url = this.resolveUrl(path);
-    const response = await this.executeRequest("PUT", url, body, opts);
+    const response = await this.executeRequest("PUT", url, body, opts, {
+      retryable: false,
+    });
+    return this.parseJson<T>(response, url);
+  }
+
+  async patch<T>(path: string, body: unknown, opts?: RequestOptions): Promise<T> {
+    const url = this.resolveUrl(path);
+    const response = await this.executeRequest("PATCH", url, body, opts, {
+      retryable: false,
+    });
     return this.parseJson<T>(response, url);
   }
 
@@ -124,9 +136,11 @@ export class LiveApiClient {
     url: string,
     body?: unknown,
     opts?: RequestOptions,
+    execution?: { retryable?: boolean },
   ): Promise<Response> {
     const timeout = opts?.timeout ?? this.config.timeout ?? DEFAULT_TIMEOUT;
     const maxRetries = this.config.maxRetries ?? DEFAULT_MAX_RETRIES;
+    const retryable = execution?.retryable ?? true;
 
     // 1. Build headers and apply requestId
     const headers = new Headers();
@@ -155,7 +169,11 @@ export class LiveApiClient {
           cache: "no-store",
         });
 
-      const response = await withRetry(doFetch, { maxRetries }, opts?.signal);
+      const response = await withRetry(
+        doFetch,
+        { maxRetries: retryable ? maxRetries : 0 },
+        opts?.signal,
+      );
 
       // 5. Version check
       checkContractVersion(response);

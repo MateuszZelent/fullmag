@@ -1586,7 +1586,7 @@ async fn handle_current_live_ws(mut socket: WebSocket, state: Arc<AppState>) {
     }
 }
 
-async fn import_asset_for_current_workspace(
+pub(crate) async fn import_asset_for_current_workspace(
     state: &Arc<AppState>,
     req: ImportSessionAssetRequest,
 ) -> Result<SessionAssetImportResponse, ApiError> {
