@@ -1,5 +1,5 @@
-pub mod assets;
 pub mod artifacts;
+pub mod assets;
 pub mod commands;
 pub mod display;
 pub mod domain;

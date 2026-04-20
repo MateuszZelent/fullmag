@@ -1,91 +1,107 @@
-//! Session persistence endpoints — export, inspect, commit.
+//! Session persistence endpoints — export, import inspect/commit, checkpoints, recovery.
 
 use std::sync::Arc;
 
 use axum::extract::State;
 use axum::Json;
-use serde_json::Value;
 
 use crate::error::ApiError;
+use crate::session_persistence::{
+    CheckpointListResponse, RecoveryClearResponse, RecoveryListResponse, SessionExportRequest,
+    SessionExportResponse, SessionImportCommitRequest, SessionImportCommitResponse,
+    SessionImportInspectRequest, SessionImportInspectResponse,
+};
 use crate::types::AppState;
 
 #[utoipa::path(
     post,
     path = "/v1/live/current/session/export",
+    request_body = SessionExportRequest,
     responses(
-        (status = 200, description = "Session exported"),
+        (status = 200, description = "Session exported", body = SessionExportResponse),
         (status = 404, description = "No active workspace"),
     ),
     tag = "session"
 )]
-pub async fn export_session(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
-    let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-
-    tracing::warn!(
-        "v1 session export is a lightweight proxy — use legacy endpoint for full .fms export"
-    );
-
-    Ok(Json(serde_json::json!({
-        "session_id": snapshot.session.session_id,
-        "problem_name": snapshot.session.problem_name,
-        "status": snapshot.session.status,
-        "scalar_rows": snapshot.scalar_rows.len(),
-        "artifacts": snapshot.artifacts.len(),
-        "message": "use POST /v1/live/current/session/export with body for full .fms export",
-    })))
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/live/current/session/inspect",
-    responses(
-        (status = 200, description = "Session inspection"),
-        (status = 404, description = "No active workspace"),
-    ),
-    tag = "session"
-)]
-pub async fn inspect_session(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
-    let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-
-    Ok(Json(serde_json::json!({
-        "session_id": snapshot.session.session_id,
-        "problem_name": snapshot.session.problem_name,
-        "status": snapshot.session.status,
-        "requested_backend": snapshot.session.requested_backend,
-        "resolved_backend": snapshot.session.resolved_backend,
-        "scalar_rows": snapshot.scalar_rows.len(),
-        "quantities": snapshot.quantities.len(),
-        "artifacts": snapshot.artifacts.len(),
-        "state_version": snapshot.state_version,
-    })))
+pub async fn export_session(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SessionExportRequest>,
+) -> Result<Json<SessionExportResponse>, ApiError> {
+    crate::session_persistence::export_session(State(state), Json(req)).await
 }
 
 #[utoipa::path(
     post,
-    path = "/v1/live/current/session/commit",
+    path = "/v1/live/current/session/import/inspect",
+    request_body = SessionImportInspectRequest,
     responses(
-        (status = 200, description = "Session committed"),
+        (status = 200, description = "Session import inspection", body = SessionImportInspectResponse),
+        (status = 400, description = "Invalid .fms payload"),
+    ),
+    tag = "session"
+)]
+pub async fn inspect_session(
+    Json(req): Json<SessionImportInspectRequest>,
+) -> Result<Json<SessionImportInspectResponse>, ApiError> {
+    crate::session_persistence::import_session_inspect(Json(req)).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/live/current/session/import/commit",
+    request_body = SessionImportCommitRequest,
+    responses(
+        (status = 200, description = "Session import committed", body = SessionImportCommitResponse),
+        (status = 400, description = "Invalid .fms payload"),
+    ),
+    tag = "session"
+)]
+pub async fn commit_session(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SessionImportCommitRequest>,
+) -> Result<Json<SessionImportCommitResponse>, ApiError> {
+    crate::session_persistence::import_session_commit(State(state), Json(req)).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/live/current/session/checkpoints",
+    responses(
+        (status = 200, description = "Session checkpoints", body = CheckpointListResponse),
         (status = 404, description = "No active workspace"),
     ),
     tag = "session"
 )]
-pub async fn commit_session(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
-    let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+pub async fn list_checkpoints(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<CheckpointListResponse>, ApiError> {
+    crate::session_persistence::list_checkpoints(State(state)).await
+}
 
-    tracing::warn!("session commit is a placeholder — no persistent commit implemented yet");
+#[utoipa::path(
+    get,
+    path = "/v1/live/current/session/recovery",
+    responses(
+        (status = 200, description = "Recovery snapshots", body = RecoveryListResponse),
+    ),
+    tag = "session"
+)]
+pub async fn list_recovery(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<RecoveryListResponse>, ApiError> {
+    crate::session_persistence::list_recovery(State(state)).await
+}
 
-    Ok(Json(serde_json::json!({
-        "committed": false,
-        "session_id": snapshot.session.session_id,
-        "message": "session commit not yet implemented",
-    })))
+#[utoipa::path(
+    post,
+    path = "/v1/live/current/session/recovery/clear",
+    responses(
+        (status = 200, description = "Recovery snapshots cleared", body = RecoveryClearResponse),
+    ),
+    tag = "session"
+)]
+pub async fn clear_recovery(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<RecoveryClearResponse>, ApiError> {
+    crate::session_persistence::clear_recovery(State(state)).await
 }

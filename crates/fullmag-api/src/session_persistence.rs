@@ -7,6 +7,7 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::error::ApiError;
 use crate::types::{AppState, RuntimeStatusView, SessionStateResponse};
@@ -109,7 +110,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
 
 // ── Request / Response types ───────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct SessionExportRequest {
     /// Save profile: "compact", "solved", "resume", "archive".
     pub profile: SaveProfile,
@@ -124,7 +125,7 @@ pub(crate) struct SessionExportRequest {
     pub ui_state: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SessionExportResponse {
     pub session_id: String,
     pub profile: SaveProfile,
@@ -133,18 +134,18 @@ pub(crate) struct SessionExportResponse {
     pub size_bytes: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct SessionImportInspectRequest {
     /// Base64-encoded `.fms` file content.
     pub fms_base64: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SessionImportInspectResponse {
     pub inspection: SessionInspection,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct SessionImportCommitRequest {
     /// Base64-encoded `.fms` file content.
     pub fms_base64: String,
@@ -154,7 +155,7 @@ pub(crate) struct SessionImportCommitRequest {
     pub restore_mode: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SessionImportCommitResponse {
     pub session_id: String,
     pub restore_class: fullmag_session::RestoreClass,
@@ -163,12 +164,12 @@ pub(crate) struct SessionImportCommitResponse {
     pub ui_state: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct CheckpointListResponse {
     pub checkpoints: Vec<CheckpointEntry>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct CheckpointEntry {
     pub checkpoint_id: String,
     pub step: u64,
@@ -176,12 +177,12 @@ pub(crate) struct CheckpointEntry {
     pub created_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct RecoveryListResponse {
     pub snapshots: Vec<RecoveryEntry>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct RecoveryEntry {
     pub session_id: String,
     pub name: String,
@@ -189,7 +190,7 @@ pub(crate) struct RecoveryEntry {
     pub profile: SaveProfile,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct RecoveryClearResponse {
     pub cleared: usize,
 }

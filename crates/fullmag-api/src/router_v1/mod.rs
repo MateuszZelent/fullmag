@@ -5,7 +5,7 @@ pub mod middleware;
 mod tests;
 
 use axum::{
-    routing::{get, patch, post, put},
+    routing::{get, post, put},
     Router,
 };
 use std::sync::Arc;
@@ -25,10 +25,6 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
             get(handlers::domain::get_domain_topology),
         )
         .route(
-            "/v1/live/current/domain/coordinates",
-            get(handlers::domain::get_domain_coordinates),
-        )
-        .route(
             "/v1/live/current/fields/catalog",
             get(handlers::fields::get_field_catalog),
         )
@@ -46,8 +42,7 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/v1/live/current/display",
-            put(handlers::display::update_display)
-                .patch(handlers::display::patch_display),
+            put(handlers::display::update_display).patch(handlers::display::patch_display),
         )
         .route(
             "/v1/live/current/commands",
@@ -94,12 +89,24 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
             post(handlers::session::export_session),
         )
         .route(
-            "/v1/live/current/session/inspect",
-            get(handlers::session::inspect_session),
+            "/v1/live/current/session/import/inspect",
+            post(handlers::session::inspect_session),
         )
         .route(
-            "/v1/live/current/session/commit",
+            "/v1/live/current/session/import/commit",
             post(handlers::session::commit_session),
+        )
+        .route(
+            "/v1/live/current/session/checkpoints",
+            get(handlers::session::list_checkpoints),
+        )
+        .route(
+            "/v1/live/current/session/recovery",
+            get(handlers::session::list_recovery),
+        )
+        .route(
+            "/v1/live/current/session/recovery/clear",
+            post(handlers::session::clear_recovery),
         )
         .route("/v1/capabilities", get(handlers::system::get_capabilities))
         .route("/v1/health", get(handlers::system::get_health))

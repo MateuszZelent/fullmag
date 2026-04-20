@@ -114,7 +114,6 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
     let capabilities = CapabilityMap {
         structured_grid: !is_fem,
         explicit_topology: is_fem,
-        implicit_coordinates: !is_fem,
         binary_fields: true,
         cell_fields: true,
         node_fields: is_fem,

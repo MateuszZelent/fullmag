@@ -9,21 +9,18 @@
 
 import { useCallback, useState } from "react";
 import {
-  exportSession,
-  inspectSession,
-  commitSessionImport,
-  listCheckpoints,
-  listRecovery,
-  clearRecovery,
-  fileToBase64,
-  downloadFmsFile,
-  type SaveProfile,
-  type SessionExportResponse,
-  type SessionInspection,
-  type SessionImportCommitResponse,
-  type CheckpointEntry,
-  type RecoveryEntry,
-} from "../api/sessionPersistence";
+  getLiveApiClient,
+  initLiveApiClient,
+} from "@/src/api/client/LiveApiClient";
+import type {
+  CheckpointEntry,
+  RecoveryEntry,
+  SaveProfile,
+  SessionExportResponse,
+  SessionImportCommitResponse,
+  SessionInspection,
+} from "@/src/api/types";
+import { resolveApiBase } from "../apiBase";
 import { useWorkspaceStore } from "../workspace/workspace-store";
 
 export interface UseSessionPersistenceResult {
@@ -85,7 +82,11 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
     async (profile: SaveProfile, name?: string) => {
       return wrap(async () => {
         const uiState = useWorkspaceStore.getState().exportUiStateSnapshot();
-        const resp = await exportSession({ profile, name, ui_state: uiState });
+        const resp = await ensureResourceClient().session.export({
+          profile,
+          name,
+          ui_state: uiState,
+        });
         const filename = `${name ?? "session"}.fms`;
         downloadFmsFile(resp.fms_base64, filename);
         return resp;
@@ -98,7 +99,9 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
     async (file: File) => {
       return wrap(async () => {
         const base64 = await fileToBase64(file);
-        const resp = await inspectSession({ fms_base64: base64 });
+        const resp = await ensureResourceClient().session.inspectImport({
+          fms_base64: base64,
+        });
         return resp.inspection;
       });
     },
@@ -109,7 +112,7 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
     async (file: File, restoreMode?: string) => {
       return wrap(async () => {
         const base64 = await fileToBase64(file);
-        const response = await commitSessionImport({
+        const response = await ensureResourceClient().session.commitImport({
           fms_base64: base64,
           restore_mode: restoreMode,
         });
@@ -124,7 +127,7 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
 
   const fetchCheckpoints = useCallback(async () => {
     const result = await wrap(async () => {
-      const resp = await listCheckpoints();
+      const resp = await ensureResourceClient().session.listCheckpoints();
       return resp.checkpoints;
     });
     return result ?? [];
@@ -132,7 +135,7 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
 
   const fetchRecovery = useCallback(async () => {
     const result = await wrap(async () => {
-      const resp = await listRecovery();
+      const resp = await ensureResourceClient().session.listRecovery();
       return resp.snapshots;
     });
     return result ?? [];
@@ -140,7 +143,7 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
 
   const doClearRecovery = useCallback(async () => {
     const result = await wrap(async () => {
-      const resp = await clearRecovery();
+      const resp = await ensureResourceClient().session.clearRecovery();
       return resp.cleared;
     });
     return result ?? 0;
@@ -159,4 +162,49 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
     doClearRecovery,
     clearError,
   };
+}
+
+function ensureResourceClient() {
+  try {
+    return getLiveApiClient();
+  } catch {
+    return initLiveApiClient({ baseUrl: resolveApiBase() });
+  }
+}
+
+function fileToBase64(file: File): Promise<string> {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("FileReader unavailable in this environment"));
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      resolve(result.includes(",") ? result.split(",")[1] : result);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function downloadFmsFile(base64: string, filename: string): void {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  const blob = new Blob([bytes], { type: "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
 }

@@ -224,6 +224,109 @@ async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) 
     (build_v1_router().with_state(state), artifact_dir)
 }
 
+async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
+    let repo_root = std::env::temp_dir().join(format!(
+        "fullmag-api-router-v1-session-store-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos(),
+    ));
+    fs::create_dir_all(&repo_root).expect("failed to create temp repo root");
+
+    let (live_events_tx, _rx) = broadcast::channel::<CurrentLiveWireMessage>(16);
+    let (control_events_tx, _rx) = watch::channel(0u64);
+
+    let state = Arc::new(AppState {
+        repo_root: repo_root.clone(),
+        current_workspace_root: repo_root.clone(),
+        live_channels: Arc::new(RwLock::new(HashMap::new())),
+        current_live_state: Arc::new(RwLock::new(None)),
+        current_live_public_snapshot: Arc::new(RwLock::new(None)),
+        current_live_events: live_events_tx,
+        current_live_vector_payload_seq: Arc::new(AtomicU32::new(0)),
+        current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
+        current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
+        current_control_events: control_events_tx,
+        current_control_next_seq: Arc::new(Mutex::new(0)),
+        current_live_snapshot_version: Arc::new(AtomicU64::new(0)),
+        feature_flags: FeatureFlags::default(),
+    });
+
+    let session = SessionManifest {
+        session_id: "test-session".into(),
+        run_id: "test-run".into(),
+        status: "running".into(),
+        interactive_session_requested: false,
+        script_path: "test.py".into(),
+        problem_name: "contract-test".into(),
+        requested_backend: "cpu-fdm".into(),
+        explicit_selection: false,
+        requested_device: "auto".into(),
+        requested_precision: "double".into(),
+        requested_mode: "strict".into(),
+        requested_cpu_threads: None,
+        execution_mode: "strict".into(),
+        precision: "double".into(),
+        resolved_backend: Some("cpu-fdm".into()),
+        resolved_device: Some("cpu".into()),
+        resolved_precision: Some("double".into()),
+        resolved_mode: Some("strict".into()),
+        resolved_runtime_family: None,
+        resolved_engine_id: None,
+        resolved_worker: None,
+        resolved_cpu_threads: None,
+        resolved_fallback: None,
+        artifact_dir: repo_root.join("artifacts").display().to_string(),
+        started_at_unix_ms: 1_700_000_000_000,
+        finished_at_unix_ms: 0,
+        plan_summary: serde_json::json!({}),
+    };
+
+    let snapshot = SessionStateResponse {
+        session_protocol_version: "1.0.0".into(),
+        capability_profile_version: "1.0.0".into(),
+        session,
+        run: None,
+        live_state: None,
+        runtime_status: RuntimeStatusView {
+            kind: RuntimeStatus::AwaitingCommand,
+            code: "awaiting_command".into(),
+            is_busy: false,
+            can_accept_commands: true,
+        },
+        capabilities: None,
+        metadata: None,
+        mesh_workspace: None,
+        stage_execution: None,
+        scene_document: None,
+        scalar_rows: Vec::new(),
+        engine_log: Vec::new(),
+        quantities: Vec::new(),
+        fem_mesh: None,
+        latest_fields: LatestFields::default(),
+        preview_cache: Default::default(),
+        artifacts: Vec::new(),
+        display_selection: CurrentDisplaySelection::default(),
+        preview_config: Default::default(),
+        preview: None,
+        builder_adapter: None,
+        scalar_rows_ws_cursor: 0,
+        quantities_ws_hash: 0,
+        ws_sent_fem_mesh_generation: None,
+        ws_sent_preview_fingerprint: None,
+        ws_sent_latest_fields_hash: 0,
+        state_version: 0,
+        ws_sent_envelope_version: 0,
+        envelope_version: 0,
+    };
+
+    *state.current_live_state.write().await = Some(snapshot);
+
+    (build_v1_router().with_state(state), repo_root)
+}
+
 /// Read the response body into bytes.
 async fn body_bytes(response: axum::response::Response) -> Vec<u8> {
     axum::body::to_bytes(response.into_body(), 1024 * 1024)
@@ -501,22 +604,6 @@ async fn domain_topology_returns_204_for_fdm() {
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
 
-#[tokio::test]
-async fn domain_coordinates_returns_204_for_fdm() {
-    let app = test_router_with_session().await;
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/live/current/domain/coordinates")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-}
-
 // ─── display endpoint ───────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -608,13 +695,20 @@ async fn display_put_rejects_invalid_json() {
 // ─── session endpoints ──────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn session_inspect_returns_404_without_session() {
+async fn session_export_returns_404_without_session() {
     let app = test_router();
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v1/live/current/session/inspect")
-                .body(Body::empty())
+                .method("POST")
+                .uri("/v1/live/current/session/export")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "profile": "compact"
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -624,13 +718,20 @@ async fn session_inspect_returns_404_without_session() {
 }
 
 #[tokio::test]
-async fn session_inspect_returns_200_with_session() {
-    let app = test_router_with_session().await;
+async fn session_export_returns_fms_payload_with_session() {
+    let (app, repo_root) = test_router_with_session_store().await;
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v1/live/current/session/inspect")
-                .body(Body::empty())
+                .method("POST")
+                .uri("/v1/live/current/session/export")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "profile": "compact"
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -640,17 +741,125 @@ async fn session_inspect_returns_200_with_session() {
 
     let json = body_json(response).await;
     assert_eq!(json["session_id"], "test-session");
-    assert_eq!(json["problem_name"], "contract-test");
+    assert_eq!(json["profile"], "compact");
+    assert!(json["fms_base64"].as_str().is_some_and(|value| !value.is_empty()));
+    assert!(json["size_bytes"].as_u64().unwrap_or(0) > 0);
+
+    let _ = fs::remove_dir_all(&repo_root);
 }
 
 #[tokio::test]
-async fn session_commit_returns_200_with_session() {
-    let app = test_router_with_session().await;
-    let response = app
+async fn session_import_inspect_round_trips_exported_session() {
+    let (app, repo_root) = test_router_with_session_store().await;
+    let export_response = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/live/current/session/commit")
+                .uri("/v1/live/current/session/export")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "profile": "compact"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(export_response.status(), StatusCode::OK);
+    let exported = body_json(export_response).await;
+    let fms_base64 = exported["fms_base64"]
+        .as_str()
+        .expect("export response should contain fms_base64");
+
+    let inspect_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/session/import/inspect")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": fms_base64
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(inspect_response.status(), StatusCode::OK);
+
+    let json = body_json(inspect_response).await;
+    assert_eq!(json["inspection"]["session_id"], "test-session");
+    assert_eq!(json["inspection"]["name"], "contract-test");
+    assert_eq!(json["inspection"]["profile"], "compact");
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn session_import_commit_round_trips_exported_session() {
+    let (app, repo_root) = test_router_with_session_store().await;
+    let export_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/session/export")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "profile": "compact"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(export_response.status(), StatusCode::OK);
+    let exported = body_json(export_response).await;
+    let fms_base64 = exported["fms_base64"]
+        .as_str()
+        .expect("export response should contain fms_base64");
+
+    let commit_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/session/import/commit")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": fms_base64
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(commit_response.status(), StatusCode::OK);
+
+    let json = body_json(commit_response).await;
+    assert_eq!(json["session_id"], "test-session");
+    assert_eq!(json["restore_class"], "config_only");
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn session_recovery_returns_200() {
+    let (app, repo_root) = test_router_with_session_store().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/session/recovery")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -660,7 +869,9 @@ async fn session_commit_returns_200_with_session() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["committed"], false);
+    assert!(json["snapshots"].is_array());
+
+    let _ = fs::remove_dir_all(&repo_root);
 }
 
 #[tokio::test]
@@ -693,7 +904,10 @@ async fn assets_import_returns_200_with_session() {
     assert_eq!(json["summary"]["file_name"], "note.txt");
 
     let imports_dir = artifact_dir.join("imports");
-    assert!(imports_dir.exists(), "asset import should create imports dir");
+    assert!(
+        imports_dir.exists(),
+        "asset import should create imports dir"
+    );
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }

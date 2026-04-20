@@ -363,10 +363,6 @@ async fn main() {
             get(wait_current_live_control),
         )
         .route(
-            "/v1/live/current/assets/import",
-            post(import_current_live_asset),
-        )
-        .route(
             "/v1/live/current/state/export",
             post(export_current_live_state),
         )
@@ -386,27 +382,6 @@ async fn main() {
         .route("/v1/docs/physics", get(list_physics_docs))
         .route("/v1/quantities/catalog", get(get_quantities_catalog))
         .route("/v1/run", post(start_run))
-        // ── Session persistence ────────────────────────────────────────
-        .route(
-            "/v1/live/current/session/import/inspect",
-            post(session_persistence::import_session_inspect),
-        )
-        .route(
-            "/v1/live/current/session/import/commit",
-            post(session_persistence::import_session_commit),
-        )
-        .route(
-            "/v1/live/current/checkpoints",
-            get(session_persistence::list_checkpoints),
-        )
-        .route(
-            "/v1/live/current/recovery",
-            get(session_persistence::list_recovery),
-        )
-        .route(
-            "/v1/live/current/recovery/clear",
-            post(session_persistence::clear_recovery),
-        )
         // ── WebSocket ──────────────────────────────────────────────────
         .route("/ws/live/current", get(ws_current_live))
         .route("/ws/live/:run_id", get(ws_live))
@@ -1356,14 +1331,6 @@ async fn wait_current_live_control(
         Ok(Err(error)) => Err(error),
         Err(_) => Ok(StatusCode::NO_CONTENT.into_response()),
     }
-}
-
-async fn import_current_live_asset(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ImportSessionAssetRequest>,
-) -> Result<Json<SessionAssetImportResponse>, ApiError> {
-    let response = import_asset_for_current_workspace(&state, req).await?;
-    Ok(Json(response))
 }
 
 async fn export_current_live_state(

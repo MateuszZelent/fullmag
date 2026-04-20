@@ -76,7 +76,6 @@ export interface ResourceRevisionMap {
 export interface CapabilityMap {
   structured_grid: boolean;
   explicit_topology: boolean;
-  implicit_coordinates: boolean;
   binary_fields: boolean;
   cell_fields: boolean;
   node_fields: boolean;
@@ -217,6 +216,105 @@ export interface CommandResponse {
 export interface ArtifactEntry {
   path: string;
   kind: string;
+}
+
+// ── Session persistence ───────────────────────────────────────────────
+
+export type SaveProfile =
+  | "compact"
+  | "solved"
+  | "resume"
+  | "archive"
+  | "recovery";
+
+export type RestoreClass =
+  | "exact_resume"
+  | "logical_resume"
+  | "initial_condition_import"
+  | "config_only";
+
+export type CompressionProfile = "speed" | "balanced" | "smallest";
+
+export interface SessionExportRequest {
+  profile: SaveProfile;
+  name?: string;
+  compression?: CompressionProfile;
+  ui_state?: unknown;
+}
+
+export interface SessionExportResponse {
+  session_id: string;
+  profile: SaveProfile;
+  fms_base64: string;
+  size_bytes: number;
+}
+
+export interface CheckpointSummary {
+  checkpoint_id: string;
+  step: number;
+  time_s: number;
+  study_kind: string;
+}
+
+export interface SessionInspection {
+  format_version: string;
+  session_id: string;
+  name: string;
+  profile: SaveProfile;
+  created_by_version: string;
+  created_at: string;
+  saved_at: string;
+  run_count: number;
+  latest_checkpoint: CheckpointSummary | null;
+  restore_class: RestoreClass;
+  warnings: string[];
+  total_size_bytes: number;
+}
+
+export interface SessionImportInspectRequest {
+  fms_base64: string;
+}
+
+export interface SessionImportInspectResponse {
+  inspection: SessionInspection;
+}
+
+export interface SessionImportCommitRequest {
+  fms_base64: string;
+  restore_mode?: string;
+}
+
+export interface SessionImportCommitResponse {
+  session_id: string;
+  restore_class: RestoreClass;
+  warnings: string[];
+  ui_state?: unknown;
+}
+
+export interface CheckpointEntry {
+  checkpoint_id: string;
+  step: number;
+  time_s: number;
+  created_at: string;
+}
+
+export interface CheckpointListResponse {
+  checkpoints: CheckpointEntry[];
+}
+
+export interface RecoveryEntry {
+  session_id: string;
+  name: string;
+  saved_at: string;
+  profile: SaveProfile;
+}
+
+export interface RecoveryListResponse {
+  snapshots: RecoveryEntry[];
+}
+
+export interface RecoveryClearResponse {
+  cleared: number;
 }
 
 // ── System / Health ───────────────────────────────────────────────────

@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   shouldFetchTopology,
-  shouldFetchCoordinates,
   canShowWireframe,
   canShowGridDimensions,
   getAvailableAlgorithms,
@@ -11,17 +10,16 @@ import type { CapabilityMap } from "../../../api/types";
 function makeCaps(overrides?: Partial<CapabilityMap>): CapabilityMap {
   return {
     explicit_topology: false,
-    implicit_coordinates: true,
     structured_grid: true,
-    binary_field_transport: true,
-    binary_topology_transport: false,
-    eigen_spectrum: false,
-    eigen_dispersion: false,
-    frequency_response: false,
+    binary_fields: true,
+    cell_fields: true,
+    node_fields: false,
+    scalar_history: true,
+    eigen_modes: false,
+    gpu_telemetry: false,
+    preview_2d: true,
+    preview_3d: true,
     algorithms_available: ["rk45", "euler"],
-    discretization: "fdm",
-    device: "cpu",
-    precision: "double",
     ...overrides,
   };
 }
@@ -39,20 +37,6 @@ describe("capabilityGuards", () => {
     expect(shouldFetchTopology(makeCaps({ explicit_topology: false }))).toBe(
       false,
     );
-  });
-
-  // ── shouldFetchCoordinates ───────────────────────────────────────
-
-  it("shouldFetchCoordinates returns true when implicit_coordinates is false", () => {
-    expect(
-      shouldFetchCoordinates(makeCaps({ implicit_coordinates: false })),
-    ).toBe(true);
-  });
-
-  it("shouldFetchCoordinates returns false when implicit_coordinates is true", () => {
-    expect(
-      shouldFetchCoordinates(makeCaps({ implicit_coordinates: true })),
-    ).toBe(false);
   });
 
   // ── canShowWireframe ─────────────────────────────────────────────

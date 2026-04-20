@@ -4,10 +4,6 @@ export function shouldFetchTopology(caps: CapabilityMap): boolean {
   return caps.explicit_topology;
 }
 
-export function shouldFetchCoordinates(caps: CapabilityMap): boolean {
-  return !caps.implicit_coordinates;
-}
-
 export function canShowWireframe(caps: CapabilityMap): boolean {
   return caps.explicit_topology;
 }

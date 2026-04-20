@@ -1,4 +1,4 @@
-//! Domain endpoints — meta, topology, coordinates.
+//! Domain endpoints — meta and topology.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -146,38 +146,6 @@ pub async fn get_domain_topology(
         Some(mesh) => {
             let binary = serialize_fem_mesh_topology_binary_v1(mesh);
             Ok(([(CONTENT_TYPE, "application/octet-stream")], binary).into_response())
-        }
-        None => Ok(StatusCode::NO_CONTENT.into_response()),
-    }
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/live/current/domain/coordinates",
-    responses(
-        (status = 200, description = "Binary FEM node coordinates", content_type = "application/octet-stream"),
-        (status = 204, description = "Not applicable (FDM — coordinates are implicit)"),
-        (status = 404, description = "No active workspace"),
-    ),
-    tag = "domain"
-)]
-pub async fn get_domain_coordinates(
-    State(state): State<Arc<AppState>>,
-) -> Result<axum::response::Response, ApiError> {
-    let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-
-    match snapshot.fem_mesh.as_ref() {
-        Some(mesh) => {
-            let mut buf = Vec::with_capacity(mesh.nodes.len() * 3 * std::mem::size_of::<f64>());
-            for node in &mesh.nodes {
-                buf.extend_from_slice(&node[0].to_le_bytes());
-                buf.extend_from_slice(&node[1].to_le_bytes());
-                buf.extend_from_slice(&node[2].to_le_bytes());
-            }
-            Ok(([(CONTENT_TYPE, "application/octet-stream")], buf).into_response())
         }
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }

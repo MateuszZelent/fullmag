@@ -80,7 +80,6 @@ pub struct ResourceRevisionMap {
 pub struct CapabilityMap {
     pub structured_grid: bool,
     pub explicit_topology: bool,
-    pub implicit_coordinates: bool,
     pub binary_fields: bool,
     pub cell_fields: bool,
     pub node_fields: bool,

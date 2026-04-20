@@ -11,8 +11,4 @@ export class DomainModule {
   async getTopology(): Promise<ArrayBuffer> {
     return this.client.getBinary("/v1/live/current/domain/topology");
   }
-
-  async getCoordinates(): Promise<ArrayBuffer> {
-    return this.client.getBinary("/v1/live/current/domain/coordinates");
-  }
 }

@@ -5,11 +5,12 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 // ── Save profiles ──────────────────────────────────────────────────────
 
 /// Which elements to include when saving a session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SaveProfile {
     /// Script + scene + UI; no solver data.
@@ -27,7 +28,7 @@ pub enum SaveProfile {
 // ── Restore classes ────────────────────────────────────────────────────
 
 /// What level of session restoration is possible.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RestoreClass {
     /// Bitwise-identical continuation from checkpoint.
@@ -201,7 +202,7 @@ pub enum ArtifactPolicy {
     All,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CompressionProfile {
     Speed,
@@ -477,7 +478,7 @@ pub struct RngState {
 // ── Compatibility inspection ───────────────────────────────────────────
 
 /// Result of inspecting a `.fms` file before committing to open it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SessionInspection {
     pub format_version: String,
     pub session_id: String,
@@ -493,7 +494,7 @@ pub struct SessionInspection {
     pub total_size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CheckpointSummary {
     pub checkpoint_id: String,
     pub step: u64,
