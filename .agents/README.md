@@ -23,6 +23,9 @@ The canonical local browser contract is the resource-first API described in:
 Rules:
 
 - `status` stays thin and revision-driven,
+- `workspace/*` carries selection/ribbon/layout state and must not mutate physics semantics,
+- `authoring/*` carries model-builder, inspector, interaction, and study edits against one
+  canonical `scene_revision`,
 - heavy numerical payloads use binary data-plane transports,
 - React components do not call `fetch()` directly,
 - FDM/FEM differences stay in capability guards and domain adapters,

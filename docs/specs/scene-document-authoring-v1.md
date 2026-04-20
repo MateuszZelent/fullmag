@@ -11,6 +11,9 @@ assignment, magnetization initialization, study defaults, and editor metadata.
 
 It replaces `script_builder` and `model_builder_graph` in the public live-session payload.
 
+Model tree nodes, inspector panels, and authoring ribbons are projections over this document and
+its narrow semantic subresources. They do not define a second persisted physics model.
+
 ## Version
 
 - Document version string: `scene.v1`
@@ -94,12 +97,19 @@ Supported `kind` values in v1:
 - `random`
 - `file`
 - `sampled`
+- `preset_texture`
 
 Each asset stores:
 
 - source/value payload fields needed by the current executable paths
 - `mapping`
 - `texture_transform`
+
+Concrete authoring examples:
+
+- object magnetization "uniform" maps to `kind = "uniform"` and `value = [mx, my, mz]`
+- object magnetization "vortex" maps to `kind = "preset_texture"`,
+  `preset_kind = "vortex"`, and `preset_params`
 
 Default migration values:
 
@@ -154,12 +164,19 @@ source of truth.
 
 ## Live API changes
 
-- `POST /v1/live/current/scene` accepts and returns `SceneDocument`
+- `GET /v1/live/current/authoring/scene` returns `SceneDocument`
+- `PUT /v1/live/current/authoring/scene` replaces `SceneDocument`
+- `PATCH /v1/live/current/authoring/scene` applies coarse scene-level patches
+- `POST /v1/live/current/authoring/transactions` commits semantic authoring transactions against
+  the same scene revision
 - websocket `session_state` continues using the same event kind, but the payload now contains
   `scene_document`
 - `script_builder` and `model_builder_graph` are removed from the public payload
-- `POST /v1/live/current/script/sync` derives its input from `SceneDocument`, not from a manually
-  mutated public builder payload
+- `POST /v1/live/current/authoring/script/sync` derives its input from `SceneDocument`, not from a
+  manually mutated public builder payload
+- narrow routes such as `authoring/model/materials/:material_id` or
+  `authoring/model/magnetization-assets/:asset_id` are allowed only as projections over the same
+  canonical scene state
 
 ## Validation
 

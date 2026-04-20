@@ -1,11 +1,66 @@
+use crate::types::MeshCommandTarget;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct CommandRequest {
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StructuredCommandRequest {
+    Run {
+        until_seconds: f64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_steps: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        integrator: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fixed_timestep: Option<f64>,
+    },
+    Relax {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        until_seconds: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_steps: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        torque_tolerance: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        energy_tolerance: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        relax_algorithm: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        relax_alpha: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fixed_timestep: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_error: Option<f64>,
+    },
+    Pause,
+    Resume,
+    Stop,
+    Skip,
+    Remesh {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mesh_options: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mesh_target: Option<MeshCommandTarget>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mesh_reason: Option<String>,
+    },
+    SaveVtk,
+    Solve,
+    Close,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct LegacyCommandRequest {
     pub command: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub params: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum CommandRequest {
+    Structured(StructuredCommandRequest),
+    Legacy(LegacyCommandRequest),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

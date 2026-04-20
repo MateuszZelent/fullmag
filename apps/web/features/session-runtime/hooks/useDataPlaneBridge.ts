@@ -54,12 +54,15 @@ function adaptScalarRow(
  * Mount alongside useNewApiBridge. Watches store revision counters
  * and fetches heavy payloads lazily from the new resource-first API.
  */
-export function useDataPlaneBridge(): void {
+
+export function useDataPlaneBridge(
+  options?: { enabled?: boolean },
+): void {
+  const enabled = options?.enabled ?? true;
   // Read revision signals from the store (set by useNewApiBridge)
   const fieldFrameEnvelope = useSessionRuntimeStore(
     (s) => s.fieldFrameEnvelope,
   );
-  const stateVersion = useSessionRuntimeStore((s) => s.stateVersion);
   const scalarRevision = useSessionRuntimeStore(
     (s) => s.liveState?.step ?? s.stateVersion,
   );
@@ -78,6 +81,9 @@ export function useDataPlaneBridge(): void {
   // Reset accumulators when session changes
   const prevSessionRef = useRef<string | undefined>(undefined);
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     if (sessionId !== prevSessionRef.current) {
       prevSessionRef.current = sessionId;
       scalarAccumulatorRef.current = [];
@@ -85,12 +91,13 @@ export function useDataPlaneBridge(): void {
       fetchedScalarRevRef.current = null;
       fetchedDomainGenRef.current = null;
     }
-  }, [sessionId]);
+  }, [enabled, sessionId]);
 
   // ── Field vector fetching ───────────────────────────────────────
 
   const fetchFieldVector = useCallback(
     async (envelope: FieldFrameEnvelope) => {
+      if (!enabled) return;
       const rev = envelope.fieldRevision;
       if (fetchedFieldRevRef.current === rev) return;
 
@@ -156,13 +163,14 @@ export function useDataPlaneBridge(): void {
         console.warn("[fullmag][data-plane] field fetch failed", err);
       }
     },
-    [applyNormalizedState],
+    [applyNormalizedState, enabled],
   );
 
   // ── Scalar history fetching ─────────────────────────────────────
 
   const fetchScalars = useCallback(
     async (revision: number) => {
+      if (!enabled) return;
       if (fetchedScalarRevRef.current === revision) return;
 
       try {
@@ -214,13 +222,14 @@ export function useDataPlaneBridge(): void {
         console.warn("[fullmag][data-plane] scalar fetch failed", err);
       }
     },
-    [applyNormalizedState],
+    [applyNormalizedState, enabled],
   );
 
   // ── Domain / topology fetching ──────────────────────────────────
 
   const fetchDomain = useCallback(
     async (genId: string) => {
+      if (!enabled) return;
       if (fetchedDomainGenRef.current === genId) return;
 
       try {
@@ -264,29 +273,38 @@ export function useDataPlaneBridge(): void {
         console.warn("[fullmag][data-plane] domain fetch failed", err);
       }
     },
-    [applyNormalizedState],
+    [applyNormalizedState, enabled],
   );
 
   // ── Watchers ────────────────────────────────────────────────────
 
   // Watch field revision changes
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     if (fieldFrameEnvelope && fieldFrameEnvelope.fieldRevision > 0) {
       fetchFieldVector(fieldFrameEnvelope);
     }
-  }, [fieldFrameEnvelope, fetchFieldVector]);
+  }, [enabled, fieldFrameEnvelope, fetchFieldVector]);
 
   // Watch scalar revision changes
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     if (scalarRevision != null && scalarRevision > 0) {
       fetchScalars(scalarRevision);
     }
-  }, [scalarRevision, fetchScalars]);
+  }, [enabled, scalarRevision, fetchScalars]);
 
   // Watch domain generation changes
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     if (fieldFrameEnvelope?.meshGenerationId) {
       fetchDomain(fieldFrameEnvelope.meshGenerationId);
     }
-  }, [fieldFrameEnvelope?.meshGenerationId, fetchDomain]);
+  }, [enabled, fieldFrameEnvelope?.meshGenerationId, fetchDomain]);
 }

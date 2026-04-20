@@ -3,6 +3,7 @@ import 'flexlayout-react/style/dark.css';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { ThemeProvider } from '../components/theme';
+import { ClientProviders } from './ClientProviders';
 
 export const metadata: Metadata = {
   title: 'Fullmag — Control Room',
@@ -29,7 +30,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         />
       </head>
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        <ClientProviders>
+          <ThemeProvider>{children}</ThemeProvider>
+        </ClientProviders>
       </body>
     </html>
   );

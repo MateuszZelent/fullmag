@@ -1,15 +1,16 @@
 "use client";
 
 /**
- * useRuntimeFeatureFlags — fetches feature flags from the backend once on mount.
+ * useRuntimeFeatureFlags — compatibility shim resolved through `/v1/capabilities`.
  *
  * Returns `null` while loading (first render), then the resolved flags.
  * Components should show a loading placeholder or nothing until flags are
  * available to avoid mounting expensive subsystems (e.g. Three.js) that might
  * be immediately disabled.
  *
- * The backend reads `~/.fullmag/feature_flags.json` (or env vars as fallback)
- * and exposes them at `GET /v1/live/feature-flags`.
+ * The canonical runtime capability source is `GET /v1/capabilities`.
+ * During migration we preserve the old boolean shape locally, but the network
+ * request now goes through the capability endpoint instead of legacy flags.
  */
 
 import { useEffect, useState } from "react";

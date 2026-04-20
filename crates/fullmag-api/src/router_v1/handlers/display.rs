@@ -8,7 +8,7 @@ use axum::Json;
 use crate::error::ApiError;
 use crate::schemas::display::DisplayUpdate;
 use crate::schemas::status::{DisplaySelection, DisplayViewMode, FieldComponent};
-use crate::types::AppState;
+use crate::types::{AppState, CurrentDisplaySelection, DisplayPresentationState};
 use fullmag_runner::{DisplayFieldComponent, DisplayViewMode as RunnerDisplayViewMode};
 
 #[utoipa::path(
@@ -50,6 +50,7 @@ async fn apply_display_update(
     update: DisplayUpdate,
 ) -> Result<Json<DisplaySelection>, ApiError> {
     let mut sel = state.current_display_selection.write().await;
+    let mut presentation = state.current_display_presentation.write().await;
 
     if let Some(q) = update.active_quantity_id {
         sel.selection.quantity = q;
@@ -89,37 +90,56 @@ async fn apply_display_update(
     if let Some(y_chosen_size) = update.y_chosen_size {
         sel.selection.y_chosen_size = y_chosen_size;
     }
+    if let Some(colormap) = update.colormap {
+        presentation.colormap = colormap;
+    }
+    if let Some(contrast_min) = update.contrast_min {
+        presentation.contrast_min = Some(contrast_min);
+    }
+    if let Some(contrast_max) = update.contrast_max {
+        presentation.contrast_max = Some(contrast_max);
+    }
+    if let Some(vector_glyphs) = update.vector_glyphs {
+        presentation.vector_glyphs = vector_glyphs;
+    }
     sel.selection.canonicalize();
 
     sel.revision = sel.revision.wrapping_add(1);
-    let response = DisplaySelection {
-        active_quantity_id: sel.selection.quantity.clone(),
-        view_mode: match sel.selection.view_mode {
+    let response = build_display_selection_response(&sel, &presentation);
+
+    Ok(Json(response))
+}
+
+pub(crate) fn build_display_selection_response(
+    selection: &CurrentDisplaySelection,
+    presentation: &DisplayPresentationState,
+) -> DisplaySelection {
+    DisplaySelection {
+        active_quantity_id: selection.selection.quantity.clone(),
+        view_mode: match selection.selection.view_mode {
             RunnerDisplayViewMode::TwoD => DisplayViewMode::TwoD,
             RunnerDisplayViewMode::ThreeD => DisplayViewMode::ThreeD,
         },
-        field_component: match sel.selection.field_component {
+        field_component: match selection.selection.field_component {
             DisplayFieldComponent::X => FieldComponent::X,
             DisplayFieldComponent::Y => FieldComponent::Y,
             DisplayFieldComponent::Z => FieldComponent::Z,
             DisplayFieldComponent::Magnitude => FieldComponent::Magnitude,
         },
-        colormap: update.colormap.unwrap_or_else(|| "viridis".to_string()),
-        auto_contrast: sel.selection.auto_scale_enabled,
-        contrast_min: update.contrast_min,
-        contrast_max: update.contrast_max,
-        vector_glyphs: update.vector_glyphs.unwrap_or(true),
-        vector_density: sel.selection.every_n,
-        slice_mode: if sel.selection.all_layers {
+        colormap: presentation.colormap.clone(),
+        auto_contrast: selection.selection.auto_scale_enabled,
+        contrast_min: presentation.contrast_min,
+        contrast_max: presentation.contrast_max,
+        vector_glyphs: presentation.vector_glyphs,
+        vector_density: selection.selection.every_n,
+        slice_mode: if selection.selection.all_layers {
             "all".into()
         } else {
             "single".into()
         },
-        slice_layer: sel.selection.layer as i32,
-        max_points: sel.selection.max_points,
-        x_chosen_size: sel.selection.x_chosen_size,
-        y_chosen_size: sel.selection.y_chosen_size,
-    };
-
-    Ok(Json(response))
+        slice_layer: selection.selection.layer as i32,
+        max_points: selection.selection.max_points,
+        x_chosen_size: selection.selection.x_chosen_size,
+        y_chosen_size: selection.selection.y_chosen_size,
+    }
 }

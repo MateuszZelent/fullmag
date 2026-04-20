@@ -9,7 +9,7 @@ import {
 } from "@/src/api/client/LiveApiClient";
 import { adaptLegacyCommand } from "@/src/api/client/modules/CommandAdapter";
 import { scalarWindowToRows } from "@/src/api/client/modules/ScalarHistoryAdapter";
-import type { DisplayUpdate } from "@/src/api/generated/openapi-types";
+import type { DisplayUpdate, RemeshCommandRequest } from "@/src/api/types";
 import type { MeshCommandTarget } from "./session/types";
 import type { SceneDocument } from "./session/types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "./debug/frontendDiagnosticFlags";
@@ -43,6 +43,8 @@ export interface GpuTelemetryDevice {
 }
 
 export interface GpuTelemetryResponse {
+  status: string;
+  reason?: string | null;
   sample_time_unix_ms: number;
   devices: GpuTelemetryDevice[];
 }
@@ -102,10 +104,17 @@ export interface LiveFieldVectorResponse {
   n_comp: number;
   element_count: number;
   grid?: [number, number, number] | null;
-  values: number[];
+  values: Float32Array | Float64Array;
   active_mask?: boolean[] | null;
   source: string;
 }
+
+const DEFAULT_RUNTIME_FEATURE_FLAGS: RuntimeFeatureFlags = {
+  disable_charts: false,
+  disable_preview_2d: false,
+  disable_preview_3d: false,
+  disable_session_state_broadcast: false,
+};
 
 export interface QuantityCatalogResponse {
   schema_version: string;
@@ -222,7 +231,10 @@ export function currentLiveApiClient() {
         }));
     },
     fetchFeatureFlags(options?: RequestOptions) {
-      return requestGet<RuntimeFeatureFlags>(`${baseUrl}/v1/live/feature-flags`, options);
+      const client = ensureResourceClient();
+      return client.system
+        .getCapabilities()
+        .then(() => DEFAULT_RUNTIME_FEATURE_FLAGS);
     },
     fetchRuntimeCapabilities(options?: RequestOptions) {
       const client = ensureResourceClient();
@@ -231,26 +243,27 @@ export function currentLiveApiClient() {
     queueCommand(payload: JsonBody, options?: RequestOptions) {
       const command = adaptLegacyCommand((payload ?? {}) as Record<string, unknown>);
       const client = ensureResourceClient();
-      return client.commands.submit(
-        command.command,
-        command.params as Record<string, unknown> | undefined,
-      ).then((response) => response as unknown as JsonObject);
+      return client.commands.submit(command).then((response) => response as unknown as JsonObject);
     },
     queueRemesh(payload: QueueRemeshPayload, options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.commands.submit("remesh", {
+      const request: RemeshCommandRequest = {
+        kind: "remesh",
         mesh_options: payload.mesh_options,
         mesh_target: payload.mesh_target,
         mesh_reason: payload.mesh_reason,
-      }).then((response) => response as unknown as JsonObject);
+      };
+      return client.commands.submit(request).then((response) => response as unknown as JsonObject);
     },
     queueStudyDomainRemesh(meshOptions: JsonBody, meshReason?: string, options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.commands.submit("remesh", {
+      const request: RemeshCommandRequest = {
+        kind: "remesh",
         mesh_options: meshOptions,
         mesh_target: { kind: "study_domain" },
         mesh_reason: meshReason,
-      }).then((response) => response as unknown as JsonObject);
+      };
+      return client.commands.submit(request).then((response) => response as unknown as JsonObject);
     },
     importAsset(payload: JsonBody, options?: RequestOptions) {
       return requestPost<JsonObject>(`${baseUrl}/v1/live/current/assets/import`, payload, options);
@@ -325,7 +338,7 @@ export function currentLiveApiClient() {
         n_comp: decoded.nComp,
         element_count: decoded.valueCount,
         grid: decoded.grid,
-        values: Array.from(decoded.values),
+        values: decoded.values,
         active_mask: null,
         source: "binary",
       }));

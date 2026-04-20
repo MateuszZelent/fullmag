@@ -163,6 +163,8 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     monotonicFrameGuard: true,
     /** PR-6: Split topology / field caches in viewport. */
     viewportSplitTopologyFieldCache: false,
+    /** PR-10: Route Control Room transport through resource-first status bridge. */
+    resourceFirstSessionRuntime: true,
     /** PR-7: Semantic chart time series. */
     chartSemanticSeries: false,
     /** PR-7: Worker-based chart decimation. */

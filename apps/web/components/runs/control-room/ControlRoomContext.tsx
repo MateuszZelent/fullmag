@@ -14,12 +14,9 @@ import {
   type GpuTelemetryResponse,
 } from "../../../lib/liveApiClient";
 import { useCurrentLiveStream } from "../../../lib/useSessionStream";
-import { decodePreviewBinaryFrame } from "../../../lib/session/binary-preview";
-import {
-  decodeFemMeshTopologyBinary,
-  hydrateFemMeshTopology,
-} from "../../../lib/session/binary-fem-mesh";
-import { useSessionRuntimeBridge } from "../../../features/session-runtime/hooks/useSessionRuntimeBridge";
+import { decodeFieldVector } from "../../../src/api/codecs/fieldVectorCodec";
+import { decodeTopology } from "../../../src/api/codecs/topologyCodec";
+import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
 import { useWorkspaceStore } from "../../../lib/workspace/workspace-store";
 import { useBuilderAutoSync } from "./hooks/useBuilderAutoSync";
 import { useDomainLayout } from "./hooks/useDomainLayout";
@@ -237,8 +234,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const { state, connection, error, refresh: refreshLiveState } = useCurrentLiveStream();
   const liveApi = useMemo(() => currentLiveApiClient(), []);
 
-  // F-P1: sync live stream into the session-runtime Zustand store
-  useSessionRuntimeBridge(state, connection, error);
+  // Runtime bridge adapter: sync Control Room transport into session-runtime store.
+  useSessionRuntimeBridgeRouter({ state, connection, error });
 
   /* ── Local UI state ── */
   const workspaceMode = useWorkspaceStore((s) => s.currentStage);
@@ -488,8 +485,39 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         signal: controller.signal,
       })
       .then((buffer) => {
-        const decoded = decodeFemMeshTopologyBinary(buffer);
-        const nextMesh = hydrateFemMeshTopology(streamFemMesh, decoded);
+        const topo = decodeTopology(buffer);
+        const nextMesh: typeof streamFemMesh = {
+          ...streamFemMesh,
+          nodes: Array.from({ length: topo.nodeCount }, (_, i) => [
+            topo.positions[i * 3] ?? 0,
+            topo.positions[i * 3 + 1] ?? 0,
+            topo.positions[i * 3 + 2] ?? 0,
+          ] as [number, number, number]),
+          elements: Array.from({ length: topo.elementCount }, (_, i) => [
+            topo.indices[i * 4] ?? 0,
+            topo.indices[i * 4 + 1] ?? 0,
+            topo.indices[i * 4 + 2] ?? 0,
+            topo.indices[i * 4 + 3] ?? 0,
+          ] as [number, number, number, number]),
+          boundary_faces: Array.from({ length: topo.boundaryFaceCount }, (_, i) => [
+            topo.boundaryFaces[i * 3] ?? 0,
+            topo.boundaryFaces[i * 3 + 1] ?? 0,
+            topo.boundaryFaces[i * 3 + 2] ?? 0,
+          ] as [number, number, number]),
+          element_markers: Array.from(topo.elementMarkers),
+          boundary_markers: Array.from(topo.boundaryMarkers),
+          topology_buffers: {
+            nodes: topo.positions,
+            elements: topo.indices,
+            boundary_faces: topo.boundaryFaces,
+            element_markers: topo.elementMarkers,
+            boundary_markers: topo.boundaryMarkers,
+          },
+          topology_transport: "binary",
+          node_count: topo.nodeCount,
+          element_count: topo.elementCount,
+          boundary_face_count: topo.boundaryFaceCount,
+        };
         const cache = femMeshTopologyCacheRef.current;
         cache.set(streamFemMeshKey, nextMesh);
         while (cache.size > 2) {
@@ -1705,16 +1733,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     void liveApi
       .getFieldVectorBinary(activeQuantityId, { signal: controller.signal })
       .then((buffer) => {
-        const decoded = decodePreviewBinaryFrame(buffer);
-        if (!decoded || !("version" in decoded) || decoded.version !== 2) {
-          return;
-        }
+        const decoded = decodeFieldVector(buffer);
         const resolvedQuantityId =
           decoded.quantityId.trim().length > 0 ? decoded.quantityId : activeQuantityId;
         const nextFrame: BinaryFieldFrame = {
           key: selectedFieldTransportKey,
           quantityId: resolvedQuantityId,
-          values: decoded.vectorFieldValues,
+          values: decoded.values,
           nComp: decoded.nComp,
           grid: decoded.grid,
         };

@@ -22,8 +22,8 @@ use tokio::sync::{broadcast, watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
 use crate::types::{
-    AppState, CurrentDisplaySelection, CurrentLiveWireMessage, LatestFields, RuntimeStatusView,
-    SessionManifest, SessionStateResponse,
+    AppState, CurrentDisplaySelection, CurrentLiveWireMessage, DisplayPresentationState,
+    LatestFields, RuntimeStatusView, SessionManifest, SessionStateResponse,
 };
 use fullmag_runner::RuntimeStatus;
 
@@ -45,6 +45,7 @@ fn test_app_state() -> Arc<AppState> {
         current_live_events: live_events_tx,
         current_live_vector_payload_seq: Arc::new(AtomicU32::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
+        current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: control_events_tx,
@@ -248,6 +249,7 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         current_live_events: live_events_tx,
         current_live_vector_payload_seq: Arc::new(AtomicU32::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
+        current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: control_events_tx,
@@ -708,12 +710,64 @@ async fn display_patch_accepts_partial_update() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let sel = state.current_display_selection.read().await;
+    let presentation = state.current_display_presentation.read().await;
     assert_eq!(sel.selection.quantity, "h_demag");
     assert_eq!(sel.selection.layer, 4);
     assert_eq!(sel.selection.max_points, 4096);
     assert_eq!(sel.selection.x_chosen_size, 32);
     assert_eq!(sel.selection.y_chosen_size, 16);
     assert_eq!(sel.revision, 1);
+    assert_eq!(presentation.colormap, "viridis");
+    assert!(presentation.vector_glyphs);
+}
+
+#[tokio::test]
+async fn display_patch_returns_persisted_presentation_state() {
+    let state = test_app_state();
+    let app = build_v1_router().with_state(state.clone());
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/live/current/display")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "colormap": "plasma",
+                        "vector_glyphs": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/live/current/display")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "active_quantity_id": "h_eff"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+
+    let second_json = body_json(second).await;
+    assert_eq!(second_json["colormap"], "plasma");
+    assert_eq!(second_json["vector_glyphs"], false);
 }
 
 #[tokio::test]
@@ -754,10 +808,8 @@ async fn commands_endpoint_enqueues_single_command() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "command": "run",
-                        "params": {
-                            "until_seconds": 1.0
-                        }
+                        "kind": "run",
+                        "until_seconds": 1.0
                     })
                     .to_string(),
                 ))
@@ -787,14 +839,12 @@ async fn commands_endpoint_reuses_response_for_same_request_id() {
             Request::builder()
                 .method("POST")
                 .uri("/v1/live/current/commands")
-                .header("x-request-id", "cmd-dedupe-1")
+                .header("idempotency-key", "cmd-dedupe-1")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "command": "run",
-                        "params": {
-                            "until_seconds": 1.0
-                        }
+                        "kind": "run",
+                        "until_seconds": 1.0
                     })
                     .to_string(),
                 ))
@@ -808,14 +858,12 @@ async fn commands_endpoint_reuses_response_for_same_request_id() {
             Request::builder()
                 .method("POST")
                 .uri("/v1/live/current/commands")
-                .header("x-request-id", "cmd-dedupe-1")
+                .header("idempotency-key", "cmd-dedupe-1")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "command": "run",
-                        "params": {
-                            "until_seconds": 1.0
-                        }
+                        "kind": "run",
+                        "until_seconds": 1.0
                     })
                     .to_string(),
                 ))
@@ -833,6 +881,55 @@ async fn commands_endpoint_reuses_response_for_same_request_id() {
 
     let queue = state.current_control_queue.lock().await;
     assert_eq!(queue.len(), 1);
+}
+
+#[tokio::test]
+async fn commands_endpoint_does_not_dedupe_by_request_id_only() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v1_router().with_state(state.clone());
+
+    let first_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/commands")
+                .header("x-request-id", "cmd-trace-1")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "pause"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let second_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/commands")
+                .header("x-request-id", "cmd-trace-1")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "pause"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first_response.status(), StatusCode::OK);
+    assert_eq!(second_response.status(), StatusCode::OK);
+
+    let queue = state.current_control_queue.lock().await;
+    assert_eq!(queue.len(), 2);
 }
 
 // ─── session endpoints ──────────────────────────────────────────────────────

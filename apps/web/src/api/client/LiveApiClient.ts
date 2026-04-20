@@ -92,6 +92,24 @@ export class LiveApiClient {
     }
   }
 
+  /**
+   * Like getBinary but also returns response headers.
+   * Useful for ETag/304 caching and content-length inspection.
+   */
+  async getBinaryResponse(
+    path: string,
+    opts?: RequestOptions,
+  ): Promise<{ buffer: ArrayBuffer; headers: Headers; status: number }> {
+    const url = this.resolveUrl(path);
+    const response = await this.executeRequest("GET", url, undefined, opts);
+    try {
+      const buffer = await response.arrayBuffer();
+      return { buffer, headers: response.headers, status: response.status };
+    } catch (err) {
+      throw LiveApiError.networkError(url, err);
+    }
+  }
+
   async post<T>(path: string, body: unknown, opts?: RequestOptions): Promise<T> {
     const url = this.resolveUrl(path);
     const response = await this.executeRequest("POST", url, body, opts, {

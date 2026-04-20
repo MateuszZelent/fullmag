@@ -4,4 +4,6 @@ export {
   canShowWireframe,
   canShowGridDimensions,
   getAvailableAlgorithms,
+  isFemDiscretization,
+  isFdmDiscretization,
 } from "./capabilityGuards";

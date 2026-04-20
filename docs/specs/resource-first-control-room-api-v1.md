@@ -4,6 +4,7 @@
 - Last updated: 2026-04-20
 - Parent architecture: `docs/specs/fullmag-application-architecture-v2.md`
 - Related runtime model: `docs/specs/session-run-api-v1.md`
+- Route tree: `docs/specs/control-room-api-tree-v1.md`
 - Governing ADR: `docs/adr/0011-resource-first-api.md`
 
 ## 1. Purpose
@@ -17,6 +18,8 @@ frontend professional, modular, and performant.
 This spec is the source of truth for:
 
 - the current `/v1/live/current/*` contract,
+- the canonical route-family split and tree,
+- the split between workspace state and authoring state,
 - the split between control plane and data plane,
 - frontend API-client and resource-hook rules,
 - FDM/FEM unification rules for the control room.
@@ -35,6 +38,8 @@ The frontend fetches resources on demand and caches them by revision.
 The control plane is JSON and lightweight:
 
 - status,
+- workspace state,
+- authoring metadata and patches,
 - capabilities,
 - revisions,
 - commands,
@@ -95,6 +100,10 @@ architectural regression.
 
 The canonical local control-room contract lives under versioned resource paths.
 
+The full target tree is specified in:
+
+- `docs/specs/control-room-api-tree-v1.md`
+
 ### 3.1 Control-plane endpoints
 
 ```text
@@ -147,16 +156,33 @@ Rules:
 ### 3.4 Control/action endpoints
 
 ```text
+GET    /v1/live/current/workspace/*
+PUT    /v1/live/current/workspace/*
+GET    /v1/live/current/authoring/scene
+PUT    /v1/live/current/authoring/scene
+PATCH  /v1/live/current/authoring/scene
+POST   /v1/live/current/authoring/transactions
+GET    /v1/live/current/authoring/model/*
+PATCH  /v1/live/current/authoring/model/*
+PATCH  /v1/live/current/authoring/physics/*
+PATCH  /v1/live/current/authoring/study/*
+POST   /v1/live/current/authoring/script/sync
 PUT    /v1/live/current/display
+PATCH  /v1/live/current/display
 POST   /v1/live/current/commands
-POST   /v1/live/current/scene
-POST   /v1/live/current/script/sync
 ```
 
 Rules:
 
+- workspace resources carry selection/ribbon/layout state and must not mutate physics semantics,
+- `authoring/scene` is the canonical full-document authoring resource,
+- narrow `authoring/*` endpoints are semantic projections over the same scene revision,
+- model-builder, inspector, and ribbon edits must land in `authoring/*` or `workspace/*`, not in
+  preview endpoints or ad hoc side channels,
 - display state is updated through one consolidated resource,
 - command submission is explicit and structured,
+- the canonical `POST /commands` body is a discriminated `kind` union rather than loose
+  `command + params`,
 - scene/script synchronization must preserve canonical Python and `ProblemIR` semantics.
 
 ### 3.5 Supporting resource families
@@ -170,6 +196,12 @@ The same architecture applies to:
 - `/v1/live/current/gpu/*`
 
 They are resource families, not ad hoc side channels.
+
+GPU telemetry must degrade gracefully:
+
+- absence of `nvidia-smi`, a local NVIDIA driver, or a GPU is represented as a thin JSON
+  `status: unavailable` resource response,
+- telemetry unavailability is not a control-room-fatal 500 path by itself.
 
 ## 4. Revision and cache contract
 
@@ -225,6 +257,8 @@ Every request/response pair must support correlation and contract validation.
 Minimum requirements:
 
 - `x-request-id` on every request and response,
+- `Idempotency-Key` remains distinct from `x-request-id` and is used only for safe retry/dedupe
+  on command mutations,
 - `x-api-contract-version` on every response,
 - structured request logging on the backend,
 - contract/version checks in the frontend client,

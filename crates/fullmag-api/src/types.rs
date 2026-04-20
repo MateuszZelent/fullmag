@@ -18,7 +18,26 @@ use utoipa::ToSchema;
 pub(crate) type CurrentPreviewConfig = LivePreviewRequest;
 pub(crate) type CurrentDisplaySelection = DisplaySelectionState;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct DisplayPresentationState {
+    pub colormap: String,
+    pub contrast_min: Option<f64>,
+    pub contrast_max: Option<f64>,
+    pub vector_glyphs: bool,
+}
+
+impl Default for DisplayPresentationState {
+    fn default() -> Self {
+        Self {
+            colormap: "viridis".to_string(),
+            contrast_min: None,
+            contrast_max: None,
+            vector_glyphs: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum MeshCommandTarget {
     StudyDomain,
@@ -43,6 +62,8 @@ pub(crate) struct AppState {
     pub current_live_vector_payload_seq: Arc<AtomicU32>,
     /// Typed display selection for the sessionless root workspace.
     pub current_display_selection: Arc<RwLock<CurrentDisplaySelection>>,
+    /// Presentation-only display options that are not part of runner semantics.
+    pub current_display_presentation: Arc<RwLock<DisplayPresentationState>>,
     /// In-memory sequenced control queue for the root local-live workspace.
     pub current_control_queue: Arc<Mutex<VecDeque<SessionCommand>>>,
     /// Recent idempotent command responses keyed by request identity.
@@ -77,7 +98,7 @@ pub(crate) struct VisionResponse {
     pub runtime_spine: &'static str,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub(crate) struct GpuTelemetryDevice {
     pub index: u32,
     pub name: String,
@@ -89,8 +110,11 @@ pub(crate) struct GpuTelemetryDevice {
     pub temperature_c: Option<f64>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub(crate) struct GpuTelemetryResponse {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     pub sample_time_unix_ms: u128,
     pub devices: Vec<GpuTelemetryDevice>,
 }

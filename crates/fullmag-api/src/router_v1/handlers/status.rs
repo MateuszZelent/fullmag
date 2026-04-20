@@ -6,9 +6,9 @@ use axum::extract::State;
 use axum::Json;
 
 use crate::error::ApiError;
+use crate::router_v1::handlers::display::build_display_selection_response;
 use crate::schemas::status::*;
 use crate::types::AppState;
-use fullmag_runner::{DisplayFieldComponent, DisplayViewMode as RunnerDisplayViewMode};
 
 #[utoipa::path(
     get,
@@ -26,6 +26,7 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
     let display_sel = state.current_display_selection.read().await;
+    let display_presentation = state.current_display_presentation.read().await;
 
     let session = SessionSummary {
         session_id: snapshot.session.session_id.clone(),
@@ -62,34 +63,7 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
         converged: latest.map(|s| s.finished),
     };
 
-    let display = DisplaySelection {
-        active_quantity_id: display_sel.selection.quantity.clone(),
-        view_mode: match display_sel.selection.view_mode {
-            RunnerDisplayViewMode::TwoD => DisplayViewMode::TwoD,
-            RunnerDisplayViewMode::ThreeD => DisplayViewMode::ThreeD,
-        },
-        field_component: match display_sel.selection.field_component {
-            DisplayFieldComponent::X => FieldComponent::X,
-            DisplayFieldComponent::Y => FieldComponent::Y,
-            DisplayFieldComponent::Z => FieldComponent::Z,
-            DisplayFieldComponent::Magnitude => FieldComponent::Magnitude,
-        },
-        colormap: "viridis".into(),
-        auto_contrast: display_sel.selection.auto_scale_enabled,
-        contrast_min: None,
-        contrast_max: None,
-        vector_glyphs: true,
-        vector_density: display_sel.selection.every_n,
-        slice_mode: if display_sel.selection.all_layers {
-            "all".into()
-        } else {
-            "single".into()
-        },
-        slice_layer: display_sel.selection.layer as i32,
-        max_points: display_sel.selection.max_points,
-        x_chosen_size: display_sel.selection.x_chosen_size,
-        y_chosen_size: display_sel.selection.y_chosen_size,
-    };
+    let display = build_display_selection_response(&display_sel, &display_presentation);
 
     let is_fem = snapshot.fem_mesh.is_some();
     let cell_count = if is_fem {

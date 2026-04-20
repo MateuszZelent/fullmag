@@ -284,6 +284,7 @@ async fn main() {
         current_live_events: broadcast::channel(256).0,
         current_live_vector_payload_seq: Arc::new(AtomicU32::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
+        current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: watch::channel(0).0,
@@ -484,6 +485,8 @@ pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
     }
 
     Ok(GpuTelemetryResponse {
+        status: "available".into(),
+        reason: None,
         sample_time_unix_ms: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_millis())
@@ -496,6 +499,7 @@ async fn get_current_live_bootstrap(
     State(state): State<Arc<AppState>>,
     Query(query): Query<CurrentLiveSnapshotQuery>,
 ) -> Result<Response, ApiError> {
+    eprintln!("[fullmag-api][LEGACY] hit: GET /v1/live/current/bootstrap — migrate to GET /v1/live/current/status + resource endpoints");
     let binary_field_transport = binary_field_transport_requested(query.field_transport.as_deref());
     let binary_mesh_transport = binary_mesh_transport_requested(query.mesh_transport.as_deref());
     // Try to serve from the live state directly (serialize on-demand).
@@ -680,6 +684,7 @@ async fn get_current_live_poll(
     State(state): State<Arc<AppState>>,
     Query(query): Query<CurrentLivePollQuery>,
 ) -> Result<Response, ApiError> {
+    eprintln!("[fullmag-api][LEGACY] hit: GET /v1/live/current/poll — migrate to GET /v1/live/current/status + resource endpoints");
     let guard = state.current_live_state.read().await;
     let Some(snapshot) = guard.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());

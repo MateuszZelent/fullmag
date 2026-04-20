@@ -11,7 +11,7 @@ import type {
 } from "@/components/analyze/eigenTypes";
 import { fetchAnalyzeArtifact } from "@/features/analyze";
 import { currentLiveApiClient } from "@/lib/liveApiClient";
-import { decodeFemMeshTopologyBinary } from "@/lib/session/binary-fem-mesh";
+import { decodeTopology } from "@/src/api/codecs/topologyCodec";
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
 
@@ -22,23 +22,23 @@ interface EigenDispersionResponse {
 }
 
 function femMeshPayloadFromBinary(buffer: ArrayBuffer): FemMeshPayload {
-  const topology = decodeFemMeshTopologyBinary(buffer);
+  const topology = decodeTopology(buffer);
   return {
     nodes: Array.from({ length: topology.nodeCount }, (_, index) => {
       const base = index * 3;
       return [
-        topology.nodes[base] ?? 0,
-        topology.nodes[base + 1] ?? 0,
-        topology.nodes[base + 2] ?? 0,
+        topology.positions[base] ?? 0,
+        topology.positions[base + 1] ?? 0,
+        topology.positions[base + 2] ?? 0,
       ];
     }),
     elements: Array.from({ length: topology.elementCount }, (_, index) => {
       const base = index * 4;
       return [
-        topology.elements[base] ?? 0,
-        topology.elements[base + 1] ?? 0,
-        topology.elements[base + 2] ?? 0,
-        topology.elements[base + 3] ?? 0,
+        topology.indices[base] ?? 0,
+        topology.indices[base + 1] ?? 0,
+        topology.indices[base + 2] ?? 0,
+        topology.indices[base + 3] ?? 0,
       ];
     }),
     element_markers: Array.from(topology.elementMarkers),

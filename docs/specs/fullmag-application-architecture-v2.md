@@ -647,6 +647,7 @@ The browser must consume a stable API instead of reading files ad hoc.
 The current canonical local-live browser contract is the resource-first API documented in:
 
 - `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/control-room-api-tree-v1.md`
 - `docs/adr/0011-resource-first-api.md`
 
 Longer-term session-oriented routes remain valid product architecture for multi-session and managed
@@ -696,12 +697,21 @@ These remain important for the broader runtime model, remote execution, and hist
 ## 14.3 Additional local resource families
 
 ```text
+GET    /v1/live/current/workspace/*
+PUT    /v1/live/current/workspace/*
+GET    /v1/live/current/authoring/scene
+PUT    /v1/live/current/authoring/scene
+PATCH  /v1/live/current/authoring/scene
+POST   /v1/live/current/authoring/transactions
+GET    /v1/live/current/authoring/model/*
+PATCH  /v1/live/current/authoring/model/*
+PATCH  /v1/live/current/authoring/physics/*
+PATCH  /v1/live/current/authoring/study/*
+POST   /v1/live/current/authoring/script/sync
 GET    /v1/live/current/artifacts
 GET    /v1/live/current/artifacts/:id
 GET    /v1/live/current/eigen/*
 GET    /v1/live/current/logs/*
-POST   /v1/live/current/scene
-POST   /v1/live/current/script/sync
 POST   /v1/live/current/session/*
 ```
 

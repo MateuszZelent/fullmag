@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import FemMeshView3D, { type FemMeshData } from "@/components/preview/FemMeshView3D";
-import { currentLiveApiClient } from "@/lib/liveApiClient";
-import { decodeFemMeshTopologyBinary } from "@/lib/session/binary-fem-mesh";
+import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import { decodeTopology } from "@/src/api/codecs/topologyCodec";
 import type { FemLiveMesh } from "@/lib/session/types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
@@ -59,11 +59,11 @@ export default function StandaloneFemDiagnosticViewport() {
   useEffect(() => {
     let cancelled = false;
 
-    void currentLiveApiClient()
-      .getFemMeshTopologyBinary()
+    void getLiveApiClient()
+      .getBinary("/v1/live/current/domain/topology")
       .then((buffer) => {
         if (cancelled) return;
-        const topology = decodeFemMeshTopologyBinary(buffer);
+        const topology = decodeTopology(buffer);
         const nextMesh: FemLiveMesh = {
           mesh_name: "diagnostic-topology",
           mesh_id: "diagnostic-topology",
@@ -71,18 +71,18 @@ export default function StandaloneFemDiagnosticViewport() {
           nodes: Array.from({ length: topology.nodeCount }, (_, index) => {
             const base = index * 3;
             return [
-              topology.nodes[base] ?? 0,
-              topology.nodes[base + 1] ?? 0,
-              topology.nodes[base + 2] ?? 0,
+              topology.positions[base] ?? 0,
+              topology.positions[base + 1] ?? 0,
+              topology.positions[base + 2] ?? 0,
             ];
           }),
           elements: Array.from({ length: topology.elementCount }, (_, index) => {
             const base = index * 4;
             return [
-              topology.elements[base] ?? 0,
-              topology.elements[base + 1] ?? 0,
-              topology.elements[base + 2] ?? 0,
-              topology.elements[base + 3] ?? 0,
+              topology.indices[base] ?? 0,
+              topology.indices[base + 1] ?? 0,
+              topology.indices[base + 2] ?? 0,
+              topology.indices[base + 3] ?? 0,
             ];
           }),
           element_markers: Array.from(topology.elementMarkers),

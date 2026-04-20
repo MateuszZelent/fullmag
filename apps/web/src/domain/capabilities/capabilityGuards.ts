@@ -15,3 +15,20 @@ export function canShowGridDimensions(caps: CapabilityMap): boolean {
 export function getAvailableAlgorithms(caps: CapabilityMap): string[] {
   return caps.algorithms_available;
 }
+
+/**
+ * Semantic replacement for the legacy `isFemBackend` boolean.
+ * Returns true when the domain uses explicit (unstructured) topology,
+ * which is the defining characteristic of a FEM discretization.
+ */
+export function isFemDiscretization(caps: CapabilityMap): boolean {
+  return caps.explicit_topology;
+}
+
+/**
+ * Returns true when the domain uses a structured grid (FDM discretization).
+ */
+export function isFdmDiscretization(caps: CapabilityMap): boolean {
+  return caps.structured_grid;
+}
+

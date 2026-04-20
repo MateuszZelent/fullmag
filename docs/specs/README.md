@@ -6,6 +6,7 @@ If you are looking for the main architecture document for the whole application,
 
 - **Primary application architecture:** `docs/specs/fullmag-application-architecture-v2.md`
 - **Primary control-room API architecture:** `docs/specs/resource-first-control-room-api-v1.md`
+- **Primary control-room API tree:** `docs/specs/control-room-api-tree-v1.md`
 
 ## Reading order
 
@@ -13,15 +14,16 @@ When you need to understand Fullmag quickly, read in this order:
 
 1. `docs/specs/fullmag-application-architecture-v2.md`
 2. `docs/specs/resource-first-control-room-api-v1.md`
-3. `docs/specs/session-run-api-v1.md`
-4. `docs/specs/runtime-distribution-and-managed-backends-v1.md`
-5. `docs/specs/hpc-cluster-execution-v1.md`
-6. `docs/1_project_scope.md`
-7. `docs/2_repo_blueprint.md`
-8. `docs/specs/problem-ir-v0.md`
-9. `docs/specs/capability-matrix-v0.md`
-10. the relevant `docs/physics/` notes
-11. the relevant `docs/plans/active/` plan
+3. `docs/specs/control-room-api-tree-v1.md`
+4. `docs/specs/session-run-api-v1.md`
+5. `docs/specs/runtime-distribution-and-managed-backends-v1.md`
+6. `docs/specs/hpc-cluster-execution-v1.md`
+7. `docs/1_project_scope.md`
+8. `docs/2_repo_blueprint.md`
+9. `docs/specs/problem-ir-v0.md`
+10. `docs/specs/capability-matrix-v0.md`
+11. the relevant `docs/physics/` notes
+12. the relevant `docs/plans/active/` plan
 
 ## Document hierarchy
 
@@ -29,6 +31,7 @@ When you need to understand Fullmag quickly, read in this order:
 
 - `docs/specs/fullmag-application-architecture-v2.md`
 - `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/control-room-api-tree-v1.md`
 
 These are the highest-level, canonical descriptions of the whole Fullmag application and the
 current local control-room API contract.
@@ -57,6 +60,7 @@ It is subordinate to the application architecture and should be read as:
 ### 3. Stable cross-cutting specs
 
 - `docs/specs/session-run-api-v1.md`
+- `docs/specs/control-room-api-tree-v1.md`
 - `docs/specs/resource-first-control-room-api-v1.md`
 - `docs/specs/runtime-distribution-and-managed-backends-v1.md`
 - `docs/specs/hpc-cluster-execution-v1.md`
@@ -128,3 +132,7 @@ Whenever one of these changes, also update
 - revision or generation semantics,
 - capability/adapters rules for FDM/FEM unification,
 - OpenAPI and diagnostics requirements.
+
+Whenever the route-family split or resource hierarchy changes, also update:
+
+- `docs/specs/control-room-api-tree-v1.md`

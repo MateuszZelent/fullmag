@@ -26,6 +26,9 @@ This design has several consequences:
    choose renderers, hooks, and stores.
 5. **No API contract.** There is no formal specification; wire shapes are
    inferred from `types.ts` and runtime inspection.
+6. **Authoring ambiguity.** The bootstrap-era mental model does not make it
+   clear where model-tree, inspector, study-pipeline, and ribbon edits belong,
+   which encourages ad hoc scene writes and UI-specific side channels.
 
 ## Decision
 
@@ -60,7 +63,21 @@ Every resource carries a revision (`field_revision`, `domain_generation_id`,
 `scalars_revision`). The frontend caches by revision and only re-fetches when
 the status endpoint reports a newer revision.
 
-### 4. Unified FDM/FEM domain contract
+### 4. Workspace and authoring are first-class resource families
+
+The resource-first split applies not only to runtime data, but also to control-room authoring.
+
+- `workspace/*` carries selection, ribbon state, active node, layout, and similar UI-only state.
+- `authoring/*` carries the editable simulation model, materials, magnetization assets, physics
+  stacks, study pipeline, and script synchronization.
+- `SceneDocument` remains the canonical round-trip authoring document.
+- Narrow `authoring/*` routes are allowed only as semantic projections over the same
+  `scene_revision`; they must not become a second persistence model.
+
+This prevents model builder, inspector panels, and ribbons from degenerating into a hidden second
+architecture outside the API contract.
+
+### 5. Unified FDM/FEM domain contract
 
 Domain endpoints are discretization-neutral. `/domain/meta` returns a
 `DiscretizationKind` field and the adapter layer on the frontend decides how
@@ -70,23 +87,23 @@ The control room keeps one UI tree.
 FDM/FEM differences are handled through capability maps and domain adapters, not through separate
 product branches.
 
-### 5. Consolidated display control
+### 6. Consolidated display control
 
 The 10+ legacy preview POST endpoints are replaced by a single
 `PUT /display` endpoint that accepts the full `DisplaySelection` update.
 
-### 6. OpenAPI documentation
+### 7. OpenAPI documentation
 
 The new API is documented via utoipa-generated OpenAPI 3.1 spec, accessible
 at `/v1/openapi.json` and rendered at `/v1/docs/swagger`.
 
-### 7. Professional API client
+### 8. Professional API client
 
 The frontend gets a typed `LiveApiClient` with interceptors (request-id,
 retry, version-check, diagnostics), a `ResourceCache`, and modular endpoint
 modules.
 
-### 8. Feature-flag migration
+### 9. Feature-flag migration
 
 A `FULLMAG_NEW_API` / `NEXT_PUBLIC_USE_NEW_API` flag allows running old and
 new API in parallel during migration. Legacy code is removed once the new
@@ -121,6 +138,7 @@ When the local browser API, cache semantics, OpenAPI contract, or FDM/FEM
 adapter boundary changes, update:
 
 - `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/control-room-api-tree-v1.md`
 - `docs/specs/session-run-api-v1.md` when runtime semantics changed
 - agent guidance in `AGENTS.md`, `.agents/`, and `.github/`
 

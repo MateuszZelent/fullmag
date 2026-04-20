@@ -30,7 +30,9 @@ export function useSessionRuntimeBridge(
   state: SessionState | null,
   connection: ConnectionStatus,
   error: string | null,
+  options?: { enabled?: boolean },
 ): void {
+  const enabled = options?.enabled ?? true;
   const applyNormalizedState = useSessionRuntimeStore(
     (s) => s.applyNormalizedState,
   );
@@ -40,14 +42,20 @@ export function useSessionRuntimeBridge(
   // Sync connection status
   const prevConnectionRef = useRef(connection);
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     if (connection !== prevConnectionRef.current || error != null) {
       prevConnectionRef.current = connection;
       setConnection(connection, error);
     }
-  }, [connection, error, setConnection]);
+  }, [enabled, connection, error, setConnection]);
 
   // Sync normalized state
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     const nextStateVersion =
       typeof state?.state_version === "number" ? state.state_version : null;
     if (
@@ -82,5 +90,5 @@ export function useSessionRuntimeBridge(
       scalarRows: normalized.scalarRows.length,
       hasPreview: normalized.preview != null,
     });
-  }, [state, applyNormalizedState]);
+  }, [enabled, state, connection, applyNormalizedState]);
 }

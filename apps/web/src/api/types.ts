@@ -208,10 +208,85 @@ export interface DisplayUpdate {
 
 // ── Commands ──────────────────────────────────────────────────────────
 
-export interface CommandRequest {
+export type MeshCommandTargetRequest =
+  | { kind: "study_domain" }
+  | { kind: "adaptive_followup" }
+  | { kind: "airbox" }
+  | { kind: "object_mesh"; object_id: string };
+
+export interface RunCommandRequest {
+  kind: "run";
+  until_seconds: number;
+  max_steps?: number;
+  integrator?: string;
+  fixed_timestep?: number;
+}
+
+export interface RelaxCommandRequest {
+  kind: "relax";
+  until_seconds?: number;
+  max_steps?: number;
+  torque_tolerance?: number;
+  energy_tolerance?: number;
+  relax_algorithm?: string;
+  relax_alpha?: number;
+  fixed_timestep?: number;
+  max_error?: number;
+}
+
+export interface PauseCommandRequest {
+  kind: "pause";
+}
+
+export interface ResumeCommandRequest {
+  kind: "resume";
+}
+
+export interface StopCommandRequest {
+  kind: "stop";
+}
+
+export interface SkipCommandRequest {
+  kind: "skip";
+}
+
+export interface RemeshCommandRequest {
+  kind: "remesh";
+  mesh_options?: unknown;
+  mesh_target?: MeshCommandTargetRequest;
+  mesh_reason?: string;
+}
+
+export interface SaveVtkCommandRequest {
+  kind: "save_vtk";
+}
+
+export interface SolveCommandRequest {
+  kind: "solve";
+}
+
+export interface CloseCommandRequest {
+  kind: "close";
+}
+
+export interface LegacyCommandEnvelope {
   command: string;
   params?: Record<string, unknown>;
 }
+
+export type StructuredCommandRequest =
+  | RunCommandRequest
+  | RelaxCommandRequest
+  | PauseCommandRequest
+  | ResumeCommandRequest
+  | StopCommandRequest
+  | SkipCommandRequest
+  | RemeshCommandRequest
+  | SaveVtkCommandRequest
+  | SolveCommandRequest
+  | CloseCommandRequest;
+
+export type CommandRequest = StructuredCommandRequest | LegacyCommandEnvelope;
 
 export interface CommandResponse {
   accepted: boolean;
@@ -370,6 +445,8 @@ export interface GpuTelemetryDevice {
 }
 
 export interface GpuTelemetryResponse {
+  status: string;
+  reason?: string | null;
   sample_time_unix_ms: number;
   devices: GpuTelemetryDevice[];
 }

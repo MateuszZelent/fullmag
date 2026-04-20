@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::schemas::common::HealthResponse;
-use crate::types::AppState;
+use crate::types::{AppState, GpuTelemetryResponse};
 
 #[utoipa::path(
     get,
@@ -73,19 +73,25 @@ pub async fn get_engine_log(State(state): State<Arc<AppState>>) -> Result<Json<V
     get,
     path = "/v1/live/current/gpu/telemetry",
     responses(
-        (status = 200, description = "GPU telemetry"),
+        (status = 200, description = "GPU telemetry or degraded unavailable response", body = GpuTelemetryResponse),
     ),
     tag = "system"
 )]
-pub async fn get_gpu_telemetry() -> Result<Json<Value>, ApiError> {
+pub async fn get_gpu_telemetry() -> Result<Json<GpuTelemetryResponse>, ApiError> {
     // Reuse existing GPU telemetry sampling
     let output = tokio::task::spawn_blocking(crate::sample_gpu_telemetry)
         .await
         .map_err(|e| ApiError::internal(format!("gpu telemetry task join failed: {e}")))?;
     match output {
-        Ok(telemetry) => Ok(Json(serde_json::to_value(telemetry).map_err(|e| {
-            ApiError::internal(format!("failed to serialize gpu telemetry: {e}"))
-        })?)),
-        Err(e) => Err(e),
+        Ok(telemetry) => Ok(Json(telemetry)),
+        Err(error) => Ok(Json(GpuTelemetryResponse {
+            status: "unavailable".into(),
+            reason: Some(error.message),
+            sample_time_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or(0),
+            devices: Vec::new(),
+        })),
     }
 }

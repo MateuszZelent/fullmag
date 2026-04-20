@@ -20,14 +20,15 @@ interface UseLiveStatusResult {
   error: LiveApiError | null;
 }
 
-export function useLiveStatus(): UseLiveStatusResult {
+export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusResult {
+  const enabled = options?.enabled ?? true;
   const [status, setStatus] = useState<LiveStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<LiveApiError | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
 
-  const poll = useCallback(async () => {
+  const poll = useCallback(async function pollStatus(): Promise<void> {
     try {
       const client = getLiveApiClient();
       const result = await client.status.get();
@@ -41,7 +42,7 @@ export function useLiveStatus(): UseLiveStatusResult {
         result.solver.state === "running" ||
         result.solver.state === "initializing";
       const interval = isActive ? ACTIVE_INTERVAL_MS : IDLE_INTERVAL_MS;
-      timerRef.current = setTimeout(poll, interval);
+      timerRef.current = setTimeout(pollStatus, interval);
     } catch (err) {
       if (!mountedRef.current) return;
       const apiErr =
@@ -55,13 +56,19 @@ export function useLiveStatus(): UseLiveStatusResult {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
     mountedRef.current = true;
+    setLoading(true);
     poll();
     return () => {
       mountedRef.current = false;
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [poll]);
+  }, [poll, enabled]);
 
   return { status, loading, error };
 }

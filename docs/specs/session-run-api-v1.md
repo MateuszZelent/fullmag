@@ -37,6 +37,7 @@ This spec does not define:
 The concrete local resource-first browser contract is specified in:
 
 - `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/control-room-api-tree-v1.md`
 
 Cluster-specific scheduler/runtime semantics are expanded in:
 

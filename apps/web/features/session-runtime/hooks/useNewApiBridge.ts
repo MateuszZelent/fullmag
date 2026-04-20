@@ -295,8 +295,11 @@ function mapLiveStatusToNormalized(
  *
  * Mount this once wherever the app owns the live session transport.
  */
-export function useNewApiBridge(): void {
-  const { status, error } = useLiveStatus();
+export function useNewApiBridge(
+  options?: { enabled?: boolean },
+): void {
+  const enabled = options?.enabled ?? true;
+  const { status, error } = useLiveStatus({ enabled });
   const applyNormalizedState = useSessionRuntimeStore(
     (s) => s.applyNormalizedState,
   );
@@ -309,6 +312,10 @@ export function useNewApiBridge(): void {
 
   // Sync connection state
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     const nextConnection = error
       ? "disconnected"
       : status
@@ -319,10 +326,13 @@ export function useNewApiBridge(): void {
       prevConnectionRef.current = nextConnection;
       setConnection(nextConnection, error?.message ?? null);
     }
-  }, [status, error, setConnection]);
+  }, [enabled, status, error, setConnection]);
 
   // Sync normalized state
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     if (!status) return;
 
     // Deduplicate by field_revision (monotonically increasing)
@@ -336,5 +346,5 @@ export function useNewApiBridge(): void {
     const normalized = mapLiveStatusToNormalized(status);
     applyNormalizedState(normalized);
     prevRevisionRef.current = status.resources.fields_revision;
-  }, [status, applyNormalizedState]);
+  }, [enabled, status, applyNormalizedState]);
 }

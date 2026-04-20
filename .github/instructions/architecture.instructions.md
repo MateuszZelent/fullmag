@@ -15,6 +15,8 @@ description: "Use when working anywhere in Fullmag to preserve one semantic core
   layer.
 - The current local control-room API is resource-first and revision-driven; keep thin JSON control
   plane resources separate from binary heavy-data resources.
+- Treat `workspace/*` and `authoring/*` as distinct families: selection/ribbon/layout are not
+  physics semantics, while model/material/magnetization/study edits are.
 - Keep requested execution intent distinct from resolved backend/runtime/device selection.
 - Never introduce shared APIs that depend on Cartesian cell indices, raw GPU arrays, CUDA pointers,
   or FEM implementation detail.
