@@ -38,8 +38,8 @@ export function useLiveStatus(): UseLiveStatusResult {
 
       // Adaptive interval based on solver state
       const isActive =
-        result.solver_state === "running" ||
-        result.solver_state === "initializing";
+        result.solver.state === "running" ||
+        result.solver.state === "initializing";
       const interval = isActive ? ACTIVE_INTERVAL_MS : IDLE_INTERVAL_MS;
       timerRef.current = setTimeout(poll, interval);
     } catch (err) {

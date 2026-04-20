@@ -18,9 +18,7 @@ use crate::types::AppState;
     ),
     tag = "system"
 )]
-pub async fn get_health(
-    State(state): State<Arc<AppState>>,
-) -> Json<HealthResponse> {
+pub async fn get_health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     let active = state.current_live_state.read().await.is_some();
     let uptime = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -59,9 +57,7 @@ pub async fn get_capabilities(
     ),
     tag = "system"
 )]
-pub async fn get_engine_log(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
+pub async fn get_engine_log(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()

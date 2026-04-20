@@ -11,6 +11,7 @@ import type {
 } from "@/components/analyze/eigenTypes";
 import { fetchAnalyzeArtifact } from "@/features/analyze";
 import { currentLiveApiClient } from "@/lib/liveApiClient";
+import { decodeFemMeshTopologyBinary } from "@/lib/session/binary-fem-mesh";
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
 
@@ -20,39 +21,37 @@ interface EigenDispersionResponse {
   rows: DispersionRow[];
 }
 
-interface BootstrapLite {
-  artifacts: { path: string; kind?: string }[];
-  fem_mesh: FemMeshPayload | null;
-  live_state?: { latest_step?: { fem_mesh?: FemMeshPayload | null } | null } | null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function parseBootstrapLite(raw: unknown): BootstrapLite {
-  const root = asRecord(raw);
-  const liveState = asRecord(root?.live_state);
-  const latestStep = asRecord(liveState?.latest_step);
-  const artifactsRaw = Array.isArray(root?.artifacts) ? root.artifacts : [];
-  const artifacts = artifactsRaw
-    .map((entry) => asRecord(entry))
-    .filter((entry): entry is Record<string, unknown> => entry !== null)
-    .map((entry) => ({
-      path: typeof entry.path === "string" ? entry.path : "",
-      kind: typeof entry.kind === "string" ? entry.kind : undefined,
-    }))
-    .filter((entry) => entry.path.length > 0);
+function femMeshPayloadFromBinary(buffer: ArrayBuffer): FemMeshPayload {
+  const topology = decodeFemMeshTopologyBinary(buffer);
   return {
-    artifacts,
-    fem_mesh: (root?.fem_mesh as FemMeshPayload | null | undefined) ?? null,
-    live_state: {
-      latest_step: {
-        fem_mesh: (latestStep?.fem_mesh as FemMeshPayload | null | undefined) ?? null,
-      },
-    },
+    nodes: Array.from({ length: topology.nodeCount }, (_, index) => {
+      const base = index * 3;
+      return [
+        topology.nodes[base] ?? 0,
+        topology.nodes[base + 1] ?? 0,
+        topology.nodes[base + 2] ?? 0,
+      ];
+    }),
+    elements: Array.from({ length: topology.elementCount }, (_, index) => {
+      const base = index * 4;
+      return [
+        topology.elements[base] ?? 0,
+        topology.elements[base + 1] ?? 0,
+        topology.elements[base + 2] ?? 0,
+        topology.elements[base + 3] ?? 0,
+      ];
+    }),
+    element_markers: Array.from(topology.elementMarkers),
+    boundary_faces: Array.from({ length: topology.boundaryFaceCount }, (_, index) => {
+      const base = index * 3;
+      return [
+        topology.boundaryFaces[base] ?? 0,
+        topology.boundaryFaces[base + 1] ?? 0,
+        topology.boundaryFaces[base + 2] ?? 0,
+      ];
+    }),
+    boundary_markers: Array.from(topology.boundaryMarkers),
+    object_segments: [],
   };
 }
 
@@ -105,19 +104,19 @@ export function useCurrentAnalyzeArtifacts(
       try {
         const client = currentLiveApiClient();
         const queryNonce = `${refreshNonce}:${internalRefreshNonce}`;
-        const [bootstrap, liveArtifacts] = await Promise.all([
-          fetchAnalyzeArtifact<BootstrapLite>(
+        const [meshTopology, liveArtifacts] = await Promise.all([
+          fetchAnalyzeArtifact<FemMeshPayload | null>(
             {
               domain: "eigenmodes",
-              tab: "bootstrap",
-              selectionFingerprint: `bootstrap:${queryNonce}`,
+              tab: "mesh-topology",
+              selectionFingerprint: `mesh-topology:${queryNonce}`,
               refreshNonce,
             },
             (requestSignal) =>
-              client.fetchBootstrap<unknown>({ signal: requestSignal }).then((payload) =>
-                parseBootstrapLite(payload),
-              ),
-          ),
+              client
+                .getFemMeshTopologyBinary(null, { signal: requestSignal })
+                .then((buffer) => femMeshPayloadFromBinary(buffer)),
+          ).catch(() => null),
           fetchAnalyzeArtifact<Array<{ path: string; kind?: string }>>(
             {
               domain: "eigenmodes",
@@ -130,12 +129,7 @@ export function useCurrentAnalyzeArtifacts(
         ]);
         if (cancelled) return;
 
-        const bootstrapArtifacts = Array.isArray(bootstrap.artifacts)
-          ? bootstrap.artifacts
-          : [];
-        // Prefer live artifact listing (fresh filesystem scan). Bootstrap can be stale.
-        const artifacts =
-          liveArtifacts.length > 0 ? liveArtifacts : bootstrapArtifacts;
+        const artifacts = liveArtifacts;
         const artifactPaths = artifacts.map((artifact) => artifact.path);
         const hasSpectrum = artifactPaths.some(
           (path) => path === "eigen/spectrum.json" || path.startsWith("eigen/spectrum"),
@@ -202,7 +196,7 @@ export function useCurrentAnalyzeArtifacts(
 
         if (cancelled) return;
 
-        setMesh(bootstrap.fem_mesh ?? bootstrap.live_state?.latest_step?.fem_mesh ?? null);
+        setMesh(meshTopology);
         setSpectrum(nextSpectrum);
         setBranches(nextBranches);
         setDispersionRows(nextDispersion?.rows ?? []);

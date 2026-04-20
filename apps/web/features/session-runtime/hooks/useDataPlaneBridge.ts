@@ -19,34 +19,32 @@ import { useEffect, useRef, useCallback } from "react";
 import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
 import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
-import type { ScalarRow as ApiScalarRow } from "@/src/api/types";
 import type { ScalarRow as StoreScalarRow } from "@/lib/session/types";
 import type { FieldFrameEnvelope, FieldFrameStats } from "@/lib/fieldFrame/types";
+import { scalarWindowToRows } from "@/src/api/client/modules/ScalarHistoryAdapter";
 
 const ENABLE_DEBUG =
   typeof process !== "undefined" && process.env.NODE_ENV !== "production";
 
-// ── Scalar row adapter ──────────────────────────────────────────────
-// New API scalar rows use a flat { iteration, sim_time, [key]: number }
-// shape. The store expects the legacy ScalarRow shape. Convert here.
-
-function adaptScalarRow(row: ApiScalarRow): StoreScalarRow {
+function adaptScalarRow(
+  row: Record<string, number | string | null>,
+): StoreScalarRow {
   return {
-    step: row.iteration ?? 0,
-    time: row.sim_time ?? 0,
-    solver_dt: (row as Record<string, number>).dt ?? 0,
-    mx: (row as Record<string, number>).mx ?? 0,
-    my: (row as Record<string, number>).my ?? 0,
-    mz: (row as Record<string, number>).mz ?? 0,
-    e_ex: (row as Record<string, number>).e_ex ?? (row as Record<string, number>).exchange ?? 0,
-    e_demag: (row as Record<string, number>).e_demag ?? (row as Record<string, number>).demag ?? 0,
-    e_ext: (row as Record<string, number>).e_ext ?? (row as Record<string, number>).zeeman ?? 0,
-    e_ani: (row as Record<string, number>).e_ani ?? (row as Record<string, number>).anisotropy ?? 0,
-    e_dmi: (row as Record<string, number>).e_dmi ?? 0,
-    e_total: (row as Record<string, number>).e_total ?? (row as Record<string, number>).total ?? 0,
-    max_dm_dt: (row as Record<string, number>).max_dm_dt ?? 0,
-    max_h_eff: (row as Record<string, number>).max_h_eff ?? 0,
-    max_h_demag: (row as Record<string, number>).max_h_demag ?? 0,
+    step: Number(row.step ?? 0),
+    time: Number(row.t ?? 0),
+    solver_dt: Number(row.solver_dt ?? 0),
+    mx: Number(row.mx ?? 0),
+    my: Number(row.my ?? 0),
+    mz: Number(row.mz ?? 0),
+    e_ex: Number(row.e_ex ?? 0),
+    e_demag: Number(row.e_demag ?? 0),
+    e_ext: Number(row.e_ext ?? 0),
+    e_ani: Number(row.e_ani ?? 0),
+    e_dmi: Number(row.e_dmi ?? 0),
+    e_total: Number(row.e_total ?? 0),
+    max_dm_dt: Number(row.max_dm_dt ?? 0),
+    max_h_eff: Number(row.max_h_eff ?? 0),
+    max_h_demag: Number(row.max_h_demag ?? 0),
   };
 }
 
@@ -62,6 +60,9 @@ export function useDataPlaneBridge(): void {
     (s) => s.fieldFrameEnvelope,
   );
   const stateVersion = useSessionRuntimeStore((s) => s.stateVersion);
+  const scalarRevision = useSessionRuntimeStore(
+    (s) => s.liveState?.step ?? s.stateVersion,
+  );
   const sessionId = useSessionRuntimeStore((s) => s.session?.session_id);
 
   const applyNormalizedState = useSessionRuntimeStore(
@@ -171,7 +172,7 @@ export function useDataPlaneBridge(): void {
         });
 
         if (window.rows.length > 0) {
-          const adapted = window.rows.map(adaptScalarRow);
+          const adapted = scalarWindowToRows(window).map(adaptScalarRow);
           scalarAccumulatorRef.current = [
             ...scalarAccumulatorRef.current,
             ...adapted,
@@ -275,12 +276,12 @@ export function useDataPlaneBridge(): void {
     }
   }, [fieldFrameEnvelope, fetchFieldVector]);
 
-  // Watch scalar revision changes (stateVersion as proxy)
+  // Watch scalar revision changes
   useEffect(() => {
-    if (stateVersion != null && stateVersion > 0) {
-      fetchScalars(stateVersion);
+    if (scalarRevision != null && scalarRevision > 0) {
+      fetchScalars(scalarRevision);
     }
-  }, [stateVersion, fetchScalars]);
+  }, [scalarRevision, fetchScalars]);
 
   // Watch domain generation changes
   useEffect(() => {

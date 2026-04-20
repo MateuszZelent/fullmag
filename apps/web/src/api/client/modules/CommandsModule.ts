@@ -9,8 +9,8 @@ export class CommandsModule {
     params?: Record<string, unknown>,
   ): Promise<CommandResponse> {
     return this.client.post<CommandResponse>("/v1/live/current/commands", {
-      kind: command,
-      ...params,
+      command,
+      params: params ?? {},
     });
   }
 }

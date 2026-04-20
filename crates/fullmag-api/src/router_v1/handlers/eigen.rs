@@ -7,8 +7,8 @@ use axum::Json;
 use serde_json::Value;
 
 use crate::artifacts::{
-    read_json_artifact_value, read_text_artifact_value, require_current_live_artifact_dir,
-    try_resolve_artifact_path, parse_eigen_dispersion_csv,
+    parse_eigen_dispersion_csv, read_json_artifact_value, read_text_artifact_value,
+    require_current_live_artifact_dir, try_resolve_artifact_path,
 };
 use crate::error::ApiError;
 use crate::types::{AppState, EigenDispersionResponse, EigenModeQuery};
@@ -22,9 +22,7 @@ use crate::types::{AppState, EigenDispersionResponse, EigenModeQuery};
     ),
     tag = "eigen"
 )]
-pub async fn get_spectrum(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
+pub async fn get_spectrum(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
     for candidate in ["eigen/spectrum.json", "eigen/metadata/eigen_summary.json"] {
         if try_resolve_artifact_path(&artifact_dir, candidate)?.is_some() {
@@ -112,9 +110,7 @@ pub async fn get_dispersion(
     ),
     tag = "eigen"
 )]
-pub async fn get_branches(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
+pub async fn get_branches(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
     match try_resolve_artifact_path(&artifact_dir, "eigen/branches.json")? {
         Some(_) => Ok(Json(read_json_artifact_value(

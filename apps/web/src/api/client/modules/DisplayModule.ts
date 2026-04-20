@@ -6,7 +6,7 @@ export class DisplayModule {
 
   async update(update: DisplayUpdate): Promise<DisplaySelection> {
     return this.client.put<DisplaySelection>(
-      "/v1/live/current/preview/selection",
+      "/v1/live/current/display",
       update,
     );
   }

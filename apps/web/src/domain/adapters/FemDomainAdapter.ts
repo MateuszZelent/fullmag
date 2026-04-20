@@ -29,7 +29,7 @@ export class FemDomainAdapter implements SpatialDomainAdapter {
     this.meta = meta;
     this.topology = topology;
     this.generationId = meta.generation_id;
-    this.pointCount = topology.nodeCount;
+    this.pointCount = meta.counts.nodes ?? topology.nodeCount;
   }
 
   getBounds(): Bounds3 {

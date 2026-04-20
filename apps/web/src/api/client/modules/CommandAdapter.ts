@@ -6,17 +6,17 @@ import type { CommandRequest } from "../../types";
 
 /**
  * Converts a legacy command payload ({ kind: "pause", ... })
- * into the canonical CommandRequest shape ({ kind, params }).
+ * into the canonical CommandRequest shape ({ command, params }).
  */
 export function adaptLegacyCommand(
   payload: Record<string, unknown>,
 ): CommandRequest {
-  const kind = payload.kind as string;
+  const command = solverActionToCommand((payload.kind as string) ?? "");
   const params = { ...payload };
   delete params.kind;
 
   return {
-    kind,
+    command,
     params: Object.keys(params).length > 0 ? params : undefined,
   };
 }

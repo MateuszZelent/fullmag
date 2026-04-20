@@ -18,9 +18,7 @@ use crate::types::AppState;
     ),
     tag = "status"
 )]
-pub async fn get_status(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<LiveStatus>, ApiError> {
+pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveStatus>, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
@@ -39,9 +37,7 @@ pub async fn get_status(
         let stage_exec = snapshot.stage_execution.as_ref();
         RunSummary {
             run_id: r.run_id.clone(),
-            stage_index: stage_exec
-                .and_then(|se| se.active_stage_index)
-                .unwrap_or(0) as u32,
+            stage_index: stage_exec.and_then(|se| se.active_stage_index).unwrap_or(0) as u32,
             stage_label: stage_exec
                 .and_then(|se| se.active_stage_kind.clone())
                 .unwrap_or_default(),
@@ -56,7 +52,9 @@ pub async fn get_status(
     let latest = ls.map(|l| &l.latest_step);
 
     let solver = SolverSummary {
-        state: ls.map(|l| l.status.clone()).unwrap_or_else(|| "idle".into()),
+        state: ls
+            .map(|l| l.status.clone())
+            .unwrap_or_else(|| "idle".into()),
         algorithm: None,
         dt: latest.map(|s| s.dt),
         max_torque: latest.map(|s| s.max_torque_T),

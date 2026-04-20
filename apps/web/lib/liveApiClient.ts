@@ -3,6 +3,13 @@
 import { resolveApiBase } from "./apiBase";
 import { apiGet, apiGetArrayBuffer, apiGetOptional, apiPost } from "./api/client";
 import { ApiError } from "./api/errors";
+import {
+  getLiveApiClient,
+  initLiveApiClient,
+} from "@/src/api/client/LiveApiClient";
+import { adaptLegacyCommand } from "@/src/api/client/modules/CommandAdapter";
+import { scalarWindowToRows } from "@/src/api/client/modules/ScalarHistoryAdapter";
+import { legacyPreviewToDisplayUpdate } from "@/src/api/client/modules/DisplayConsolidation";
 import type { MeshCommandTarget } from "./session/types";
 import type { SceneDocument } from "./session/types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "./debug/frontendDiagnosticFlags";
@@ -122,6 +129,14 @@ function normalizeApiError(error: unknown): never {
   throw error;
 }
 
+function ensureResourceClient() {
+  try {
+    return getLiveApiClient();
+  } catch {
+    return initLiveApiClient({ baseUrl: resolveApiBase() });
+  }
+}
+
 async function requestGet<T>(url: string, options?: RequestOptions): Promise<T> {
   try {
     return await apiGet<T>(url, options);
@@ -173,10 +188,10 @@ export function currentLiveApiClient() {
     urls: {
       bootstrap: withSnapshotTransport(`${baseUrl}/v1/live/current/bootstrap`),
       poll: withSnapshotTransport(`${baseUrl}/v1/live/current/poll`),
-      runtimeCapabilities: `${baseUrl}/v1/runtime/capabilities`,
+      runtimeCapabilities: `${baseUrl}/v1/capabilities`,
       commands: `${baseUrl}/v1/live/current/commands`,
       preview: (path: string) => `${baseUrl}/v1/live/current/preview${path}`,
-      previewSelection: `${baseUrl}/v1/live/current/preview/selection`,
+      previewSelection: `${baseUrl}/v1/live/current/display`,
       importAsset: `${baseUrl}/v1/live/current/assets/import`,
       exportState: `${baseUrl}/v1/live/current/state/export`,
       importState: `${baseUrl}/v1/live/current/state/import`,
@@ -200,41 +215,63 @@ export function currentLiveApiClient() {
       return requestGetOptional<JsonObject>(url.toString(), options);
     },
     fetchScalarsHistory(options?: RequestOptions) {
-      return requestGet<{ scalar_rows: JsonObject[]; scalar_rows_total: number }>(
-        `${baseUrl}/v1/live/current/scalars`,
-        options,
-      );
+      const client = ensureResourceClient();
+      return client.scalars
+        .getWindow()
+        .then((window) => ({
+          scalar_rows: scalarWindowToRows(window),
+          scalar_rows_total: window.total_rows,
+        }));
     },
     fetchFeatureFlags(options?: RequestOptions) {
       return requestGet<RuntimeFeatureFlags>(`${baseUrl}/v1/live/feature-flags`, options);
     },
     fetchRuntimeCapabilities(options?: RequestOptions) {
-      return requestGet<HostCapabilityMatrix>(`${baseUrl}/v1/runtime/capabilities`, options);
+      const client = ensureResourceClient();
+      return client.system.getCapabilities() as Promise<HostCapabilityMatrix>;
     },
     queueCommand(payload: JsonBody, options?: RequestOptions) {
-      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/commands`, payload, options);
+      const command = adaptLegacyCommand((payload ?? {}) as Record<string, unknown>);
+      const client = ensureResourceClient();
+      return client.commands.submit(
+        command.command,
+        command.params as Record<string, unknown> | undefined,
+      ).then((response) => response as unknown as JsonObject);
     },
     queueRemesh(payload: QueueRemeshPayload, options?: RequestOptions) {
-      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/commands`, {
-        kind: "remesh",
+      const client = ensureResourceClient();
+      return client.commands.submit("remesh", {
         mesh_options: payload.mesh_options,
         mesh_target: payload.mesh_target,
         mesh_reason: payload.mesh_reason,
-      }, options);
+      }).then((response) => response as unknown as JsonObject);
     },
     queueStudyDomainRemesh(meshOptions: JsonBody, meshReason?: string, options?: RequestOptions) {
-      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/commands`, {
-        kind: "remesh",
+      const client = ensureResourceClient();
+      return client.commands.submit("remesh", {
         mesh_options: meshOptions,
         mesh_target: { kind: "study_domain" },
         mesh_reason: meshReason,
-      }, options);
+      }).then((response) => response as unknown as JsonObject);
     },
     updatePreview(path: string, payload: JsonBody = {}, options?: RequestOptions) {
+      const update = legacyPreviewToDisplayUpdate(
+        path,
+        (payload as Record<string, unknown> | undefined) ?? {},
+      );
+      if (Object.keys(update).length > 0) {
+        const client = ensureResourceClient();
+        return client.display.update(update).then((response) => response as unknown as JsonObject);
+      }
       return requestPost<JsonObject>(`${baseUrl}/v1/live/current/preview${path}`, payload, options);
     },
     updateDisplaySelection(payload: JsonBody, options?: RequestOptions) {
-      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/preview/selection`, payload, options);
+      const update = legacyPreviewToDisplayUpdate(
+        "/selection",
+        (payload as Record<string, unknown> | undefined) ?? {},
+      );
+      const client = ensureResourceClient();
+      return client.display.update(update).then((response) => response as unknown as JsonObject);
     },
     importAsset(payload: JsonBody, options?: RequestOptions) {
       return requestPost<JsonObject>(`${baseUrl}/v1/live/current/assets/import`, payload, options);
@@ -252,64 +289,98 @@ export function currentLiveApiClient() {
       return requestPost<SceneDocument>(`${baseUrl}/v1/live/current/scene`, payload, options);
     },
     fetchGpuTelemetry(options?: RequestOptions) {
-      return requestGet<GpuTelemetryResponse>(`${baseUrl}/v1/live/current/gpu/telemetry`, options);
+      const client = ensureResourceClient();
+      return client.gpu.getTelemetry() as Promise<GpuTelemetryResponse>;
     },
     fetchArtifacts(options?: RequestOptions) {
-      return requestGet<Array<{ path: string; kind?: string }>>(
-        `${baseUrl}/v1/live/current/artifacts`,
-        options,
-      );
+      const client = ensureResourceClient();
+      return client.artifacts.list();
     },
     fetchEigenSpectrum<T = { modes?: unknown[] }>(options?: RequestOptions) {
-      return requestGet<T>(`${baseUrl}/v1/live/current/eigen/spectrum`, options);
+      const client = ensureResourceClient();
+      return client.eigen.getSpectrum() as Promise<T>;
     },
     fetchEigenDispersion<T = { csv_path: string; path_metadata?: unknown; rows: unknown[] }>(options?: RequestOptions) {
-      return requestGet<T>(`${baseUrl}/v1/live/current/eigen/dispersion`, options);
+      const client = ensureResourceClient();
+      return client.eigen.getDispersion() as Promise<T>;
     },
     fetchEigenBranches<T = unknown>(options?: RequestOptions) {
-      return requestGet<T>(`${baseUrl}/v1/live/current/eigen/branches`, options);
+      const client = ensureResourceClient();
+      return client.eigen.getBranches() as Promise<T>;
     },
     fetchEigenMode<T = unknown>(index: number, sampleIndex?: number | null, options?: RequestOptions) {
-      const url = new URL(`${baseUrl}/v1/live/current/eigen/mode`);
-      url.searchParams.set("index", String(index));
-      if (sampleIndex != null) {
-        url.searchParams.set("sample_index", String(sampleIndex));
-      }
-      return requestGet<T>(url.toString(), options);
+      const client = ensureResourceClient();
+      return client.eigen.getMode({ index, sampleIndex }) as Promise<T>;
     },
     fetchQuantitiesCatalog(options?: RequestOptions) {
       return requestGet<QuantityCatalogResponse>(`${baseUrl}/v1/quantities/catalog`, options);
     },
     // ── Data-plane field store (read-only, no command queue) ──────────
     getFieldCatalog(options?: RequestOptions) {
-      return requestGet<LiveFieldCatalogEntry[]>(`${baseUrl}/v1/live/current/fields/catalog`, options);
+      const client = ensureResourceClient();
+      return client.fields.getCatalog().then((catalog) =>
+        catalog.quantities.map((entry) => ({
+          quantity_id: entry.quantity_id,
+          label: entry.label,
+          kind: entry.kind,
+          unit: entry.unit,
+          spatial_domain: entry.location,
+          n_comp: entry.components,
+          source: "resource_client",
+          available: entry.available,
+          element_count: 0,
+        })),
+      );
     },
     getFieldVector(quantityId: string, options?: RequestOptions) {
-      return requestGet<LiveFieldVectorResponse>(
-        `${baseUrl}/v1/live/current/fields/${encodeURIComponent(quantityId)}/vector`,
-        options,
-      );
+      const client = ensureResourceClient();
+      return client.fields.getVector(quantityId).then((decoded) => ({
+        quantity_id: decoded.quantityId,
+        unit: "",
+        n_comp: decoded.nComp,
+        element_count: decoded.valueCount,
+        grid: decoded.grid,
+        values: Array.from(decoded.values),
+        active_mask: null,
+        source: "binary",
+      }));
     },
     getFieldVectorBinary(quantityId: string, options?: RequestOptions) {
-      const url = new URL(
-        `${baseUrl}/v1/live/current/fields/${encodeURIComponent(quantityId)}/vector`,
-      );
-      url.searchParams.set("format", "bin");
-      return requestGetArrayBuffer(url.toString(), options);
-    },
-    getFemMeshTopologyBinary(generationId?: string | null, options?: RequestOptions) {
-      const url = new URL(`${baseUrl}/v1/live/current/fem-mesh/topology`);
-      url.searchParams.set("format", "bin");
-      if (generationId && generationId.trim().length > 0) {
-        url.searchParams.set("generation_id", generationId);
-      }
-      return requestGetArrayBuffer(url.toString(), options);
-    },
-    getFieldMeta(quantityId: string, options?: RequestOptions) {
-      return requestGet<LiveFieldCatalogEntry>(
-        `${baseUrl}/v1/live/current/fields/${encodeURIComponent(quantityId)}/meta`,
+      const client = ensureResourceClient();
+      return client.getBinary(
+        `/v1/live/current/fields/${encodeURIComponent(quantityId)}/vector`,
         options,
       );
+    },
+    getFemMeshTopologyBinary(generationId?: string | null, options?: RequestOptions) {
+      const client = ensureResourceClient();
+      const url = new URL("/v1/live/current/domain/topology", baseUrl);
+      if (generationId) {
+        url.searchParams.set("generation_id", generationId);
+      }
+      return client.getBinary(url.toString(), options);
+    },
+    getFieldMeta(quantityId: string, options?: RequestOptions) {
+      const client = ensureResourceClient();
+      return client.fields.getMeta(quantityId).then((meta) => ({
+        quantity_id: meta.quantity_id,
+        label: meta.label,
+        kind: meta.kind,
+        unit: meta.unit,
+        spatial_domain: meta.location,
+        n_comp: meta.components,
+        source: "resource_client",
+        available: true,
+        element_count: 0,
+        grid: undefined,
+        stats: meta.stats
+          ? {
+              min: meta.stats.min,
+              max: meta.stats.max,
+              mean: meta.stats.mean,
+            }
+          : undefined,
+      }));
     },
   };
 }

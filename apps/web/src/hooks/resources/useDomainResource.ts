@@ -8,6 +8,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import type { SpatialDomainAdapter } from "../../domain/adapters/SpatialDomainAdapter";
 import { createDomainAdapter } from "../../domain/adapters/createDomainAdapter";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { ResourceCache } from "../../api/client/cache/ResourceCache";
 import { decodeTopology } from "../../api/codecs/topologyCodec";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
@@ -30,17 +31,28 @@ export function useDomainResource(
     setLoading(true);
     setError(null);
 
-    try {
-      const client = getLiveApiClient();
-      const meta = await client.domain.getMeta();
+      try {
+        const client = getLiveApiClient();
+        const cacheKey = ResourceCache.domainKey(genId, "adapter");
+        const cached = client.getCache().get<SpatialDomainAdapter>(cacheKey);
+        if (cached && cached.generationId === genId) {
+          fetchedGenRef.current = genId;
+          setAdapter(cached.data);
+          setLoading(false);
+          return;
+        }
 
-      let topology;
-      if (meta.discretization === "fem") {
-        const topologyBuffer = await client.domain.getTopology();
+        const meta = await client.domain.getMeta();
+
+        let topology;
+        if (meta.discretization === "fem") {
+          const topologyBuffer = await client.domain.getTopology();
         topology = decodeTopology(topologyBuffer);
       }
 
       const newAdapter = createDomainAdapter(meta, topology);
+      client.getCache().invalidateByGeneration(genId);
+      client.getCache().set(cacheKey, newAdapter, genId, genId);
       fetchedGenRef.current = genId;
       setAdapter(newAdapter);
       setLoading(false);

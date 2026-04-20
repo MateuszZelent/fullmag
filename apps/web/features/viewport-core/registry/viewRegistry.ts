@@ -11,6 +11,8 @@
  * router module itself.
  */
 
+import { UNIFIED_VIEWPORT_3D } from "../../viewport-unified/registry/unifiedViewEntry";
+
 // ── View kind ────────────────────────────────────────────────
 
 /** Canonical set of view kinds the viewport area can host. */
@@ -81,22 +83,6 @@ export interface ViewRegistryEntry {
 
 // ── Built-in entries ─────────────────────────────────────────
 
-const VIEWPORT_3D_FDM: ViewRegistryEntry = {
-  id: "viewport-3d-fdm",
-  kind: "viewport-3d",
-  title: "3-D FDM Viewport",
-  componentKey: "VectorFieldView3D",
-  canOpen: (ctx) => ctx.viewportMode === "3D" && ctx.discretization !== "fem",
-};
-
-const VIEWPORT_3D_FEM: ViewRegistryEntry = {
-  id: "viewport-3d-fem",
-  kind: "viewport-3d",
-  title: "3-D FEM Viewport",
-  componentKey: "FemMeshView3D",
-  canOpen: (ctx) => ctx.viewportMode === "3D" && ctx.discretization === "fem",
-};
-
 const VIEWPORT_2D: ViewRegistryEntry = {
   id: "viewport-2d",
   kind: "viewport-2d",
@@ -163,8 +149,7 @@ export const VIEW_REGISTRY: readonly ViewRegistryEntry[] = [
   RESULT_REPORT_VIEW,
   RESULT_TABLE_VIEW,
   RESULT_CHART_VIEW,
-  VIEWPORT_3D_FEM,
-  VIEWPORT_3D_FDM,
+  UNIFIED_VIEWPORT_3D,
   VIEWPORT_2D,
   MESH_WORKSPACE,
   ANALYZE_WORKSPACE,

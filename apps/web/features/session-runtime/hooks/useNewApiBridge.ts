@@ -3,9 +3,8 @@
 /**
  * New API Bridge: maps resource-first LiveStatus → NormalizedSessionState.
  *
- * Drop-in replacement for useSessionRuntimeBridge when USE_NEW_API is enabled.
- * The mapping produces EXACTLY the same store shape that existing components
- * consume — no store changes required.
+ * Resource-first status bridge producing the same normalized store shape
+ * that existing components consume.
  */
 
 import { useEffect, useRef } from "react";
@@ -65,17 +64,17 @@ function mapSolverStateToRuntimeStatus(
 
 function mapSessionManifest(status: LiveStatus): SessionManifest {
   return {
-    session_id: status.session_id,
-    run_id: status.run_id ?? "",
-    status: status.solver_state,
+    session_id: status.session.session_id,
+    run_id: status.run?.run_id ?? "",
+    status: status.solver.state,
     interactive_session_requested: true,
     script_path: "",
-    problem_name: "",
+    problem_name: status.session.name,
     requested_backend: "auto",
     execution_mode: "interactive",
     precision: "double",
-    artifact_dir: "",
-    started_at_unix_ms: 0,
+    artifact_dir: status.session.workspace_root,
+    started_at_unix_ms: Number(status.session.created_at) || 0,
     finished_at_unix_ms: 0,
   };
 }
@@ -83,15 +82,15 @@ function mapSessionManifest(status: LiveStatus): SessionManifest {
 // ── LiveStatus → RunManifest ────────────────────────────────────────
 
 function mapRunManifest(status: LiveStatus): RunManifest | null {
-  if (!status.run_id) return null;
+  if (!status.run) return null;
 
-  const e = status.energy_summary;
+  const e = status.energies;
   return {
-    run_id: status.run_id,
-    session_id: status.session_id,
-    status: status.solver_state,
-    total_steps: status.iteration,
-    final_time: status.sim_time || null,
+    run_id: status.run.run_id,
+    session_id: status.session.session_id,
+    status: status.solver.state,
+    total_steps: status.run.solver_steps,
+    final_time: status.run.solver_time || null,
     final_e_ex: e?.exchange ?? null,
     final_e_demag: e?.demag ?? null,
     final_e_ext: e?.zeeman ?? null,
@@ -105,36 +104,39 @@ function mapRunManifest(status: LiveStatus): RunManifest | null {
 // ── LiveStatus → LiveState (partial) ────────────────────────────────
 
 function mapLiveState(status: LiveStatus): LiveState {
-  const e: EnergySummary = status.energy_summary ?? {
-    total: 0,
-    exchange: 0,
-    zeeman: 0,
-    demag: 0,
-    anisotropy: 0,
+  const e: EnergySummary = status.energies ?? {
+    total: null,
+    exchange: null,
+    zeeman: null,
+    demag: null,
+    anisotropy: null,
+    dmi: null,
   };
-  const m: MetricsSummary = status.metrics_summary ?? {
-    dt: 0,
-    max_torque: 0,
-    max_dm_dt: 0,
+  const m: MetricsSummary = status.metrics ?? {
+    uptime_seconds: 0,
+    total_steps: 0,
+    steps_per_second: null,
   };
+  const sourceStep = status.run?.solver_steps ?? status.metrics.total_steps;
+  const sourceTime = status.run?.solver_time ?? 0;
 
   return {
-    status: status.solver_state,
+    status: status.solver.state,
     updated_at_unix_ms: Date.now(),
-    step: status.iteration,
-    time: status.sim_time,
-    dt: m.dt,
-    e_ex: e.exchange,
-    e_demag: e.demag,
-    e_ext: e.zeeman,
-    e_ani: e.anisotropy,
-    e_dmi: 0,
-    e_total: e.total,
-    max_dm_dt: m.max_dm_dt,
+    step: sourceStep,
+    time: sourceTime,
+    dt: status.solver.dt ?? 0,
+    e_ex: e.exchange ?? 0,
+    e_demag: e.demag ?? 0,
+    e_ext: e.zeeman ?? 0,
+    e_ani: e.anisotropy ?? 0,
+    e_dmi: e.dmi ?? 0,
+    e_total: e.total ?? 0,
+    max_dm_dt: 0,
     max_h_eff: 0,
     max_h_demag: 0,
-    max_torque_Apm: m.max_torque,
-    wall_time_ns: status.wall_time_s * 1e9,
+    max_torque_Apm: status.solver.max_torque ?? 0,
+    wall_time_ns: m.uptime_seconds * 1e9,
     grid: [0, 0, 0],
     preview_grid: null,
     preview_data_points_count: null,
@@ -144,39 +146,39 @@ function mapLiveState(status: LiveStatus): LiveState {
     fem_mesh: null,
     magnetization: null,
     finished:
-      status.solver_state === "converged" ||
-      status.solver_state === "stopped" ||
-      status.solver_state === "error",
+      status.solver.converged === true ||
+      status.solver.state === "finished" ||
+      status.solver.state === "error",
   };
 }
 
 // ── LiveStatus → PreviewState (partial from display_selection) ──────
 
 function mapPreviewState(status: LiveStatus): PreviewState | null {
-  const ds = status.display_selection;
-  if (!ds?.quantity_id) return null;
+  const ds = status.display;
+  if (!ds?.active_quantity_id) return null;
 
   // Build a minimal spatial preview from display selection.
   // Full preview data arrives via the data-plane bridge (useDataPlaneBridge).
   return {
     kind: "spatial",
     display_kind: "vector_field",
-    config_revision: status.field_revision,
-    source_step: status.iteration,
-    source_time: status.sim_time,
+    config_revision: status.resources.display_revision,
+    source_step: status.run?.solver_steps ?? status.metrics.total_steps,
+    source_time: status.run?.solver_time ?? 0,
     spatial_kind: "grid",
-    quantity: ds.quantity_id,
+    quantity: ds.active_quantity_id,
     unit: "",
     quantity_domain: "magnetic_only",
     component: ds.component ?? "3D",
-    layer: 0,
-    all_layers: true,
+    layer: ds.slice_layer ?? 0,
+    all_layers: ds.slice_mode === "all",
     type: "vector",
     vector_payload_id: null,
     vector_field_values: null,
     scalar_field: [],
-    min: ds.range_min ?? 0,
-    max: ds.range_max ?? 1,
+    min: ds.contrast_min ?? 0,
+    max: ds.contrast_max ?? 1,
     n_comp: 3,
     max_points: 0,
     data_points_count: 0,
@@ -187,7 +189,7 @@ function mapPreviewState(status: LiveStatus): PreviewState | null {
     applied_x_chosen_size: 0,
     applied_y_chosen_size: 0,
     applied_layer_stride: 0,
-    auto_scale_enabled: true,
+    auto_scale_enabled: ds.auto_contrast,
     auto_downscaled: false,
     auto_downscale_message: null,
     preview_grid: [0, 0, 0],
@@ -203,33 +205,41 @@ function mapPreviewState(status: LiveStatus): PreviewState | null {
 function mapFieldFrameEnvelope(
   status: LiveStatus,
 ): FieldFrameEnvelope | null {
-  if (!status.run_id) return null;
+  if (!status.run) return null;
 
-  const ds = status.display_selection;
-  const quantityId = ds?.quantity_id ?? "m";
+  const ds = status.display;
+  const quantityId = ds?.active_quantity_id ?? "m";
   const component = ds?.component ?? "3D";
 
   return {
-    sessionId: status.session_id,
-    runId: status.run_id,
+    sessionId: status.session.session_id,
+    runId: status.run.run_id,
     backendEpoch: 0,
-    meshGenerationId: String(status.domain_generation_id),
+    meshGenerationId:
+      status.resources.domain_generation_id > 0
+        ? String(status.resources.domain_generation_id)
+        : null,
     topologyHash: null,
-    fieldRevision: status.field_revision,
-    sourceStep: status.iteration,
-    sourceTime: status.sim_time,
+    fieldRevision: status.resources.fields_revision,
+    sourceStep: status.run.solver_steps,
+    sourceTime: status.run.solver_time,
     quantityId,
     component: component as FieldFrameEnvelope["component"],
     nComp: 3,
     domain: "magnetic_only",
-    location: "grid_cell",
+    location: status.capabilities.node_fields ? "node" : "grid_cell",
     dtype: "f64",
     payloadKind: "binary-ref",
     payloadId: null,
     activeMaskId: null,
     stats:
-      ds?.range_min != null && ds?.range_max != null
-        ? { min: ds.range_min, max: ds.range_max, compMin: null, compMax: null }
+      ds?.contrast_min != null && ds?.contrast_max != null
+        ? {
+            min: ds.contrast_min,
+            max: ds.contrast_max,
+            compMin: null,
+            compMax: null,
+          }
         : null,
   };
 }
@@ -242,12 +252,12 @@ function mapLiveStatusToNormalized(
   const session = mapSessionManifest(status);
   const run = mapRunManifest(status);
   const liveState = mapLiveState(status);
-  const runtimeStatus = mapSolverStateToRuntimeStatus(status.solver_state);
+  const runtimeStatus = mapSolverStateToRuntimeStatus(status.solver.state);
   const preview = mapPreviewState(status);
-  const workspaceStatus = runtimeStatus.code || status.solver_state || "idle";
+  const workspaceStatus = runtimeStatus.code || status.solver.state || "idle";
 
   return {
-    stateVersion: status.field_revision,
+    stateVersion: status.resources.fields_revision,
     session,
     run,
     metadata: null,
@@ -264,7 +274,7 @@ function mapLiveStatusToNormalized(
     meshWorkspace: null,
     stepUpdateV2: null,
     workspaceStatus,
-    isFemBackend: false,
+    isFemBackend: status.domain.discretization === "fem",
     fieldFrameEnvelope: mapFieldFrameEnvelope(status),
   };
 }
@@ -274,8 +284,7 @@ function mapLiveStatusToNormalized(
 /**
  * Bridge hook that syncs the new resource-first API → useSessionRuntimeStore.
  *
- * Mount this once (via useSessionRuntimeBridgeRouter) when USE_NEW_API is
- * enabled. It replaces the legacy useSessionRuntimeBridge.
+ * Mount this once wherever the app owns the live session transport.
  */
 export function useNewApiBridge(): void {
   const { status, error } = useLiveStatus();
@@ -310,13 +319,13 @@ export function useNewApiBridge(): void {
     // Deduplicate by field_revision (monotonically increasing)
     if (
       prevRevisionRef.current != null &&
-      prevRevisionRef.current === status.field_revision
+      prevRevisionRef.current === status.resources.fields_revision
     ) {
       return;
     }
 
     const normalized = mapLiveStatusToNormalized(status);
     applyNormalizedState(normalized);
-    prevRevisionRef.current = status.field_revision;
+    prevRevisionRef.current = status.resources.fields_revision;
   }, [status, applyNormalizedState]);
 }

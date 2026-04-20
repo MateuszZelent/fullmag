@@ -5,7 +5,10 @@ import type { DecodedTopology } from "../../../api/codecs/types";
 
 function makeFemMeta(overrides?: Partial<DomainMeta>): DomainMeta {
   return {
+    domain_id: "current",
     discretization: "fem",
+    coordinate_system: "cartesian",
+    units: { length: "m" },
     dimension: 3,
     generation_id: 2,
     bounds: {
@@ -13,12 +16,12 @@ function makeFemMeta(overrides?: Partial<DomainMeta>): DomainMeta {
       max: [1, 1, 1],
     },
     counts: {
-      point_count: 4,
-      cell_count: 1,
-      element_count: 1,
-      boundary_face_count: 4,
+      nodes: 4,
+      elements: 1,
+      boundary_faces: 4,
     },
-    structured_grid: null,
+    grid: null,
+    element_type: "tetrahedron",
     ...overrides,
   };
 }

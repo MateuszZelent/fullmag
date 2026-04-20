@@ -4,7 +4,10 @@ import type { DomainMeta } from "../../../api/types";
 
 function makeFdmMeta(overrides?: Partial<DomainMeta>): DomainMeta {
   return {
+    domain_id: "current",
     discretization: "fdm",
+    coordinate_system: "cartesian",
+    units: { length: "m" },
     dimension: 3,
     generation_id: 1,
     bounds: {
@@ -12,14 +15,14 @@ function makeFdmMeta(overrides?: Partial<DomainMeta>): DomainMeta {
       max: [2e-7, 2e-7, 1e-7],
     },
     counts: {
-      point_count: 8,
-      cell_count: 8,
+      cells: 8,
     },
-    structured_grid: {
+    grid: {
       shape: [2, 2, 2],
       origin: [0, 0, 0],
       spacing: [1e-7, 1e-7, 0.5e-7],
     },
+    element_type: null,
     ...overrides,
   };
 }
@@ -96,8 +99,8 @@ describe("FdmDomainAdapter", () => {
 
   it("throws when structured_grid is missing", () => {
     const adapter = new FdmDomainAdapter(
-      makeFdmMeta({ structured_grid: null }),
+      makeFdmMeta({ grid: null }),
     );
-    expect(() => adapter.getPositions()).toThrow(/missing structured_grid/);
+    expect(() => adapter.getPositions()).toThrow(/missing grid/);
   });
 });

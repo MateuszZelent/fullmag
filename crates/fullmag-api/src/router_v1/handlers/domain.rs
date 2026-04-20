@@ -32,10 +32,7 @@ pub async fn get_domain_meta(
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
     let is_fem = snapshot.fem_mesh.is_some();
-    let latest = snapshot
-        .live_state
-        .as_ref()
-        .map(|l| &l.latest_step);
+    let latest = snapshot.live_state.as_ref().map(|l| &l.latest_step);
 
     let grid_shape = latest.map(|s| s.grid).unwrap_or([0, 0, 0]);
 
@@ -81,11 +78,18 @@ pub async fn get_domain_meta(
         let (mut bmin, mut bmax) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
         for node in &m.nodes {
             for i in 0..3 {
-                if node[i] < bmin[i] { bmin[i] = node[i]; }
-                if node[i] > bmax[i] { bmax[i] = node[i]; }
+                if node[i] < bmin[i] {
+                    bmin[i] = node[i];
+                }
+                if node[i] > bmax[i] {
+                    bmax[i] = node[i];
+                }
             }
         }
-        Bounds3 { min: bmin, max: bmax }
+        Bounds3 {
+            min: bmin,
+            max: bmax,
+        }
     } else {
         Bounds3 {
             min: [0.0, 0.0, 0.0],
@@ -167,8 +171,7 @@ pub async fn get_domain_coordinates(
 
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
-            let mut buf =
-                Vec::with_capacity(mesh.nodes.len() * 3 * std::mem::size_of::<f64>());
+            let mut buf = Vec::with_capacity(mesh.nodes.len() * 3 * std::mem::size_of::<f64>());
             for node in &mesh.nodes {
                 buf.extend_from_slice(&node[0].to_le_bytes());
                 buf.extend_from_slice(&node[1].to_le_bytes());

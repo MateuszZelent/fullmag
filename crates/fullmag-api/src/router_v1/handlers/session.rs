@@ -18,15 +18,15 @@ use crate::types::AppState;
     ),
     tag = "session"
 )]
-pub async fn export_session(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
+pub async fn export_session(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
-    tracing::warn!("v1 session export is a lightweight proxy — use legacy endpoint for full .fms export");
+    tracing::warn!(
+        "v1 session export is a lightweight proxy — use legacy endpoint for full .fms export"
+    );
 
     Ok(Json(serde_json::json!({
         "session_id": snapshot.session.session_id,
@@ -47,9 +47,7 @@ pub async fn export_session(
     ),
     tag = "session"
 )]
-pub async fn inspect_session(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
+pub async fn inspect_session(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
@@ -77,9 +75,7 @@ pub async fn inspect_session(
     ),
     tag = "session"
 )]
-pub async fn commit_session(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
+pub async fn commit_session(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()

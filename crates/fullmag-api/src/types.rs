@@ -893,45 +893,6 @@ pub(crate) struct ScriptSyncResponse {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct SessionCommandRequest {
-    pub kind: String,
-    #[serde(default)]
-    pub until_seconds: Option<f64>,
-    #[serde(default)]
-    pub max_steps: Option<u64>,
-    #[serde(default)]
-    pub torque_tolerance: Option<f64>,
-    #[serde(default)]
-    pub energy_tolerance: Option<f64>,
-    #[serde(default)]
-    pub integrator: Option<String>,
-    #[serde(default)]
-    pub fixed_timestep: Option<f64>,
-    #[serde(default)]
-    pub max_error: Option<f64>,
-    #[serde(default)]
-    pub relax_algorithm: Option<String>,
-    #[serde(default)]
-    pub relax_alpha: Option<f64>,
-    #[serde(default)]
-    pub mesh_options: Option<Value>,
-    #[serde(default)]
-    pub mesh_target: Option<MeshCommandTarget>,
-    #[serde(default)]
-    pub mesh_reason: Option<String>,
-    #[serde(default)]
-    pub state_path: Option<String>,
-    #[serde(default)]
-    pub state_format: Option<String>,
-    #[serde(default)]
-    pub state_dataset: Option<String>,
-    #[serde(default)]
-    pub state_sample_index: Option<i64>,
-    #[serde(default)]
-    pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
-}
-
-#[derive(Debug, Deserialize)]
 pub(crate) struct CurrentLivePublishRequest {
     pub session_id: String,
     #[serde(default)]
@@ -993,15 +954,6 @@ pub(crate) struct StageExecutionState {
     #[serde(default)]
     pub active_stage_kind: Option<String>,
     pub runtime_state: String,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SessionCommandResponse {
-    pub command_id: String,
-    pub session_id: String,
-    pub seq: u64,
-    pub kind: String,
-    pub queued_path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

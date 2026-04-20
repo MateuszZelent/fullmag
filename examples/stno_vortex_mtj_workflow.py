@@ -10,7 +10,7 @@ study = fm.study("stno_vortex_mtj_workflow")
 
 # Engine
 study.engine("fem")
-study.device("cpu", precision="double")
+study.device("gpu", precision="double")
 study.universe(mode="auto", size=(1e-07, 1e-07, 3e-08), center=(0, 0, 0), padding=(0, 0, 0), maximum_element_size=5e-08)
 study.interactive(True)
 study.wait_for_solve(True)

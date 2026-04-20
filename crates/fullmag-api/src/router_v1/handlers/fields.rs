@@ -234,7 +234,11 @@ pub async fn get_field_vector(
     // Try latest_fields
     if let Some(raw) = snapshot.latest_fields.get(&quantity_id) {
         let values = flatten_json_field_values(raw);
-        let element_count = if n_comp > 0 { values.len() / n_comp } else { values.len() };
+        let element_count = if n_comp > 0 {
+            values.len() / n_comp
+        } else {
+            values.len()
+        };
         let grid = json_field_grid(raw).unwrap_or([element_count as u32, 1, 1]);
         let binary = serialize_field_vector_binary_v2(&quantity_id, n_comp, grid, &values);
         return Ok(([(CONTENT_TYPE, "application/octet-stream")], binary).into_response());

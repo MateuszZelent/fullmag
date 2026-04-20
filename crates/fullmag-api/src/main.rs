@@ -23,7 +23,6 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Mutex, RwLock};
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
@@ -82,8 +81,9 @@ fn latest_fields_wire_value(
         }
         return Ok(metadata);
     }
-    serde_json::to_value(&snapshot.latest_fields)
-        .map_err(|error| ApiError::internal(format!("failed to serialize latest_fields: {}", error)))
+    serde_json::to_value(&snapshot.latest_fields).map_err(|error| {
+        ApiError::internal(format!("failed to serialize latest_fields: {}", error))
+    })
 }
 
 fn live_magnetization_field_metadata(snapshot: &SessionStateResponse) -> Option<Value> {
@@ -120,9 +120,9 @@ fn fem_mesh_wire_value(
         return Ok(None);
     };
     if !binary_mesh_transport {
-        return serde_json::to_value(fem_mesh)
-            .map(Some)
-            .map_err(|error| ApiError::internal(format!("failed to serialize fem_mesh: {}", error)));
+        return serde_json::to_value(fem_mesh).map(Some).map_err(|error| {
+            ApiError::internal(format!("failed to serialize fem_mesh: {}", error))
+        });
     }
     Ok(Some(json!({
         "mesh_name": fem_mesh.mesh_name,
@@ -149,9 +149,7 @@ fn preview_wire_value(
     };
     let mut value = serde_json::to_value(preview)
         .map_err(|error| ApiError::internal(format!("failed to serialize preview: {}", error)))?;
-    if binary_field_transport
-        && matches!(preview, PreviewState::Spatial(_))
-    {
+    if binary_field_transport && matches!(preview, PreviewState::Spatial(_)) {
         if let Some(object) = value.as_object_mut() {
             object.insert("vector_field_values".to_string(), Value::Null);
         }
@@ -167,11 +165,13 @@ fn live_state_wire_value(
     let Some(live_state) = live_state else {
         return Ok(None);
     };
-    let mut value = serde_json::to_value(live_state)
-        .map_err(|error| ApiError::internal(format!("failed to serialize live_state: {}", error)))?;
+    let mut value = serde_json::to_value(live_state).map_err(|error| {
+        ApiError::internal(format!("failed to serialize live_state: {}", error))
+    })?;
     if binary_field_transport {
         if let Some(object) = value.as_object_mut() {
-            if let Some(latest_step) = object.get_mut("latest_step").and_then(Value::as_object_mut) {
+            if let Some(latest_step) = object.get_mut("latest_step").and_then(Value::as_object_mut)
+            {
                 latest_step.insert("magnetization".to_string(), Value::Null);
                 if binary_mesh_transport {
                     latest_step.insert("fem_mesh".to_string(), Value::Null);
@@ -181,7 +181,8 @@ fn live_state_wire_value(
     }
     if binary_mesh_transport {
         if let Some(object) = value.as_object_mut() {
-            if let Some(latest_step) = object.get_mut("latest_step").and_then(Value::as_object_mut) {
+            if let Some(latest_step) = object.get_mut("latest_step").and_then(Value::as_object_mut)
+            {
                 latest_step.insert("fem_mesh".to_string(), Value::Null);
             }
         }
@@ -196,8 +197,9 @@ fn step_update_v2_wire_value(
     let Some(step_update_v2) = step_update_v2 else {
         return Ok(None);
     };
-    let mut value = serde_json::to_value(step_update_v2)
-        .map_err(|error| ApiError::internal(format!("failed to serialize step_update_v2: {}", error)))?;
+    let mut value = serde_json::to_value(step_update_v2).map_err(|error| {
+        ApiError::internal(format!("failed to serialize step_update_v2: {}", error))
+    })?;
     if binary_field_transport {
         if let Some(object) = value.as_object_mut() {
             object.insert("frames".to_string(), Value::Array(Vec::new()));
@@ -235,7 +237,6 @@ use artifacts::*;
 use assets::*;
 use error::ApiError;
 use feature_flags::FeatureFlags;
-use field_store::*;
 use preview::*;
 use quantities::*;
 use script::*;
@@ -293,19 +294,11 @@ async fn main() {
         feature_flags,
     });
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = router_v1::middleware::cors::cors_layer();
 
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/meta/vision", get(vision))
-        .route("/v1/runtime/capabilities", get(get_runtime_capabilities))
-        .route(
-            "/v1/live/current/gpu/telemetry",
-            get(get_current_gpu_telemetry),
-        )
         .route(
             "/v1/live/current/bootstrap",
             get(get_current_live_bootstrap),
@@ -317,10 +310,6 @@ async fn main() {
         .route(
             "/v1/live/current/create",
             post(create_current_live_workspace),
-        )
-        .route(
-            "/v1/live/current/preview/selection",
-            get(get_current_display_selection).post(set_current_preview_selection),
         )
         .route(
             "/v1/live/current/preview/quantity",
@@ -363,30 +352,8 @@ async fn main() {
             post(refresh_current_preview),
         )
         // ── Data-plane field store (read-only, no command queue) ───────
-        .route(
-            "/v1/live/current/fields/catalog",
-            get(get_live_field_catalog),
-        )
-        // ── Scalar history (read-only, full history for charts) ───────
-        .route("/v1/live/current/scalars", get(get_current_live_scalars))
         // ── Feature flags (diagnostics) ──────────────────────────────
         .route("/v1/live/feature-flags", get(get_feature_flags))
-        .route(
-            "/v1/live/current/fields/:quantity/vector",
-            get(get_live_field_vector),
-        )
-        .route(
-            "/v1/live/current/fields/:quantity/meta",
-            get(get_live_field_meta),
-        )
-        .route(
-            "/v1/live/current/fem-mesh/topology",
-            get(get_live_fem_mesh_topology),
-        )
-        .route(
-            "/v1/live/current/commands",
-            post(enqueue_current_live_command),
-        )
         .route(
             "/v1/live/current/commands/next",
             get(dequeue_current_live_command),
@@ -413,37 +380,13 @@ async fn main() {
         )
         .route("/v1/live/current/scene", post(update_current_live_scene))
         .route(
-            "/v1/live/current/artifacts",
-            get(list_current_live_artifacts),
-        )
-        .route(
             "/v1/live/current/artifacts/file",
             get(read_current_live_artifact),
-        )
-        .route(
-            "/v1/live/current/eigen/spectrum",
-            get(get_current_live_eigen_spectrum),
-        )
-        .route(
-            "/v1/live/current/eigen/mode",
-            get(get_current_live_eigen_mode),
-        )
-        .route(
-            "/v1/live/current/eigen/dispersion",
-            get(get_current_live_eigen_dispersion),
-        )
-        .route(
-            "/v1/live/current/eigen/branches",
-            get(get_current_live_eigen_branches),
         )
         .route("/v1/docs/physics", get(list_physics_docs))
         .route("/v1/quantities/catalog", get(get_quantities_catalog))
         .route("/v1/run", post(start_run))
         // ── Session persistence ────────────────────────────────────────
-        .route(
-            "/v1/live/current/session/export",
-            post(session_persistence::export_session),
-        )
         .route(
             "/v1/live/current/session/import/inspect",
             post(session_persistence::import_session_inspect),
@@ -470,8 +413,10 @@ async fn main() {
         // ── New resource-first API (v1) ────────────────────────────────
         .merge(router_v1::build_v1_router())
         // ── OpenAPI / Swagger ──────────────────────────────────────────
-        .merge(utoipa_swagger_ui::SwaggerUi::new("/v1/docs/swagger")
-            .url("/v1/openapi.json", <openapi::ApiDoc as utoipa::OpenApi>::openapi()))
+        .merge(utoipa_swagger_ui::SwaggerUi::new("/v1/docs/swagger").url(
+            "/v1/openapi.json",
+            <openapi::ApiDoc as utoipa::OpenApi>::openapi(),
+        ))
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(cors)
         .with_state(state);
@@ -539,24 +484,8 @@ async fn vision() -> Json<VisionResponse> {
     })
 }
 
-async fn get_runtime_capabilities(
-    State(state): State<Arc<AppState>>,
-) -> Json<fullmag_runner::HostCapabilityMatrix> {
-    let runtimes_dir = state.repo_root.join("runtimes");
-    Json(fullmag_runner::RuntimeRegistry::discover(&runtimes_dir).capability_matrix())
-}
-
 async fn get_quantities_catalog() -> Json<fullmag_quantities::QuantityCatalogResponse> {
     Json(fullmag_quantities::QuantityCatalogResponse::build())
-}
-
-async fn get_current_gpu_telemetry() -> Result<Json<GpuTelemetryResponse>, ApiError> {
-    let output = tokio::task::spawn_blocking(sample_gpu_telemetry)
-        .await
-        .map_err(|error| {
-            ApiError::internal(format!("gpu telemetry task join failed: {error}"))
-        })??;
-    Ok(Json(output))
 }
 
 pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
@@ -646,7 +575,7 @@ async fn get_current_live_bootstrap(
             binary_field_transport,
             binary_mesh_transport,
         )
-            .map_err(|e| ApiError::internal(format!("failed to serialize live state: {}", e)))?;
+        .map_err(|e| ApiError::internal(format!("failed to serialize live state: {}", e)))?;
         // Update the cached snapshot opportunistically for SSE consumers.
         *state.current_live_public_snapshot.write().await = Some(public_json.clone());
         let current_version = live.state_version;
@@ -873,29 +802,9 @@ async fn get_current_live_poll(
     Ok(([(CONTENT_TYPE, "application/json")], json).into_response())
 }
 
-/// `GET /v1/live/current/scalars` — return the full scalar history for the
-/// current workspace.  The frontend fetches this once on tab open and then
-/// appends WS chart_state deltas.
-async fn get_current_live_scalars(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let guard = state.current_live_state.read().await;
-    let rows = guard.as_ref().map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
-    Ok(Json(serde_json::json!({
-        "scalar_rows": rows,
-        "scalar_rows_total": rows.len(),
-    })))
-}
-
 /// `GET /v1/live/feature-flags` — return the current feature flags.
 async fn get_feature_flags(State(state): State<Arc<AppState>>) -> Json<FeatureFlags> {
     Json(state.feature_flags.clone())
-}
-
-async fn get_current_display_selection(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<CurrentDisplaySelection>, ApiError> {
-    Ok(Json(state.current_display_selection.read().await.clone()))
 }
 
 async fn get_current_live_events(
@@ -1282,21 +1191,6 @@ async fn set_current_preview_quantity(
     .await
 }
 
-async fn set_current_preview_selection(
-    State(state): State<Arc<AppState>>,
-    Json(selection): Json<DisplaySelection>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    mutate_current_preview(
-        &state,
-        PreviewControlMode::Update,
-        "selection",
-        move |current| {
-            *current = selection;
-        },
-    )
-    .await
-}
-
 async fn set_current_preview_component(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PreviewComponentRequest>,
@@ -1418,43 +1312,6 @@ async fn refresh_current_preview(
     mutate_current_preview(&state, PreviewControlMode::Refresh, "refresh", |_config| {}).await
 }
 
-async fn enqueue_current_live_command(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<SessionCommandRequest>,
-) -> Result<Json<SessionCommandResponse>, ApiError> {
-    let session_id = current_live_session_id(&state).await?;
-    let command = enqueue_current_control_command(&state, build_session_command(req)?).await;
-    eprintln!(
-        "[fullmag-api] RX <- frontend command {} seq={} id={}",
-        command.kind, command.seq, command.command_id
-    );
-    if let Some(mesh_options) = command.mesh_options.as_ref() {
-        eprintln!("[fullmag-api]    mesh_options: {}", mesh_options);
-    }
-    if let Some(mesh_target) = command.mesh_target.as_ref() {
-        eprintln!("[fullmag-api]    mesh_target: {:?}", mesh_target);
-    }
-    if let Some(mesh_reason) = command.mesh_reason.as_ref() {
-        eprintln!("[fullmag-api]    mesh_reason: {}", mesh_reason);
-    }
-    let ack_json = serialize_runtime_event(&build_command_ack_event(&session_id, &command))?;
-    let _ = state
-        .current_live_events
-        .send(CurrentLiveWireMessage::Text(ack_json));
-    eprintln!(
-        "[fullmag-api] TX -> frontend ack {} seq={} id={}",
-        command.kind, command.seq, command.command_id
-    );
-    let response = SessionCommandResponse {
-        command_id: command.command_id.clone(),
-        session_id,
-        seq: command.seq,
-        kind: command.kind.clone(),
-        queued_path: format!("memory://current/{}", command.command_id),
-    };
-    Ok(Json(response))
-}
-
 async fn dequeue_current_live_command(
     State(state): State<Arc<AppState>>,
 ) -> Result<Response, ApiError> {
@@ -1525,18 +1382,6 @@ async fn import_current_live_state(
     Ok(Json(response))
 }
 
-async fn list_current_live_artifacts(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<ArtifactEntry>>, ApiError> {
-    let current = state.current_live_state.read().await;
-    let snapshot = current
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    let artifact_dir = current_artifact_dir(snapshot);
-    drop(current);
-    Ok(Json(read_artifacts_from_dir(artifact_dir.as_deref())?))
-}
-
 async fn read_current_live_artifact(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ArtifactFileQuery>,
@@ -1567,84 +1412,6 @@ async fn read_current_live_artifact(
     let bytes = std::fs::read(&artifact_path)
         .map_err(|error| ApiError::internal(format!("failed to read artifact: {}", error)))?;
     Ok(([(CONTENT_TYPE, content_type)], bytes).into_response())
-}
-
-async fn get_current_live_eigen_spectrum(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    for candidate in ["eigen/spectrum.json", "eigen/metadata/eigen_summary.json"] {
-        if try_resolve_artifact_path(&artifact_dir, candidate)?.is_some() {
-            return Ok(Json(read_json_artifact_value(&artifact_dir, candidate)?));
-        }
-    }
-    Err(ApiError::not_found(
-        "no eigen spectrum artifact found in the active workspace",
-    ))
-}
-
-async fn get_current_live_eigen_mode(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<EigenModeQuery>,
-) -> Result<Json<Value>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    // Try V2 sample-indexed path first, then fall back to legacy flat path
-    let relative_path = if let Some(sample_idx) = query.sample_index {
-        format!(
-            "eigen/modes/sample_{:04}/mode_{:04}.json",
-            sample_idx, query.index
-        )
-    } else {
-        format!("eigen/modes/mode_{:04}.json", query.index)
-    };
-    match read_json_artifact_value(&artifact_dir, &relative_path) {
-        Ok(value) => Ok(Json(value)),
-        Err(_) if query.sample_index.is_some() => {
-            // Fallback: try legacy flat path when sample path doesn't exist
-            let legacy_path = format!("eigen/modes/mode_{:04}.json", query.index);
-            Ok(Json(read_json_artifact_value(&artifact_dir, &legacy_path)?))
-        }
-        Err(err) => Err(err),
-    }
-}
-
-async fn get_current_live_eigen_dispersion(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<EigenDispersionResponse>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    let csv_path = "eigen/dispersion/branch_table.csv";
-    let csv_content = read_text_artifact_value(&artifact_dir, csv_path)?;
-    let path_metadata =
-        if try_resolve_artifact_path(&artifact_dir, "eigen/dispersion/path.json")?.is_some() {
-            Some(read_json_artifact_value(
-                &artifact_dir,
-                "eigen/dispersion/path.json",
-            )?)
-        } else {
-            None
-        };
-    Ok(Json(EigenDispersionResponse {
-        csv_path: csv_path.to_string(),
-        path_metadata,
-        rows: parse_eigen_dispersion_csv(&csv_content)?,
-    }))
-}
-
-/// Serve V2 tracked-branch artifact (eigen/branches.json).
-/// Returns 404 if the artifact doesn't exist (single-k solve or legacy run).
-async fn get_current_live_eigen_branches(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    match try_resolve_artifact_path(&artifact_dir, "eigen/branches.json")? {
-        Some(_) => Ok(Json(read_json_artifact_value(
-            &artifact_dir,
-            "eigen/branches.json",
-        )?)),
-        None => Err(ApiError::not_found(
-            "no eigen/branches.json artifact found (single-k solve or legacy run)",
-        )),
-    }
 }
 
 /// POST /v1/run — start a simulation run and broadcast live updates.
@@ -1817,99 +1584,6 @@ async fn handle_current_live_ws(mut socket: WebSocket, state: Arc<AppState>) {
             }
         }
     }
-}
-
-fn build_session_command(req: SessionCommandRequest) -> Result<SessionCommand, ApiError> {
-    let kind = req.kind.trim().to_lowercase();
-    if !matches!(
-        kind.as_str(),
-        "run"
-            | "relax"
-            | "close"
-            | "stop"
-            | "break"
-            | "pause"
-            | "resume"
-            | "remesh"
-            | "solve"
-            | "compute"
-            | "load_state"
-            | "run_sequence"
-            | "skip"
-    ) {
-        return Err(ApiError::bad_request(format!(
-            "unsupported command kind '{}'",
-            req.kind
-        )));
-    }
-    if kind == "run" && req.until_seconds.unwrap_or(0.0) <= 0.0 {
-        return Err(ApiError::bad_request(
-            "run command requires positive until_seconds",
-        ));
-    }
-    if kind == "relax" && req.max_steps.unwrap_or(0) == 0 {
-        return Err(ApiError::bad_request(
-            "relax command requires positive max_steps",
-        ));
-    }
-    if kind == "load_state"
-        && req
-            .state_path
-            .as_ref()
-            .map(|path| path.trim().is_empty())
-            .unwrap_or(true)
-    {
-        return Err(ApiError::bad_request(
-            "load_state command requires state_path",
-        ));
-    }
-    if kind == "run_sequence" {
-        let stages = req.stages.as_ref();
-        if stages.map_or(true, |s| s.is_empty()) {
-            return Err(ApiError::bad_request(
-                "run_sequence command requires at least one stage",
-            ));
-        }
-    }
-    if kind == "remesh" && req.mesh_target.is_none() {
-        return Err(ApiError::bad_request("remesh command requires mesh_target"));
-    }
-    if kind != "remesh" && req.mesh_target.is_some() {
-        return Err(ApiError::bad_request(
-            "mesh_target is supported only for remesh commands",
-        ));
-    }
-    if kind != "remesh" && req.mesh_reason.is_some() {
-        return Err(ApiError::bad_request(
-            "mesh_reason is supported only for remesh commands",
-        ));
-    }
-
-    Ok(SessionCommand {
-        seq: 0,
-        command_id: format!("cmd-{}", uuid_v4_hex()),
-        kind,
-        created_at_unix_ms: unix_time_millis_now(),
-        until_seconds: req.until_seconds,
-        max_steps: req.max_steps,
-        torque_tolerance: req.torque_tolerance,
-        energy_tolerance: req.energy_tolerance,
-        integrator: req.integrator,
-        fixed_timestep: req.fixed_timestep,
-        max_error: req.max_error,
-        relax_algorithm: req.relax_algorithm,
-        relax_alpha: req.relax_alpha,
-        mesh_options: req.mesh_options,
-        mesh_target: req.mesh_target,
-        mesh_reason: req.mesh_reason,
-        state_path: req.state_path,
-        state_format: req.state_format,
-        state_dataset: req.state_dataset,
-        state_sample_index: req.state_sample_index,
-        display_selection: None,
-        preview_config: None,
-        stages: req.stages,
-    })
 }
 
 async fn import_asset_for_current_workspace(

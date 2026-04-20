@@ -1,9 +1,4 @@
-use axum::{
-    extract::Request,
-    http::HeaderValue,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, http::HeaderValue, middleware::Next, response::Response};
 
 const CONTRACT_VERSION: &str = "1.0.0";
 const HEADER_NAME: &str = "x-api-contract-version";

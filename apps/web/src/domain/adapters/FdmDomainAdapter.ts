@@ -25,7 +25,7 @@ export class FdmDomainAdapter implements SpatialDomainAdapter {
     }
     this.meta = meta;
     this.generationId = meta.generation_id;
-    this.pointCount = meta.counts.point_count;
+    this.pointCount = meta.counts.cells ?? 0;
   }
 
   getBounds(): Bounds3 {
@@ -38,9 +38,9 @@ export class FdmDomainAdapter implements SpatialDomainAdapter {
   getPositions(): Float32Array {
     if (this.cachedPositions) return this.cachedPositions;
 
-    const grid = this.meta.structured_grid;
+    const grid = this.meta.grid;
     if (!grid) {
-      throw new Error("FDM domain missing structured_grid descriptor");
+      throw new Error("FDM domain missing grid descriptor");
     }
 
     const [nx, ny, nz] = grid.shape;
@@ -86,8 +86,8 @@ export class FdmDomainAdapter implements SpatialDomainAdapter {
       dimension: 3,
       pointCount: this.pointCount,
       cellCount: this.pointCount,
-      gridShape: this.meta.structured_grid
-        ? [...this.meta.structured_grid.shape]
+      gridShape: this.meta.grid
+        ? [...this.meta.grid.shape]
         : undefined,
     };
   }

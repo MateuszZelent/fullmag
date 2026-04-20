@@ -1,12 +1,12 @@
 /**
  * Unified display-control actions.
  *
- * Bridges legacy preview-mutation calls with the new resource-first
- * DisplayUpdate API behind the USE_NEW_API feature flag.
+ * Bridges legacy preview-mutation calls with the canonical resource-first
+ * DisplayUpdate API, falling back to legacy preview posts only when a caller
+ * does not provide the new update handler.
  */
 
 import { useCallback } from "react";
-import { USE_NEW_API } from "../../../src/config/featureFlags";
 import type { DisplayUpdate } from "../../../src/api/types";
 
 export function useUnifiedDisplayControls(
@@ -17,7 +17,7 @@ export function useUnifiedDisplayControls(
 ) {
   const setComponent = useCallback(
     (component: string) => {
-      if (USE_NEW_API && newDisplayUpdate) {
+      if (newDisplayUpdate) {
         return newDisplayUpdate({ component });
       }
       return legacyUpdatePreview?.("/component", { component });
@@ -27,8 +27,8 @@ export function useUnifiedDisplayControls(
 
   const setEveryN = useCallback(
     (everyN: number) => {
-      if (USE_NEW_API && newDisplayUpdate) {
-        return newDisplayUpdate({ component: String(everyN) });
+      if (newDisplayUpdate) {
+        return newDisplayUpdate({ vector_density: everyN });
       }
       return legacyUpdatePreview?.("/everyN", { everyN });
     },
@@ -37,8 +37,8 @@ export function useUnifiedDisplayControls(
 
   const setMaxPoints = useCallback(
     (maxPoints: number) => {
-      if (USE_NEW_API && newDisplayUpdate) {
-        return newDisplayUpdate({ component: String(maxPoints) });
+      if (newDisplayUpdate) {
+        return Promise.resolve(void maxPoints);
       }
       return legacyUpdatePreview?.("/maxPoints", { maxPoints });
     },
@@ -47,11 +47,8 @@ export function useUnifiedDisplayControls(
 
   const setAutoScale = useCallback(
     (enabled: boolean) => {
-      if (USE_NEW_API && newDisplayUpdate) {
-        return newDisplayUpdate({
-          range_min: enabled ? null : undefined,
-          range_max: enabled ? null : undefined,
-        });
+      if (newDisplayUpdate) {
+        return newDisplayUpdate({ auto_contrast: enabled });
       }
       return legacyUpdatePreview?.("/autoScaleEnabled", {
         autoScaleEnabled: enabled,
@@ -62,8 +59,8 @@ export function useUnifiedDisplayControls(
 
   const setLayer = useCallback(
     (layer: number) => {
-      if (USE_NEW_API && newDisplayUpdate) {
-        return newDisplayUpdate({ component: String(layer) });
+      if (newDisplayUpdate) {
+        return newDisplayUpdate({ slice_layer: layer });
       }
       return legacyUpdatePreview?.("/layer", { layer });
     },
@@ -72,8 +69,8 @@ export function useUnifiedDisplayControls(
 
   const setAllLayers = useCallback(
     (all: boolean) => {
-      if (USE_NEW_API && newDisplayUpdate) {
-        return newDisplayUpdate({ component: all ? "all" : "single" });
+      if (newDisplayUpdate) {
+        return newDisplayUpdate({ slice_mode: all ? "all" : "single" });
       }
       return legacyUpdatePreview?.("/allLayers", { allLayers: all });
     },
@@ -82,7 +79,7 @@ export function useUnifiedDisplayControls(
 
   const setColormap = useCallback(
     (colormap: string) => {
-      if (USE_NEW_API && newDisplayUpdate) {
+      if (newDisplayUpdate) {
         return newDisplayUpdate({ colormap });
       }
       return legacyUpdatePreview?.("/colormap", { colormap });
@@ -92,8 +89,8 @@ export function useUnifiedDisplayControls(
 
   const setQuantity = useCallback(
     (quantityId: string) => {
-      if (USE_NEW_API && newDisplayUpdate) {
-        return newDisplayUpdate({ quantity_id: quantityId });
+      if (newDisplayUpdate) {
+        return newDisplayUpdate({ active_quantity_id: quantityId });
       }
       return legacyUpdatePreview?.("/selection", { quantityId });
     },
@@ -102,8 +99,8 @@ export function useUnifiedDisplayControls(
 
   const setVectorGlyphs = useCallback(
     (enabled: boolean) => {
-      if (USE_NEW_API && newDisplayUpdate) {
-        return newDisplayUpdate({ component: enabled ? "3D" : "magnitude" });
+      if (newDisplayUpdate) {
+        return newDisplayUpdate({ vector_glyphs: enabled });
       }
       return legacyUpdatePreview?.("/vectorGlyphs", {
         vectorGlyphs: enabled,
@@ -114,8 +111,8 @@ export function useUnifiedDisplayControls(
 
   const setContrastRange = useCallback(
     (min: number, max: number) => {
-      if (USE_NEW_API && newDisplayUpdate) {
-        return newDisplayUpdate({ range_min: min, range_max: max });
+      if (newDisplayUpdate) {
+        return newDisplayUpdate({ contrast_min: min, contrast_max: max });
       }
       return legacyUpdatePreview?.("/contrastRange", { min, max });
     },

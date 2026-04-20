@@ -9,7 +9,7 @@ export class DomainModule {
   }
 
   async getTopology(): Promise<ArrayBuffer> {
-    return this.client.getBinary("/v1/live/current/fem-mesh/topology?format=bin");
+    return this.client.getBinary("/v1/live/current/domain/topology");
   }
 
   async getCoordinates(): Promise<ArrayBuffer> {

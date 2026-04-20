@@ -21,8 +21,8 @@ use tokio::sync::{broadcast, watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
 use crate::types::{
-    AppState, CurrentDisplaySelection, CurrentLiveWireMessage, LatestFields,
-    RuntimeStatusView, SessionManifest, SessionStateResponse,
+    AppState, CurrentDisplaySelection, CurrentLiveWireMessage, LatestFields, RuntimeStatusView,
+    SessionManifest, SessionStateResponse,
 };
 use fullmag_runner::RuntimeStatus;
 
@@ -43,9 +43,7 @@ fn test_app_state() -> Arc<AppState> {
         current_live_public_snapshot: Arc::new(RwLock::new(None)),
         current_live_events: live_events_tx,
         current_live_vector_payload_seq: Arc::new(AtomicU32::new(0)),
-        current_display_selection: Arc::new(RwLock::new(
-            CurrentDisplaySelection::default(),
-        )),
+        current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: control_events_tx,
         current_control_next_seq: Arc::new(Mutex::new(0)),

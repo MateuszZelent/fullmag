@@ -7,6 +7,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { DecodedFieldVector } from "../../api/codecs/types";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { ResourceCache } from "../../api/client/cache/ResourceCache";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 interface UseFieldVectorResult {
@@ -33,7 +34,17 @@ export function useFieldVector(
 
       try {
         const client = getLiveApiClient();
+        const resourceKey = ResourceCache.fieldKey(qId, rev, 0);
+        const cached = client.getCache().get<DecodedFieldVector>(resourceKey);
+        if (cached && cached.revision === rev) {
+          fetchedRevRef.current = cacheKey;
+          setField(cached.data);
+          setLoading(false);
+          return;
+        }
+
         const result = await client.fields.getVector(qId);
+        client.getCache().set(resourceKey, result, rev, 0);
         fetchedRevRef.current = cacheKey;
         setField(result);
         setLoading(false);

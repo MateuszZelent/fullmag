@@ -7,7 +7,7 @@ use axum::Json;
 
 use crate::error::ApiError;
 use crate::schemas::commands::{CommandRequest, CommandResponse};
-use crate::types::{AppState, SessionCommand};
+use crate::types::{AppState, MeshCommandTarget, SessionCommand};
 
 #[utoipa::path(
     post,
@@ -35,6 +35,14 @@ pub async fn submit_command(
         .map(|d| d.as_millis())
         .unwrap_or(0);
 
+    let mesh_target = req
+        .params
+        .get("mesh_target")
+        .cloned()
+        .map(serde_json::from_value::<MeshCommandTarget>)
+        .transpose()
+        .map_err(|error| ApiError::bad_request(format!("invalid mesh_target: {error}")))?;
+
     let command = SessionCommand {
         seq: 0,
         command_id: command_id.clone(),
@@ -58,14 +66,22 @@ pub async fn submit_command(
             .map(|s| s.to_string()),
         relax_alpha: req.params.get("relax_alpha").and_then(|v| v.as_f64()),
         mesh_options: req.params.get("mesh_options").cloned(),
-        mesh_target: None,
+        mesh_target,
         mesh_reason: req
             .params
             .get("mesh_reason")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        state_path: None,
-        state_format: None,
+        state_path: req
+            .params
+            .get("state_path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        state_format: req
+            .params
+            .get("state_format")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         state_dataset: None,
         state_sample_index: None,
         display_selection: None,
@@ -81,11 +97,7 @@ pub async fn submit_command(
     };
     let mut enqueued = command;
     enqueued.seq = seq;
-    state
-        .current_control_queue
-        .lock()
-        .await
-        .push_back(enqueued);
+    state.current_control_queue.lock().await.push_back(enqueued);
     let _ = state.current_control_events.send(seq);
 
     Ok(Json(CommandResponse {

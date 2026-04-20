@@ -8,7 +8,7 @@ import { FemViewportScene } from "@/components/preview/fem/FemViewportScene";
 import ScientificViewportShell from "@/components/preview/shared/ScientificViewportShell";
 import { fitCameraToBounds } from "@/components/preview/camera/cameraHelpers";
 import { currentLiveApiClient } from "@/lib/liveApiClient";
-import { normalizeSessionState } from "@/lib/session/normalize";
+import { decodeFemMeshTopologyBinary } from "@/lib/session/binary-fem-mesh";
 import type { FemLiveMesh } from "@/lib/session/types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
@@ -129,13 +129,49 @@ export default function StandaloneFemSceneDiagnosticViewport() {
   useEffect(() => {
     let cancelled = false;
     void currentLiveApiClient()
-      .fetchBootstrap()
-      .then((raw) => {
+      .getFemMeshTopologyBinary()
+      .then((buffer) => {
         if (cancelled) return;
-        const state = normalizeSessionState(raw);
-        const nextMesh = state.fem_mesh ?? state.live_state?.fem_mesh ?? null;
+        const topology = decodeFemMeshTopologyBinary(buffer);
+        const nextMesh: FemLiveMesh = {
+          mesh_name: "diagnostic-topology",
+          mesh_id: "diagnostic-topology",
+          generation_id: "diagnostic-topology",
+          nodes: Array.from({ length: topology.nodeCount }, (_, index) => {
+            const base = index * 3;
+            return [
+              topology.nodes[base] ?? 0,
+              topology.nodes[base + 1] ?? 0,
+              topology.nodes[base + 2] ?? 0,
+            ];
+          }),
+          elements: Array.from({ length: topology.elementCount }, (_, index) => {
+            const base = index * 4;
+            return [
+              topology.elements[base] ?? 0,
+              topology.elements[base + 1] ?? 0,
+              topology.elements[base + 2] ?? 0,
+              topology.elements[base + 3] ?? 0,
+            ];
+          }),
+          element_markers: Array.from(topology.elementMarkers),
+          boundary_faces: Array.from({ length: topology.boundaryFaceCount }, (_, index) => {
+            const base = index * 3;
+            return [
+              topology.boundaryFaces[base] ?? 0,
+              topology.boundaryFaces[base + 1] ?? 0,
+              topology.boundaryFaces[base + 2] ?? 0,
+            ];
+          }),
+          boundary_markers: Array.from(topology.boundaryMarkers),
+          object_segments: [],
+          mesh_parts: [],
+          node_count: topology.nodeCount,
+          element_count: topology.elementCount,
+          boundary_face_count: topology.boundaryFaceCount,
+        };
         if (!nextMesh || nextMesh.nodes.length === 0 || nextMesh.elements.length === 0) {
-          setError("Bootstrap loaded, but no FEM mesh was available.");
+          setError("Topology loaded, but no FEM mesh was available.");
           setMesh(null);
           return;
         }
@@ -246,7 +282,7 @@ export default function StandaloneFemSceneDiagnosticViewport() {
         </ScientificViewportShell>
       ) : (
         <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-          {loading ? "Loading FEM scene bootstrap..." : error ?? "No FEM mesh available"}
+          {loading ? "Loading FEM topology..." : error ?? "No FEM mesh available"}
         </div>
       )}
 

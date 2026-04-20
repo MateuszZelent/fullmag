@@ -1,4 +1,4 @@
-import type { HealthResponse, CapabilityMap } from "../../types";
+import type { HealthResponse, RuntimeCapabilityMatrix } from "../../types";
 import type { LiveApiClient } from "../LiveApiClient";
 
 export class SystemModule {
@@ -8,7 +8,7 @@ export class SystemModule {
     return this.client.get<HealthResponse>("/v1/health");
   }
 
-  async getCapabilities(): Promise<CapabilityMap> {
-    return this.client.get<CapabilityMap>("/v1/runtime/capabilities");
+  async getCapabilities(): Promise<RuntimeCapabilityMatrix> {
+    return this.client.get<RuntimeCapabilityMatrix>("/v1/capabilities");
   }
 }

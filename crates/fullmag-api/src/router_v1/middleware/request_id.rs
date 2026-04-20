@@ -1,9 +1,4 @@
-use axum::{
-    extract::Request,
-    http::HeaderValue,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, http::HeaderValue, middleware::Next, response::Response};
 
 const HEADER_NAME: &str = "x-request-id";
 

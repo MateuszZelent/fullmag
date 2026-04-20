@@ -5,12 +5,15 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { ScalarRow } from "../../api/types";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
+import {
+  mergeScalarWindows,
+  type LegacyScalarRow,
+} from "../../api/client/modules/ScalarHistoryAdapter";
 
 interface UseScalarHistoryResult {
-  scalars: ScalarRow[];
+  scalars: LegacyScalarRow[];
   totalRows: number;
   loading: boolean;
   error: LiveApiError | null;
@@ -22,7 +25,7 @@ const POLL_INTERVAL_MS = 2000;
 export function useScalarHistory(
   scalarRevision: number | null,
 ): UseScalarHistoryResult {
-  const [scalars, setScalars] = useState<ScalarRow[]>([]);
+  const [scalars, setScalars] = useState<LegacyScalarRow[]>([]);
   const [totalRows, setTotalRows] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<LiveApiError | null>(null);
@@ -39,10 +42,8 @@ export function useScalarHistory(
       });
       if (!mountedRef.current) return;
 
-      if (window.rows.length > 0) {
-        setScalars((prev) => [...prev, ...window.rows]);
-        lastRevRef.current = window.since_revision;
-      }
+      setScalars((prev) => mergeScalarWindows(prev, window));
+      lastRevRef.current = window.revision;
       setTotalRows(window.total_rows);
       setError(null);
       setLoading(false);
