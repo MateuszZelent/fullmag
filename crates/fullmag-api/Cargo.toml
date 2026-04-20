@@ -30,3 +30,6 @@ fullmag-session = { path = "../fullmag-session" }
 utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "8", features = ["axum"] }
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

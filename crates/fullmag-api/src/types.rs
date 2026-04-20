@@ -1099,6 +1099,8 @@ mod tests {
         ScriptBuilderState {
             revision: 3,
             backend: None,
+            cpu_threads: None,
+            fem_demag_solver_policy: None,
             demag_realization: None,
             external_field: None,
             solver: fullmag_authoring::ScriptBuilderSolverState {
@@ -1210,6 +1212,7 @@ mod tests {
                 requested_device: "auto".to_string(),
                 requested_precision: "double".to_string(),
                 requested_mode: "strict".to_string(),
+                requested_cpu_threads: None,
                 execution_mode: "strict".to_string(),
                 precision: "double".to_string(),
                 resolved_backend: None,
@@ -1219,6 +1222,7 @@ mod tests {
                 resolved_runtime_family: None,
                 resolved_engine_id: None,
                 resolved_worker: None,
+                resolved_cpu_threads: None,
                 resolved_fallback: None,
                 artifact_dir: String::new(),
                 started_at_unix_ms: 0,
@@ -1248,6 +1252,14 @@ mod tests {
             preview_config: CurrentPreviewConfig::default(),
             preview: None,
             builder_adapter: Some(builder),
+            scalar_rows_ws_cursor: 0,
+            quantities_ws_hash: 0,
+            ws_sent_fem_mesh_generation: None,
+            ws_sent_preview_fingerprint: None,
+            ws_sent_latest_fields_hash: 0,
+            state_version: 0,
+            ws_sent_envelope_version: 0,
+            envelope_version: 0,
         };
 
         let value = serde_json::to_value(SessionStateResponseView {
@@ -1269,6 +1281,8 @@ mod tests {
             preview_config: &response.preview_config,
             preview: response.preview.as_ref(),
             step_update_v2: None,
+            scalar_rows_total: 0,
+            state_version: 0,
         })
         .expect("response should serialize");
 

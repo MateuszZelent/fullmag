@@ -1,6 +1,9 @@
 pub mod handlers;
 pub mod middleware;
 
+#[cfg(test)]
+mod tests;
+
 use axum::{
     routing::{get, post, put},
     Router,
