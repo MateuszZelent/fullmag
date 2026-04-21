@@ -7,12 +7,12 @@ import {
   getLiveApiClient,
   initLiveApiClient,
 } from "@/src/api/client/LiveApiClient";
-import { adaptLegacyCommand } from "@/src/api/client/modules/CommandAdapter";
+import { normalizeCommandRequest } from "@/src/api/client/modules/CommandAdapter";
 import type { QuantityCatalogResponse as ResourceQuantityCatalogResponse } from "@/src/api/client/modules/QuantitiesModule";
 import type {
   DisplayPatchRequest,
   DisplayReplaceRequest,
-  RemeshCommandRequest,
+  MeshBuildCommandRequest,
 } from "@/src/api/types";
 import type { MeshCommandTarget } from "./session/types";
 import type { SceneDocument } from "./session/types";
@@ -124,7 +124,7 @@ export interface QuantityCatalogResponse {
   quantities: unknown[];
 }
 
-function scalarWindowToLegacyRows(window: {
+function scalarWindowToSessionRows(window: {
   columns: string[];
   rows: number[][];
 }): JsonObject[] {
@@ -196,7 +196,7 @@ export function currentLiveApiClient() {
       return client.scalars
         .getWindow(undefined, options)
         .then((window) => ({
-          scalar_rows: scalarWindowToLegacyRows(window),
+          scalar_rows: scalarWindowToSessionRows(window),
           scalar_rows_total: window.total_rows,
         }));
     },
@@ -211,7 +211,7 @@ export function currentLiveApiClient() {
       return client.system.getCapabilities(options) as Promise<HostCapabilityMatrix>;
     },
     queueCommand(payload: JsonBody, options?: RequestOptions) {
-      const command = adaptLegacyCommand((payload ?? {}) as Record<string, unknown>);
+      const command = normalizeCommandRequest((payload ?? {}) as Record<string, unknown>);
       const client = ensureResourceClient();
       return client.commands
         .submit(command, options)
@@ -219,26 +219,24 @@ export function currentLiveApiClient() {
     },
     queueRemesh(payload: QueueRemeshPayload, options?: RequestOptions) {
       const client = ensureResourceClient();
-      const request: RemeshCommandRequest = {
-        kind: "remesh",
+      const request: MeshBuildCommandRequest = {
         mesh_options: payload.mesh_options,
         mesh_target: payload.mesh_target,
         mesh_reason: payload.mesh_reason,
       };
-      return client.commands
-        .submit(request, options)
+      return client.mesh
+        .submitBuildCommand(request, options)
         .then((response) => response as unknown as JsonObject);
     },
     queueStudyDomainRemesh(meshOptions: JsonBody, meshReason?: string, options?: RequestOptions) {
       const client = ensureResourceClient();
-      const request: RemeshCommandRequest = {
-        kind: "remesh",
+      const request: MeshBuildCommandRequest = {
         mesh_options: meshOptions,
         mesh_target: { kind: "study_domain" },
         mesh_reason: meshReason,
       };
-      return client.commands
-        .submit(request, options)
+      return client.mesh
+        .submitBuildCommand(request, options)
         .then((response) => response as unknown as JsonObject);
     },
     importAsset(payload: JsonBody, options?: RequestOptions) {

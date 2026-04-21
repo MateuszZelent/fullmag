@@ -1,12 +1,12 @@
 "use client";
 
 import { getLiveApiClient, type RequestOptions } from "@/src/api/client/LiveApiClient";
-import { adaptLegacyCommand } from "@/src/api/client/modules/CommandAdapter";
+import { normalizeCommandRequest } from "@/src/api/client/modules/CommandAdapter";
 import type { DisplaySelection } from "@/src/api/generated/openapi-types";
 import type {
   DisplayPatchRequest,
   DisplayReplaceRequest,
-  RemeshCommandRequest,
+  MeshBuildCommandRequest,
   SessionExportRequest,
   SessionExportResponse,
   SessionImportCommitRequest,
@@ -84,20 +84,19 @@ export function createControlRoomApi(): ControlRoomApi {
 
   return {
     queueCommand(payload, options) {
-      const command = adaptLegacyCommand((payload ?? {}) as Record<string, unknown>);
+      const command = normalizeCommandRequest((payload ?? {}) as Record<string, unknown>);
       return client.commands
         .submit(command, options)
         .then((response) => response as unknown as JsonObject);
     },
     queueRemesh(payload, options) {
-      const request: RemeshCommandRequest = {
-        kind: "remesh",
+      const request: MeshBuildCommandRequest = {
         mesh_options: payload.mesh_options,
         mesh_target: payload.mesh_target,
         mesh_reason: payload.mesh_reason,
       };
-      return client.commands
-        .submit(request, options)
+      return client.mesh
+        .submitBuildCommand(request, options)
         .then((response) => response as unknown as JsonObject);
     },
     getDisplay(options) {

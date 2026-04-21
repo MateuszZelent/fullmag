@@ -9,7 +9,8 @@ use crate::error::ApiError;
 use crate::router_v1::handlers::display::build_display_selection_response;
 use crate::schemas::status::*;
 use crate::types::{
-    AppState, CurrentDisplaySelection, DisplayPresentationState, SessionStateResponse,
+    AppState, CurrentDisplaySelection, CurrentWorkspaceLayout, CurrentWorkspaceRibbon,
+    CurrentWorkspaceSelection, DisplayPresentationState, SessionStateResponse,
 };
 
 #[utoipa::path(
@@ -29,12 +30,18 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
 
     let display_sel = state.current_display_selection.read().await;
     let display_presentation = state.current_display_presentation.read().await;
+    let workspace_selection = state.current_workspace_selection.read().await;
+    let workspace_ribbon = state.current_workspace_ribbon.read().await;
+    let workspace_layout = state.current_workspace_layout.read().await;
 
     Ok(Json(build_live_status(
         state.current_workspace_root.as_path(),
         snapshot,
         &display_sel,
         &display_presentation,
+        &workspace_selection,
+        &workspace_ribbon,
+        &workspace_layout,
     )))
 }
 
@@ -43,6 +50,9 @@ pub(crate) fn build_live_status(
     snapshot: &SessionStateResponse,
     display_sel: &CurrentDisplaySelection,
     display_presentation: &DisplayPresentationState,
+    workspace_selection: &CurrentWorkspaceSelection,
+    workspace_ribbon: &CurrentWorkspaceRibbon,
+    workspace_layout: &CurrentWorkspaceLayout,
 ) -> LiveStatus {
     let session = SessionSummary {
         session_id: snapshot.session.session_id.clone(),
@@ -112,6 +122,10 @@ pub(crate) fn build_live_status(
         artifacts_revision: snapshot.artifacts.len() as u64,
         engine_log_revision: snapshot.engine_log.len() as u64,
         display_revision: display_sel.revision,
+        workspace_revision: workspace_selection
+            .revision
+            .max(workspace_ribbon.revision)
+            .max(workspace_layout.revision),
     };
 
     let capabilities = CapabilityMap {

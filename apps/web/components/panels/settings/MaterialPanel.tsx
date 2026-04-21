@@ -764,7 +764,7 @@ export default function MaterialPanel({
       });
 
       try {
-        await model.refreshLiveState({ forceBootstrap: true });
+        await model.refreshLiveState();
         if (presetTextureSyncGenerationRef.current !== generation) {
           return;
         }
@@ -945,7 +945,7 @@ export default function MaterialPanel({
       .update(scenePayload)
       .then(async (committedScene) => {
         model.setSceneDocument(committedScene);
-        await model.refreshLiveState({ forceBootstrap: true });
+        await model.refreshLiveState();
       })
       .catch(() => {
         lastAutoAppliedMagnetizationHashRef.current = null;

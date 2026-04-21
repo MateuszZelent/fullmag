@@ -22,10 +22,11 @@ use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
 use crate::types::{
-    AppState, CommandLifecycleState, CurrentDisplaySelection, DisplayPresentationState,
-    LatestFields, LiveState, RunManifest, RuntimeStatusView, ScalarRow, SessionCommand,
-    SessionManifest, SessionStateResponse, StageExecutionRecord, StageExecutionState,
-    StepUpdateView, TrackedCommandRecord,
+    AppState, CommandLifecycleState, CurrentDisplaySelection, CurrentWorkspaceLayout,
+    CurrentWorkspaceRibbon, CurrentWorkspaceSelection, DisplayPresentationState, LatestFields,
+    LiveState, RunManifest, RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest,
+    SessionStateResponse, StageExecutionRecord, StageExecutionState, StepUpdateView,
+    TrackedCommandRecord,
 };
 use fullmag_runner::RuntimeStatus;
 
@@ -144,6 +145,9 @@ fn test_app_state() -> Arc<AppState> {
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
+        current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
+        current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
+        current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_command_ledger: Arc::new(Mutex::new(VecDeque::new())),
@@ -559,6 +563,9 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
+        current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
+        current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
+        current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_command_ledger: Arc::new(Mutex::new(VecDeque::new())),
@@ -851,6 +858,7 @@ async fn status_returns_200_with_live_session() {
     assert!(json["display"]["y_chosen_size"].is_number());
     assert!(json["domain"].is_object());
     assert!(json["resources"].is_object());
+    assert_eq!(json["resources"]["workspace_revision"], 0);
     assert!(json["capabilities"].is_object());
     assert!(json["energies"].is_object());
     assert!(json["metrics"].is_object());
@@ -1214,10 +1222,551 @@ async fn display_put_rejects_partial_payload() {
     );
 }
 
-// ─── scene resource ────────────────────────────────────────────────────────
+// ─── workspace endpoints ───────────────────────────────────────────────────
 
 #[tokio::test]
-async fn scene_document_get_returns_current_scene() {
+async fn workspace_selection_get_requires_live_session() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/workspace/selection")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn workspace_selection_get_returns_defaults() {
+    let app = test_router_with_session().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/workspace/selection")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 0);
+    assert!(json.get("selected_node_id").is_none());
+    assert!(json.get("selected_object_id").is_none());
+    assert!(json.get("selected_entity_id").is_none());
+}
+
+#[tokio::test]
+async fn workspace_selection_put_replaces_selection() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/live/current/workspace/selection")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "selected_node_id": "objects/body",
+                        "selected_object_id": "body",
+                        "selected_entity_id": "mesh:body:surface"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 1);
+    assert_eq!(json["selected_node_id"], "objects/body");
+    assert_eq!(json["selected_object_id"], "body");
+    assert_eq!(json["selected_entity_id"], "mesh:body:surface");
+
+    let selection = state.current_workspace_selection.read().await;
+    assert_eq!(selection.revision, 1);
+    assert_eq!(selection.selected_node_id.as_deref(), Some("objects/body"));
+    assert_eq!(selection.selected_object_id.as_deref(), Some("body"));
+    assert_eq!(
+        selection.selected_entity_id.as_deref(),
+        Some("mesh:body:surface")
+    );
+}
+
+#[tokio::test]
+async fn workspace_active_node_put_updates_selection_projection() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/live/current/workspace/tree/active-node")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "node_id": "study/stages/relax-1"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 1);
+    assert_eq!(json["node_id"], "study/stages/relax-1");
+
+    let selection = state.current_workspace_selection.read().await;
+    assert_eq!(selection.revision, 1);
+    assert_eq!(
+        selection.selected_node_id.as_deref(),
+        Some("study/stages/relax-1"),
+    );
+}
+
+#[tokio::test]
+async fn workspace_ribbon_put_replaces_ribbon_state() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/live/current/workspace/ribbon")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "workspace_mode": "build",
+                        "active_core_tab": "Mesh",
+                        "active_contextual_tab": "mesh-quality"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 1);
+    assert_eq!(json["workspace_mode"], "build");
+    assert_eq!(json["active_core_tab"], "Mesh");
+    assert_eq!(json["active_contextual_tab"], "mesh-quality");
+
+    let ribbon = state.current_workspace_ribbon.read().await;
+    assert_eq!(ribbon.revision, 1);
+    assert_eq!(ribbon.workspace_mode, "build");
+    assert_eq!(ribbon.active_core_tab, "Mesh");
+    assert_eq!(
+        ribbon.active_contextual_tab.as_deref(),
+        Some("mesh-quality")
+    );
+}
+
+#[tokio::test]
+async fn workspace_layout_put_replaces_layout_state() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/live/current/workspace/layout")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "current_stage": "analyze",
+                        "stage_layouts": {
+                            "build": {
+                                "left_dock": "model",
+                                "center_dock": "settings",
+                                "right_dock": "properties",
+                                "bottom_dock": "messages"
+                            },
+                            "study": {
+                                "left_dock": "study-tree",
+                                "center_dock": "viewport-controls",
+                                "right_dock": "solver",
+                                "bottom_dock": "jobs"
+                            },
+                            "analyze": {
+                                "left_dock": "results-tree",
+                                "center_dock": "plots",
+                                "right_dock": "display",
+                                "bottom_dock": "charts"
+                            }
+                        },
+                        "active_workspace_tab_by_stage": {
+                            "build": "core:mesh",
+                            "study": "core:3d",
+                            "analyze": "core:analyze"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 1);
+    assert_eq!(json["current_stage"], "analyze");
+    assert_eq!(json["active_workspace_tab_by_stage"]["build"], "core:mesh",);
+
+    let layout = state.current_workspace_layout.read().await;
+    assert_eq!(layout.revision, 1);
+    assert_eq!(layout.current_stage, "analyze");
+    assert_eq!(
+        layout
+            .active_workspace_tab_by_stage
+            .get("build")
+            .and_then(|value| value.as_deref()),
+        Some("core:mesh"),
+    );
+}
+
+// ─── mesh endpoints ────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn mesh_summary_returns_404_without_mesh_workspace() {
+    let app = test_router_with_session().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/summary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn mesh_summary_returns_current_mesh_workspace() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_summary": { "nodes": 12, "elements": 24 },
+            "mesh_quality_summary": { "min_quality": 0.82 }
+        }));
+        snapshot.state_version = 11;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/summary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 11);
+    assert_eq!(json["mesh_workspace"]["mesh_summary"]["nodes"], 12);
+    assert_eq!(
+        json["mesh_workspace"]["mesh_quality_summary"]["min_quality"],
+        0.82
+    );
+}
+
+#[tokio::test]
+async fn mesh_active_build_returns_projection_from_mesh_workspace() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "active_build": { "build_id": "mesh-build-1", "status": "running" },
+            "mesh_pipeline_status": { "phase": "remesh", "queued": true },
+            "effective_airbox_target": { "hmax": "5e-9" },
+            "effective_per_object_targets": { "body": { "hmax": "2e-9" } },
+            "last_build_summary": { "elements": 42 },
+            "last_build_error": "stale topology"
+        }));
+        snapshot.state_version = 13;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/builds/active")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 13);
+    assert_eq!(json["active_build"]["build_id"], "mesh-build-1");
+    assert_eq!(json["mesh_pipeline_status"]["phase"], "remesh");
+    assert_eq!(json["effective_airbox_target"]["hmax"], "5e-9");
+    assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
+    assert_eq!(json["last_build_summary"]["elements"], 42);
+    assert_eq!(json["last_build_error"], "stale topology");
+}
+
+#[tokio::test]
+async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/mesh/builds/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "mesh_options": { "maximum_element_size": "4e-9" },
+                        "mesh_target": { "kind": "object_mesh", "object_id": "body" },
+                        "mesh_reason": "user_request"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let queue = state.current_control_queue.lock().await;
+    assert_eq!(queue.len(), 1);
+    let command = queue.front().expect("remesh command enqueued");
+    assert_eq!(command.kind, "remesh");
+    assert_eq!(
+        command
+            .mesh_target
+            .as_ref()
+            .and_then(|value| serde_json::to_value(value).ok())
+            .and_then(|value| value.get("kind").cloned()),
+        Some(serde_json::json!("object_mesh"))
+    );
+    assert_eq!(command.mesh_reason.as_deref(), Some("user_request"));
+}
+
+#[tokio::test]
+async fn mesh_universe_config_put_commits_scene_projection() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/live/current/mesh/universe/config")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "config": {
+                            "mode": "box",
+                            "size": [4.0, 5.0, 6.0],
+                            "padding": [1.0, 1.5, 2.0],
+                            "airbox_hmax": 8.0e-9,
+                            "airbox_hmin": 2.0e-9,
+                            "airbox_growth_rate": 1.4
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["config"]["mode"], "box");
+    assert_eq!(json["config"]["size"][0], 4.0);
+    assert_eq!(json["config"]["airbox_hmax"], 8.0e-9);
+
+    let guard = state.current_live_state.read().await;
+    let committed = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("scene document committed");
+    let universe = committed
+        .study
+        .universe_mesh
+        .as_ref()
+        .expect("study universe mesh present");
+    assert_eq!(universe.mode, "box");
+    assert_eq!(universe.size, Some([4.0, 5.0, 6.0]));
+    assert_eq!(committed.universe.as_ref(), Some(universe));
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_config_put_commits_scene_projection() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/live/current/mesh/shared-domain/config")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "config": {
+                            "algorithm_2d": 6,
+                            "algorithm_3d": 10,
+                            "size_mode": "manual",
+                            "hmax": "3e-9",
+                            "hmin": "1e-9",
+                            "maximum_element_size": "3e-9",
+                            "minimum_element_size": "1e-9",
+                            "calibrate_for": "general_physics",
+                            "size_preset": "normal",
+                            "size_factor": 0.75,
+                            "size_from_curvature": 1,
+                            "curvature_factor": "0.25",
+                            "growth_rate": "1.2",
+                            "maximum_element_growth_rate": "1.2",
+                            "narrow_regions": 1,
+                            "narrow_region_resolution": "0.5",
+                            "resolved_size_from_curvature": null,
+                            "resolved_narrow_regions": null,
+                            "resolved_growth_rate": null,
+                            "smoothing_steps": 2,
+                            "optimize": "",
+                            "optimize_iterations": 1,
+                            "compute_quality": true,
+                            "per_element_quality": false,
+                            "interface_hmax": null,
+                            "interface_thickness": null,
+                            "transition_distance": null,
+                            "transition_growth": null,
+                            "adaptive_enabled": false,
+                            "adaptive_policy": "manual",
+                            "adaptive_indicator": "geometric_only",
+                            "adaptive_target_quantity": "auto",
+                            "adaptive_convergence_metric": "energy_delta",
+                            "adaptive_theta": 0.3,
+                            "adaptive_h_min": "",
+                            "adaptive_h_max": "",
+                            "adaptive_max_passes": 5,
+                            "adaptive_error_tolerance": ""
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["config"]["algorithm_3d"], 10);
+    assert_eq!(json["config"]["hmax"], "3e-9");
+
+    let guard = state.current_live_state.read().await;
+    let committed = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("scene document committed");
+    assert_eq!(committed.study.shared_domain_mesh.algorithm_3d, 10);
+    assert_eq!(committed.study.shared_domain_mesh.hmax, "3e-9");
+    assert_eq!(
+        committed.study.mesh_defaults,
+        committed.study.shared_domain_mesh
+    );
+}
+
+#[tokio::test]
+async fn mesh_object_config_put_commits_scene_projection() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/live/current/mesh/objects/body/config")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "config": {
+                            "mode": "override",
+                            "size_mode": "manual",
+                            "hmax": "2e-9",
+                            "hmin": "5e-10",
+                            "maximum_element_size": "2e-9",
+                            "minimum_element_size": "5e-10",
+                            "growth_rate": "1.1",
+                            "maximum_element_growth_rate": "1.1",
+                            "build_requested": true
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["object_id"], "body");
+    assert_eq!(json["config"]["mode"], "override");
+    assert_eq!(json["config"]["hmax"], "2e-9");
+
+    let guard = state.current_live_state.read().await;
+    let committed = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("scene document committed");
+    let object = committed
+        .objects
+        .iter()
+        .find(|entry| entry.id == "body")
+        .expect("body object present");
+    let mesh = object.object_mesh.as_ref().expect("object mesh present");
+    assert_eq!(mesh.mode, "override");
+    assert_eq!(mesh.hmax, "2e-9");
+    assert_eq!(object.mesh_override.as_ref(), Some(mesh));
+}
+
+// ─── retired flat scene route ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn scene_document_get_is_removed_from_public_router() {
     let router = test_router_with_scene_document().await;
 
     let response = router
@@ -1230,17 +1779,11 @@ async fn scene_document_get_returns_current_scene() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["version"], "scene.v1");
-    assert!(json["objects"].is_array());
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn scene_document_put_commits_scene_document() {
+async fn scene_document_put_is_removed_from_public_router() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(sample_scene_document());
@@ -1263,21 +1806,15 @@ async fn scene_document_put_commits_scene_document() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["scene"]["name"], "Updated Scene");
-    assert_eq!(json["revision"], 4);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let guard = state.current_live_state.read().await;
     let committed = guard
         .as_ref()
         .and_then(|snapshot| snapshot.scene_document.as_ref())
         .expect("scene document committed");
-    assert_eq!(committed.scene.name, "Updated Scene");
-    assert_eq!(committed.revision, 4);
+    assert_eq!(committed.scene.name, "Scene");
+    assert_eq!(committed.revision, 3);
 }
 
 #[tokio::test]
@@ -1617,15 +2154,17 @@ async fn authoring_material_patch_commits_requested_material() {
 #[tokio::test]
 async fn authoring_object_interaction_get_returns_interfacial_dmi() {
     let mut scene = sample_scene_document();
-    scene.objects[0].physics_stack.push(fullmag_authoring::ScriptBuilderMagneticInteractionEntry {
-        kind: fullmag_authoring::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
-        enabled: true,
-        params: Some(
-            [("dind".to_string(), serde_json::json!(0.0))]
-                .into_iter()
-                .collect(),
-        ),
-    });
+    scene.objects[0]
+        .physics_stack
+        .push(fullmag_authoring::ScriptBuilderMagneticInteractionEntry {
+            kind: fullmag_authoring::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+            enabled: true,
+            params: Some(
+                [("dind".to_string(), serde_json::json!(0.0))]
+                    .into_iter()
+                    .collect(),
+            ),
+        });
     let object_id = scene.objects[0].id.clone();
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -1707,7 +2246,10 @@ async fn authoring_object_interaction_patch_updates_uniaxial_params() {
     let interaction = object
         .physics_stack
         .iter()
-        .find(|entry| entry.kind == fullmag_authoring::ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy)
+        .find(|entry| {
+            entry.kind
+                == fullmag_authoring::ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy
+        })
         .expect("uniaxial interaction");
     assert_eq!(interaction.enabled, true);
 }
@@ -1715,15 +2257,17 @@ async fn authoring_object_interaction_patch_updates_uniaxial_params() {
 #[tokio::test]
 async fn authoring_material_patch_syncs_interfacial_dmi_params_for_bound_objects() {
     let mut scene = sample_scene_document();
-    scene.objects[0].physics_stack.push(fullmag_authoring::ScriptBuilderMagneticInteractionEntry {
-        kind: fullmag_authoring::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
-        enabled: true,
-        params: Some(
-            [("dind".to_string(), serde_json::json!(0.0))]
-                .into_iter()
-                .collect(),
-        ),
-    });
+    scene.objects[0]
+        .physics_stack
+        .push(fullmag_authoring::ScriptBuilderMagneticInteractionEntry {
+            kind: fullmag_authoring::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+            enabled: true,
+            params: Some(
+                [("dind".to_string(), serde_json::json!(0.0))]
+                    .into_iter()
+                    .collect(),
+            ),
+        });
     let object_id = scene.objects[0].id.clone();
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -1765,9 +2309,18 @@ async fn authoring_material_patch_syncs_interfacial_dmi_params_for_bound_objects
     let interaction = object
         .physics_stack
         .iter()
-        .find(|entry| entry.kind == fullmag_authoring::ScriptBuilderMagneticInteractionKind::InterfacialDmi)
+        .find(|entry| {
+            entry.kind == fullmag_authoring::ScriptBuilderMagneticInteractionKind::InterfacialDmi
+        })
         .expect("dmi interaction");
-    assert_eq!(interaction.params.as_ref().and_then(|params| params.get("dind")).and_then(|value| value.as_f64()), Some(0.123));
+    assert_eq!(
+        interaction
+            .params
+            .as_ref()
+            .and_then(|params| params.get("dind"))
+            .and_then(|value| value.as_f64()),
+        Some(0.123)
+    );
 }
 
 // ─── commands endpoint ──────────────────────────────────────────────────────
@@ -1907,6 +2460,35 @@ async fn commands_endpoint_does_not_dedupe_by_request_id_only() {
 
     let queue = state.current_control_queue.lock().await;
     assert_eq!(queue.len(), 2);
+}
+
+#[tokio::test]
+async fn commands_endpoint_rejects_legacy_command_payload_shape() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "command": "pause",
+                        "params": {}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let queue = state.current_control_queue.lock().await;
+    assert!(queue.is_empty());
 }
 
 #[tokio::test]

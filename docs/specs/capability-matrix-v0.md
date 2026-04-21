@@ -39,11 +39,11 @@ The following status statements are intentionally explicit because older docs an
 
 | Feature | Status summary | Alignment note |
 |---|---|---|
-| `OerstedCylinder` on FDM and native FEM | `reference_executable` on CPU FDM, `production_executable` on GPU FDM and native FEM CPU/GPU for constant / sinusoidal / pulse envelopes | `piecewise_linear` is still rejected on the public planner path. |
-| `OerstedField(model="from_current_solution")` for cylindrical `prescribed_density` sources | `reference_executable` on CPU FDM, `production_executable` on GPU FDM and native FEM CPU/GPU | Executable only for `CurrentTransport(model="prescribed_density")` with cylindrical `solve_region` and axis-aligned current; planner lowers to the exact infinite-cylinder Oersted realization. |
-| `OerstedField(model="from_current_solution")` for general `prescribed_density` sources | `reference_executable` on CPU FDM, `production_executable` on GPU FDM and native FEM CPU/GPU | Non-cylindrical prescribed-current sources lower to a midpoint Biot-Savart `H_oe(x)` realization with explicit provenance. The current FDM slice is still single-body and capped by planner source-cell count, but both CPU reference and native CUDA now execute the resulting per-cell field. |
-| `CurrentTransport(model="prescribed_density")` | `reference_executable` on CPU FDM, `production_executable` on GPU FDM and native FEM CPU/GPU | Emits `current_transport/<name>.json` as an auxiliary artifact. On FDM and native FEM it can bind named current sources into prescribed Slonczewski / Zhang-Li torque modules. |
-| `SlonczewskiSTT` / `ZhangLiSTT` | `reference_executable` on CPU FDM, `production_executable` on GPU FDM and native FEM CPU/GPU | Native FEM executes the current public single-module subset; the Rust FEM reference runner still does not. |
+| `OerstedCylinder` on FDM and MFEM FEM | `reference_executable` on CPU FDM, `production_executable` on GPU FDM plus MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM for constant / sinusoidal / pulse envelopes | `piecewise_linear` is still rejected on the public planner path. |
+| `OerstedField(model="from_current_solution")` for cylindrical `prescribed_density` sources | `reference_executable` on CPU FDM, `production_executable` on GPU FDM plus MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM | Executable only for `CurrentTransport(model="prescribed_density")` with cylindrical `solve_region` and axis-aligned current; planner lowers to the exact infinite-cylinder Oersted realization. |
+| `OerstedField(model="from_current_solution")` for general `prescribed_density` sources | `reference_executable` on CPU FDM, `production_executable` on GPU FDM plus MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM | Non-cylindrical prescribed-current sources lower to a midpoint Biot-Savart `H_oe(x)` realization with explicit provenance. The current FDM slice is still single-body and capped by planner source-cell count, but both CPU reference and native CUDA now execute the resulting per-cell field. |
+| `CurrentTransport(model="prescribed_density")` | `reference_executable` on CPU FDM, `production_executable` on GPU FDM plus MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM | Emits `current_transport/<name>.json` as an auxiliary artifact. On FDM and MFEM FEM it can bind named current sources into prescribed Slonczewski / Zhang-Li torque modules. |
+| `SlonczewskiSTT` / `ZhangLiSTT` | `reference_executable` on CPU FDM, `production_executable` on GPU FDM plus MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM | MFEM FEM executes the current public single-module subset; the Rust FEM reference runner still does not. |
 | `examples/stno_vortex_ref_minimal.py` | `reference_executable` on the reference FDM lane | This is the canonical minimal STNO benchmark; full solver CI validation remains separate work. |
 | `examples/stno_vortex_mtj_workflow.py` | non-canonical workflow example | Do not treat this generated workflow as the golden benchmark. |
 | Artifact-backed STNO report | `validated` on the reference FDM lane | Uses real solver artifacts, not synthetic demonstration data, and has regression coverage for the analysis path. |
@@ -67,16 +67,18 @@ The following status statements are intentionally explicit because older docs an
 ## Runtime engine naming
 
 - `BackendPlanIR::Fem` on CPU resolves to `fem_cpu_native`.
+- `fem_cpu_native` is the sole maintained CPU FEM engine and denotes the MFEM/libCEED/hypre
+  runtime stack, not a generic "some CPU-native FEM" bucket.
 - `BackendPlanIR::Fem` on GPU resolves to `fem_native_gpu`.
 - Time-domain FEM has no CPU-reference fallback lane: if the local launcher lacks native MFEM
   support, it must hand off to the managed `fem-gpu-host` runtime or fail early with an explicit
   diagnostic.
-- `fem_cpu_reference` is reserved for the Rust FEM reference runner and must not appear as the
-  public time-domain FEM `resolved_engine_id`.
-- `BackendPlanIR::FemEigen` on CPU resolves to `fem_eigen_cpu_reference`.
+- `fem_cpu_baseline_internal` is reserved for the Rust FEM baseline helper and must not appear as
+  the public time-domain FEM `resolved_engine_id`.
+- `BackendPlanIR::FemEigen` on CPU resolves to `fem_eigen_cpu_baseline`.
 - `BackendPlanIR::FemEigen` on GPU resolves to `fem_eigen_native_gpu`.
 - `FULLMAG_FEM_EXECUTION=cpu` selects the CPU lane, but the final engine id still depends on the
-  workflow family (`fem_cpu_native` for time-domain FEM, `fem_eigen_cpu_reference` for FEM eigen).
+  workflow family (`fem_cpu_native` for time-domain FEM, `fem_eigen_cpu_baseline` for FEM eigen).
 - `resolve_runtime_capabilities()` must return the same canonical engine ids as runtime/session
   resolution; capabilities metadata is part of the same public execution contract.
 - Canonical reference: `docs/specs/runtime-engine-naming-v0.md`.
@@ -88,13 +90,13 @@ The following status statements are intentionally explicit because older docs an
 | `Box` geometry | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Box→grid lowering for FDM and Box→mesh lowering for FEM |
 | `Cylinder` geometry | planned | planned | planned | semantic-only | Requires active-mask voxelizer for accurate curved-boundary FDM execution |
 | Imported geometry ref | planned | planned | planned | semantic-only | FDM planner accepts it when a precomputed grid asset is attached; public execution still depends on voxelization extras |
-| Material constants (`Ms`, `A`, `alpha`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Used by the CPU reference FDM runner and MFEM-native FEM CPU/GPU runners |
+| Material constants (`Ms`, `A`, `alpha`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Used by the CPU reference FDM runner and the MFEM/libCEED/hypre CPU plus MFEM/libCEED/CUDA GPU FEM runners |
 | Material constants (`Ku1`, `anisU`) | planned | planned | planned | semantic-only | Anisotropy not in exchange-only scope |
 | Ferromagnet + uniform `m0` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Lowered to per-cell vectors for FDM and per-node vectors for FEM |
 | Ferromagnet + random `m0` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Deterministic xorshift64 RNG in planner |
 | Multiple `Ferromagnet` bodies + global demag | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses multilayer-convolution for eligible z-stacks, with CPU reference, a native CUDA single-grid fast path for compatible stacks, and `cuda-assisted` fallback for the remaining current public scope; the CUDA multilayer paths honor `execution_precision` (`double` and calibrated `single`) across the native fast path and the assisted multilayer demag/Heun runtime; FEM merges disjoint mesh assets into one bootstrap plan with body-local exchange and global demag |
 | `Exchange` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | CPU 6-point stencil in FDM and lumped-mass P1 operator in FEM |
-| `Demag` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses Newell tensor FFT; executable FEM is Poisson-only (`poisson_robin` / `poisson_dirichlet`) on MFEM-native CPU/GPU paths and requires a shared-domain mesh with air. Native FEM Poisson exposes an explicit backend-hint `FemLinearSolverPolicy` authoring contract (`CG/GMRES`, `AMG/JACOBI/NONE`, tolerances, iteration cap) while keeping `Demag()` physics-first. For explicit native `poisson_robin`, the managed runtime resolves directly to `hypre_pcg_boomeramg`; live session views preserve requested CPU threads, resolved Rayon threads, and requested/effective OpenMP threads when the native runtime reports them. |
+| `Demag` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses Newell tensor FFT; executable FEM is Poisson-only (`poisson_robin` / `poisson_dirichlet`) on the MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU lanes and requires a shared-domain mesh with air. Native FEM Poisson exposes an explicit backend-hint `FemLinearSolverPolicy` authoring contract (`CG/GMRES`, `AMG/JACOBI/NONE`, tolerances, iteration cap) while keeping `Demag()` physics-first. For explicit native `poisson_robin`, the managed runtime resolves directly to `hypre_pcg_boomeramg`; live session views preserve requested CPU threads, resolved Rayon threads, and requested/effective OpenMP threads when the native runtime reports them. |
 | `InterfacialDMI` | planned | planned | planned | semantic-only | Not numerically implemented |
 | `Zeeman` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Public API authors `B`; planner normalizes to `H_ext` in A/m for CPU FDM and CPU FEM |
 | `Magnetoelastic` | planned | planned | planned | **internal-reference** | Small-strain magnetoelastic coupling (B1/B2 cubic, λ_s isotropic); prescribed-strain H_mel wired into H_eff; see `docs/physics/0700-shared-magnetoelastic-semantics.md` |
@@ -103,10 +105,10 @@ The following status statements are intentionally explicit because older docs an
 | `Relaxation(projected_gradient_bb)` | ✅ exec | planned | planned | **public-executable** (FDM) | Direct energy minimization on the sphere product manifold with alternating BB1/BB2 step sizes and Armijo backtracking; see `docs/physics/0500-fdm-relaxation-algorithms.md` |
 | `Relaxation(nonlinear_cg)` | ✅ exec | planned | planned | **public-executable** (FDM) | Polak–Ribière+ CG with tangent-space vector transport, periodic restarts, and Armijo backtracking; see `docs/physics/0500-fdm-relaxation-algorithms.md` |
 | `Relaxation(tangent_plane_implicit)` | planned | planned | planned | semantic-only | Canonical production-target FEM relaxation family; execution deferred |
-| Execution precision `double` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | CPU reference FDM remains the trusted baseline; FEM executes through MFEM-native CPU/GPU runtimes |
+| Execution precision `double` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | CPU reference FDM remains the trusted baseline; FEM executes through the MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU runtimes |
 | Execution precision `single` | ✅ exec | planned | planned | **public-executable** (CUDA FDM) | Public CUDA FDM supports calibrated `single` precision across native single-body runs and multilayer CUDA paths; CPU reference FDM remains `double`-only |
 | Field/scalar outputs (`m`, `H_ex`, `H_ext`, `H_eff`, `E_ex`, `E_ext`, `E_total`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Common artifact layout for current FDM/FEM executable slices |
-| FEM demag outputs (`H_demag`, `E_demag`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | MFEM-native FEM CPU/GPU emit demag outputs through the same quantity/artifact contract as FDM |
+| FEM demag outputs (`H_demag`, `E_demag`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | The MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM lanes emit demag outputs through the same quantity/artifact contract as FDM |
 | FDM hints | ✅ exec | n/a | planned | **public-executable** | Cell size → grid dims in planner |
 | FEM hints | n/a | ✅ exec | planned | **public-executable** (FEM) | Planner builds `FemPlanIR`; execution currently requires `MeshIR` or external meshing extras |
 | Hybrid hints | n/a | n/a | planned | semantic-only | Requires hybrid mode and backend |

@@ -63,8 +63,51 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
                 .patch(handlers::display::patch_display),
         )
         .route(
-            "/v1/live/current/scene/document",
-            get(handlers::scene::get_scene_document).put(handlers::scene::replace_scene_document),
+            "/v1/live/current/workspace/selection",
+            get(handlers::workspace::get_workspace_selection)
+                .put(handlers::workspace::replace_workspace_selection),
+        )
+        .route(
+            "/v1/live/current/workspace/tree/active-node",
+            get(handlers::workspace::get_workspace_active_node)
+                .put(handlers::workspace::replace_workspace_active_node),
+        )
+        .route(
+            "/v1/live/current/workspace/ribbon",
+            get(handlers::workspace::get_workspace_ribbon)
+                .put(handlers::workspace::replace_workspace_ribbon),
+        )
+        .route(
+            "/v1/live/current/workspace/layout",
+            get(handlers::workspace::get_workspace_layout)
+                .put(handlers::workspace::replace_workspace_layout),
+        )
+        .route(
+            "/v1/live/current/mesh/summary",
+            get(handlers::mesh::get_mesh_summary),
+        )
+        .route(
+            "/v1/live/current/mesh/builds/active",
+            get(handlers::mesh::get_mesh_active_build),
+        )
+        .route(
+            "/v1/live/current/mesh/builds/commands",
+            post(handlers::mesh::submit_mesh_build_command),
+        )
+        .route(
+            "/v1/live/current/mesh/universe/config",
+            get(handlers::mesh::get_mesh_universe_config)
+                .put(handlers::mesh::replace_mesh_universe_config),
+        )
+        .route(
+            "/v1/live/current/mesh/shared-domain/config",
+            get(handlers::mesh::get_mesh_shared_domain_config)
+                .put(handlers::mesh::replace_mesh_shared_domain_config),
+        )
+        .route(
+            "/v1/live/current/mesh/objects/:object_id/config",
+            get(handlers::mesh::get_mesh_object_config)
+                .put(handlers::mesh::replace_mesh_object_config),
         )
         .route(
             "/v1/live/current/authoring/scene",

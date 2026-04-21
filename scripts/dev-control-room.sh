@@ -3,7 +3,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SESSION_ID="${1:-}"
-API_URL="${FULLMAG_API_URL:-http://localhost:8081}"
+API_PORT="${FULLMAG_API_PORT:-8081}"
+API_URL="${FULLMAG_API_URL:-http://localhost:${API_PORT}}"
 WEB_BIND_HOST="${FULLMAG_WEB_BIND_HOST:-0.0.0.0}"
 WEB_PUBLIC_HOST="${FULLMAG_WEB_HOST:-localhost}"
 CONTROL_ROOM_URL_FILE=".fullmag/control-room-url.txt"
@@ -144,7 +145,7 @@ if curl -fsS "${API_URL}/healthz" >/dev/null 2>&1; then
   echo "Reusing Fullmag API on ${API_URL} ..."
 else
   echo "Starting Fullmag API on ${API_URL} ..."
-  CARGO_TARGET_DIR=.fullmag/target cargo +nightly run -p fullmag-api > .fullmag/logs/fullmag-api.log 2>&1 &
+  FULLMAG_API_PORT="${API_PORT}" CARGO_TARGET_DIR=.fullmag/target cargo +nightly run -p fullmag-api > .fullmag/logs/fullmag-api.log 2>&1 &
   API_PID=$!
 
   for _ in $(seq 1 50); do
@@ -202,5 +203,5 @@ fi
 
 printf '%s\n' "${WEB_URL_BASE}" > "${CONTROL_ROOM_URL_FILE}"
 
-FULLMAG_API_PROXY_TARGET="http://localhost:8081" \
-  "${PNPM_CMD[@]}" --dir apps/web exec node dev-server.mjs --hostname "${WEB_BIND_HOST}" --port "${WEB_PORT}" --api-target "http://localhost:8081"
+FULLMAG_API_PROXY_TARGET="${API_URL}" \
+  "${PNPM_CMD[@]}" --dir apps/web exec node dev-server.mjs --hostname "${WEB_BIND_HOST}" --port "${WEB_PORT}" --api-target "${API_URL}"

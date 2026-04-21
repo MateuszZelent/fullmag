@@ -216,7 +216,7 @@ pub(crate) fn bootstrap_control_plane(
     };
 
     if let Some(live_workspace) = live_workspace {
-        publish_current_live_workspace_snapshot(live_workspace)?;
+        sync_current_live_workspace_snapshot(live_workspace)?;
         live_workspace.publish_snapshot();
     }
 
@@ -404,7 +404,7 @@ pub(crate) fn spawn_control_room(
     Ok((ready.web_port, ready.api_child, ready.frontend_child))
 }
 
-pub(crate) fn publish_current_live_workspace_snapshot(
+pub(crate) fn sync_current_live_workspace_snapshot(
     live_workspace: &LocalLiveWorkspace,
 ) -> Result<()> {
     let snapshot = live_workspace.snapshot().snapshot();
@@ -593,9 +593,9 @@ pub(crate) fn sync_current_live_snapshot(
             fem_mesh: payload.fem_mesh.as_ref(),
         })
         .send()
-        .context("failed to publish current live state")?
+        .context("failed to sync current live snapshot")?
         .error_for_status()
-        .context("current live publish endpoint returned error")?;
+        .context("current live snapshot endpoint returned error")?;
     Ok(())
 }
 

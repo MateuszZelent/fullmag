@@ -73,13 +73,31 @@ GET    /v1/openapi.json
 GET    /v1/docs/swagger
 ```
 
-### 2.2 Transitional routes still mounted
+### 2.2 Non-v1 and internal routes still mounted
 
-The legacy server entrypoint in `crates/fullmag-api/src/main.rs` still mounts:
+The top-level server entrypoint in `crates/fullmag-api/src/main.rs` still
+mounts a small public non-v1 surface:
 
 ```text
 GET    /healthz
 GET    /v1/meta/vision
+GET    /v1/docs/physics
+```
+
+The runner bridge also still uses internal-only synchronization routes:
+
+```text
+POST   /v1/internal/live/current/snapshot
+POST   /v1/internal/live/current/session
+POST   /v1/internal/live/current/runtime
+POST   /v1/internal/live/current/scalars
+POST   /v1/internal/live/current/fields
+GET    /v1/internal/live/current/control/wait
+```
+
+Recently retired public legacy routes no longer mounted include:
+
+```text
 GET    /v1/live/current/bootstrap
 GET    /v1/live/current/state
 GET    /v1/live/current/poll
@@ -94,15 +112,15 @@ POST   /v1/live/current/state/import
 POST   /v1/live/current/script/sync
 POST   /v1/live/current/scene
 GET    /v1/live/current/artifacts/file
-GET    /v1/docs/physics
 GET    /v1/quantities/catalog
+GET    /v1/live/current/scene/document
+PUT    /v1/live/current/scene/document
 POST   /v1/run
 GET    /ws/live/current
 GET    /ws/live/:run_id
 ```
 
-These routes must be documented honestly as transitional or legacy-only. They
-must not appear as the canonical browser contract.
+Only the routes in section 2.1 are part of the canonical browser contract.
 
 ### 2.3 Frontend migration status
 
@@ -125,12 +143,17 @@ The control-room tree already uses a typed `controlRoomApi` wrapper for
 commands, display, artifacts, binary field fetches, topology fetches, GPU
 telemetry, and session persistence helpers.
 
-The remaining hard legacy dependency is concentrated in:
+The active control-room tree no longer depends on public `bootstrap`, `poll`,
+or `/v1/live/current/state` fetches for normal rendering.
 
-- `apps/web/lib/useSessionStream.ts`
-- `apps/web/lib/liveApiClient.ts`
+The remaining migration backlog is now mostly:
 
-This is good progress, but it is not yet a full cutover.
+- runtime and command lifecycle refinements,
+- narrower `authoring/*`, `workspace/*`, and `mesh/*` families,
+- replacement or retirement of the remaining non-v1 public routes listed
+  above,
+- eventual cleanup of transitional session import/export surfaces once their
+  canonical replacements are mounted.
 
 ## 3. Main deliverables
 

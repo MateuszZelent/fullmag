@@ -5,6 +5,7 @@ use crate::error::ApiError;
 use crate::quantities::{build_quantities, extract_fem_mesh_from_metadata};
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 pub(crate) async fn current_live_session_id(state: &AppState) -> Result<String, ApiError> {
@@ -115,29 +116,18 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
     }
 }
 
-pub(crate) fn apply_current_live_publish(
-    current: &mut SessionStateResponse,
-    req: CurrentLiveSnapshotRequest,
-) -> Result<(), ApiError> {
-    // Capture flags _before_ fields are moved out of `req`.
-    let has_metadata = req.metadata.is_some();
-    let has_latest_fields = req.latest_fields.is_some();
-    let has_preview_fields = req.preview_fields.is_some();
-    let has_run = req.run.is_some();
-    let has_scalar_row = req.latest_scalar_row.is_some();
-    let clear_preview_cache = req.clear_preview_cache;
+#[derive(Debug, Clone, Copy, Default)]
+struct CurrentLiveApplyFlags {
+    has_metadata: bool,
+    has_latest_fields: bool,
+    has_preview_fields: bool,
+    has_run: bool,
+    has_scalar_row: bool,
+    clear_preview_cache: bool,
+}
 
-    if let Some(session) = req.session {
-        current.session = session;
-    }
-    current.session.session_id = req.session_id.clone();
-
-    if let Some(status) = req.session_status {
-        current.session.status = status;
-    }
-    if let Some(metadata) = req.metadata {
-        current.metadata = Some(metadata);
-    }
+fn apply_current_live_metadata(current: &mut SessionStateResponse, metadata: Value) {
+    current.metadata = Some(metadata);
     if let Some(metadata) = current.metadata.as_ref() {
         if let Some(value) = metadata.get("capabilities") {
             current.capabilities = serde_json::from_value(value.clone()).ok();
@@ -155,53 +145,12 @@ pub(crate) fn apply_current_live_publish(
             current.session_protocol_version = value.to_string();
         }
     }
-    if let Some(mesh_workspace) = req.mesh_workspace {
-        current.mesh_workspace = Some(mesh_workspace);
-    }
-    if let Some(stage_execution) = req.stage_execution {
-        current.stage_execution = Some(stage_execution);
-    }
-    if let Some(run) = req.run {
-        current.session.run_id = run.run_id.clone();
-        current.session.artifact_dir = run.artifact_dir.clone();
-        current.run = Some(run);
-    }
-    if let Some(live_state) = req.live_state {
-        if current.run.is_none() && current.session.status == "bootstrapping" {
-            current.session.status = live_state.status.clone();
-        }
-        // Legacy path: accept fem_mesh embedded in latest_step for backwards compat.
-        // New payloads carry it at the top-level (req.fem_mesh) instead.
-        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.clone() {
-            current.fem_mesh = Some(fem_mesh);
-        }
-        current.live_state = Some(live_state);
-    }
-    // Top-level fem_mesh takes precedence — explicit mesh lifecycle event.
-    if let Some(fem_mesh) = req.fem_mesh {
-        current.fem_mesh = Some(fem_mesh);
-    }
-    if let Some(row) = req.latest_scalar_row {
-        let prev_len = current.scalar_rows.len();
-        upsert_scalar_row(&mut current.scalar_rows, row);
-        // If a genuinely new row was appended, leave the ws_cursor untouched so
-        // the next broadcast will include it.  (Upsert of the same step is a
-        // no-op on length, so the cursor logic still handles it correctly.)
-        let _ = prev_len; // cursor is advanced by the broadcast path, not here
-    }
-    if let Some(latest_fields) = req.latest_fields {
-        merge_latest_fields(&mut current.latest_fields, latest_fields);
-    }
-    if req.clear_preview_cache {
-        current.preview_cache = CachedPreviewFields::default();
-    }
-    if let Some(preview_fields) = req.preview_fields {
-        merge_cached_preview_fields(&mut current.preview_cache, preview_fields);
-    }
-    if let Some(engine_log) = req.engine_log {
-        current.engine_log = engine_log;
-    }
+}
 
+fn finalize_current_live_apply(
+    current: &mut SessionStateResponse,
+    flags: CurrentLiveApplyFlags,
+) -> Result<(), ApiError> {
     if let Some(run) = current.run.as_ref() {
         current.session.run_id = run.run_id.clone();
         if current.session.artifact_dir.is_empty() {
@@ -230,17 +179,13 @@ pub(crate) fn apply_current_live_publish(
     }
 
     refresh_runtime_status(current);
-    // Only rebuild the quantities catalog when inputs that affect availability
-    // change.  On a typical per-step publish only a scalar row arrives, which
-    // does not alter the catalog — skipping this saves a surprisingly expensive
-    // iteration over the full catalog + capabilities each step.
-    let quantities_inputs_changed = has_metadata
-        || has_latest_fields
-        || has_preview_fields
-        || clear_preview_cache
-        || has_run
+    let quantities_inputs_changed = flags.has_metadata
+        || flags.has_latest_fields
+        || flags.has_preview_fields
+        || flags.clear_preview_cache
+        || flags.has_run
         || current.quantities.is_empty()
-        || (has_scalar_row && current.scalar_rows.len() == 1);
+        || (flags.has_scalar_row && current.scalar_rows.len() == 1);
     if quantities_inputs_changed {
         let field_location = if current.fem_mesh.is_some() {
             "node"
@@ -258,20 +203,186 @@ pub(crate) fn apply_current_live_publish(
         );
     }
 
-    // Only scan the artifact directory on run finish or when the artifacts list
-    // has never been populated and a run manifest just arrived.  Scanning the
-    // filesystem on every per-step publish was an unnecessary bottleneck.
     let finished = current
         .live_state
         .as_ref()
         .map(|state| state.latest_step.finished)
         .unwrap_or(false);
-    if finished || (current.artifacts.is_empty() && has_run) {
+    if finished || (current.artifacts.is_empty() && flags.has_run) {
         let artifact_dir = current_artifact_dir(current);
         current.artifacts = read_artifacts_from_dir(artifact_dir.as_deref())?;
     }
 
     Ok(())
+}
+
+pub(crate) fn apply_current_live_snapshot(
+    current: &mut SessionStateResponse,
+    req: CurrentLiveSnapshotRequest,
+) -> Result<(), ApiError> {
+    let flags = CurrentLiveApplyFlags {
+        has_metadata: req.metadata.is_some(),
+        has_latest_fields: req.latest_fields.is_some(),
+        has_preview_fields: req.preview_fields.is_some(),
+        has_run: req.run.is_some(),
+        has_scalar_row: req.latest_scalar_row.is_some(),
+        clear_preview_cache: req.clear_preview_cache,
+    };
+
+    if let Some(session) = req.session {
+        current.session = session;
+    }
+    current.session.session_id = req.session_id.clone();
+
+    if let Some(status) = req.session_status {
+        current.session.status = status;
+    }
+    if let Some(metadata) = req.metadata {
+        apply_current_live_metadata(current, metadata);
+    }
+    if let Some(mesh_workspace) = req.mesh_workspace {
+        current.mesh_workspace = Some(mesh_workspace);
+    }
+    if let Some(stage_execution) = req.stage_execution {
+        current.stage_execution = Some(stage_execution);
+    }
+    if let Some(run) = req.run {
+        current.session.run_id = run.run_id.clone();
+        current.session.artifact_dir = run.artifact_dir.clone();
+        current.run = Some(run);
+    }
+    if let Some(live_state) = req.live_state {
+        if current.run.is_none() && current.session.status == "bootstrapping" {
+            current.session.status = live_state.status.clone();
+        }
+        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.clone() {
+            current.fem_mesh = Some(fem_mesh);
+        }
+        current.live_state = Some(live_state);
+    }
+    if let Some(fem_mesh) = req.fem_mesh {
+        current.fem_mesh = Some(fem_mesh);
+    }
+    if let Some(row) = req.latest_scalar_row {
+        upsert_scalar_row(&mut current.scalar_rows, row);
+    }
+    if let Some(latest_fields) = req.latest_fields {
+        merge_latest_fields(&mut current.latest_fields, latest_fields);
+    }
+    if req.clear_preview_cache {
+        current.preview_cache = CachedPreviewFields::default();
+    }
+    if let Some(preview_fields) = req.preview_fields {
+        merge_cached_preview_fields(&mut current.preview_cache, preview_fields);
+    }
+    if let Some(engine_log) = req.engine_log {
+        current.engine_log = engine_log;
+    }
+
+    finalize_current_live_apply(current, flags)
+}
+
+pub(crate) fn apply_current_live_session_frame(
+    current: &mut SessionStateResponse,
+    frame: CurrentLiveSessionFrameRequest,
+) -> Result<(), ApiError> {
+    let flags = CurrentLiveApplyFlags {
+        has_metadata: frame.metadata.is_some(),
+        has_run: frame.run.is_some(),
+        ..CurrentLiveApplyFlags::default()
+    };
+
+    if let Some(session) = frame.session {
+        current.session = session;
+    }
+    current.session.session_id = frame.session_id;
+
+    if let Some(status) = frame.session_status {
+        current.session.status = status;
+    }
+    if let Some(metadata) = frame.metadata {
+        apply_current_live_metadata(current, metadata);
+    }
+    if let Some(mesh_workspace) = frame.mesh_workspace {
+        current.mesh_workspace = Some(mesh_workspace);
+    }
+    if let Some(stage_execution) = frame.stage_execution {
+        current.stage_execution = Some(stage_execution);
+    }
+    if let Some(run) = frame.run {
+        current.session.run_id = run.run_id.clone();
+        current.session.artifact_dir = run.artifact_dir.clone();
+        current.run = Some(run);
+    }
+
+    finalize_current_live_apply(current, flags)
+}
+
+pub(crate) fn apply_current_live_runtime_frame(
+    current: &mut SessionStateResponse,
+    frame: CurrentLiveRuntimeFrameRequest,
+) -> Result<(), ApiError> {
+    if let Some(live_state) = frame.live_state {
+        if current.run.is_none() && current.session.status == "bootstrapping" {
+            current.session.status = live_state.status.clone();
+        }
+        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.clone() {
+            current.fem_mesh = Some(fem_mesh);
+        }
+        current.live_state = Some(live_state);
+    }
+    if let Some(fem_mesh) = frame.fem_mesh {
+        current.fem_mesh = Some(fem_mesh);
+    }
+    if let Some(engine_log) = frame.engine_log {
+        current.engine_log = engine_log;
+    }
+
+    finalize_current_live_apply(current, CurrentLiveApplyFlags::default())
+}
+
+pub(crate) fn apply_current_live_scalar_frame(
+    current: &mut SessionStateResponse,
+    frame: CurrentLiveScalarFrameRequest,
+) -> Result<(), ApiError> {
+    if let Some(row) = frame.latest_scalar_row {
+        upsert_scalar_row(&mut current.scalar_rows, row);
+    }
+
+    finalize_current_live_apply(
+        current,
+        CurrentLiveApplyFlags {
+            has_scalar_row: true,
+            ..CurrentLiveApplyFlags::default()
+        },
+    )
+}
+
+pub(crate) fn apply_current_live_field_frame(
+    current: &mut SessionStateResponse,
+    frame: CurrentLiveFieldFrameRequest,
+) -> Result<(), ApiError> {
+    let has_latest_fields = frame.latest_fields.is_some();
+    let has_preview_fields = frame.preview_fields.is_some();
+    if let Some(latest_fields) = frame.latest_fields {
+        merge_latest_fields(&mut current.latest_fields, latest_fields);
+    }
+    if frame.clear_preview_cache {
+        current.preview_cache = CachedPreviewFields::default();
+    }
+    if let Some(preview_fields) = frame.preview_fields {
+        merge_cached_preview_fields(&mut current.preview_cache, preview_fields);
+    }
+
+    finalize_current_live_apply(
+        current,
+        CurrentLiveApplyFlags {
+            has_latest_fields,
+            has_preview_fields,
+            clear_preview_cache: frame.clear_preview_cache,
+            ..CurrentLiveApplyFlags::default()
+        },
+    )
 }
 
 pub(crate) fn current_artifact_dir(current: &SessionStateResponse) -> Option<PathBuf> {

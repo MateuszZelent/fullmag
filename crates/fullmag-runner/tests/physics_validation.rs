@@ -765,7 +765,7 @@ fn extract_frequencies(result: &fullmag_runner::FemEigenRunResult) -> Vec<f64> {
 // FEM eigen physics tests — EIG-031/032/033/035
 // ===========================================================================
 
-/// EIG-035 smoke test: the CPU reference FEM eigen solver must complete
+/// EIG-035 smoke test: the CPU FEM eigen baseline solver must complete
 /// without errors on a minimal mesh and produce at least one finite
 /// eigenfrequency.
 #[test]

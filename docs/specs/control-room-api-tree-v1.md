@@ -498,19 +498,23 @@ cache-invalidating identity.
 
 ## 8. Legacy routes that must not survive the refactor
 
-These are explicitly non-canonical and must be removed from the public browser contract or kept
-only behind a deliberate short-lived compatibility layer:
+These are explicitly non-canonical and are either already removed from the
+public browser contract or kept only behind a deliberate short-lived
+compatibility/internal layer:
 
 ```text
 GET  /v1/live/current/bootstrap
 GET  /v1/live/current/poll
-GET  /v1/live/current/state
+GET  /v1/live/current/state                 (retired compatibility snapshot; no longer used by the active frontend and absent from the current public mount)
 POST /v1/live/current/preview/*
-GET  /v1/quantities/catalog
+GET  /v1/live/feature-flags               (removed from public router)
+GET  /v1/quantities/catalog                (removed from public router)
+GET  /v1/live/current/scene/document      (removed from public router)
+PUT  /v1/live/current/scene/document      (removed from public router)
 POST /v1/live/current/state/export
 POST /v1/live/current/state/import
-POST /v1/live/current/scene                    (legacy flat placement)
-POST /v1/live/current/script/sync              (legacy flat placement)
+POST /v1/live/current/scene               (removed from public router)
+POST /v1/live/current/script/sync         (removed from public router)
 ```
 
 As of `2026-04-21`, runner bridge traffic is no longer part of the public browser contract.
@@ -518,6 +522,10 @@ The remaining internal-only bridge paths are:
 
 ```text
 POST /v1/internal/live/current/snapshot
+POST /v1/internal/live/current/session
+POST /v1/internal/live/current/runtime
+POST /v1/internal/live/current/scalars
+POST /v1/internal/live/current/fields
 GET  /v1/internal/live/current/control/wait
 ```
 
@@ -529,10 +537,14 @@ As of `2026-04-21`, the repository is still in migration:
   `eigen`, `session`, `gpu`, `system`, and `quantities` already exist,
 - the concrete currently mounted endpoint list and field-level schema reference now live in
   `docs/specs/control-room-api-endpoint-reference-v1.md`,
-- the current implementation still carries flat transitional authoring endpoints such as
-  `/v1/live/current/scene`,
-- `workspace/*` and wide `authoring/*` families are not yet fully implemented,
-- `mesh/*` still needs broader per-object and per-interface split coverage in some code paths,
+- retired flat aliases such as `/v1/quantities/catalog` and
+  `/v1/live/current/scene/document` no longer sit on the public router,
+- the mounted `workspace/*` subset now covers `selection`, `tree/active-node`, `ribbon`, and `layout`,
+- the mounted `mesh/*` subset now covers `summary`, `builds/active`, `builds/commands`,
+  `universe/config`, `shared-domain/config`, and `objects/:object_id/config`,
+- `workspace/tree/expansion` and `workspace/viewport-presets` remain target-only,
+- wide `authoring/*` families are still not yet fully implemented,
+- `mesh/*` still needs broader report, quality, history, and per-interface split coverage in some code paths,
 - a lightweight cutover envelope may still be needed while `bootstrap/poll` is removed from the
   current UI.
 

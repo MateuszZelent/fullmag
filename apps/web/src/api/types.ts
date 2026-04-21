@@ -75,6 +75,7 @@ export interface ResourceRevisionMap {
   artifacts_revision: number;
   engine_log_revision: number;
   display_revision: number;
+  workspace_revision: number;
 }
 
 export interface CapabilityMap {
@@ -110,6 +111,7 @@ export interface MetricsSummary {
 
 export type RealtimeResourceName =
   | "display"
+  | "workspace"
   | "fields"
   | "scalars"
   | "domain"
@@ -126,9 +128,67 @@ export interface RealtimeResourceRevisionMap {
   artifacts_revision: number;
   engine_log_revision: number;
   display_revision: number;
+  workspace_revision: number;
   commands_revision: number;
   stages_revision: number;
   scene_revision?: number | null;
+}
+
+// ── Workspace ────────────────────────────────────────────────────────
+
+export interface WorkspaceSelectionResource {
+  revision: number;
+  selected_node_id?: string | null;
+  selected_object_id?: string | null;
+  selected_entity_id?: string | null;
+}
+
+export interface WorkspaceSelectionReplaceRequest {
+  selected_node_id?: string | null;
+  selected_object_id?: string | null;
+  selected_entity_id?: string | null;
+}
+
+export interface WorkspaceActiveNodeResource {
+  revision: number;
+  node_id?: string | null;
+}
+
+export interface WorkspaceActiveNodeReplaceRequest {
+  node_id?: string | null;
+}
+
+export interface WorkspaceRibbonResource {
+  revision: number;
+  workspace_mode: string;
+  active_core_tab: string;
+  active_contextual_tab?: string | null;
+}
+
+export interface WorkspaceRibbonReplaceRequest {
+  workspace_mode: string;
+  active_core_tab: string;
+  active_contextual_tab?: string | null;
+}
+
+export interface WorkspaceStageLayout {
+  left_dock?: string | null;
+  center_dock?: string | null;
+  right_dock?: string | null;
+  bottom_dock?: string | null;
+}
+
+export interface WorkspaceLayoutResource {
+  revision: number;
+  current_stage: string;
+  stage_layouts: Record<string, WorkspaceStageLayout>;
+  active_workspace_tab_by_stage: Record<string, string | null>;
+}
+
+export interface WorkspaceLayoutReplaceRequest {
+  current_stage: string;
+  stage_layouts: Record<string, WorkspaceStageLayout>;
+  active_workspace_tab_by_stage: Record<string, string | null>;
 }
 
 export interface RealtimeResourceChange {
@@ -320,11 +380,63 @@ export type DisplayUpdate = DisplayPatchRequest;
 
 // ── Commands ──────────────────────────────────────────────────────────
 
+export type MeshConfigRecord = Record<string, unknown>;
+export type MeshWorkspaceRecord = Record<string, unknown>;
+
+export interface MeshUniverseConfigResource {
+  revision: number;
+  config?: MeshConfigRecord | null;
+}
+
+export interface MeshUniverseConfigReplaceRequest {
+  config: MeshConfigRecord;
+}
+
+export interface MeshSharedDomainConfigResource {
+  revision: number;
+  config: MeshConfigRecord;
+}
+
+export interface MeshSharedDomainConfigReplaceRequest {
+  config: MeshConfigRecord;
+}
+
+export interface MeshObjectConfigResource {
+  revision: number;
+  object_id: string;
+  config?: MeshConfigRecord | null;
+}
+
+export interface MeshObjectConfigReplaceRequest {
+  config?: MeshConfigRecord | null;
+}
+
+export interface MeshWorkspaceResource {
+  revision: number;
+  mesh_workspace: MeshWorkspaceRecord;
+}
+
+export interface MeshActiveBuildResource {
+  revision: number;
+  active_build?: MeshWorkspaceRecord | null;
+  mesh_pipeline_status?: MeshWorkspaceRecord | null;
+  effective_airbox_target?: MeshWorkspaceRecord | null;
+  effective_per_object_targets?: MeshWorkspaceRecord | null;
+  last_build_summary?: MeshWorkspaceRecord | null;
+  last_build_error?: string | null;
+}
+
 export type MeshCommandTargetRequest =
   | { kind: "study_domain" }
   | { kind: "adaptive_followup" }
   | { kind: "airbox" }
   | { kind: "object_mesh"; object_id: string };
+
+export interface MeshBuildCommandRequest {
+  mesh_options?: unknown;
+  mesh_target?: MeshCommandTargetRequest;
+  mesh_reason?: string;
+}
 
 export interface RunCommandRequest {
   kind: "run";
@@ -381,11 +493,6 @@ export interface CloseCommandRequest {
   kind: "close";
 }
 
-export interface LegacyCommandEnvelope {
-  command: string;
-  params?: Record<string, unknown>;
-}
-
 export type StructuredCommandRequest =
   | RunCommandRequest
   | RelaxCommandRequest
@@ -398,7 +505,7 @@ export type StructuredCommandRequest =
   | SolveCommandRequest
   | CloseCommandRequest;
 
-export type CommandRequest = StructuredCommandRequest | LegacyCommandEnvelope;
+export type CommandRequest = StructuredCommandRequest;
 
 export interface CommandResponse {
   accepted: boolean;

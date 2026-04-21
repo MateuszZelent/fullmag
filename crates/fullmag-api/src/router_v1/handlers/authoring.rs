@@ -502,13 +502,15 @@ fn interaction_kind_str(kind: ScriptBuilderMagneticInteractionKind) -> &'static 
 fn is_required_interaction(kind: ScriptBuilderMagneticInteractionKind) -> bool {
     matches!(
         kind,
-        ScriptBuilderMagneticInteractionKind::Exchange | ScriptBuilderMagneticInteractionKind::Demag
+        ScriptBuilderMagneticInteractionKind::Exchange
+            | ScriptBuilderMagneticInteractionKind::Demag
     )
 }
 
 fn material_dind_for_object(scene: &SceneDocument, object_id: &str) -> Option<f64> {
     let object = scene.objects.iter().find(|entry| entry.id == object_id)?;
-    scene.materials
+    scene
+        .materials
         .iter()
         .find(|entry| entry.id == object.material_ref)
         .and_then(|entry| entry.properties.dind)
@@ -565,16 +567,14 @@ fn apply_interaction_patch(
     }
 
     let default_params = match kind {
-        ScriptBuilderMagneticInteractionKind::InterfacialDmi => {
-            Value::Object(
-                [(
-                    "dind".to_string(),
-                    Value::from(material_dind.unwrap_or(1e-3)),
-                )]
-                .into_iter()
-                .collect(),
-            )
-        }
+        ScriptBuilderMagneticInteractionKind::InterfacialDmi => Value::Object(
+            [(
+                "dind".to_string(),
+                Value::from(material_dind.unwrap_or(1e-3)),
+            )]
+            .into_iter()
+            .collect(),
+        ),
         ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy => serde_json::json!({
             "ku1": 0.0,
             "axis": [0.0, 0.0, 1.0]
@@ -582,7 +582,11 @@ fn apply_interaction_patch(
         _ => Value::Object(Default::default()),
     };
 
-    if let Some(existing) = object.physics_stack.iter_mut().find(|entry| entry.kind == kind) {
+    if let Some(existing) = object
+        .physics_stack
+        .iter_mut()
+        .find(|entry| entry.kind == kind)
+    {
         if let Some(enabled) = req.enabled {
             existing.enabled = enabled;
         }
@@ -592,14 +596,16 @@ fn apply_interaction_patch(
         return Ok(());
     }
 
-    object.physics_stack.push(ScriptBuilderMagneticInteractionEntry {
-        kind,
-        enabled: req.enabled.unwrap_or(true),
-        params: Some(Value::Object(expect_object_params(
-            req.params.unwrap_or(default_params),
+    object
+        .physics_stack
+        .push(ScriptBuilderMagneticInteractionEntry {
             kind,
-        )?)),
-    });
+            enabled: req.enabled.unwrap_or(true),
+            params: Some(Value::Object(expect_object_params(
+                req.params.unwrap_or(default_params),
+                kind,
+            )?)),
+        });
     Ok(())
 }
 

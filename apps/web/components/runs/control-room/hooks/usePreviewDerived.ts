@@ -118,7 +118,9 @@ export function usePreviewDerived({
     currentPreviewRevision != null &&
     preview.config_revision !== currentPreviewRevision,
   );
-  const previewIsBootstrapStale = Boolean(previewControlsActive && preview && effectiveStep > 0 && preview.source_step === 0);
+  const previewIsInitialSampleStale = Boolean(
+    previewControlsActive && preview && effectiveStep > 0 && preview.source_step === 0,
+  );
   const displaySelectionPending = optimisticDisplaySelection != null;
   const previewBusy = previewPostInFlight || displaySelectionPending;
   const renderPreview = spatialPreview;
@@ -186,7 +188,7 @@ export function usePreviewDerived({
     previewEveryNOptions,
     previewMaxPointOptions,
     previewIsStale,
-    previewIsBootstrapStale,
+    previewIsInitialSampleStale,
     previewBusy,
     previewMessage: null as string | null,
     renderPreview,

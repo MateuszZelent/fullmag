@@ -28,6 +28,8 @@ import { SceneModule } from "./modules/SceneModule";
 import { RunsModule } from "./modules/RunsModule";
 import { StagesModule } from "./modules/StagesModule";
 import { SolverModule } from "./modules/SolverModule";
+import { WorkspaceModule } from "./modules/WorkspaceModule";
+import { MeshModule } from "./modules/MeshModule";
 
 // ── Config ────────────────────────────────────────────────────────────
 
@@ -62,6 +64,8 @@ export class LiveApiClient {
   readonly system: SystemModule;
   readonly quantities: QuantitiesModule;
   readonly scene: SceneModule;
+  readonly workspace: WorkspaceModule;
+  readonly mesh: MeshModule;
   readonly runs: RunsModule;
   readonly stages: StagesModule;
   readonly solver: SolverModule;
@@ -87,6 +91,8 @@ export class LiveApiClient {
     this.system = new SystemModule(this);
     this.quantities = new QuantitiesModule(this);
     this.scene = new SceneModule(this);
+    this.workspace = new WorkspaceModule(this);
+    this.mesh = new MeshModule(this);
     this.runs = new RunsModule(this);
     this.stages = new StagesModule(this);
     this.solver = new SolverModule(this);

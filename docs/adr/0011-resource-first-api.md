@@ -126,6 +126,8 @@ path is validated.
 Feature flags are migration scaffolding, not a permanent architecture layer.
 The canonical end-state is one resource-first stack with no long-lived dual
 operation of bootstrap/poll and resource-first flows.
+As of `2026-04-21`, the active browser Control Room path no longer depends on
+the legacy whole-state snapshot compatibility route.
 
 ## Consequences
 

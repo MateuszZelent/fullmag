@@ -6,8 +6,8 @@
 //! - `cuda`: force CUDA, fail if unavailable
 //!
 //! Reads `FULLMAG_FEM_EXECUTION` env var:
-//! - `auto` (default): use native FEM GPU when available, else native FEM CPU
-//! - `cpu`: force native FEM CPU
+//! - `auto` (default): use native FEM GPU when available, else MFEM/libCEED/hypre CPU FEM
+//! - `cpu`: force MFEM/libCEED/hypre CPU FEM
 //! - `gpu`: force native FEM GPU, fail if unavailable
 
 use fullmag_ir::{
@@ -79,7 +79,7 @@ pub(crate) enum FdmEngine {
 /// Which public FEM runtime lane to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FemEngine {
-    /// Native CPU FEM backend (MFEM stack on host device).
+    /// Sole maintained CPU FEM backend (MFEM/libCEED/hypre on host CPU).
     CpuNative,
     /// Native GPU FEM backend (MFEM stack on CUDA device).
     NativeGpu,
@@ -124,7 +124,7 @@ pub(crate) fn fem_engine_id(engine: FemEngine) -> &'static str {
 
 pub(crate) fn fem_eigen_engine_id(engine: FemEngine) -> &'static str {
     match engine {
-        FemEngine::CpuNative => "fem_eigen_cpu_reference",
+        FemEngine::CpuNative => "fem_eigen_cpu_baseline",
         FemEngine::NativeGpu => "fem_eigen_native_gpu",
     }
 }
@@ -586,7 +586,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
                         .to_string(),
             });
         }
-        let message = "FEM engine falling back to native FEM CPU — native FEM GPU does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)".to_string();
+        let message = "FEM engine falling back to MFEM/libCEED/hypre CPU FEM — native FEM GPU does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)".to_string();
         runtime_warn_once(&message);
         return Ok(EngineResolution {
             engine: FemEngine::CpuNative,
@@ -617,7 +617,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
                     })
                 } else {
                     let message = format!(
-                        "script requested FEM GPU execution, but the native FEM GPU backend is not available: {} — falling back to native FEM CPU engine",
+                        "script requested FEM GPU execution, but the native FEM GPU backend is not available: {} — falling back to MFEM/libCEED/hypre CPU FEM engine",
                         availability.reason
                     );
                     runtime_warn_once(&message);
@@ -643,7 +643,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
                     })
                 } else {
                     let message = format!(
-                        "native FEM GPU backend currently supports fe_order=1 only; falling back to native FEM CPU for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
+                        "native FEM GPU backend currently supports fe_order=1 only; falling back to MFEM/libCEED/hypre CPU FEM for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
                         fe_order
                     );
                     runtime_warn_once(&message);
@@ -673,7 +673,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
             } else {
                 if availability.available && fe_order != 1 {
                     let message = format!(
-                        "native FEM GPU backend currently supports fe_order=1 only; falling back to native FEM CPU for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
+                        "native FEM GPU backend currently supports fe_order=1 only; falling back to MFEM/libCEED/hypre CPU FEM for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
                         fe_order
                     );
                     runtime_warn_once(&message);
@@ -688,7 +688,7 @@ pub(crate) fn resolve_fem_engine_with_trail(
                     })
                 } else if !availability.available {
                     let message = format!(
-                        "native FEM GPU backend is not available — using native FEM CPU engine (fallback_reason=native_fem_gpu_unavailable; reason={})",
+                        "native FEM GPU backend is not available — using MFEM/libCEED/hypre CPU FEM engine (fallback_reason=native_fem_gpu_unavailable; reason={})",
                         availability.reason
                     );
                     runtime_info_once(&message);
@@ -765,7 +765,7 @@ fn resolve_fem_engine_with_registry(
                     .to_string(),
             }
                     })?;
-            let message = "FEM engine falling back to native FEM CPU — native FEM GPU does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)".to_string();
+            let message = "FEM engine falling back to MFEM/libCEED/hypre CPU FEM — native FEM GPU does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)".to_string();
             fallback = Some(runtime_fallback(
                 fem_engine_id(FemEngine::NativeGpu),
                 fem_engine_id(FemEngine::CpuNative),
@@ -802,7 +802,7 @@ fn resolve_fem_engine_with_registry(
             }
                     })?;
             let message = format!(
-                "native FEM GPU backend currently supports fe_order=1 only; falling back to native FEM CPU for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
+                "native FEM GPU backend currently supports fe_order=1 only; falling back to MFEM/libCEED/hypre CPU FEM for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
                 fe_order
             );
             fallback = Some(runtime_fallback(
@@ -845,7 +845,7 @@ fn resolve_fem_engine_with_registry(
                             .to_string(),
                 })?;
                 let message = format!(
-                    "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to native FEM CPU engine",
+                    "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to MFEM/libCEED/hypre CPU FEM engine",
                     fem_plan.mesh.nodes.len(),
                     min_nodes
                 );
@@ -954,9 +954,9 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     if !cfg!(feature = "fem-gpu") {
         return Err(RunError {
             message:
-                "time-domain FEM execution requires the native MFEM backend, but this launcher \
+                "time-domain FEM execution requires the MFEM/libCEED runtime stack, but this launcher \
                  was built without the 'fem-gpu' feature. Use the managed FEM runtime or rebuild \
-                 the launcher with native FEM support."
+                 the launcher with MFEM/libCEED/hypre CPU or MFEM/libCEED/CUDA support."
                     .to_string(),
         });
     }
@@ -964,7 +964,7 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     if resolution.engine == FemEngine::NativeGpu {
         if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(plan) {
             let message = format!(
-                "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to native FEM CPU engine",
+                "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to MFEM/libCEED/hypre CPU FEM engine",
                 plan.mesh.nodes.len(),
                 min_nodes
             );
@@ -1453,7 +1453,7 @@ pub(crate) fn execute_fem<'a>(
             if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(&normalized_plan) {
                 eprintln!(
                     "warning: FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — \
-                     falling back to native FEM CPU engine \
+                     falling back to MFEM/libCEED/hypre CPU FEM engine \
                      (fallback_reason=fem_gpu_small_mesh_policy; \
                      set FULLMAG_FEM_EXECUTION=gpu to force GPU or \
                      FULLMAG_FEM_GPU_MIN_NODES=0 to disable this policy)",
@@ -1493,7 +1493,7 @@ pub(crate) fn execute_fem_eigen(
     }
 
     match engine {
-        FemEngine::CpuNative => fem_eigen::execute_reference_fem_eigen(plan, outputs),
+        FemEngine::CpuNative => fem_eigen::execute_baseline_fem_eigen(plan, outputs),
         FemEngine::NativeGpu => {
             // GPU-accelerated dense eigensolver (Etap A4) — TRANSITIONAL.
             // `execute_gpu_fem_eigen` uses cuSolverDN; returns error if GPU
@@ -1536,7 +1536,7 @@ fn execute_fem_eigen_path(
 
             let executed = match self.engine {
                 FemEngine::CpuNative => {
-                    fem_eigen::execute_reference_fem_eigen(&point_plan, outputs)?
+                    fem_eigen::execute_baseline_fem_eigen(&point_plan, outputs)?
                 }
                 FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen(&point_plan, outputs)?,
             };
@@ -1709,7 +1709,7 @@ fn execute_fem_eigen_path(
 
         let legacy_spectrum = serde_json::json!({
             "study_kind": "eigenmodes",
-            "solver_backend": "cpu_reference_fem_eigen",
+            "solver_backend": "cpu_baseline_fem_eigen",
             "solver_kind": path_result.solver_model.as_str(),
             "mesh_name": plan.mesh_name,
             "mode_count": modes_summary.len(),
@@ -3252,7 +3252,7 @@ mod tests {
     fn time_domain_fem_without_mfem_backend_fails_early() {
         let err = resolve_fem_engine_for_plan_with_trail(&fem_policy_problem(), &tiny_fem_plan())
             .expect_err("time-domain FEM should fail before execution without MFEM support");
-        assert!(err.message.contains("native MFEM backend"));
+        assert!(err.message.contains("MFEM/libCEED runtime stack"));
         assert!(err.message.contains("managed FEM runtime") || err.message.contains("fem-gpu"));
     }
 
@@ -3262,7 +3262,7 @@ mod tests {
         assert_eq!(fem_engine_id(FemEngine::NativeGpu), "fem_native_gpu");
         assert_eq!(
             fem_eigen_engine_id(FemEngine::CpuNative),
-            "fem_eigen_cpu_reference"
+            "fem_eigen_cpu_baseline"
         );
         assert_eq!(
             fem_eigen_engine_id(FemEngine::NativeGpu),

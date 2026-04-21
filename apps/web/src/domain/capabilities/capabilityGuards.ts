@@ -17,7 +17,7 @@ export function getAvailableAlgorithms(caps: CapabilityMap): string[] {
 }
 
 /**
- * Transitional fallback for legacy snapshot paths that only expose
+ * Transitional fallback for paths that only expose
  * discretization semantics, not a canonical resource-first capability map.
  */
 export function synthesizeCapabilitiesFromDiscretization(
@@ -39,7 +39,7 @@ export function synthesizeCapabilitiesFromDiscretization(
 }
 
 /**
- * Semantic replacement for the legacy FEM/FDM snapshot boolean.
+ * Semantic replacement for a raw FEM/FDM discretization boolean.
  * Returns true when the domain uses explicit (unstructured) topology,
  * which is the defining characteristic of a FEM discretization.
  */
@@ -56,11 +56,11 @@ export function isFdmDiscretization(caps: CapabilityMap): boolean {
 
 /**
  * Transitional bridge for callers that already have canonical capabilities
- * but still need to tolerate legacy snapshot paths.
+ * but still need a plain discretization fallback.
  */
 export function resolveFemDiscretization(
   caps: CapabilityMap | null | undefined,
-  legacyFemBackend = false,
+  fallbackFemDiscretization = false,
 ): boolean {
-  return caps ? isFemDiscretization(caps) : legacyFemBackend;
+  return caps ? isFemDiscretization(caps) : fallbackFemDiscretization;
 }

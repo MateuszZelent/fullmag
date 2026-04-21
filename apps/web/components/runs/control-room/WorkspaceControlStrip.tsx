@@ -31,7 +31,7 @@ import { migrateFlatStagesToStudyPipeline } from "@/lib/study-builder/migrate";
 import { buildPipelineStudyStageNodeId, parseStudyNodeContext } from "@/lib/study-builder/node-context";
 import type { StudyPipelineDocument, StudyPrimitiveStageKind } from "@/lib/study-builder/types";
 
-function syncStudyCompatibilityState(
+function syncStudyRuntimeState(
   ctx: ReturnType<typeof useTransport> &
     ReturnType<typeof useViewport> &
     ReturnType<typeof useCommand> &
@@ -145,7 +145,7 @@ const WorkspaceControlStrip = memo(function WorkspaceControlStrip() {
     const compiled = materializeStudyPipeline(nextDocument);
     ctx.setStudyPipeline(nextDocument);
     ctx.setStudyStages(compiled.stages);
-    syncStudyCompatibilityState(ctx, compiled.stages);
+    syncStudyRuntimeState(ctx, compiled.stages);
     ctx.setWorkspaceMode("study");
     ctx.setSelectedSidebarNodeId(buildPipelineStudyStageNodeId(nextNode.id));
   };

@@ -50,20 +50,6 @@ pub enum StructuredCommandRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct LegacyCommandRequest {
-    pub command: String,
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub params: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum CommandRequest {
-    Structured(StructuredCommandRequest),
-    Legacy(LegacyCommandRequest),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CommandResponse {
     pub accepted: bool,
     pub command_id: String,

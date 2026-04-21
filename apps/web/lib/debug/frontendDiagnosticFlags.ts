@@ -7,7 +7,6 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableGraphV2: true,
   },
   session: {
-    enableLiveBootstrapFetch: true,
     enableLiveWebSocket: true,
   },
   shell: {

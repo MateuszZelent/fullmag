@@ -20,7 +20,6 @@ export {
   selectDomainCapabilities,
   selectLiveState,
   selectFemMesh,
-  type SessionRuntimeSnapshot,
   type ConnectionStatus,
 } from "./session-runtime";
 export { classifyApiError, isRetryableError } from "./session-runtime";
@@ -140,12 +139,6 @@ export type {
   DerivedValueNodeRef,
   QuantityFrameViewModel,
 } from "./workspace-graph";
-
-/* Transport Metrics */
-export {
-  getTransportMetrics,
-  resetTransportMetrics,
-} from "./session-runtime/transport/transportMetrics";
 
 /* Layer G: Model Builder (Canonical Document Model + Inspector Registry) */
 export type {

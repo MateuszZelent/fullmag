@@ -18,7 +18,8 @@ mod cpu_reference;
 mod dispatch;
 pub mod eigen;
 mod fem_eigen;
-mod fem_reference;
+#[path = "fem_reference.rs"]
+mod fem_baseline;
 pub mod interactive;
 mod interactive_runtime;
 #[cfg(feature = "cuda")]
@@ -298,7 +299,7 @@ pub fn fem_observables_for_magnetization(
     plan: &fullmag_ir::FemPlanIR,
     magnetization: &[[f64; 3]],
 ) -> Result<fullmag_engine::EffectiveFieldObservables, RunError> {
-    fem_reference::fem_observables_for_magnetization(plan, magnetization)
+    fem_baseline::fem_observables_for_magnetization(plan, magnetization)
 }
 
 /// Run a problem with a per-step callback for live streaming.
@@ -1064,7 +1065,11 @@ fn fem_runtime_engine_info(
 ) -> (&'static str, &'static str, &'static str) {
     match engine {
         dispatch::FemEngine::CpuNative => {
-            (dispatch::fem_engine_id(engine), "CPU FEM (MFEM)", "cpu")
+            (
+                dispatch::fem_engine_id(engine),
+                "CPU FEM (MFEM/libCEED/hypre)",
+                "cpu",
+            )
         }
         dispatch::FemEngine::NativeGpu => (dispatch::fem_engine_id(engine), "GPU FEM", "gpu"),
     }
@@ -1076,7 +1081,7 @@ fn fem_eigen_runtime_engine_info(
     match engine {
         dispatch::FemEngine::CpuNative => (
             dispatch::fem_eigen_engine_id(engine),
-            "CPU FEM Eigen",
+            "CPU FEM Eigen Baseline",
             "cpu",
         ),
         dispatch::FemEngine::NativeGpu => (
@@ -1103,8 +1108,8 @@ fn fem_eigen_session_runtime_defaults(
 ) -> (&'static str, &'static str, &'static str) {
     match engine {
         dispatch::FemEngine::CpuNative => (
-            "fem-eigen-cpu-reference",
-            "fem_eigen_cpu_reference",
+            "fem-eigen-cpu-baseline",
+            "fem_eigen_cpu_baseline",
             "../../bin/fullmag-bin",
         ),
         dispatch::FemEngine::NativeGpu => (
@@ -1373,7 +1378,7 @@ pub fn run_reference_multilayer_fdm(
     .result)
 }
 
-/// Run a FEM eigenmode analysis on the CPU reference engine.
+/// Run a FEM eigenmode analysis on the CPU FEM baseline engine.
 ///
 /// Returns a [`types::FemEigenRunResult`] with the solver status and all artifact
 /// files (spectrum JSON, mode JSONs) produced during the solve.
@@ -1381,7 +1386,7 @@ pub fn run_reference_fem_eigen(
     plan: &fullmag_ir::FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<types::FemEigenRunResult, RunError> {
-    let executed = fem_eigen::execute_reference_fem_eigen(plan, outputs)?;
+    let executed = fem_eigen::execute_baseline_fem_eigen(plan, outputs)?;
     Ok(types::FemEigenRunResult {
         status: executed.result.status,
         artifacts: executed
@@ -1838,11 +1843,11 @@ mod tests {
     fn fem_runtime_and_eigen_engine_ids_stay_distinct() {
         assert_eq!(
             fem_runtime_engine_info(dispatch::FemEngine::CpuNative),
-            ("fem_cpu_native", "CPU FEM (MFEM)", "cpu")
+            ("fem_cpu_native", "CPU FEM (MFEM/libCEED/hypre)", "cpu")
         );
         assert_eq!(
             fem_eigen_runtime_engine_info(dispatch::FemEngine::CpuNative),
-            ("fem_eigen_cpu_reference", "CPU FEM Eigen", "cpu")
+            ("fem_eigen_cpu_baseline", "CPU FEM Eigen Baseline", "cpu")
         );
         assert_eq!(
             fem_session_runtime_defaults(dispatch::FemEngine::CpuNative),
@@ -1851,8 +1856,8 @@ mod tests {
         assert_eq!(
             fem_eigen_session_runtime_defaults(dispatch::FemEngine::CpuNative),
             (
-                "fem-eigen-cpu-reference",
-                "fem_eigen_cpu_reference",
+                "fem-eigen-cpu-baseline",
+                "fem_eigen_cpu_baseline",
                 "../../bin/fullmag-bin",
             )
         );

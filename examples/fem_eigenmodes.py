@@ -1,7 +1,7 @@
 """FEM eigenmodes example — linearized LLG spin-wave spectrum.
 
 Computes the normal-mode spectrum of a 200×50×10 nm Permalloy box under
-50 mT applied along x using the CPU reference FEM eigen solver.  The
+50 mT applied along x using the CPU FEM eigen baseline solver.  The
 lowest ``N_MODES`` eigenfrequencies and the spatial profiles of the first
 three modes are written to the artifact directory.
 
@@ -87,5 +87,5 @@ def build() -> fm.Problem:
 
 if __name__ == "__main__":
     problem = build()
-    # runtime dispatch picks CpuReference for eigen studies
+    # runtime dispatch picks the CPU FEM eigen baseline lane for eigen studies
     fm.Simulation(problem, backend="fem").run()

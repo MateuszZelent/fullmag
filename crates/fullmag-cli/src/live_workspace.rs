@@ -419,7 +419,7 @@ fn current_live_publisher_loop(
                 slow_publish_count += 1;
                 if slow_publish_count <= 5 || slow_publish_count % 50 == 0 {
                     eprintln!(
-                        "[fullmag-cli] PERF WARNING: publish cycle took {}ms (count: {})",
+                        "[fullmag-cli] PERF WARNING: live snapshot sync cycle took {}ms (count: {})",
                         cycle_ms, slow_publish_count,
                     );
                 }
@@ -427,7 +427,7 @@ fn current_live_publisher_loop(
             if let Err(error) = publish_result {
                 pending.store(true, Ordering::Release);
                 if api_is_ready(api_port()) {
-                    eprintln!("fullmag live publish warning: {}", error);
+                    eprintln!("fullmag live snapshot sync warning: {}", error);
                 }
             }
             last_publish_at = Some(Instant::now());
@@ -441,7 +441,7 @@ fn current_live_publisher_loop(
         sending.store(false, Ordering::Release);
         if let Err(error) = publish_result {
             if api_is_ready(api_port()) {
-                eprintln!("fullmag live publish warning: {}", error);
+                eprintln!("fullmag live snapshot sync warning: {}", error);
             }
         }
     }

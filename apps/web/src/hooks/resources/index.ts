@@ -8,3 +8,6 @@ export { useCommands } from "./useCommands";
 export { useArtifacts } from "./useArtifacts";
 export { useSceneDocument } from "./useSceneDocument";
 export { useStageExecution } from "./useStageExecution";
+export { useWorkspaceLayout } from "./useWorkspaceLayout";
+export { useWorkspaceRibbon } from "./useWorkspaceRibbon";
+export { useWorkspaceSelection } from "./useWorkspaceSelection";

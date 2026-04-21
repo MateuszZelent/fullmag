@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildEnvelopeFromLegacyState, type EnvelopeAdapterInput } from "../envelopeAdapter";
+import { buildFieldFrameEnvelopeFromRuntimeState, type EnvelopeAdapterInput } from "../envelopeAdapter";
 import { synthesizeCapabilitiesFromDiscretization } from "@/src/domain/capabilities";
 
 function makeInput(overrides: Partial<EnvelopeAdapterInput> = {}): EnvelopeAdapterInput {
@@ -37,32 +37,32 @@ function makeInput(overrides: Partial<EnvelopeAdapterInput> = {}): EnvelopeAdapt
     preview: null,
     stepUpdateV2: null,
     domainCapabilities: null,
-    legacyFemBackend: false,
+    fallbackFemDiscretization: false,
     quantityId: "m",
     ...overrides,
   };
 }
 
-describe("buildEnvelopeFromLegacyState", () => {
+describe("buildFieldFrameEnvelopeFromRuntimeState", () => {
   it("returns null when sessionId is missing", () => {
-    const result = buildEnvelopeFromLegacyState(makeInput({ sessionId: null }));
+    const result = buildFieldFrameEnvelopeFromRuntimeState(makeInput({ sessionId: null }));
     expect(result).toBeNull();
   });
 
   it("returns null when runId is missing", () => {
-    const result = buildEnvelopeFromLegacyState(makeInput({ runId: null }));
+    const result = buildFieldFrameEnvelopeFromRuntimeState(makeInput({ runId: null }));
     expect(result).toBeNull();
   });
 
   it("returns null when both liveState and stepUpdateV2 are null", () => {
-    const result = buildEnvelopeFromLegacyState(
+    const result = buildFieldFrameEnvelopeFromRuntimeState(
       makeInput({ liveState: null, stepUpdateV2: null }),
     );
     expect(result).toBeNull();
   });
 
   it("builds envelope from liveState for FDM", () => {
-    const result = buildEnvelopeFromLegacyState(makeInput());
+    const result = buildFieldFrameEnvelopeFromRuntimeState(makeInput());
     expect(result).not.toBeNull();
     expect(result!.sessionId).toBe("session-1");
     expect(result!.runId).toBe("run-1");
@@ -74,10 +74,10 @@ describe("buildEnvelopeFromLegacyState", () => {
   });
 
   it("uses mesh generation id from femMesh for FEM", () => {
-    const result = buildEnvelopeFromLegacyState(
+    const result = buildFieldFrameEnvelopeFromRuntimeState(
       makeInput({
         domainCapabilities: synthesizeCapabilitiesFromDiscretization(true),
-        legacyFemBackend: false,
+        fallbackFemDiscretization: false,
         femMesh: {
           nodes: [],
           elements: [],
@@ -92,10 +92,10 @@ describe("buildEnvelopeFromLegacyState", () => {
   });
 
   it("falls back to mesh_id when generation_id is absent", () => {
-    const result = buildEnvelopeFromLegacyState(
+    const result = buildFieldFrameEnvelopeFromRuntimeState(
       makeInput({
         domainCapabilities: synthesizeCapabilitiesFromDiscretization(true),
-        legacyFemBackend: false,
+        fallbackFemDiscretization: false,
         femMesh: {
           nodes: [],
           elements: [],
@@ -109,10 +109,10 @@ describe("buildEnvelopeFromLegacyState", () => {
   });
 
   it("falls back to legacy discretization boolean when capabilities are unavailable", () => {
-    const result = buildEnvelopeFromLegacyState(
+    const result = buildFieldFrameEnvelopeFromRuntimeState(
       makeInput({
         domainCapabilities: null,
-        legacyFemBackend: true,
+        fallbackFemDiscretization: true,
       }),
     );
     expect(result).not.toBeNull();
@@ -120,7 +120,7 @@ describe("buildEnvelopeFromLegacyState", () => {
   });
 
   it("prefers stepUpdateV2 diagnostics over liveState", () => {
-    const result = buildEnvelopeFromLegacyState(
+    const result = buildFieldFrameEnvelopeFromRuntimeState(
       makeInput({
         stepUpdateV2: {
           diagnostics: {

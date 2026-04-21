@@ -1892,9 +1892,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
     }
     let runtime_engine = fullmag_runner::resolve_runtime_engine(&stage.ir)
         .map_err(|error| anyhow!(error.message))?;
-    if runtime_engine.engine_id != "fem_cpu_native"
-        && runtime_engine.engine_id != "fem_cpu_reference"
-    {
+    if runtime_engine.engine_id != "fem_cpu_native" {
         live_workspace.push_log(
             "warning",
             format!(
@@ -2918,7 +2916,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         .unwrap_or(default_cpu_threads);
     let rayon_log_detail = match fullmag_cpu_threads.as_deref() {
         Some(raw) if raw.eq_ignore_ascii_case("auto") => {
-            " (FULLMAG_CPU_THREADS=auto; native FEM CPU logs resolved OpenMP threads separately)"
+            " (FULLMAG_CPU_THREADS=auto; MFEM/libCEED/hypre CPU FEM logs resolved OpenMP threads separately)"
         }
         Some(_) => " (source=FULLMAG_CPU_THREADS)",
         None => match rayon_cpu_threads {

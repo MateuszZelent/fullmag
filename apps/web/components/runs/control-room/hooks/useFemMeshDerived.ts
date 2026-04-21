@@ -89,7 +89,7 @@ function resolveFemTopologyCacheKey(mesh: any): string | null {
   const lastNode = mesh.nodes?.[(mesh.nodes?.length ?? 1) - 1]?.join(",") ?? "";
   const firstElement = mesh.elements?.[0]?.join(",") ?? "";
   return [
-    "legacy",
+    "derived",
     nodeCount,
     elementCount,
     boundaryFaceCount,

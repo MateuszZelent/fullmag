@@ -84,7 +84,7 @@
         "fem_gpu_public": "production_executable"
       },
       "validated_workloads": [],
-      "notes": "Analytic infinite-cylinder Oersted support exists on FDM and native FEM CPU/GPU public paths."
+      "notes": "Analytic infinite-cylinder Oersted support exists on FDM plus the public MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM lanes."
     },
     {
       "id": "oersted_cylinder_sinusoidal",
@@ -108,7 +108,7 @@
         "fem_gpu_public": "production_executable"
       },
       "validated_workloads": [],
-      "notes": "Public FDM and native FEM planners lower pulse envelopes."
+      "notes": "Public FDM and MFEM FEM planners lower pulse envelopes."
     },
     {
       "id": "oersted_cylinder_piecewise_linear",
@@ -132,7 +132,7 @@
         "fem_gpu_public": "production_executable"
       },
       "validated_workloads": [],
-      "notes": "Executable when the named CurrentTransport uses prescribed_density in a cylindrical solve_region with axis-aligned current; planner lowers to the exact infinite-cylinder Oersted realization on FDM and native FEM CPU/GPU."
+      "notes": "Executable when the named CurrentTransport uses prescribed_density in a cylindrical solve_region with axis-aligned current; planner lowers to the exact infinite-cylinder Oersted realization on FDM plus the public MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM lanes."
     },
     {
       "id": "oersted_from_current_solution_general_prescribed_density",
@@ -144,7 +144,7 @@
         "fem_gpu_public": "production_executable"
       },
       "validated_workloads": [],
-      "notes": "For non-cylindrical prescribed-density solve regions, the public planner lowers to a midpoint Biot-Savart field with equivalent-sphere self regularization. CPU-reference FDM executes the single-body per-cell slice with an explicit active-source-cell cap; native CUDA FDM executes the same planner-resolved per-cell field; native FEM CPU/GPU execute the per-node slice."
+      "notes": "For non-cylindrical prescribed-density solve regions, the public planner lowers to a midpoint Biot-Savart field with equivalent-sphere self regularization. CPU-reference FDM executes the single-body per-cell slice with an explicit active-source-cell cap; native CUDA FDM executes the same planner-resolved per-cell field; the public MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM lanes execute the per-node slice."
     },
     {
       "id": "stno_vortex_ref_minimal",
@@ -189,7 +189,7 @@
         "fem_gpu_public": "production_executable"
       },
       "validated_workloads": [],
-      "notes": "Writes `current_transport/<name>.json` auxiliary artifacts on the public FDM path and on native FEM CPU/GPU paths. Prescribed transport no longer forces FEM GPU fallback; only antenna_field_source still does."
+      "notes": "Writes `current_transport/<name>.json` auxiliary artifacts on the public FDM path and on the public MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM lanes. Prescribed transport no longer forces FEM GPU fallback; only antenna_field_source still does."
     },
     {
       "id": "current_transport_ohmic_poisson",

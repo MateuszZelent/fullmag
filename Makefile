@@ -204,17 +204,19 @@ install-cli install-cli-dev install-cli-static:
 			'SELF_DIR="$$(cd "$$(dirname "$$0")" && pwd)"' \
 			'REPO_ROOT="$$(cd "$$SELF_DIR/../../.." && pwd)"' \
 			'export FULLMAG_REPO_ROOT="$$REPO_ROOT"' \
+			'export FULLMAG_API_PORT="$${FULLMAG_API_PORT:-8081}"' \
 			'export PYTHONPATH="$$REPO_ROOT/packages/fullmag-py/src$${PYTHONPATH:+:$$PYTHONPATH}"' \
 			'export FULLMAG_FEM_MESH_CACHE_DIR="$$REPO_ROOT/.fullmag/local/cache/fem_mesh_assets"' \
 			'LOCAL_LD_LIBRARY_PATH="$$SELF_DIR/../lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}"' \
 			'MANAGED_RUNTIME_ROOT="$${SELF_DIR}/../../runtimes/fem-gpu-host"' \
+			'MANAGED_RUNTIME_LAUNCHER="$${MANAGED_RUNTIME_ROOT}/bin/fullmag-fem-gpu"' \
 			'MANAGED_RUNTIME_BIN="$${MANAGED_RUNTIME_ROOT}/bin/fullmag-fem-gpu-bin"' \
 			'ALLOW_MANAGED_RUNTIME="0"' \
-			'if [ -x "$$MANAGED_RUNTIME_BIN" ]; then' \
+			'if [ -x "$$MANAGED_RUNTIME_LAUNCHER" ] && [ "$${FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT:-0}" != "1" ]; then' \
 			'  ALLOW_MANAGED_RUNTIME="1"' \
 			'fi' \
 			'RESOLVE_RUNTIME_OUTPUT=""' \
-			'if [ "$$ALLOW_MANAGED_RUNTIME" = "1" ] && [ "$${FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME:-0}" != "1" ] && [ -x "$$MANAGED_RUNTIME_BIN" ]; then' \
+			'if [ "$$ALLOW_MANAGED_RUNTIME" = "1" ] && [ "$${FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME:-0}" != "1" ] && [ -x "$$MANAGED_RUNTIME_LAUNCHER" ]; then' \
 			'  RESOLVE_RUNTIME_OUTPUT="$$(LD_LIBRARY_PATH="$$LOCAL_LD_LIBRARY_PATH" "$$SELF_DIR/fullmag-bin" resolve-runtime-invocation --shell -- "$$@" 2>/dev/null || true)"' \
 			'fi' \
 			'PREFERRED_RUNTIME_FAMILY=""' \
@@ -235,12 +237,12 @@ install-cli install-cli-dev install-cli-static:
 			'if [ "$$REQUIRES_MANAGED_RUNTIME" = "1" ]; then' \
 			'  SHOULD_USE_MANAGED_RUNTIME="1"' \
 			'fi' \
-			'if [ "$$PREFERRED_RUNTIME_FAMILY" = "fem-gpu" ]; then' \
-			'  if [ "$$REQUIRES_MANAGED_RUNTIME" = "1" ] || [ "$$RESOLVED_RUNTIME_FAMILY" != "fem-gpu" ] || [ "$$LOCAL_ENGINE_ID" = "fem_cpu_native" ]; then' \
+			'if [ "$$PREFERRED_RUNTIME_FAMILY" = "fem-gpu" ] || [ "$$PREFERRED_RUNTIME_FAMILY" = "fem-eigen-gpu" ]; then' \
+			'  if [ "$$REQUIRES_MANAGED_RUNTIME" = "1" ] || [ "$$RESOLVED_RUNTIME_FAMILY" != "$$PREFERRED_RUNTIME_FAMILY" ] || [ "$$LOCAL_ENGINE_ID" = "fem_cpu_native" ] || [ "$$LOCAL_ENGINE_ID" = "fem_eigen_cpu_baseline" ]; then' \
 			'    SHOULD_USE_MANAGED_RUNTIME="1"' \
 			'  fi' \
 			'fi' \
-			'if [ "$$ALLOW_MANAGED_RUNTIME" = "1" ] && [ "$$SHOULD_USE_MANAGED_RUNTIME" = "1" ] && [ "$${FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME:-0}" != "1" ] && [ -x "$$MANAGED_RUNTIME_BIN" ]; then' \
+			'if [ "$$ALLOW_MANAGED_RUNTIME" = "1" ] && [ "$$SHOULD_USE_MANAGED_RUNTIME" = "1" ] && [ "$${FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME:-0}" != "1" ] && [ -x "$$MANAGED_RUNTIME_LAUNCHER" ]; then' \
 			'  OPENMPI_ROOT="$$MANAGED_RUNTIME_ROOT/openmpi"' \
 			'  if [ -d "$$OPENMPI_ROOT/share/openmpi" ]; then' \
 			'    export OPAL_PREFIX="$$OPENMPI_ROOT"' \
@@ -254,7 +256,7 @@ install-cli install-cli-dev install-cli-static:
 			'    export PMIX_EXEC_PREFIX="$$MANAGED_RUNTIME_ROOT/lib/pmix2"' \
 			'  fi' \
 			'  export LD_LIBRARY_PATH="$$MANAGED_RUNTIME_ROOT/lib:$$LOCAL_LD_LIBRARY_PATH"' \
-			'  exec "$$MANAGED_RUNTIME_BIN" "$$@"' \
+			'  exec "$$MANAGED_RUNTIME_LAUNCHER" "$$@"' \
 			'fi' \
 		'export LD_LIBRARY_PATH="$$LOCAL_LD_LIBRARY_PATH"' \
 		'exec "$$SELF_DIR/fullmag-bin" "$$@"' \

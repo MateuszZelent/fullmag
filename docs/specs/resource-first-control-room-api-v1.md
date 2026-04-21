@@ -118,6 +118,9 @@ Feature flags may exist only as short-lived migration scaffolding.
 The canonical end-state is one resource-first stack.
 Long-lived dual operation of the old bootstrap/poll model and the new resource model is an
 architectural regression.
+As of `2026-04-21`, the active browser Control Room no longer carries a
+compatibility call path to the legacy whole-state snapshot route
+`GET /v1/live/current/state`.
 
 ## 3. Canonical endpoint families
 
@@ -191,8 +194,15 @@ Rules:
 ```text
 GET    /v1/live/current/workspace/*
 PUT    /v1/live/current/workspace/*
-GET    /v1/live/current/scene/document
-PUT    /v1/live/current/scene/document
+GET    /v1/live/current/mesh/summary
+GET    /v1/live/current/mesh/builds/active
+POST   /v1/live/current/mesh/builds/commands
+GET    /v1/live/current/mesh/universe/config
+PUT    /v1/live/current/mesh/universe/config
+GET    /v1/live/current/mesh/shared-domain/config
+PUT    /v1/live/current/mesh/shared-domain/config
+GET    /v1/live/current/mesh/objects/:object_id/config
+PUT    /v1/live/current/mesh/objects/:object_id/config
 GET    /v1/live/current/authoring/scene
 PUT    /v1/live/current/authoring/scene
 PATCH  /v1/live/current/authoring/scene
@@ -217,8 +227,11 @@ POST   /v1/live/current/commands
 Rules:
 
 - workspace resources carry selection/ribbon/layout state and must not mutate physics semantics,
-- `scene/document` is the currently mounted full-document scene resource during cutover,
+- the currently mounted workspace subset is `selection`, `tree/active-node`, `ribbon`, and `layout`,
+- `mesh/*` is the canonical family for mounted mesh summary, active build projection, universe/shared-domain/object config,
+- `POST /mesh/builds/commands` is the canonical remesh enqueue path,
 - `authoring/scene` is the canonical full-document authoring resource,
+- the flat `scene/document` placement has been retired from the public router,
 - narrow `authoring/*` endpoints are semantic projections over the same scene revision,
 - `authoring/study/runtime` is the canonical narrow surface for requested backend/device/precision/mode intent,
 - `authoring/model/materials/:material_id` is the first mounted narrow material mutation surface,
@@ -231,8 +244,9 @@ Rules:
 - `view_mode` and `field_component` are distinct display axes and must not be
   collapsed back into a single mixed `component` token,
 - command submission is explicit and structured,
-- the canonical `POST /commands` body is a discriminated `kind` union rather than loose
-  `command + params`,
+- family-specific command routes are allowed where they keep intent explicit, with
+  `mesh/builds/commands` now mounted as the canonical remesh route,
+- `POST /commands` accepts only the discriminated `kind` union body,
 - scene/script synchronization must preserve canonical Python and `ProblemIR` semantics.
 
 ### 3.5 Supporting resource families
@@ -271,6 +285,12 @@ Implemented and canonical today:
 - `commands`,
 - `commands/status`,
 - `commands/:command_id`,
+- `mesh/summary`,
+- `mesh/builds/active`,
+- `mesh/builds/commands`,
+- `mesh/universe/config`,
+- `mesh/shared-domain/config`,
+- `mesh/objects/:object_id/config`,
 - `runs/current`,
 - `stages/execution`,
 - `solver/status`,
@@ -310,9 +330,10 @@ Still mounted but transitional:
 
 Still target-only:
 
-- `workspace/*`,
+- `workspace/tree/expansion`,
+- `workspace/viewport-presets`,
 - wide `authoring/*` beyond mounted scene/transactions/script routes,
-- broad `mesh/*`,
+- broader `mesh/*` such as reports, quality, interface resources, history, and last-success projections,
 - run history beyond `runs/current`,
 - command completion/rejection resources beyond the current queued/dispatched ledger.
 

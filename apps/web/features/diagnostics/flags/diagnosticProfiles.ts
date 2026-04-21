@@ -135,7 +135,6 @@ export const DIAGNOSTIC_PROFILES: readonly DiagnosticProfile[] = [
         showBackendErrorNotice: false,
       },
       session: {
-        enableLiveBootstrapFetch: false,
         enableLiveWebSocket: false,
       },
     },

@@ -59,7 +59,7 @@ This document does not replace the target route tree.
 |---|---|---|---|
 | `x-request-id` | request + response | yes for v1 middleware | Correlation id. Client may send it; server echoes or generates one. |
 | `x-api-contract-version` | response | yes for v1 middleware | Current contract version. Implemented value is `1.0.0`. |
-| `Idempotency-Key` | request | command mutations only | Safe retry / dedupe key for `POST /v1/live/current/commands`. |
+| `Idempotency-Key` | request | command mutations only | Safe retry / dedupe key for `POST /v1/live/current/commands` and `POST /v1/live/current/mesh/builds/commands`. |
 
 ### 3.3 Revision vocabulary
 
@@ -336,6 +336,7 @@ This same schema appears in `status.display`, as the response body of
 | `artifacts_revision` | `u64` | Artifact index revision | Current implementation uses artifact count. |
 | `engine_log_revision` | `u64` | Engine-log revision | Current implementation uses engine-log entry count. |
 | `display_revision` | `u64` | Display selection revision | Bumped when display selection is updated. |
+| `workspace_revision` | `u64` | Workspace UI-family revision | Bumped when workspace selection, ribbon, or layout changes. |
 
 #### `CapabilityMap`
 
@@ -493,16 +494,13 @@ Current implementation note:
 
 ### 7.2 `GET /v1/quantities/catalog`
 
-- Status: `transitional`
-- Purpose: legacy flat quantity catalog route kept for short-term compatibility
-- Request body: none
-- Response body: `QuantityCatalogResponse`
+- Status: `removed from public router`
+- Purpose: retired legacy flat quantity-catalog alias
 
 Migration note:
 
-- This route now mirrors the canonical current-live quantity catalog wire
-  shape.
 - The canonical browser route is `GET /v1/live/current/quantities/catalog`.
+- Public callers must not rely on the removed flat alias.
 
 ### 7.3 `GET /v1/live/current/fields/catalog`
 
@@ -749,7 +747,7 @@ Current implementation honesty note:
 
 | Parameter | Type | Meaning |
 |---|---|---|
-| `command_id` | `string` | Command identifier returned by `POST /v1/live/current/commands` |
+| `command_id` | `string` | Command identifier returned by command enqueue routes | Today this includes `POST /v1/live/current/commands` and `POST /v1/live/current/mesh/builds/commands`. |
 
 - Response body: `CommandDetailResource`
 
@@ -760,6 +758,245 @@ Notes:
 - The current mounted detail view exposes submission parameters relevant to
   `run`, `relax`, `pause`, `resume`, `stop`, `skip`, and `remesh` flows.
 
+### 7.14.1 `GET /v1/live/current/workspace/selection`
+
+- Status: `canonical`
+- Purpose: fetch the current workspace-only selection resource
+- Request body: none
+- Response body: `WorkspaceSelectionResource`
+
+#### `WorkspaceSelectionResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Workspace-selection revision | Bumped on selection mutations. |
+| `selected_node_id` | `string | null` | Active model-tree node id | Workspace/UI state only. |
+| `selected_object_id` | `string | null` | Active scene object id | Inspector/ribbon context, not physics state. |
+| `selected_entity_id` | `string | null` | Active FEM mesh/entity id | Workspace/viewport context only. |
+
+### 7.14.2 `PUT /v1/live/current/workspace/selection`
+
+- Status: `canonical`
+- Purpose: replace the current workspace-only selection resource
+- Request body: `WorkspaceSelectionReplaceRequest`
+- Response body: `WorkspaceSelectionResource`
+
+#### `WorkspaceSelectionReplaceRequest`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `selected_node_id` | `string | null` | Replace active model-tree node id | Optional nullable field. |
+| `selected_object_id` | `string | null` | Replace active scene object id | Optional nullable field. |
+| `selected_entity_id` | `string | null` | Replace active FEM mesh/entity id | Optional nullable field. |
+
+### 7.14.3 `GET /v1/live/current/workspace/tree/active-node`
+
+- Status: `canonical`
+- Purpose: fetch the active workspace tree node as a narrow selection projection
+- Request body: none
+- Response body: `WorkspaceActiveNodeResource`
+
+### 7.14.4 `PUT /v1/live/current/workspace/tree/active-node`
+
+- Status: `canonical`
+- Purpose: replace only the active workspace tree node
+- Request body: `WorkspaceActiveNodeReplaceRequest`
+- Response body: `WorkspaceActiveNodeResource`
+
+#### `WorkspaceActiveNodeResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Selection-family revision | Shared with `workspace/selection`. |
+| `node_id` | `string | null` | Current active node id | Narrow tree projection only. |
+
+### 7.14.5 `GET /v1/live/current/workspace/ribbon`
+
+- Status: `canonical`
+- Purpose: fetch the current ribbon/workspace-mode resource
+- Request body: none
+- Response body: `WorkspaceRibbonResource`
+
+### 7.14.6 `PUT /v1/live/current/workspace/ribbon`
+
+- Status: `canonical`
+- Purpose: replace the current ribbon/workspace-mode resource
+- Request body: `WorkspaceRibbonReplaceRequest`
+- Response body: `WorkspaceRibbonResource`
+
+#### `WorkspaceRibbonResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Ribbon-family revision | Bumped on ribbon mutations. |
+| `workspace_mode` | `string` | Active workspace stage | Current values are `build`, `study`, or `analyze`. |
+| `active_core_tab` | `string` | Active core ribbon tab label | Current implementation uses UI labels such as `Home` or `Mesh`. |
+| `active_contextual_tab` | `string | null` | Active contextual ribbon tab label | Optional when no contextual tab is active. |
+
+### 7.14.7 `GET /v1/live/current/workspace/layout`
+
+- Status: `canonical`
+- Purpose: fetch the current workspace layout resource
+- Request body: none
+- Response body: `WorkspaceLayoutResource`
+
+### 7.14.8 `PUT /v1/live/current/workspace/layout`
+
+- Status: `canonical`
+- Purpose: replace the current workspace layout resource
+- Request body: `WorkspaceLayoutReplaceRequest`
+- Response body: `WorkspaceLayoutResource`
+
+#### `WorkspaceLayoutResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Layout-family revision | Bumped when workspace layout changes. |
+| `current_stage` | `string` | Current workspace stage | Current values are `build`, `study`, or `analyze`. |
+| `stage_layouts` | `map<string, WorkspaceStageLayout>` | Stage-to-dock-slot map | Current implementation tracks left/center/right/bottom dock ids. |
+| `active_workspace_tab_by_stage` | `map<string, string | null>` | Stage-to-active-workspace-tab map | Current implementation stores tab ids such as `core:3d` or `core:analyze`. |
+
+Honesty note:
+
+- The mounted `workspace/*` subset covers selection, active node, ribbon, and layout.
+- `workspace/tree/expansion` and `workspace/viewport-presets` remain target-only.
+- These resources are UI-only and must not be used as a backdoor authoring or runtime mutation channel.
+
+### 7.14.9 `GET /v1/live/current/mesh/summary`
+
+- Status: `canonical`
+- Purpose: fetch the current mesh workspace read-model
+- Request body: none
+- Response body: `MeshWorkspaceResource`
+
+#### `MeshWorkspaceResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Mesh read-model revision | Current implementation uses the live snapshot `state_version`. |
+| `mesh_workspace` | `json object` | Current mesh workspace projection | Current payload is intentionally flexible JSON during migration. |
+
+### 7.14.10 `GET /v1/live/current/mesh/builds/active`
+
+- Status: `canonical`
+- Purpose: fetch the active mesh build projection
+- Request body: none
+- Response body: `MeshActiveBuildResource`
+
+#### `MeshActiveBuildResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Mesh build projection revision | Current implementation uses the live snapshot `state_version`. |
+| `active_build` | `json object | null` | Current active build descriptor | Optional when no build is active. |
+| `mesh_pipeline_status` | `json object | null` | Thin pipeline-status projection | Optional when unavailable. |
+| `effective_airbox_target` | `json object | null` | Effective universe/airbox target summary | Optional projection from mesh workspace state. |
+| `effective_per_object_targets` | `json object | null` | Effective per-object target summary map | Optional projection from mesh workspace state. |
+| `last_build_summary` | `json object | null` | Thin summary of the last completed build | Optional when no build completed yet. |
+| `last_build_error` | `string | null` | Last build error string | Optional diagnostic field. |
+
+### 7.14.11 `POST /v1/live/current/mesh/builds/commands`
+
+- Status: `canonical`
+- Purpose: enqueue an explicit mesh build/remesh command through the dedicated mesh family
+- Request headers:
+
+| Header | Required | Meaning |
+|---|---|---|
+| `x-request-id` | recommended | Correlation id |
+| `Idempotency-Key` | optional | Safe retry / dedupe key |
+
+- Request body: `MeshBuildCommandRequest`
+- Response body: `CommandResponse`
+
+#### `MeshBuildCommandRequest`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `mesh_options` | `json | null` | Optional mesh-options payload | Current implementation forwards this payload into the structured `remesh` command. |
+| `mesh_target` | `MeshCommandTarget | null` | Optional explicit remesh target | Same target vocabulary as the `remesh` command variant. |
+| `mesh_reason` | `string | null` | Optional human-readable remesh reason | Provenance/diagnostic hint. |
+
+Honesty note:
+
+- This is now the canonical remesh enqueue route for the browser.
+- `POST /v1/live/current/commands` still accepts `kind = remesh` temporarily for compatibility, but new frontend code should target `mesh/builds/commands`.
+
+### 7.14.12 `GET /v1/live/current/mesh/universe/config`
+
+- Status: `canonical`
+- Purpose: fetch the current universe mesh config projection
+- Request body: none
+- Response body: `MeshUniverseConfigResource`
+
+### 7.14.13 `PUT /v1/live/current/mesh/universe/config`
+
+- Status: `canonical`
+- Purpose: replace the current universe mesh config projection
+- Request body: `MeshUniverseConfigReplaceRequest`
+- Response body: `MeshUniverseConfigResource`
+
+#### `MeshUniverseConfigResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Canonical scene revision after the change | Bumped through the shared scene commit helper. |
+| `config` | `json object | null` | Current universe mesh config | Current implementation projects `study.universe_mesh` and falls back to `scene.universe` on reads. |
+
+### 7.14.14 `GET /v1/live/current/mesh/shared-domain/config`
+
+- Status: `canonical`
+- Purpose: fetch the current shared-domain mesh config projection
+- Request body: none
+- Response body: `MeshSharedDomainConfigResource`
+
+### 7.14.15 `PUT /v1/live/current/mesh/shared-domain/config`
+
+- Status: `canonical`
+- Purpose: replace the current shared-domain mesh config projection
+- Request body: `MeshSharedDomainConfigReplaceRequest`
+- Response body: `MeshSharedDomainConfigResource`
+
+#### `MeshSharedDomainConfigResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Canonical scene revision after the change | Bumped through the shared scene commit helper. |
+| `config` | `json object` | Current shared-domain mesh config | Current implementation keeps `study.shared_domain_mesh` and `study.mesh_defaults` aligned on write. |
+
+### 7.14.16 `GET /v1/live/current/mesh/objects/:object_id/config`
+
+- Status: `canonical`
+- Purpose: fetch the current per-object mesh config projection
+- Path parameters:
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `object_id` | `string` | Canonical scene object id |
+
+- Response body: `MeshObjectConfigResource`
+
+### 7.14.17 `PUT /v1/live/current/mesh/objects/:object_id/config`
+
+- Status: `canonical`
+- Purpose: replace the current per-object mesh config projection
+- Path parameters:
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `object_id` | `string` | Canonical scene object id |
+
+- Request body: `MeshObjectConfigReplaceRequest`
+- Response body: `MeshObjectConfigResource`
+
+#### `MeshObjectConfigResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Canonical scene revision after the change | Bumped through the shared scene commit helper. |
+| `object_id` | `string` | Canonical scene object id | Echoes the addressed path segment. |
+| `config` | `json object | null` | Current per-object mesh config | Current implementation projects `object_mesh` and falls back to `mesh_override` on reads while keeping both aligned on write. |
+
 ### 7.15 `GET /v1/live/current/authoring/scene`
 
 - Status: `canonical`
@@ -769,10 +1006,9 @@ Notes:
 
 Current implementation note:
 
-- Today this route is the canonical mounted alias over the same scene document
-  committed by `GET/PUT /v1/live/current/scene/document`.
-- The intent is to move browser clients to `authoring/scene` while keeping the
-  older flat scene route only as transitional compatibility.
+- This route is the only mounted public full-document scene resource.
+- The older flat `GET/PUT /v1/live/current/scene/document` placement has been
+  removed from the public router.
 
 ### 7.16 `PUT /v1/live/current/authoring/scene`
 
@@ -1157,19 +1393,11 @@ The canonical request body is the discriminated `kind` union.
 | `solve` | Start or continue solve pipeline |
 | `close` | Close the active session/workspace |
 
-#### `LegacyCommandRequest`
+Request-shape rule:
 
-The handler still accepts a legacy body shape for migration compatibility.
-
-| Field | Type | Meaning | Notes |
-|---|---|---|---|
-| `command` | `string` | Legacy command name | Transitional compatibility field. |
-| `params` | `json` | Legacy loose parameter map | Transitional compatibility field. |
-
-Migration rule:
-
-- Structured `kind` bodies are canonical.
-- Legacy `command + params` input remains transitional compatibility only.
+- `POST /commands` accepts only the structured discriminated `kind` union.
+- Loose `command + params` envelopes are no longer part of the public command contract.
+- Remesh is also available through the dedicated canonical route `POST /v1/live/current/mesh/builds/commands`.
 
 #### `CommandResponse`
 
@@ -1620,19 +1848,19 @@ treated as the canonical browser contract.
 | `GET /healthz` | `transitional` | Legacy health probe | `GET /v1/health` |
 | `GET /v1/meta/vision` | `transitional` | Legacy repo/application vision summary | No direct product-data replacement required |
 | `GET /v1/live/current/bootstrap` | `transitional` | Monolithic initial session blob | `GET /v1/live/current/status` plus named resources |
-| `GET /v1/live/current/state` | `transitional` | Legacy whole-state snapshot | Named resources under `/v1/live/current/*` |
+| `GET /v1/live/current/state` | `removed from active frontend and current public mount` | Former legacy whole-state snapshot | Named resources under `/v1/live/current/*` |
 | `GET /v1/live/current/poll` | `transitional` | Legacy delta polling over whole-state blobs | Status polling plus revision-driven resource fetches |
 | `GET /v1/live/current/events` | `removed from public router` | Former legacy current-live event stream | Use `GET /v1/live/current/ws` for realtime notices; canonical reads stay resource-first |
-| `POST /v1/live/current/publish` | `internalized` | Former public publish bridge for the monolithic live snapshot | Internal runner bridge: `POST /v1/internal/live/current/snapshot` |
+| `POST /v1/live/current/publish` | `internalized` | Former public publish bridge for the monolithic live snapshot | Internal runner bridge: bootstrap `POST /v1/internal/live/current/snapshot`, then frame sync via `POST /v1/internal/live/current/{session,runtime,scalars,fields}` |
 | `POST /v1/live/current/create` | `removed from public router` | Former legacy workspace bootstrap/create helper | Future explicit session/workspace creation contract |
-| `GET /v1/live/feature-flags` | `transitional` | Legacy diagnostics/feature-flag probe | Diagnostics policy only; not part of the canonical browser contract |
+| `GET /v1/live/feature-flags` | `removed from public router` | Retired legacy diagnostics/feature-flag probe | Use canonical capabilities and local diagnostics policy instead |
 | `GET /v1/live/current/commands/next` | `removed from public router` | Former legacy pull-based command queue consumption | Structured command queue behind `POST /commands` plus future read models |
 | `GET /v1/live/current/control/wait` | `internalized` | Former public blocking wait channel for the runner bridge | Internal runner bridge: `GET /v1/internal/live/current/control/wait` |
 | `POST /v1/live/current/script/sync` | `removed from public router` | Former legacy flat script-sync placement | `POST /v1/live/current/authoring/script/sync` |
-| `GET/PUT /v1/live/current/scene/document` | `transitional` | Legacy flat scene-document placement | `GET/PUT /v1/live/current/authoring/scene` |
+| `GET/PUT /v1/live/current/scene/document` | `removed from public router` | Retired legacy flat scene-document placement | `GET/PUT /v1/live/current/authoring/scene` |
 | `GET /v1/live/current/artifacts/file` | `removed from public router` | Former legacy artifact-file fetch route | `GET /v1/live/current/artifacts/:artifact_id` |
 | `GET /v1/docs/physics` | `transitional` | Legacy physics docs listing | Remains separate from the control-room runtime contract |
-| `GET /v1/quantities/catalog` | `transitional` | Legacy flat quantity catalog route kept for short-term compatibility | `GET /v1/live/current/quantities/catalog` |
+| `GET /v1/quantities/catalog` | `removed from public router` | Retired legacy flat quantity catalog alias | `GET /v1/live/current/quantities/catalog` |
 
 ## 14. Target-Only Family Appendix
 
@@ -1641,9 +1869,22 @@ resource-first families in the current server.
 
 | Family | Status | Purpose |
 |---|---|---|
-| `/v1/live/current/workspace/*` | `target-only` | Workspace-only UI state such as selection, ribbon, layout, tree expansion, viewport presets |
+| `/v1/live/current/workspace/tree/expansion` | `target-only` | Persisted expansion state for workspace/model trees |
+| `/v1/live/current/workspace/viewport-presets` | `target-only` | Named viewport/camera presets and similar workspace-only presentation state |
 | wider `/v1/live/current/authoring/*` families beyond mounted scene/script routes | `target-only` | Canonical model/material/magnetization/physics/study/builder authoring resources |
-| `/v1/live/current/mesh/*` | `target-only` | Mesh policy, reports, quality, history, per-object and shared-domain mesh resources |
+| `/v1/live/current/mesh/capabilities` | `target-only` | Mesh capability vocabulary and mesh-engine support summary |
+| `/v1/live/current/mesh/universe/report` | `target-only` | Realized universe/airbox mesh report |
+| `/v1/live/current/mesh/universe/quality` | `target-only` | Universe/airbox quality metrics |
+| `/v1/live/current/mesh/shared-domain/report` | `target-only` | Realized shared-domain mesh report |
+| `/v1/live/current/mesh/shared-domain/topology` | `target-only` | Shared-domain topology payload distinct from solver-domain topology |
+| `/v1/live/current/mesh/shared-domain/quality` | `target-only` | Shared-domain quality metrics |
+| `/v1/live/current/mesh/objects/:object_id/report` | `target-only` | Realized per-object mesh report |
+| `/v1/live/current/mesh/objects/:object_id/quality` | `target-only` | Per-object quality metrics |
+| `/v1/live/current/mesh/objects/:object_id/topology` | `target-only` | Per-object topology payload |
+| `/v1/live/current/mesh/objects/:object_id/size-field` | `target-only` | Per-object size-field inspection resource |
+| `/v1/live/current/mesh/interfaces/:interface_id/*` | `target-only` | Interface refinement, report, and quality resources |
+| `/v1/live/current/mesh/builds/history` | `target-only` | Historical mesh-build ledger |
+| `/v1/live/current/mesh/builds/last-success` | `target-only` | Last successful build projection |
 | `/v1/live/current/domain/coordinates` | `target-only` | Explicit coordinate buffers for non-implicit domains |
 | `/v1/live/current/domain/regions` | `target-only` | Region/material ownership mappings |
 | `/v1/live/current/domain/active-mask` | `target-only` | Explicit active-mask data |
@@ -1672,7 +1913,7 @@ resource-first architecture.
 | `runtime_status` | `status.solver` + `solver/status` | partially covered |
 | `capabilities` | `status.capabilities` and `/v1/capabilities` | covered in split form |
 | `metadata` | future dedicated metadata resource | contract gap remains |
-| `mesh_workspace` | future `/v1/live/current/mesh/*` | target-only |
+| `mesh_workspace` | `/v1/live/current/mesh/summary` + `/v1/live/current/mesh/builds/active` + remaining future `/v1/live/current/mesh/*` | partially covered |
 | `stage_execution` | `GET /v1/live/current/stages/execution` | covered |
 | `scene_document` | `GET/PUT /v1/live/current/authoring/scene` | covered |
 | `script_builder` | future `/v1/live/current/authoring/*` projections | target-only |

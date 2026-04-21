@@ -253,10 +253,10 @@ export default function DockCenterTabs() {
                 `Preview auto-fit to ${vp.previewGrid[0]}×${vp.previewGrid[1]}×${vp.previewGrid[2]}`}
             </div>
           )}
-          {(vp.previewMessage || vp.previewIsStale || vp.previewIsBootstrapStale) && (
+          {(vp.previewMessage || vp.previewIsStale || vp.previewIsInitialSampleStale) && (
             <div className="border-b border-border/40 bg-card/40 px-2.5 py-1.5 text-xs leading-snug text-muted-foreground">
               {vp.previewMessage ??
-                (vp.previewIsBootstrapStale
+                (vp.previewIsInitialSampleStale
                   ? "Showing bootstrap preview until first live preview sample arrives 3"
                   : "Preview update pending")}
             </div>

@@ -90,6 +90,7 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
     display_revision: u64,
 ) -> CurrentLiveRealtimeState {
     let commands_revision = state.current_command_ledger.lock().await.len() as u64;
+    let workspace_revision = current_live_workspace_revision(state).await;
     CurrentLiveRealtimeState {
         session_id: snapshot.session.session_id.clone(),
         run_id: snapshot.run.as_ref().map(|run| run.run_id.clone()),
@@ -105,6 +106,7 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             artifacts_revision: snapshot.artifacts.len() as u64,
             engine_log_revision: snapshot.engine_log.len() as u64,
             display_revision,
+            workspace_revision,
             commands_revision,
             stages_revision: snapshot
                 .stage_execution
@@ -114,6 +116,13 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
         },
     }
+}
+
+async fn current_live_workspace_revision(state: &AppState) -> u64 {
+    let selection_revision = state.current_workspace_selection.read().await.revision;
+    let ribbon_revision = state.current_workspace_ribbon.read().await.revision;
+    let layout_revision = state.current_workspace_layout.read().await.revision;
+    selection_revision.max(ribbon_revision).max(layout_revision)
 }
 
 fn current_live_realtime_changes(
@@ -126,6 +135,13 @@ fn current_live_realtime_changes(
             resource_id: None,
             domain_generation_id: None,
             recommended_fetch: Some("/v1/live/current/display".to_string()),
+        },
+        RealtimeResourceChange {
+            resource: RealtimeResourceName::Workspace,
+            revision: realtime_state.revisions.workspace_revision,
+            resource_id: None,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v1/live/current/workspace/selection".to_string()),
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Fields,
@@ -187,7 +203,7 @@ fn current_live_realtime_changes(
             revision: scene_revision,
             resource_id: None,
             domain_generation_id: None,
-            recommended_fetch: Some("/v1/live/current/scene/document".to_string()),
+            recommended_fetch: Some("/v1/live/current/authoring/scene".to_string()),
         });
     }
     changes
@@ -287,6 +303,9 @@ async fn main() {
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
+        current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
+        current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
+        current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_command_ledger: Arc::new(Mutex::new(VecDeque::new())),
@@ -327,9 +346,7 @@ async fn main() {
         )
         // ── Diagnostics / feature flags ───────────────────────────────
         // ── Feature flags (diagnostics) ──────────────────────────────
-        .route("/v1/live/feature-flags", get(get_feature_flags))
         .route("/v1/docs/physics", get(list_physics_docs))
-        .route("/v1/quantities/catalog", get(get_quantities_catalog))
         // ── New resource-first API (v1) ────────────────────────────────
         .merge(router_v1::build_v1_router())
         // ── OpenAPI / Swagger ──────────────────────────────────────────
@@ -402,10 +419,6 @@ async fn vision() -> Json<VisionResponse> {
         modes: ["strict", "extended", "hybrid"],
         runtime_spine: "current-live",
     })
-}
-
-async fn get_quantities_catalog() -> Json<crate::schemas::quantities::QuantityCatalogResponse> {
-    Json(crate::schemas::quantities::QuantityCatalogResponse::build())
 }
 
 pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
@@ -481,11 +494,6 @@ pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
     })
 }
 
-/// `GET /v1/live/feature-flags` — return the current feature flags.
-async fn get_feature_flags(State(state): State<Arc<AppState>>) -> Json<FeatureFlags> {
-    Json(state.feature_flags.clone())
-}
-
 fn is_preview_control_command(command: &SessionCommand) -> bool {
     matches!(
         command.kind.as_str(),
@@ -552,31 +560,44 @@ async fn sync_current_live_snapshot(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CurrentLiveSnapshotRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    apply_current_live_snapshot(&state, req).await
+    let has_live_state_update = req.live_state.is_some();
+    let has_scalar_row_update = req.latest_scalar_row.is_some();
+    let has_latest_fields_update = req.latest_fields.is_some();
+    let allow_previous_preview_fallback = !req.clear_preview_cache;
+    let preview_fields = req.preview_fields.clone();
+    let clear_preview_cache = req.clear_preview_cache;
+    let session_id = req.session_id.clone();
+    sync_current_live_frame_update(
+        &state,
+        CurrentLiveSyncKind::Snapshot,
+        &session_id,
+        allow_previous_preview_fallback,
+        has_live_state_update,
+        has_scalar_row_update,
+        has_latest_fields_update,
+        preview_fields,
+        clear_preview_cache,
+        move |next| apply_current_live_snapshot(next, req),
+    )
+    .await
 }
 
 async fn sync_current_live_session_frame(
     State(state): State<Arc<AppState>>,
     Json(frame): Json<CurrentLiveSessionFrameRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    apply_current_live_snapshot(
+    let session_id = frame.session_id.clone();
+    sync_current_live_frame_update(
         &state,
-        CurrentLiveSnapshotRequest {
-            session_id: frame.session_id,
-            session: frame.session,
-            session_status: frame.session_status,
-            metadata: frame.metadata,
-            mesh_workspace: frame.mesh_workspace,
-            stage_execution: frame.stage_execution,
-            run: frame.run,
-            live_state: None,
-            latest_scalar_row: None,
-            latest_fields: None,
-            preview_fields: None,
-            clear_preview_cache: false,
-            engine_log: None,
-            fem_mesh: None,
-        },
+        CurrentLiveSyncKind::Session,
+        &session_id,
+        true,
+        false,
+        false,
+        false,
+        None,
+        false,
+        move |next| apply_current_live_session_frame(next, frame),
     )
     .await
 }
@@ -585,24 +606,18 @@ async fn sync_current_live_runtime_frame(
     State(state): State<Arc<AppState>>,
     Json(frame): Json<CurrentLiveRuntimeFrameRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    apply_current_live_snapshot(
+    let session_id = frame.session_id.clone();
+    sync_current_live_frame_update(
         &state,
-        CurrentLiveSnapshotRequest {
-            session_id: frame.session_id,
-            session: None,
-            session_status: None,
-            metadata: None,
-            mesh_workspace: None,
-            stage_execution: None,
-            run: None,
-            live_state: frame.live_state,
-            latest_scalar_row: None,
-            latest_fields: None,
-            preview_fields: None,
-            clear_preview_cache: false,
-            engine_log: frame.engine_log,
-            fem_mesh: frame.fem_mesh,
-        },
+        CurrentLiveSyncKind::Runtime,
+        &session_id,
+        true,
+        true,
+        false,
+        false,
+        None,
+        false,
+        move |next| apply_current_live_runtime_frame(next, frame),
     )
     .await
 }
@@ -611,24 +626,18 @@ async fn sync_current_live_scalar_frame(
     State(state): State<Arc<AppState>>,
     Json(frame): Json<CurrentLiveScalarFrameRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    apply_current_live_snapshot(
+    let session_id = frame.session_id.clone();
+    sync_current_live_frame_update(
         &state,
-        CurrentLiveSnapshotRequest {
-            session_id: frame.session_id,
-            session: None,
-            session_status: None,
-            metadata: None,
-            mesh_workspace: None,
-            stage_execution: None,
-            run: None,
-            live_state: None,
-            latest_scalar_row: frame.latest_scalar_row,
-            latest_fields: None,
-            preview_fields: None,
-            clear_preview_cache: false,
-            engine_log: None,
-            fem_mesh: None,
-        },
+        CurrentLiveSyncKind::Scalars,
+        &session_id,
+        true,
+        false,
+        true,
+        false,
+        None,
+        false,
+        move |next| apply_current_live_scalar_frame(next, frame),
     )
     .await
 }
@@ -637,43 +646,68 @@ async fn sync_current_live_field_frame(
     State(state): State<Arc<AppState>>,
     Json(frame): Json<CurrentLiveFieldFrameRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    apply_current_live_snapshot(
+    let session_id = frame.session_id.clone();
+    let preview_fields = frame.preview_fields.clone();
+    let clear_preview_cache = frame.clear_preview_cache;
+    let has_latest_fields_update = frame.latest_fields.is_some();
+    sync_current_live_frame_update(
         &state,
-        CurrentLiveSnapshotRequest {
-            session_id: frame.session_id,
-            session: None,
-            session_status: None,
-            metadata: None,
-            mesh_workspace: None,
-            stage_execution: None,
-            run: None,
-            live_state: None,
-            latest_scalar_row: None,
-            latest_fields: frame.latest_fields,
-            preview_fields: frame.preview_fields,
-            clear_preview_cache: frame.clear_preview_cache,
-            engine_log: None,
-            fem_mesh: None,
-        },
+        CurrentLiveSyncKind::Fields,
+        &session_id,
+        !clear_preview_cache,
+        false,
+        false,
+        has_latest_fields_update,
+        preview_fields,
+        clear_preview_cache,
+        move |next| apply_current_live_field_frame(next, frame),
     )
     .await
 }
 
-async fn apply_current_live_snapshot(
+#[derive(Debug, Clone, Copy)]
+enum CurrentLiveSyncKind {
+    Snapshot,
+    Session,
+    Runtime,
+    Scalars,
+    Fields,
+}
+
+impl CurrentLiveSyncKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Snapshot => "snapshot",
+            Self::Session => "session",
+            Self::Runtime => "runtime",
+            Self::Scalars => "scalars",
+            Self::Fields => "fields",
+        }
+    }
+}
+
+async fn sync_current_live_frame_update<F>(
     state: &Arc<AppState>,
-    req: CurrentLiveSnapshotRequest,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let publish_start = std::time::Instant::now();
-    let has_live_state_update = req.live_state.is_some();
-    let has_scalar_row_update = req.latest_scalar_row.is_some();
-    let has_latest_fields_update = req.latest_fields.is_some();
-    let allow_previous_preview_fallback = !req.clear_preview_cache;
+    kind: CurrentLiveSyncKind,
+    session_id: &str,
+    allow_previous_preview_fallback: bool,
+    has_live_state_update: bool,
+    has_scalar_row_update: bool,
+    has_latest_fields_update: bool,
+    preview_fields: Option<Vec<LivePreviewField>>,
+    clear_preview_cache: bool,
+    apply: F,
+) -> Result<Json<serde_json::Value>, ApiError>
+where
+    F: FnOnce(&mut SessionStateResponse) -> Result<(), ApiError>,
+{
+    let sync_start = std::time::Instant::now();
     let reset_preview = state
         .current_live_state
         .read()
         .await
         .as_ref()
-        .map(|existing| existing.session.session_id != req.session_id)
+        .map(|existing| existing.session.session_id != session_id)
         .unwrap_or(false);
     if reset_preview {
         let display_selection = CurrentDisplaySelection::default();
@@ -686,20 +720,34 @@ async fn apply_current_live_snapshot(
         let _ = std::fs::remove_dir_all(&state.current_workspace_root);
     }
     let display_selection = state.current_display_selection.read().await.clone();
-    let selected_cached_preview_updated = req
-        .preview_fields
+    let selected_cached_preview_updated = preview_fields
         .as_ref()
         .is_some_and(|fields| cached_preview_update_matches_selection(fields, &display_selection));
-    let has_cached_preview_update = req.clear_preview_cache || selected_cached_preview_updated;
+    let has_cached_preview_update = clear_preview_cache || selected_cached_preview_updated;
     let preview_config = display_selection.preview_request();
     let mut current = state.current_live_state.write().await;
     let mut next = match current.take() {
-        Some(existing) if existing.session.session_id == req.session_id => existing,
-        _ => default_current_live_state(&req),
+        Some(existing) if existing.session.session_id == session_id => existing,
+        _ => default_current_live_state(&CurrentLiveSnapshotRequest {
+            session_id: session_id.to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            fem_mesh: None,
+        }),
     };
     let previous_preview = next.preview.clone();
     let apply_start = std::time::Instant::now();
-    apply_current_live_publish(&mut next, req)?;
+    apply(&mut next)?;
     let apply_ms = apply_start.elapsed().as_micros();
     next.display_selection = display_selection.clone();
     next.preview_config = preview_config.clone();
@@ -759,7 +807,8 @@ async fn apply_current_live_snapshot(
         .and_then(|state| state.latest_step.magnetization.as_ref())
         .and_then(|values| average_vector_components(values, 3));
     eprintln!(
-        "[fullmag-api] publish -> live snapshot version={} session={} run={} step={} scalar_rows={} live_mag_len={} live_mag_avg={} preview={} preview_step={} preview_vec_len={} preview_vec_avg={} fields={} realtime_subscribers={}",
+        "[fullmag-api] sync -> live {} version={} session={} run={} step={} scalar_rows={} live_mag_len={} live_mag_avg={} preview={} preview_step={} preview_vec_len={} preview_vec_avg={} fields={} realtime_subscribers={}",
+        kind.label(),
         current_state_version,
         next.session.session_id,
         next.run.as_ref().map(|run| run.run_id.as_str()).unwrap_or("-"),
@@ -785,11 +834,12 @@ async fn apply_current_live_snapshot(
 
     publish_current_live_realtime_batch_changed(&state, &realtime_state, true, 100).await?;
 
-    let publish_elapsed_us = publish_start.elapsed().as_micros();
-    if publish_elapsed_us > 50_000 {
+    let sync_elapsed_us = sync_start.elapsed().as_micros();
+    if sync_elapsed_us > 50_000 {
         eprintln!(
-            "[fullmag-api] PERF: publish took {:.1}ms (apply={:.1}ms preview={:.1}ms)",
-            publish_elapsed_us as f64 / 1000.0,
+            "[fullmag-api] PERF: internal live {} sync took {:.1}ms (apply={:.1}ms preview={:.1}ms)",
+            kind.label(),
+            sync_elapsed_us as f64 / 1000.0,
             apply_ms as f64 / 1000.0,
             preview_ms as f64 / 1000.0,
         );
@@ -1121,8 +1171,12 @@ pub(crate) async fn import_asset_for_current_workspace(
             .as_mut()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
         snapshot.artifacts = artifacts;
-        current_live_realtime_state_from_snapshot(state, snapshot, snapshot.display_selection.revision)
-            .await
+        current_live_realtime_state_from_snapshot(
+            state,
+            snapshot,
+            snapshot.display_selection.revision,
+        )
+        .await
     };
     publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
     Ok(response)
@@ -1226,12 +1280,7 @@ pub(crate) async fn commit_current_live_scene_document(
         summary = %scene_magnetization_summary(&scene_document),
         "frontend scene update received"
     );
-    let (
-        scene_document,
-        realtime_state,
-        preset_texture_change_logs,
-        live_rebuild_stats,
-    ) = {
+    let (scene_document, realtime_state, preset_texture_change_logs, live_rebuild_stats) = {
         let mut current = state.current_live_state.write().await;
         let snapshot = current
             .as_mut()

@@ -381,6 +381,10 @@ POST   /v1/live/current/session/*
 GET    /v1/live/current/ws
 ```
 
+`POST /v1/live/current/commands` accepts only the structured discriminated
+`kind` union request body documented in
+`docs/specs/control-room-api-endpoint-reference-v1.md`.
+
 Rules for this projection:
 
 - it is a convenience view over the active local workspace, not a replacement for the canonical

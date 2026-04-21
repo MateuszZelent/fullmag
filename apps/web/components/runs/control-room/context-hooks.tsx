@@ -193,7 +193,7 @@ export interface ViewportContextValue {
   previewEveryNOptions: number[];
   previewMaxPointOptions: number[];
   previewIsStale: boolean;
-  previewIsBootstrapStale: boolean;
+  previewIsInitialSampleStale: boolean;
   /* Actions */
   setViewMode: React.Dispatch<React.SetStateAction<ViewportMode>>;
   setComponent: React.Dispatch<React.SetStateAction<VectorComponent>>;
@@ -378,7 +378,7 @@ export interface ModelContextValue {
   /* Actions */
   setSolverSettings: React.Dispatch<React.SetStateAction<SolverSettingsState>>;
   setSceneDocument: React.Dispatch<React.SetStateAction<SceneDocument | null>>;
-  refreshLiveState: (options?: { forceBootstrap?: boolean }) => Promise<void>;
+  refreshLiveState: () => Promise<void>;
   setRequestedRuntimeSelection: React.Dispatch<
     React.SetStateAction<{
       requested_backend: string;

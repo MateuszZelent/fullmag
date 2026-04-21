@@ -9,6 +9,9 @@ PY
 )"
 
 pkill -f "${REPO_ROOT}/.fullmag/target/.*/fullmag-api" >/dev/null 2>&1 || true
+pkill -f "${REPO_ROOT}/.fullmag/local/bin/fullmag-api" >/dev/null 2>&1 || true
+pkill -f "${REPO_ROOT}/target/.*/fullmag-api" >/dev/null 2>&1 || true
+pkill -f "cargo +nightly run -p fullmag-api" >/dev/null 2>&1 || true
 pkill -f "${REPO_ROOT}/apps/web.*next dev" >/dev/null 2>&1 || true
 pkill -f "${REPO_ROOT}/apps/web.*dev-server.mjs" >/dev/null 2>&1 || true
 pkill -f "next dev --hostname 0.0.0.0 --port 300" >/dev/null 2>&1 || true

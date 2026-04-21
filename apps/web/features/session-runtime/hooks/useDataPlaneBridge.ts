@@ -3,7 +3,7 @@
 /**
  * Data-plane bridge: fetches heavy resources on-demand when revisions change.
  *
- * Instead of bundling everything in a bootstrap payload, this hook
+ * Instead of bundling everything in one initial payload, this hook
  * watches revision counters from the Zustand store (populated by the
  * status bridge) and lazily fetches:
  *

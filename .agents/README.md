@@ -27,6 +27,7 @@ Rules:
 - `workspace/*` carries selection/ribbon/layout state and must not mutate physics semantics,
 - `authoring/*` carries model-builder, inspector, interaction, and study edits against one
   canonical `scene_revision`,
+- `POST /v1/live/current/commands` accepts only the structured discriminated `kind` union body,
 - heavy numerical payloads use binary data-plane transports,
 - React components do not call `fetch()` directly,
 - FDM/FEM differences stay in capability guards and domain adapters,

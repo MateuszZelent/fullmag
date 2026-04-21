@@ -438,7 +438,7 @@ export function meshOptionsToBuilder(
   };
 }
 
-export function buildLegacyScriptBuilderUpdatePayload(
+export function buildSceneDocumentFromBuilderFallback(
   solverSettings: SolverSettingsState,
   meshOptions: MeshOptionsState,
   demagRealization: string | null,
@@ -493,7 +493,7 @@ export function buildScriptBuilderUpdatePayload(
     scene.study.requested_mode = modelBuilderGraph.study.requested_mode;
     return scene;
   }
-  return buildLegacyScriptBuilderUpdatePayload(
+  return buildSceneDocumentFromBuilderFallback(
     fallback.solverSettings,
     fallback.meshOptions,
     fallback.demagRealization,

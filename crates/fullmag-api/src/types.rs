@@ -1,6 +1,9 @@
 //! API request/response types and view models.
 
 use crate::schemas::commands::CommandResponse;
+use crate::schemas::workspace::{
+    WorkspaceLayoutResource, WorkspaceRibbonResource, WorkspaceSelectionResource,
+};
 use fullmag_authoring::{SceneDocument, ScriptBuilderState};
 use fullmag_runner::{
     BackendCapabilities, DisplaySelectionState, FemMeshPayload, LivePreviewField,
@@ -17,6 +20,9 @@ use utoipa::ToSchema;
 
 pub(crate) type CurrentPreviewConfig = LivePreviewRequest;
 pub(crate) type CurrentDisplaySelection = DisplaySelectionState;
+pub(crate) type CurrentWorkspaceSelection = WorkspaceSelectionResource;
+pub(crate) type CurrentWorkspaceRibbon = WorkspaceRibbonResource;
+pub(crate) type CurrentWorkspaceLayout = WorkspaceLayoutResource;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct DisplayPresentationState {
@@ -62,6 +68,12 @@ pub(crate) struct AppState {
     pub current_display_selection: Arc<RwLock<CurrentDisplaySelection>>,
     /// Presentation-only display options that are not part of runner semantics.
     pub current_display_presentation: Arc<RwLock<DisplayPresentationState>>,
+    /// Workspace-only selection state for the local control room.
+    pub current_workspace_selection: Arc<RwLock<CurrentWorkspaceSelection>>,
+    /// Workspace-only ribbon state for the local control room.
+    pub current_workspace_ribbon: Arc<RwLock<CurrentWorkspaceRibbon>>,
+    /// Workspace-only layout state for the local control room.
+    pub current_workspace_layout: Arc<RwLock<CurrentWorkspaceLayout>>,
     /// In-memory sequenced control queue for the root local-live workspace.
     pub current_control_queue: Arc<Mutex<VecDeque<SessionCommand>>>,
     /// Recent idempotent command responses keyed by request identity.
@@ -477,7 +489,6 @@ impl LatestFields {
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
         self.0.iter()
     }
-
 }
 
 impl CachedPreviewFields {

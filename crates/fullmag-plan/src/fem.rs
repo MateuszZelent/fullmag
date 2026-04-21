@@ -1007,7 +1007,7 @@ pub(crate) fn plan_fem(
             external_field.is_some()
         ),
         study_note,
-        "FEM CPU reference execution is available; native MFEM/libCEED/hypre GPU execution remains in progress"
+        "Executable time-domain FEM requires the native MFEM/libCEED/hypre backend; the Rust FEM baseline remains internal-only for preview and validation helpers"
             .to_string(),
     ];
     if let Some(note) = universe_note {
@@ -1640,7 +1640,7 @@ pub(crate) fn plan_fem_eigen(
                     external_field.is_some()
                 ),
                 study_note,
-                "FEM eigen execution currently targets the CPU reference baseline; native MFEM/SLEPc integration remains future work"
+                "FEM eigen execution currently targets the transitional CPU FEM baseline; native MFEM/SLEPc integration remains future work"
                     .to_string(),
             ],
         },

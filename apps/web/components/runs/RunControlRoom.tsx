@@ -161,7 +161,7 @@ function makeRibbonAntenna(
   };
 }
 
-function syncStudyCompatibilityState(
+function syncStudyRuntimeState(
   ctx: { setRunUntilInput: (v: string) => void; setSolverSettings: React.Dispatch<React.SetStateAction<any>> },
   stages: ReturnType<typeof materializeStudyPipeline>["stages"],
 ): void {
@@ -630,7 +630,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     const compiled = materializeStudyPipeline(next);
     ctx.setStudyPipeline(next);
     ctx.setStudyStages(compiled.stages);
-    syncStudyCompatibilityState(ctx, compiled.stages);
+    syncStudyRuntimeState(ctx, compiled.stages);
     if (nextSelectedNodeId) {
       handleSelectModelNode(nextSelectedNodeId);
     }
@@ -1230,10 +1230,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
             `Preview auto-fit to ${ctx.previewGrid[0]}×${ctx.previewGrid[1]}×${ctx.previewGrid[2]}`}
         </div>
       )}
-      {(ctx.previewMessage || ctx.previewIsStale || ctx.previewIsBootstrapStale) && (
+      {(ctx.previewMessage || ctx.previewIsStale || ctx.previewIsInitialSampleStale) && (
         <div className="px-2.5 py-1.5 border-b border-border/40 bg-card/40 text-muted-foreground text-xs leading-snug">
           {ctx.previewMessage ??
-            (ctx.previewIsBootstrapStale
+            (ctx.previewIsInitialSampleStale
               ? "Showing bootstrap preview until first live preview sample arrives 2"
               : "Preview update pending")}
         </div>

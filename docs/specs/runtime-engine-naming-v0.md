@@ -27,15 +27,15 @@ reference-vs-production solver identity.
 
 | Engine id | Meaning | Status |
 |---|---|---|
-| `fem_cpu_native` | native MFEM/libCEED/hypre CPU runner | public-executable |
+| `fem_cpu_native` | sole maintained MFEM/libCEED/hypre CPU runner | public-executable |
 | `fem_native_gpu` | native MFEM/libCEED/CUDA GPU runner | public-executable |
-| `fem_cpu_reference` | Rust FEM reference runner | internal-reference only |
+| `fem_cpu_baseline_internal` | Rust FEM baseline helper | internal-reference only |
 
 ### FEM eigen
 
 | Engine id | Meaning | Status |
 |---|---|---|
-| `fem_eigen_cpu_reference` | current CPU reference FEM eigen solver | public-executable |
+| `fem_eigen_cpu_baseline` | current CPU FEM eigen baseline solver | public-executable / transitional |
 | `fem_eigen_native_gpu` | current GPU FEM eigen solver | public-executable / transitional |
 
 ## Dispatch vocabulary
@@ -46,7 +46,8 @@ Inside the runner, FEM dispatch first resolves a **runtime lane**:
 - `NativeGpu`
 
 For time-domain FEM, the CPU lane resolves to `fem_cpu_native`.
-For FEM eigen, the CPU lane resolves to `fem_eigen_cpu_reference`.
+No alternate public CPU-native FEM engine is maintained alongside it.
+For FEM eigen, the CPU lane resolves to `fem_eigen_cpu_baseline`.
 
 That split is intentional:
 

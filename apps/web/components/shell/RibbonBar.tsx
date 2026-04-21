@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useCallback, useRef } from "react";
+import React, { useMemo, useCallback, useEffect, useRef } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Tooltip, TooltipTrigger, TooltipContent, TooltipProvider,
@@ -23,6 +23,8 @@ import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
 import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
 import type { CapabilityMap } from "@/src/api/types";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
+import { useWorkspaceRibbon } from "@/src/hooks/resources/useWorkspaceRibbon";
+import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
 
 // ── Registry imports ──
 import {
@@ -208,6 +210,26 @@ function contextualTabsForSelection(p: RibbonBarProps): ContextualRibbonTab[] {
   return tabs;
 }
 
+function normalizeWorkspaceMode(
+  value: string | null | undefined,
+): WorkspaceMode {
+  return value === "build" || value === "study" || value === "analyze"
+    ? value
+    : "study";
+}
+
+function workspaceRibbonIdentity(value: {
+  workspace_mode?: string | null;
+  active_core_tab?: string | null;
+  active_contextual_tab?: string | null;
+} | null | undefined): string {
+  return JSON.stringify([
+    value?.workspace_mode ?? null,
+    value?.active_core_tab ?? null,
+    value?.active_contextual_tab ?? null,
+  ]);
+}
+
 /** Build a RibbonBuildContext from the current RibbonBarProps. */
 function buildContext(
   props: RibbonBarProps,
@@ -381,11 +403,23 @@ function ribbonGroupToneClass(tone: RibbonGroup["tone"] | undefined): string {
 /* ── Component ──────────────────────────────────── */
 
 export default function RibbonBar(props: RibbonBarProps) {
+  const sessionId = useSessionRuntimeStore((s) => s.session?.session_id ?? null);
   const currentStage = useWorkspaceStore((s) => s.currentStage);
+  const setCurrentStage = useWorkspaceStore((s) => s.setCurrentStage);
   const activeCoreTab = useWorkspaceStore((s) => s.activeCoreTab);
   const setActiveCoreTab = useWorkspaceStore((s) => s.setActiveCoreTab);
   const activeContextualTab = useWorkspaceStore((s) => s.activeContextualTab);
   const setActiveContextualTab = useWorkspaceStore((s) => s.setActiveContextualTab);
+  const {
+    ribbon: workspaceRibbon,
+    loading: workspaceRibbonLoading,
+    replaceRibbon: replaceWorkspaceRibbon,
+  } = useWorkspaceRibbon({
+    enabled: true,
+    sessionKey: sessionId,
+  });
+  const workspaceRibbonHydratingRef = useRef(false);
+  const lastPersistedWorkspaceRibbonRef = useRef<string | null>(null);
   const builderEnabled = useGeometryBuilderStore((s) => s.builderMode.enabled);
   const builderDirtyGeometry = useGeometryBuilderStore(
     (s) => s.dirty.geometryDraftDirty || s.dirty.geometryRealizationDirty,
@@ -396,6 +430,74 @@ export default function RibbonBar(props: RibbonBarProps) {
     s.builderSelection.type === "primitive" ? s.builderSelection.id : null,
   );
   const workspaceStage = props.workspaceMode ?? currentStage;
+  useEffect(() => {
+    if (!sessionId) {
+      lastPersistedWorkspaceRibbonRef.current = null;
+      workspaceRibbonHydratingRef.current = false;
+      return;
+    }
+    if (!workspaceRibbon) {
+      return;
+    }
+    const nextIdentity = workspaceRibbonIdentity(workspaceRibbon);
+    lastPersistedWorkspaceRibbonRef.current = nextIdentity;
+    const currentIdentity = workspaceRibbonIdentity({
+      workspace_mode: workspaceStage,
+      active_core_tab: activeCoreTab,
+      active_contextual_tab: activeContextualTab,
+    });
+    if (currentIdentity === nextIdentity) {
+      return;
+    }
+    workspaceRibbonHydratingRef.current = true;
+    setCurrentStage(normalizeWorkspaceMode(workspaceRibbon.workspace_mode));
+    setActiveCoreTab(workspaceRibbon.active_core_tab);
+    setActiveContextualTab(workspaceRibbon.active_contextual_tab ?? null);
+    queueMicrotask(() => {
+      workspaceRibbonHydratingRef.current = false;
+    });
+  }, [
+    activeContextualTab,
+    activeCoreTab,
+    sessionId,
+    setActiveContextualTab,
+    setActiveCoreTab,
+    setCurrentStage,
+    workspaceRibbon,
+    workspaceStage,
+  ]);
+
+  useEffect(() => {
+    if (!sessionId || workspaceRibbonLoading || workspaceRibbonHydratingRef.current) {
+      return;
+    }
+    const nextIdentity = workspaceRibbonIdentity({
+      workspace_mode: workspaceStage,
+      active_core_tab: activeCoreTab,
+      active_contextual_tab: activeContextualTab,
+    });
+    if (lastPersistedWorkspaceRibbonRef.current === nextIdentity) {
+      return;
+    }
+    lastPersistedWorkspaceRibbonRef.current = nextIdentity;
+    void replaceWorkspaceRibbon({
+      workspace_mode: workspaceStage,
+      active_core_tab: activeCoreTab,
+      active_contextual_tab: activeContextualTab,
+    }).then((persisted) => {
+      if (persisted) {
+        lastPersistedWorkspaceRibbonRef.current = workspaceRibbonIdentity(persisted);
+      }
+    });
+  }, [
+    activeContextualTab,
+    activeCoreTab,
+    replaceWorkspaceRibbon,
+    sessionId,
+    workspaceRibbonLoading,
+    workspaceStage,
+  ]);
+
   const visibleTabs = useMemo(() => tabsForMode(workspaceStage), [workspaceStage]);
   const defaultTab = defaultTabForMode(workspaceStage);
   const contextualTabs = useMemo(

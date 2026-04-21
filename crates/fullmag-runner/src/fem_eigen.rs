@@ -126,7 +126,7 @@ fn gpu_solve_real_symmetric_eigenpairs(
     Ok(eigenpairs)
 }
 
-pub(crate) fn execute_reference_fem_eigen(
+pub(crate) fn execute_baseline_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
@@ -406,7 +406,7 @@ fn execute_fem_eigen_inner(
                 "max_amplitude": max_amplitude,
                 "normalization": normalization_label(plan.normalization),
                 "damping_policy": damping_policy_label(plan.damping_policy),
-                "solver_backend": "cpu_reference_fem_eigen",
+                "solver_backend": "cpu_baseline_fem_eigen",
                 "solver_kind": solver_kind,
                 "solver_notes": solver_notes(plan, complex_reduction, use_sparse),
                 "solver_capabilities": solver_capabilities(plan, complex_reduction, use_sparse),
@@ -427,7 +427,7 @@ fn execute_fem_eigen_inner(
 
     let summary_payload = serde_json::json!({
         "study_kind": "eigenmodes",
-        "solver_backend": "cpu_reference_fem_eigen",
+        "solver_backend": "cpu_baseline_fem_eigen",
         "solver_kind": solver_kind,
         "solver_notes": solver_notes(plan, complex_reduction, use_sparse),
         "solver_capabilities": solver_capabilities(plan, complex_reduction, use_sparse),
@@ -530,7 +530,7 @@ fn execution_provenance(plan: &FemEigenPlanIR, used_gpu: bool) -> ExecutionProve
     let engine = if used_gpu {
         format!("gpu_cusolver_fem_eigen/{}", solver_kind_label(plan))
     } else {
-        format!("cpu_reference_fem_eigen/{}", solver_kind_label(plan))
+        format!("cpu_baseline_fem_eigen/{}", solver_kind_label(plan))
     };
     let resolved_demag = resolved_demag_realization(plan);
     ExecutionProvenance {

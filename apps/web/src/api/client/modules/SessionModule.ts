@@ -10,22 +10,11 @@ import type {
   SessionImportInspectResponse,
 } from "../../generated/openapi-types";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
-import type { SessionState } from "@/lib/session/types";
 
 const SESSION_PERSISTENCE_TIMEOUT_MS = 120_000;
 
 export class SessionModule {
   constructor(private client: LiveApiClient) {}
-
-  /**
-   * Compatibility-only whole-state snapshot.
-   *
-   * Active Control Room runtime no longer depends on this path when the
-   * resource-first bridge is enabled.
-   */
-  async current(opts?: RequestOptions): Promise<SessionState> {
-    return this.client.get<SessionState>("/v1/live/current/state", opts);
-  }
 
   async export(
     request: SessionExportRequest,

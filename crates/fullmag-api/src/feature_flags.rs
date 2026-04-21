@@ -18,7 +18,9 @@
 //! }
 //! ```
 //!
-//! Flags are exposed to the frontend via `GET /v1/live/feature-flags`.
+//! Flags are resolved locally at startup and gate internal preview/chart
+//! behaviors. The public browser contract must use canonical capability and
+//! resource endpoints instead of a dedicated legacy flags route.
 
 use serde::{Deserialize, Serialize};
 

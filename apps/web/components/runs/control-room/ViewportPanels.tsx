@@ -1561,7 +1561,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         </div>
       ) : null}
 
-      {/* ── Graph-hosted path or legacy fallback ── */}
+      {/* ── Graph-hosted path or fallback content ── */}
       {graphHostedContent ?? conditionalContent}
     </div>
   );

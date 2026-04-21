@@ -5,7 +5,7 @@
  */
 
 import { useState, useCallback } from "react";
-import type { CommandResponse } from "../../api/types";
+import type { CommandRequest, CommandResponse } from "../../api/types";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
@@ -13,10 +13,7 @@ interface UseCommandsResult {
   lastResponse: CommandResponse | null;
   loading: boolean;
   error: LiveApiError | null;
-  submitCommand: (
-    command: string,
-    params?: Record<string, unknown>,
-  ) => Promise<CommandResponse | null>;
+  submitCommand: (request: CommandRequest) => Promise<CommandResponse | null>;
 }
 
 export function useCommands(): UseCommandsResult {
@@ -27,15 +24,12 @@ export function useCommands(): UseCommandsResult {
   const [error, setError] = useState<LiveApiError | null>(null);
 
   const submitCommand = useCallback(
-    async (
-      command: string,
-      params?: Record<string, unknown>,
-    ): Promise<CommandResponse | null> => {
+    async (request: CommandRequest): Promise<CommandResponse | null> => {
       setLoading(true);
       setError(null);
       try {
         const client = getLiveApiClient();
-        const result = await client.commands.submit(command, params);
+        const result = await client.commands.submit(request);
         setLastResponse(result);
         setLoading(false);
         return result;

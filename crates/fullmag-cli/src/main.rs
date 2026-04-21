@@ -594,12 +594,19 @@ fn runtime_selection_string(problem: &ProblemIR, key: &str, default: &str) -> St
 }
 
 fn preferred_runtime_family_for_problem(
-    _problem: &ProblemIR,
+    problem: &ProblemIR,
     resolved_backend: BackendTarget,
     requested_device: &str,
 ) -> String {
     match (resolved_backend, requested_device) {
-        (BackendTarget::Fem, "cuda" | "gpu") => "fem-gpu".to_string(),
+        (BackendTarget::Fem, "cuda" | "gpu") => match problem.study {
+            fullmag_ir::StudyIR::Eigenmodes { .. } => "fem-eigen-gpu".to_string(),
+            _ => "fem-gpu".to_string(),
+        },
+        (BackendTarget::Fem, _) => match problem.study {
+            fullmag_ir::StudyIR::Eigenmodes { .. } => "fem-eigen-cpu-baseline".to_string(),
+            _ => "fem-cpu-native".to_string(),
+        },
         (BackendTarget::Fdm, "cuda" | "gpu") => "fdm-cuda".to_string(),
         (BackendTarget::Hybrid, "cuda" | "gpu") => "hybrid-gpu".to_string(),
         _ => "cpu-reference".to_string(),
@@ -633,7 +640,8 @@ fn local_engine_resolution(
     }
 
     match preferred_runtime_family {
-        "fem-gpu" => {
+        "fem-gpu" | "fem-eigen-gpu" => {
+            let is_fem_eigen = matches!(problem.study, fullmag_ir::StudyIR::Eigenmodes { .. });
             let fe_order = problem
                 .backend_policy
                 .discretization_hints
@@ -643,18 +651,51 @@ fn local_engine_resolution(
                 .unwrap_or(1);
             if fullmag_runner::is_native_fem_gpu_available() && fe_order == 1 {
                 (
-                    Some("fem_native_gpu".to_string()),
-                    Some("Native FEM GPU".to_string()),
+                    Some(
+                        if is_fem_eigen {
+                            "fem_eigen_native_gpu"
+                        } else {
+                            "fem_native_gpu"
+                        }
+                        .to_string(),
+                    ),
+                    Some(
+                        if is_fem_eigen {
+                            "GPU FEM Eigen"
+                        } else {
+                            "Native FEM GPU"
+                        }
+                        .to_string(),
+                    ),
                     false,
                 )
             } else {
                 (
-                    Some("fem_cpu_native".to_string()),
-                    Some("CPU FEM (MFEM)".to_string()),
+                    Some(
+                        if is_fem_eigen {
+                            "fem_eigen_cpu_baseline"
+                        } else {
+                            "fem_cpu_native"
+                        }
+                        .to_string(),
+                    ),
+                    Some(
+                        if is_fem_eigen {
+                            "CPU FEM Eigen Baseline"
+                        } else {
+                            "CPU FEM (MFEM/libCEED/hypre)"
+                        }
+                        .to_string(),
+                    ),
                     explicit_selection,
                 )
             }
         }
+        "fem-eigen-cpu-baseline" => (
+            Some("fem_eigen_cpu_baseline".to_string()),
+            Some("CPU FEM Eigen Baseline".to_string()),
+            false,
+        ),
         "fdm-cuda" => {
             if fullmag_runner::is_native_fdm_cuda_available() {
                 (
@@ -671,11 +712,18 @@ fn local_engine_resolution(
             }
         }
         _ => match resolved_backend {
-            BackendTarget::Fem => (
-                Some("fem_cpu_native".to_string()),
-                Some("CPU FEM (MFEM)".to_string()),
-                false,
-            ),
+            BackendTarget::Fem => match problem.study {
+                fullmag_ir::StudyIR::Eigenmodes { .. } => (
+                    Some("fem_eigen_cpu_baseline".to_string()),
+                    Some("CPU FEM Eigen Baseline".to_string()),
+                    false,
+                ),
+                _ => (
+                    Some("fem_cpu_native".to_string()),
+                    Some("CPU FEM (MFEM/libCEED/hypre)".to_string()),
+                    false,
+                ),
+            },
             _ => (
                 Some("fdm_cpu_reference".to_string()),
                 Some("CPU FDM".to_string()),
@@ -1137,7 +1185,7 @@ mod tests {
         assert_eq!(resolved_backend, BackendTarget::Fem);
 
         let (engine_id, engine_label, requires_managed_runtime) =
-            local_engine_resolution(&problem, resolved_backend, "cpu-reference", false);
+            local_engine_resolution(&problem, resolved_backend, "fem-cpu-native", false);
         if fullmag_runner::is_native_fem_time_domain_available() {
             assert!(!requires_managed_runtime);
             assert!(engine_id.is_some());
@@ -1149,5 +1197,46 @@ mod tests {
                 Some("Local time-domain FEM unavailable")
             );
         }
+    }
+
+    #[test]
+    fn preferred_runtime_family_distinguishes_fem_cpu_lanes() {
+        let time_domain = geometryless_time_domain_fem_problem();
+        assert_eq!(
+            preferred_runtime_family_for_problem(&time_domain, BackendTarget::Fem, "auto"),
+            "fem-cpu-native"
+        );
+
+        let mut eigen = geometryless_time_domain_fem_problem();
+        eigen.study = fullmag_ir::StudyIR::Eigenmodes {
+            dynamics: eigen.study.dynamics().clone(),
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            count: 4,
+            target: fullmag_ir::EigenTargetIR::Lowest,
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            }),
+            normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            mode_tracking: None,
+            sampling: fullmag_ir::SamplingIR {
+                outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
+                    quantity: "eigenfrequency".to_string(),
+                }],
+            },
+        };
+        assert_eq!(
+            preferred_runtime_family_for_problem(&eigen, BackendTarget::Fem, "auto"),
+            "fem-eigen-cpu-baseline"
+        );
+        assert_eq!(
+            preferred_runtime_family_for_problem(&eigen, BackendTarget::Fem, "gpu"),
+            "fem-eigen-gpu"
+        );
     }
 }

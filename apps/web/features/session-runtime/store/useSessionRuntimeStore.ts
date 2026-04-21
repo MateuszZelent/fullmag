@@ -73,11 +73,10 @@ interface SessionRuntimeStoreState {
   previewConfig: PreviewConfig | null;
   latestFieldFrames: Record<string, LatestFieldFrame>;
   latestFieldGrid: [number, number, number] | null;
-  /** Canonical field-frame envelope (synthesized from legacy state). */
+  /** Canonical field-frame envelope synthesized from current runtime state. */
   fieldFrameEnvelope: FieldFrameEnvelope | null;
 
   /** Timestamps */
-  bootstrapTimestamp: number | null;
   lastUpdateTimestamp: number | null;
 
   /** Actions */
@@ -116,7 +115,6 @@ const INITIAL_STATE: Omit<SessionRuntimeStoreState,
   latestFieldFrames: {},
   latestFieldGrid: null,
   fieldFrameEnvelope: null,
-  bootstrapTimestamp: null,
   lastUpdateTimestamp: null,
 };
 

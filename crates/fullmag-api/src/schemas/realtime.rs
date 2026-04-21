@@ -10,6 +10,7 @@ pub struct RealtimeResourceRevisionMap {
     pub artifacts_revision: u64,
     pub engine_log_revision: u64,
     pub display_revision: u64,
+    pub workspace_revision: u64,
     pub commands_revision: u64,
     pub stages_revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -20,6 +21,7 @@ pub struct RealtimeResourceRevisionMap {
 #[serde(rename_all = "snake_case")]
 pub enum RealtimeResourceName {
     Display,
+    Workspace,
     Fields,
     Scalars,
     Domain,

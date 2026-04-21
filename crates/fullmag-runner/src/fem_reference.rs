@@ -1,9 +1,9 @@
-//! Reference FEM helper: executes narrow FEM LLG via `fullmag-engine::fem`.
+//! FEM baseline helper: executes narrow FEM LLG via `fullmag-engine::fem`.
 //!
 //! This path is retained for tests, preview helpers, and provenance checks.
-//! The public executable FEM CPU path routes through the native MFEM backend.
+//! The public executable FEM CPU path routes through the MFEM/libCEED/hypre backend.
 //!
-//! Current narrow reference slice:
+//! Current narrow baseline slice:
 //! - precomputed `MeshIR`
 //! - `Exchange`, optional bootstrap `Demag`, and optional `Zeeman`
 //! - `LLG(heun)`
@@ -150,7 +150,7 @@ pub(crate) fn build_problem_and_state(
         })?
         .with_precession_enabled(!pure_damping_relax);
     if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
-        // Reject adaptive fields not supported by the CPU reference engine.
+        // Reject adaptive fields not supported by the internal FEM baseline engine.
         let mut unsupported = Vec::new();
         if adaptive.max_spin_rotation.is_some() {
             unsupported.push("max_spin_rotation".to_string());
@@ -161,7 +161,7 @@ pub(crate) fn build_problem_and_state(
         if !unsupported.is_empty() {
             return Err(RunError {
                 message: format!(
-                    "CPU reference FEM engine does not support adaptive parameters: {}; \
+                    "Internal FEM baseline engine does not support adaptive parameters: {}; \
                      supported: atol, rtol, dt_min, dt_max, safety, growth_limit, shrink_limit",
                     unsupported.join(", ")
                 ),
@@ -181,7 +181,7 @@ pub(crate) fn build_problem_and_state(
             shrink_limit: adaptive.shrink_limit,
         });
     }
-    // FEM-010 fix: reject interactions not supported by CPU reference engine
+    // FEM-010 fix: reject interactions not supported by the internal FEM baseline engine
     // instead of silently ignoring them.
     {
         let mut unsupported_terms = Vec::new();
@@ -222,7 +222,7 @@ pub(crate) fn build_problem_and_state(
         if !unsupported_terms.is_empty() {
             return Err(RunError {
                 message: format!(
-                    "CPU reference FEM engine does not support the following interaction terms: {}; \
+                    "Internal FEM baseline engine does not support the following interaction terms: {}; \
                      supported: exchange, demag (poisson), zeeman, interfacial_dmi, bulk_dmi. \
                      Use the native FEM GPU backend for these interactions.",
                     unsupported_terms.join(", ")
@@ -308,7 +308,7 @@ pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
         None
     };
     ExecutionProvenance {
-        execution_engine: FemBackendId::CpuReference.provenance_name().to_string(),
+        execution_engine: FemBackendId::CpuBaseline.provenance_name().to_string(),
         precision: "double".to_string(),
         demag_operator_kind: resolved_demag_realization.clone(),
         fft_backend: None,
@@ -450,7 +450,7 @@ fn execute_reference_fem_impl(
         "unbounded".to_string()
     };
     eprintln!(
-        "[fullmag-runner] reference-fem LLG loop: until={} dt_initial={:.4e} \
+        "[fullmag-runner] fem-baseline LLG loop: until={} dt_initial={:.4e} \
          max_steps={} torque_tol={}",
         until_label,
         dt,
@@ -1586,7 +1586,7 @@ mod tests {
     }
 
     #[test]
-    fn dmi_terms_are_supported_in_cpu_reference_fem() {
+    fn dmi_terms_are_supported_in_fem_baseline() {
         let mut plan = make_test_plan(false);
         plan.interfacial_dmi = Some(3e-3);
         plan.bulk_dmi = Some(2e-3);
@@ -1670,11 +1670,11 @@ mod tests {
     }
 
     #[test]
-    fn reference_provenance_defaults_implicit_demag_to_fem_poisson() {
+    fn baseline_provenance_defaults_implicit_demag_to_fem_poisson() {
         let plan = make_test_plan(true);
         let provenance = execution_provenance(&plan);
 
-        assert_eq!(provenance.execution_engine, "fem_cpu_reference");
+        assert_eq!(provenance.execution_engine, "fem_cpu_baseline_internal");
         assert_eq!(provenance.requested_demag_realization, None);
         assert_eq!(
             provenance.resolved_demag_realization.as_deref(),

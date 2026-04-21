@@ -8,10 +8,12 @@ use serde_json::Value;
 use crate::error::ApiError;
 use crate::schemas::runtime::{
     CommandDetailResource, CommandQueueStatusResource, CommandStatusResource, CurrentRunResource,
-    SolverEnergyCurrentResource, SolverEnergyHistoryResource, SolverEnergyRow, SolverStatusResource,
-    StageExecutionRecordResource, StageExecutionResource,
+    SolverEnergyCurrentResource, SolverEnergyHistoryResource, SolverEnergyRow,
+    SolverStatusResource, StageExecutionRecordResource, StageExecutionResource,
 };
-use crate::types::{AppState, CommandLifecycleState, ScalarRow, SessionStateResponse, TrackedCommandRecord};
+use crate::types::{
+    AppState, CommandLifecycleState, ScalarRow, SessionStateResponse, TrackedCommandRecord,
+};
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct EnergyHistoryQuery {
@@ -68,7 +70,9 @@ pub async fn get_current_run(
         resolved_runtime_family: snapshot.session.resolved_runtime_family.clone(),
         resolved_engine_id: snapshot.session.resolved_engine_id.clone(),
         resolved_worker: snapshot.session.resolved_worker.clone(),
-        active_stage_index: stage.and_then(|value| value.active_stage_index).map(|value| value as u32),
+        active_stage_index: stage
+            .and_then(|value| value.active_stage_index)
+            .map(|value| value as u32),
         active_stage_kind: stage.and_then(|value| value.active_stage_kind.clone()),
         total_stages: stage.map(|value| value.total_stages as u32),
     }))
@@ -205,8 +209,8 @@ pub async fn get_solver_energies_current(
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    let latest_row = latest_energy_row(snapshot)
-        .ok_or_else(|| ApiError::not_found("no solver energy data"))?;
+    let latest_row =
+        latest_energy_row(snapshot).ok_or_else(|| ApiError::not_found("no solver energy data"))?;
 
     Ok(Json(SolverEnergyCurrentResource {
         revision: snapshot.scalar_rows.len() as u64,
@@ -355,31 +359,27 @@ pub async fn get_command_detail(
 }
 
 fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
-    snapshot
-        .scalar_rows
-        .last()
-        .cloned()
-        .or_else(|| {
-            snapshot.live_state.as_ref().map(|live_state| ScalarRow {
-                step: live_state.latest_step.step,
-                time: live_state.latest_step.time,
-                solver_dt: live_state.latest_step.dt,
-                mx: 0.0,
-                my: 0.0,
-                mz: 0.0,
-                e_ex: live_state.latest_step.e_ex,
-                e_demag: live_state.latest_step.e_demag,
-                e_ext: live_state.latest_step.e_ext,
-                e_ani: live_state.latest_step.e_ani,
-                e_dmi: live_state.latest_step.e_dmi,
-                e_total: live_state.latest_step.e_total,
-                max_dm_dt: live_state.latest_step.max_dm_dt,
-                max_h_eff: live_state.latest_step.max_h_eff,
-                max_h_demag: live_state.latest_step.max_h_demag,
-                max_torque_Apm: live_state.latest_step.max_torque_Apm,
-                max_torque_T: live_state.latest_step.max_torque_T,
-            })
+    snapshot.scalar_rows.last().cloned().or_else(|| {
+        snapshot.live_state.as_ref().map(|live_state| ScalarRow {
+            step: live_state.latest_step.step,
+            time: live_state.latest_step.time,
+            solver_dt: live_state.latest_step.dt,
+            mx: 0.0,
+            my: 0.0,
+            mz: 0.0,
+            e_ex: live_state.latest_step.e_ex,
+            e_demag: live_state.latest_step.e_demag,
+            e_ext: live_state.latest_step.e_ext,
+            e_ani: live_state.latest_step.e_ani,
+            e_dmi: live_state.latest_step.e_dmi,
+            e_total: live_state.latest_step.e_total,
+            max_dm_dt: live_state.latest_step.max_dm_dt,
+            max_h_eff: live_state.latest_step.max_h_eff,
+            max_h_demag: live_state.latest_step.max_h_demag,
+            max_torque_Apm: live_state.latest_step.max_torque_Apm,
+            max_torque_T: live_state.latest_step.max_torque_T,
         })
+    })
 }
 
 fn metadata_string(metadata: Option<&Value>, path: &[&str]) -> Option<String> {

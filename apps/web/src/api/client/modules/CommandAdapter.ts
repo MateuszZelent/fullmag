@@ -1,5 +1,6 @@
 /**
- * Adapts legacy command payloads to the new CommandRequest format
+ * Normalizes loose Control Room command payloads to the structured
+ * CommandRequest format
  * expected by CommandsModule.submit().
  */
 import type {
@@ -8,10 +9,10 @@ import type {
 } from "../../types";
 
 /**
- * Converts a legacy command payload ({ kind: "pause", ... })
+ * Converts a command payload ({ kind: "pause", ... })
  * into the canonical structured CommandRequest shape.
  */
-export function adaptLegacyCommand(
+export function normalizeCommandRequest(
   payload: Record<string, unknown>,
 ): CommandRequest {
   const command = solverActionToCommand((payload.kind as string) ?? "");
@@ -63,10 +64,7 @@ export function adaptLegacyCommand(
     case "close":
       return { kind: "close" };
     default:
-      return {
-        command,
-        params: Object.keys(params).length > 0 ? params : undefined,
-      };
+      throw new Error(`unsupported command kind: ${command}`);
   }
 }
 

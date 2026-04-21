@@ -12,33 +12,11 @@ export class CommandsModule {
   async submit(
     request: CommandRequest,
     options?: RequestOptions,
-  ): Promise<CommandResponse>;
-  async submit(
-    command: string,
-    params?: Record<string, unknown>,
-    options?: RequestOptions,
-  ): Promise<CommandResponse>;
-  async submit(
-    requestOrCommand: CommandRequest | string,
-    params?: Record<string, unknown>,
-    options?: RequestOptions,
   ): Promise<CommandResponse> {
-    const requestOptions =
-      typeof requestOrCommand === "string"
-        ? options
-        : (params as RequestOptions | undefined);
-    const body =
-      typeof requestOrCommand === "string"
-        ? {
-            command: requestOrCommand,
-            params: params ?? {},
-          }
-        : requestOrCommand;
-
     return this.client.post<CommandResponse>(
       "/v1/live/current/commands",
-      body,
-      requestOptions,
+      request,
+      options,
     );
   }
 

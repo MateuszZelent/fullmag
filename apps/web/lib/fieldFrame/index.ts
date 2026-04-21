@@ -18,6 +18,6 @@ export {
   type FrameStalenessInfo,
 } from "./frameGuard";
 
-export { buildEnvelopeFromLegacyState, type EnvelopeAdapterInput } from "./envelopeAdapter";
+export { buildFieldFrameEnvelopeFromRuntimeState, type EnvelopeAdapterInput } from "./envelopeAdapter";
 
 export { useFrameStaleness } from "./useFrameStaleness";

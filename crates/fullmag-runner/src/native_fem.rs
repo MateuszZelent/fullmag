@@ -1,4 +1,4 @@
-//! Safe Rust wrapper around the native FEM GPU backend scaffold.
+//! Safe Rust wrapper around the native MFEM/libCEED FEM backend scaffold.
 //!
 //! Current stage:
 //! - stable C ABI and Rust wrapper
@@ -119,7 +119,7 @@ pub(crate) fn gpu_availability() -> GpuAvailability {
 #[cfg(feature = "fem-gpu")]
 fn single_precision_rejection(plan: &fullmag_ir::FemPlanIR) -> &'static str {
     if plan.mfem_device_string.as_deref() == Some("cpu") {
-        "native FEM CPU backend currently supports only double precision; single precision is not implemented"
+        "MFEM/libCEED/hypre CPU FEM backend currently supports only double precision; single precision is not implemented"
     } else {
         "native FEM GPU backend requires double precision; single-precision CUDA kernels are not yet implemented"
     }

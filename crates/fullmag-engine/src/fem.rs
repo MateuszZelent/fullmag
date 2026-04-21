@@ -30,8 +30,8 @@ const BARYCENTRIC_INCLUSION_EPS: f64 = 1e-9;
 /// artifacts, benchmark reports, and run metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FemBackendId {
-    /// Rust reference CPU solver (this crate).
-    CpuReference,
+    /// Rust CPU baseline solver (this crate, internal helper only).
+    CpuBaseline,
     /// MFEM-native CPU production solver.
     CpuNative,
     /// MFEM-native GPU solver.
@@ -42,7 +42,7 @@ impl FemBackendId {
     /// Canonical snake_case string used in provenance records and artifacts.
     pub fn provenance_name(self) -> &'static str {
         match self {
-            Self::CpuReference => "fem_cpu_reference",
+            Self::CpuBaseline => "fem_cpu_baseline_internal",
             Self::CpuNative => "fem_cpu_native",
             Self::GpuNative => "fem_native_gpu",
         }
@@ -50,7 +50,7 @@ impl FemBackendId {
 
     /// Whether this backend runs on the CPU.
     pub fn is_cpu(self) -> bool {
-        matches!(self, Self::CpuReference | Self::CpuNative)
+        matches!(self, Self::CpuBaseline | Self::CpuNative)
     }
 }
 

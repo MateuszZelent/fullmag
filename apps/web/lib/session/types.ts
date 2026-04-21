@@ -1241,7 +1241,7 @@ export interface UseSessionStreamResult {
   state: SessionState | null;
   connection: ConnectionStatus;
   error: string | null;
-  refresh: (options?: { forceBootstrap?: boolean }) => Promise<void>;
+  refresh: () => Promise<void>;
 }
 
 /* ── StepUpdateV2 canonical types (Q16/Q17) ── */

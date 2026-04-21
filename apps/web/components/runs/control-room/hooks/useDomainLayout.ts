@@ -11,7 +11,6 @@ import type {
   ScriptBuilderState,
   ScriptBuilderUniverseState,
   MeshWorkspaceState,
-  SessionState,
   SpatialPreviewState,
 } from "../../../../lib/session/types";
 import type {
@@ -51,7 +50,6 @@ export interface UseDomainLayoutParams {
   scriptBuilderCurrentModules: ScriptBuilderCurrentModuleEntry[];
   meshWorkspace: MeshWorkspaceState | null;
   liveState: LiveState | null;
-  state: SessionState | null;
   latestFieldGrid: [number, number, number] | null;
   spatialPreview: SpatialPreviewState | null;
   scriptBuilder: ScriptBuilderState | null;
@@ -117,7 +115,6 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
     scriptBuilderCurrentModules,
     meshWorkspace,
     liveState,
-    state,
     latestFieldGrid,
     spatialPreview,
     scriptBuilder,
@@ -431,14 +428,14 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
   const mesherCurrentSettings = (meshingCapabilities?.current_settings as Record<string, unknown> | undefined) ?? null;
 
   /* Grid */
-  const _rawSolverGrid = liveState?.grid ?? latestFieldGrid ?? state?.latest_fields.grid;
+  const _rawSolverGrid = liveState?.grid ?? latestFieldGrid;
   const solverGrid = useMemo<[number, number, number]>(
     () => [_rawSolverGrid?.[0] ?? 0, _rawSolverGrid?.[1] ?? 0, _rawSolverGrid?.[2] ?? 0] as [number, number, number],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [_rawSolverGrid?.[0], _rawSolverGrid?.[1], _rawSolverGrid?.[2]],
   );
   const _rawPreviewGrid =
-    spatialPreview?.preview_grid ?? liveState?.preview_grid ?? latestFieldGrid ?? state?.latest_fields.grid ?? solverGrid;
+    spatialPreview?.preview_grid ?? liveState?.preview_grid ?? latestFieldGrid ?? solverGrid;
   const previewGrid = useMemo<[number, number, number]>(
     () => [_rawPreviewGrid?.[0] ?? 0, _rawPreviewGrid?.[1] ?? 0, _rawPreviewGrid?.[2] ?? 0] as [number, number, number],
     // eslint-disable-next-line react-hooks/exhaustive-deps

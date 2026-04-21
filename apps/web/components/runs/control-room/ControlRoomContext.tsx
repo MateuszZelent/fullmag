@@ -15,10 +15,10 @@ import { decodeFieldVector } from "../../../src/api/codecs/fieldVectorCodec";
 import { decodeTopology } from "../../../src/api/codecs/topologyCodec";
 import { useSceneDocument } from "../../../src/hooks/resources/useSceneDocument";
 import { useStageExecution } from "../../../src/hooks/resources/useStageExecution";
+import { useWorkspaceSelection } from "../../../src/hooks/resources/useWorkspaceSelection";
 import { getLiveApiClient } from "../../../src/api/client/LiveApiClient";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
 import { useSessionRuntimeStore } from "../../../features/session-runtime/store/useSessionRuntimeStore";
-import { useCurrentLiveSnapshot } from "../../../features/session-runtime/hooks/useCurrentLiveSnapshot";
 import { useWorkspaceStore } from "../../../lib/workspace/workspace-store";
 import { useBuilderAutoSync } from "./hooks/useBuilderAutoSync";
 import { useDomainLayout } from "./hooks/useDomainLayout";
@@ -210,6 +210,18 @@ function vectorHead(values: Float64Array | null | undefined): [number, number, n
   return [values[0] ?? 0, values[1] ?? 0, values[2] ?? 0];
 }
 
+function workspaceSelectionIdentity(value: {
+  selected_node_id?: string | null;
+  selected_object_id?: string | null;
+  selected_entity_id?: string | null;
+} | null | undefined): string {
+  return JSON.stringify([
+    value?.selected_node_id ?? null,
+    value?.selected_object_id ?? null,
+    value?.selected_entity_id ?? null,
+  ]);
+}
+
 type BinaryFieldFrame = {
   key: string;
   quantityId: string;
@@ -238,16 +250,6 @@ function femMeshTransportKey(mesh: FemLiveMesh | null): string | null {
 
 /* ── Provider ── */
 export function ControlRoomProvider({ children }: { children: ReactNode }) {
-  const resourceFirstRuntimeEnabled =
-    FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.resourceFirstSessionRuntime;
-  const {
-    state,
-    connection: legacyConnection,
-    error: legacyError,
-    refresh: refreshLegacyLiveState,
-  } = useCurrentLiveSnapshot({
-    enabled: !resourceFirstRuntimeEnabled,
-  });
   const liveApi = useMemo(() => createControlRoomApi(), []);
   const runtimeConnection = useSessionRuntimeStore((s) => s.connection);
   const runtimeConnectionError = useSessionRuntimeStore((s) => s.error);
@@ -270,18 +272,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const runtimePreviewConfig = useSessionRuntimeStore((s) => s.previewConfig);
   const runtimeLatestFieldFrames = useSessionRuntimeStore((s) => s.latestFieldFrames);
   const runtimeLatestFieldGrid = useSessionRuntimeStore((s) => s.latestFieldGrid);
-  const connection = resourceFirstRuntimeEnabled ? runtimeConnection : legacyConnection;
-  const error = resourceFirstRuntimeEnabled ? runtimeConnectionError : legacyError;
+  const connection = runtimeConnection;
+  const error = runtimeConnectionError;
   const refreshLiveState = useCallback(async () => {
-    if (resourceFirstRuntimeEnabled) {
-      await getLiveApiClient().status.get();
-      return;
-    }
-    await refreshLegacyLiveState();
-  }, [refreshLegacyLiveState, resourceFirstRuntimeEnabled]);
+    await getLiveApiClient().status.get();
+  }, []);
 
   // Runtime bridge adapter: sync Control Room transport into session-runtime store.
-  useSessionRuntimeBridgeRouter({ state, connection, error });
+  useSessionRuntimeBridgeRouter();
 
   /* ── Local UI state ── */
   const workspaceMode = useWorkspaceStore((s) => s.currentStage);
@@ -418,25 +416,31 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setViewMode(inferredMode);
   }, [activeWorkspaceTab, viewMode]);
 
-  /* ── Derived from SSE state ── */
-  const session = resourceFirstRuntimeEnabled
-    ? (runtimeSession ?? state?.session ?? null)
-    : (state?.session ?? null);
+  /* ── Derived runtime state ── */
+  const session = runtimeSession;
   const sceneResourceSessionKey =
     runtimeSession?.session_id ??
     session?.session_id ??
     null;
   const { document: resourceSceneDocument } = useSceneDocument({
-    enabled: resourceFirstRuntimeEnabled,
+    enabled: true,
     sessionKey: sceneResourceSessionKey,
   });
   const { stageExecution: resourceStageExecution } = useStageExecution({
-    enabled: resourceFirstRuntimeEnabled,
+    enabled: true,
     sessionKey: sceneResourceSessionKey,
   });
-  const metadata = resourceFirstRuntimeEnabled
-    ? runtimeMetadata
-    : ((state?.metadata as Record<string, unknown> | null) ?? null);
+  const {
+    selection: workspaceSelection,
+    loading: workspaceSelectionLoading,
+    replaceSelection: replaceWorkspaceSelection,
+  } = useWorkspaceSelection({
+    enabled: true,
+    sessionKey: sceneResourceSessionKey,
+  });
+  const workspaceSelectionHydratingRef = useRef(false);
+  const lastPersistedWorkspaceSelectionRef = useRef<string | null>(null);
+  const metadata = runtimeMetadata;
   const problemMeta =
     metadata?.problem_meta && typeof metadata.problem_meta === "object"
       ? (metadata.problem_meta as Record<string, unknown>)
@@ -512,26 +516,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     },
     [resultWorkspaceEntries],
   );
-  const run = resourceFirstRuntimeEnabled
-    ? (runtimeRun ?? state?.run ?? null)
-    : (state?.run ?? null);
-  const liveState = resourceFirstRuntimeEnabled
-    ? (runtimeLiveState ?? state?.live_state ?? null)
-    : (state?.live_state ?? null);
-  const displaySelection = resourceFirstRuntimeEnabled
-    ? runtimeDisplaySelection
-    : (state?.display_selection ?? null);
-  const previewConfig = resourceFirstRuntimeEnabled
-    ? runtimePreviewConfig
-    : (state?.preview_config ?? null);
-  const preview = resourceFirstRuntimeEnabled
-    ? (runtimePreview ?? state?.preview ?? null)
-    : (state?.preview ?? null);
+  const run = runtimeRun;
+  const liveState = runtimeLiveState;
+  const displaySelection = runtimeDisplaySelection;
+  const previewConfig = runtimePreviewConfig;
+  const preview = runtimePreview;
   const spatialPreview = preview?.kind === "spatial" ? preview : null;
   const globalScalarPreview = preview?.kind === "global_scalar" ? preview : null;
-  const streamFemMesh = resourceFirstRuntimeEnabled
-    ? (runtimeFemMesh ?? state?.fem_mesh ?? liveState?.fem_mesh ?? null)
-    : (state?.fem_mesh ?? liveState?.fem_mesh ?? null);
+  const streamFemMesh = runtimeFemMesh ?? liveState?.fem_mesh ?? null;
   const binaryFemTopologyTransportEnabled =
     FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFemTopologyTransport;
   const femMeshTopologyCacheRef = useRef<Map<string, FemLiveMesh>>(new Map());
@@ -623,20 +615,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     hydratedFemMesh && streamFemMeshKey && femMeshTransportKey(hydratedFemMesh) === streamFemMeshKey
       ? hydratedFemMesh
       : streamFemMesh;
-  const remoteSceneDocument = resourceSceneDocument ?? (!resourceFirstRuntimeEnabled
-    ? (state?.scene_document ?? null)
-    : null);
+  const remoteSceneDocument = resourceSceneDocument;
   const meshConfigSignature = useMemo(
     () => buildMeshConfigurationSignature(sceneDocumentDraft ?? remoteSceneDocument),
     [remoteSceneDocument, sceneDocumentDraft],
   );
   meshConfigSignatureRef.current = meshConfigSignature;
-  const scriptBuilder = resourceFirstRuntimeEnabled
-    ? runtimeScriptBuilder
-    : (state?.script_builder ?? null);
-  const remoteModelBuilderGraph = resourceFirstRuntimeEnabled
-    ? null
-    : (state?.model_builder_graph ?? null);
+  const scriptBuilder = runtimeScriptBuilder;
+  const remoteModelBuilderGraph = null as ModelBuilderGraphV2 | null;
   const scriptInitialState = scriptBuilder?.initial_state ?? null;
   const studyStages = useMemo(
     () => selectModelBuilderStages(modelBuilderGraph),
@@ -666,21 +652,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     () => selectModelBuilderExcitationAnalysis(modelBuilderGraph),
     [modelBuilderGraph],
   );
-  const runtimeStatus = resourceFirstRuntimeEnabled
-    ? runtimeRuntimeStatus
-    : (state?.runtime_status ?? null);
-  const commandStatus = resourceFirstRuntimeEnabled
-    ? runtimeCommandStatus
-    : (state?.command_status ?? null);
-  const stageExecution = resourceFirstRuntimeEnabled
-    ? resourceStageExecution
-    : (state?.stage_execution ?? null);
-  const capabilities = resourceFirstRuntimeEnabled ? null : (state?.capabilities ?? null);
+  const runtimeStatus = runtimeRuntimeStatus;
+  const commandStatus = runtimeCommandStatus;
+  const stageExecution = resourceStageExecution;
+  const capabilities = null;
   // Reference-stable scalarRows: only changes ref when the history tip changes.
   // This prevents cascading useMemo invalidation on unrelated runtime ticks.
-  const rawScalarRows = resourceFirstRuntimeEnabled
-    ? (runtimeScalarRows.length > 0 ? runtimeScalarRows : (state?.scalar_rows ?? EMPTY_SCALAR_ROWS))
-    : (state?.scalar_rows ?? EMPTY_SCALAR_ROWS);
+  const rawScalarRows = runtimeScalarRows.length > 0 ? runtimeScalarRows : EMPTY_SCALAR_ROWS;
   const stableScalarRowsRef = useRef(rawScalarRows);
   const scalarRowsFingerprintRef = useRef("");
   const scalarRowsFp = scalarRowsTipFingerprint(rawScalarRows);
@@ -689,22 +667,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     stableScalarRowsRef.current = rawScalarRows;
   }
   const scalarRows = stableScalarRowsRef.current;
-  const scalarRowsTotal =
-    !resourceFirstRuntimeEnabled && typeof state?.scalar_rows_total === "number"
-      ? state.scalar_rows_total
-      : scalarRows.length;
-  const engineLog = resourceFirstRuntimeEnabled
-    ? (runtimeEngineLog.length > 0 ? runtimeEngineLog : (state?.engine_log ?? EMPTY_ENGINE_LOG))
-    : (state?.engine_log ?? EMPTY_ENGINE_LOG);
-  const quantities = resourceFirstRuntimeEnabled
-    ? (runtimeQuantities.length > 0 ? runtimeQuantities : (state?.quantities ?? EMPTY_QUANTITIES))
-    : (state?.quantities ?? EMPTY_QUANTITIES);
-  const artifactsArr = resourceFirstRuntimeEnabled
-    ? (runtimeArtifacts.length > 0 ? runtimeArtifacts : (state?.artifacts ?? EMPTY_ARTIFACTS))
-    : (state?.artifacts ?? EMPTY_ARTIFACTS);
-  const meshWorkspace = resourceFirstRuntimeEnabled
-    ? (runtimeMeshWorkspace ?? ((state?.mesh_workspace as MeshWorkspaceState | null) ?? null))
-    : ((state?.mesh_workspace as MeshWorkspaceState | null) ?? null);
+  const scalarRowsTotal = scalarRows.length;
+  const engineLog = runtimeEngineLog.length > 0 ? runtimeEngineLog : EMPTY_ENGINE_LOG;
+  const quantities = runtimeQuantities.length > 0 ? runtimeQuantities : EMPTY_QUANTITIES;
+  const artifactsArr = runtimeArtifacts.length > 0 ? runtimeArtifacts : EMPTY_ARTIFACTS;
+  const meshWorkspace = runtimeMeshWorkspace as MeshWorkspaceState | null;
   // Derive quality data from the session-carried summary (P1-1 fix).
   const meshQualityData = useMemo<MeshQualityData | null>(() => {
     const s = meshWorkspace?.mesh_quality_summary;
@@ -819,7 +786,43 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setFdmVisualizationSettings(DEFAULT_FDM_VISUALIZATION_SETTINGS);
     setActiveVisualizationPresetRef(null);
     lastAppliedVisualizationPresetRef.current = null;
+    lastPersistedWorkspaceSelectionRef.current = null;
+    workspaceSelectionHydratingRef.current = false;
   }, [workspaceHydrationKey]);
+
+  useEffect(() => {
+    if (!sceneResourceSessionKey) {
+      lastPersistedWorkspaceSelectionRef.current = null;
+      workspaceSelectionHydratingRef.current = false;
+      return;
+    }
+    if (!workspaceSelection) {
+      return;
+    }
+    const nextIdentity = workspaceSelectionIdentity(workspaceSelection);
+    lastPersistedWorkspaceSelectionRef.current = nextIdentity;
+    const currentIdentity = workspaceSelectionIdentity({
+      selected_node_id: selectedSidebarNodeId,
+      selected_object_id: selectedObjectId,
+      selected_entity_id: selectedEntityId,
+    });
+    if (currentIdentity === nextIdentity) {
+      return;
+    }
+    workspaceSelectionHydratingRef.current = true;
+    setSelectedSidebarNodeId(workspaceSelection.selected_node_id ?? null);
+    setSelectedObjectId(workspaceSelection.selected_object_id ?? null);
+    setSelectedEntityId(workspaceSelection.selected_entity_id ?? null);
+    queueMicrotask(() => {
+      workspaceSelectionHydratingRef.current = false;
+    });
+  }, [
+    sceneResourceSessionKey,
+    selectedEntityId,
+    selectedObjectId,
+    selectedSidebarNodeId,
+    workspaceSelection,
+  ]);
 
   useEffect(() => {
     const scope = resolveViewportScope(
@@ -1168,7 +1171,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setSceneDocumentDraft(hydratedScene);
     setLastBuiltMeshConfigSignature(buildMeshConfigurationSignature(hydratedScene));
     pendingMeshConfigSignatureRef.current = null;
-    setSelectedObjectId(hydratedScene.editor.selected_object_id);
+    setSelectedObjectId(
+      workspaceSelection?.selected_object_id ?? hydratedScene.editor.selected_object_id,
+    );
     setObjectViewMode(normalizePersistedObjectViewMode(hydratedScene.editor.object_view_mode));
     setFemVectorDomainFilter(hydratedScene.editor.vector_domain_filter ?? "auto");
     setFemFerromagnetVisibilityMode(
@@ -1188,7 +1193,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setMeshEntityViewState(
       normalizePersistedMeshEntityViewState(hydratedScene.editor.mesh_entity_view_state),
     );
-    setSelectedEntityId(hydratedScene.editor.selected_entity_id);
+    setSelectedEntityId(
+      workspaceSelection?.selected_entity_id ?? hydratedScene.editor.selected_entity_id,
+    );
     setFocusedEntityId(hydratedScene.editor.focused_entity_id);
     setActiveVisualizationPresetRef(
       normalizeVisualizationPresetRef(hydratedScene.editor.active_visualization_preset_ref),
@@ -1219,7 +1226,39 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     remoteModelBuilderGraph,
     scriptBuilder,
     solverSettings,
+    workspaceSelection,
     workspaceHydrationKey,
+  ]);
+
+  useEffect(() => {
+    if (!sceneResourceSessionKey || workspaceSelectionLoading || workspaceSelectionHydratingRef.current) {
+      return;
+    }
+    const nextIdentity = workspaceSelectionIdentity({
+      selected_node_id: selectedSidebarNodeId,
+      selected_object_id: selectedObjectId,
+      selected_entity_id: selectedEntityId,
+    });
+    if (lastPersistedWorkspaceSelectionRef.current === nextIdentity) {
+      return;
+    }
+    lastPersistedWorkspaceSelectionRef.current = nextIdentity;
+    void replaceWorkspaceSelection({
+      selected_node_id: selectedSidebarNodeId,
+      selected_object_id: selectedObjectId,
+      selected_entity_id: selectedEntityId,
+    }).then((persisted) => {
+      if (persisted) {
+        lastPersistedWorkspaceSelectionRef.current = workspaceSelectionIdentity(persisted);
+      }
+    });
+  }, [
+    replaceWorkspaceSelection,
+    sceneResourceSessionKey,
+    selectedEntityId,
+    selectedObjectId,
+    selectedSidebarNodeId,
+    workspaceSelectionLoading,
   ]);
 
   useEffect(() => {
@@ -1456,10 +1495,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     scriptBuilderCurrentModules,
     meshWorkspace,
     liveState,
-    state,
-    latestFieldGrid: resourceFirstRuntimeEnabled
-      ? runtimeLatestFieldGrid
-      : (state?.latest_fields.grid ?? null),
+    latestFieldGrid: runtimeLatestFieldGrid,
     spatialPreview,
     scriptBuilder,
     runtimeStatus,
@@ -1511,7 +1547,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     currentPreviewRevision != null &&
     preview.config_revision !== currentPreviewRevision,
   );
-  const previewIsBootstrapStale = Boolean(previewControlsActive && preview && effectiveStep > 0 && preview.source_step === 0);
+  const previewIsInitialSampleStale = Boolean(
+    previewControlsActive && preview && effectiveStep > 0 && preview.source_step === 0,
+  );
   const displaySelectionPending = optimisticDisplaySelection != null;
   const previewBusy = previewPostInFlight || displaySelectionPending;
   const renderPreview = spatialPreview;
@@ -1573,12 +1611,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   // Used by requestPreviewQuantity and applyVisualizationPreset to skip
   // the control-plane POST when the field is already in memory.
   const cachedFieldQuantities = useMemo<ReadonlySet<string>>(() => {
-    const frames = resourceFirstRuntimeEnabled
-      ? runtimeLatestFieldFrames
-      : (state?.latest_fields?.frames ?? null);
+    const frames = runtimeLatestFieldFrames;
     if (!frames) return new Set<string>();
     return new Set(Object.keys(frames));
-  }, [resourceFirstRuntimeEnabled, runtimeLatestFieldFrames, state?.latest_fields?.frames]);
+  }, [runtimeLatestFieldFrames]);
 
   const {
     handleCompute,
@@ -1776,9 +1812,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     if (requestedPreviewQuantity) setSelectedQuantity(requestedPreviewQuantity);
   }, [requestedPreviewQuantity]);
 
-  const latestFieldFrames = resourceFirstRuntimeEnabled
-    ? runtimeLatestFieldFrames
-    : (state?.latest_fields.frames ?? {});
+  const latestFieldFrames = runtimeLatestFieldFrames;
   const binaryFieldTransportEnabled =
     FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFieldTransport;
   const binaryFieldCacheRef = useRef<Map<string, BinaryFieldFrame>>(new Map());
@@ -2225,7 +2259,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     requestedPreviewAllLayers, requestedPreviewEveryN,
     requestedPreviewXChosenSize, requestedPreviewYChosenSize, requestedPreviewAutoScale,
     requestedPreviewMaxPoints, previewEveryNOptions, previewMaxPointOptions,
-    previewIsStale, previewIsBootstrapStale,
+    previewIsStale, previewIsInitialSampleStale,
     setViewMode, setComponent, setPlane, setSliceIndex, setSelectedQuantity,
     setConsoleCollapsed, setSidebarCollapsed,
     updatePreview, handleViewModeChange, handleCapture, handleExport, requestPreviewQuantity,
@@ -2243,7 +2277,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     requestedPreviewAllLayers, requestedPreviewEveryN,
     requestedPreviewXChosenSize, requestedPreviewYChosenSize, requestedPreviewAutoScale,
     requestedPreviewMaxPoints, previewEveryNOptions, previewMaxPointOptions,
-    previewIsStale, previewIsBootstrapStale,
+    previewIsStale, previewIsInitialSampleStale,
     updatePreview, handleViewModeChange, handleCapture, handleExport, requestPreviewQuantity,
   ]);
 
@@ -2409,9 +2443,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     resetViewportDisplayState,
   ]);
 
-  const controlRoomReady = resourceFirstRuntimeEnabled
-    ? (connection !== "connecting" && (session != null || remoteSceneDocument != null || error != null))
-    : state != null;
+  const controlRoomReady =
+    connection !== "connecting" &&
+    (session != null || remoteSceneDocument != null || error != null);
 
   if (!controlRoomReady) {
     return (

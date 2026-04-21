@@ -7,12 +7,8 @@ use axum::http::HeaderMap;
 use axum::Json;
 
 use crate::error::ApiError;
-use crate::schemas::commands::{
-    CommandRequest, CommandResponse, LegacyCommandRequest, StructuredCommandRequest,
-};
-use crate::types::{
-    AppState, CommandLifecycleState, MeshCommandTarget, SessionCommand, TrackedCommandRecord,
-};
+use crate::schemas::commands::{CommandResponse, StructuredCommandRequest};
+use crate::types::{AppState, CommandLifecycleState, SessionCommand, TrackedCommandRecord};
 
 #[utoipa::path(
     post,
@@ -27,8 +23,17 @@ use crate::types::{
 pub async fn submit_command(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(req): Json<CommandRequest>,
+    Json(req): Json<StructuredCommandRequest>,
 ) -> Result<Json<CommandResponse>, ApiError> {
+    let response = submit_structured_command_impl(state, &headers, req).await?;
+    Ok(Json(response))
+}
+
+pub(crate) async fn submit_structured_command_impl(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    req: StructuredCommandRequest,
+) -> Result<CommandResponse, ApiError> {
     let _guard = state.current_live_state.read().await;
     if _guard.is_none() {
         return Err(ApiError::not_found("no active local live workspace"));
@@ -44,7 +49,7 @@ pub async fn submit_command(
                 .map(|(_, response)| response.clone())
         };
         if let Some(response) = cached {
-            return Ok(Json(response));
+            return Ok(response);
         }
     }
 
@@ -54,10 +59,7 @@ pub async fn submit_command(
         .map(|d| d.as_millis())
         .unwrap_or(0);
 
-    let command = match req {
-        CommandRequest::Structured(req) => command_from_structured(req, command_id.clone(), now),
-        CommandRequest::Legacy(req) => command_from_legacy(req, command_id.clone(), now)?,
-    };
+    let command = command_from_structured(req, command_id.clone(), now);
 
     // Enqueue
     let seq = {
@@ -109,7 +111,7 @@ pub async fn submit_command(
             .await?;
     }
 
-    Ok(Json(response))
+    Ok(response)
 }
 
 fn command_request_key(headers: &HeaderMap) -> Option<String> {
@@ -222,55 +224,4 @@ fn command_from_structured(
             new_session_command(command_id, "close", created_at_unix_ms)
         }
     }
-}
-
-fn command_from_legacy(
-    req: LegacyCommandRequest,
-    command_id: String,
-    created_at_unix_ms: u128,
-) -> Result<SessionCommand, ApiError> {
-    let mesh_target = req
-        .params
-        .get("mesh_target")
-        .cloned()
-        .map(serde_json::from_value::<MeshCommandTarget>)
-        .transpose()
-        .map_err(|error| ApiError::bad_request(format!("invalid mesh_target: {error}")))?;
-
-    let mut command = new_session_command(command_id, &req.command, created_at_unix_ms);
-    command.until_seconds = req.params.get("until_seconds").and_then(|v| v.as_f64());
-    command.max_steps = req.params.get("max_steps").and_then(|v| v.as_u64());
-    command.torque_tolerance = req.params.get("torque_tolerance").and_then(|v| v.as_f64());
-    command.energy_tolerance = req.params.get("energy_tolerance").and_then(|v| v.as_f64());
-    command.integrator = req
-        .params
-        .get("integrator")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    command.fixed_timestep = req.params.get("fixed_timestep").and_then(|v| v.as_f64());
-    command.max_error = req.params.get("max_error").and_then(|v| v.as_f64());
-    command.relax_algorithm = req
-        .params
-        .get("relax_algorithm")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    command.relax_alpha = req.params.get("relax_alpha").and_then(|v| v.as_f64());
-    command.mesh_options = req.params.get("mesh_options").cloned();
-    command.mesh_target = mesh_target;
-    command.mesh_reason = req
-        .params
-        .get("mesh_reason")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    command.state_path = req
-        .params
-        .get("state_path")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    command.state_format = req
-        .params
-        .get("state_format")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    Ok(command)
 }

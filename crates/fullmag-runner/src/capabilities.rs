@@ -9,7 +9,7 @@ pub enum RuntimeEngineId {
     FdmCuda,
     FemCpuNative,
     FemNativeGpu,
-    FemEigenCpuReference,
+    FemEigenCpuBaseline,
     FemEigenNativeGpu,
 }
 
@@ -20,7 +20,7 @@ impl RuntimeEngineId {
             Self::FdmCuda => "fdm_cuda",
             Self::FemCpuNative => "fem_cpu_native",
             Self::FemNativeGpu => "fem_native_gpu",
-            Self::FemEigenCpuReference => "fem_eigen_cpu_reference",
+            Self::FemEigenCpuBaseline => "fem_eigen_cpu_baseline",
             Self::FemEigenNativeGpu => "fem_eigen_native_gpu",
         }
     }
@@ -244,7 +244,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
 pub(crate) fn capabilities_for_fem_eigen_engine(engine: FemEngine) -> BackendCapabilities {
     let mut capabilities = capabilities_for_fem_engine(engine);
     capabilities.engine_id = match engine {
-        FemEngine::CpuNative => RuntimeEngineId::FemEigenCpuReference,
+        FemEngine::CpuNative => RuntimeEngineId::FemEigenCpuBaseline,
         FemEngine::NativeGpu => RuntimeEngineId::FemEigenNativeGpu,
     };
     capabilities
@@ -262,7 +262,7 @@ mod tests {
         let fem_eigen_gpu = capabilities_for_fem_eigen_engine(FemEngine::NativeGpu);
 
         assert_eq!(fem_cpu.engine_id.as_str(), "fem_cpu_native");
-        assert_eq!(fem_eigen_cpu.engine_id.as_str(), "fem_eigen_cpu_reference");
+        assert_eq!(fem_eigen_cpu.engine_id.as_str(), "fem_eigen_cpu_baseline");
         assert_eq!(fem_gpu.engine_id.as_str(), "fem_native_gpu");
         assert_eq!(fem_eigen_gpu.engine_id.as_str(), "fem_eigen_native_gpu");
 

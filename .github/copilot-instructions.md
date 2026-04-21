@@ -12,6 +12,7 @@
 - UI-authored simulations must be exportable as canonical, human-editable Python scripts.
 - The shared API must describe physics and runtime truth, not grid internals, raw GPU arrays, or FEM-only implementation details.
 - The canonical local browser contract is resource-first: thin `status`, on-demand resources, JSON control plane, binary data plane.
+- `POST /v1/live/current/commands` should use the structured discriminated `kind` union body, not loose `command + params`.
 - Frontend components should go through one typed API client and one resource-hook layer; avoid direct `fetch()` calls in React components.
 - FDM/FEM control-room differences belong in capability guards and domain adapters, not duplicated UI trees.
 - Current execution priority is calibrated GPU-first FDM/CUDA, but the product shell must remain modular and backend-neutral enough for explicit CPU/GPU and FDM/FEM selection.

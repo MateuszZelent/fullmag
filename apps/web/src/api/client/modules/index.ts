@@ -12,6 +12,8 @@ export { LogsModule } from "./LogsModule";
 export { SystemModule } from "./SystemModule";
 export { QuantitiesModule } from "./QuantitiesModule";
 export { SceneModule } from "./SceneModule";
+export { WorkspaceModule } from "./WorkspaceModule";
+export { MeshModule } from "./MeshModule";
 export { RunsModule } from "./RunsModule";
 export { StagesModule } from "./StagesModule";
 export { SolverModule } from "./SolverModule";

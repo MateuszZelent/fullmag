@@ -2,8 +2,8 @@
  * @module lib/fieldFrame/envelopeAdapter
  *
  * Builds a FieldFrameEnvelope from existing session runtime state.
- * This is the bridge between the legacy live-state model and the
- * new canonical envelope contract (FEM-DP-001, PR-4).
+ * This is the bridge between the current session-runtime store and the
+ * canonical envelope contract (FEM-DP-001, PR-4).
  *
  * Once the backend publishes envelopes natively, this adapter
  * becomes a passthrough and can eventually be removed.
@@ -23,18 +23,18 @@ export interface EnvelopeAdapterInput {
   preview: PreviewState | null;
   stepUpdateV2: StepUpdateV2 | null;
   domainCapabilities?: CapabilityMap | null;
-  legacyFemBackend: boolean;
+  fallbackFemDiscretization: boolean;
   /** Currently selected quantity. */
   quantityId: string;
 }
 
 /**
- * Synthesize a FieldFrameEnvelope from legacy session state.
+ * Synthesize a FieldFrameEnvelope from current session runtime state.
  *
  * Returns null when insufficient data is available to construct
  * a meaningful envelope (no session, no live state, etc.).
  */
-export function buildEnvelopeFromLegacyState(
+export function buildFieldFrameEnvelopeFromRuntimeState(
   input: EnvelopeAdapterInput,
 ): FieldFrameEnvelope | null {
   const {
@@ -45,7 +45,7 @@ export function buildEnvelopeFromLegacyState(
     preview,
     stepUpdateV2,
     domainCapabilities,
-    legacyFemBackend,
+    fallbackFemDiscretization,
     quantityId,
   } =
     input;
@@ -84,12 +84,15 @@ export function buildEnvelopeFromLegacyState(
       : quantityDomain === "surface_only"
         ? "surface_only"
         : "magnetic_only";
-  const femDiscretization = resolveFemDiscretization(domainCapabilities, legacyFemBackend);
+  const femDiscretization = resolveFemDiscretization(
+    domainCapabilities,
+    fallbackFemDiscretization,
+  );
 
   return {
     sessionId,
     runId,
-    backendEpoch: 0, // Legacy path has no epoch concept — always 0
+    backendEpoch: 0, // Session-runtime fallback path has no epoch concept yet.
     meshGenerationId,
     topologyHash: null,
     fieldRevision: sourceStep > 0 ? sourceStep : (configRevision || 1),
