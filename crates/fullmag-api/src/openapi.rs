@@ -5,6 +5,9 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::router_v1::handlers::realtime::get_asyncapi_document,
+        crate::router_v1::handlers::realtime::get_asyncapi_docs,
+        crate::router_v1::handlers::realtime::ws_current_live,
         crate::router_v1::handlers::status::get_status,
         crate::router_v1::handlers::domain::get_domain_meta,
         crate::router_v1::handlers::domain::get_domain_topology,
@@ -26,6 +29,8 @@ use utoipa::OpenApi;
         crate::router_v1::handlers::authoring::patch_authoring_study_runtime,
         crate::router_v1::handlers::authoring::get_authoring_material,
         crate::router_v1::handlers::authoring::patch_authoring_material,
+        crate::router_v1::handlers::authoring::get_authoring_object_interaction,
+        crate::router_v1::handlers::authoring::patch_authoring_object_interaction,
         crate::router_v1::handlers::authoring::get_authoring_script_source,
         crate::router_v1::handlers::authoring::sync_authoring_script,
         crate::router_v1::handlers::commands::submit_command,
@@ -85,10 +90,14 @@ use utoipa::OpenApi;
         crate::schemas::authoring::AuthoringTransactionResponse,
         crate::schemas::authoring::StudyRuntimeResource,
         crate::schemas::authoring::StudyRuntimePatchRequest,
+        crate::schemas::authoring::NullableU32PatchValue,
+        crate::schemas::authoring::NullableF64PatchValue,
         crate::schemas::authoring::MaterialPropertiesResource,
         crate::schemas::authoring::MaterialResource,
         crate::schemas::authoring::MaterialPropertiesPatchRequest,
         crate::schemas::authoring::MaterialPatchRequest,
+        crate::schemas::authoring::ObjectInteractionResource,
+        crate::schemas::authoring::ObjectInteractionPatchRequest,
         crate::schemas::runtime::CurrentRunResource,
         crate::schemas::runtime::StageExecutionResource,
         crate::schemas::runtime::StageExecutionRecordResource,
@@ -130,6 +139,7 @@ use utoipa::OpenApi;
     )),
     tags(
         (name = "status", description = "Live status summary"),
+        (name = "realtime", description = "Realtime websocket discovery and AsyncAPI draft"),
         (name = "domain", description = "Domain / mesh metadata"),
         (name = "quantities", description = "Quantity catalog"),
         (name = "fields", description = "Field catalog and data"),

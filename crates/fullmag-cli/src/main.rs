@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use fullmag_engine::run_reference_exchange_demo;
-use fullmag_ir::{BackendTarget, ProblemIR};
+use fullmag_ir::{BackendPlanIR, BackendTarget, ProblemIR};
 use serde_json::Value;
 use std::ffi::OsString;
 
@@ -612,6 +612,26 @@ fn local_engine_resolution(
     preferred_runtime_family: &str,
     explicit_selection: bool,
 ) -> (Option<String>, Option<String>, bool) {
+    let planned_backend = fullmag_plan::plan(problem).ok().map(|plan| plan.backend_plan);
+    let is_time_domain_fem = matches!(planned_backend.as_ref(), Some(BackendPlanIR::Fem(_)))
+        || (planned_backend.is_none()
+            && resolved_backend == BackendTarget::Fem
+            && matches!(
+                problem.study,
+                fullmag_ir::StudyIR::TimeEvolution { .. }
+                    | fullmag_ir::StudyIR::Relaxation { .. }
+            ));
+    let local_time_domain_fem_unavailable =
+        is_time_domain_fem && !fullmag_runner::is_native_fem_time_domain_available();
+
+    if local_time_domain_fem_unavailable {
+        return (
+            None,
+            Some("Local time-domain FEM unavailable".to_string()),
+            true,
+        );
+    }
+
     match preferred_runtime_family {
         "fem-gpu" => {
             let fe_order = problem
@@ -670,10 +690,73 @@ mod tests {
     use super::*;
     use crate::diagnostics::diagnose_initial_fdm_plan;
     use fullmag_ir::{
-        BackendPlanIR, BackendTarget, ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR,
-        FemPlanIR, GridDimensions, IntegratorChoice, MaterialIR, MeshIR, RelaxationAlgorithmIR,
-        RelaxationControlIR,
+        BackendPlanIR, BackendTarget, DiscretizationHintsIR, ExchangeBoundaryCondition,
+        ExecutionPrecision, FdmHintsIR, FdmMaterialIR, FemDomainMeshAssetIR,
+        FemDomainRegionMarkerIR, FemHintsIR, FemPlanIR, GeometryAssetsIR, GridDimensions,
+        IntegratorChoice, MaterialIR, MeshIR, RelaxationAlgorithmIR, RelaxationControlIR,
     };
+
+    fn shared_domain_fem_problem() -> ProblemIR {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+            fdm: Some(FdmHintsIR {
+                cell: [2e-9, 2e-9, 5e-9],
+                default_cell: None,
+                per_magnet: None,
+                demag: None,
+                boundary_correction: None,
+                boundary_phi_floor: None,
+                boundary_delta_min: None,
+            }),
+            fem: Some(FemHintsIR {
+                order: 1,
+                hmax: 2e-9,
+                mesh: None,
+                demag_solver_policy: None,
+            }),
+            hybrid: None,
+        });
+        problem.geometry_assets = Some(GeometryAssetsIR {
+            fdm_grid_assets: vec![],
+            fem_mesh_assets: vec![],
+            fem_domain_mesh_asset: Some(FemDomainMeshAssetIR {
+                mesh_source: None,
+                mesh: Some(MeshIR {
+                    mesh_name: "strip".to_string(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                        [-2.0, -2.0, -2.0],
+                        [2.0, -2.0, -2.0],
+                        [-2.0, 2.0, -2.0],
+                        [-2.0, -2.0, 2.0],
+                    ],
+                    elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                    element_markers: vec![1, 0],
+                    boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                    boundary_markers: vec![1, 99],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: Default::default(),
+                }),
+                region_markers: vec![FemDomainRegionMarkerIR {
+                    geometry_name: "strip".to_string(),
+                    marker: 1,
+                }],
+                build_report: None,
+            }),
+        });
+        problem
+    }
+
+    fn geometryless_time_domain_fem_problem() -> ProblemIR {
+        let mut problem = shared_domain_fem_problem();
+        problem.geometry_assets = None;
+        problem
+    }
 
     #[test]
     fn initial_step_update_bootstraps_fdm_grid_and_magnetization() {
@@ -1023,10 +1106,48 @@ mod tests {
     }
 
     #[test]
-    fn local_engine_resolution_does_not_require_managed_runtime_without_explicit_selection() {
-        let problem = ProblemIR::bootstrap_example();
-        let (_engine_id, _engine_label, requires_managed_runtime) =
+    fn local_engine_resolution_matches_local_fem_availability() {
+        let problem = shared_domain_fem_problem();
+        assert!(matches!(
+            fullmag_plan::plan(&problem)
+                .expect("shared-domain FEM fixture should plan successfully")
+                .backend_plan,
+            BackendPlanIR::Fem(_)
+        ));
+
+        let (engine_id, engine_label, requires_managed_runtime) =
             local_engine_resolution(&problem, BackendTarget::Fem, "fem-gpu", false);
-        assert!(!requires_managed_runtime);
+        if fullmag_runner::is_native_fem_time_domain_available() {
+            assert!(!requires_managed_runtime);
+            assert!(engine_id.is_some());
+        } else {
+            assert!(requires_managed_runtime);
+            assert!(engine_id.is_none());
+            assert_eq!(
+                engine_label.as_deref(),
+                Some("Local time-domain FEM unavailable")
+            );
+        }
+    }
+
+    #[test]
+    fn local_engine_resolution_flags_geometryless_time_domain_fem() {
+        let problem = geometryless_time_domain_fem_problem();
+        let resolved_backend = resolved_backend_from_problem(&problem);
+        assert_eq!(resolved_backend, BackendTarget::Fem);
+
+        let (engine_id, engine_label, requires_managed_runtime) =
+            local_engine_resolution(&problem, resolved_backend, "cpu-reference", false);
+        if fullmag_runner::is_native_fem_time_domain_available() {
+            assert!(!requires_managed_runtime);
+            assert!(engine_id.is_some());
+        } else {
+            assert!(requires_managed_runtime);
+            assert!(engine_id.is_none());
+            assert_eq!(
+                engine_label.as_deref(),
+                Some("Local time-domain FEM unavailable")
+            );
+        }
     }
 }

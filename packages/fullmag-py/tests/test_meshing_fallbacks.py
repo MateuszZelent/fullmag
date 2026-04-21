@@ -207,6 +207,36 @@ class BuildReportTests(unittest.TestCase):
         self.assertIn("Box", report.used_size_field_kinds)
         self.assertNotIn("ComponentVolumeConstant", report.used_size_field_kinds)
 
+    def test_single_geometry_surface_prep_failure_falls_back_to_direct_occ(self):
+        left = fm.Box(size=(1.0, 1.0, 1.0), name="left")
+        mesh = _make_mesh_3elem()
+
+        with patch(
+            "fullmag.meshing.asset_pipeline._import_trimesh",
+            return_value=_FAKE_TRIMESH,
+        ), patch(
+            "fullmag.meshing.asset_pipeline._geometry_to_trimesh",
+            side_effect=ImportError("No boolean backend"),
+        ), patch(
+            "fullmag.meshing.asset_pipeline.generate_mesh",
+            return_value=mesh,
+        ) as generate_mesh_mock, patch(
+            "fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components",
+            side_effect=AssertionError("single-geometry OCC fallback should skip component-aware meshing"),
+        ):
+            _, region_markers, report = (
+                realize_fem_domain_mesh_asset_from_components_with_report(
+                    [left],
+                    fm.FEM(order=1, hmax=100e-9),
+                    study_universe=_STUDY_UNIVERSE,
+                )
+            )
+
+        self.assertEqual(report.build_mode, "single_geometry_occ")
+        self.assertIn("component_surface_prep_failed", report.fallbacks_triggered)
+        self.assertEqual(len(region_markers), 1)
+        self.assertEqual(generate_mesh_mock.call_count, 1)
+
     def test_component_aware_report_records_component_field_kinds(self):
         left = fm.Box(size=(1.0, 1.0, 1.0), name="left")
         mesh = _make_mesh_3elem()

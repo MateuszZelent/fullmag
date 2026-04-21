@@ -95,6 +95,22 @@ frontend shared types.
 Binary endpoints must still be present in the API surface, even if OpenAPI only describes them at
 the envelope/header level.
 
+### 2.6 Realtime is notification-first
+
+HTTP resources remain the source of truth.
+
+The canonical realtime channel is:
+
+- `GET /v1/live/current/ws`
+
+Rules:
+
+- the websocket is an invalidation and lifecycle notification bus, not a second state API,
+- clients reconnect with `after_seq`,
+- clients must offer `Sec-WebSocket-Protocol: fullmag.live.v1`,
+- heavy field/topology payloads stay on HTTP resource endpoints,
+- websocket message schemas are documented through AsyncAPI, not stretched into Swagger.
+
 ### 2.6 Migration does not create a second permanent architecture
 
 Feature flags may exist only as short-lived migration scaffolding.
@@ -122,7 +138,10 @@ spelled out in `docs/specs/control-room-api-endpoint-reference-v1.md`.
 GET    /v1/live/current/status
 GET    /v1/capabilities
 GET    /v1/openapi.json
+GET    /v1/asyncapi.json
 GET    /v1/docs/swagger
+GET    /v1/docs/asyncapi
+GET    /v1/live/current/ws
 ```
 
 `status` must remain thin and carry:
@@ -182,6 +201,8 @@ GET    /v1/live/current/authoring/study/runtime
 PATCH  /v1/live/current/authoring/study/runtime
 GET    /v1/live/current/authoring/model/materials/:material_id
 PATCH  /v1/live/current/authoring/model/materials/:material_id
+GET    /v1/live/current/authoring/physics/objects/:object_id/interactions/:interaction_kind
+PATCH  /v1/live/current/authoring/physics/objects/:object_id/interactions/:interaction_kind
 GET    /v1/live/current/authoring/model/*
 PATCH  /v1/live/current/authoring/model/*
 PATCH  /v1/live/current/authoring/physics/*
@@ -201,6 +222,8 @@ Rules:
 - narrow `authoring/*` endpoints are semantic projections over the same scene revision,
 - `authoring/study/runtime` is the canonical narrow surface for requested backend/device/precision/mode intent,
 - `authoring/model/materials/:material_id` is the first mounted narrow material mutation surface,
+- `authoring/physics/objects/:object_id/interactions/:interaction_kind` is the mounted narrow surface
+  for object-level term toggles and parameter edits,
 - model-builder, inspector, and ribbon edits must land in `authoring/*` or `workspace/*`, not in
   preview endpoints or ad hoc side channels,
 - display state is exposed as one readable/mutable consolidated resource,

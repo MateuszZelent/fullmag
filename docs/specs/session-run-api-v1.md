@@ -263,6 +263,7 @@ GET    /v1/live/current/solver/energies/history
 GET    /v1/live/current/authoring/scene
 GET    /v1/live/current/authoring/study/runtime
 GET    /v1/live/current/authoring/model/materials/:material_id
+GET    /v1/live/current/authoring/physics/objects/:object_id/interactions/:interaction_kind
 POST   /v1/live/current/authoring/transactions
 GET    /v1/live/current/authoring/script/source
 POST   /v1/live/current/assets/import
@@ -271,6 +272,7 @@ PUT    /v1/live/current/display
 PATCH  /v1/live/current/display
 PATCH  /v1/live/current/authoring/study/runtime
 PATCH  /v1/live/current/authoring/model/materials/:material_id
+PATCH  /v1/live/current/authoring/physics/objects/:object_id/interactions/:interaction_kind
 POST   /v1/live/current/authoring/script/sync
 POST   /v1/live/current/commands
 GET    /v1/live/current/commands/status
@@ -359,12 +361,14 @@ GET    /v1/live/current/solver/energies/history
 GET    /v1/live/current/authoring/scene
 GET    /v1/live/current/authoring/study/runtime
 GET    /v1/live/current/authoring/model/materials/:material_id
+GET    /v1/live/current/authoring/physics/objects/:object_id/interactions/:interaction_kind
 POST   /v1/live/current/authoring/transactions
 GET    /v1/live/current/authoring/script/source
 GET    /v1/live/current/display
 PATCH  /v1/live/current/display
 PATCH  /v1/live/current/authoring/study/runtime
 PATCH  /v1/live/current/authoring/model/materials/:material_id
+PATCH  /v1/live/current/authoring/physics/objects/:object_id/interactions/:interaction_kind
 POST   /v1/live/current/authoring/script/sync
 POST   /v1/live/current/commands
 GET    /v1/live/current/commands/status
@@ -374,7 +378,7 @@ GET    /v1/live/current/artifacts*
 GET    /v1/live/current/logs/engine
 GET    /v1/live/current/gpu/telemetry
 POST   /v1/live/current/session/*
-GET    /ws/live/current    (optional accelerator, not required)
+GET    /v1/live/current/ws
 ```
 
 Rules for this projection:
@@ -387,10 +391,13 @@ Rules for this projection:
   `runs/current`, `stages/execution`, `solver/status`, and `solver/energies/*` when the host can
   derive them honestly from the active workspace snapshot,
 - singleton local-live deployments may also expose canonical authoring surfaces such as
-  `authoring/scene`, `authoring/study/runtime`, `authoring/model/materials/:material_id`, and
+  `authoring/scene`, `authoring/study/runtime`,
+  `authoring/model/materials/:material_id`,
+  `authoring/physics/objects/:object_id/interactions/:interaction_kind`, and
   `authoring/script/*` for the active workspace,
-- WebSocket or SSE may deliver revision notices, but heavy data still remains resource-fetched by
-  default,
+- `GET /v1/live/current/ws` is the canonical realtime notification bus for this singleton
+  projection,
+- heavy data still remains resource-fetched by default,
 - the browser must not require URL-level `?session=` routing for this singleton local-live flow.
 
 ## 10. Browser contract

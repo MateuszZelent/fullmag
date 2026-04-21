@@ -4,16 +4,16 @@ use crate::schemas::commands::CommandResponse;
 use fullmag_authoring::{SceneDocument, ScriptBuilderState};
 use fullmag_runner::{
     BackendCapabilities, DisplaySelectionState, FemMeshPayload, LivePreviewField,
-    LivePreviewRequest, RuntimeStatus, StepUpdate,
+    LivePreviewRequest, RuntimeStatus,
 };
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Mutex, RwLock};
+use utoipa::ToSchema;
 
 pub(crate) type CurrentPreviewConfig = LivePreviewRequest;
 pub(crate) type CurrentDisplaySelection = DisplaySelectionState;
@@ -50,16 +50,14 @@ pub(crate) enum MeshCommandTarget {
 pub(crate) struct AppState {
     pub repo_root: PathBuf,
     pub current_workspace_root: PathBuf,
-    /// Per-run broadcast channels for live step updates.
-    pub live_channels: Arc<RwLock<HashMap<String, broadcast::Sender<StepUpdate>>>>,
     /// Sessionless local-live workspace snapshot used by the root `/` GUI.
     pub current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,
-    /// Latest public snapshot JSON served to `/state` and bootstrap HTTP clients.
-    pub current_live_public_snapshot: Arc<RwLock<Option<String>>>,
-    /// Canonical current-workspace wire messages broadcast to SSE/WS clients.
-    pub current_live_events: broadcast::Sender<CurrentLiveWireMessage>,
-    /// Monotonic payload id for binary vector preview frames.
-    pub current_live_vector_payload_seq: Arc<AtomicU32>,
+    /// Resource-first realtime events for `/v1/live/current/ws`.
+    pub current_live_realtime_events: broadcast::Sender<CurrentLiveRealtimeEvent>,
+    /// Bounded replay buffer for the resource-first realtime stream.
+    pub current_live_realtime_replay: Arc<Mutex<VecDeque<CurrentLiveRealtimeEvent>>>,
+    /// Monotonic sequence number for resource-first realtime events.
+    pub current_live_realtime_next_seq: Arc<AtomicU64>,
     /// Typed display selection for the sessionless root workspace.
     pub current_display_selection: Arc<RwLock<CurrentDisplaySelection>>,
     /// Presentation-only display options that are not part of runner semantics.
@@ -74,18 +72,14 @@ pub(crate) struct AppState {
     pub current_control_events: watch::Sender<u64>,
     /// Monotonic sequence generator for the current session control stream.
     pub current_control_next_seq: Arc<Mutex<u64>>,
-    /// State version at which the memoized `current_live_public_snapshot` was built.
-    /// When `state_version` on the live state exceeds this, the snapshot is stale.
-    #[allow(dead_code)]
-    pub current_live_snapshot_version: Arc<AtomicU64>,
     /// Runtime feature flags for disabling heavy subsystems during diagnostics.
     pub feature_flags: crate::feature_flags::FeatureFlags,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum CurrentLiveWireMessage {
-    Text(String),
-    Binary(Vec<u8>),
+pub(crate) struct CurrentLiveRealtimeEvent {
+    pub seq: u64,
+    pub json: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -320,6 +314,7 @@ impl StepUpdateView {
     /// Maps the flat scalar fields to `GlobalQuantityRow` and wraps any
     /// magnetization/preview data as `LiveQuantityFrame`s so the frontend
     /// can consume a single unified representation.
+    #[cfg(test)]
     pub(crate) fn to_step_update_v2(&self) -> fullmag_quantities::StepUpdateV2 {
         use fullmag_quantities::{
             GlobalQuantityRow, LiveQuantityFrame, StepDiagnostics, StepUpdateV2,
@@ -404,130 +399,8 @@ pub(crate) struct SessionStateResponse {
     pub preview: Option<PreviewState>,
     #[serde(skip_serializing, default)]
     pub builder_adapter: Option<ScriptBuilderState>,
-    /// How many scalar_rows have already been included in a WS broadcast.
-    /// WS events send only the delta slice `scalar_rows[ws_cursor..]`;
-    /// the full history is available via the HTTP snapshot endpoint.
-    #[serde(skip)]
-    pub scalar_rows_ws_cursor: usize,
-    /// Fingerprint of quantities at last WS broadcast; skip re-sending when unchanged.
-    #[serde(skip)]
-    pub quantities_ws_hash: u64,
-    /// `generation_id` of the FEM mesh last broadcast over WS.
-    /// When unchanged, the WS event omits `fem_mesh` entirely (sparse delta).
-    #[serde(skip)]
-    pub ws_sent_fem_mesh_generation: Option<String>,
-    /// Fingerprint of the preview state last broadcast over WS.
-    /// Tuple of (quantity, component, config_revision, source_step).
-    /// When unchanged, no new `vector_payload_id` is generated.
-    #[serde(skip)]
-    pub ws_sent_preview_fingerprint: Option<(String, String, u64, u64)>,
-    /// Fingerprint of `latest_fields` keys+lengths last broadcast.
-    /// When unchanged, the WS event sends an empty `latest_fields` (sparse delta).
-    #[serde(skip)]
-    pub ws_sent_latest_fields_hash: u64,
     /// Monotonic state version counter.  Bumped on every publish.
-    /// Used for lazy memoization of the public snapshot JSON.
     #[serde(skip)]
-    pub state_version: u64,
-    /// Version of the "static envelope" fields last broadcast via WS.
-    /// When unchanged, these fields are omitted from the WS event (sparse delta).
-    /// Covers: session, run, capabilities, metadata, mesh_workspace, stage_execution,
-    /// scene_document, engine_log, artifacts, display_selection, preview_config.
-    #[serde(skip)]
-    pub ws_sent_envelope_version: u64,
-    /// Current version of the static envelope (bumped when any covered field changes).
-    #[serde(skip)]
-    pub envelope_version: u64,
-}
-
-impl SessionStateResponse {
-    /// Build `StepUpdateV2` with base step data (magnetization diagnostics + scalars)
-    /// and optionally the *currently selected* preview quantity frame.
-    ///
-    /// Cached preview fields for other quantities are NOT included here anymore
-    /// (was a major serialization bottleneck: cloning + JSON-encoding up to 13
-    /// vector fields per publish cycle).  The frontend fetches them on-demand
-    /// via `GET /v1/live/current/fields/:quantity/vector`.
-    pub(crate) fn build_step_update_v2(&self) -> Option<fullmag_quantities::StepUpdateV2> {
-        let ls = self.live_state.as_ref()?;
-        let v2 = ls.latest_step.to_step_update_v2();
-        // Only the base "m" frame (from to_step_update_v2) is included.
-        // Other cached preview fields are served via the field store API.
-        Some(v2)
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum CurrentLiveEvent<'a> {
-    SessionState { state: SessionStateEventView<'a> },
-    ChartState { state: ChartStateEventView<'a> },
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ChartStateEventView<'a> {
-    /// Delta: only rows added since the last WS broadcast (empty = no new rows).
-    pub scalar_rows: &'a [ScalarRow],
-    /// Total accumulated row count on server side.
-    pub scalar_rows_total: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SessionStateEventView<'a> {
-    pub session_protocol_version: &'a str,
-    pub capability_profile_version: &'a str,
-    /// Sparse: only present when the session manifest changed (start/end, status change).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session: Option<&'a SessionManifest>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub run: Option<&'a RunManifest>,
-    pub live_state: Option<&'a LiveState>,
-    pub runtime_status: &'a RuntimeStatusView,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<&'a BackendCapabilities>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<&'a Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mesh_workspace: Option<&'a Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stage_execution: Option<&'a StageExecutionState>,
-    /// Sparse: only present when scene_document changed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scene_document: Option<&'a SceneDocument>,
-    /// Delta: only rows added since the last WS broadcast (empty = no new rows).
-    /// Clients accumulate history by appending deltas.  New clients get full
-    /// history from the HTTP snapshot endpoint on first connection.
-    pub scalar_rows: &'a [ScalarRow],
-    /// Total accumulated row count.  Lets the frontend decide whether to replace
-    /// (on reconnect with stale state) or append.
-    pub scalar_rows_total: usize,
-    /// Sparse: only present when engine_log changed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub engine_log: Option<&'a [EngineLogEntry]>,
-    /// Only present when quantities changed since the last WS broadcast.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub quantities: Option<&'a [QuantityDescriptor]>,
-    /// Only present when `generation_id` changed since the last WS broadcast (sparse delta).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fem_mesh: Option<&'a FemMeshPayload>,
-    /// Sparse: only present when content hash changed since the last WS broadcast.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latest_fields: Option<&'a LatestFields>,
-    /// Sparse: only present when artifacts changed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub artifacts: Option<&'a [ArtifactEntry]>,
-    /// Sparse: only present when display_selection changed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_selection: Option<&'a CurrentDisplaySelection>,
-    /// Sparse: only present when preview_config changed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub preview_config: Option<&'a CurrentPreviewConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub preview: Option<PreviewState>,
-    /// V2 canonical step representation (Q16/Q17).
-    /// Present when `live_state` contains a latest step.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub step_update_v2: Option<fullmag_quantities::StepUpdateV2>,
     pub state_version: u64,
 }
 
@@ -605,49 +478,6 @@ impl LatestFields {
         self.0.iter()
     }
 
-    /// Cheap fingerprint over keys and per-key value lengths.
-    /// Useful for detecting whether the set of populated quantities changed.
-    pub(crate) fn content_hash(&self) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut h = DefaultHasher::new();
-        self.0.len().hash(&mut h);
-        for (key, value) in &self.0 {
-            key.hash(&mut h);
-            // Hash a size proxy: array length or serialized length for scalars.
-            if let Some(arr) = value.as_array() {
-                arr.len().hash(&mut h);
-            }
-        }
-        h.finish()
-    }
-
-    pub(crate) fn metadata_only_json(&self) -> Value {
-        let mut out = serde_json::Map::new();
-        for (quantity, value) in &self.0 {
-            let mut field = serde_json::Map::new();
-            if let Some(object) = value.as_object() {
-                for key in [
-                    "unit",
-                    "n_comp",
-                    "grid",
-                    "layout",
-                    "location",
-                    "domain",
-                    "field_revision",
-                    "source_step",
-                    "source_time",
-                ] {
-                    if let Some(entry) = object.get(key) {
-                        field.insert(key.to_string(), entry.clone());
-                    }
-                }
-            }
-            field.insert("transport".to_string(), Value::String("binary".to_string()));
-            out.insert(quantity.clone(), Value::Object(field));
-        }
-        Value::Object(out)
-    }
 }
 
 impl CachedPreviewFields {
@@ -669,28 +499,6 @@ impl CachedPreviewFields {
 pub(crate) enum PreviewState {
     Spatial(SpatialPreviewState),
     GlobalScalar(GlobalScalarPreviewState),
-}
-
-impl PreviewState {
-    /// Fingerprint tuple: (quantity, component, config_revision, source_step).
-    /// Used to detect whether the preview content has materially changed and
-    /// a new binary vector payload needs to be sent.
-    pub(crate) fn fingerprint(&self) -> (String, String, u64, u64) {
-        match self {
-            PreviewState::Spatial(s) => (
-                s.quantity.clone(),
-                s.component.clone(),
-                s.config_revision,
-                s.source_step,
-            ),
-            PreviewState::GlobalScalar(s) => (
-                s.quantity.clone(),
-                String::new(),
-                s.config_revision,
-                s.source_step,
-            ),
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -805,14 +613,6 @@ pub(crate) struct ControlWaitQuery {
     pub timeout_ms: u64,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct RunRequest {
-    pub problem: fullmag_ir::ProblemIR,
-    pub until_seconds: f64,
-    #[serde(default = "default_output_dir")]
-    pub output_dir: String,
-}
-
 #[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct ImportSessionAssetRequest {
     pub file_name: String,
@@ -852,7 +652,7 @@ pub(crate) struct ScriptSourceResponse {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct CurrentLivePublishRequest {
+pub(crate) struct CurrentLiveSnapshotRequest {
     pub session_id: String,
     #[serde(default)]
     pub session: Option<SessionManifest>,
@@ -884,6 +684,52 @@ pub(crate) struct CurrentLivePublishRequest {
     /// are also accepted for backwards compatibility.
     #[serde(default)]
     pub fem_mesh: Option<FemMeshPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CurrentLiveSessionFrameRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub session: Option<SessionManifest>,
+    #[serde(default)]
+    pub session_status: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<Value>,
+    #[serde(default)]
+    pub mesh_workspace: Option<Value>,
+    #[serde(default)]
+    pub stage_execution: Option<StageExecutionState>,
+    #[serde(default)]
+    pub run: Option<RunManifest>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CurrentLiveRuntimeFrameRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub live_state: Option<LiveState>,
+    #[serde(default)]
+    pub engine_log: Option<Vec<EngineLogEntry>>,
+    #[serde(default)]
+    pub fem_mesh: Option<FemMeshPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CurrentLiveScalarFrameRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub latest_scalar_row: Option<ScalarRow>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CurrentLiveFieldFrameRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub latest_fields: Option<LatestFields>,
+    #[serde(default)]
+    pub preview_fields: Option<Vec<LivePreviewField>>,
+    #[serde(default)]
+    pub clear_preview_cache: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1002,10 +848,6 @@ pub(crate) struct BoundsSummary {
     pub min: [f64; 3],
     pub max: [f64; 3],
     pub size: [f64; 3],
-}
-
-pub(crate) fn default_output_dir() -> String {
-    ".fullmag/local-live/current/artifacts".to_string()
 }
 
 pub(crate) fn uuid_v4_hex() -> String {
@@ -1180,14 +1022,7 @@ mod tests {
             preview_config: CurrentPreviewConfig::default(),
             preview: None,
             builder_adapter: Some(builder),
-            scalar_rows_ws_cursor: 0,
-            quantities_ws_hash: 0,
-            ws_sent_fem_mesh_generation: None,
-            ws_sent_preview_fingerprint: None,
-            ws_sent_latest_fields_hash: 0,
             state_version: 0,
-            ws_sent_envelope_version: 0,
-            envelope_version: 0,
         };
 
         let value = serde_json::to_value(SessionStateResponseView {

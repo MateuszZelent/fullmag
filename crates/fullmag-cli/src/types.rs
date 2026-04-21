@@ -144,7 +144,7 @@ pub(crate) struct LiveStepView {
     /// **Deprecated (Q16):** Spatial data flows through `latest_fields`.
     pub magnetization: Option<Vec<f64>>,
     /// **Deprecated (Q17):** Preview fields flow through `preview_fields`
-    /// in `CurrentLivePublishPayload`, not inside the step view.
+    /// in `CurrentLiveSnapshotPayload`, not inside the step view.
     pub preview_field: Option<fullmag_runner::LivePreviewField>,
     pub finished: bool,
 }
@@ -447,7 +447,7 @@ pub(crate) struct CurrentLiveStageExecutionState {
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
-pub(crate) struct CurrentLivePublishPayload {
+pub(crate) struct CurrentLiveSnapshotPayload {
     pub session: Option<SessionManifest>,
     pub session_status: Option<String>,
     pub metadata: Option<serde_json::Value>,
@@ -517,7 +517,7 @@ impl CurrentLivePreviewFieldCache {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct CurrentLivePublishRequest<'a> {
+pub(crate) struct CurrentLiveSnapshotRequest<'a> {
     pub session_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<&'a SessionManifest>,
@@ -544,6 +544,51 @@ pub(crate) struct CurrentLivePublishRequest<'a> {
     pub stage_execution: Option<&'a CurrentLiveStageExecutionState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_mesh: Option<&'a fullmag_runner::FemMeshPayload>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CurrentLiveSessionFrameRequest<'a> {
+    pub session_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<&'a SessionManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_status: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_workspace: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_execution: Option<&'a CurrentLiveStageExecutionState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<&'a RunManifest>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CurrentLiveRuntimeFrameRequest<'a> {
+    pub session_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_state: Option<&'a LiveStateManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_log: Option<&'a [EngineLogEntry]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_mesh: Option<&'a fullmag_runner::FemMeshPayload>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CurrentLiveScalarFrameRequest<'a> {
+    pub session_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_scalar_row: Option<&'a CurrentLiveScalarRow>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CurrentLiveFieldFrameRequest<'a> {
+    pub session_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_fields: Option<&'a CurrentLiveLatestFields>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_fields: Option<&'a [fullmag_runner::LivePreviewField]>,
+    pub clear_preview_cache: bool,
 }
 
 #[derive(Debug, Clone)]

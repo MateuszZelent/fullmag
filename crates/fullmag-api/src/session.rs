@@ -37,7 +37,7 @@ pub(crate) fn refresh_runtime_status(snapshot: &mut SessionStateResponse) {
     snapshot.runtime_status = build_runtime_status_view(&effective_runtime_status_code(snapshot));
 }
 
-pub(crate) fn default_current_live_state(req: &CurrentLivePublishRequest) -> SessionStateResponse {
+pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> SessionStateResponse {
     let now = unix_time_millis_now();
     let run_id = req
         .session
@@ -111,32 +111,20 @@ pub(crate) fn default_current_live_state(req: &CurrentLivePublishRequest) -> Ses
         preview_config: CurrentPreviewConfig::default(),
         preview: None,
         builder_adapter: None,
-        scalar_rows_ws_cursor: 0,
-        quantities_ws_hash: 0,
-        ws_sent_fem_mesh_generation: None,
-        ws_sent_preview_fingerprint: None,
-        ws_sent_latest_fields_hash: 0,
         state_version: 0,
-        ws_sent_envelope_version: 0,
-        envelope_version: 0,
     }
 }
 
 pub(crate) fn apply_current_live_publish(
     current: &mut SessionStateResponse,
-    req: CurrentLivePublishRequest,
+    req: CurrentLiveSnapshotRequest,
 ) -> Result<(), ApiError> {
     // Capture flags _before_ fields are moved out of `req`.
-    let has_session = req.session.is_some();
     let has_metadata = req.metadata.is_some();
     let has_latest_fields = req.latest_fields.is_some();
     let has_preview_fields = req.preview_fields.is_some();
     let has_run = req.run.is_some();
     let has_scalar_row = req.latest_scalar_row.is_some();
-    let has_session_status = req.session_status.is_some();
-    let has_mesh_workspace = req.mesh_workspace.is_some();
-    let has_stage_execution = req.stage_execution.is_some();
-    let has_engine_log = req.engine_log.is_some();
     let clear_preview_cache = req.clear_preview_cache;
 
     if let Some(session) = req.session {
@@ -242,21 +230,6 @@ pub(crate) fn apply_current_live_publish(
     }
 
     refresh_runtime_status(current);
-
-    // Bump envelope version when any of the "static" fields change.
-    // These fields are large but rarely change during a running simulation.
-    // The WS broadcast path uses this to skip re-serializing them.
-    let envelope_changed = has_session
-        || has_session_status
-        || has_run
-        || has_metadata
-        || has_mesh_workspace
-        || has_stage_execution
-        || has_engine_log;
-    if envelope_changed {
-        current.envelope_version += 1;
-    }
-
     // Only rebuild the quantities catalog when inputs that affect availability
     // change.  On a typical per-step publish only a scalar row arrives, which
     // does not alter the catalog — skipping this saves a surprisingly expensive

@@ -39,7 +39,7 @@ function shouldProxyHttp(pathname) {
 }
 
 function shouldProxyWs(pathname) {
-  return pathname.startsWith("/ws/live/");
+  return pathname.startsWith("/v1/live/") && pathname.endsWith("/ws");
 }
 
 function requestPathname(req) {

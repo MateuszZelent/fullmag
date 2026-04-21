@@ -1,9 +1,7 @@
-use async_stream::stream;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, State};
+use axum::extract::ws::{Message, WebSocket};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::StatusCode;
-use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::{
     routing::{get, post},
@@ -13,21 +11,20 @@ use base64::Engine;
 use fullmag_authoring::{MagnetizationAsset, SceneDocument};
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
 use fullmag_plan::{generate_random_unit_vectors, sample_preset_texture, TextureSamplePoint};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Mutex, RwLock};
+use tokio::time::{interval, Duration};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
 use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
-use fullmag_runner::{FemMeshPayload, LivePreviewField, StepUpdate};
+use fullmag_runner::LivePreviewField;
 
 mod artifacts;
 mod assets;
@@ -44,185 +41,207 @@ mod session;
 mod session_persistence;
 mod types;
 
-fn latest_fields_wire_value(
-    snapshot: &SessionStateResponse,
-    binary_field_transport: bool,
-) -> Result<Value, ApiError> {
-    if binary_field_transport {
-        let mut metadata = snapshot.latest_fields.metadata_only_json();
-        if metadata
-            .as_object()
-            .is_some_and(|fields| !fields.contains_key("m"))
-        {
-            if let Some(magnetization_field) = live_magnetization_field_metadata(snapshot) {
-                if let Some(fields) = metadata.as_object_mut() {
-                    fields.insert("m".to_string(), magnetization_field);
-                }
-            }
-        }
-        return Ok(metadata);
-    }
-    serde_json::to_value(&snapshot.latest_fields).map_err(|error| {
-        ApiError::internal(format!("failed to serialize latest_fields: {}", error))
-    })
-}
-
-fn live_magnetization_field_metadata(snapshot: &SessionStateResponse) -> Option<Value> {
-    let live_state = snapshot.live_state.as_ref()?;
-    let magnetization = live_state.latest_step.magnetization.as_ref()?;
-    if magnetization.is_empty() || magnetization.len() % 3 != 0 {
-        return None;
-    }
-    let node_count = (magnetization.len() / 3) as u32;
-    let grid = if live_state.latest_step.grid.iter().any(|value| *value > 0) {
-        live_state.latest_step.grid
-    } else {
-        [node_count, 1, 1]
-    };
-    Some(json!({
-        "unit": fullmag_quantities::quantity_unit("m"),
-        "n_comp": fullmag_quantities::quantity_spec("m")
-            .map(|spec| spec.n_comp)
-            .unwrap_or(3),
-        "grid": grid,
-        "domain": "magnetic_only",
-        "field_revision": live_state.latest_step.step,
-        "source_step": live_state.latest_step.step,
-        "source_time": live_state.latest_step.time,
-        "transport": "binary",
-    }))
-}
-
-fn fem_mesh_wire_value(
-    fem_mesh: Option<&FemMeshPayload>,
-    binary_mesh_transport: bool,
-) -> Result<Option<Value>, ApiError> {
-    let Some(fem_mesh) = fem_mesh else {
-        return Ok(None);
-    };
-    if !binary_mesh_transport {
-        return serde_json::to_value(fem_mesh).map(Some).map_err(|error| {
-            ApiError::internal(format!("failed to serialize fem_mesh: {}", error))
-        });
-    }
-    Ok(Some(json!({
-        "mesh_name": fem_mesh.mesh_name,
-        "mesh_id": fem_mesh.mesh_id,
-        "generation_id": fem_mesh.generation_id,
-        "mesh_parts": fem_mesh.mesh_parts,
-        "object_segments": fem_mesh.object_segments,
-        "domain_mesh_mode": fem_mesh.domain_mesh_mode,
-        "domain_frame": fem_mesh.domain_frame,
-        "per_domain_quality": fem_mesh.per_domain_quality,
-        "node_count": fem_mesh.nodes.len(),
-        "element_count": fem_mesh.elements.len(),
-        "boundary_face_count": fem_mesh.boundary_faces.len(),
-        "transport": "binary",
-    })))
-}
-
-fn preview_wire_value(
-    preview: Option<&PreviewState>,
-    binary_field_transport: bool,
-) -> Result<Option<Value>, ApiError> {
-    let Some(preview) = preview else {
-        return Ok(None);
-    };
-    let mut value = serde_json::to_value(preview)
-        .map_err(|error| ApiError::internal(format!("failed to serialize preview: {}", error)))?;
-    if binary_field_transport && matches!(preview, PreviewState::Spatial(_)) {
-        if let Some(object) = value.as_object_mut() {
-            object.insert("vector_field_values".to_string(), Value::Null);
-        }
-    }
-    Ok(Some(value))
-}
-
-fn live_state_wire_value(
-    live_state: Option<&LiveState>,
-    binary_field_transport: bool,
-    binary_mesh_transport: bool,
-) -> Result<Option<Value>, ApiError> {
-    let Some(live_state) = live_state else {
-        return Ok(None);
-    };
-    let mut value = serde_json::to_value(live_state).map_err(|error| {
-        ApiError::internal(format!("failed to serialize live_state: {}", error))
-    })?;
-    if binary_field_transport {
-        if let Some(object) = value.as_object_mut() {
-            if let Some(latest_step) = object.get_mut("latest_step").and_then(Value::as_object_mut)
-            {
-                latest_step.insert("magnetization".to_string(), Value::Null);
-                if binary_mesh_transport {
-                    latest_step.insert("fem_mesh".to_string(), Value::Null);
-                }
-            }
-        }
-    }
-    if binary_mesh_transport {
-        if let Some(object) = value.as_object_mut() {
-            if let Some(latest_step) = object.get_mut("latest_step").and_then(Value::as_object_mut)
-            {
-                latest_step.insert("fem_mesh".to_string(), Value::Null);
-            }
-        }
-    }
-    Ok(Some(value))
-}
-
-fn step_update_v2_wire_value(
-    step_update_v2: Option<fullmag_quantities::StepUpdateV2>,
-    binary_field_transport: bool,
-) -> Result<Option<Value>, ApiError> {
-    let Some(step_update_v2) = step_update_v2 else {
-        return Ok(None);
-    };
-    let mut value = serde_json::to_value(step_update_v2).map_err(|error| {
-        ApiError::internal(format!("failed to serialize step_update_v2: {}", error))
-    })?;
-    if binary_field_transport {
-        if let Some(object) = value.as_object_mut() {
-            object.insert("frames".to_string(), Value::Array(Vec::new()));
-        }
-    }
-    Ok(Some(value))
-}
-
-#[derive(Debug, Serialize)]
-struct SessionStateResponseWire<'a> {
-    session: &'a SessionManifest,
-    run: Option<&'a RunManifest>,
-    live_state: Option<Value>,
-    runtime_status: &'a RuntimeStatusView,
-    metadata: Option<&'a Value>,
-    mesh_workspace: Option<&'a Value>,
-    stage_execution: Option<&'a StageExecutionState>,
-    scene_document: Option<&'a SceneDocument>,
-    scalar_rows: &'a [ScalarRow],
-    scalar_rows_total: usize,
-    engine_log: &'a [EngineLogEntry],
-    quantities: &'a [QuantityDescriptor],
-    fem_mesh: Option<Value>,
-    latest_fields: Value,
-    artifacts: &'a [ArtifactEntry],
-    display_selection: &'a CurrentDisplaySelection,
-    preview_config: &'a CurrentPreviewConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    preview: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    step_update_v2: Option<Value>,
-    state_version: u64,
-}
 use artifacts::*;
 use assets::*;
 use error::ApiError;
 use feature_flags::FeatureFlags;
 use preview::*;
 use quantities::*;
+use schemas::realtime::{
+    HeartbeatPayload, HelloPayload, LiveRealtimeServerEvent, RealtimeResourceChange,
+    RealtimeResourceName, RealtimeResourceRevisionMap, ResourceBatchChangedPayload,
+    ResyncRequiredPayload,
+};
 use script::*;
 use session::*;
 use types::*;
+
+const CURRENT_LIVE_REALTIME_REPLAY_CAPACITY: usize = 512;
+const CURRENT_LIVE_REALTIME_HEARTBEAT_SECS: u64 = 15;
+
+#[derive(Debug, Clone)]
+pub(crate) struct CurrentLiveRealtimeState {
+    pub session_id: String,
+    pub run_id: Option<String>,
+    pub revisions: RealtimeResourceRevisionMap,
+}
+
+fn realtime_timestamp_now() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn current_live_realtime_contract_version() -> &'static str {
+    "1.0.0"
+}
+
+fn current_live_realtime_available_after_seq(
+    replay: &VecDeque<CurrentLiveRealtimeEvent>,
+    current_seq: u64,
+) -> u64 {
+    replay
+        .front()
+        .map(|event| event.seq.saturating_sub(1))
+        .unwrap_or(current_seq)
+}
+
+pub(crate) async fn current_live_realtime_state_from_snapshot(
+    state: &AppState,
+    snapshot: &SessionStateResponse,
+    display_revision: u64,
+) -> CurrentLiveRealtimeState {
+    let commands_revision = state.current_command_ledger.lock().await.len() as u64;
+    CurrentLiveRealtimeState {
+        session_id: snapshot.session.session_id.clone(),
+        run_id: snapshot.run.as_ref().map(|run| run.run_id.clone()),
+        revisions: RealtimeResourceRevisionMap {
+            fields_revision: snapshot.state_version,
+            scalars_revision: snapshot.scalar_rows.len() as u64,
+            domain_generation_id: snapshot
+                .fem_mesh
+                .as_ref()
+                .and_then(|mesh| mesh.generation_id.as_deref())
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0),
+            artifacts_revision: snapshot.artifacts.len() as u64,
+            engine_log_revision: snapshot.engine_log.len() as u64,
+            display_revision,
+            commands_revision,
+            stages_revision: snapshot
+                .stage_execution
+                .as_ref()
+                .map(|_| snapshot.state_version)
+                .unwrap_or(0),
+            scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
+        },
+    }
+}
+
+fn current_live_realtime_changes(
+    realtime_state: &CurrentLiveRealtimeState,
+) -> Vec<RealtimeResourceChange> {
+    let mut changes = vec![
+        RealtimeResourceChange {
+            resource: RealtimeResourceName::Display,
+            revision: realtime_state.revisions.display_revision,
+            resource_id: None,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v1/live/current/display".to_string()),
+        },
+        RealtimeResourceChange {
+            resource: RealtimeResourceName::Fields,
+            revision: realtime_state.revisions.fields_revision,
+            resource_id: None,
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            recommended_fetch: Some("/v1/live/current/fields/catalog".to_string()),
+        },
+        RealtimeResourceChange {
+            resource: RealtimeResourceName::Scalars,
+            revision: realtime_state.revisions.scalars_revision,
+            resource_id: None,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v1/live/current/scalars".to_string()),
+        },
+        RealtimeResourceChange {
+            resource: RealtimeResourceName::Domain,
+            revision: realtime_state.revisions.domain_generation_id,
+            resource_id: None,
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            recommended_fetch: Some("/v1/live/current/domain/meta".to_string()),
+        },
+        RealtimeResourceChange {
+            resource: RealtimeResourceName::Artifacts,
+            revision: realtime_state.revisions.artifacts_revision,
+            resource_id: None,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v1/live/current/artifacts".to_string()),
+        },
+        RealtimeResourceChange {
+            resource: RealtimeResourceName::Logs,
+            revision: realtime_state.revisions.engine_log_revision,
+            resource_id: None,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v1/live/current/logs/engine".to_string()),
+        },
+    ];
+    if realtime_state.revisions.commands_revision > 0 {
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::Commands,
+            revision: realtime_state.revisions.commands_revision,
+            resource_id: None,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v1/live/current/commands/status".to_string()),
+        });
+    }
+    if realtime_state.revisions.stages_revision > 0 {
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::Stages,
+            revision: realtime_state.revisions.stages_revision,
+            resource_id: None,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v1/live/current/stages/execution".to_string()),
+        });
+    }
+    if let Some(scene_revision) = realtime_state.revisions.scene_revision {
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::SceneDocument,
+            revision: scene_revision,
+            resource_id: None,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v1/live/current/scene/document".to_string()),
+        });
+    }
+    changes
+}
+
+async fn publish_current_live_realtime_event(
+    state: &AppState,
+    event: LiveRealtimeServerEvent,
+) -> Result<(), ApiError> {
+    let json = serde_json::to_string(&event).map_err(|error| {
+        ApiError::internal(format!("failed to serialize realtime event: {error}"))
+    })?;
+    let record = CurrentLiveRealtimeEvent {
+        seq: event.seq(),
+        json,
+    };
+    {
+        let mut replay = state.current_live_realtime_replay.lock().await;
+        replay.push_back(record.clone());
+        while replay.len() > CURRENT_LIVE_REALTIME_REPLAY_CAPACITY {
+            replay.pop_front();
+        }
+    }
+    let _ = state.current_live_realtime_events.send(record);
+    Ok(())
+}
+
+pub(crate) async fn publish_current_live_realtime_batch_changed(
+    state: &AppState,
+    realtime_state: &CurrentLiveRealtimeState,
+    coalesced: bool,
+    window_ms: u32,
+) -> Result<(), ApiError> {
+    let seq = state
+        .current_live_realtime_next_seq
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    publish_current_live_realtime_event(
+        state,
+        LiveRealtimeServerEvent::ResourceBatchChanged {
+            seq,
+            ts: realtime_timestamp_now(),
+            session_id: realtime_state.session_id.clone(),
+            run_id: realtime_state.run_id.clone(),
+            contract_version: current_live_realtime_contract_version().to_string(),
+            payload: ResourceBatchChangedPayload {
+                changes: current_live_realtime_changes(realtime_state),
+                coalesced,
+                window_ms,
+            },
+        },
+    )
+    .await
+}
 
 fn parse_texture_projection_mode(value: &str) -> TextureProjectionMode {
     match value.trim().to_ascii_lowercase().as_str() {
@@ -262,11 +281,10 @@ async fn main() {
     let state = Arc::new(AppState {
         repo_root: repo_root.clone(),
         current_workspace_root,
-        live_channels: Arc::new(RwLock::new(HashMap::new())),
         current_live_state: Arc::new(RwLock::new(None)),
-        current_live_public_snapshot: Arc::new(RwLock::new(None)),
-        current_live_events: broadcast::channel(256).0,
-        current_live_vector_payload_seq: Arc::new(AtomicU32::new(0)),
+        current_live_realtime_events: broadcast::channel(256).0,
+        current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
+        current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -274,7 +292,6 @@ async fn main() {
         current_command_ledger: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: watch::channel(0).0,
         current_control_next_seq: Arc::new(Mutex::new(0)),
-        current_live_snapshot_version: Arc::new(AtomicU64::new(0)),
         feature_flags,
     });
 
@@ -285,8 +302,24 @@ async fn main() {
         .route("/v1/meta/vision", get(vision))
         // ── Internal runner bridge (not part of the public browser contract) ──
         .route(
-            "/v1/internal/live/current/publish",
-            post(publish_current_live_state),
+            "/v1/internal/live/current/snapshot",
+            post(sync_current_live_snapshot),
+        )
+        .route(
+            "/v1/internal/live/current/session",
+            post(sync_current_live_session_frame),
+        )
+        .route(
+            "/v1/internal/live/current/runtime",
+            post(sync_current_live_runtime_frame),
+        )
+        .route(
+            "/v1/internal/live/current/scalars",
+            post(sync_current_live_scalar_frame),
+        )
+        .route(
+            "/v1/internal/live/current/fields",
+            post(sync_current_live_field_frame),
         )
         .route(
             "/v1/internal/live/current/control/wait",
@@ -297,10 +330,6 @@ async fn main() {
         .route("/v1/live/feature-flags", get(get_feature_flags))
         .route("/v1/docs/physics", get(list_physics_docs))
         .route("/v1/quantities/catalog", get(get_quantities_catalog))
-        .route("/v1/run", post(start_run))
-        // ── WebSocket ──────────────────────────────────────────────────
-        .route("/ws/live/current", get(ws_current_live))
-        .route("/ws/live/:run_id", get(ws_live))
         // ── New resource-first API (v1) ────────────────────────────────
         .merge(router_v1::build_v1_router())
         // ── OpenAPI / Swagger ──────────────────────────────────────────
@@ -452,168 +481,9 @@ pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
     })
 }
 
-/// Create an empty interactive workspace and publish it to the live state.
-/// Returns the serialized public snapshot JSON.
-#[allow(dead_code)]
-async fn auto_create_workspace(state: &AppState) -> Result<String, ApiError> {
-    let now = unix_time_millis_now();
-    let session_id = format!("ui-session-{}-{}", now, std::process::id());
-    let run_id = format!("run-{}", &session_id);
-    let artifact_dir = state
-        .repo_root
-        .join(".fullmag")
-        .join("local-live")
-        .join("history")
-        .join(&session_id)
-        .join("artifacts");
-    let _ = std::fs::create_dir_all(&artifact_dir);
-
-    let publish_req = CurrentLivePublishRequest {
-        session_id: session_id.clone(),
-        session: Some(SessionManifest {
-            session_id: session_id.clone(),
-            run_id,
-            status: "interactive".to_string(),
-            interactive_session_requested: true,
-            script_path: String::new(),
-            problem_name: "New Simulation".to_string(),
-            requested_backend: "auto".to_string(),
-            explicit_selection: false,
-            requested_device: "auto".to_string(),
-            requested_precision: "double".to_string(),
-            requested_mode: "strict".to_string(),
-            requested_cpu_threads: None,
-            execution_mode: "strict".to_string(),
-            precision: "double".to_string(),
-            resolved_backend: None,
-            resolved_device: None,
-            resolved_precision: None,
-            resolved_mode: None,
-            resolved_runtime_family: None,
-            resolved_engine_id: None,
-            resolved_worker: None,
-            resolved_cpu_threads: None,
-            resolved_fallback: None,
-            artifact_dir: artifact_dir.display().to_string(),
-            started_at_unix_ms: now,
-            finished_at_unix_ms: now,
-            plan_summary: json!({}),
-        }),
-        session_status: None,
-        metadata: None,
-        mesh_workspace: None,
-        stage_execution: None,
-        run: None,
-        live_state: None,
-        latest_scalar_row: None,
-        latest_fields: None,
-        preview_fields: None,
-        clear_preview_cache: false,
-        engine_log: None,
-        fem_mesh: None,
-    };
-
-    let next = default_current_live_state(&publish_req);
-    let ws_messages = build_current_live_ws_messages(state, &next)?;
-    let public_json = serialize_current_live_response(&next, true, false, false)?;
-    *state.current_live_state.write().await = Some(next);
-    *state.current_live_public_snapshot.write().await = Some(public_json.clone());
-    send_current_live_ws_messages(state, ws_messages);
-    Ok(public_json)
-}
-
-#[allow(dead_code)]
-fn bootstrap_workspace_payload(snapshot_json: &str) -> Result<String, ApiError> {
-    let value: Value = serde_json::from_str(snapshot_json).map_err(|error| {
-        ApiError::internal(format!(
-            "failed to parse workspace bootstrap snapshot: {error}"
-        ))
-    })?;
-    let mut object = value
-        .as_object()
-        .cloned()
-        .ok_or_else(|| ApiError::internal("workspace bootstrap snapshot must be a JSON object"))?;
-    object.insert("mode".to_string(), Value::String("workspace".to_string()));
-    serde_json::to_string(&Value::Object(object)).map_err(|error| {
-        ApiError::internal(format!("failed to encode workspace bootstrap: {error}"))
-    })
-}
-
-/// POST /v1/live/current/create — create a bootstrapping workspace in-process.
-///
-/// Called by the web UI when the user clicks "Create New Simulation" and no
-/// live workspace exists yet (hub mode). Creates a minimal bootstrapping
-/// `SessionStateResponse`, publishes it, and returns the bootstrap payload so
-/// the client can immediately transition out of the loading state.
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct CreateWorkspaceRequest {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    backend: Option<String>,
-}
-
-#[allow(dead_code)]
-async fn create_current_live_workspace(
-    State(state): State<Arc<AppState>>,
-    Json(_req): Json<CreateWorkspaceRequest>,
-) -> Result<Response, ApiError> {
-    // If a workspace already exists, serialize and return its bootstrap payload.
-    if let Some(live) = state.current_live_state.read().await.as_ref() {
-        let public_json = serialize_current_live_response(live, true, false, false)
-            .map_err(|e| ApiError::internal(format!("failed to serialize live state: {}", e)))?;
-        let json = bootstrap_workspace_payload(&public_json)?;
-        return Ok(([(CONTENT_TYPE, "application/json")], json).into_response());
-    }
-
-    let json = auto_create_workspace(&state).await?;
-    let payload = bootstrap_workspace_payload(&json)?;
-    Ok(([(CONTENT_TYPE, "application/json")], payload).into_response())
-}
-
 /// `GET /v1/live/feature-flags` — return the current feature flags.
 async fn get_feature_flags(State(state): State<Arc<AppState>>) -> Json<FeatureFlags> {
     Json(state.feature_flags.clone())
-}
-
-#[allow(dead_code)]
-async fn get_current_live_events(
-    State(state): State<Arc<AppState>>,
-) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    eprintln!("[fullmag-api][LEGACY] hit: GET /v1/live/current/events — migrate to resource-first SSE");
-    let mut rx = state.current_live_events.subscribe();
-    let initial_snapshot = state
-        .current_live_public_snapshot
-        .read()
-        .await
-        .as_ref()
-        .cloned();
-    let stream = stream! {
-        if let Some(json) = initial_snapshot {
-            yield Ok(Event::default().event("session_state").data(json));
-        }
-
-        loop {
-            match rx.recv().await {
-                Ok(_) => {
-                    let current_json = state
-                        .current_live_public_snapshot
-                        .read()
-                        .await
-                        .as_ref()
-                        .cloned();
-                    if let Some(json) = current_json {
-                        yield Ok(Event::default().event("session_state").data(json));
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    };
-
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 fn is_preview_control_command(command: &SessionCommand) -> bool {
@@ -678,11 +548,121 @@ async fn take_next_current_control_command_after(
     selected
 }
 
-async fn publish_current_live_state(
+async fn sync_current_live_snapshot(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<CurrentLivePublishRequest>,
+    Json(req): Json<CurrentLiveSnapshotRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    eprintln!("[fullmag-api][LEGACY] hit: POST /v1/live/current/publish — migrate to resource-first publish");
+    apply_current_live_snapshot(&state, req).await
+}
+
+async fn sync_current_live_session_frame(
+    State(state): State<Arc<AppState>>,
+    Json(frame): Json<CurrentLiveSessionFrameRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    apply_current_live_snapshot(
+        &state,
+        CurrentLiveSnapshotRequest {
+            session_id: frame.session_id,
+            session: frame.session,
+            session_status: frame.session_status,
+            metadata: frame.metadata,
+            mesh_workspace: frame.mesh_workspace,
+            stage_execution: frame.stage_execution,
+            run: frame.run,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            fem_mesh: None,
+        },
+    )
+    .await
+}
+
+async fn sync_current_live_runtime_frame(
+    State(state): State<Arc<AppState>>,
+    Json(frame): Json<CurrentLiveRuntimeFrameRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    apply_current_live_snapshot(
+        &state,
+        CurrentLiveSnapshotRequest {
+            session_id: frame.session_id,
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: frame.live_state,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: frame.engine_log,
+            fem_mesh: frame.fem_mesh,
+        },
+    )
+    .await
+}
+
+async fn sync_current_live_scalar_frame(
+    State(state): State<Arc<AppState>>,
+    Json(frame): Json<CurrentLiveScalarFrameRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    apply_current_live_snapshot(
+        &state,
+        CurrentLiveSnapshotRequest {
+            session_id: frame.session_id,
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: frame.latest_scalar_row,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            fem_mesh: None,
+        },
+    )
+    .await
+}
+
+async fn sync_current_live_field_frame(
+    State(state): State<Arc<AppState>>,
+    Json(frame): Json<CurrentLiveFieldFrameRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    apply_current_live_snapshot(
+        &state,
+        CurrentLiveSnapshotRequest {
+            session_id: frame.session_id,
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: frame.latest_fields,
+            preview_fields: frame.preview_fields,
+            clear_preview_cache: frame.clear_preview_cache,
+            engine_log: None,
+            fem_mesh: None,
+        },
+    )
+    .await
+}
+
+async fn apply_current_live_snapshot(
+    state: &Arc<AppState>,
+    req: CurrentLiveSnapshotRequest,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let publish_start = std::time::Instant::now();
     let has_live_state_update = req.live_state.is_some();
     let has_scalar_row_update = req.latest_scalar_row.is_some();
@@ -763,91 +743,6 @@ async fn publish_current_live_state(
         previous_preview
     };
     let preview_ms = preview_start.elapsed().as_micros();
-    let serialize_start = std::time::Instant::now();
-    let ws_subscribers = state.current_live_events.receiver_count();
-    let session_state_messages = if ws_subscribers == 0 {
-        Vec::new()
-    } else {
-        // Compute delta: send only rows added since the last WS broadcast.
-        // Track the cursor and quantities hash so we avoid re-sending stale data.
-        let scalar_delta_start = next.scalar_rows_ws_cursor;
-        let new_quantities_hash = quantities_hash(&next.quantities);
-        let quantities_changed = new_quantities_hash != next.quantities_ws_hash;
-
-        // ── Sparse FEM mesh: only send when generation_id changed ──
-        let current_fem_gen = next.fem_mesh.as_ref().and_then(|m| m.generation_id.clone());
-        let fem_mesh_changed = current_fem_gen != next.ws_sent_fem_mesh_generation;
-
-        // ── Sparse preview: only generate vector_payload_id when fingerprint changed ──
-        let current_preview_fp = next.preview.as_ref().map(|p| p.fingerprint());
-        let preview_changed = current_preview_fp != next.ws_sent_preview_fingerprint;
-
-        // ── Sparse latest_fields: only send when content hash changed ──
-        let current_fields_hash = next.latest_fields.content_hash();
-        // Important: latest_fields.content_hash() is intentionally cheap
-        // (keys + shape), so value-only updates may keep the same hash.
-        // When the publish payload carries latest_fields, treat that as a
-        // definitive signal that field buffers changed and must be broadcast.
-        let latest_fields_changed =
-            has_latest_fields_update || current_fields_hash != next.ws_sent_latest_fields_hash;
-
-        // ── Sparse envelope: only send heavy static fields when version changed ──
-        let envelope_changed = next.envelope_version != next.ws_sent_envelope_version;
-
-        let messages = build_current_live_ws_messages_delta(
-            &state,
-            &next,
-            scalar_delta_start,
-            quantities_changed,
-            fem_mesh_changed,
-            preview_changed,
-            latest_fields_changed,
-            envelope_changed,
-        )?;
-        // Advance cursors and update fingerprints BEFORE storing.
-        next.scalar_rows_ws_cursor = next.scalar_rows.len();
-        if quantities_changed {
-            next.quantities_ws_hash = new_quantities_hash;
-        }
-        if fem_mesh_changed {
-            next.ws_sent_fem_mesh_generation = current_fem_gen;
-        }
-        if preview_changed {
-            next.ws_sent_preview_fingerprint = current_preview_fp;
-        }
-        if latest_fields_changed {
-            next.ws_sent_latest_fields_hash = current_fields_hash;
-        }
-        if envelope_changed {
-            next.ws_sent_envelope_version = next.envelope_version;
-        }
-        // Log sparse stats periodically to verify savings.
-        let step = next
-            .live_state
-            .as_ref()
-            .map(|l| l.latest_step.step)
-            .unwrap_or(0);
-        if step > 0 && step % 200 == 0 {
-            let total_bytes: usize = messages
-                .iter()
-                .map(|m| match m {
-                    CurrentLiveWireMessage::Text(t) => t.len(),
-                    CurrentLiveWireMessage::Binary(b) => b.len(),
-                })
-                .sum();
-            eprintln!(
-                "[fullmag-api] WS delta step={step}: {n} msgs, {kb:.1} KB, envelope={env}",
-                n = messages.len(),
-                kb = total_bytes as f64 / 1024.0,
-                env = if envelope_changed { "full" } else { "sparse" },
-            );
-        }
-        messages
-    };
-    let serialize_ms = serialize_start.elapsed().as_micros();
-
-    // Lazy memoization: bump state version and only rebuild full JSON snapshot
-    // when requested by HTTP endpoints (bootstrap / state).
     next.state_version = next.state_version.wrapping_add(1);
     let current_state_version = next.state_version;
     let (preview_source_step, preview_vector_len, preview_vector_avg) =
@@ -864,7 +759,7 @@ async fn publish_current_live_state(
         .and_then(|state| state.latest_step.magnetization.as_ref())
         .and_then(|values| average_vector_components(values, 3));
     eprintln!(
-        "[fullmag-api] publish -> live snapshot version={} session={} run={} step={} scalar_rows={} live_mag_len={} live_mag_avg={} preview={} preview_step={} preview_vec_len={} preview_vec_avg={} fields={} ws_messages={}",
+        "[fullmag-api] publish -> live snapshot version={} session={} run={} step={} scalar_rows={} live_mag_len={} live_mag_avg={} preview={} preview_step={} preview_vec_len={} preview_vec_avg={} fields={} realtime_subscribers={}",
         current_state_version,
         next.session.session_id,
         next.run.as_ref().map(|run| run.run_id.as_str()).unwrap_or("-"),
@@ -881,29 +776,22 @@ async fn publish_current_live_state(
         preview_vector_len,
         format_debug_vector_average(preview_vector_avg),
         next.latest_fields.len(),
-        session_state_messages.len(),
+        state.current_live_realtime_events.receiver_count(),
     );
+    let realtime_state =
+        current_live_realtime_state_from_snapshot(&state, &next, display_selection.revision).await;
     *current = Some(next);
     drop(current);
 
-    // Truly lazy snapshot: only bump the state version counter.
-    // Full JSON serialization is deferred to the HTTP handler that actually
-    // needs it (bootstrap / state endpoint) via version comparison.
-    // This eliminates ~2-10ms of synchronous JSON serialization from the hot
-    // publish path that runs every 50ms during a solver run.
-    let snapshot_ms: u128 = 0;
-
-    send_current_live_ws_messages(&state, session_state_messages);
+    publish_current_live_realtime_batch_changed(&state, &realtime_state, true, 100).await?;
 
     let publish_elapsed_us = publish_start.elapsed().as_micros();
     if publish_elapsed_us > 50_000 {
         eprintln!(
-            "[fullmag-api] PERF: publish took {:.1}ms (apply={:.1}ms preview={:.1}ms serialize={:.1}ms snapshot={:.1}ms)",
+            "[fullmag-api] PERF: publish took {:.1}ms (apply={:.1}ms preview={:.1}ms)",
             publish_elapsed_us as f64 / 1000.0,
             apply_ms as f64 / 1000.0,
             preview_ms as f64 / 1000.0,
-            serialize_ms as f64 / 1000.0,
-            snapshot_ms as f64 / 1000.0,
         );
     }
 
@@ -990,171 +878,219 @@ async fn read_current_live_artifact(
     Ok(([(CONTENT_TYPE, content_type)], bytes).into_response())
 }
 
-/// POST /v1/run — start a simulation run and broadcast live updates.
-async fn start_run(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<RunRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let output_dir = PathBuf::from(&req.output_dir);
-    std::fs::create_dir_all(&output_dir)
-        .map_err(|e| ApiError::internal(format!("failed to create output dir: {}", e)))?;
-
-    let run_id = format!("run-{}", uuid_v4_hex());
-    let (tx, _) = broadcast::channel::<StepUpdate>(256);
-    {
-        let mut channels = state.live_channels.write().await;
-        channels.insert(run_id.clone(), tx.clone());
-    }
-
-    let problem = req.problem;
-    let until = req.until_seconds;
-    let channels = state.live_channels.clone();
-    let rid = run_id.clone();
-
-    // Spawn runner in a blocking task (runner is synchronous)
-    tokio::task::spawn_blocking(move || {
-        let result = fullmag_runner::run_problem_with_callback(
-            &problem,
-            until,
-            &output_dir,
-            10, // send magnetization every 10 steps
-            |update| {
-                let _ = tx.send(update);
-                fullmag_runner::StepAction::Continue
-            },
-        );
-        match result {
-            Ok(_) => info!(run_id = %rid, "run completed successfully"),
-            Err(e) => tracing::error!(run_id = %rid, "run failed: {}", e),
-        }
-        // Dropping tx closes the broadcast channel; subscribers will see Closed.
-        drop(tx);
-        // Schedule cleanup of the channel registry entry.
-        let handle = tokio::runtime::Handle::current();
-        handle.spawn(async move {
-            channels.write().await.remove(&rid);
-        });
-    });
-
-    Ok(Json(serde_json::json!({
-        "status": "started",
-        "run_id": run_id,
-        "message": format!("simulation started, connect to /ws/live/{} for updates", run_id)
-    })))
-}
-
-/// GET /ws/live/:run_id — WebSocket endpoint for live step updates.
-async fn ws_live(
-    State(state): State<Arc<AppState>>,
-    AxumPath(run_id): AxumPath<String>,
-    ws: WebSocketUpgrade,
-) -> Result<impl IntoResponse, ApiError> {
-    let channels = state.live_channels.read().await;
-    let tx = channels
-        .get(&run_id)
+async fn build_current_live_realtime_hello_event(
+    state: &AppState,
+) -> Result<LiveRealtimeServerEvent, ApiError> {
+    let snapshot = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
         .cloned()
-        .ok_or_else(|| ApiError::not_found(format!("no active run with id '{}'", run_id)))?;
-    drop(channels);
-    Ok(ws.on_upgrade(move |socket| handle_ws(socket, tx)))
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let display_revision = state.current_display_selection.read().await.revision;
+    let realtime_state =
+        current_live_realtime_state_from_snapshot(state, &snapshot, display_revision).await;
+    let replay = state.current_live_realtime_replay.lock().await;
+    let current_seq = state.current_live_realtime_next_seq.load(Ordering::Relaxed);
+    let replay_available_after_seq =
+        current_live_realtime_available_after_seq(&replay, current_seq);
+    Ok(LiveRealtimeServerEvent::Hello {
+        seq: current_seq,
+        ts: realtime_timestamp_now(),
+        session_id: realtime_state.session_id.clone(),
+        run_id: realtime_state.run_id.clone(),
+        contract_version: current_live_realtime_contract_version().to_string(),
+        payload: HelloPayload {
+            server_time: realtime_timestamp_now(),
+            replay_available_after_seq,
+            current_seq,
+            resource_revisions: realtime_state.revisions,
+        },
+    })
 }
 
-async fn ws_current_live(
-    State(state): State<Arc<AppState>>,
-    ws: WebSocketUpgrade,
-) -> Result<impl IntoResponse, ApiError> {
-    Ok(ws.on_upgrade(move |socket| handle_current_live_ws(socket, state)))
-}
-
-async fn handle_ws(mut socket: WebSocket, tx: broadcast::Sender<StepUpdate>) {
-    let mut rx = tx.subscribe();
-
-    loop {
-        tokio::select! {
-            result = rx.recv() => {
-                match result {
-                    Ok(update) => {
-                        let finished = update.finished;
-                        // Q16/Q17: serialize the canonical V2 format for external consumers.
-                        let v2 = update.to_v2();
-                        let json = match serde_json::to_string(&v2) {
-                            Ok(j) => j,
-                            Err(_) => continue,
-                        };
-                        if socket.send(Message::Text(json.into())).await.is_err() {
-                            break; // client disconnected
-                        }
-                        if finished {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("ws client lagged {n} messages");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-            // Check for client disconnect
-            msg = socket.recv() => {
-                match msg {
-                    Some(Ok(Message::Close(_))) | None => break,
-                    _ => {}
-                }
-            }
-        }
+async fn build_current_live_realtime_resync_event(
+    state: &AppState,
+    session_id: String,
+    run_id: Option<String>,
+    expected_after: Option<u64>,
+    reason: &str,
+) -> LiveRealtimeServerEvent {
+    let replay = state.current_live_realtime_replay.lock().await;
+    let current_seq = state.current_live_realtime_next_seq.load(Ordering::Relaxed);
+    let replay_available_after_seq =
+        current_live_realtime_available_after_seq(&replay, current_seq);
+    LiveRealtimeServerEvent::ResyncRequired {
+        seq: current_seq,
+        ts: realtime_timestamp_now(),
+        session_id,
+        run_id,
+        contract_version: current_live_realtime_contract_version().to_string(),
+        payload: ResyncRequiredPayload {
+            reason: reason.to_string(),
+            expected_after,
+            replay_available_after_seq,
+        },
     }
 }
 
-async fn handle_current_live_ws(mut socket: WebSocket, state: Arc<AppState>) {
-    let initial_snapshot = {
-        let current = state.current_live_state.read().await;
-        current
-            .as_ref()
-            .map(|snapshot| build_current_live_ws_messages(&state, snapshot))
-            .transpose()
+fn encode_current_live_realtime_event(event: &LiveRealtimeServerEvent) -> Result<String, ApiError> {
+    serde_json::to_string(event).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to serialize realtime websocket event: {error}"
+        ))
+    })
+}
+
+pub(crate) async fn handle_current_live_realtime_ws(
+    mut socket: WebSocket,
+    state: Arc<AppState>,
+    after_seq: u64,
+) {
+    let mut rx = state.current_live_realtime_events.subscribe();
+    let hello = match build_current_live_realtime_hello_event(&state).await {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::warn!("failed to build realtime hello event: {:?}", error);
+            return;
+        }
     };
-    match initial_snapshot {
-        Ok(Some(messages)) => {
-            for message in messages {
-                let outbound = match message {
-                    CurrentLiveWireMessage::Text(text) => Message::Text(text.into()),
-                    CurrentLiveWireMessage::Binary(bytes) => Message::Binary(bytes.into()),
-                };
-                if socket.send(outbound).await.is_err() {
+    let (session_id, run_id, replay_available_after_seq) = match &hello {
+        LiveRealtimeServerEvent::Hello {
+            session_id,
+            run_id,
+            payload,
+            ..
+        } => (
+            session_id.clone(),
+            run_id.clone(),
+            payload.replay_available_after_seq,
+        ),
+        _ => return,
+    };
+    let hello_json = match encode_current_live_realtime_event(&hello) {
+        Ok(json) => json,
+        Err(error) => {
+            tracing::warn!("failed to encode realtime hello event: {:?}", error);
+            return;
+        }
+    };
+    if socket.send(Message::Text(hello_json.into())).await.is_err() {
+        return;
+    }
+
+    let mut last_sent_seq = after_seq;
+    if after_seq > 0 && after_seq < replay_available_after_seq {
+        let resync = build_current_live_realtime_resync_event(
+            &state,
+            session_id.clone(),
+            run_id.clone(),
+            Some(after_seq),
+            "sequence_gap",
+        )
+        .await;
+        match encode_current_live_realtime_event(&resync) {
+            Ok(json) => {
+                if socket.send(Message::Text(json.into())).await.is_err() {
                     return;
                 }
             }
+            Err(error) => {
+                tracing::warn!("failed to encode realtime resync event: {:?}", error);
+                return;
+            }
         }
-        Ok(None) => {}
-        Err(error) => {
-            tracing::warn!(
-                "failed to serialize initial current-live session_state: {:?}",
-                error
-            );
-            return;
+    } else if after_seq > 0 {
+        let replay_events = {
+            let replay = state.current_live_realtime_replay.lock().await;
+            replay
+                .iter()
+                .filter(|event| event.seq > after_seq)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        for event in replay_events {
+            if event.seq <= last_sent_seq {
+                continue;
+            }
+            if socket.send(Message::Text(event.json.into())).await.is_err() {
+                return;
+            }
+            last_sent_seq = event.seq;
         }
     }
 
-    let mut rx = state.current_live_events.subscribe();
+    let mut heartbeat = interval(Duration::from_secs(CURRENT_LIVE_REALTIME_HEARTBEAT_SECS));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         tokio::select! {
             result = rx.recv() => {
                 match result {
-                    Ok(message) => {
-                        let outbound = match message {
-                            CurrentLiveWireMessage::Text(text) => Message::Text(text.into()),
-                            CurrentLiveWireMessage::Binary(bytes) => Message::Binary(bytes.into()),
-                        };
-                        if socket.send(outbound).await.is_err() {
+                    Ok(event) => {
+                        if event.seq <= last_sent_seq {
+                            continue;
+                        }
+                        if socket.send(Message::Text(event.json.into())).await.is_err() {
+                            break;
+                        }
+                        last_sent_seq = event.seq;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        let resync = build_current_live_realtime_resync_event(
+                            &state,
+                            session_id.clone(),
+                            run_id.clone(),
+                            Some(last_sent_seq),
+                            "sequence_gap",
+                        ).await;
+                        match encode_current_live_realtime_event(&resync) {
+                            Ok(json) => {
+                                if socket.send(Message::Text(json.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!("failed to encode realtime lag resync event: {:?}", error);
+                                break;
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            _ = heartbeat.tick() => {
+                let heartbeat_event = LiveRealtimeServerEvent::Heartbeat {
+                    seq: state.current_live_realtime_next_seq.load(Ordering::Relaxed),
+                    ts: realtime_timestamp_now(),
+                    session_id: session_id.clone(),
+                    run_id: run_id.clone(),
+                    contract_version: current_live_realtime_contract_version().to_string(),
+                    payload: HeartbeatPayload {
+                        current_seq: state.current_live_realtime_next_seq.load(Ordering::Relaxed),
+                    },
+                };
+                match encode_current_live_realtime_event(&heartbeat_event) {
+                    Ok(json) => {
+                        if socket.send(Message::Text(json.into())).await.is_err() {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(error) => {
+                        tracing::warn!("failed to encode realtime heartbeat event: {:?}", error);
+                        break;
+                    }
                 }
             }
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(Message::Ping(payload))) => {
+                        if socket.send(Message::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1179,18 +1115,16 @@ pub(crate) async fn import_asset_for_current_workspace(
 
     let response = import_asset_into_dir(state, &session_id, imports_dir.clone(), req)?;
     let artifacts = read_artifacts_from_dir(imports_dir.parent())?;
-    let (messages, public_json) = {
+    let realtime_state = {
         let mut current = state.current_live_state.write().await;
         let snapshot = current
             .as_mut()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
         snapshot.artifacts = artifacts;
-        let messages = build_current_live_ws_messages(&state, snapshot)?;
-        let public_json = serialize_current_live_response(snapshot, true, false, false)?;
-        (messages, public_json)
+        current_live_realtime_state_from_snapshot(state, snapshot, snapshot.display_selection.revision)
+            .await
     };
-    *state.current_live_public_snapshot.write().await = Some(public_json);
-    send_current_live_ws_messages(&state, messages);
+    publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
     Ok(response)
 }
 
@@ -1294,8 +1228,7 @@ pub(crate) async fn commit_current_live_scene_document(
     );
     let (
         scene_document,
-        session_state_messages,
-        public_json,
+        realtime_state,
         preset_texture_change_logs,
         live_rebuild_stats,
     ) = {
@@ -1361,21 +1294,23 @@ pub(crate) async fn commit_current_live_scene_document(
         // Polling clients gate updates on `state_version`, so scene-authoring
         // changes must advance it just like solver publishes do.
         snapshot.state_version = snapshot.state_version.wrapping_add(1);
-        let session_state_messages = build_current_live_ws_messages(&state, snapshot)?;
-        let public_json = serialize_current_live_response(snapshot, true, false, false)?;
+        let realtime_state = current_live_realtime_state_from_snapshot(
+            state,
+            snapshot,
+            snapshot.display_selection.revision,
+        )
+        .await;
         let preset_texture_change_logs =
             detect_preset_texture_changes(previous_scene.as_ref(), &scene_document);
         (
             scene_document,
-            session_state_messages,
-            public_json,
+            realtime_state,
             preset_texture_change_logs,
             live_rebuild_stats,
         )
     };
 
-    *state.current_live_public_snapshot.write().await = Some(public_json);
-    send_current_live_ws_messages(&state, session_state_messages);
+    publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
     eprintln!(
         "[fullmag-api] TX -> frontend scene rev={} preset_texture_assets={} status=committed",
         scene_document.revision,
@@ -2073,45 +2008,6 @@ async fn list_physics_docs(
     Ok(Json(docs))
 }
 
-const CURRENT_LIVE_VECTOR_FRAME_MAGIC: [u8; 4] = *b"FMVP";
-const CURRENT_LIVE_VECTOR_FRAME_VERSION: u8 = 1;
-const CURRENT_LIVE_VECTOR_FRAME_KIND_F64: u8 = 1;
-const CURRENT_LIVE_VECTOR_FRAME_HEADER_LEN: usize = 16;
-
-/// V2 binary frame header length.
-///
-/// Layout (48 bytes):
-///   [0..4)   magic "FMVP"
-///   [4]      version = 2
-///   [5]      kind = 1 (f64)
-///   [6]      n_comp (u8)
-///   [7]      reserved (0)
-///   [8..12)  payload_id (u32 LE)
-///   [12..16) element_count (u32 LE)
-///   [16..20) grid_x (u32 LE)
-///   [20..24) grid_y (u32 LE)
-///   [24..28) grid_z (u32 LE)
-///   [28..44) quantity_id (16 bytes, null-padded UTF-8)
-///   [44..48) reserved (0)
-///   [48..)   f64 values
-const CURRENT_LIVE_VECTOR_FRAME_V2_HEADER_LEN: usize = 48;
-const CURRENT_LIVE_VECTOR_FRAME_V2_VERSION: u8 = 2;
-const CURRENT_LIVE_VECTOR_FRAME_QUANTITY_ID_LEN: usize = 16;
-
-fn next_current_live_vector_payload_id(state: &AppState) -> u32 {
-    state
-        .current_live_vector_payload_seq
-        .fetch_add(1, Ordering::Relaxed)
-        .wrapping_add(1)
-}
-
-fn preview_vector_values(preview: Option<&PreviewState>) -> Option<&[f64]> {
-    match preview {
-        Some(PreviewState::Spatial(state)) => state.vector_field_values.as_deref(),
-        _ => None,
-    }
-}
-
 fn average_vector_components(values: &[f64], n_comp: usize) -> Option<[f64; 3]> {
     if values.is_empty() || n_comp == 0 || values.len() < n_comp {
         return None;
@@ -2163,372 +2059,6 @@ fn preview_debug_metrics(preview: Option<&PreviewState>) -> (u64, usize, Option<
         Some(PreviewState::GlobalScalar(state)) => (state.source_step, 0, None),
         None => (0, 0, None),
     }
-}
-
-fn ws_preview_state(
-    preview: Option<&PreviewState>,
-    vector_payload_id: Option<u32>,
-) -> Option<PreviewState> {
-    match preview {
-        Some(PreviewState::Spatial(state)) => {
-            let mut cloned = state.clone();
-            if vector_payload_id.is_some() {
-                cloned.vector_payload_id = vector_payload_id;
-                cloned.vector_field_values = None;
-            }
-            // Strip `fem_mesh` from WS preview — the frontend must use the
-            // top-level `fem_mesh` field.  Sending it twice was a major
-            // bandwidth and memory waste.
-            cloned.fem_mesh = None;
-            Some(PreviewState::Spatial(cloned))
-        }
-        Some(PreviewState::GlobalScalar(state)) => Some(PreviewState::GlobalScalar(state.clone())),
-        None => None,
-    }
-}
-
-#[allow(dead_code)]
-fn serialize_current_live_vector_binary(payload_id: u32, values: &[f64]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(CURRENT_LIVE_VECTOR_FRAME_HEADER_LEN + values.len() * 8);
-    out.extend_from_slice(&CURRENT_LIVE_VECTOR_FRAME_MAGIC);
-    out.push(CURRENT_LIVE_VECTOR_FRAME_VERSION);
-    out.push(CURRENT_LIVE_VECTOR_FRAME_KIND_F64);
-    out.extend_from_slice(&0u16.to_le_bytes());
-    out.extend_from_slice(&payload_id.to_le_bytes());
-    out.extend_from_slice(&(values.len() as u32).to_le_bytes());
-    for value in values {
-        out.extend_from_slice(&value.to_le_bytes());
-    }
-    out
-}
-
-/// Serialize a quantity frame to the V2 binary format (FMVP version 2).
-///
-/// Includes quantity_id, n_comp, and grid dimensions in the header so
-/// that the frontend can identify and reconstruct spatial fields without
-/// relying on a paired JSON message.
-fn serialize_current_live_vector_binary_v2(
-    payload_id: u32,
-    quantity_id: &str,
-    n_comp: u8,
-    grid: [u32; 3],
-    values: &[f64],
-) -> Vec<u8> {
-    let mut out = Vec::with_capacity(CURRENT_LIVE_VECTOR_FRAME_V2_HEADER_LEN + values.len() * 8);
-    out.extend_from_slice(&CURRENT_LIVE_VECTOR_FRAME_MAGIC);
-    out.push(CURRENT_LIVE_VECTOR_FRAME_V2_VERSION);
-    out.push(CURRENT_LIVE_VECTOR_FRAME_KIND_F64);
-    out.push(n_comp);
-    out.push(0u8); // reserved
-    out.extend_from_slice(&payload_id.to_le_bytes());
-    out.extend_from_slice(&(values.len() as u32).to_le_bytes());
-    out.extend_from_slice(&grid[0].to_le_bytes());
-    out.extend_from_slice(&grid[1].to_le_bytes());
-    out.extend_from_slice(&grid[2].to_le_bytes());
-    // quantity_id: 16 bytes, null-padded
-    let id_bytes = quantity_id.as_bytes();
-    let copy_len = id_bytes
-        .len()
-        .min(CURRENT_LIVE_VECTOR_FRAME_QUANTITY_ID_LEN);
-    out.extend_from_slice(&id_bytes[..copy_len]);
-    for _ in copy_len..CURRENT_LIVE_VECTOR_FRAME_QUANTITY_ID_LEN {
-        out.push(0u8);
-    }
-    out.extend_from_slice(&[0u8; 4]); // reserved
-    for value in values {
-        out.extend_from_slice(&value.to_le_bytes());
-    }
-    out
-}
-
-/// Compute a cheap fingerprint for a slice of QuantityDescriptors so we
-/// can skip re-broadcasting quantities when they haven't changed.
-fn quantities_hash(quantities: &[crate::types::QuantityDescriptor]) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    quantities.len().hash(&mut h);
-    for q in quantities {
-        q.id.hash(&mut h);
-        q.available.hash(&mut h);
-    }
-    h.finish()
-}
-
-pub(crate) fn build_current_live_ws_messages(
-    state: &AppState,
-    snapshot: &SessionStateResponse,
-) -> Result<Vec<CurrentLiveWireMessage>, ApiError> {
-    // Non-delta path: send full scalar history and always include quantities.
-    // Used for initial WS handshake and infrequent mutation endpoints.
-    // All sparse flags are true → send everything (including envelope).
-    build_current_live_ws_messages_delta(state, snapshot, 0, true, true, true, true, true)
-}
-
-/// Build WS messages using a delta slice of scalar_rows.
-///
-/// `scalar_rows_delta_start` — index from which to slice `scalar_rows` for the WS
-/// event (0 = send full history).  `quantities_changed` controls whether
-/// quantities are included in the event (omit when unchanged to save bandwidth).
-///
-/// The `fem_mesh_changed`, `preview_changed`, and `latest_fields_changed` flags
-/// control whether the corresponding heavy payloads are included.  When `false`,
-/// the field is omitted from the JSON (sparse delta) and the frontend preserves
-/// the previously-received value.
-fn build_current_live_ws_messages_delta(
-    state: &AppState,
-    snapshot: &SessionStateResponse,
-    scalar_rows_delta_start: usize,
-    quantities_changed: bool,
-    fem_mesh_changed: bool,
-    preview_changed: bool,
-    latest_fields_changed: bool,
-    envelope_changed: bool,
-) -> Result<Vec<CurrentLiveWireMessage>, ApiError> {
-    let flags = &state.feature_flags;
-
-    // Only generate a binary vector payload when the preview fingerprint changed
-    // AND 3D preview is not disabled.
-    let vector_payload_id = if preview_changed && !flags.disable_preview_3d {
-        preview_vector_values(snapshot.preview.as_ref())
-            .map(|_| next_current_live_vector_payload_id(state))
-    } else {
-        None
-    };
-    let mut messages = Vec::new();
-    if !flags.disable_preview_3d {
-        if let (Some(payload_id), Some(values)) = (
-            vector_payload_id,
-            preview_vector_values(snapshot.preview.as_ref()),
-        ) {
-            // Extract V2 metadata from spatial preview if available
-            let v2_meta = match snapshot.preview.as_ref() {
-                Some(PreviewState::Spatial(sp)) => Some((
-                    &sp.quantity,
-                    sp.n_comp as u8,
-                    [
-                        sp.preview_grid[0] as u32,
-                        sp.preview_grid[1] as u32,
-                        sp.preview_grid[2] as u32,
-                    ],
-                )),
-                _ => None,
-            };
-            let binary = if let Some((quantity_id, n_comp, grid)) = v2_meta {
-                serialize_current_live_vector_binary_v2(
-                    payload_id,
-                    quantity_id,
-                    n_comp,
-                    grid,
-                    values,
-                )
-            } else {
-                serialize_current_live_vector_binary(payload_id, values)
-            };
-            messages.push(CurrentLiveWireMessage::Binary(binary));
-        }
-    }
-    if !flags.disable_charts {
-        messages.push(CurrentLiveWireMessage::Text(
-            serialize_current_live_chart_event(snapshot, scalar_rows_delta_start)?,
-        ));
-    }
-    if !flags.disable_session_state_broadcast {
-        messages.push(CurrentLiveWireMessage::Text(
-            serialize_current_live_session_event(
-                snapshot,
-                vector_payload_id,
-                scalar_rows_delta_start,
-                quantities_changed,
-                fem_mesh_changed,
-                preview_changed && !flags.disable_preview_3d,
-                latest_fields_changed,
-                envelope_changed,
-            )?,
-        ));
-    }
-    Ok(messages)
-}
-
-fn serialize_current_live_chart_event(
-    snapshot: &SessionStateResponse,
-    scalar_rows_delta_start: usize,
-) -> Result<String, ApiError> {
-    let delta_start = scalar_rows_delta_start.min(snapshot.scalar_rows.len());
-    let scalar_rows_delta = &snapshot.scalar_rows[delta_start..];
-    serde_json::to_string(&CurrentLiveEvent::ChartState {
-        state: ChartStateEventView {
-            scalar_rows: scalar_rows_delta,
-            scalar_rows_total: snapshot.scalar_rows.len(),
-        },
-    })
-    .map_err(|error| ApiError::internal(format!("failed to serialize chart state: {}", error)))
-}
-
-fn send_current_live_ws_messages(state: &AppState, messages: Vec<CurrentLiveWireMessage>) {
-    let mut total_text_bytes: usize = 0;
-    let mut total_binary_bytes: usize = 0;
-    for message in &messages {
-        match message {
-            CurrentLiveWireMessage::Text(t) => total_text_bytes += t.len(),
-            CurrentLiveWireMessage::Binary(b) => total_binary_bytes += b.len(),
-        }
-    }
-    if total_text_bytes + total_binary_bytes > 512 * 1024 {
-        eprintln!(
-            "[fullmag-api] PERF: WS broadcast payload {:.1}KB text + {:.1}KB binary",
-            total_text_bytes as f64 / 1024.0,
-            total_binary_bytes as f64 / 1024.0,
-        );
-    }
-    for message in messages {
-        let _ = state.current_live_events.send(message);
-    }
-}
-
-fn serialize_current_live_session_event(
-    snapshot: &SessionStateResponse,
-    vector_payload_id: Option<u32>,
-    scalar_rows_delta_start: usize,
-    quantities_changed: bool,
-    fem_mesh_changed: bool,
-    preview_changed: bool,
-    latest_fields_changed: bool,
-    envelope_changed: bool,
-) -> Result<String, ApiError> {
-    let step_update_v2 = snapshot.build_step_update_v2();
-    let _ = scalar_rows_delta_start;
-
-    // Sparse: only include preview with binary reference when it actually changed.
-    let preview = if preview_changed {
-        ws_preview_state(snapshot.preview.as_ref(), vector_payload_id)
-    } else {
-        None
-    };
-
-    // Envelope fields: only include when their version changed.
-    // On a typical per-step publish, none of these change — skipping them
-    // reduces the session_state message from ~1.5 MB to ~2 KB.
-    let (
-        session,
-        run,
-        capabilities,
-        metadata,
-        mesh_workspace,
-        stage_execution,
-        scene_document,
-        engine_log,
-        artifacts,
-        display_selection,
-        preview_config,
-    ) = if envelope_changed {
-        (
-            Some(&snapshot.session),
-            snapshot.run.as_ref(),
-            snapshot.capabilities.as_ref(),
-            snapshot.metadata.as_ref(),
-            snapshot.mesh_workspace.as_ref(),
-            snapshot.stage_execution.as_ref(),
-            snapshot.scene_document.as_ref(),
-            Some(snapshot.engine_log.as_slice()),
-            Some(snapshot.artifacts.as_slice()),
-            Some(&snapshot.display_selection),
-            Some(&snapshot.preview_config),
-        )
-    } else {
-        (
-            None, None, None, None, None, None, None, None, None, None, None,
-        )
-    };
-
-    serde_json::to_string(&CurrentLiveEvent::SessionState {
-        state: SessionStateEventView {
-            session_protocol_version: &snapshot.session_protocol_version,
-            capability_profile_version: &snapshot.capability_profile_version,
-            session,
-            run,
-            live_state: snapshot.live_state.as_ref(),
-            runtime_status: &snapshot.runtime_status,
-            capabilities,
-            metadata,
-            mesh_workspace,
-            stage_execution,
-            scene_document,
-            scalar_rows: &[],
-            scalar_rows_total: snapshot.scalar_rows.len(),
-            engine_log,
-            quantities: quantities_changed.then_some(snapshot.quantities.as_slice()),
-            fem_mesh: if fem_mesh_changed {
-                snapshot.fem_mesh.as_ref()
-            } else {
-                None
-            },
-            latest_fields: if latest_fields_changed {
-                Some(&snapshot.latest_fields)
-            } else {
-                None
-            },
-            artifacts,
-            display_selection,
-            preview_config,
-            preview,
-            step_update_v2,
-            state_version: snapshot.state_version,
-        },
-    })
-    .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
-}
-
-pub(crate) fn serialize_current_live_response(
-    snapshot: &SessionStateResponse,
-    include_preview: bool,
-    binary_field_transport: bool,
-    binary_mesh_transport: bool,
-) -> Result<String, ApiError> {
-    let step_update_v2 = snapshot.build_step_update_v2();
-    serde_json::to_string(&SessionStateResponseWire {
-        session: &snapshot.session,
-        run: snapshot.run.as_ref(),
-        live_state: live_state_wire_value(
-            snapshot.live_state.as_ref(),
-            binary_field_transport,
-            binary_mesh_transport,
-        )?,
-        runtime_status: &snapshot.runtime_status,
-        metadata: snapshot.metadata.as_ref(),
-        mesh_workspace: snapshot.mesh_workspace.as_ref(),
-        stage_execution: snapshot.stage_execution.as_ref(),
-        scene_document: snapshot.scene_document.as_ref(),
-        scalar_rows: &snapshot.scalar_rows,
-        scalar_rows_total: snapshot.scalar_rows.len(),
-        engine_log: &snapshot.engine_log,
-        quantities: &snapshot.quantities,
-        fem_mesh: fem_mesh_wire_value(snapshot.fem_mesh.as_ref(), binary_mesh_transport)?,
-        latest_fields: latest_fields_wire_value(snapshot, binary_field_transport)?,
-        artifacts: &snapshot.artifacts,
-        display_selection: &snapshot.display_selection,
-        preview_config: &snapshot.preview_config,
-        preview: if include_preview {
-            preview_wire_value(snapshot.preview.as_ref(), binary_field_transport)?
-        } else {
-            None
-        },
-        step_update_v2: step_update_v2_wire_value(step_update_v2, binary_field_transport)?,
-        state_version: snapshot.state_version,
-    })
-    .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
-}
-
-/// Read from AppState's live state (read lock) and serialize the full public
-/// snapshot.  Used for lazy memoization instead of serializing inline during
-/// publish while holding the write lock.
-#[allow(dead_code)]
-async fn serialize_current_live_response_from_state(state: &AppState) -> Result<String, ApiError> {
-    let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::internal("no live state to serialize".to_string()))?;
-    serialize_current_live_response(snapshot, true, false, false)
 }
 
 fn live_state_has_fresh_preview(live_state: Option<&LiveState>) -> bool {
@@ -3087,30 +2617,5 @@ fn scalar_row_metric_value(row: &ScalarRow, metric_key: &str) -> Option<f64> {
         "e_dmi" => Some(row.e_dmi),
         "e_total" => Some(row.e_total),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::bootstrap_workspace_payload;
-
-    #[test]
-    fn workspace_bootstrap_payload_injects_mode() {
-        let payload = bootstrap_workspace_payload(r#"{"session":{"session_id":"s1"},"run":null}"#)
-            .expect("workspace bootstrap payload should encode");
-        let value: serde_json::Value =
-            serde_json::from_str(&payload).expect("payload should be valid json");
-        assert_eq!(
-            value.get("mode").and_then(serde_json::Value::as_str),
-            Some("workspace")
-        );
-        assert_eq!(
-            value
-                .get("session")
-                .and_then(serde_json::Value::as_object)
-                .and_then(|session| session.get("session_id"))
-                .and_then(serde_json::Value::as_str),
-            Some("s1")
-        );
     }
 }

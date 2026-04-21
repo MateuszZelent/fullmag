@@ -13,19 +13,19 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tokio::sync::{broadcast, watch, Mutex, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
 use crate::types::{
-    AppState, CommandLifecycleState, CurrentDisplaySelection, CurrentLiveWireMessage,
-    DisplayPresentationState, LatestFields, LiveState, RunManifest, RuntimeStatusView, ScalarRow,
-    SessionCommand, SessionManifest, SessionStateResponse, StageExecutionRecord,
-    StageExecutionState, StepUpdateView, TrackedCommandRecord,
+    AppState, CommandLifecycleState, CurrentDisplaySelection, DisplayPresentationState,
+    LatestFields, LiveState, RunManifest, RuntimeStatusView, ScalarRow, SessionCommand,
+    SessionManifest, SessionStateResponse, StageExecutionRecord, StageExecutionState,
+    StepUpdateView, TrackedCommandRecord,
 };
 use fullmag_runner::RuntimeStatus;
 
@@ -133,17 +133,15 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
 
 /// Minimal `AppState` with no active live session.
 fn test_app_state() -> Arc<AppState> {
-    let (live_events_tx, _rx) = broadcast::channel::<CurrentLiveWireMessage>(16);
     let (control_events_tx, _rx) = watch::channel(0u64);
 
     Arc::new(AppState {
         repo_root: PathBuf::from("."),
         current_workspace_root: PathBuf::from("."),
-        live_channels: Arc::new(RwLock::new(HashMap::new())),
         current_live_state: Arc::new(RwLock::new(None)),
-        current_live_public_snapshot: Arc::new(RwLock::new(None)),
-        current_live_events: live_events_tx,
-        current_live_vector_payload_seq: Arc::new(AtomicU32::new(0)),
+        current_live_realtime_events: tokio::sync::broadcast::channel(16).0,
+        current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
+        current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -151,7 +149,6 @@ fn test_app_state() -> Arc<AppState> {
         current_command_ledger: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: control_events_tx,
         current_control_next_seq: Arc::new(Mutex::new(0)),
-        current_live_snapshot_version: Arc::new(AtomicU64::new(0)),
         feature_flags: FeatureFlags::default(),
     })
 }
@@ -219,14 +216,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         preview_config: Default::default(),
         preview: None,
         builder_adapter: None,
-        scalar_rows_ws_cursor: 0,
-        quantities_ws_hash: 0,
-        ws_sent_fem_mesh_generation: None,
-        ws_sent_preview_fingerprint: None,
-        ws_sent_latest_fields_hash: 0,
         state_version: 0,
-        ws_sent_envelope_version: 0,
-        envelope_version: 0,
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -539,14 +529,7 @@ async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) 
         preview_config: Default::default(),
         preview: None,
         builder_adapter: None,
-        scalar_rows_ws_cursor: 0,
-        quantities_ws_hash: 0,
-        ws_sent_fem_mesh_generation: None,
-        ws_sent_preview_fingerprint: None,
-        ws_sent_latest_fields_hash: 0,
         state_version: 0,
-        ws_sent_envelope_version: 0,
-        envelope_version: 0,
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -565,17 +548,15 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
     ));
     fs::create_dir_all(&repo_root).expect("failed to create temp repo root");
 
-    let (live_events_tx, _rx) = broadcast::channel::<CurrentLiveWireMessage>(16);
     let (control_events_tx, _rx) = watch::channel(0u64);
 
     let state = Arc::new(AppState {
         repo_root: repo_root.clone(),
         current_workspace_root: repo_root.clone(),
-        live_channels: Arc::new(RwLock::new(HashMap::new())),
         current_live_state: Arc::new(RwLock::new(None)),
-        current_live_public_snapshot: Arc::new(RwLock::new(None)),
-        current_live_events: live_events_tx,
-        current_live_vector_payload_seq: Arc::new(AtomicU32::new(0)),
+        current_live_realtime_events: tokio::sync::broadcast::channel(16).0,
+        current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
+        current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -583,7 +564,6 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         current_command_ledger: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: control_events_tx,
         current_control_next_seq: Arc::new(Mutex::new(0)),
-        current_live_snapshot_version: Arc::new(AtomicU64::new(0)),
         feature_flags: FeatureFlags::default(),
     });
 
@@ -645,14 +625,7 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         preview_config: Default::default(),
         preview: None,
         builder_adapter: None,
-        scalar_rows_ws_cursor: 0,
-        quantities_ws_hash: 0,
-        ws_sent_fem_mesh_generation: None,
-        ws_sent_preview_fingerprint: None,
-        ws_sent_latest_fields_hash: 0,
         state_version: 0,
-        ws_sent_envelope_version: 0,
-        envelope_version: 0,
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -964,7 +937,10 @@ async fn quantities_catalog_returns_json_without_session() {
     let quantities = json["quantities"]
         .as_array()
         .expect("quantities must be an array");
-    assert!(!quantities.is_empty(), "quantity catalog should not be empty");
+    assert!(
+        !quantities.is_empty(),
+        "quantity catalog should not be empty"
+    );
 
     let first = &quantities[0];
     assert!(first["id"].is_string());
@@ -1457,7 +1433,10 @@ async fn authoring_transactions_replace_scene_commits_document() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["transaction_kind"], "replace_scene");
-    assert_eq!(json["committed_scene"]["scene"]["name"], "Transaction Scene");
+    assert_eq!(
+        json["committed_scene"]["scene"]["name"],
+        "Transaction Scene"
+    );
 }
 
 #[tokio::test]
@@ -1493,7 +1472,10 @@ async fn authoring_transactions_merge_patch_commits_document() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["transaction_kind"], "merge_patch");
-    assert_eq!(json["committed_scene"]["scene"]["name"], "Transaction Patch Scene");
+    assert_eq!(
+        json["committed_scene"]["scene"]["name"],
+        "Transaction Patch Scene"
+    );
 }
 
 #[tokio::test]
@@ -1630,6 +1612,162 @@ async fn authoring_material_patch_commits_requested_material() {
     assert_eq!(material.properties.ms, None);
     assert_eq!(material.properties.aex, Some(15e-12));
     assert_eq!(material.properties.alpha, 0.05);
+}
+
+#[tokio::test]
+async fn authoring_object_interaction_get_returns_interfacial_dmi() {
+    let mut scene = sample_scene_document();
+    scene.objects[0].physics_stack.push(fullmag_authoring::ScriptBuilderMagneticInteractionEntry {
+        kind: fullmag_authoring::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+        enabled: true,
+        params: Some(
+            [("dind".to_string(), serde_json::json!(0.0))]
+                .into_iter()
+                .collect(),
+        ),
+    });
+    let object_id = scene.objects[0].id.clone();
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v1_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v1/live/current/authoring/physics/objects/{object_id}/interactions/interfacial_dmi"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["interaction_kind"], "interfacial_dmi");
+    assert_eq!(json["present"], true);
+    assert_eq!(json["params"]["dind"], 0.0);
+}
+
+#[tokio::test]
+async fn authoring_object_interaction_patch_updates_uniaxial_params() {
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/v1/live/current/authoring/physics/objects/{object_id}/interactions/uniaxial_anisotropy"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "present": true,
+                        "enabled": true,
+                        "params": {
+                            "ku1": 42.0,
+                            "axis": [1.0, 0.0, 0.0]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["interaction_kind"], "uniaxial_anisotropy");
+    assert_eq!(json["present"], true);
+    assert_eq!(json["params"]["ku1"], 42.0);
+    assert_eq!(json["params"]["axis"][0], 1.0);
+
+    let guard = state.current_live_state.read().await;
+    let committed = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("scene document committed");
+    let object = committed
+        .objects
+        .iter()
+        .find(|entry| entry.id == object_id)
+        .expect("object");
+    let interaction = object
+        .physics_stack
+        .iter()
+        .find(|entry| entry.kind == fullmag_authoring::ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy)
+        .expect("uniaxial interaction");
+    assert_eq!(interaction.enabled, true);
+}
+
+#[tokio::test]
+async fn authoring_material_patch_syncs_interfacial_dmi_params_for_bound_objects() {
+    let mut scene = sample_scene_document();
+    scene.objects[0].physics_stack.push(fullmag_authoring::ScriptBuilderMagneticInteractionEntry {
+        kind: fullmag_authoring::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+        enabled: true,
+        params: Some(
+            [("dind".to_string(), serde_json::json!(0.0))]
+                .into_iter()
+                .collect(),
+        ),
+    });
+    let object_id = scene.objects[0].id.clone();
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/live/current/authoring/model/materials/mat%3Abody")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "properties": {
+                            "Dind": 0.123
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let guard = state.current_live_state.read().await;
+    let committed = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("scene document committed");
+    let object = committed
+        .objects
+        .iter()
+        .find(|entry| entry.id == object_id)
+        .expect("object");
+    let interaction = object
+        .physics_stack
+        .iter()
+        .find(|entry| entry.kind == fullmag_authoring::ScriptBuilderMagneticInteractionKind::InterfacialDmi)
+        .expect("dmi interaction");
+    assert_eq!(interaction.params.as_ref().and_then(|params| params.get("dind")).and_then(|value| value.as_f64()), Some(0.123));
 }
 
 // ─── commands endpoint ──────────────────────────────────────────────────────
@@ -2179,6 +2317,42 @@ async fn engine_log_returns_200_with_session() {
     assert_eq!(json["revision"], 0);
     assert!(json["entries"].is_array());
     assert_eq!(json["total"], 0);
+}
+
+#[tokio::test]
+async fn asyncapi_document_returns_200() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/asyncapi.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["asyncapi"], "2.6.0");
+    assert_eq!(
+        json["channels"]["/v1/live/current/ws"]["subscribe"]["operationId"],
+        "subscribeCurrentLiveRealtime"
+    );
+}
+
+#[tokio::test]
+async fn realtime_ws_requires_subprotocol() {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "sec-websocket-protocol",
+        axum::http::HeaderValue::from_static("wrong.protocol"),
+    );
+
+    let error = super::handlers::realtime::ensure_realtime_subprotocol(&headers)
+        .expect_err("wrong subprotocol should be rejected");
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
 }
 
 // ─── unknown route ──────────────────────────────────────────────────────────

@@ -110,6 +110,28 @@ function clampFinite(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function buildMaterialNumericPatch(
+  key: keyof SceneMaterialAsset["properties"],
+  value: number | null,
+): {
+  properties: Partial<SceneMaterialAsset["properties"]>;
+} {
+  switch (key) {
+    case "Ms":
+      return { properties: { Ms: value } };
+    case "Aex":
+      return { properties: { Aex: value } };
+    case "alpha":
+      return { properties: { alpha: value ?? 0 } };
+    case "Dind":
+      return { properties: { Dind: value } };
+    default: {
+      const exhaustive: never = key;
+      throw new Error(`unsupported material property patch: ${exhaustive}`);
+    }
+  }
+}
+
 function multiplyQuat(
   a: [number, number, number, number],
   b: [number, number, number, number],
@@ -209,6 +231,7 @@ export default function MaterialPanel({
     () => buildPhysicsCapabilityView(cmd.capabilities, physicsStack),
     [cmd.capabilities, physicsStack],
   );
+  const liveApi = useMemo(() => getLiveApiClient(), []);
 
   const updateMaterial = useCallback(
     (updater: (asset: SceneMaterialAsset) => SceneMaterialAsset) => {
@@ -269,6 +292,25 @@ export default function MaterialPanel({
       });
     },
     [materialAsset?.properties.Dind, model, sceneObject],
+  );
+
+  const patchObjectInteraction = useCallback(
+    (
+      kind: ScriptBuilderMagneticInteractionKind,
+      request: {
+        present?: boolean;
+        enabled?: boolean;
+        params?: Record<string, unknown>;
+      },
+    ) => {
+      if (!sceneObject) return;
+      void liveApi.scene
+        .patchObjectInteraction(sceneObject.id, kind, request)
+        .catch((error) => {
+          console.error("failed to patch authoring object interaction", error);
+        });
+    },
+    [liveApi, sceneObject],
   );
 
   const assignPresetTexture = useCallback(
@@ -446,6 +488,10 @@ export default function MaterialPanel({
   ) => {
     const val = parseFloat(valStr);
     const parsed = Number.isNaN(val) ? null : val;
+    if (key === "alpha" && parsed == null) {
+      return;
+    }
+    const materialPatch = buildMaterialNumericPatch(key, parsed);
     updateMaterial((asset) => ({
       ...asset,
       properties: {
@@ -453,25 +499,37 @@ export default function MaterialPanel({
         [key]: parsed as never,
       },
     }));
-    if (key === "Dind") {
+    if (key === "Dind" && hasObjectInteraction(physicsStack, "interfacial_dmi")) {
       updateObjectPhysicsStack((stack) => {
-        if (!hasObjectInteraction(stack, "interfacial_dmi")) {
-          return stack;
-        }
-        return upsertObjectInteraction(stack, "interfacial_dmi", {
+        const current = ensureObjectPhysicsStack(stack, parsed);
+        return upsertObjectInteraction(current, "interfacial_dmi", {
           params: {
-            ...(stack.find((entry) => entry.kind === "interfacial_dmi")?.params ?? {}),
+            ...(current.find((entry) => entry.kind === "interfacial_dmi")?.params ?? {}),
             dind: parsed ?? 0,
           },
         });
       });
     }
+    if (sceneObject?.material_ref) {
+      void liveApi.scene
+        .patchMaterial(sceneObject.material_ref, materialPatch)
+        .catch((error) => {
+          console.error("failed to patch authoring material", error);
+        });
+    }
   };
 
   const addInteraction = (kind: ScriptBuilderMagneticInteractionKind) => {
+    const params =
+      kind === "interfacial_dmi"
+        ? { dind: materialAsset?.properties.Dind ?? 1e-3 }
+        : kind === "uniaxial_anisotropy"
+          ? { ku1: 0, axis: [0, 0, 1] }
+          : undefined;
     updateObjectPhysicsStack((stack) =>
-      upsertObjectInteraction(stack, kind, { enabled: true }),
+      upsertObjectInteraction(stack, kind, { enabled: true, params }),
     );
+    patchObjectInteraction(kind, { present: true, enabled: true, params });
   };
 
   const toggleInteraction = (
@@ -482,19 +540,25 @@ export default function MaterialPanel({
       return;
     }
     updateObjectPhysicsStack((stack) => upsertObjectInteraction(stack, kind, { enabled }));
+    patchObjectInteraction(kind, { present: true, enabled });
   };
 
   const removeInteraction = (kind: ScriptBuilderMagneticInteractionKind) => {
     updateObjectPhysicsStack((stack) => removeOptionalInteraction(stack, kind));
+    patchObjectInteraction(kind, { present: false });
   };
 
   const updateUniaxialParam = (key: "ku1" | "axis", value: unknown) => {
+    const nextParams = {
+      ...(uniaxial?.params ?? {}),
+      [key]: value,
+    } as Record<string, unknown>;
     updateObjectPhysicsStack((stack) => {
-      const params = {
-        ...(stack.find((entry) => entry.kind === "uniaxial_anisotropy")?.params ?? {}),
-        [key]: value,
-      };
-      return upsertObjectInteraction(stack, "uniaxial_anisotropy", { params });
+      return upsertObjectInteraction(stack, "uniaxial_anisotropy", { params: nextParams });
+    });
+    patchObjectInteraction("uniaxial_anisotropy", {
+      present: true,
+      params: nextParams,
     });
   };
 
@@ -538,7 +602,6 @@ export default function MaterialPanel({
     ? MAGNETIC_PRESET_CATALOG.find((entry) => entry.kind === selectedPresetKind) ?? null
     : null;
 
-  const liveApi = useMemo(() => getLiveApiClient(), []);
   const [presetTextureSync, setPresetTextureSync] = useState<PresetTextureSyncState>({
     status: "idle",
     totalSpins: null,

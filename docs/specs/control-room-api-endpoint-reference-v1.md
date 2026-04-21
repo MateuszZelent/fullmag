@@ -178,6 +178,46 @@ Notes:
 - This is a contract discovery surface.
 - It is useful for manual inspection, not a canonical data source for clients.
 
+### 4.5 `GET /v1/asyncapi.json`
+
+- Status: `canonical`
+- Purpose: machine-readable AsyncAPI draft for the canonical realtime websocket
+- Request body: none
+- Response body: AsyncAPI 2.x JSON document
+
+Notes:
+
+- This documents websocket message families, replay semantics, and subprotocol expectations.
+- HTTP remains documented in OpenAPI; AsyncAPI does not replace resource docs.
+
+### 4.6 `GET /v1/docs/asyncapi`
+
+- Status: `canonical`
+- Purpose: lightweight human-readable landing page for the realtime AsyncAPI draft
+- Request body: none
+- Response body: HTML page with handshake summary and link to `/v1/asyncapi.json`
+
+### 4.7 `GET /v1/live/current/ws`
+
+- Status: `canonical`
+- Purpose: low-latency realtime invalidation and lifecycle notifications for the current live workspace
+- Request body: none
+- Query params:
+  - `after_seq: u64` — optional resume cursor; server replays events strictly newer than this sequence number when available
+- Required request header:
+  - `Sec-WebSocket-Protocol: fullmag.live.v1`
+- Response:
+  - `101 Switching Protocols` on successful upgrade
+  - `404` when no active current-live workspace exists
+  - `400` when the websocket subprotocol is missing or unsupported
+
+Rules:
+
+- websocket frames are notification-first; clients fetch canonical resources over HTTP after invalidation,
+- heavy fields and topology do not ride on this websocket by default,
+- the server sends `hello`, `heartbeat`, `resource.batch_changed`, and `resync.required`,
+- reconnect uses `after_seq`; when replay is unavailable the server emits `resync.required`.
+
 ## 5. Live Status Endpoint
 
 ### 5.1 `GET /v1/live/current/status`
@@ -885,6 +925,46 @@ Current implementation note:
   mutations into a first-class authoring resource.
 - It is still backed by commit-time scene revalidation, so the canonical source
   of truth remains the whole `SceneDocument`.
+- Current backend behavior also synchronizes `interfacial_dmi.params.dind` for
+  objects bound to the patched material, so material edits no longer need a
+  coarse full-scene commit just to keep DMI parameters aligned.
+
+### 7.18.5 `GET /v1/live/current/authoring/physics/objects/{object_id}/interactions/{interaction_kind}`
+
+- Status: `canonical`
+- Purpose: fetch one object-scoped physics interaction from the current authoring scene
+- Request body: none
+- Response body: `ObjectInteractionResource`
+
+#### `ObjectInteractionResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `object_id` | `string` | Canonical scene object id | Matches `SceneObject.id`. |
+| `interaction_kind` | `string` | Interaction discriminator | Current values: `exchange`, `demag`, `interfacial_dmi`, `uniaxial_anisotropy`. |
+| `present` | `bool` | Whether the optional interaction currently exists on the object | `exchange` and `demag` are effectively always present. |
+| `enabled` | `bool` | Current enabled state | Required terms remain enabled. |
+| `params` | `json object` | Term-specific authoring parameters | Examples: `{ "dind": ... }`, `{ "ku1": ..., "axis": [...] }`. |
+
+### 7.18.6 `PATCH /v1/live/current/authoring/physics/objects/{object_id}/interactions/{interaction_kind}`
+
+- Status: `canonical`
+- Purpose: create, update, toggle, or remove one object-scoped physics interaction
+- Request body: `ObjectInteractionPatchRequest`
+- Response body: `ObjectInteractionResource`
+
+#### `ObjectInteractionPatchRequest`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `present` | `bool?` | Optional create/remove signal | `false` removes optional interactions; required interactions reject removal. |
+| `enabled` | `bool?` | Optional enabled-state update | Used for object-panel toggles. |
+| `params` | `json object?` | Optional full replacement of term parameters | Current mounted use covers `interfacial_dmi` and `uniaxial_anisotropy`. |
+
+Current implementation note:
+
+- This is the first canonical `authoring/physics/*` route mounted in the public v1 API.
+- `MaterialPanel` now uses it for object-level interaction toggles and uniaxial parameter edits.
 
 ### 7.19 `GET /v1/live/current/authoring/script/source`
 
@@ -1542,8 +1622,8 @@ treated as the canonical browser contract.
 | `GET /v1/live/current/bootstrap` | `transitional` | Monolithic initial session blob | `GET /v1/live/current/status` plus named resources |
 | `GET /v1/live/current/state` | `transitional` | Legacy whole-state snapshot | Named resources under `/v1/live/current/*` |
 | `GET /v1/live/current/poll` | `transitional` | Legacy delta polling over whole-state blobs | Status polling plus revision-driven resource fetches |
-| `GET /v1/live/current/events` | `removed from public router` | Former legacy current-live event stream | Use `GET /ws/live/current` only as an optional accelerator; canonical reads stay resource-first |
-| `POST /v1/live/current/publish` | `internalized` | Former public publish bridge for the monolithic live snapshot | Internal runner bridge: `POST /v1/internal/live/current/publish` |
+| `GET /v1/live/current/events` | `removed from public router` | Former legacy current-live event stream | Use `GET /v1/live/current/ws` for realtime notices; canonical reads stay resource-first |
+| `POST /v1/live/current/publish` | `internalized` | Former public publish bridge for the monolithic live snapshot | Internal runner bridge: `POST /v1/internal/live/current/snapshot` |
 | `POST /v1/live/current/create` | `removed from public router` | Former legacy workspace bootstrap/create helper | Future explicit session/workspace creation contract |
 | `GET /v1/live/feature-flags` | `transitional` | Legacy diagnostics/feature-flag probe | Diagnostics policy only; not part of the canonical browser contract |
 | `GET /v1/live/current/commands/next` | `removed from public router` | Former legacy pull-based command queue consumption | Structured command queue behind `POST /commands` plus future read models |
@@ -1553,9 +1633,6 @@ treated as the canonical browser contract.
 | `GET /v1/live/current/artifacts/file` | `removed from public router` | Former legacy artifact-file fetch route | `GET /v1/live/current/artifacts/:artifact_id` |
 | `GET /v1/docs/physics` | `transitional` | Legacy physics docs listing | Remains separate from the control-room runtime contract |
 | `GET /v1/quantities/catalog` | `transitional` | Legacy flat quantity catalog route kept for short-term compatibility | `GET /v1/live/current/quantities/catalog` |
-| `POST /v1/run` | `transitional` | Legacy run-launch helper | Future session/run creation contract |
-| `GET /ws/live/current` | `transitional` | Legacy current-live WebSocket stream | Optional accelerator only; not canonical contract |
-| `GET /ws/live/:run_id` | `transitional` | Legacy per-run WebSocket stream | Future session/run event contract |
 
 ## 14. Target-Only Family Appendix
 

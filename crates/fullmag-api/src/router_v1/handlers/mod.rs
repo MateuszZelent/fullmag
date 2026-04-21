@@ -1,6 +1,6 @@
-pub mod authoring;
 pub mod artifacts;
 pub mod assets;
+pub mod authoring;
 pub mod commands;
 pub mod display;
 pub mod domain;
@@ -8,6 +8,7 @@ pub mod eigen;
 pub mod fields;
 pub mod gpu;
 pub mod quantities;
+pub mod realtime;
 pub mod runtime;
 pub mod scalars;
 pub mod scene;

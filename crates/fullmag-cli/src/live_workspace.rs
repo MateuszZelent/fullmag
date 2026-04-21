@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::control_room::{api_is_ready, api_port, publish_current_live_state};
+use crate::control_room::{api_is_ready, api_port, sync_current_live_delta};
 use crate::feature_flags::FeatureFlags;
 use crate::formatting::{push_engine_log, unix_time_millis};
 use crate::types::*;
@@ -43,7 +43,7 @@ impl LocalLiveWorkspaceState {
         &self,
         preview_fields: Option<Vec<fullmag_runner::LivePreviewField>>,
         clear_preview_cache: bool,
-    ) -> CurrentLivePublishPayload {
+    ) -> CurrentLiveSnapshotPayload {
         let mut live_state = self.live_state.clone();
         let mut metadata = self.metadata.clone();
 
@@ -56,7 +56,7 @@ impl LocalLiveWorkspaceState {
             metadata = None;
         }
 
-        CurrentLivePublishPayload {
+        CurrentLiveSnapshotPayload {
             fem_mesh,
             session: Some(self.session.clone()),
             session_status: Some(self.session.status.clone()),
@@ -74,14 +74,14 @@ impl LocalLiveWorkspaceState {
         }
     }
 
-    pub fn snapshot(&self) -> CurrentLivePublishPayload {
+    pub fn snapshot(&self) -> CurrentLiveSnapshotPayload {
         self.build_publish_payload(
             (!self.preview_fields.is_empty()).then_some(self.preview_fields.to_vec()),
             self.clear_preview_cache,
         )
     }
 
-    pub fn publish_delta(&mut self) -> CurrentLivePublishPayload {
+    pub fn publish_delta(&mut self) -> CurrentLiveSnapshotPayload {
         let preview_fields = (!self.pending_preview_fields.is_empty())
             .then_some(self.pending_preview_fields.take_vec());
         let clear_preview_cache = std::mem::take(&mut self.clear_preview_cache);
@@ -175,8 +175,8 @@ fn preserve_pending_live_step_payload(
 }
 
 fn merge_pending_publish_payload(
-    slot: &mut CurrentLivePublishPayload,
-    mut incoming: CurrentLivePublishPayload,
+    slot: &mut CurrentLiveSnapshotPayload,
+    mut incoming: CurrentLiveSnapshotPayload,
     should_merge_pending: bool,
 ) {
     let allow_previous_preview = should_merge_pending && !incoming.clear_preview_cache;
@@ -216,7 +216,7 @@ fn merge_pending_publish_payload(
 pub(crate) struct CurrentLivePublisher {
     pending: Arc<AtomicBool>,
     sending: Arc<AtomicBool>,
-    payload: Arc<Mutex<CurrentLivePublishPayload>>,
+    payload: Arc<Mutex<CurrentLiveSnapshotPayload>>,
     wake_tx: mpsc::SyncSender<()>,
 }
 
@@ -227,7 +227,7 @@ impl CurrentLivePublisher {
         let (wake_tx, wake_rx) = mpsc::sync_channel(1);
         let pending = Arc::new(AtomicBool::new(false));
         let sending = Arc::new(AtomicBool::new(false));
-        let payload = Arc::new(Mutex::new(CurrentLivePublishPayload::default()));
+        let payload = Arc::new(Mutex::new(CurrentLiveSnapshotPayload::default()));
         let worker_pending = Arc::clone(&pending);
         let worker_sending = Arc::clone(&sending);
         let worker_payload = Arc::clone(&payload);
@@ -262,7 +262,7 @@ impl CurrentLivePublisher {
         }
     }
 
-    pub fn replace(&self, payload: CurrentLivePublishPayload) {
+    pub fn replace(&self, payload: CurrentLiveSnapshotPayload) {
         if let Ok(mut slot) = self.payload.lock() {
             let should_merge_pending =
                 self.pending.load(Ordering::Acquire) || self.sending.load(Ordering::Acquire);
@@ -274,7 +274,7 @@ impl CurrentLivePublisher {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_live_state, merge_pending_publish_payload, CurrentLivePublishPayload};
+    use super::{bootstrap_live_state, merge_pending_publish_payload, CurrentLiveSnapshotPayload};
 
     fn preview_field(quantity: &str, revision: u64, z: f64) -> fullmag_runner::LivePreviewField {
         fullmag_runner::LivePreviewField {
@@ -321,16 +321,16 @@ mod tests {
         magnetization: Option<Vec<f64>>,
         fem_mesh: Option<fullmag_runner::FemMeshPayload>,
         preview_fields: Option<Vec<fullmag_runner::LivePreviewField>>,
-    ) -> CurrentLivePublishPayload {
+    ) -> CurrentLiveSnapshotPayload {
         let mut live_state = bootstrap_live_state("running");
         live_state.latest_step.step = step;
         live_state.latest_step.preview_field = preview;
         live_state.latest_step.magnetization = magnetization;
-        CurrentLivePublishPayload {
+        CurrentLiveSnapshotPayload {
             live_state: Some(live_state),
             fem_mesh,
             preview_fields,
-            ..CurrentLivePublishPayload::default()
+            ..CurrentLiveSnapshotPayload::default()
         }
     }
 
@@ -396,7 +396,7 @@ fn current_live_publisher_loop(
     session_id: String,
     pending: Arc<AtomicBool>,
     sending: Arc<AtomicBool>,
-    payload: Arc<Mutex<CurrentLivePublishPayload>>,
+    payload: Arc<Mutex<CurrentLiveSnapshotPayload>>,
     wake_rx: mpsc::Receiver<()>,
 ) {
     let mut last_publish_at: Option<Instant> = None;
@@ -412,7 +412,7 @@ fn current_live_publisher_loop(
             let snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
             sending.store(true, Ordering::Release);
             let cycle_start = Instant::now();
-            let publish_result = publish_current_live_state(&session_id, &snapshot);
+            let publish_result = sync_current_live_delta(&session_id, &snapshot);
             let cycle_ms = cycle_start.elapsed().as_millis();
             sending.store(false, Ordering::Release);
             if cycle_ms > 100 {
@@ -437,7 +437,7 @@ fn current_live_publisher_loop(
     if pending.swap(false, Ordering::AcqRel) {
         let snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
         sending.store(true, Ordering::Release);
-        let publish_result = publish_current_live_state(&session_id, &snapshot);
+        let publish_result = sync_current_live_delta(&session_id, &snapshot);
         sending.store(false, Ordering::Release);
         if let Err(error) = publish_result {
             if api_is_ready(api_port()) {

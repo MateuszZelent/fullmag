@@ -68,6 +68,9 @@ The following status statements are intentionally explicit because older docs an
 
 - `BackendPlanIR::Fem` on CPU resolves to `fem_cpu_native`.
 - `BackendPlanIR::Fem` on GPU resolves to `fem_native_gpu`.
+- Time-domain FEM has no CPU-reference fallback lane: if the local launcher lacks native MFEM
+  support, it must hand off to the managed `fem-gpu-host` runtime or fail early with an explicit
+  diagnostic.
 - `fem_cpu_reference` is reserved for the Rust FEM reference runner and must not appear as the
   public time-domain FEM `resolved_engine_id`.
 - `BackendPlanIR::FemEigen` on CPU resolves to `fem_eigen_cpu_reference`.

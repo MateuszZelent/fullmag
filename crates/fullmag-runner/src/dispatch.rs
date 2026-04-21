@@ -951,6 +951,15 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     problem: &ProblemIR,
     plan: &FemPlanIR,
 ) -> Result<EngineResolution<FemEngine>, RunError> {
+    if !cfg!(feature = "fem-gpu") {
+        return Err(RunError {
+            message:
+                "time-domain FEM execution requires the native MFEM backend, but this launcher \
+                 was built without the 'fem-gpu' feature. Use the managed FEM runtime or rebuild \
+                 the launcher with native FEM support."
+                    .to_string(),
+        });
+    }
     let mut resolution = resolve_fem_engine_with_trail(problem)?;
     if resolution.engine == FemEngine::NativeGpu {
         if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(plan) {
@@ -3236,6 +3245,15 @@ mod tests {
         assert_eq!(fallback.original_engine, "fem_native_gpu");
         assert_eq!(fallback.fallback_engine, "fem_cpu_native");
         assert_eq!(fallback.reason, "native_fem_gpu_unavailable");
+    }
+
+    #[cfg(not(feature = "fem-gpu"))]
+    #[test]
+    fn time_domain_fem_without_mfem_backend_fails_early() {
+        let err = resolve_fem_engine_for_plan_with_trail(&fem_policy_problem(), &tiny_fem_plan())
+            .expect_err("time-domain FEM should fail before execution without MFEM support");
+        assert!(err.message.contains("native MFEM backend"));
+        assert!(err.message.contains("managed FEM runtime") || err.message.contains("fem-gpu"));
     }
 
     #[test]

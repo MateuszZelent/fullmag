@@ -202,6 +202,10 @@ pub fn is_native_fem_gpu_available() -> bool {
     native_fem::is_gpu_available()
 }
 
+pub fn is_native_fem_time_domain_available() -> bool {
+    cfg!(feature = "fem-gpu")
+}
+
 /// Plan and run a problem, writing artifacts to `output_dir`.
 ///
 /// This is the top-level entry point: ProblemIR → plan → execute → artifacts.

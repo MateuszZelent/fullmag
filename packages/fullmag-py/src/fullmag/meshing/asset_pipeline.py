@@ -1058,27 +1058,50 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             len(geometries) == 1 and not isinstance(geometries[0], ImportedGeometry)
         )
 
-    trimesh = _import_trimesh()
     bounds_by_name: dict[str, tuple] = {}
+    fallbacks_triggered: list[str] = []
 
     with tempfile.TemporaryDirectory(prefix="fullmag-fem-domain-components-") as tmp_dir:
         component_descriptors: list[ComponentDescriptor] = []
-        for geometry in geometries:
-            comp_mesh = _geometry_to_trimesh(geometry, trimesh)
-            verts = np.asarray(comp_mesh.vertices)
-            b_min = tuple(float(v) for v in verts.min(axis=0))
-            b_max = tuple(float(v) for v in verts.max(axis=0))
-            bounds_by_name[geometry.geometry_name] = (b_min, b_max)
-            comp_path = Path(tmp_dir) / f"{geometry.geometry_name}.stl"
-            comp_mesh.export(comp_path)
-            component_descriptors.append(
-                ComponentDescriptor(
-                    geometry_name=geometry.geometry_name,
-                    stl_path=comp_path,
-                    bounds_min=b_min,
-                    bounds_max=b_max,
+        if not single_geometry_occ_direct:
+            trimesh = _import_trimesh()
+            try:
+                for geometry in geometries:
+                    comp_mesh = _geometry_to_trimesh(geometry, trimesh)
+                    verts = np.asarray(comp_mesh.vertices)
+                    b_min = tuple(float(v) for v in verts.min(axis=0))
+                    b_max = tuple(float(v) for v in verts.max(axis=0))
+                    bounds_by_name[geometry.geometry_name] = (b_min, b_max)
+                    comp_path = Path(tmp_dir) / f"{geometry.geometry_name}.stl"
+                    comp_mesh.export(comp_path)
+                    component_descriptors.append(
+                        ComponentDescriptor(
+                            geometry_name=geometry.geometry_name,
+                            stl_path=comp_path,
+                            bounds_min=b_min,
+                            bounds_max=b_max,
+                        )
+                    )
+            except Exception as exc:
+                if len(geometries) == 1 and not isinstance(geometries[0], ImportedGeometry):
+                    single_geometry_occ_direct = True
+                    fallbacks_triggered.append("component_surface_prep_failed")
+                    emit_progress(
+                        "Shared-domain surface preparation failed "
+                        f"({exc!r}); falling back to direct OCC meshing for the single geometry"
+                    )
+                else:
+                    raise
+
+        if single_geometry_occ_direct:
+            for geometry in geometries:
+                bounds_min, bounds_max = geometry_bounds(geometry)
+                if bounds_min is None or bounds_max is None:
+                    continue
+                bounds_by_name[geometry.geometry_name] = (
+                    tuple(float(value) for value in bounds_min),
+                    tuple(float(value) for value in bounds_max),
                 )
-            )
 
         mesh_options = _mesh_options_from_runtime_metadata(
             mesh_workflow,
@@ -1120,7 +1143,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "effective_airbox_target": effective_airbox_target,
                 "effective_per_object_targets": effective_per_object_targets,
                 "used_size_field_kinds": used_size_field_kinds,
-                "fallbacks_triggered": [],
+                "fallbacks_triggered": fallbacks_triggered,
                 "message": "Preparing shared-domain mesh inputs",
             }
         )
@@ -1146,7 +1169,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
 
         result: SharedDomainMeshResult | None = None
         build_mode = "component_aware"
-        fallbacks_triggered: list[str] = []
         try:
             if single_geometry_occ_direct:
                 build_mode = "single_geometry_occ"

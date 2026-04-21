@@ -6,6 +6,7 @@ pub mod domain;
 pub mod fields;
 pub mod logs;
 pub mod quantities;
+pub mod realtime;
 pub mod runtime;
 pub mod scalars;
 pub mod status;

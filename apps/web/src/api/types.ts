@@ -106,6 +106,96 @@ export interface MetricsSummary {
   steps_per_second: number | null;
 }
 
+// ── Realtime websocket ───────────────────────────────────────────────
+
+export type RealtimeResourceName =
+  | "display"
+  | "fields"
+  | "scalars"
+  | "domain"
+  | "artifacts"
+  | "logs"
+  | "commands"
+  | "stages"
+  | "scene_document";
+
+export interface RealtimeResourceRevisionMap {
+  fields_revision: number;
+  scalars_revision: number;
+  domain_generation_id: number;
+  artifacts_revision: number;
+  engine_log_revision: number;
+  display_revision: number;
+  commands_revision: number;
+  stages_revision: number;
+  scene_revision?: number | null;
+}
+
+export interface RealtimeResourceChange {
+  resource: RealtimeResourceName;
+  revision: number;
+  resource_id?: string | null;
+  domain_generation_id?: number | null;
+  recommended_fetch?: string | null;
+}
+
+export interface RealtimeHelloPayload {
+  server_time: string;
+  replay_available_after_seq: number;
+  current_seq: number;
+  resource_revisions: RealtimeResourceRevisionMap;
+}
+
+export interface RealtimeHeartbeatPayload {
+  current_seq: number;
+}
+
+export interface RealtimeResourceBatchChangedPayload {
+  changes: RealtimeResourceChange[];
+  coalesced: boolean;
+  window_ms: number;
+}
+
+export interface RealtimeResyncRequiredPayload {
+  reason: string;
+  expected_after?: number | null;
+  replay_available_after_seq: number;
+}
+
+interface RealtimeEnvelopeBase {
+  seq: number;
+  ts: string;
+  session_id: string;
+  run_id?: string | null;
+  contract_version: string;
+}
+
+export interface RealtimeHelloEvent extends RealtimeEnvelopeBase {
+  type: "hello";
+  payload: RealtimeHelloPayload;
+}
+
+export interface RealtimeHeartbeatEvent extends RealtimeEnvelopeBase {
+  type: "heartbeat";
+  payload: RealtimeHeartbeatPayload;
+}
+
+export interface RealtimeResourceBatchChangedEvent extends RealtimeEnvelopeBase {
+  type: "resource.batch_changed";
+  payload: RealtimeResourceBatchChangedPayload;
+}
+
+export interface RealtimeResyncRequiredEvent extends RealtimeEnvelopeBase {
+  type: "resync.required";
+  payload: RealtimeResyncRequiredPayload;
+}
+
+export type LiveRealtimeEvent =
+  | RealtimeHelloEvent
+  | RealtimeHeartbeatEvent
+  | RealtimeResourceBatchChangedEvent
+  | RealtimeResyncRequiredEvent;
+
 // ── Logs ─────────────────────────────────────────────────────────────
 
 export interface EngineLogEntry {
@@ -417,6 +507,20 @@ export interface AuthoringMaterialPropertiesPatchRequest {
 export interface AuthoringMaterialPatchRequest {
   name?: string;
   properties?: AuthoringMaterialPropertiesPatchRequest;
+}
+
+export interface AuthoringObjectInteractionResource {
+  object_id: string;
+  interaction_kind: string;
+  present: boolean;
+  enabled: boolean;
+  params: Record<string, unknown>;
+}
+
+export interface AuthoringObjectInteractionPatchRequest {
+  present?: boolean;
+  enabled?: boolean;
+  params?: Record<string, unknown>;
 }
 
 export type AuthoringTransactionRequest =

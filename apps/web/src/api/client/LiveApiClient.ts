@@ -156,6 +156,10 @@ export class LiveApiClient {
     return this.cache;
   }
 
+  getBaseUrl(): string {
+    return this.config.baseUrl;
+  }
+
   // ── Internal pipeline ───────────────────────────────────────────────
 
   private resolveUrl(path: string): string {

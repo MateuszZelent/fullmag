@@ -1,0 +1,230 @@
+{
+  "asyncapi": "2.6.0",
+  "info": {
+    "title": "Fullmag Live Realtime API",
+    "version": "1.0.0",
+    "description": "Draft AsyncAPI contract for the canonical Fullmag realtime websocket. HTTP resources remain the source of truth; the websocket is an invalidation and lifecycle notification bus."
+  },
+  "defaultContentType": "application/json",
+  "servers": {
+    "local": {
+      "url": "localhost:8081",
+      "protocol": "ws",
+      "description": "Local Fullmag API server"
+    }
+  },
+  "channels": {
+    "/v1/live/current/ws": {
+      "description": "Canonical realtime websocket for the current live workspace. Clients reconnect with `after_seq` and must offer `Sec-WebSocket-Protocol: fullmag.live.v1`.",
+      "subscribe": {
+        "operationId": "subscribeCurrentLiveRealtime",
+        "summary": "Receive low-latency resource invalidation and lifecycle events",
+        "message": {
+          "oneOf": [
+            { "$ref": "#/components/messages/HelloEvent" },
+            { "$ref": "#/components/messages/HeartbeatEvent" },
+            { "$ref": "#/components/messages/ResourceBatchChangedEvent" },
+            { "$ref": "#/components/messages/ResyncRequiredEvent" }
+          ]
+        }
+      },
+      "bindings": {
+        "ws": {
+          "method": "GET",
+          "query": {
+            "type": "object",
+            "properties": {
+              "after_seq": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Resume strictly after this last processed event sequence number."
+              }
+            }
+          },
+          "headers": {
+            "type": "object",
+            "required": ["Sec-WebSocket-Protocol"],
+            "properties": {
+              "Sec-WebSocket-Protocol": {
+                "type": "string",
+                "enum": ["fullmag.live.v1"]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "messages": {
+      "HelloEvent": {
+        "name": "hello",
+        "payload": { "$ref": "#/components/schemas/HelloEvent" }
+      },
+      "HeartbeatEvent": {
+        "name": "heartbeat",
+        "payload": { "$ref": "#/components/schemas/HeartbeatEvent" }
+      },
+      "ResourceBatchChangedEvent": {
+        "name": "resource.batch_changed",
+        "payload": { "$ref": "#/components/schemas/ResourceBatchChangedEvent" }
+      },
+      "ResyncRequiredEvent": {
+        "name": "resync.required",
+        "payload": { "$ref": "#/components/schemas/ResyncRequiredEvent" }
+      }
+    },
+    "schemas": {
+      "EnvelopeBase": {
+        "type": "object",
+        "required": ["type", "seq", "ts", "session_id", "contract_version", "payload"],
+        "properties": {
+          "type": { "type": "string" },
+          "seq": { "type": "integer", "minimum": 0 },
+          "ts": { "type": "string", "format": "date-time" },
+          "session_id": { "type": "string" },
+          "run_id": { "type": ["string", "null"] },
+          "contract_version": { "type": "string", "enum": ["1.0.0"] },
+          "payload": { "type": "object" }
+        }
+      },
+      "RealtimeResourceRevisionMap": {
+        "type": "object",
+        "required": [
+          "fields_revision",
+          "scalars_revision",
+          "domain_generation_id",
+          "artifacts_revision",
+          "engine_log_revision",
+          "display_revision",
+          "commands_revision",
+          "stages_revision"
+        ],
+        "properties": {
+          "fields_revision": { "type": "integer", "minimum": 0 },
+          "scalars_revision": { "type": "integer", "minimum": 0 },
+          "domain_generation_id": { "type": "integer", "minimum": 0 },
+          "artifacts_revision": { "type": "integer", "minimum": 0 },
+          "engine_log_revision": { "type": "integer", "minimum": 0 },
+          "display_revision": { "type": "integer", "minimum": 0 },
+          "commands_revision": { "type": "integer", "minimum": 0 },
+          "stages_revision": { "type": "integer", "minimum": 0 },
+          "scene_revision": { "type": ["integer", "null"], "minimum": 0 }
+        }
+      },
+      "RealtimeResourceChange": {
+        "type": "object",
+        "required": ["resource", "revision"],
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "display",
+              "fields",
+              "scalars",
+              "domain",
+              "artifacts",
+              "logs",
+              "commands",
+              "stages",
+              "scene_document"
+            ]
+          },
+          "revision": { "type": "integer", "minimum": 0 },
+          "resource_id": { "type": ["string", "null"] },
+          "domain_generation_id": { "type": ["integer", "null"], "minimum": 0 },
+          "recommended_fetch": { "type": ["string", "null"] }
+        }
+      },
+      "HelloEvent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EnvelopeBase" },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "const": "hello" },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "server_time",
+                  "replay_available_after_seq",
+                  "current_seq",
+                  "resource_revisions"
+                ],
+                "properties": {
+                  "server_time": { "type": "string", "format": "date-time" },
+                  "replay_available_after_seq": { "type": "integer", "minimum": 0 },
+                  "current_seq": { "type": "integer", "minimum": 0 },
+                  "resource_revisions": {
+                    "$ref": "#/components/schemas/RealtimeResourceRevisionMap"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "HeartbeatEvent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EnvelopeBase" },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "const": "heartbeat" },
+              "payload": {
+                "type": "object",
+                "required": ["current_seq"],
+                "properties": {
+                  "current_seq": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ResourceBatchChangedEvent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EnvelopeBase" },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "const": "resource.batch_changed" },
+              "payload": {
+                "type": "object",
+                "required": ["changes", "coalesced", "window_ms"],
+                "properties": {
+                  "changes": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/RealtimeResourceChange" }
+                  },
+                  "coalesced": { "type": "boolean" },
+                  "window_ms": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ResyncRequiredEvent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EnvelopeBase" },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "const": "resync.required" },
+              "payload": {
+                "type": "object",
+                "required": ["reason", "replay_available_after_seq"],
+                "properties": {
+                  "reason": { "type": "string", "enum": ["sequence_gap", "replay_unavailable"] },
+                  "expected_after": { "type": ["integer", "null"], "minimum": 0 },
+                  "replay_available_after_seq": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

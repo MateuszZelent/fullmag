@@ -134,10 +134,13 @@ The canonical local control-room API tree is:
 ├── health
 ├── capabilities
 ├── openapi.json
+├── asyncapi.json
 ├── docs
-│   └── swagger
+│   ├── swagger
+│   └── asyncapi
 └── live
     └── current
+        ├── ws
         ├── status
         ├── workspace
         │   ├── envelope                         (transitional cutover-only)
@@ -331,6 +334,7 @@ GET   /v1/live/current/authoring/model/materials/:material_id
 PATCH /v1/live/current/authoring/model/objects/:object_id/geometry
 PATCH /v1/live/current/authoring/model/materials/:material_id
 PATCH /v1/live/current/authoring/model/magnetization-assets/:asset_id
+GET   /v1/live/current/authoring/physics/objects/:object_id/interactions/:interaction_kind
 PATCH /v1/live/current/authoring/physics/objects/:object_id/interactions/:interaction_kind
 GET   /v1/live/current/authoring/study/runtime
 PATCH /v1/live/current/authoring/study/runtime
@@ -378,6 +382,7 @@ Rules:
 Representative routes:
 
 ```text
+GET /v1/live/current/ws
 GET /v1/live/current/domain/meta
 GET /v1/live/current/domain/topology
 GET /v1/live/current/domain/coordinates
@@ -391,6 +396,7 @@ GET /v1/live/current/scalars
 
 Rules:
 
+- `ws` is a notification bus layered over these resources, not a second state API,
 - this is the read-optimized data plane,
 - already-computed quantities are fetched as resources,
 - quantity switching must not enqueue preview-control work if data already exists,
@@ -511,7 +517,7 @@ As of `2026-04-21`, runner bridge traffic is no longer part of the public browse
 The remaining internal-only bridge paths are:
 
 ```text
-POST /v1/internal/live/current/publish
+POST /v1/internal/live/current/snapshot
 GET  /v1/internal/live/current/control/wait
 ```
 

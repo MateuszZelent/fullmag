@@ -13,6 +13,9 @@ description: "Use when editing the Fullmag web app. Keep the web layer as the co
   canonical Python script export when they create or edit simulations.
 - The local control-room API is resource-first: thin `status`, on-demand resource fetching, JSON
   control plane, binary data plane.
+- Realtime must stay notification-first: `GET /v1/live/current/ws` invalidates resources while HTTP
+  resources remain the source of truth; websocket semantics are documented in AsyncAPI, not only in
+  OpenAPI.
 - React components should not call `fetch()` directly; use the shared typed API client, codecs,
   resource hooks, and caches.
 - Keep FDM/FEM differences in capability guards and domain adapters, not in separate top-level

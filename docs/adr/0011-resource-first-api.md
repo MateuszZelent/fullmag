@@ -97,6 +97,20 @@ The 10+ legacy preview POST endpoints are replaced by a single
 The new API is documented via utoipa-generated OpenAPI 3.1 spec, accessible
 at `/v1/openapi.json` and rendered at `/v1/docs/swagger`.
 
+### 8. AsyncAPI-documented realtime websocket
+
+The canonical realtime channel is:
+
+- `GET /v1/live/current/ws`
+
+It is explicitly notification-first:
+
+- HTTP resources remain the source of truth,
+- clients reconnect with `after_seq`,
+- clients offer `Sec-WebSocket-Protocol: fullmag.live.v1`,
+- websocket frames carry invalidation/lifecycle events, not heavy field/topology payloads,
+- the websocket contract is documented in AsyncAPI at `/v1/asyncapi.json` and `/v1/docs/asyncapi`.
+
 ### 8. Professional API client
 
 The frontend gets a typed `LiveApiClient` with interceptors (request-id,
@@ -130,7 +144,7 @@ operation of bootstrap/poll and resource-first flows.
 
 ### Neutral
 - Binary protocols (FMVP v2, FMMT v1) are unchanged.
-- WebSocket endpoints remain deprecated (polling is the active path).
+- The canonical realtime path is `GET /v1/live/current/ws`; no legacy websocket compatibility layer remains in the public server.
 
 ## Follow-up rule
 

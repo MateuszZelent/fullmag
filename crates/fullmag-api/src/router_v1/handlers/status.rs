@@ -8,7 +8,9 @@ use axum::Json;
 use crate::error::ApiError;
 use crate::router_v1::handlers::display::build_display_selection_response;
 use crate::schemas::status::*;
-use crate::types::AppState;
+use crate::types::{
+    AppState, CurrentDisplaySelection, DisplayPresentationState, SessionStateResponse,
+};
 
 #[utoipa::path(
     get,
@@ -28,11 +30,25 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
     let display_sel = state.current_display_selection.read().await;
     let display_presentation = state.current_display_presentation.read().await;
 
+    Ok(Json(build_live_status(
+        state.current_workspace_root.as_path(),
+        snapshot,
+        &display_sel,
+        &display_presentation,
+    )))
+}
+
+pub(crate) fn build_live_status(
+    workspace_root: &std::path::Path,
+    snapshot: &SessionStateResponse,
+    display_sel: &CurrentDisplaySelection,
+    display_presentation: &DisplayPresentationState,
+) -> LiveStatus {
     let session = SessionSummary {
         session_id: snapshot.session.session_id.clone(),
         name: snapshot.session.problem_name.clone(),
         created_at: snapshot.session.started_at_unix_ms.to_string(),
-        workspace_root: state.current_workspace_root.display().to_string(),
+        workspace_root: workspace_root.display().to_string(),
     };
 
     let run = snapshot.run.as_ref().map(|r| {
@@ -138,7 +154,7 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
         },
     };
 
-    Ok(Json(LiveStatus {
+    LiveStatus {
         api_contract_version: "1.0.0".into(),
         runtime_bundle_version: snapshot.session_protocol_version.clone(),
         session,
@@ -150,5 +166,5 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
         capabilities,
         energies,
         metrics,
-    }))
+    }
 }

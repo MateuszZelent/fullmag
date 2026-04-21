@@ -1,6 +1,8 @@
 import type {
   AuthoringMaterialPatchRequest,
   AuthoringMaterialResource,
+  AuthoringObjectInteractionPatchRequest,
+  AuthoringObjectInteractionResource,
   AuthoringStudyRuntimePatchRequest,
   AuthoringStudyRuntimeResource,
   AuthoringTransactionRequest,
@@ -99,6 +101,30 @@ export class SceneModule {
   ): Promise<AuthoringMaterialResource> {
     return this.client.patch<AuthoringMaterialResource>(
       `/v1/live/current/authoring/model/materials/${encodeURIComponent(materialId)}`,
+      request,
+      opts,
+    );
+  }
+
+  async getObjectInteraction(
+    objectId: string,
+    interactionKind: string,
+    opts?: RequestOptions,
+  ): Promise<AuthoringObjectInteractionResource> {
+    return this.client.get<AuthoringObjectInteractionResource>(
+      `/v1/live/current/authoring/physics/objects/${encodeURIComponent(objectId)}/interactions/${encodeURIComponent(interactionKind)}`,
+      opts,
+    );
+  }
+
+  async patchObjectInteraction(
+    objectId: string,
+    interactionKind: string,
+    request: AuthoringObjectInteractionPatchRequest,
+    opts?: RequestOptions,
+  ): Promise<AuthoringObjectInteractionResource> {
+    return this.client.patch<AuthoringObjectInteractionResource>(
+      `/v1/live/current/authoring/physics/objects/${encodeURIComponent(objectId)}/interactions/${encodeURIComponent(interactionKind)}`,
       request,
       opts,
     );

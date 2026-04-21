@@ -8,6 +8,7 @@ description: "Use when changing the Fullmag live API, OpenAPI contract, browser 
 ## When to trigger
 
 - adding or changing `/v1/live/current/*` endpoints,
+- adding or changing `/v1/live/current/ws`, `/v1/asyncapi.json`, or `/v1/docs/asyncapi`,
 - changing status/domain/field/scalar/display/commands/artifact/session resource shapes,
 - changing OpenAPI/utoipa schemas or shared frontend API types,
 - changing frontend resource hooks, caches, codecs, or request/response middleware,
@@ -19,11 +20,12 @@ description: "Use when changing the Fullmag live API, OpenAPI contract, browser 
 2. Does `status` remain thin and free of heavy arrays?
 3. Does the control plane stay JSON while heavy numerical data stays binary by default?
 4. Are Rust schemas, OpenAPI, and frontend shared types updated together?
-5. Do React components still go through one typed API client instead of direct `fetch()` calls?
-6. Do capability maps and domain adapters keep FDM/FEM differences out of the top-level UI tree?
-7. Are `x-request-id`, `x-api-contract-version`, and revision/generation headers preserved where relevant?
-8. Does the change avoid creating a long-lived old/new API dual stack?
-9. Are contract, codec, cache, adapter, and integration tests updated?
+5. If realtime changed, does AsyncAPI stay aligned with the websocket envelope and replay semantics?
+6. Do React components still go through one typed API client instead of direct `fetch()` calls?
+7. Do capability maps and domain adapters keep FDM/FEM differences out of the top-level UI tree?
+8. Are `x-request-id`, `x-api-contract-version`, and revision/generation headers preserved where relevant?
+9. Does the change avoid creating a long-lived old/new API dual stack?
+10. Are contract, codec, cache, adapter, and integration tests updated?
 
 ## Required outputs
 

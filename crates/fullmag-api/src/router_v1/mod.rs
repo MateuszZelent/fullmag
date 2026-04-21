@@ -15,7 +15,19 @@ use crate::types::AppState;
 /// Build the canonical resource-first v1 router.
 pub fn build_v1_router() -> Router<Arc<AppState>> {
     Router::new()
+        .route(
+            "/v1/asyncapi.json",
+            get(handlers::realtime::get_asyncapi_document),
+        )
+        .route(
+            "/v1/docs/asyncapi",
+            get(handlers::realtime::get_asyncapi_docs),
+        )
         .route("/v1/live/current/status", get(handlers::status::get_status))
+        .route(
+            "/v1/live/current/ws",
+            get(handlers::realtime::ws_current_live),
+        )
         .route(
             "/v1/live/current/domain/meta",
             get(handlers::domain::get_domain_meta),
@@ -52,8 +64,7 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/v1/live/current/scene/document",
-            get(handlers::scene::get_scene_document)
-                .put(handlers::scene::replace_scene_document),
+            get(handlers::scene::get_scene_document).put(handlers::scene::replace_scene_document),
         )
         .route(
             "/v1/live/current/authoring/scene",
@@ -74,6 +85,11 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
             "/v1/live/current/authoring/model/materials/:material_id",
             get(handlers::authoring::get_authoring_material)
                 .patch(handlers::authoring::patch_authoring_material),
+        )
+        .route(
+            "/v1/live/current/authoring/physics/objects/:object_id/interactions/:interaction_kind",
+            get(handlers::authoring::get_authoring_object_interaction)
+                .patch(handlers::authoring::patch_authoring_object_interaction),
         )
         .route(
             "/v1/live/current/authoring/script/source",

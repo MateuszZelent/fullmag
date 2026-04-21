@@ -39,9 +39,30 @@ pub(crate) fn internal_live_api_url(path: &str) -> String {
 }
 
 pub(crate) fn resolve_api_port() -> Result<u16> {
+    if let Ok(raw) = std::env::var("FULLMAG_API_PORT") {
+        let raw = raw.trim();
+        let port = raw
+            .parse::<u16>()
+            .with_context(|| format!("FULLMAG_API_PORT must be a valid u16 port, got '{raw}'"))?;
+        if port == 0 {
+            return Ok(0);
+        }
+        if api_is_ready(port) || port_is_bindable(port) {
+            return Ok(port);
+        }
+        bail!("requested FULLMAG_API_PORT={port} is not bindable and does not serve a healthy fullmag-api");
+    }
+
+    if api_is_ready(8081) || port_is_bindable(8081) {
+        return Ok(8081);
+    }
+
     const CANDIDATE_API_PORTS: &[u16] =
-        &[8081, 8080, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089];
+        &[8080, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089];
     for &port in CANDIDATE_API_PORTS {
+        if api_is_ready(port) {
+            return Ok(port);
+        }
         if port_is_bindable(port) {
             return Ok(port);
         }
@@ -83,12 +104,12 @@ impl ControlRoomGuard {
 
     pub fn active(
         web_port: u16,
-        api_child: std::process::Child,
+        api_child: Option<std::process::Child>,
         frontend_child: Option<std::process::Child>,
     ) -> Self {
         Self {
             web_port: Some(web_port),
-            api_child: Some(api_child),
+            api_child,
             frontend_child,
         }
     }
@@ -114,7 +135,7 @@ pub(crate) struct ControlPlaneReady {
     pub api_port: u16,
     pub web_url: String,
     pub web_port: u16,
-    pub api_child: std::process::Child,
+    pub api_child: Option<std::process::Child>,
     pub frontend_child: Option<std::process::Child>,
 }
 
@@ -164,29 +185,35 @@ pub(crate) fn bootstrap_control_plane(
             })
             .unwrap_or(false);
 
-    eprintln!("  starting fullmag-api on :{} ...", api_port());
-    let api_log =
-        fs::File::create(log_dir.join("fullmag-api.log")).context("failed to create api log")?;
-    let api_err = api_log.try_clone()?;
-    if stream_api_logs_to_terminal {
-        eprintln!("  streaming fullmag-api logs to terminal (and saving to .fullmag/logs/fullmag-api.log)");
+    let api_child = if api_port() != 0 && api_is_ready(api_port()) {
+        eprintln!("  reusing fullmag-api on :{} ...", api_port());
+        None
     } else {
-        eprintln!(
-            "  fullmag-api logs: {}",
-            log_dir.join("fullmag-api.log").display()
-        );
-    }
+        eprintln!("  starting fullmag-api on :{} ...", api_port());
+        let api_log =
+            fs::File::create(log_dir.join("fullmag-api.log")).context("failed to create api log")?;
+        let api_err = api_log.try_clone()?;
+        if stream_api_logs_to_terminal {
+            eprintln!("  streaming fullmag-api logs to terminal (and saving to .fullmag/logs/fullmag-api.log)");
+        } else {
+            eprintln!(
+                "  fullmag-api logs: {}",
+                log_dir.join("fullmag-api.log").display()
+            );
+        }
 
-    let self_exe = std::env::current_exe().unwrap_or_default();
-    let mut api_child = spawn_fullmag_api(
-        &root,
-        &self_exe,
-        api_log,
-        api_err,
-        external_control_room_available,
-        stream_api_logs_to_terminal,
-    )?;
-    wait_for_api_ready(api_port(), &mut api_child, Duration::from_secs(60))?;
+        let self_exe = std::env::current_exe().unwrap_or_default();
+        let mut api_child = spawn_fullmag_api(
+            &root,
+            &self_exe,
+            api_log,
+            api_err,
+            external_control_room_available,
+            stream_api_logs_to_terminal,
+        )?;
+        wait_for_api_ready(api_port(), &mut api_child, Duration::from_secs(60))?;
+        Some(api_child)
+    };
 
     if let Some(live_workspace) = live_workspace {
         publish_current_live_workspace_snapshot(live_workspace)?;
@@ -370,7 +397,7 @@ pub(crate) fn spawn_control_room(
     dev_mode: bool,
     requested_port: Option<u16>,
     live_workspace: &LocalLiveWorkspace,
-) -> Result<(u16, std::process::Child, Option<std::process::Child>)> {
+) -> Result<(u16, Option<std::process::Child>, Option<std::process::Child>)> {
     let ready =
         bootstrap_control_plane(session_id, dev_mode, requested_port, Some(live_workspace))?;
     open_in_browser(&ready);
@@ -381,7 +408,7 @@ pub(crate) fn publish_current_live_workspace_snapshot(
     live_workspace: &LocalLiveWorkspace,
 ) -> Result<()> {
     let snapshot = live_workspace.snapshot().snapshot();
-    publish_current_live_state(
+    sync_current_live_snapshot(
         snapshot
             .session
             .as_ref()
@@ -543,13 +570,13 @@ pub(crate) fn current_live_api_client() -> &'static reqwest::blocking::Client {
     })
 }
 
-pub(crate) fn publish_current_live_state(
+pub(crate) fn sync_current_live_snapshot(
     session_id: &str,
-    payload: &CurrentLivePublishPayload,
+    payload: &CurrentLiveSnapshotPayload,
 ) -> Result<()> {
     current_live_api_client()
-        .post(internal_live_api_url("publish"))
-        .json(&CurrentLivePublishRequest {
+        .post(internal_live_api_url("snapshot"))
+        .json(&CurrentLiveSnapshotRequest {
             session_id,
             session: payload.session.as_ref(),
             session_status: payload.session_status.as_deref(),
@@ -569,6 +596,115 @@ pub(crate) fn publish_current_live_state(
         .context("failed to publish current live state")?
         .error_for_status()
         .context("current live publish endpoint returned error")?;
+    Ok(())
+}
+
+fn sync_current_live_session_frame(
+    session_id: &str,
+    payload: &CurrentLiveSnapshotPayload,
+) -> Result<()> {
+    current_live_api_client()
+        .post(internal_live_api_url("session"))
+        .json(&CurrentLiveSessionFrameRequest {
+            session_id,
+            session: payload.session.as_ref(),
+            session_status: payload.session_status.as_deref(),
+            metadata: payload.metadata.as_ref(),
+            mesh_workspace: payload.mesh_workspace.as_ref(),
+            stage_execution: payload.stage_execution.as_ref(),
+            run: payload.run.as_ref(),
+        })
+        .send()
+        .context("failed to sync current live session frame")?
+        .error_for_status()
+        .context("current live session frame endpoint returned error")?;
+    Ok(())
+}
+
+fn sync_current_live_runtime_frame(
+    session_id: &str,
+    payload: &CurrentLiveSnapshotPayload,
+) -> Result<()> {
+    current_live_api_client()
+        .post(internal_live_api_url("runtime"))
+        .json(&CurrentLiveRuntimeFrameRequest {
+            session_id,
+            live_state: payload.live_state.as_ref(),
+            engine_log: payload.engine_log.as_deref(),
+            fem_mesh: payload.fem_mesh.as_ref(),
+        })
+        .send()
+        .context("failed to sync current live runtime frame")?
+        .error_for_status()
+        .context("current live runtime frame endpoint returned error")?;
+    Ok(())
+}
+
+fn sync_current_live_scalar_frame(
+    session_id: &str,
+    payload: &CurrentLiveSnapshotPayload,
+) -> Result<()> {
+    current_live_api_client()
+        .post(internal_live_api_url("scalars"))
+        .json(&CurrentLiveScalarFrameRequest {
+            session_id,
+            latest_scalar_row: payload.latest_scalar_row.as_ref(),
+        })
+        .send()
+        .context("failed to sync current live scalar frame")?
+        .error_for_status()
+        .context("current live scalar frame endpoint returned error")?;
+    Ok(())
+}
+
+fn sync_current_live_field_frame(
+    session_id: &str,
+    payload: &CurrentLiveSnapshotPayload,
+) -> Result<()> {
+    current_live_api_client()
+        .post(internal_live_api_url("fields"))
+        .json(&CurrentLiveFieldFrameRequest {
+            session_id,
+            latest_fields: payload.latest_fields.as_ref(),
+            preview_fields: payload.preview_fields.as_deref(),
+            clear_preview_cache: payload.clear_preview_cache,
+        })
+        .send()
+        .context("failed to sync current live field frame")?
+        .error_for_status()
+        .context("current live field frame endpoint returned error")?;
+    Ok(())
+}
+
+pub(crate) fn sync_current_live_delta(
+    session_id: &str,
+    payload: &CurrentLiveSnapshotPayload,
+) -> Result<()> {
+    if payload.session.is_some()
+        || payload.session_status.is_some()
+        || payload.metadata.is_some()
+        || payload.mesh_workspace.is_some()
+        || payload.stage_execution.is_some()
+        || payload.run.is_some()
+    {
+        sync_current_live_session_frame(session_id, payload)?;
+    }
+
+    if payload.live_state.is_some() || payload.engine_log.is_some() || payload.fem_mesh.is_some() {
+        sync_current_live_runtime_frame(session_id, payload)?;
+    }
+
+    if payload.latest_scalar_row.is_some() {
+        sync_current_live_scalar_frame(session_id, payload)?;
+    }
+
+    if payload.latest_fields.is_some()
+        || payload.preview_fields.is_some()
+        || payload.clear_preview_cache
+    {
+        sync_current_live_field_frame(session_id, payload)?;
+    }
+
     Ok(())
 }
 

@@ -659,6 +659,39 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("study.object_mesh_defaults(hmax=8e-09, order=2)", rewritten)
         self.assertNotIn("study.mesh(", rewritten)
 
+    def test_py_layer_hole_example_uses_study_shared_domain_fem_contract(self) -> None:
+        example_path = Path(__file__).resolve().parents[3] / "examples" / "py_layer_hole_relax_150nm.py"
+
+        with patch("fullmag.world.build_geometry_assets_for_request", return_value=None):
+            loaded = fm.load_problem_from_script(example_path)
+
+        runtime_metadata = loaded.problem.runtime_metadata
+        self.assertEqual(runtime_metadata["study_universe"]["mode"], "auto")
+
+        workflow = runtime_metadata["mesh_workflow"]
+        self.assertTrue(workflow["build_requested"])
+        self.assertEqual(workflow["build_target"], "domain")
+        self.assertEqual(workflow["domain_mesh_mode"], "generated_shared_domain_mesh")
+
+        with patch(
+            "fullmag.model.problem.build_geometry_assets_for_request",
+            return_value=None,
+        ):
+            ir = loaded.to_ir(
+                requested_backend=None,
+                execution_mode=None,
+                execution_precision=None,
+            )
+
+        self.assertEqual(
+            ir["problem_meta"]["runtime_metadata"]["runtime_selection"]["device"],
+            "auto",
+        )
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn("study.build_domain_mesh()", rewritten)
+        self.assertIn('study.demag(realization="poisson_robin")', rewritten)
+
     def test_multiple_study_build_domain_mesh_calls_materialize_once_from_final_state(self) -> None:
         script = """
         import fullmag as fm

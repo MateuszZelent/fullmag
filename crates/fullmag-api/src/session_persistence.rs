@@ -11,7 +11,9 @@ use utoipa::ToSchema;
 
 use crate::error::ApiError;
 use crate::types::{AppState, RuntimeStatusView, SessionStateResponse};
-use crate::{build_current_live_ws_messages, serialize_current_live_response};
+use crate::{
+    current_live_realtime_state_from_snapshot, publish_current_live_realtime_batch_changed,
+};
 
 use fullmag_session::{
     inspect_fms, pack_fms, unpack_fms, FmsExportProfile, FmsRunManifest, FmsSessionManifest,
@@ -96,14 +98,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             preview_config: value.preview_config,
             preview: value.preview,
             builder_adapter: value.builder_adapter,
-            scalar_rows_ws_cursor: 0,
-            quantities_ws_hash: 0,
-            ws_sent_fem_mesh_generation: None,
-            ws_sent_preview_fingerprint: None,
-            ws_sent_latest_fields_hash: 0,
             state_version: 0,
-            ws_sent_envelope_version: 0,
-            envelope_version: 0,
         }
     }
 }
@@ -418,19 +413,13 @@ pub(crate) async fn import_session_commit(
                 let mut selection = state.current_display_selection.write().await;
                 *selection = restored.display_selection.clone();
             }
-            // Refresh HTTP bootstrap/state payload.
-            let public = serialize_current_live_response(&restored, true, false, false)
-                .map_err(|e| ApiError::internal(format!("serializing restored snapshot: {e:?}")))?;
-            {
-                let mut public_guard = state.current_live_public_snapshot.write().await;
-                *public_guard = Some(public);
-            }
-            // Broadcast restored state to active WS clients.
-            let messages = build_current_live_ws_messages(&state, &restored)
-                .map_err(|e| ApiError::internal(format!("building restored ws event: {e:?}")))?;
-            for message in messages {
-                let _ = state.current_live_events.send(message);
-            }
+            let realtime_state = current_live_realtime_state_from_snapshot(
+                &state,
+                &restored,
+                restored.display_selection.revision,
+            )
+            .await;
+            publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
         }
     }
 

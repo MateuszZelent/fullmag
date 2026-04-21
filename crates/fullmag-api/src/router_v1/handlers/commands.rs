@@ -67,7 +67,11 @@ pub async fn submit_command(
     };
     let mut enqueued = command;
     enqueued.seq = seq;
-    state.current_control_queue.lock().await.push_back(enqueued.clone());
+    state
+        .current_control_queue
+        .lock()
+        .await
+        .push_back(enqueued.clone());
     {
         let mut ledger = state.current_command_ledger.lock().await;
         ledger.push_back(TrackedCommandRecord {
@@ -94,6 +98,15 @@ pub async fn submit_command(
         while responses.len() > 128 {
             responses.pop_front();
         }
+    }
+
+    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
+        let display_revision = state.current_display_selection.read().await.revision;
+        let realtime_state =
+            crate::current_live_realtime_state_from_snapshot(&state, &snapshot, display_revision)
+                .await;
+        crate::publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0)
+            .await?;
     }
 
     Ok(Json(response))
@@ -185,7 +198,9 @@ fn command_from_structured(
         StructuredCommandRequest::Stop => {
             new_session_command(command_id, "stop", created_at_unix_ms)
         }
-        StructuredCommandRequest::Skip => new_session_command(command_id, "skip", created_at_unix_ms),
+        StructuredCommandRequest::Skip => {
+            new_session_command(command_id, "skip", created_at_unix_ms)
+        }
         StructuredCommandRequest::Remesh {
             mesh_options,
             mesh_target,

@@ -9,11 +9,15 @@ use serde_json::Value;
 use crate::error::ApiError;
 use crate::schemas::authoring::{
     AuthoringTransactionRequest, AuthoringTransactionResponse, MaterialPatchRequest,
-    MaterialPropertiesResource, MaterialResource, ScenePatchRequest, StudyRuntimePatchRequest,
-    StudyRuntimeResource,
+    MaterialPropertiesResource, MaterialResource, NullableF64PatchValue, NullableU32PatchValue,
+    ObjectInteractionPatchRequest, ObjectInteractionResource, ScenePatchRequest,
+    StudyRuntimePatchRequest, StudyRuntimeResource,
 };
 use crate::types::{AppState, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse};
-use fullmag_authoring::SceneDocument;
+use fullmag_authoring::{
+    SceneDocument, SceneObject, ScriptBuilderMagneticInteractionEntry,
+    ScriptBuilderMagneticInteractionKind,
+};
 
 #[utoipa::path(
     get,
@@ -48,8 +52,9 @@ pub async fn replace_authoring_scene(
     State(state): State<Arc<AppState>>,
     Json(scene_value): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    let scene_document: SceneDocument = serde_json::from_value(scene_value)
-        .map_err(|error| ApiError::bad_request(format!("invalid scene document payload: {error}")))?;
+    let scene_document: SceneDocument = serde_json::from_value(scene_value).map_err(|error| {
+        ApiError::bad_request(format!("invalid scene document payload: {error}"))
+    })?;
     let committed = crate::commit_current_live_scene_document(&state, scene_document).await?;
     serde_json::to_value(committed)
         .map(Json)
@@ -123,10 +128,10 @@ pub async fn patch_authoring_study_runtime(
         scene.study.requested_mode = value;
     }
     if let Some(value) = req.requested_cpu_threads {
-        scene.study.requested_cpu_threads = parse_nullable_u32_patch(
-            value,
-            "requested_cpu_threads",
-        )?;
+        scene.study.requested_cpu_threads = match value {
+            NullableU32PatchValue::Value(value) => Some(value),
+            NullableU32PatchValue::Null => None,
+        };
     }
 
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
@@ -188,18 +193,29 @@ pub async fn patch_authoring_material(
     }
     if let Some(properties) = req.properties {
         if let Some(value) = properties.ms {
-            material.properties.ms = parse_nullable_f64_patch(value, "Ms")?;
+            material.properties.ms = match value {
+                NullableF64PatchValue::Value(value) => Some(value),
+                NullableF64PatchValue::Null => None,
+            };
         }
         if let Some(value) = properties.aex {
-            material.properties.aex = parse_nullable_f64_patch(value, "Aex")?;
+            material.properties.aex = match value {
+                NullableF64PatchValue::Value(value) => Some(value),
+                NullableF64PatchValue::Null => None,
+            };
         }
         if let Some(value) = properties.alpha {
             material.properties.alpha = value;
         }
         if let Some(value) = properties.dind {
-            material.properties.dind = parse_nullable_f64_patch(value, "Dind")?;
+            material.properties.dind = match value {
+                NullableF64PatchValue::Value(value) => Some(value),
+                NullableF64PatchValue::Null => None,
+            };
         }
     }
+
+    sync_interfacial_dmi_for_material(&mut scene, &material_id);
 
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
     let material = committed
@@ -208,6 +224,88 @@ pub async fn patch_authoring_material(
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::internal(format!("committed material missing: {material_id}")))?;
     Ok(Json(build_material_resource(material)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/live/current/authoring/physics/objects/{object_id}/interactions/{interaction_kind}",
+    params(
+        ("object_id" = String, Path, description = "Canonical scene object id"),
+        ("interaction_kind" = String, Path, description = "Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy")
+    ),
+    responses(
+        (status = 200, description = "Canonical object interaction resource", body = ObjectInteractionResource),
+        (status = 404, description = "No active workspace, object not found, or optional interaction missing"),
+    ),
+    tag = "authoring"
+)]
+pub async fn get_authoring_object_interaction(
+    State(state): State<Arc<AppState>>,
+    Path((object_id, interaction_kind)): Path<(String, String)>,
+) -> Result<Json<ObjectInteractionResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let kind = parse_interaction_kind(&interaction_kind)?;
+    let object = scene
+        .objects
+        .iter()
+        .find(|entry| entry.id == object_id)
+        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+    let interaction = find_interaction(object, kind);
+    if interaction.is_none() && !is_required_interaction(kind) {
+        return Err(ApiError::not_found(format!(
+            "interaction not found: {interaction_kind}"
+        )));
+    }
+    Ok(Json(build_object_interaction_resource(
+        object,
+        kind,
+        interaction,
+    )))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v1/live/current/authoring/physics/objects/{object_id}/interactions/{interaction_kind}",
+    params(
+        ("object_id" = String, Path, description = "Canonical scene object id"),
+        ("interaction_kind" = String, Path, description = "Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy")
+    ),
+    request_body = ObjectInteractionPatchRequest,
+    responses(
+        (status = 200, description = "Committed canonical object interaction resource", body = ObjectInteractionResource),
+        (status = 400, description = "Invalid interaction patch payload"),
+        (status = 404, description = "No active workspace or object not found"),
+    ),
+    tag = "authoring"
+)]
+pub async fn patch_authoring_object_interaction(
+    State(state): State<Arc<AppState>>,
+    Path((object_id, interaction_kind)): Path<(String, String)>,
+    Json(req): Json<ObjectInteractionPatchRequest>,
+) -> Result<Json<ObjectInteractionResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let kind = parse_interaction_kind(&interaction_kind)?;
+    let material_dind = material_dind_for_object(&scene, &object_id);
+    let object = scene
+        .objects
+        .iter_mut()
+        .find(|entry| entry.id == object_id)
+        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+
+    apply_interaction_patch(object, kind, material_dind, req)?;
+
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let object = committed
+        .objects
+        .iter()
+        .find(|entry| entry.id == object_id)
+        .ok_or_else(|| ApiError::internal(format!("committed object missing: {object_id}")))?;
+    let interaction = find_interaction(object, kind);
+    Ok(Json(build_object_interaction_resource(
+        object,
+        kind,
+        interaction,
+    )))
 }
 
 #[utoipa::path(
@@ -227,21 +325,25 @@ pub async fn commit_authoring_transaction(
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
     let (transaction_kind, committed) = match req {
         AuthoringTransactionRequest::ReplaceScene { scene } => {
-            let scene_document: SceneDocument = serde_json::from_value(scene)
-                .map_err(|error| ApiError::bad_request(format!("invalid scene document payload: {error}")))?;
-            let committed = crate::commit_current_live_scene_document(&state, scene_document).await?;
+            let scene_document: SceneDocument = serde_json::from_value(scene).map_err(|error| {
+                ApiError::bad_request(format!("invalid scene document payload: {error}"))
+            })?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, scene_document).await?;
             ("replace_scene", committed)
         }
         AuthoringTransactionRequest::MergePatch { merge_patch } => {
             let current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             let patched_scene = apply_scene_merge_patch(&current_scene, &merge_patch)?;
-            let committed = crate::commit_current_live_scene_document(&state, patched_scene).await?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, patched_scene).await?;
             ("merge_patch", committed)
         }
     };
 
-    let committed_scene = serde_json::to_value(&committed)
-        .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))?;
+    let committed_scene = serde_json::to_value(&committed).map_err(|error| {
+        ApiError::internal(format!("failed to serialize scene document: {error}"))
+    })?;
 
     Ok(Json(AuthoringTransactionResponse {
         transaction_kind: transaction_kind.to_string(),
@@ -290,8 +392,9 @@ fn apply_scene_merge_patch(
     scene: &SceneDocument,
     merge_patch: &Value,
 ) -> Result<SceneDocument, ApiError> {
-    let mut scene_value = serde_json::to_value(scene)
-        .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))?;
+    let mut scene_value = serde_json::to_value(scene).map_err(|error| {
+        ApiError::internal(format!("failed to serialize scene document: {error}"))
+    })?;
     merge_patch_value(&mut scene_value, merge_patch);
     serde_json::from_value(scene_value)
         .map_err(|error| ApiError::bad_request(format!("invalid scene patch payload: {error}")))
@@ -349,29 +452,166 @@ fn build_material_resource(material: &fullmag_authoring::SceneMaterialAsset) -> 
     }
 }
 
-fn parse_nullable_u32_patch(value: Value, field_name: &str) -> Result<Option<u32>, ApiError> {
-    match value {
-        Value::Null => Ok(None),
-        Value::Number(number) => number
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok())
-            .map(Some)
-            .ok_or_else(|| ApiError::bad_request(format!("invalid `{field_name}` patch value"))),
+fn sync_interfacial_dmi_for_material(scene: &mut SceneDocument, material_id: &str) {
+    let material_dind = scene
+        .materials
+        .iter()
+        .find(|entry| entry.id == material_id)
+        .and_then(|entry| entry.properties.dind)
+        .unwrap_or(0.0);
+    for object in &mut scene.objects {
+        if object.material_ref != material_id {
+            continue;
+        }
+        if let Some(interaction) = object
+            .physics_stack
+            .iter_mut()
+            .find(|entry| entry.kind == ScriptBuilderMagneticInteractionKind::InterfacialDmi)
+        {
+            let mut params = match interaction.params.clone() {
+                Some(Value::Object(map)) => map,
+                _ => Default::default(),
+            };
+            params.insert("dind".to_string(), Value::from(material_dind));
+            interaction.params = Some(Value::Object(params));
+        }
+    }
+}
+
+fn parse_interaction_kind(raw: &str) -> Result<ScriptBuilderMagneticInteractionKind, ApiError> {
+    match raw {
+        "exchange" => Ok(ScriptBuilderMagneticInteractionKind::Exchange),
+        "demag" => Ok(ScriptBuilderMagneticInteractionKind::Demag),
+        "interfacial_dmi" => Ok(ScriptBuilderMagneticInteractionKind::InterfacialDmi),
+        "uniaxial_anisotropy" => Ok(ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy),
         _ => Err(ApiError::bad_request(format!(
-            "invalid `{field_name}` patch value"
+            "unsupported interaction kind: {raw}"
         ))),
     }
 }
 
-fn parse_nullable_f64_patch(value: Value, field_name: &str) -> Result<Option<f64>, ApiError> {
+fn interaction_kind_str(kind: ScriptBuilderMagneticInteractionKind) -> &'static str {
+    match kind {
+        ScriptBuilderMagneticInteractionKind::Exchange => "exchange",
+        ScriptBuilderMagneticInteractionKind::Demag => "demag",
+        ScriptBuilderMagneticInteractionKind::InterfacialDmi => "interfacial_dmi",
+        ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy => "uniaxial_anisotropy",
+    }
+}
+
+fn is_required_interaction(kind: ScriptBuilderMagneticInteractionKind) -> bool {
+    matches!(
+        kind,
+        ScriptBuilderMagneticInteractionKind::Exchange | ScriptBuilderMagneticInteractionKind::Demag
+    )
+}
+
+fn material_dind_for_object(scene: &SceneDocument, object_id: &str) -> Option<f64> {
+    let object = scene.objects.iter().find(|entry| entry.id == object_id)?;
+    scene.materials
+        .iter()
+        .find(|entry| entry.id == object.material_ref)
+        .and_then(|entry| entry.properties.dind)
+}
+
+fn find_interaction(
+    object: &SceneObject,
+    kind: ScriptBuilderMagneticInteractionKind,
+) -> Option<&ScriptBuilderMagneticInteractionEntry> {
+    object.physics_stack.iter().find(|entry| entry.kind == kind)
+}
+
+fn build_object_interaction_resource(
+    object: &SceneObject,
+    kind: ScriptBuilderMagneticInteractionKind,
+    interaction: Option<&ScriptBuilderMagneticInteractionEntry>,
+) -> ObjectInteractionResource {
+    let (present, enabled, params) = match interaction {
+        Some(entry) => (
+            true,
+            entry.enabled,
+            entry
+                .params
+                .clone()
+                .unwrap_or_else(|| Value::Object(Default::default())),
+        ),
+        None => (false, false, Value::Object(Default::default())),
+    };
+    ObjectInteractionResource {
+        object_id: object.id.clone(),
+        interaction_kind: interaction_kind_str(kind).to_string(),
+        present,
+        enabled,
+        params,
+    }
+}
+
+fn apply_interaction_patch(
+    object: &mut SceneObject,
+    kind: ScriptBuilderMagneticInteractionKind,
+    material_dind: Option<f64>,
+    req: ObjectInteractionPatchRequest,
+) -> Result<(), ApiError> {
+    if req.present == Some(false) && is_required_interaction(kind) {
+        return Err(ApiError::bad_request(format!(
+            "cannot remove required interaction: {}",
+            interaction_kind_str(kind)
+        )));
+    }
+
+    if req.present == Some(false) {
+        object.physics_stack.retain(|entry| entry.kind != kind);
+        return Ok(());
+    }
+
+    let default_params = match kind {
+        ScriptBuilderMagneticInteractionKind::InterfacialDmi => {
+            Value::Object(
+                [(
+                    "dind".to_string(),
+                    Value::from(material_dind.unwrap_or(1e-3)),
+                )]
+                .into_iter()
+                .collect(),
+            )
+        }
+        ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy => serde_json::json!({
+            "ku1": 0.0,
+            "axis": [0.0, 0.0, 1.0]
+        }),
+        _ => Value::Object(Default::default()),
+    };
+
+    if let Some(existing) = object.physics_stack.iter_mut().find(|entry| entry.kind == kind) {
+        if let Some(enabled) = req.enabled {
+            existing.enabled = enabled;
+        }
+        if let Some(params) = req.params {
+            existing.params = Some(Value::Object(expect_object_params(params, kind)?));
+        }
+        return Ok(());
+    }
+
+    object.physics_stack.push(ScriptBuilderMagneticInteractionEntry {
+        kind,
+        enabled: req.enabled.unwrap_or(true),
+        params: Some(Value::Object(expect_object_params(
+            req.params.unwrap_or(default_params),
+            kind,
+        )?)),
+    });
+    Ok(())
+}
+
+fn expect_object_params(
+    value: Value,
+    kind: ScriptBuilderMagneticInteractionKind,
+) -> Result<serde_json::Map<String, Value>, ApiError> {
     match value {
-        Value::Null => Ok(None),
-        Value::Number(number) => number
-            .as_f64()
-            .map(Some)
-            .ok_or_else(|| ApiError::bad_request(format!("invalid `{field_name}` patch value"))),
+        Value::Object(map) => Ok(map),
         _ => Err(ApiError::bad_request(format!(
-            "invalid `{field_name}` patch value"
+            "invalid params payload for interaction: {}",
+            interaction_kind_str(kind)
         ))),
     }
 }

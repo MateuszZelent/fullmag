@@ -74,10 +74,12 @@ pub async fn replace_display(
     presentation.vector_glyphs = replacement.vector_glyphs;
 
     selection.revision = selection.revision.wrapping_add(1);
-    Ok(Json(build_display_selection_response(
-        &selection,
-        &presentation,
-    )))
+    let response = build_display_selection_response(&selection, &presentation);
+    drop(presentation);
+    let display_revision = selection.revision;
+    drop(selection);
+    emit_display_realtime_change(&state, display_revision).await?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -157,9 +159,27 @@ async fn apply_display_patch(
     sel.selection.canonicalize();
 
     sel.revision = sel.revision.wrapping_add(1);
+    let display_revision = sel.revision;
     let response = build_display_selection_response(&sel, &presentation);
+    drop(presentation);
+    drop(sel);
+    emit_display_realtime_change(&state, display_revision).await?;
 
     Ok(Json(response))
+}
+
+async fn emit_display_realtime_change(
+    state: &Arc<AppState>,
+    display_revision: u64,
+) -> Result<(), ApiError> {
+    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
+        let realtime_state =
+            crate::current_live_realtime_state_from_snapshot(state, &snapshot, display_revision)
+                .await;
+        crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0)
+            .await?;
+    }
+    Ok(())
 }
 
 pub(crate) fn build_display_selection_response(

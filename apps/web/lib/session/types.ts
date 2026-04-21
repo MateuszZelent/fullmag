@@ -1244,21 +1244,6 @@ export interface UseSessionStreamResult {
   refresh: (options?: { forceBootstrap?: boolean }) => Promise<void>;
 }
 
-/* Internal event types used by the WS message dispatcher */
-
-export interface SessionStateCurrentLiveEvent {
-  kind: "session_state";
-  state: unknown;
-}
-
-export interface ChartStateCurrentLiveEvent {
-  kind: "chart_state";
-  state: {
-    scalar_rows: unknown[];
-    scalar_rows_total?: number;
-  };
-}
-
 /* ── StepUpdateV2 canonical types (Q16/Q17) ── */
 
 /** Solver-internal telemetry for one integration step. */
