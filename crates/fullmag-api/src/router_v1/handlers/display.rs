@@ -6,32 +6,84 @@ use axum::extract::State;
 use axum::Json;
 
 use crate::error::ApiError;
-use crate::schemas::display::DisplayUpdate;
+use crate::schemas::display::DisplayPatch;
 use crate::schemas::status::{DisplaySelection, DisplayViewMode, FieldComponent};
 use crate::types::{AppState, CurrentDisplaySelection, DisplayPresentationState};
 use fullmag_runner::{DisplayFieldComponent, DisplayViewMode as RunnerDisplayViewMode};
 
 #[utoipa::path(
-    put,
+    get,
     path = "/v1/live/current/display",
-    request_body = DisplayUpdate,
     responses(
-        (status = 200, description = "Display updated", body = DisplaySelection),
+        (status = 200, description = "Current display selection", body = DisplaySelection),
         (status = 404, description = "No active workspace"),
     ),
     tag = "display"
 )]
-pub async fn update_display(
+pub async fn get_display(
     State(state): State<Arc<AppState>>,
-    Json(update): Json<DisplayUpdate>,
 ) -> Result<Json<DisplaySelection>, ApiError> {
-    apply_display_update(state, update).await
+    let selection = state.current_display_selection.read().await;
+    let presentation = state.current_display_presentation.read().await;
+    Ok(Json(build_display_selection_response(
+        &selection,
+        &presentation,
+    )))
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/live/current/display",
+    request_body = DisplaySelection,
+    responses(
+        (status = 200, description = "Display replaced", body = DisplaySelection),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "display"
+)]
+pub async fn replace_display(
+    State(state): State<Arc<AppState>>,
+    Json(replacement): Json<DisplaySelection>,
+) -> Result<Json<DisplaySelection>, ApiError> {
+    let mut selection = state.current_display_selection.write().await;
+    let mut presentation = state.current_display_presentation.write().await;
+
+    selection.selection.quantity = replacement.active_quantity_id;
+    selection.selection.view_mode = match replacement.view_mode {
+        DisplayViewMode::TwoD => RunnerDisplayViewMode::TwoD,
+        DisplayViewMode::ThreeD => RunnerDisplayViewMode::ThreeD,
+    };
+    selection.selection.field_component = match replacement.field_component {
+        FieldComponent::X => DisplayFieldComponent::X,
+        FieldComponent::Y => DisplayFieldComponent::Y,
+        FieldComponent::Z => DisplayFieldComponent::Z,
+        FieldComponent::Magnitude => DisplayFieldComponent::Magnitude,
+    };
+    selection.selection.auto_scale_enabled = replacement.auto_contrast;
+    selection.selection.every_n = replacement.vector_density;
+    selection.selection.layer = replacement.slice_layer.max(0) as u32;
+    selection.selection.all_layers = replacement.slice_mode == "all";
+    selection.selection.max_points = replacement.max_points;
+    selection.selection.x_chosen_size = replacement.x_chosen_size;
+    selection.selection.y_chosen_size = replacement.y_chosen_size;
+    selection.selection.canonicalize();
+
+    presentation.colormap = replacement.colormap;
+    presentation.contrast_min = replacement.contrast_min;
+    presentation.contrast_max = replacement.contrast_max;
+    presentation.vector_glyphs = replacement.vector_glyphs;
+
+    selection.revision = selection.revision.wrapping_add(1);
+    Ok(Json(build_display_selection_response(
+        &selection,
+        &presentation,
+    )))
 }
 
 #[utoipa::path(
     patch,
     path = "/v1/live/current/display",
-    request_body = DisplayUpdate,
+    request_body = DisplayPatch,
     responses(
         (status = 200, description = "Display patched", body = DisplaySelection),
         (status = 404, description = "No active workspace"),
@@ -40,14 +92,14 @@ pub async fn update_display(
 )]
 pub async fn patch_display(
     State(state): State<Arc<AppState>>,
-    Json(update): Json<DisplayUpdate>,
+    Json(update): Json<DisplayPatch>,
 ) -> Result<Json<DisplaySelection>, ApiError> {
-    apply_display_update(state, update).await
+    apply_display_patch(state, update).await
 }
 
-async fn apply_display_update(
+async fn apply_display_patch(
     state: Arc<AppState>,
-    update: DisplayUpdate,
+    update: DisplayPatch,
 ) -> Result<Json<DisplaySelection>, ApiError> {
     let mut sel = state.current_display_selection.write().await;
     let mut presentation = state.current_display_presentation.write().await;

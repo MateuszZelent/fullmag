@@ -4,8 +4,9 @@
  * Static quantity catalog mirroring the Rust `QUANTITY_SPECS` table from
  * `crates/fullmag-runner/src/quantities.rs`.
  *
- * This is a **transitional** static catalog.  When QB-13 lands the
- * `GET /api/quantities/catalog` endpoint, this file will be replaced
+ * This is a **transitional** static catalog.  When the canonical
+ * `GET /v1/live/current/quantities/catalog` endpoint is fully adopted
+ * everywhere, this file will be replaced
  * by a runtime fetch + cache.  Until then it is the single frontend
  * source of truth (ZP-01), kept 1:1 with the Rust table.
  *
@@ -14,6 +15,8 @@
  * Rust crate first.
  */
 
+import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import type { QuantityCatalogResponse } from "@/src/api/client/modules/QuantitiesModule";
 import type { QuantityDescriptor, QuantityId, QuantityShape } from "./types";
 
 // ── Static catalog ───────────────────────────────────────────────
@@ -614,7 +617,7 @@ export function quantityColumnLabel(id: QuantityId): string {
 
 // ── Remote catalog fetch (QB-13 integration) ─────────────────────
 
-/** Wire shape of a single quantity from GET /v1/quantities/catalog */
+/** Wire shape of a single quantity from GET /v1/live/current/quantities/catalog */
 interface WireQuantityDescriptor {
   id: string;
   label: string;
@@ -632,11 +635,6 @@ interface WireQuantityDescriptor {
   supports_export: boolean;
   quick_access_label?: string | null;
   scalar_metric_key?: string | null;
-}
-
-interface WireCatalogResponse {
-  schema_version: string;
-  quantities: WireQuantityDescriptor[];
 }
 
 function wireToDescriptor(w: WireQuantityDescriptor): QuantityDescriptor {
@@ -668,11 +666,10 @@ export async function fetchQuantityCatalog(
   _baseUrl: string = "",
 ): Promise<readonly QuantityDescriptor[]> {
   try {
-    const client = currentLiveApiClient();
-    const body = (await client.fetchQuantitiesCatalog()) as WireCatalogResponse;
+    const client = getLiveApiClient();
+    const body = (await client.quantities.getCatalog()) as QuantityCatalogResponse;
     return body.quantities.map(wireToDescriptor);
   } catch {
     return CATALOG;
   }
 }
-import { currentLiveApiClient } from "@/lib/liveApiClient";

@@ -9,3 +9,5 @@ export { EigenModule } from "./EigenModule";
 export { SessionModule } from "./SessionModule";
 export { GpuModule } from "./GpuModule";
 export { SystemModule } from "./SystemModule";
+export { QuantitiesModule } from "./QuantitiesModule";
+export { SceneModule } from "./SceneModule";

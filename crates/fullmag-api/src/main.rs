@@ -418,8 +418,8 @@ async fn vision() -> Json<VisionResponse> {
     })
 }
 
-async fn get_quantities_catalog() -> Json<fullmag_quantities::QuantityCatalogResponse> {
-    Json(fullmag_quantities::QuantityCatalogResponse::build())
+async fn get_quantities_catalog() -> Json<crate::schemas::quantities::QuantityCatalogResponse> {
+    Json(crate::schemas::quantities::QuantityCatalogResponse::build())
 }
 
 pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
@@ -748,6 +748,7 @@ async fn get_feature_flags(State(state): State<Arc<AppState>>) -> Json<FeatureFl
 async fn get_current_live_events(
     State(state): State<Arc<AppState>>,
 ) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    eprintln!("[fullmag-api][LEGACY] hit: GET /v1/live/current/events — migrate to resource-first SSE");
     let mut rx = state.current_live_events.subscribe();
     let initial_snapshot = state
         .current_live_public_snapshot
@@ -836,6 +837,7 @@ async fn publish_current_live_state(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CurrentLivePublishRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    eprintln!("[fullmag-api][LEGACY] hit: POST /v1/live/current/publish — migrate to resource-first publish");
     let publish_start = std::time::Instant::now();
     let has_live_state_update = req.live_state.is_some();
     let has_scalar_row_update = req.latest_scalar_row.is_some();

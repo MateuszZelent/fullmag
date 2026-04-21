@@ -7,6 +7,7 @@ import type { ScalarWindow } from "../../generated/openapi-types";
 export interface LegacyScalarRow {
   step: number;
   t: number;
+  time: number | null;
   [key: string]: number | string | null;
 }
 
@@ -17,6 +18,7 @@ function scalarRowFromWindow(
   const row: LegacyScalarRow = {
     step: 0,
     t: 0,
+    time: null,
   };
 
   for (let i = 0; i < window.columns.length; i++) {
@@ -28,6 +30,7 @@ function scalarRowFromWindow(
     }
     if (column === "time") {
       row.t = value;
+      row.time = value;
       continue;
     }
     row[column] = value;

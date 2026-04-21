@@ -22,6 +22,8 @@ import { EigenModule } from "./modules/EigenModule";
 import { SessionModule } from "./modules/SessionModule";
 import { GpuModule } from "./modules/GpuModule";
 import { SystemModule } from "./modules/SystemModule";
+import { QuantitiesModule } from "./modules/QuantitiesModule";
+import { SceneModule } from "./modules/SceneModule";
 
 // ── Config ────────────────────────────────────────────────────────────
 
@@ -53,6 +55,8 @@ export class LiveApiClient {
   readonly session: SessionModule;
   readonly gpu: GpuModule;
   readonly system: SystemModule;
+  readonly quantities: QuantitiesModule;
+  readonly scene: SceneModule;
 
   private cache: ResourceCache;
   private config: LiveApiClientConfig;
@@ -72,6 +76,8 @@ export class LiveApiClient {
     this.session = new SessionModule(this);
     this.gpu = new GpuModule(this);
     this.system = new SystemModule(this);
+    this.quantities = new QuantitiesModule(this);
+    this.scene = new SceneModule(this);
   }
 
   // ── Public HTTP helpers (used by modules) ───────────────────────────

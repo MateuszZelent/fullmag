@@ -10,6 +10,7 @@
 import { useEffect, useRef } from "react";
 import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
 import { useLiveStatus } from "@/src/hooks/resources/useLiveStatus";
+import { previewComponentFromDisplaySelection } from "@/src/api/displaySelection";
 import type { NormalizedSessionState } from "../model/deriveSessionReadModel";
 import type { LiveStatus, EnergySummary, MetricsSummary } from "@/src/api/types";
 import type {
@@ -66,7 +67,7 @@ function displayComponentFromStatus(
   if (!display) {
     return "3D";
   }
-  return display.view_mode === "3d" ? "3D" : display.field_component;
+  return previewComponentFromDisplaySelection(display);
 }
 
 // ── LiveStatus → SessionManifest ────────────────────────────────────

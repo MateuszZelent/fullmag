@@ -28,6 +28,7 @@ description: "Use when changing the Fullmag live API, OpenAPI contract, browser 
 ## Required outputs
 
 - Update `docs/specs/resource-first-control-room-api-v1.md`
+- Update `docs/specs/control-room-api-endpoint-reference-v1.md` when concrete endpoint shapes or field-level schemas changed
 - Update `docs/adr/0011-resource-first-api.md` if the architecture decision changed
 - Update `.agents/` and `.github/` guidance when the contract materially changed
 - Make legacy bootstrap/poll/preview dependencies explicit if they still exist temporarily

@@ -1,8 +1,9 @@
 # Resource-first Control Room API v1
 
 - Status: canonical local control-room API contract
-- Last updated: 2026-04-20
+- Last updated: 2026-04-21
 - Parent architecture: `docs/specs/fullmag-application-architecture-v2.md`
+- Concrete endpoint reference: `docs/specs/control-room-api-endpoint-reference-v1.md`
 - Related runtime model: `docs/specs/session-run-api-v1.md`
 - Route tree: `docs/specs/control-room-api-tree-v1.md`
 - Governing ADR: `docs/adr/0011-resource-first-api.md`
@@ -18,11 +19,17 @@ frontend professional, modular, and performant.
 This spec is the source of truth for:
 
 - the current `/v1/live/current/*` contract,
+- the canonical split between current mounted endpoints and target-only families,
 - the canonical route-family split and tree,
 - the split between workspace state and authoring state,
 - the split between control plane and data plane,
 - frontend API-client and resource-hook rules,
 - FDM/FEM unification rules for the control room.
+
+The concrete currently mounted endpoint inventory and per-field schema
+definitions live in:
+
+- `docs/specs/control-room-api-endpoint-reference-v1.md`
 
 ## 2. Canonical rules
 
@@ -102,7 +109,12 @@ The canonical local control-room contract lives under versioned resource paths.
 
 The full target tree is specified in:
 
+- `docs/specs/control-room-api-endpoint-reference-v1.md` for currently mounted endpoints
 - `docs/specs/control-room-api-tree-v1.md`
+
+The family lists below describe the canonical local contract shape. Concrete
+current mounted endpoints, transitional routes, and target-only members are
+spelled out in `docs/specs/control-room-api-endpoint-reference-v1.md`.
 
 ### 3.1 Control-plane endpoints
 
@@ -136,9 +148,10 @@ Rules:
 - `coordinates` is omitted when the domain uses implicit structured coordinates,
 - `domain_generation_id` is the cache-invalidating identity boundary.
 
-### 3.3 Field resource endpoints
+### 3.3 Quantity and field resource endpoints
 
 ```text
+GET    /v1/live/current/quantities/catalog
 GET    /v1/live/current/fields/catalog
 GET    /v1/live/current/fields/:quantity_id/meta
 GET    /v1/live/current/fields/:quantity_id/vector
@@ -147,6 +160,7 @@ GET    /v1/live/current/scalars
 
 Rules:
 
+- quantity metadata is available as a dedicated JSON catalog,
 - already computed quantities are treated as data resources,
 - `fields/catalog` and field metadata are JSON,
 - field vectors are binary by default,
@@ -167,6 +181,7 @@ PATCH  /v1/live/current/authoring/model/*
 PATCH  /v1/live/current/authoring/physics/*
 PATCH  /v1/live/current/authoring/study/*
 POST   /v1/live/current/authoring/script/sync
+GET    /v1/live/current/display
 PUT    /v1/live/current/display
 PATCH  /v1/live/current/display
 POST   /v1/live/current/commands
@@ -179,7 +194,10 @@ Rules:
 - narrow `authoring/*` endpoints are semantic projections over the same scene revision,
 - model-builder, inspector, and ribbon edits must land in `authoring/*` or `workspace/*`, not in
   preview endpoints or ad hoc side channels,
-- display state is updated through one consolidated resource,
+- display state is exposed as one readable/mutable consolidated resource,
+- `PUT /display` is full replacement while `PATCH /display` is partial mutation,
+- `view_mode` and `field_component` are distinct display axes and must not be
+  collapsed back into a single mixed `component` token,
 - command submission is explicit and structured,
 - the canonical `POST /commands` body is a discriminated `kind` union rather than loose
   `command + params`,
@@ -202,6 +220,57 @@ GPU telemetry must degrade gracefully:
 - absence of `nvidia-smi`, a local NVIDIA driver, or a GPU is represented as a thin JSON
   `status: unavailable` resource response,
 - telemetry unavailability is not a control-room-fatal 500 path by itself.
+
+## 3.6 Current implementation honesty note
+
+The repository is still in migration.
+
+Implemented and canonical today:
+
+- `status`,
+- `domain/meta`,
+- `domain/topology`,
+- `fields/catalog`,
+- `quantities/catalog`,
+- `fields/:quantity_id/meta`,
+- `fields/:quantity_id/vector`,
+- `scalars`,
+- `display`,
+- `commands`,
+- `assets/import`,
+- `artifacts`,
+- `eigen/*`,
+- `logs/engine`,
+- `gpu/telemetry`,
+- `session/export`,
+- `session/import/*`,
+- `session/checkpoints`,
+- `session/recovery`,
+- `/v1/health`,
+- `/v1/capabilities`,
+- `/v1/openapi.json`,
+- `/v1/docs/swagger`.
+
+Still mounted but transitional:
+
+- `bootstrap`,
+- `state`,
+- `poll`,
+- `events`,
+- `publish`,
+- `create`,
+- flat `scene`,
+- flat `script/sync`,
+- flat `artifacts/file`,
+- flat `quantities/catalog`,
+- WebSocket legacy accelerators.
+
+Still target-only:
+
+- `workspace/*`,
+- wide `authoring/*`,
+- broad `mesh/*`,
+- explicit runtime stage-execution and command-status read models.
 
 ## 4. Revision and cache contract
 

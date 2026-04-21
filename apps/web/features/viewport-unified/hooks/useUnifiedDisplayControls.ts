@@ -7,31 +7,27 @@
  */
 
 import { useCallback } from "react";
-import type { DisplayUpdate } from "../../../src/api/types";
-
-function componentToDisplayUpdate(component: string): DisplayUpdate {
-  if (component === "3D") {
-    return { view_mode: "3d" };
-  }
-  return {
-    view_mode: "2d",
-    field_component:
-      component === "x" || component === "y" || component === "z"
-        ? component
-        : "magnitude",
-  };
-}
+import { displayPatchFromPreviewComponent } from "../../../src/api/displaySelection";
+import type { DisplayPatchRequest } from "../../../src/api/types";
 
 export function useUnifiedDisplayControls(
   legacyUpdatePreview:
     | ((path: string, payload?: Record<string, unknown>) => Promise<void>)
     | null,
-  newDisplayUpdate: ((update: DisplayUpdate) => Promise<void>) | null,
+  newDisplayUpdate: ((update: DisplayPatchRequest) => Promise<void>) | null,
 ) {
   const setComponent = useCallback(
     (component: string) => {
       if (newDisplayUpdate) {
-        return newDisplayUpdate(componentToDisplayUpdate(component));
+        return newDisplayUpdate(displayPatchFromPreviewComponent(
+          component === "3D" ||
+            component === "x" ||
+            component === "y" ||
+            component === "z" ||
+            component === "magnitude"
+            ? component
+            : "magnitude",
+        ));
       }
       return legacyUpdatePreview?.("/component", { component });
     },

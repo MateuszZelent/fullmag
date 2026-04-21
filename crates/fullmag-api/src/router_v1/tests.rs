@@ -613,10 +613,73 @@ async fn domain_topology_returns_204_for_fdm() {
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
 
+// ─── quantities endpoints ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn quantities_catalog_returns_json_without_session() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/quantities/catalog")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert!(json["schema_version"].is_string());
+    let quantities = json["quantities"]
+        .as_array()
+        .expect("quantities must be an array");
+    assert!(!quantities.is_empty(), "quantity catalog should not be empty");
+
+    let first = &quantities[0];
+    assert!(first["id"].is_string());
+    assert!(first["label"].is_string());
+    assert!(first["description"].is_string());
+    assert!(first["shape"].is_string());
+    assert!(first["unit"].is_string());
+    assert!(first["location"].is_string());
+    assert!(first["domain"].is_string());
+    assert!(first["n_comp"].is_number());
+    assert!(first["normalization_hint"].is_string());
+    assert!(first["interactive_preview"].is_boolean());
+    assert!(first["supports_preview_2d"].is_boolean());
+    assert!(first["supports_preview_3d"].is_boolean());
+    assert!(first["supports_history"].is_boolean());
+    assert!(first["supports_export"].is_boolean());
+}
+
 // ─── display endpoint ───────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn display_put_accepts_partial_update() {
+async fn display_get_returns_current_selection() {
+    let app = test_router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/display")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["active_quantity_id"], "m");
+    assert_eq!(json["view_mode"], "3d");
+    assert_eq!(json["field_component"], "magnitude");
+}
+
+#[tokio::test]
+async fn display_put_replaces_full_selection() {
     let state = test_app_state();
     let app = build_v1_router().with_state(state.clone());
 
@@ -629,7 +692,19 @@ async fn display_put_accepts_partial_update() {
                 .body(Body::from(
                     serde_json::json!({
                         "active_quantity_id": "h_eff",
-                        "vector_density": 25
+                        "view_mode": "2d",
+                        "field_component": "z",
+                        "colormap": "plasma",
+                        "auto_contrast": false,
+                        "contrast_min": -2.0,
+                        "contrast_max": 4.0,
+                        "vector_glyphs": false,
+                        "vector_density": 25,
+                        "slice_mode": "single",
+                        "slice_layer": 3,
+                        "max_points": 2048,
+                        "x_chosen_size": 32,
+                        "y_chosen_size": 16
                     })
                     .to_string(),
                 ))
@@ -640,11 +715,25 @@ async fn display_put_accepts_partial_update() {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    // Verify the state was actually mutated.
+    let json = body_json(response).await;
+    assert_eq!(json["active_quantity_id"], "h_eff");
+    assert_eq!(json["view_mode"], "2d");
+    assert_eq!(json["field_component"], "z");
+    assert_eq!(json["colormap"], "plasma");
+    assert_eq!(json["vector_glyphs"], false);
+
     let sel = state.current_display_selection.read().await;
+    let presentation = state.current_display_presentation.read().await;
     assert_eq!(sel.selection.quantity, "h_eff");
+    assert_eq!(sel.selection.preview_component(), "z");
     assert_eq!(sel.selection.every_n, 25);
+    assert_eq!(sel.selection.layer, 3);
+    assert!(!sel.selection.auto_scale_enabled);
     assert_eq!(sel.revision, 1);
+    assert_eq!(presentation.colormap, "plasma");
+    assert_eq!(presentation.contrast_min, Some(-2.0));
+    assert_eq!(presentation.contrast_max, Some(4.0));
+    assert!(!presentation.vector_glyphs);
 }
 
 #[tokio::test]
@@ -789,6 +878,33 @@ async fn display_put_rejects_invalid_json() {
     assert!(
         response.status().is_client_error(),
         "expected 4xx for invalid JSON, got {}",
+        response.status()
+    );
+}
+
+#[tokio::test]
+async fn display_put_rejects_partial_payload() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/live/current/display")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "active_quantity_id": "m"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        response.status().is_client_error(),
+        "expected 4xx for incomplete PUT payload, got {}",
         response.status()
     );
 }

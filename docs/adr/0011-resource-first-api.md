@@ -138,6 +138,7 @@ When the local browser API, cache semantics, OpenAPI contract, or FDM/FEM
 adapter boundary changes, update:
 
 - `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/control-room-api-tree-v1.md`
 - `docs/specs/session-run-api-v1.md` when runtime semantics changed
 - agent guidance in `AGENTS.md`, `.agents/`, and `.github/`

@@ -10,7 +10,7 @@ import type {
   FemMeshPayload,
 } from "@/components/analyze/eigenTypes";
 import { fetchAnalyzeArtifact } from "@/features/analyze";
-import { currentLiveApiClient } from "@/lib/liveApiClient";
+import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import { decodeTopology } from "@/src/api/codecs/topologyCodec";
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
@@ -102,7 +102,7 @@ export function useCurrentAnalyzeArtifacts(
       setError(null);
 
       try {
-        const client = currentLiveApiClient();
+        const client = getLiveApiClient();
         const queryNonce = `${refreshNonce}:${internalRefreshNonce}`;
         const [meshTopology, liveArtifacts] = await Promise.all([
           fetchAnalyzeArtifact<FemMeshPayload | null>(
@@ -114,7 +114,8 @@ export function useCurrentAnalyzeArtifacts(
             },
             (requestSignal) =>
               client
-                .getFemMeshTopologyBinary(null, { signal: requestSignal })
+                .domain
+                .getTopology({ signal: requestSignal })
                 .then((buffer) => femMeshPayloadFromBinary(buffer)),
           ).catch(() => null),
           fetchAnalyzeArtifact<Array<{ path: string; kind?: string }>>(
@@ -124,7 +125,7 @@ export function useCurrentAnalyzeArtifacts(
               selectionFingerprint: `artifacts:${queryNonce}`,
               refreshNonce,
             },
-            (requestSignal) => client.fetchArtifacts({ signal: requestSignal }),
+            (requestSignal) => client.artifacts.list({ signal: requestSignal }),
           ).catch(() => []),
         ]);
         if (cancelled) return;
@@ -159,7 +160,7 @@ export function useCurrentAnalyzeArtifacts(
                   refreshNonce,
                 },
                 (requestSignal) =>
-                  client.fetchEigenSpectrum<EigenSpectrumArtifact>({ signal: requestSignal }),
+                  client.eigen.getSpectrum({ signal: requestSignal }) as Promise<EigenSpectrumArtifact>,
               ).catch(
                 () => null,
               )
@@ -173,7 +174,7 @@ export function useCurrentAnalyzeArtifacts(
                   refreshNonce,
                 },
                 (requestSignal) =>
-                  client.fetchEigenDispersion<EigenDispersionResponse>({ signal: requestSignal }),
+                  client.eigen.getDispersion({ signal: requestSignal }) as Promise<EigenDispersionResponse>,
               ).catch(
                 () => null,
               )
@@ -187,7 +188,7 @@ export function useCurrentAnalyzeArtifacts(
                   refreshNonce,
                 },
                 (requestSignal) =>
-                  client.fetchEigenBranches<EigenBranchesArtifact>({ signal: requestSignal }),
+                  client.eigen.getBranches({ signal: requestSignal }) as Promise<EigenBranchesArtifact>,
               ).catch(
                 () => null,
               )
@@ -229,7 +230,7 @@ export function useCurrentAnalyzeArtifacts(
     setModeError(null);
 
     try {
-      const client = currentLiveApiClient();
+      const client = getLiveApiClient();
       const artifact = await fetchAnalyzeArtifact<EigenModeArtifact>(
         {
           domain: "eigenmodes",
@@ -238,7 +239,10 @@ export function useCurrentAnalyzeArtifacts(
           refreshNonce,
         },
         (requestSignal) =>
-          client.fetchEigenMode<EigenModeArtifact>(index, sampleIndex, { signal: requestSignal }),
+          client.eigen.getMode(
+            { index, sampleIndex },
+            { signal: requestSignal },
+          ) as Promise<EigenModeArtifact>,
       );
       setModeCache((prev) => ({ ...prev, [index]: artifact }));
       setModeLoadState("loaded");

@@ -1,7 +1,7 @@
 # Session and Run API v1
 
 - Status: draft stable runtime contract
-- Last updated: 2026-04-20
+- Last updated: 2026-04-21
 - Parent architecture: `docs/specs/fullmag-application-architecture-v2.md`
 
 ## 1. Purpose
@@ -37,6 +37,7 @@ This spec does not define:
 The concrete local resource-first browser contract is specified in:
 
 - `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/control-room-api-tree-v1.md`
 
 Cluster-specific scheduler/runtime semantics are expanded in:
@@ -251,22 +252,31 @@ For the current singleton control room, the canonical local API is the resource-
 ```text
 GET    /v1/live/current/status
 GET    /v1/live/current/domain/*
+GET    /v1/live/current/quantities/catalog
 GET    /v1/live/current/fields/*
 GET    /v1/live/current/scalars
+POST   /v1/live/current/assets/import
+GET    /v1/live/current/display
 PUT    /v1/live/current/display
+PATCH  /v1/live/current/display
 POST   /v1/live/current/commands
 GET    /v1/live/current/artifacts*
 GET    /v1/live/current/eigen/*
+GET    /v1/live/current/logs/engine
+GET    /v1/live/current/gpu/telemetry
 POST   /v1/live/current/session/*
 GET    /v1/capabilities
 GET    /v1/openapi.json
+GET    /v1/docs/swagger
 ```
 
 Rules:
 
 - it is the canonical current local browser contract,
 - it is resource-first and revision-driven,
-- it is subordinate to the broader session/run model, not contradictory to it.
+- it is subordinate to the broader session/run model, not contradictory to it,
+- the field-complete current endpoint inventory lives in
+  `docs/specs/control-room-api-endpoint-reference-v1.md`.
 
 ## 9. Event stream contract
 
@@ -323,10 +333,17 @@ Local interactive control-room deployments use a singleton resource-first projec
 ```text
 GET    /v1/live/current/status
 GET    /v1/live/current/domain/*
+GET    /v1/live/current/quantities/catalog
 GET    /v1/live/current/fields/*
 GET    /v1/live/current/scalars
+GET    /v1/live/current/display
+PATCH  /v1/live/current/display
 POST   /v1/live/current/commands
 PUT    /v1/live/current/display
+GET    /v1/live/current/artifacts*
+GET    /v1/live/current/logs/engine
+GET    /v1/live/current/gpu/telemetry
+POST   /v1/live/current/session/*
 GET    /ws/live/current    (optional accelerator, not required)
 ```
 

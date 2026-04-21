@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { currentLiveApiClient, type HostCapabilityMatrix } from "./liveApiClient";
+import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import type { HostCapabilityMatrix } from "./liveApiClient";
 
 export interface UseRuntimeCapabilitiesResult {
   capabilities: HostCapabilityMatrix | null;
@@ -16,13 +17,14 @@ export function useRuntimeCapabilities(): UseRuntimeCapabilitiesResult {
 
   useEffect(() => {
     let cancelled = false;
-    const client = currentLiveApiClient();
+    const client = getLiveApiClient();
 
     client
-      .fetchRuntimeCapabilities()
+      .system
+      .getCapabilities()
       .then((next) => {
         if (cancelled) return;
-        setCapabilities(next);
+        setCapabilities(next as HostCapabilityMatrix);
         setError(null);
       })
       .catch((nextError) => {

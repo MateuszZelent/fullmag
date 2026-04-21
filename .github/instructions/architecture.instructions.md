@@ -27,6 +27,7 @@ description: "Use when working anywhere in Fullmag to preserve one semantic core
   when applicable.
 - If a feature is backend-specific, surface it through explicit backend hint blocks, runtime policy,
   capability checks, or explicit `extended` mode.
-- Treat `docs/specs/resource-first-control-room-api-v1.md` as canonical when the browser/API
+- Treat `docs/specs/resource-first-control-room-api-v1.md` and
+  `docs/specs/control-room-api-endpoint-reference-v1.md` as canonical when the browser/API
   contract changes.
 - **Keep source files under ~1000 lines.** Split large modules into focused submodules instead of growing monolithic files.

@@ -21,6 +21,10 @@ import type {
 import { serializeModelBuilderGraphV2 } from "../../../lib/session/modelBuilderGraph";
 import { buildSceneDocumentFromScriptBuilder } from "../../../lib/session/sceneDocument";
 import { asVec3 } from "./shared";
+import {
+  displaySelectionFromPreviewComponent,
+  previewComponentFromDisplaySelection as previewComponentFromApiDisplaySelection,
+} from "@/src/api/displaySelection";
 import { DEFAULT_SOLVER_SETTINGS } from "../../panels/SolverSettingsPanel";
 import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
 import { DEFAULT_MESH_OPTIONS } from "@/lib/mesh/options";
@@ -70,29 +74,10 @@ export function sameDisplaySelection(
   );
 }
 
-function displayFieldComponentFromPreviewComponent(
-  component: string | null | undefined,
-): DisplaySelection["field_component"] {
-  switch (component) {
-    case "x":
-    case "y":
-    case "z":
-      return component;
-    default:
-      return "magnitude";
-  }
-}
-
-function displayViewModeFromPreviewComponent(
-  component: string | null | undefined,
-): DisplaySelection["view_mode"] {
-  return component === "3D" ? "3d" : "2d";
-}
-
 export function previewComponentFromDisplaySelection(
   selection: Pick<DisplaySelection, "view_mode" | "field_component">,
 ): "3D" | VectorComponent {
-  return selection.view_mode === "3d" ? "3D" : selection.field_component;
+  return previewComponentFromApiDisplaySelection(selection) as "3D" | VectorComponent;
 }
 
 export function buildRequestedDisplaySelection({
@@ -148,12 +133,25 @@ export function buildRequestedDisplaySelection({
   const nextSelection: DisplaySelection = {
     quantity,
     kind: displaySelection?.selection.kind ?? kindForQuantity(quantity),
-    view_mode:
-      displaySelection?.selection.view_mode ??
-      displayViewModeFromPreviewComponent(fallbackComponent),
-    field_component:
-      displaySelection?.selection.field_component ??
-      displayFieldComponentFromPreviewComponent(fallbackComponent),
+    ...(() => {
+      const fallbackDisplaySelection = displaySelectionFromPreviewComponent(
+        fallbackComponent === "3D" ||
+          fallbackComponent === "x" ||
+          fallbackComponent === "y" ||
+          fallbackComponent === "z" ||
+          fallbackComponent === "magnitude"
+          ? fallbackComponent
+          : "magnitude",
+      );
+      return {
+        view_mode:
+          displaySelection?.selection.view_mode ??
+          fallbackDisplaySelection.view_mode,
+        field_component:
+          displaySelection?.selection.field_component ??
+          fallbackDisplaySelection.field_component,
+      };
+    })(),
     layer:
       displaySelection?.selection.layer ??
       previewConfig?.layer ??

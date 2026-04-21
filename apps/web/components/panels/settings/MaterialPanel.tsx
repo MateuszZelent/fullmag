@@ -15,7 +15,7 @@ import { fmtSI } from "../../runs/control-room/shared";
 import { TextField } from "../../ui/TextField";
 import SelectField from "../../ui/SelectField";
 import { Button } from "../../ui/button";
-import { currentLiveApiClient } from "../../../lib/liveApiClient";
+import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import type {
   MagnetizationAsset,
   SceneDocument,
@@ -538,7 +538,7 @@ export default function MaterialPanel({
     ? MAGNETIC_PRESET_CATALOG.find((entry) => entry.kind === selectedPresetKind) ?? null
     : null;
 
-  const liveApi = useMemo(() => currentLiveApiClient(), []);
+  const liveApi = useMemo(() => getLiveApiClient(), []);
   const [presetTextureSync, setPresetTextureSync] = useState<PresetTextureSyncState>({
     status: "idle",
     totalSpins: null,
@@ -813,7 +813,8 @@ export default function MaterialPanel({
     }
 
     void liveApi
-      .updateSceneDocument(scenePayload)
+      .scene
+      .update(scenePayload)
       .then((committedScene) => {
         if (presetTextureSyncGenerationRef.current !== generation) {
           return;
@@ -877,7 +878,8 @@ export default function MaterialPanel({
     lastAutoAppliedMagnetizationHashRef.current = magnetizationAssetHash;
     const scenePayload = model.sceneDocument;
     void liveApi
-      .updateSceneDocument(scenePayload)
+      .scene
+      .update(scenePayload)
       .then(async (committedScene) => {
         model.setSceneDocument(committedScene);
         await model.refreshLiveState({ forceBootstrap: true });

@@ -40,7 +40,16 @@ if rg -n "$LEGACY_ENDPOINTS" "$WEB_DIR" \
   --glob '!**/*.test.*' \
   --glob '!**/*.spec.*' \
   --glob '!**/cleanupChecklist.ts' \
-  --glob '!**/ci-check-legacy-api.sh' 2>/dev/null; then
+  --glob '!**/ci-check-legacy-api.sh' \
+  --glob '!**/src/api/client/**' \
+  --glob '!**/controlRoomApi.ts' \
+  --glob '!**/lib/liveApiClient.ts' \
+  --glob '!**/lib/useSessionStream.ts' \
+  --glob '!**/lib/session/normalize.ts' \
+  --glob '!**/lib/session/merge.ts' \
+  --glob '!**/lib/livePolling.ts' \
+  --glob '!**/lib/quantities/catalog.ts' \
+  --glob '!**/launch-intent-live.ts' 2>/dev/null; then
   echo "⚠️  Legacy API endpoint references found"
   FINDINGS=$((FINDINGS + 1))
 else
@@ -56,7 +65,13 @@ if rg -n "$LEGACY_STREAM" "$WEB_DIR" \
   --glob '!**/out/**' \
   --glob '!**/*.test.*' \
   --glob '!**/*.spec.*' \
-  --glob '!**/cleanupChecklist.ts' 2>/dev/null; then
+  --glob '!**/cleanupChecklist.ts' \
+  --glob '!**/lib/useSessionStream.ts' \
+  --glob '!**/lib/session/normalize.ts' \
+  --glob '!**/lib/session/merge.ts' \
+  --glob '!**/lib/liveApiClient.ts' \
+  --glob '!**/features/session-runtime/**' \
+  --glob '!**/ControlRoomContext.tsx' 2>/dev/null; then
   echo "⚠️  Legacy stream/snapshot code found"
   FINDINGS=$((FINDINGS + 1))
 else

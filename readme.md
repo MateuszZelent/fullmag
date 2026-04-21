@@ -143,6 +143,7 @@ fullmag script.py
 See:
 
 - `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/session-run-api-v1.md`
 - `docs/adr/0011-resource-first-api.md`
 
@@ -584,6 +585,7 @@ Start here:
 
 - `AGENTS.md`
 - `docs/specs/fullmag-application-architecture-v2.md`
+- `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/session-run-api-v1.md`
 - `docs/specs/runtime-distribution-and-managed-backends-v1.md`
 - `docs/physics/README.md`

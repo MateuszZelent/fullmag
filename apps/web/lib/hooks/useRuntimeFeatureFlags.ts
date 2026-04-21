@@ -14,7 +14,8 @@
  */
 
 import { useEffect, useState } from "react";
-import { currentLiveApiClient, type RuntimeFeatureFlags } from "../liveApiClient";
+import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import type { RuntimeFeatureFlags } from "../liveApiClient";
 
 const DEFAULT_FLAGS: RuntimeFeatureFlags = {
   disable_charts: false,
@@ -35,14 +36,15 @@ export function useRuntimeFeatureFlags(): RuntimeFeatureFlags | null {
   useEffect(() => {
     if (cachedFlags) return;
     let cancelled = false;
-    const client = currentLiveApiClient();
+    const client = getLiveApiClient();
     client
-      .fetchFeatureFlags()
-      .then((result) => {
+      .system
+      .getCapabilities()
+      .then(() => {
         if (cancelled) return;
-        cachedFlags = result;
-        setFlags(result);
-        const active = Object.entries(result)
+        cachedFlags = DEFAULT_FLAGS;
+        setFlags(DEFAULT_FLAGS);
+        const active = Object.entries(DEFAULT_FLAGS)
           .filter(([, v]) => v === true)
           .map(([k]) => k);
         if (active.length > 0) {

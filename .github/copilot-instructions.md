@@ -16,7 +16,7 @@
 - FDM/FEM control-room differences belong in capability guards and domain adapters, not duplicated UI trees.
 - Current execution priority is calibrated GPU-first FDM/CUDA, but the product shell must remain modular and backend-neutral enough for explicit CPU/GPU and FDM/FEM selection.
 - Requested execution intent and resolved execution reality must stay explicit across user surfaces, planning, and provenance.
-- Treat `docs/specs/fullmag-application-architecture-v2.md`, `docs/specs/resource-first-control-room-api-v1.md`, `docs/specs/session-run-api-v1.md`, `docs/specs/runtime-distribution-and-managed-backends-v1.md`, `docs/physics/`, and ADRs as canonical architecture references.
+- Treat `docs/specs/fullmag-application-architecture-v2.md`, `docs/specs/resource-first-control-room-api-v1.md`, `docs/specs/control-room-api-endpoint-reference-v1.md`, `docs/specs/session-run-api-v1.md`, `docs/specs/runtime-distribution-and-managed-backends-v1.md`, `docs/physics/`, and ADRs as canonical architecture references.
 - Assume container-first verification and prefer canonical `just` workflows over ad-hoc commands.
 - Prefer `justfile` as the primary build/run task layer:
   - `just build fullmag`

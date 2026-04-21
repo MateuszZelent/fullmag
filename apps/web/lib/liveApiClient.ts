@@ -8,15 +8,19 @@ import {
   initLiveApiClient,
 } from "@/src/api/client/LiveApiClient";
 import { adaptLegacyCommand } from "@/src/api/client/modules/CommandAdapter";
-import { scalarWindowToRows } from "@/src/api/client/modules/ScalarHistoryAdapter";
-import type { DisplayUpdate, RemeshCommandRequest } from "@/src/api/types";
+import type { QuantityCatalogResponse as ResourceQuantityCatalogResponse } from "@/src/api/client/modules/QuantitiesModule";
+import type {
+  DisplayPatchRequest,
+  DisplayReplaceRequest,
+  RemeshCommandRequest,
+} from "@/src/api/types";
 import type { MeshCommandTarget } from "./session/types";
 import type { SceneDocument } from "./session/types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "./debug/frontendDiagnosticFlags";
 
 type JsonObject = Record<string, unknown>;
 type JsonBody = unknown;
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = { signal?: AbortSignal; timeout?: number };
 
 /** Runtime feature flags from the backend. */
 export interface RuntimeFeatureFlags {
@@ -121,6 +125,22 @@ export interface QuantityCatalogResponse {
   quantities: unknown[];
 }
 
+function scalarWindowToLegacyRows(window: {
+  columns: string[];
+  rows: number[][];
+}): JsonObject[] {
+  return window.rows.map((values) => {
+    const row: JsonObject = {};
+    for (let index = 0; index < window.columns.length; index += 1) {
+      const column = window.columns[index];
+      if (typeof column === "string" && column.length > 0) {
+        row[column] = values[index] ?? 0;
+      }
+    }
+    return row;
+  });
+}
+
 export class ApiHttpError extends Error {
   status: number;
 
@@ -210,7 +230,7 @@ export function currentLiveApiClient() {
       eigenDispersion: `${baseUrl}/v1/live/current/eigen/dispersion`,
       eigenBranches: `${baseUrl}/v1/live/current/eigen/branches`,
       eigenMode: `${baseUrl}/v1/live/current/eigen/mode`,
-      quantitiesCatalog: `${baseUrl}/v1/quantities/catalog`,
+      quantitiesCatalog: `${baseUrl}/v1/live/current/quantities/catalog`,
     },
     fetchBootstrap<T = JsonObject>(options?: RequestOptions) {
       return requestGet<T>(withSnapshotTransport(`${baseUrl}/v1/live/current/bootstrap`), options);
@@ -224,26 +244,28 @@ export function currentLiveApiClient() {
     fetchScalarsHistory(options?: RequestOptions) {
       const client = ensureResourceClient();
       return client.scalars
-        .getWindow()
+        .getWindow(undefined, options)
         .then((window) => ({
-          scalar_rows: scalarWindowToRows(window),
+          scalar_rows: scalarWindowToLegacyRows(window),
           scalar_rows_total: window.total_rows,
         }));
     },
     fetchFeatureFlags(options?: RequestOptions) {
       const client = ensureResourceClient();
       return client.system
-        .getCapabilities()
+        .getCapabilities(options)
         .then(() => DEFAULT_RUNTIME_FEATURE_FLAGS);
     },
     fetchRuntimeCapabilities(options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.system.getCapabilities() as Promise<HostCapabilityMatrix>;
+      return client.system.getCapabilities(options) as Promise<HostCapabilityMatrix>;
     },
     queueCommand(payload: JsonBody, options?: RequestOptions) {
       const command = adaptLegacyCommand((payload ?? {}) as Record<string, unknown>);
       const client = ensureResourceClient();
-      return client.commands.submit(command).then((response) => response as unknown as JsonObject);
+      return client.commands
+        .submit(command, options)
+        .then((response) => response as unknown as JsonObject);
     },
     queueRemesh(payload: QueueRemeshPayload, options?: RequestOptions) {
       const client = ensureResourceClient();
@@ -253,7 +275,9 @@ export function currentLiveApiClient() {
         mesh_target: payload.mesh_target,
         mesh_reason: payload.mesh_reason,
       };
-      return client.commands.submit(request).then((response) => response as unknown as JsonObject);
+      return client.commands
+        .submit(request, options)
+        .then((response) => response as unknown as JsonObject);
     },
     queueStudyDomainRemesh(meshOptions: JsonBody, meshReason?: string, options?: RequestOptions) {
       const client = ensureResourceClient();
@@ -263,7 +287,9 @@ export function currentLiveApiClient() {
         mesh_target: { kind: "study_domain" },
         mesh_reason: meshReason,
       };
-      return client.commands.submit(request).then((response) => response as unknown as JsonObject);
+      return client.commands
+        .submit(request, options)
+        .then((response) => response as unknown as JsonObject);
     },
     importAsset(payload: JsonBody, options?: RequestOptions) {
       return requestPost<JsonObject>(`${baseUrl}/v1/live/current/assets/import`, payload, options);
@@ -277,9 +303,27 @@ export function currentLiveApiClient() {
     syncScript(payload: JsonBody = {}, options?: RequestOptions) {
       return requestPost<JsonObject>(`${baseUrl}/v1/live/current/script/sync`, payload, options);
     },
-    updateDisplay(payload: DisplayUpdate, options?: RequestOptions) {
+    getDisplay(options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.display.update(payload).then(
+      return client.display.get(options).then(
+        (response) => response as unknown as JsonObject,
+      );
+    },
+    replaceDisplay(payload: DisplayReplaceRequest, options?: RequestOptions) {
+      const client = ensureResourceClient();
+      return client.display.replace(payload, options).then(
+        (response) => response as unknown as JsonObject,
+      );
+    },
+    patchDisplay(payload: DisplayPatchRequest, options?: RequestOptions) {
+      const client = ensureResourceClient();
+      return client.display.patch(payload, options).then(
+        (response) => response as unknown as JsonObject,
+      );
+    },
+    updateDisplay(payload: DisplayPatchRequest, options?: RequestOptions) {
+      const client = ensureResourceClient();
+      return client.display.patch(payload, options).then(
         (response) => response as unknown as JsonObject,
       );
     },
@@ -288,35 +332,36 @@ export function currentLiveApiClient() {
     },
     fetchGpuTelemetry(options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.gpu.getTelemetry() as Promise<GpuTelemetryResponse>;
+      return client.gpu.getTelemetry(options) as Promise<GpuTelemetryResponse>;
     },
     fetchArtifacts(options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.artifacts.list();
+      return client.artifacts.list(options);
     },
     fetchEigenSpectrum<T = { modes?: unknown[] }>(options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.eigen.getSpectrum() as Promise<T>;
+      return client.eigen.getSpectrum(options) as Promise<T>;
     },
     fetchEigenDispersion<T = { csv_path: string; path_metadata?: unknown; rows: unknown[] }>(options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.eigen.getDispersion() as Promise<T>;
+      return client.eigen.getDispersion(options) as Promise<T>;
     },
     fetchEigenBranches<T = unknown>(options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.eigen.getBranches() as Promise<T>;
+      return client.eigen.getBranches(options) as Promise<T>;
     },
     fetchEigenMode<T = unknown>(index: number, sampleIndex?: number | null, options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.eigen.getMode({ index, sampleIndex }) as Promise<T>;
+      return client.eigen.getMode({ index, sampleIndex }, options) as Promise<T>;
     },
     fetchQuantitiesCatalog(options?: RequestOptions) {
-      return requestGet<QuantityCatalogResponse>(`${baseUrl}/v1/quantities/catalog`, options);
+      const client = ensureResourceClient();
+      return client.quantities.getCatalog(options) as Promise<ResourceQuantityCatalogResponse>;
     },
     // ── Data-plane field store (read-only, no command queue) ──────────
     getFieldCatalog(options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.fields.getCatalog().then((catalog) =>
+      return client.fields.getCatalog(options).then((catalog) =>
         catalog.quantities.map((entry) => ({
           quantity_id: entry.quantity_id,
           label: entry.label,
@@ -332,7 +377,7 @@ export function currentLiveApiClient() {
     },
     getFieldVector(quantityId: string, options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.fields.getVector(quantityId).then((decoded) => ({
+      return client.fields.getVector(quantityId, options).then((decoded) => ({
         quantity_id: decoded.quantityId,
         unit: "",
         n_comp: decoded.nComp,
@@ -360,7 +405,7 @@ export function currentLiveApiClient() {
     },
     getFieldMeta(quantityId: string, options?: RequestOptions) {
       const client = ensureResourceClient();
-      return client.fields.getMeta(quantityId).then((meta) => ({
+      return client.fields.getMeta(quantityId, options).then((meta) => ({
         quantity_id: meta.quantity_id,
         label: meta.label,
         kind: meta.kind,

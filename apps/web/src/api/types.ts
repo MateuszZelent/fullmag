@@ -189,7 +189,9 @@ export interface ScalarWindow {
 
 // ── Display update ────────────────────────────────────────────────────
 
-export interface DisplayUpdate {
+export type DisplayReplaceRequest = DisplaySelection;
+
+export interface DisplayPatchRequest {
   active_quantity_id?: string;
   view_mode?: "2d" | "3d";
   field_component?: "x" | "y" | "z" | "magnitude";
@@ -205,6 +207,12 @@ export interface DisplayUpdate {
   x_chosen_size?: number;
   y_chosen_size?: number;
 }
+
+/**
+ * Transitional alias kept while legacy wrappers are being tightened.
+ * New code should prefer `DisplayPatchRequest`.
+ */
+export type DisplayUpdate = DisplayPatchRequest;
 
 // ── Commands ──────────────────────────────────────────────────────────
 

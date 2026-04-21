@@ -29,7 +29,7 @@ import { resultIconToken } from "@/features/analyze/registry/resultsTemplateRegi
 import { parseResultNodeContext } from "@/features/analyze/model/resultNodeContext";
 import { resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
-import { currentLiveApiClient } from "@/lib/liveApiClient";
+import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import type { EigenModeSummary } from "@/components/analyze/eigenTypes";
 import type { StudyPipelineDocumentState } from "@/lib/session/types";
 
@@ -211,8 +211,9 @@ export default function RunSidebar() {
     let cancelled = false;
     (async () => {
       try {
-        const client = currentLiveApiClient();
-        const data = (await client.fetchEigenSpectrum()) as { modes?: EigenModeSummary[] };
+        const data = (await getLiveApiClient().eigen.getSpectrum()) as {
+          modes?: EigenModeSummary[];
+        };
         if (cancelled) return;
         if (!cancelled && Array.isArray(data.modes)) {
           setSpectrumModes(data.modes);

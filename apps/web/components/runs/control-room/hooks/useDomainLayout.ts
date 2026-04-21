@@ -17,7 +17,7 @@ import type {
 import type {
   GpuTelemetryDevice,
   GpuTelemetryResponse,
-} from "../../../../lib/liveApiClient";
+} from "../../../../src/api/types";
 import type { AntennaOverlay, BuilderObjectOverlay } from "../shared";
 import {
   asVec3,

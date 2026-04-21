@@ -4,12 +4,12 @@ import {
   startTransition,
   useDeferredValue,
   useEffect,
-  useMemo,
   useReducer,
   useRef,
 } from "react";
 
-import { currentLiveApiClient } from "@/lib/liveApiClient";
+import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import type { ScalarWindow } from "@/src/api/generated/openapi-types";
 import { coerceScalarRows } from "@/lib/plots/scalarRows";
 import { mergeScalarRowsDelta } from "@/lib/session/merge";
 import type { ScalarRow } from "@/lib/session/types";
@@ -55,6 +55,20 @@ type ScalarChartHistoryAction =
       scalarRowsTotal: number;
     }
   | { type: "full_history_failed"; sessionKey: string | null; error: string };
+
+function scalarWindowToRows(window: ScalarWindow): ScalarRow[] {
+  const rawRows = window.rows.map((values) => {
+    const row: Record<string, number> = {};
+    for (let index = 0; index < window.columns.length; index += 1) {
+      const column = window.columns[index];
+      if (typeof column === "string" && column.length > 0) {
+        row[column] = values[index] ?? 0;
+      }
+    }
+    return row;
+  });
+  return coerceScalarRows(rawRows);
+}
 
 function baseState(
   sessionKey: string | null,
@@ -136,7 +150,6 @@ export function useScalarChartHistory({
   liveRows,
   scalarRowsTotal,
 }: UseScalarChartHistoryOptions): UseScalarChartHistoryResult {
-  const client = useMemo(() => currentLiveApiClient(), []);
   const [state, dispatch] = useReducer(
     reducer,
     baseState(sessionKey, liveRows),
@@ -194,19 +207,21 @@ export function useScalarChartHistory({
     }
 
     const abortController = new AbortController();
+    const client = getLiveApiClient();
     startTransition(() => {
       dispatch({ type: "full_history_start", sessionKey });
     });
 
     void client
-      .fetchScalarsHistory({ signal: abortController.signal })
-      .then((response) => {
+      .scalars
+      .getWindow(undefined, { signal: abortController.signal })
+      .then((window) => {
         if (abortController.signal.aborted) {
           return;
         }
         fetchedSessionRef.current = sessionKey;
         fetchedTotalRef.current = scalarRowsTotal;
-        const fetchedRows = coerceScalarRows(response.scalar_rows);
+        const fetchedRows = scalarWindowToRows(window);
         startTransition(() => {
           dispatch({
             type: "full_history_ready",
@@ -238,7 +253,7 @@ export function useScalarChartHistory({
     return () => {
       abortController.abort();
     };
-  }, [client, enabled, liveRows.length, scalarRowsTotal, sessionKey]);
+  }, [enabled, liveRows.length, scalarRowsTotal, sessionKey]);
 
   const deferredRows = useDeferredValue(state.rows);
   const source: "live-window" | "full-history" =

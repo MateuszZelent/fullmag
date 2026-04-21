@@ -6,6 +6,7 @@ pub mod domain;
 pub mod eigen;
 pub mod fields;
 pub mod gpu;
+pub mod quantities;
 pub mod scalars;
 pub mod session;
 pub mod status;

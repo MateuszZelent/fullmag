@@ -12,7 +12,6 @@
 import { startTransition, useCallback, useEffect, useMemo } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
-import type { currentLiveApiClient } from "../../../../lib/liveApiClient";
 import type {
   CommandStatus,
   CurrentDisplaySelection,
@@ -47,6 +46,7 @@ import {
   useWorkspaceStore,
   type WorkspaceTabInput,
 } from "@/lib/workspace/workspace-store";
+import type { ControlRoomApi } from "../controlRoomApi";
 
 type NormalizedViewportMode = ViewportMode | "charts";
 
@@ -62,14 +62,13 @@ function normalizeViewportMode(mode: string): NormalizedViewportMode | null {
   return null;
 }
 
-type LiveApiClient = ReturnType<typeof currentLiveApiClient>;
 type BuilderAutoSync = ReturnType<typeof useBuilderAutoSync>;
 
 export interface UseWorkspaceActionsParams {
   enqueueCommand: (payload: Record<string, unknown>) => Promise<void>;
   updatePreview: (path: string, payload?: Record<string, unknown>) => Promise<void>;
   appendFrontendTrace: (level: string, message: string) => void;
-  liveApi: LiveApiClient;
+  liveApi: ControlRoomApi;
   builderAutoSync: BuilderAutoSync;
   localBuilderDraft: SceneDocument | null;
   localBuilderSignature: string;
@@ -598,6 +597,9 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     setScriptSyncMessage(null);
     appendFrontendTrace("info", `TX: SCRIPT_SYNC ${scriptPath}`);
     try {
+      if (!localBuilderDraft) {
+        throw new Error("No scene document is available for script sync");
+      }
       builderAutoSync.cancelPendingPush();
       await liveApi.updateSceneDocument(localBuilderDraft);
       builderAutoSync.recordPushSignature(localBuilderSignature);

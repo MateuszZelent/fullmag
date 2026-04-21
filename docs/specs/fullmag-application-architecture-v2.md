@@ -647,6 +647,7 @@ The browser must consume a stable API instead of reading files ad hoc.
 The current canonical local-live browser contract is the resource-first API documented in:
 
 - `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/control-room-api-tree-v1.md`
 - `docs/adr/0011-resource-first-api.md`
 
@@ -655,16 +656,26 @@ runtime scenarios, but they do not replace the current singleton local control-r
 
 ## 14.1 Local current-live resource endpoints
 
+Concrete currently mounted endpoints are listed in:
+
+- `docs/specs/control-room-api-endpoint-reference-v1.md`
+
+The family list below describes the intended local resource-first shape and
+therefore may include target-only members that are not mounted yet.
+
 ```text
 GET    /v1/live/current/status
 GET    /v1/live/current/domain/meta
 GET    /v1/live/current/domain/topology
 GET    /v1/live/current/domain/coordinates
+GET    /v1/live/current/quantities/catalog
 GET    /v1/live/current/fields/catalog
 GET    /v1/live/current/fields/:quantity_id/meta
 GET    /v1/live/current/fields/:quantity_id/vector
 GET    /v1/live/current/scalars
+GET    /v1/live/current/display
 PUT    /v1/live/current/display
+PATCH  /v1/live/current/display
 POST   /v1/live/current/commands
 ```
 

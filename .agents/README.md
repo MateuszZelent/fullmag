@@ -17,6 +17,7 @@ If the UI creates or edits a simulation, it must remain exportable as canonical 
 The canonical local browser contract is the resource-first API described in:
 
 - `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/session-run-api-v1.md`
 - `docs/adr/0011-resource-first-api.md`
 

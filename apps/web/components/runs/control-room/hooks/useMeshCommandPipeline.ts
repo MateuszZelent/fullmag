@@ -13,16 +13,20 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { MeshOptionsState, SizeFieldSpec } from "../../../panels/MeshSettingsPanel";
 import type { DisplaySelection, MeshCommandTarget, SceneDocument } from "../../../../lib/session/types";
 import type { FemMeshData } from "../../../preview/FemMeshView3D";
-import type { DisplayUpdate } from "@/src/api/generated/openapi-types";
+import {
+  displayPatchFromPreviewComponent,
+} from "@/src/api/displaySelection";
+import type {
+  DisplayPatchRequest,
+} from "@/src/api/generated/openapi-types";
 import { parseOptionalFiniteNumberText } from "../controlRoomUtils";
-import type { currentLiveApiClient } from "../../../../lib/liveApiClient";
+import type { ControlRoomApi } from "../controlRoomApi";
 import type { useBuilderAutoSync } from "./useBuilderAutoSync";
 
-type LiveApiClient = ReturnType<typeof currentLiveApiClient>;
 type BuilderAutoSync = ReturnType<typeof useBuilderAutoSync>;
 
 export interface UseMeshCommandPipelineParams {
-  liveApi: LiveApiClient;
+  liveApi: ControlRoomApi;
   meshPerGeometryPayload: Record<string, unknown>[];
   requestedDisplaySelection: DisplaySelection;
   kindForQuantity: (quantity: string) => string;
@@ -90,30 +94,8 @@ export function useMeshCommandPipeline({
   setScriptSyncBusy,
   setScriptSyncMessage,
 }: UseMeshCommandPipelineParams): UseMeshCommandPipelineReturn {
-  const componentPayloadToSelection = useCallback(
-    (
-      component: unknown,
-      selection: DisplaySelection,
-    ): Pick<DisplaySelection, "view_mode" | "field_component"> => {
-      if (component === "3D") {
-        return {
-          view_mode: "3d",
-          field_component: selection.field_component,
-        };
-      }
-      return {
-        view_mode: "2d",
-        field_component:
-          component === "x" || component === "y" || component === "z"
-            ? component
-            : "magnitude",
-      };
-    },
-    [],
-  );
-
-  const selectionToDisplayUpdate = useCallback(
-    (selection: DisplaySelection): DisplayUpdate => ({
+  const selectionToDisplayPatch = useCallback(
+    (selection: DisplaySelection): DisplayPatchRequest => ({
       active_quantity_id: selection.quantity,
       view_mode: selection.view_mode,
       field_component: selection.field_component,
@@ -271,7 +253,7 @@ export function useMeshCommandPipeline({
       console.trace(`[fullmag-diag] updatePreview path=${path}`, payload);
     }
     const nextSelection: DisplaySelection = { ...requestedDisplaySelection };
-    let displayUpdate: DisplayUpdate | null = null;
+    let displayPatch: DisplayPatchRequest | null = null;
     switch (path) {
       case "/quantity":
         nextSelection.quantity = typeof payload.quantity === "string" ? payload.quantity : nextSelection.quantity;
@@ -280,50 +262,56 @@ export function useMeshCommandPipeline({
           nextSelection.view_mode = "2d";
           nextSelection.field_component = "magnitude";
         }
-        displayUpdate = selectionToDisplayUpdate(nextSelection);
+        displayPatch = selectionToDisplayPatch(nextSelection);
         break;
       case "/component":
-        Object.assign(
-          nextSelection,
-          componentPayloadToSelection(payload.component, nextSelection),
-        );
-        displayUpdate = {
+        Object.assign(nextSelection, displayPatchFromPreviewComponent(
+          payload.component === "3D" ||
+            payload.component === "x" ||
+            payload.component === "y" ||
+            payload.component === "z" ||
+            payload.component === "magnitude"
+            ? payload.component
+            : "magnitude",
+          nextSelection.field_component,
+        ));
+        displayPatch = {
           view_mode: nextSelection.view_mode,
           field_component: nextSelection.field_component,
         };
         break;
       case "/layer":
         nextSelection.layer = Number(payload.layer ?? nextSelection.layer);
-        displayUpdate = { slice_layer: nextSelection.layer };
+        displayPatch = { slice_layer: nextSelection.layer };
         break;
       case "/allLayers":
         nextSelection.all_layers = Boolean(payload.allLayers ?? nextSelection.all_layers);
-        displayUpdate = {
+        displayPatch = {
           slice_mode: nextSelection.all_layers ? "all" : "single",
         };
         break;
       case "/everyN":
         nextSelection.every_n = Number(payload.everyN ?? nextSelection.every_n);
-        displayUpdate = { vector_density: nextSelection.every_n };
+        displayPatch = { vector_density: nextSelection.every_n };
         break;
       case "/XChosenSize":
         nextSelection.x_chosen_size = Number(payload.xChosenSize ?? nextSelection.x_chosen_size);
-        displayUpdate = { x_chosen_size: nextSelection.x_chosen_size };
+        displayPatch = { x_chosen_size: nextSelection.x_chosen_size };
         break;
       case "/YChosenSize":
         nextSelection.y_chosen_size = Number(payload.yChosenSize ?? nextSelection.y_chosen_size);
-        displayUpdate = { y_chosen_size: nextSelection.y_chosen_size };
+        displayPatch = { y_chosen_size: nextSelection.y_chosen_size };
         break;
       case "/autoScaleEnabled":
         nextSelection.auto_scale_enabled = Boolean(payload.autoScaleEnabled ?? nextSelection.auto_scale_enabled);
-        displayUpdate = { auto_contrast: nextSelection.auto_scale_enabled };
+        displayPatch = { auto_contrast: nextSelection.auto_scale_enabled };
         break;
       case "/maxPoints":
         nextSelection.max_points = Number(payload.maxPoints ?? nextSelection.max_points);
-        displayUpdate = { max_points: nextSelection.max_points };
+        displayPatch = { max_points: nextSelection.max_points };
         break;
       case "/refresh":
-        displayUpdate = selectionToDisplayUpdate(nextSelection);
+        displayPatch = selectionToDisplayPatch(nextSelection);
         break;
       default:
         setPreviewMessage(`Unsupported display mutation: ${path}`);
@@ -333,7 +321,7 @@ export function useMeshCommandPipeline({
     setPreviewPostInFlight(true);
     setPreviewMessage(`Switching to ${nextSelection.quantity}`);
     try {
-      await liveApi.updateDisplay(displayUpdate ?? selectionToDisplayUpdate(nextSelection));
+      await liveApi.patchDisplay(displayPatch ?? selectionToDisplayPatch(nextSelection));
     }
     catch (e) {
       setOptimisticDisplaySelection(null);
@@ -341,11 +329,10 @@ export function useMeshCommandPipeline({
     }
     finally { setPreviewPostInFlight(false); }
   }, [
-    componentPayloadToSelection,
     kindForQuantity,
     liveApi,
     requestedDisplaySelection,
-    selectionToDisplayUpdate,
+    selectionToDisplayPatch,
   ]);
 
   const meshGenTopologyRef = useRef<string | null>(null);
@@ -403,6 +390,9 @@ export function useMeshCommandPipeline({
         const scriptPath = session?.script_path ?? null;
         if (!scriptPath) {
           throw new Error("No script path is available for the active workspace");
+        }
+        if (!localBuilderDraft) {
+          throw new Error("No scene document is available for script sync");
         }
         setScriptSyncBusy(true);
         setScriptSyncMessage(null);

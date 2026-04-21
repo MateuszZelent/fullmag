@@ -245,6 +245,7 @@ flowchart TD
 The current local browser contract is the resource-first API documented in:
 
 - `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/session-run-api-v1.md`
 - `docs/adr/0011-resource-first-api.md`
 

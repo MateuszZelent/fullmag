@@ -1,8 +1,9 @@
 # Control-Room API Tree v1
 
 - Status: canonical target API tree for the local control room
-- Last updated: 2026-04-20
+- Last updated: 2026-04-21
 - Parent architecture: `docs/specs/resource-first-control-room-api-v1.md`
+- Concrete current endpoint reference: `docs/specs/control-room-api-endpoint-reference-v1.md`
 - Related authoring contract: `docs/specs/scene-document-authoring-v1.md`
 - Governing ADR: `docs/adr/0011-resource-first-api.md`
 
@@ -381,6 +382,7 @@ Representative routes:
 
 ```text
 GET   /v1/live/current/display
+PUT   /v1/live/current/display
 PATCH /v1/live/current/display
 POST  /v1/live/current/commands
 ```
@@ -388,6 +390,9 @@ POST  /v1/live/current/commands
 Rules:
 
 - `display` controls active quantity/component/view mode/selection for rendering,
+- `GET /display` returns the full current resource snapshot,
+- `PUT /display` replaces the full display resource,
+- `PATCH /display` mutates only the provided fields,
 - `commands` controls solve, relax, stop, remesh, export, and other explicit runtime actions,
 - neither route family is allowed to smuggle model-builder mutations.
 
@@ -409,7 +414,7 @@ The API tree must make concrete UI flows unambiguous.
 | Add/reorder/remove study stages in ribbon | `authoring.scene` | `PATCH /authoring/study/pipeline` or `POST /authoring/transactions` | This is authoring, not `commands`. |
 | Change per-object mesh override | `mesh` | `PUT /mesh/objects/:object_id/config` | Mesh is first-class and separately queryable/reportable. |
 | Change shared-domain FEM mesh policy | `mesh` | `PUT /mesh/shared-domain/config` | Dedicated mesh family, not hidden in display or commands. |
-| Switch displayed quantity | `display` + `fields` | `PATCH /display`, then `GET /fields/:quantity_id/*` as needed | Display selection is runtime/UI state; data comes from field store. |
+| Switch displayed quantity | `display` + `fields` | `PATCH /display`, then `GET /fields/:quantity_id/*` as needed | Quantity switches are partial display mutations; data comes from field store. |
 | Press Run/Relax/Stop/Remesh | `commands` | `POST /commands` | Explicit runtime action. |
 | Change active ribbon tab or dock layout | `workspace` | `PUT /workspace/ribbon`, `PUT /workspace/layout` | Workspace-only state, not authoring semantics. |
 
@@ -461,10 +466,12 @@ POST /v1/live/current/script/sync              (legacy flat placement)
 
 ## 9. Current implementation note
 
-As of `2026-04-20`, the repository is still in migration:
+As of `2026-04-21`, the repository is still in migration:
 
 - parts of `status`, `domain`, `fields`, `scalars`, `display`, `commands`, `artifacts`,
-  `eigen`, `session`, `gpu`, and `system` already exist,
+  `eigen`, `session`, `gpu`, `system`, and `quantities` already exist,
+- the concrete currently mounted endpoint list and field-level schema reference now live in
+  `docs/specs/control-room-api-endpoint-reference-v1.md`,
 - the current implementation still carries flat transitional authoring endpoints such as
   `/v1/live/current/scene`,
 - `workspace/*` and wide `authoring/*` families are not yet fully implemented,

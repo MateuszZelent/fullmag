@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * Hook: provides updateDisplay() for PATCH /display.
+ * Hook: provides partial display mutations for `PATCH /display`.
  */
 
 import { useState, useCallback } from "react";
 import type { DisplaySelection } from "../../api/generated/openapi-types";
-import type { DisplayUpdate } from "../../api/types";
+import type { DisplayPatchRequest } from "../../api/types";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
@@ -14,7 +14,9 @@ interface UseDisplayControlResult {
   selection: DisplaySelection | null;
   loading: boolean;
   error: LiveApiError | null;
-  updateDisplay: (update: DisplayUpdate) => Promise<DisplaySelection | null>;
+  patchDisplay: (
+    update: DisplayPatchRequest,
+  ) => Promise<DisplaySelection | null>;
 }
 
 export function useDisplayControl(): UseDisplayControlResult {
@@ -22,13 +24,13 @@ export function useDisplayControl(): UseDisplayControlResult {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<LiveApiError | null>(null);
 
-  const updateDisplay = useCallback(
-    async (update: DisplayUpdate): Promise<DisplaySelection | null> => {
+  const patchDisplay = useCallback(
+    async (update: DisplayPatchRequest): Promise<DisplaySelection | null> => {
       setLoading(true);
       setError(null);
       try {
         const client = getLiveApiClient();
-        const result = await client.display.update(update);
+        const result = await client.display.patch(update);
         setSelection(result);
         setLoading(false);
         return result;
@@ -45,5 +47,5 @@ export function useDisplayControl(): UseDisplayControlResult {
     [],
   );
 
-  return { selection, loading, error, updateDisplay };
+  return { selection, loading, error, patchDisplay };
 }

@@ -9,14 +9,12 @@ import {
   useState,
 } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import {
-  currentLiveApiClient,
-  type GpuTelemetryResponse,
-} from "../../../lib/liveApiClient";
-import { useCurrentLiveStream } from "../../../lib/useSessionStream";
+import type { GpuTelemetryResponse } from "../../../src/api/types";
+import { createControlRoomApi } from "./controlRoomApi";
 import { decodeFieldVector } from "../../../src/api/codecs/fieldVectorCodec";
 import { decodeTopology } from "../../../src/api/codecs/topologyCodec";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
+import { useCurrentLiveSnapshot } from "../../../features/session-runtime/hooks/useCurrentLiveSnapshot";
 import { useWorkspaceStore } from "../../../lib/workspace/workspace-store";
 import { useBuilderAutoSync } from "./hooks/useBuilderAutoSync";
 import { useDomainLayout } from "./hooks/useDomainLayout";
@@ -231,8 +229,8 @@ function femMeshTransportKey(mesh: FemLiveMesh | null): string | null {
 
 /* ── Provider ── */
 export function ControlRoomProvider({ children }: { children: ReactNode }) {
-  const { state, connection, error, refresh: refreshLiveState } = useCurrentLiveStream();
-  const liveApi = useMemo(() => currentLiveApiClient(), []);
+  const { state, connection, error, refresh: refreshLiveState } = useCurrentLiveSnapshot();
+  const liveApi = useMemo(() => createControlRoomApi(), []);
 
   // Runtime bridge adapter: sync Control Room transport into session-runtime store.
   useSessionRuntimeBridgeRouter({ state, connection, error });

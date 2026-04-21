@@ -4,7 +4,7 @@ use utoipa::ToSchema;
 use crate::schemas::status::{DisplayViewMode, FieldComponent};
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct DisplayUpdate {
+pub struct DisplayPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_quantity_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
