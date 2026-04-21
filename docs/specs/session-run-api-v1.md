@@ -255,11 +255,26 @@ GET    /v1/live/current/domain/*
 GET    /v1/live/current/quantities/catalog
 GET    /v1/live/current/fields/*
 GET    /v1/live/current/scalars
+GET    /v1/live/current/runs/current
+GET    /v1/live/current/stages/execution
+GET    /v1/live/current/solver/status
+GET    /v1/live/current/solver/energies/current
+GET    /v1/live/current/solver/energies/history
+GET    /v1/live/current/authoring/scene
+GET    /v1/live/current/authoring/study/runtime
+GET    /v1/live/current/authoring/model/materials/:material_id
+POST   /v1/live/current/authoring/transactions
+GET    /v1/live/current/authoring/script/source
 POST   /v1/live/current/assets/import
 GET    /v1/live/current/display
 PUT    /v1/live/current/display
 PATCH  /v1/live/current/display
+PATCH  /v1/live/current/authoring/study/runtime
+PATCH  /v1/live/current/authoring/model/materials/:material_id
+POST   /v1/live/current/authoring/script/sync
 POST   /v1/live/current/commands
+GET    /v1/live/current/commands/status
+GET    /v1/live/current/commands/:command_id
 GET    /v1/live/current/artifacts*
 GET    /v1/live/current/eigen/*
 GET    /v1/live/current/logs/engine
@@ -336,9 +351,24 @@ GET    /v1/live/current/domain/*
 GET    /v1/live/current/quantities/catalog
 GET    /v1/live/current/fields/*
 GET    /v1/live/current/scalars
+GET    /v1/live/current/runs/current
+GET    /v1/live/current/stages/execution
+GET    /v1/live/current/solver/status
+GET    /v1/live/current/solver/energies/current
+GET    /v1/live/current/solver/energies/history
+GET    /v1/live/current/authoring/scene
+GET    /v1/live/current/authoring/study/runtime
+GET    /v1/live/current/authoring/model/materials/:material_id
+POST   /v1/live/current/authoring/transactions
+GET    /v1/live/current/authoring/script/source
 GET    /v1/live/current/display
 PATCH  /v1/live/current/display
+PATCH  /v1/live/current/authoring/study/runtime
+PATCH  /v1/live/current/authoring/model/materials/:material_id
+POST   /v1/live/current/authoring/script/sync
 POST   /v1/live/current/commands
+GET    /v1/live/current/commands/status
+GET    /v1/live/current/commands/:command_id
 PUT    /v1/live/current/display
 GET    /v1/live/current/artifacts*
 GET    /v1/live/current/logs/engine
@@ -353,6 +383,12 @@ Rules for this projection:
   session/run resource model,
 - the browser consumes thin status plus on-demand resources instead of one monolithic bootstrap
   blob,
+- singleton local-live deployments may expose derived runtime read-models such as
+  `runs/current`, `stages/execution`, `solver/status`, and `solver/energies/*` when the host can
+  derive them honestly from the active workspace snapshot,
+- singleton local-live deployments may also expose canonical authoring surfaces such as
+  `authoring/scene`, `authoring/study/runtime`, `authoring/model/materials/:material_id`, and
+  `authoring/script/*` for the active workspace,
 - WebSocket or SSE may deliver revision notices, but heavy data still remains resource-fetched by
   default,
 - the browser must not require URL-level `?session=` routing for this singleton local-live flow.

@@ -7,6 +7,12 @@ import type {
   DisplayPatchRequest,
   DisplayReplaceRequest,
   RemeshCommandRequest,
+  SessionExportRequest,
+  SessionExportResponse,
+  SessionImportCommitRequest,
+  SessionImportCommitResponse,
+  SessionImportInspectRequest,
+  SessionImportInspectResponse,
 } from "@/src/api/types";
 import type { GpuTelemetryResponse } from "@/src/api/types";
 import type { MeshCommandTarget, SceneDocument } from "@/lib/session/types";
@@ -48,14 +54,18 @@ export interface ControlRoomApi {
     payload?: JsonBody,
     options?: RequestOptions,
   ) => Promise<JsonObject>;
-  exportState: (
-    payload: JsonBody,
+  exportSession: (
+    payload: SessionExportRequest,
     options?: RequestOptions,
-  ) => Promise<JsonObject>;
-  importState: (
-    payload: JsonBody,
+  ) => Promise<SessionExportResponse>;
+  inspectSessionImport: (
+    payload: SessionImportInspectRequest,
     options?: RequestOptions,
-  ) => Promise<JsonObject>;
+  ) => Promise<SessionImportInspectResponse>;
+  commitSessionImport: (
+    payload: SessionImportCommitRequest,
+    options?: RequestOptions,
+  ) => Promise<SessionImportCommitResponse>;
   fetchGpuTelemetry: (
     options?: RequestOptions,
   ) => Promise<GpuTelemetryResponse>;
@@ -103,13 +113,18 @@ export function createControlRoomApi(): ControlRoomApi {
       return client.scene.update(payload, options);
     },
     syncScript(payload = {}, options) {
-      return client.post<JsonObject>("/v1/live/current/script/sync", payload, options);
+      return client.scene
+        .syncScript(payload as Record<string, unknown>, options)
+        .then((response) => response as unknown as JsonObject);
     },
-    exportState(payload, options) {
-      return client.post<JsonObject>("/v1/live/current/state/export", payload, options);
+    exportSession(payload, options) {
+      return client.session.export(payload, options);
     },
-    importState(payload, options) {
-      return client.post<JsonObject>("/v1/live/current/state/import", payload, options);
+    inspectSessionImport(payload, options) {
+      return client.session.inspectImport(payload, options);
+    },
+    commitSessionImport(payload, options) {
+      return client.session.commitImport(payload, options);
     },
     fetchGpuTelemetry(options) {
       return client.gpu.getTelemetry(options) as Promise<GpuTelemetryResponse>;

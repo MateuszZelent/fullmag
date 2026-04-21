@@ -51,12 +51,73 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
                 .patch(handlers::display::patch_display),
         )
         .route(
+            "/v1/live/current/scene/document",
+            get(handlers::scene::get_scene_document)
+                .put(handlers::scene::replace_scene_document),
+        )
+        .route(
+            "/v1/live/current/authoring/scene",
+            get(handlers::authoring::get_authoring_scene)
+                .put(handlers::authoring::replace_authoring_scene)
+                .patch(handlers::authoring::patch_authoring_scene),
+        )
+        .route(
+            "/v1/live/current/authoring/transactions",
+            post(handlers::authoring::commit_authoring_transaction),
+        )
+        .route(
+            "/v1/live/current/authoring/study/runtime",
+            get(handlers::authoring::get_authoring_study_runtime)
+                .patch(handlers::authoring::patch_authoring_study_runtime),
+        )
+        .route(
+            "/v1/live/current/authoring/model/materials/:material_id",
+            get(handlers::authoring::get_authoring_material)
+                .patch(handlers::authoring::patch_authoring_material),
+        )
+        .route(
+            "/v1/live/current/authoring/script/source",
+            get(handlers::authoring::get_authoring_script_source),
+        )
+        .route(
+            "/v1/live/current/authoring/script/sync",
+            post(handlers::authoring::sync_authoring_script),
+        )
+        .route(
             "/v1/live/current/commands",
             post(handlers::commands::submit_command),
         )
         .route(
+            "/v1/live/current/commands/status",
+            get(handlers::runtime::get_command_status),
+        )
+        .route(
+            "/v1/live/current/commands/:command_id",
+            get(handlers::runtime::get_command_detail),
+        )
+        .route(
             "/v1/live/current/assets/import",
             post(handlers::assets::import_asset),
+        )
+        .route(
+            "/v1/live/current/runs/current",
+            get(handlers::runtime::get_current_run),
+        )
+        .route(
+            "/v1/live/current/stages/execution",
+            get(handlers::runtime::get_stage_execution),
+        )
+        .route(
+            "/v1/live/current/solver/status",
+            get(handlers::runtime::get_solver_status),
+        )
+        .route(
+            "/v1/live/current/solver/energies/current",
+            get(handlers::runtime::get_solver_energies_current),
+        )
+        .route(
+            "/v1/live/current/solver/energies/history",
+            get(handlers::runtime::get_solver_energies_history),
         )
         .route(
             "/v1/live/current/artifacts",

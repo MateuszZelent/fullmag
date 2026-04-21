@@ -4,6 +4,10 @@ import {
   canShowWireframe,
   canShowGridDimensions,
   getAvailableAlgorithms,
+  synthesizeCapabilitiesFromDiscretization,
+  isFemDiscretization,
+  isFdmDiscretization,
+  resolveFemDiscretization,
 } from "../capabilityGuards";
 import type { CapabilityMap } from "../../../api/types";
 
@@ -72,5 +76,46 @@ describe("capabilityGuards", () => {
     expect(
       getAvailableAlgorithms(makeCaps({ algorithms_available: [] })),
     ).toEqual([]);
+  });
+
+  it("synthesizeCapabilitiesFromDiscretization returns FEM-shaped capabilities", () => {
+    expect(synthesizeCapabilitiesFromDiscretization(true)).toMatchObject({
+      explicit_topology: true,
+      structured_grid: false,
+      node_fields: true,
+      cell_fields: false,
+    });
+  });
+
+  it("synthesizeCapabilitiesFromDiscretization returns FDM-shaped capabilities", () => {
+    expect(synthesizeCapabilitiesFromDiscretization(false)).toMatchObject({
+      explicit_topology: false,
+      structured_grid: true,
+      node_fields: false,
+      cell_fields: true,
+    });
+  });
+
+  it("isFemDiscretization and isFdmDiscretization follow canonical capabilities", () => {
+    expect(isFemDiscretization(makeCaps({ explicit_topology: true }))).toBe(
+      true,
+    );
+    expect(isFdmDiscretization(makeCaps({ structured_grid: true }))).toBe(
+      true,
+    );
+  });
+
+  it("resolveFemDiscretization prefers canonical capabilities over legacy fallback", () => {
+    expect(
+      resolveFemDiscretization(
+        makeCaps({ explicit_topology: true, structured_grid: false }),
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it("resolveFemDiscretization falls back to legacy boolean when capabilities are missing", () => {
+    expect(resolveFemDiscretization(null, true)).toBe(true);
+    expect(resolveFemDiscretization(undefined, false)).toBe(false);
   });
 });

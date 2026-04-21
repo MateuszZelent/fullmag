@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { fmtExp, fmtSI } from "./shared";
 import { useTransport, useViewport, useCommand, useModel } from "./context-hooks";
 import { MESH_WORKSPACE_PRESETS } from "./meshWorkspace";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 import { appendNode, createPrimitiveNode, insertNodeNear } from "@/lib/study-builder/operations";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import { migrateFlatStagesToStudyPipeline } from "@/lib/study-builder/migrate";
@@ -115,6 +116,9 @@ const WorkspaceControlStrip = memo(function WorkspaceControlStrip() {
   const model = useModel();
   /* Backward-compatible ctx alias */
   const ctx = { ...transport, ...viewport, ...cmd, ...model };
+  const femDiscretization = ctx.domainCapabilities
+    ? isFemDiscretization(ctx.domainCapabilities)
+    : ctx.isFemBackend;
   const solverAccelerator = solverAcceleratorLabel(
     ctx.runtimeEngineLabel,
     ctx.runtimeEngineGpuLabel,
@@ -383,7 +387,7 @@ const WorkspaceControlStrip = memo(function WorkspaceControlStrip() {
 
             <div className="flex flex-wrap gap-1.5">
               {viewModes.map((mode) => {
-                const disabled = mode.id === "Mesh" && !ctx.isFemBackend && ctx.totalCells == null;
+                const disabled = mode.id === "Mesh" && !femDiscretization && ctx.totalCells == null;
                 const active = ctx.effectiveViewMode === mode.id;
                 return (
                   <button
@@ -406,7 +410,7 @@ const WorkspaceControlStrip = memo(function WorkspaceControlStrip() {
               })}
             </div>
 
-            {ctx.isFemBackend && (
+            {femDiscretization && (
               <div className="flex flex-col gap-2 rounded-xl border border-border/50 bg-background/45 px-2.5 py-2">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[0.62rem] font-bold uppercase tracking-[0.18em] text-muted-foreground">

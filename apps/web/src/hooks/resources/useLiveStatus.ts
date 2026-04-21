@@ -18,6 +18,7 @@ interface UseLiveStatusResult {
   status: LiveStatus | null;
   loading: boolean;
   error: LiveApiError | null;
+  refresh: () => Promise<void>;
 }
 
 export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusResult {
@@ -70,5 +71,15 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
     };
   }, [poll, enabled]);
 
-  return { status, loading, error };
+  return {
+    status,
+    loading,
+    error,
+    refresh: async () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
+      await poll();
+    },
+  };
 }

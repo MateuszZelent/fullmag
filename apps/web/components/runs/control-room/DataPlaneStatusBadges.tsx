@@ -2,6 +2,7 @@
 
 import { memo, useMemo } from "react";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 import { cn } from "@/lib/utils";
 
 /**
@@ -17,11 +18,15 @@ export const DataPlaneStatusBadges = memo(function DataPlaneStatusBadges() {
   const stepUpdateV2 = useSessionRuntimeStore((s) => s.stepUpdateV2);
   const femMesh = useSessionRuntimeStore((s) => s.femMesh);
   const isFemBackend = useSessionRuntimeStore((s) => s.isFemBackend);
+  const domainCapabilities = useSessionRuntimeStore((s) => s.domainCapabilities);
   const connection = useSessionRuntimeStore((s) => s.connection);
   const scalarRows = useSessionRuntimeStore((s) => s.scalarRows);
 
   const badges = useMemo(() => {
     const b: Badge[] = [];
+    const femDiscretization = domainCapabilities
+      ? isFemDiscretization(domainCapabilities)
+      : isFemBackend;
 
     // Connection
     if (connection !== "connected") {
@@ -39,10 +44,10 @@ export const DataPlaneStatusBadges = memo(function DataPlaneStatusBadges() {
     }
 
     // Backend type
-    b.push({ label: isFemBackend ? "FEM" : "FDM", variant: "muted" });
+    b.push({ label: femDiscretization ? "FEM" : "FDM", variant: "muted" });
 
     // FEM mesh generation
-    if (isFemBackend && femMesh) {
+    if (femDiscretization && femMesh) {
       const genId = femMesh.generation_id ?? femMesh.mesh_id;
       if (genId) {
         b.push({ label: `mesh ${genId.slice(0, 6)}`, variant: "muted" });
@@ -60,7 +65,7 @@ export const DataPlaneStatusBadges = memo(function DataPlaneStatusBadges() {
     }
 
     return b;
-  }, [connection, liveState, stepUpdateV2, femMesh, isFemBackend, scalarRows.length]);
+  }, [connection, domainCapabilities, femMesh, isFemBackend, liveState, scalarRows.length, stepUpdateV2]);
 
   if (badges.length === 0) return null;
 

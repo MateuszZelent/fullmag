@@ -47,7 +47,7 @@ export interface NormalizedSessionState {
   meshWorkspace: MeshWorkspaceState | null;
   stepUpdateV2: StepUpdateV2 | null;
   workspaceStatus: string;
-  isFemBackend: boolean;
+  femDiscretization: boolean;
 }
 
 /**
@@ -76,7 +76,7 @@ export function deriveSessionReadModel(
       meshWorkspace: null,
       stepUpdateV2: null,
       workspaceStatus: "idle",
-      isFemBackend: false,
+      femDiscretization: false,
     };
   }
 
@@ -114,7 +114,7 @@ export function deriveSessionReadModel(
       : null) ??
     scriptBackendHint;
   const spatialPreview = preview?.kind === "spatial" ? preview : null;
-  const isFemBackend =
+  const femDiscretization =
     resolvedBackend === "fem" ||
     femMesh != null ||
     (spatialPreview as Record<string, unknown> | null)?.spatial_kind === "mesh";
@@ -136,6 +136,6 @@ export function deriveSessionReadModel(
     meshWorkspace,
     stepUpdateV2,
     workspaceStatus,
-    isFemBackend,
+    femDiscretization,
   };
 }

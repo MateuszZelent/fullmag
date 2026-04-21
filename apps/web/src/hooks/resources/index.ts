@@ -6,3 +6,5 @@ export { useScalarHistory } from "./useScalarHistory";
 export { useDisplayControl } from "./useDisplayControl";
 export { useCommands } from "./useCommands";
 export { useArtifacts } from "./useArtifacts";
+export { useSceneDocument } from "./useSceneDocument";
+export { useStageExecution } from "./useStageExecution";

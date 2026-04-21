@@ -10,6 +10,7 @@
  *  - field vectors  (when field_revision bumps)
  *  - scalar windows (when scalar_revision bumps)
  *  - domain/topology (when domain_generation_id bumps)
+ *  - engine logs    (when engine_log_revision bumps)
  *
  * The fetched data is written back to the store through
  * applyNormalizedState, merging with the existing state.
@@ -19,7 +20,14 @@ import { useEffect, useRef, useCallback } from "react";
 import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
 import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
-import type { ScalarRow as StoreScalarRow } from "@/lib/session/types";
+import { decodeTopology } from "@/src/api/codecs/topologyCodec";
+import { synthesizeCapabilitiesFromDiscretization } from "@/src/domain/capabilities";
+import type {
+  FemLiveMesh,
+  LatestFieldFrame,
+  QuantityDescriptor,
+  ScalarRow as StoreScalarRow,
+} from "@/lib/session/types";
 import type { FieldFrameEnvelope, FieldFrameStats } from "@/lib/fieldFrame/types";
 import { scalarWindowToRows } from "@/src/api/client/modules/ScalarHistoryAdapter";
 
@@ -48,6 +56,120 @@ function adaptScalarRow(
   };
 }
 
+function buildFemMeshFromTopology(
+  generationId: string,
+  topology: ReturnType<typeof decodeTopology>,
+): FemLiveMesh {
+  return {
+    mesh_name: "resource-topology",
+    mesh_id: `resource-topology:${generationId}`,
+    generation_id: generationId,
+    nodes: Array.from({ length: topology.nodeCount }, (_, index) => {
+      const base = index * 3;
+      return [
+        topology.positions[base] ?? 0,
+        topology.positions[base + 1] ?? 0,
+        topology.positions[base + 2] ?? 0,
+      ];
+    }),
+    elements: Array.from({ length: topology.elementCount }, (_, index) => {
+      const base = index * 4;
+      return [
+        topology.indices[base] ?? 0,
+        topology.indices[base + 1] ?? 0,
+        topology.indices[base + 2] ?? 0,
+        topology.indices[base + 3] ?? 0,
+      ];
+    }),
+    element_markers: Array.from(topology.elementMarkers),
+    boundary_faces: Array.from({ length: topology.boundaryFaceCount }, (_, index) => {
+      const base = index * 3;
+      return [
+        topology.boundaryFaces[base] ?? 0,
+        topology.boundaryFaces[base + 1] ?? 0,
+        topology.boundaryFaces[base + 2] ?? 0,
+      ];
+    }),
+    boundary_markers: Array.from(topology.boundaryMarkers),
+    topology_buffers: {
+      nodes: topology.positions,
+      elements: topology.indices,
+      boundary_faces: topology.boundaryFaces,
+      element_markers: topology.elementMarkers,
+      boundary_markers: topology.boundaryMarkers,
+    },
+    topology_transport: "binary",
+    node_count: topology.nodeCount,
+    element_count: topology.elementCount,
+    boundary_face_count: topology.boundaryFaceCount,
+    object_segments: [],
+    mesh_parts: [],
+  };
+}
+
+function mapResourceQuantities(
+  quantityCatalog: {
+    quantities: Array<{
+      id: string;
+      label: string;
+      unit: string;
+      location: string;
+      domain: string;
+      n_comp: number;
+      normalization_hint: string;
+      interactive_preview: boolean;
+      supports_preview_2d: boolean;
+      supports_preview_3d: boolean;
+      supports_history: boolean;
+      supports_export: boolean;
+      quick_access_label?: string | null;
+      scalar_metric_key?: string | null;
+      shape: string;
+    }>;
+  },
+  fieldCatalog: {
+    quantities: Array<{
+      quantity_id: string;
+      label: string;
+      kind: string;
+      components: number;
+      location: string;
+      unit: string;
+      available: boolean;
+    }>;
+  },
+): QuantityDescriptor[] {
+  const fieldById = new Map(
+    fieldCatalog.quantities.map((quantity) => [quantity.quantity_id, quantity] as const),
+  );
+
+  return quantityCatalog.quantities.map((quantity) => {
+    const field = fieldById.get(quantity.id);
+    return {
+      id: quantity.id,
+      label: field?.label ?? quantity.label,
+      kind: field?.kind ?? quantity.shape,
+      unit: field?.unit ?? quantity.unit,
+      location: field?.location ?? quantity.location,
+      available: field?.available ?? false,
+      interactive_preview: quantity.interactive_preview,
+      quick_access_label: quantity.quick_access_label ?? null,
+      scalar_metric_key: quantity.scalar_metric_key ?? null,
+      n_comp: field?.components ?? quantity.n_comp,
+      domain: quantity.domain === "full_domain" ? "full_domain" : "magnetic_only",
+      normalization_hint:
+        quantity.normalization_hint === "unit_vector" ||
+        quantity.normalization_hint === "max_abs"
+          ? quantity.normalization_hint
+          : "none",
+      supports_preview_2d: quantity.supports_preview_2d,
+      supports_preview_3d: quantity.supports_preview_3d,
+      supports_history: quantity.supports_history,
+      supports_export: quantity.supports_export,
+    };
+  });
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────
 
 /**
@@ -67,15 +189,19 @@ export function useDataPlaneBridge(
     (s) => s.liveState?.step ?? s.stateVersion,
   );
   const sessionId = useSessionRuntimeStore((s) => s.session?.session_id);
+  const resourceRevisions = useSessionRuntimeStore((s) => s.resourceRevisions);
 
   const applyNormalizedState = useSessionRuntimeStore(
     (s) => s.applyNormalizedState,
   );
 
   // Track fetched revisions to avoid duplicate requests
-  const fetchedFieldRevRef = useRef<number | null>(null);
+  const fetchedFieldRevRef = useRef<string | null>(null);
   const fetchedScalarRevRef = useRef<number | null>(null);
   const fetchedDomainGenRef = useRef<string | null>(null);
+  const fetchedCatalogKeyRef = useRef<string | null>(null);
+  const fetchedArtifactsKeyRef = useRef<string | null>(null);
+  const fetchedEngineLogKeyRef = useRef<string | null>(null);
   const scalarAccumulatorRef = useRef<StoreScalarRow[]>([]);
 
   // Reset accumulators when session changes
@@ -90,6 +216,9 @@ export function useDataPlaneBridge(
       fetchedFieldRevRef.current = null;
       fetchedScalarRevRef.current = null;
       fetchedDomainGenRef.current = null;
+      fetchedCatalogKeyRef.current = null;
+      fetchedArtifactsKeyRef.current = null;
+      fetchedEngineLogKeyRef.current = null;
     }
   }, [enabled, sessionId]);
 
@@ -99,12 +228,13 @@ export function useDataPlaneBridge(
     async (envelope: FieldFrameEnvelope) => {
       if (!enabled) return;
       const rev = envelope.fieldRevision;
-      if (fetchedFieldRevRef.current === rev) return;
+      const cacheKey = `${envelope.quantityId}:${rev}`;
+      if (fetchedFieldRevRef.current === cacheKey) return;
 
       try {
         const client = getLiveApiClient();
         const result = await client.fields.getVector(envelope.quantityId);
-        fetchedFieldRevRef.current = rev;
+        fetchedFieldRevRef.current = cacheKey;
 
         // Build updated envelope with stats from the fetched field
         let stats: FieldFrameStats | null = envelope.stats;
@@ -123,6 +253,19 @@ export function useDataPlaneBridge(
           ...envelope,
           stats,
           nComp: result.nComp as FieldFrameEnvelope["nComp"],
+        };
+        const nextFieldFrame: LatestFieldFrame = {
+          quantity_id: envelope.quantityId,
+          unit: "",
+          n_comp: result.nComp,
+          grid: result.grid,
+          values: result.values,
+          active_mask: null,
+          location: envelope.location,
+          domain: envelope.domain,
+          field_revision: rev,
+          source_step: envelope.sourceStep,
+          source_time: envelope.sourceTime,
         };
 
         // Merge into store — only update field-related fields
@@ -146,13 +289,22 @@ export function useDataPlaneBridge(
           stepUpdateV2: current.stepUpdateV2,
           workspaceStatus: current.workspaceStatus,
           isFemBackend: current.isFemBackend,
+          domainCapabilities: current.domainCapabilities,
+          resourceRevisions: current.resourceRevisions,
+          displaySelection: current.displaySelection,
+          previewConfig: current.previewConfig,
+          latestFieldFrames: {
+            ...current.latestFieldFrames,
+            [envelope.quantityId]: nextFieldFrame,
+          },
+          latestFieldGrid: result.grid,
           fieldFrameEnvelope: updatedEnvelope,
         });
 
         if (ENABLE_DEBUG) {
           console.info(
             "[fullmag-debug][data-plane] field vector fetched",
-            { quantityId: envelope.quantityId, revision: rev },
+            { quantityId: envelope.quantityId, revision: rev, cacheKey },
           );
         }
       } catch (err) {
@@ -209,6 +361,12 @@ export function useDataPlaneBridge(
           stepUpdateV2: current.stepUpdateV2,
           workspaceStatus: current.workspaceStatus,
           isFemBackend: current.isFemBackend,
+          domainCapabilities: current.domainCapabilities,
+          resourceRevisions: current.resourceRevisions,
+          displaySelection: current.displaySelection,
+          previewConfig: current.previewConfig,
+          latestFieldFrames: current.latestFieldFrames,
+          latestFieldGrid: current.latestFieldGrid,
           fieldFrameEnvelope: current.fieldFrameEnvelope,
         });
 
@@ -238,6 +396,10 @@ export function useDataPlaneBridge(
         fetchedDomainGenRef.current = genId;
 
         const isFem = meta.discretization === "fem";
+        const domainCapabilities = synthesizeCapabilitiesFromDiscretization(isFem);
+        const femMesh = isFem
+          ? buildFemMeshFromTopology(genId, decodeTopology(await client.domain.getTopology()))
+          : null;
 
         // Merge into store
         const current = useSessionRuntimeStore.getState();
@@ -251,7 +413,7 @@ export function useDataPlaneBridge(
           engineLog: current.engineLog,
           quantities: current.quantities,
           artifacts: current.artifacts,
-          femMesh: current.femMesh,
+          femMesh,
           preview: current.preview,
           scriptBuilder: current.scriptBuilder,
           runtimeStatus: current.runtimeStatus,
@@ -260,17 +422,188 @@ export function useDataPlaneBridge(
           stepUpdateV2: current.stepUpdateV2,
           workspaceStatus: current.workspaceStatus,
           isFemBackend: isFem,
+          domainCapabilities,
+          resourceRevisions: current.resourceRevisions,
+          displaySelection: current.displaySelection,
+          previewConfig: current.previewConfig,
+          latestFieldFrames: current.latestFieldFrames,
+          latestFieldGrid: current.latestFieldGrid,
           fieldFrameEnvelope: current.fieldFrameEnvelope,
         });
 
         if (ENABLE_DEBUG) {
           console.info(
             "[fullmag-debug][data-plane] domain meta fetched",
-            { genId, discretization: meta.discretization },
+            {
+              genId,
+              discretization: meta.discretization,
+              femMeshNodes: femMesh?.node_count ?? 0,
+            },
           );
         }
       } catch (err) {
         console.warn("[fullmag][data-plane] domain fetch failed", err);
+      }
+    },
+    [applyNormalizedState, enabled],
+  );
+
+  // ── Quantities / artifacts fetching ────────────────────────────
+
+  const fetchQuantities = useCallback(
+    async (cacheKey: string) => {
+      if (!enabled) return;
+      if (fetchedCatalogKeyRef.current === cacheKey) return;
+
+      try {
+        const client = getLiveApiClient();
+        const [quantityCatalog, fieldCatalog] = await Promise.all([
+          client.quantities.getCatalog(),
+          client.fields.getCatalog(),
+        ]);
+        fetchedCatalogKeyRef.current = cacheKey;
+
+        const current = useSessionRuntimeStore.getState();
+        applyNormalizedState({
+          stateVersion: current.stateVersion,
+          session: current.session,
+          run: current.run,
+          metadata: null,
+          liveState: current.liveState,
+          scalarRows: current.scalarRows,
+          engineLog: current.engineLog,
+          quantities: mapResourceQuantities(quantityCatalog, fieldCatalog),
+          artifacts: current.artifacts,
+          femMesh: current.femMesh,
+          preview: current.preview,
+          scriptBuilder: current.scriptBuilder,
+          runtimeStatus: current.runtimeStatus,
+          commandStatus: current.commandStatus,
+          meshWorkspace: current.meshWorkspace,
+          stepUpdateV2: current.stepUpdateV2,
+          workspaceStatus: current.workspaceStatus,
+          isFemBackend: current.isFemBackend,
+          domainCapabilities: current.domainCapabilities,
+          resourceRevisions: current.resourceRevisions,
+          displaySelection: current.displaySelection,
+          previewConfig: current.previewConfig,
+          latestFieldFrames: current.latestFieldFrames,
+          latestFieldGrid: current.latestFieldGrid,
+          fieldFrameEnvelope: current.fieldFrameEnvelope,
+        });
+
+        if (ENABLE_DEBUG) {
+          console.info("[fullmag-debug][data-plane] quantity catalogs fetched", {
+            cacheKey,
+            quantities: quantityCatalog.quantities.length,
+            fields: fieldCatalog.quantities.length,
+          });
+        }
+      } catch (err) {
+        console.warn("[fullmag][data-plane] quantity catalog fetch failed", err);
+      }
+    },
+    [applyNormalizedState, enabled],
+  );
+
+  const fetchArtifacts = useCallback(
+    async (cacheKey: string) => {
+      if (!enabled) return;
+      if (fetchedArtifactsKeyRef.current === cacheKey) return;
+
+      try {
+        const artifacts = await getLiveApiClient().artifacts.list();
+        fetchedArtifactsKeyRef.current = cacheKey;
+
+        const current = useSessionRuntimeStore.getState();
+        applyNormalizedState({
+          stateVersion: current.stateVersion,
+          session: current.session,
+          run: current.run,
+          metadata: null,
+          liveState: current.liveState,
+          scalarRows: current.scalarRows,
+          engineLog: current.engineLog,
+          quantities: current.quantities,
+          artifacts,
+          femMesh: current.femMesh,
+          preview: current.preview,
+          scriptBuilder: current.scriptBuilder,
+          runtimeStatus: current.runtimeStatus,
+          commandStatus: current.commandStatus,
+          meshWorkspace: current.meshWorkspace,
+          stepUpdateV2: current.stepUpdateV2,
+          workspaceStatus: current.workspaceStatus,
+          isFemBackend: current.isFemBackend,
+          domainCapabilities: current.domainCapabilities,
+          resourceRevisions: current.resourceRevisions,
+          displaySelection: current.displaySelection,
+          previewConfig: current.previewConfig,
+          latestFieldFrames: current.latestFieldFrames,
+          latestFieldGrid: current.latestFieldGrid,
+          fieldFrameEnvelope: current.fieldFrameEnvelope,
+        });
+
+        if (ENABLE_DEBUG) {
+          console.info("[fullmag-debug][data-plane] artifacts fetched", {
+            cacheKey,
+            artifacts: artifacts.length,
+          });
+        }
+      } catch (err) {
+        console.warn("[fullmag][data-plane] artifacts fetch failed", err);
+      }
+    },
+    [applyNormalizedState, enabled],
+  );
+
+  const fetchEngineLog = useCallback(
+    async (cacheKey: string) => {
+      if (!enabled) return;
+      if (fetchedEngineLogKeyRef.current === cacheKey) return;
+
+      try {
+        const engineLog = await getLiveApiClient().logs.getEngine();
+        fetchedEngineLogKeyRef.current = cacheKey;
+
+        const current = useSessionRuntimeStore.getState();
+        applyNormalizedState({
+          stateVersion: current.stateVersion,
+          session: current.session,
+          run: current.run,
+          metadata: null,
+          liveState: current.liveState,
+          scalarRows: current.scalarRows,
+          engineLog: engineLog.entries,
+          quantities: current.quantities,
+          artifacts: current.artifacts,
+          femMesh: current.femMesh,
+          preview: current.preview,
+          scriptBuilder: current.scriptBuilder,
+          runtimeStatus: current.runtimeStatus,
+          commandStatus: current.commandStatus,
+          meshWorkspace: current.meshWorkspace,
+          stepUpdateV2: current.stepUpdateV2,
+          workspaceStatus: current.workspaceStatus,
+          isFemBackend: current.isFemBackend,
+          domainCapabilities: current.domainCapabilities,
+          resourceRevisions: current.resourceRevisions,
+          displaySelection: current.displaySelection,
+          previewConfig: current.previewConfig,
+          latestFieldFrames: current.latestFieldFrames,
+          latestFieldGrid: current.latestFieldGrid,
+          fieldFrameEnvelope: current.fieldFrameEnvelope,
+        });
+
+        if (ENABLE_DEBUG) {
+          console.info("[fullmag-debug][data-plane] engine log fetched", {
+            cacheKey,
+            total: engineLog.total,
+            revision: engineLog.revision,
+          });
+        }
+      } catch (err) {
+        console.warn("[fullmag][data-plane] engine log fetch failed", err);
       }
     },
     [applyNormalizedState, enabled],
@@ -307,4 +640,28 @@ export function useDataPlaneBridge(
       fetchDomain(fieldFrameEnvelope.meshGenerationId);
     }
   }, [enabled, fieldFrameEnvelope?.meshGenerationId, fetchDomain]);
+
+  useEffect(() => {
+    if (!enabled || !sessionId || !resourceRevisions) {
+      return;
+    }
+    const cacheKey = `${sessionId}:${resourceRevisions.fields_revision}`;
+    void fetchQuantities(cacheKey);
+  }, [enabled, fetchQuantities, resourceRevisions, sessionId]);
+
+  useEffect(() => {
+    if (!enabled || !sessionId || !resourceRevisions) {
+      return;
+    }
+    const cacheKey = `${sessionId}:${resourceRevisions.artifacts_revision}`;
+    void fetchArtifacts(cacheKey);
+  }, [enabled, fetchArtifacts, resourceRevisions, sessionId]);
+
+  useEffect(() => {
+    if (!enabled || !sessionId || !resourceRevisions) {
+      return;
+    }
+    const cacheKey = `${sessionId}:${resourceRevisions.engine_log_revision}`;
+    void fetchEngineLog(cacheKey);
+  }, [enabled, fetchEngineLog, resourceRevisions, sessionId]);
 }

@@ -7,13 +7,13 @@ use fullmag_runner::{
     LivePreviewRequest, RuntimeStatus, StepUpdate,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Mutex, RwLock};
-use utoipa::ToSchema;
 
 pub(crate) type CurrentPreviewConfig = LivePreviewRequest;
 pub(crate) type CurrentDisplaySelection = DisplaySelectionState;
@@ -68,12 +68,15 @@ pub(crate) struct AppState {
     pub current_control_queue: Arc<Mutex<VecDeque<SessionCommand>>>,
     /// Recent idempotent command responses keyed by request identity.
     pub current_command_responses: Arc<Mutex<VecDeque<(String, CommandResponse)>>>,
+    /// Submission/dispatched ledger for resource-first command status endpoints.
+    pub current_command_ledger: Arc<Mutex<VecDeque<TrackedCommandRecord>>>,
     /// Latest queued control sequence number.
     pub current_control_events: watch::Sender<u64>,
     /// Monotonic sequence generator for the current session control stream.
     pub current_control_next_seq: Arc<Mutex<u64>>,
     /// State version at which the memoized `current_live_public_snapshot` was built.
     /// When `state_version` on the live state exceeds this, the snapshot is stale.
+    #[allow(dead_code)]
     pub current_live_snapshot_version: Arc<AtomicU64>,
     /// Runtime feature flags for disabling heavy subsystems during diagnostics.
     pub feature_flags: crate::feature_flags::FeatureFlags,
@@ -200,6 +203,7 @@ pub(crate) struct ArtifactEntry {
     pub kind: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(crate) struct ArtifactFileQuery {
     pub path: String,
@@ -265,7 +269,7 @@ pub(crate) struct LiveState {
     pub latest_step: StepUpdateView,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub(crate) struct EngineLogEntry {
     pub timestamp_unix_ms: u128,
     pub level: String,
@@ -554,18 +558,6 @@ pub(crate) struct SessionStateResponseView<'a> {
     pub state_version: u64,
 }
 
-#[derive(Debug, Deserialize, Default)]
-pub(crate) struct CurrentLivePollQuery {
-    #[serde(default)]
-    pub since_version: Option<u64>,
-    #[serde(default)]
-    pub scalar_rows_total: Option<usize>,
-    #[serde(default)]
-    pub field_transport: Option<String>,
-    #[serde(default)]
-    pub mesh_transport: Option<String>,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct QuantityDescriptor {
     pub id: String,
@@ -767,6 +759,40 @@ pub(crate) struct RuntimeStatusView {
     pub can_accept_commands: bool,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub(crate) struct RuntimeStatusResource {
+    pub kind: String,
+    pub code: String,
+    pub is_busy: bool,
+    pub can_accept_commands: bool,
+}
+
+impl From<&RuntimeStatusView> for RuntimeStatusResource {
+    fn from(value: &RuntimeStatusView) -> Self {
+        Self {
+            kind: format!("{:?}", value.kind).to_ascii_lowercase(),
+            code: value.code.clone(),
+            is_busy: value.is_busy,
+            can_accept_commands: value.can_accept_commands,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub(crate) struct CurrentRuntimeEnvelope {
+    pub runtime_status: RuntimeStatusResource,
+    #[schema(value_type = Object, nullable = true)]
+    pub capabilities: Option<Value>,
+    #[schema(value_type = Object, nullable = true)]
+    pub metadata: Option<Value>,
+    #[schema(value_type = Object, nullable = true)]
+    pub mesh_workspace: Option<Value>,
+    #[schema(value_type = Object, nullable = true)]
+    pub stage_execution: Option<Value>,
+}
+
 const fn default_preview_wait_timeout_ms() -> u64 {
     15_000
 }
@@ -794,57 +820,6 @@ pub(crate) struct ImportSessionAssetRequest {
     pub target_realization: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct ExportMagnetizationStateRequest {
-    #[serde(default)]
-    pub format: Option<String>,
-    #[serde(default)]
-    pub file_name: Option<String>,
-    #[serde(default)]
-    pub dataset: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ExportMagnetizationStateResponse {
-    pub file_name: String,
-    pub format: String,
-    pub stored_path: String,
-    pub vector_count: usize,
-    pub content_base64: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct ImportMagnetizationStateRequest {
-    pub file_name: String,
-    pub content_base64: String,
-    #[serde(default)]
-    pub format: Option<String>,
-    #[serde(default)]
-    pub dataset: Option<String>,
-    #[serde(default)]
-    pub sample_index: Option<i64>,
-    #[serde(default)]
-    pub apply_to_workspace: bool,
-    #[serde(default = "default_true")]
-    pub attach_to_script_builder: bool,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ImportMagnetizationStateResponse {
-    pub asset_id: String,
-    pub session_id: String,
-    pub stored_path: String,
-    pub file_name: String,
-    pub format: String,
-    pub vector_count: usize,
-    pub applied_to_workspace: bool,
-    pub attached_to_script_builder: bool,
-}
-
-const fn default_true() -> bool {
-    true
-}
-
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SessionAssetImportResponse {
     pub asset_id: String,
@@ -854,19 +829,26 @@ pub(crate) struct SessionAssetImportResponse {
     pub summary: ImportedAssetSummary,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct ScriptSyncRequest {
     #[serde(default)]
     pub overrides: Option<Value>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub(crate) struct ScriptSyncResponse {
     pub script_path: String,
     pub source_kind: String,
     pub entrypoint_kind: String,
     pub written: bool,
     pub bytes_written: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub(crate) struct ScriptSourceResponse {
+    pub script_path: String,
+    pub source: String,
+    pub bytes: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -977,6 +959,23 @@ pub(crate) struct SessionCommand {
     pub preview_config: Option<CurrentPreviewConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CommandLifecycleState {
+    Queued,
+    Dispatched,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TrackedCommandRecord {
+    pub command: SessionCommand,
+    pub status: CommandLifecycleState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatched_at_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

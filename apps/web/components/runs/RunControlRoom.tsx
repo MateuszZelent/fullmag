@@ -75,6 +75,7 @@ import WorkspaceDockingShell from "../workspace/docking/WorkspaceDockingShell";
 import { useActiveStageLayout, useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import {
   appendNode,
   createMacroNode,
@@ -230,6 +231,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const _cmd = useCommand();
   const _model = useModel();
   const ctx = { ..._transport, ..._viewport, ..._cmd, ..._model };
+  const femDiscretization = resolveFemDiscretization(
+    ctx.domainCapabilities,
+    ctx.isFemBackend,
+  );
   const femCpuThreadSummary = useMemo(
     () => extractFemCpuThreadSummary(ctx.engineLog),
     [ctx.engineLog],
@@ -1254,7 +1259,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showRibbonBar ? <RibbonBar
         workspaceMode={ctx.workspaceMode}
         viewMode={ctx.effectiveViewMode}
-        isFemBackend={ctx.isFemBackend}
+        femDiscretization={femDiscretization}
+        domainCapabilities={ctx.domainCapabilities}
         solverRunning={ctx.workspaceStatus === "running"}
         sidebarVisible={!ctx.sidebarCollapsed}
         selectedNodeId={ctx.selectedSidebarNodeId}
@@ -1275,7 +1281,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onQuickPreviewSelect={ctx.requestPreviewQuantity}
         onCapture={ctx.handleCapture}
         onExport={ctx.handleExport}
-        onStateExport={() => void ctx.handleStateExport("json")}
+        onStateExport={() => void ctx.handleStateExport("compact")}
         antennaSources={ctx.scriptBuilderCurrentModules.map((module) => ({
           name: module.name,
           kind: module.antenna_kind === "CPWAntenna" ? "CPW" : "Microstrip",
@@ -1448,7 +1454,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         solverMaxDt={commandMaxDt}
         solverFixedDt={commandFixedDt}
         solverIntegrator={commandSolverIntegrators}
-        nodeCount={ctx.isFemBackend && ctx.femMesh
+        nodeCount={femDiscretization && ctx.femMesh
           ? `${ctx.femMesh.nodes.length.toLocaleString()} nodes`
           : ctx.totalCells && ctx.totalCells > 0
             ? `${ctx.totalCells.toLocaleString()} cells`

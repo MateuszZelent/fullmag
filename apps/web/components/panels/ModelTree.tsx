@@ -1419,7 +1419,7 @@ export function buildFullmagModelTree(opts: {
               },
             ],
     },
-    { id: "res-state-io", label: "State I/O", icon: "💾" },
+    { id: "res-state-io", label: "Session I/O", icon: "💾" },
     { id: "res-export", label: "Export", icon: "💾" },
     ...(opts.eigenModeCount && opts.eigenModeCount > 0
       ? [

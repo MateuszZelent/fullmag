@@ -12,6 +12,7 @@ import { Button } from "../../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import MeshSettingsPanel from "../MeshSettingsPanel";
 import { MetricField, InspectorSection, StatusBadge, ToggleRow, CompactInputGrid } from "./primitives";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 import {
   humanizeToken,
   readBuilderContract,
@@ -98,6 +99,7 @@ export default function UniversePanel() {
     handleViewModeChange: viewport.handleViewModeChange,
     metadata: cmd.metadata,
     isFemBackend: cmd.isFemBackend,
+    domainCapabilities: cmd.domainCapabilities,
     commandStatus: cmd.commandStatus,
     session: cmd.session,
     commandMessage: cmd.commandMessage,
@@ -105,6 +107,9 @@ export default function UniversePanel() {
     scriptSyncMessage: cmd.scriptSyncMessage,
     syncScriptBuilder: cmd.syncScriptBuilder,
   };
+  const femDiscretization = ctx.domainCapabilities
+    ? isFemDiscretization(ctx.domainCapabilities)
+    : ctx.isFemBackend;
   const selectedNodeId = ctx.selectedSidebarNodeId ?? "universe";
   const builderContract = useMemo(() => readBuilderContract(ctx.metadata), [ctx.metadata]);
   const runtimeUniverse = useMemo<ScriptBuilderUniverseState | null>(() => {
@@ -142,22 +147,22 @@ export default function UniversePanel() {
         ? "Robin"
         : "Auto";
   const mode = builderUniverse?.mode ?? (worldExtent ? "derived" : null);
-  const role = ctx.isFemBackend
+  const role = femDiscretization
     ? "Declared universe / workspace framing"
     : "FDM world box / grid domain";
   const sourceSummary = builderUniverse
-    ? (ctx.isFemBackend
+    ? (femDiscretization
         ? "Universe/Airbox values below come directly from the active runtime domain frame and live mesh state."
         : "Universe values below come directly from the active runtime state.")
-    : ctx.isFemBackend && ctx.worldExtentSource === "declared_universe_manual"
+    : femDiscretization && ctx.worldExtentSource === "declared_universe_manual"
       ? "The current FEM world box comes from the active runtime domain frame."
-    : ctx.isFemBackend && ctx.worldExtentSource === "object_union_bounds"
+    : femDiscretization && ctx.worldExtentSource === "object_union_bounds"
       ? `No explicit universe in the script yet; the control room is framing the FEM world from ${ctx.objectOverlays.length} object bounds.`
-    : ctx.isFemBackend && ctx.worldExtentSource === "declared_universe_auto_padding"
+    : femDiscretization && ctx.worldExtentSource === "declared_universe_auto_padding"
         ? "No manual universe size in the script yet; the control room is deriving the world box from object bounds plus declared padding."
-    : ctx.isFemBackend && ctx.worldExtentSource === "mesh_bounds"
+    : femDiscretization && ctx.worldExtentSource === "mesh_bounds"
       ? "Object bounds are not available, so the control room is falling back to the realized FEM mesh bounds for workspace framing."
-    : ctx.isFemBackend && ctx.objectOverlays.length > 0
+    : femDiscretization && ctx.objectOverlays.length > 0
       ? `No explicit universe in the script yet; deriving the FEM world frame from ${ctx.objectOverlays.length} object bounds.`
     : worldExtent
       ? "No explicit universe in the script yet; using the current declared world/grid extent for control-room framing."
@@ -282,7 +287,7 @@ export default function UniversePanel() {
     [ctx.airPart, ctx.meshEntityViewState, ctx.meshParts],
   );
   const showMeshPartsPanel =
-    ctx.isFemBackend &&
+    femDiscretization &&
     ctx.meshParts.length > 0;
   const handleIsolateMeshPart = useCallback(
     (partId: string) => {
@@ -334,10 +339,10 @@ export default function UniversePanel() {
     <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col gap-3 pt-4 px-2">
       <TabsList className="grid h-auto grid-cols-5 gap-1 rounded-xl bg-background/45 p-1">
         <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="general">General</TabsTrigger>
-        <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="airbox" disabled={!ctx.isFemBackend}>Airbox</TabsTrigger>
-        <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="view" disabled={!ctx.isFemBackend}>View</TabsTrigger>
-        <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="boundary" disabled={!ctx.isFemBackend}>Boundary</TabsTrigger>
-        <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="build" disabled={!ctx.isFemBackend}>Build</TabsTrigger>
+        <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="airbox" disabled={!femDiscretization}>Airbox</TabsTrigger>
+        <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="view" disabled={!femDiscretization}>View</TabsTrigger>
+        <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="boundary" disabled={!femDiscretization}>Boundary</TabsTrigger>
+        <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="build" disabled={!femDiscretization}>Build</TabsTrigger>
       </TabsList>
 
       <TabsContent value="general" className="mt-0">
@@ -363,7 +368,7 @@ export default function UniversePanel() {
               <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground/80 min-w-[4.5rem]">
                 Backend
               </span>
-              <StatusBadge label={ctx.isFemBackend ? "FEM" : "FDM"} tone="accent" />
+              <StatusBadge label={femDiscretization ? "FEM" : "FDM"} tone="accent" />
             </div>
           </div>
         </InspectorSection>
@@ -403,7 +408,7 @@ export default function UniversePanel() {
           )}
         </InspectorSection>
 
-        {ctx.isFemBackend ? (
+        {femDiscretization ? (
           <InspectorSection title="Domain Mesh" defaultOpen={true}>
             <div className="rounded-lg border border-border/30 bg-card/30 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
               The shared-domain FEM path now treats Universe mesh controls as domain-level diagnostics.
@@ -431,7 +436,7 @@ export default function UniversePanel() {
       </TabsContent>
 
       <TabsContent value="airbox" className="mt-0">
-        {ctx.isFemBackend ? (
+        {femDiscretization ? (
           <InspectorSection title="Airbox" defaultOpen={true}>
             <div className="flex flex-col gap-3">
               <div className="rounded-lg border border-info/20 bg-info/10 p-2.5 text-[0.68rem] leading-relaxed text-info/90">
@@ -527,7 +532,7 @@ export default function UniversePanel() {
       </TabsContent>
 
       <TabsContent value="view" className="mt-0">
-        {ctx.isFemBackend ? (
+        {femDiscretization ? (
           <>
             <InspectorSection title="View" defaultOpen={true}>
               <div className="rounded-lg border border-border/35 bg-background/35 p-3">
@@ -662,7 +667,7 @@ export default function UniversePanel() {
       </TabsContent>
 
       <TabsContent value="boundary" className="mt-0">
-        {ctx.isFemBackend ? (
+        {femDiscretization ? (
           <InspectorSection title="Outer Boundary" defaultOpen={true}>
             <div className="flex flex-col gap-3">
               <SelectField
@@ -695,7 +700,7 @@ export default function UniversePanel() {
       </TabsContent>
 
       <TabsContent value="build" className="mt-0">
-        {ctx.isFemBackend ? (
+        {femDiscretization ? (
           <InspectorSection title="Build & Log" defaultOpen={true}>
             <div className="flex flex-col gap-3">
               <div className="grid grid-cols-2 gap-2">

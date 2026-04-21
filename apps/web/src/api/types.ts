@@ -106,6 +106,20 @@ export interface MetricsSummary {
   steps_per_second: number | null;
 }
 
+// ── Logs ─────────────────────────────────────────────────────────────
+
+export interface EngineLogEntry {
+  timestamp_unix_ms: number;
+  level: string;
+  message: string;
+}
+
+export interface EngineLogResource {
+  revision: number;
+  total: number;
+  entries: EngineLogEntry[];
+}
+
 // ── Domain ────────────────────────────────────────────────────────────
 
 export interface DomainMeta {
@@ -300,6 +314,229 @@ export interface CommandResponse {
   accepted: boolean;
   command_id: string;
   error?: string | null;
+}
+
+export interface CommandQueueStatus {
+  revision: number;
+  pending_count: number;
+  dispatched_count: number;
+  can_accept_commands: boolean;
+  commands: CommandStatus[];
+}
+
+export interface CommandStatus {
+  command_id: string;
+  seq: number;
+  kind: string;
+  status: "queued" | "dispatched";
+  created_at_unix_ms: number;
+  dispatched_at_unix_ms?: number | null;
+  error?: string | null;
+}
+
+export interface CommandDetail {
+  command_id: string;
+  seq: number;
+  kind: string;
+  status: "queued" | "dispatched";
+  created_at_unix_ms: number;
+  dispatched_at_unix_ms?: number | null;
+  error?: string | null;
+  until_seconds?: number | null;
+  max_steps?: number | null;
+  torque_tolerance?: number | null;
+  energy_tolerance?: number | null;
+  integrator?: string | null;
+  fixed_timestep?: number | null;
+  max_error?: number | null;
+  relax_algorithm?: string | null;
+  relax_alpha?: number | null;
+  mesh_target?: MeshCommandTargetRequest | null;
+  mesh_reason?: string | null;
+}
+
+export interface ScriptSyncRequest {
+  overrides?: unknown;
+}
+
+export interface ScriptSyncResponse {
+  script_path: string;
+  source_kind: string;
+  entrypoint_kind: string;
+  written: boolean;
+  bytes_written: number;
+}
+
+export interface ScriptSourceResponse {
+  script_path: string;
+  source: string;
+  bytes: number;
+}
+
+export interface ScenePatchRequest {
+  merge_patch: Record<string, unknown>;
+}
+
+export interface AuthoringStudyRuntimeResource {
+  backend: string | null;
+  requested_backend: string;
+  requested_device: string;
+  requested_precision: string;
+  requested_mode: string;
+  requested_cpu_threads: number | null;
+}
+
+export interface AuthoringStudyRuntimePatchRequest {
+  requested_backend?: string;
+  requested_device?: string;
+  requested_precision?: string;
+  requested_mode?: string;
+  requested_cpu_threads?: number | null;
+}
+
+export interface AuthoringMaterialPropertiesResource {
+  Ms: number | null;
+  Aex: number | null;
+  alpha: number;
+  Dind: number | null;
+}
+
+export interface AuthoringMaterialResource {
+  id: string;
+  name: string;
+  properties: AuthoringMaterialPropertiesResource;
+}
+
+export interface AuthoringMaterialPropertiesPatchRequest {
+  Ms?: number | null;
+  Aex?: number | null;
+  alpha?: number;
+  Dind?: number | null;
+}
+
+export interface AuthoringMaterialPatchRequest {
+  name?: string;
+  properties?: AuthoringMaterialPropertiesPatchRequest;
+}
+
+export type AuthoringTransactionRequest =
+  | {
+      kind: "replace_scene";
+      scene: Record<string, unknown>;
+    }
+  | {
+      kind: "merge_patch";
+      merge_patch: Record<string, unknown>;
+    };
+
+export interface AuthoringTransactionResponse {
+  transaction_kind: string;
+  scene_revision: number;
+  committed_scene: Record<string, unknown>;
+}
+
+// ── Runtime read-models ───────────────────────────────────────────────
+
+export interface CurrentRunResource {
+  run_id: string;
+  session_id: string;
+  revision: number;
+  status: string;
+  status_reason?: string | null;
+  started_at: string;
+  total_steps: number;
+  solver_time_seconds?: number | null;
+  final_exchange_energy?: number | null;
+  final_demag_energy?: number | null;
+  final_zeeman_energy?: number | null;
+  final_anisotropy_energy?: number | null;
+  final_dmi_energy?: number | null;
+  final_total_energy?: number | null;
+  artifact_dir: string;
+  requested_backend: string;
+  requested_device: string;
+  requested_precision: string;
+  requested_mode: string;
+  resolved_backend?: string | null;
+  resolved_device?: string | null;
+  resolved_precision?: string | null;
+  resolved_mode?: string | null;
+  resolved_runtime_family?: string | null;
+  resolved_engine_id?: string | null;
+  resolved_worker?: string | null;
+  active_stage_index?: number | null;
+  active_stage_kind?: string | null;
+  total_stages?: number | null;
+}
+
+export interface StageExecutionResource {
+  revision: number;
+  runtime_state: string;
+  total_stages: number;
+  completed_stage_indexes: number[];
+  stage_statuses: string[];
+  active_stage_index?: number | null;
+  active_stage_kind?: string | null;
+  stages: StageExecutionRecordResource[];
+}
+
+export interface StageExecutionRecordResource {
+  status: string;
+  reason?: string | null;
+  metric_name?: string | null;
+  metric_value?: number | null;
+  threshold?: number | null;
+}
+
+export interface SolverStatusResource {
+  revision: number;
+  runtime_state: string;
+  runtime_status_kind: string;
+  runtime_status_code: string;
+  session_status: string;
+  is_busy: boolean;
+  can_accept_commands: boolean;
+  run_id?: string | null;
+  stage_kind?: string | null;
+  algorithm?: string | null;
+  integrator?: string | null;
+  dt_seconds?: number | null;
+  sim_time_seconds?: number | null;
+  step_index?: number | null;
+  max_torque?: number | null;
+  converged?: boolean | null;
+  last_error?: string | null;
+  warnings: string[];
+}
+
+export interface SolverEnergyCurrentResource {
+  revision: number;
+  step: number;
+  time_seconds: number;
+  exchange: number;
+  demag: number;
+  zeeman: number;
+  anisotropy: number;
+  dmi: number;
+  total: number;
+}
+
+export interface SolverEnergyHistoryResource {
+  revision: number;
+  total_rows: number;
+  returned_rows: number;
+  rows: SolverEnergyRow[];
+}
+
+export interface SolverEnergyRow {
+  step: number;
+  time_seconds: number;
+  exchange: number;
+  demag: number;
+  zeeman: number;
+  anisotropy: number;
+  dmi: number;
+  total: number;
 }
 
 // ── Artifacts ─────────────────────────────────────────────────────────

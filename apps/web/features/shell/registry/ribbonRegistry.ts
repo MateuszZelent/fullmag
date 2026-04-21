@@ -19,6 +19,7 @@ import type { ReactNode } from "react";
 import type { NodeKind, NodeDomain } from "../../model-builder/types";
 import type { StudyNodeContext } from "@/lib/study-builder/node-context";
 import type { RibbonCommand } from "@/components/shell/ribbon/command-registry";
+import type { CapabilityMap } from "@/src/api/types";
 
 // ---------------------------------------------------------------------------
 // Core ribbon types — canonical, used by contributions AND the renderer
@@ -119,6 +120,7 @@ export interface RibbonContribution {
 export interface RibbonBuildContext {
   // ── Core solver/execution state ──
   isFemBackend: boolean;
+  domainCapabilities: CapabilityMap | null;
   canRun: boolean;
   canRelax: boolean;
   canPause: boolean;

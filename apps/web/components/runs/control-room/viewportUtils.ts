@@ -30,12 +30,12 @@ export function domainFrameSourceLabel(source: string | null): string {
 }
 
 export function visibleVolumeLabel(
-  isFemBackend: boolean,
+  femDiscretization: boolean,
   clipEnabled: boolean,
   clipAxis: "x" | "y" | "z",
   clipPos: number,
 ): string {
-  if (!isFemBackend) {
+  if (!femDiscretization) {
     return "Full Domain";
   }
   if (!clipEnabled) {

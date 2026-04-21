@@ -612,6 +612,308 @@ Notes:
 | `GET /v1/live/current/fields/:quantity_id/stats` | `target-only` | Dedicated stats resource when stats become richer or independently cacheable |
 | `GET /v1/live/current/fields/:quantity_id/availability` | `target-only` | Dedicated availability probe resource |
 
+### 7.8 `GET /v1/live/current/runs/current`
+
+- Status: `canonical`
+- Purpose: current run read-model for the active local-live workspace
+- Request body: none
+- Response body: `CurrentRunResource`
+
+Notes:
+
+- Returns `404` when a workspace exists but no run is currently materialized.
+- This is the singleton local-live projection of the broader run model from
+  `docs/specs/session-run-api-v1.md`.
+
+### 7.9 `GET /v1/live/current/stages/execution`
+
+- Status: `canonical`
+- Purpose: explicit stage-execution read-model for the current run
+- Request body: none
+- Response body: `StageExecutionResource`
+
+Notes:
+
+- Returns `404` when the active workspace does not expose stage execution data.
+- This route closes one of the major gaps between thin `status` and the former
+  monolithic `/state` snapshot.
+
+### 7.10 `GET /v1/live/current/solver/status`
+
+- Status: `canonical`
+- Purpose: detailed solver read-model derived from runtime status, latest step,
+  execution-plan metadata, and engine-log diagnostics
+- Request body: none
+- Response body: `SolverStatusResource`
+
+Current implementation notes:
+
+- `runtime_state` prefers the live-step status when present and otherwise falls
+  back to `runtime_status.code`.
+- `algorithm` and `integrator` are currently projected from
+  `metadata.execution_plan.backend_plan`.
+- `last_error` and `warnings` are derived from the current engine-log tail.
+
+### 7.11 `GET /v1/live/current/solver/energies/current`
+
+- Status: `canonical`
+- Purpose: current solver energy sample without fetching the full scalar table
+- Request body: none
+- Response body: `SolverEnergyCurrentResource`
+
+Notes:
+
+- Returns `404` when no solver energy sample is available yet.
+- Current implementation prefers the latest scalar row and falls back to the
+  latest live-step envelope when scalar history is still empty.
+
+### 7.12 `GET /v1/live/current/solver/energies/history`
+
+- Status: `canonical`
+- Purpose: energy-only history projection derived from scalar rows
+- Query parameters:
+
+| Parameter | Type | Meaning | Notes |
+|---|---|---|---|
+| `limit` | `usize | null` | Return only the most recent N rows | Optional truncation for lightweight dashboards. |
+
+- Response body: `SolverEnergyHistoryResource`
+
+Notes:
+
+- This is a resource-focused projection over the broader scalar history.
+- It does not replace `GET /v1/live/current/scalars` when the caller needs the
+  full scalar vocabulary.
+
+### 7.13 `GET /v1/live/current/commands/status`
+
+- Status: `canonical`
+- Purpose: current command queue and dispatch ledger for the active workspace
+- Request body: none
+- Response body: `CommandQueueStatusResource`
+
+Current implementation honesty note:
+
+- Today this route exposes the API host's accepted command ledger with
+  `queued` and `dispatched` states.
+- It does not yet expose authoritative `completed` or `rejected` execution
+  events from the runtime host.
+- This is still a real improvement over opaque queue polling because the
+  browser can now inspect the current command ledger as a named resource.
+
+### 7.14 `GET /v1/live/current/commands/:command_id`
+
+- Status: `canonical`
+- Purpose: fetch one command submission / dispatch record by id
+- Path parameters:
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `command_id` | `string` | Command identifier returned by `POST /v1/live/current/commands` |
+
+- Response body: `CommandDetailResource`
+
+Notes:
+
+- Returns `404` when the command id is not present in the current in-memory
+  ledger.
+- The current mounted detail view exposes submission parameters relevant to
+  `run`, `relax`, `pause`, `resume`, `stop`, `skip`, and `remesh` flows.
+
+### 7.15 `GET /v1/live/current/authoring/scene`
+
+- Status: `canonical`
+- Purpose: canonical full-document authoring route for the active workspace
+- Request body: none
+- Response body: JSON `SceneDocument`
+
+Current implementation note:
+
+- Today this route is the canonical mounted alias over the same scene document
+  committed by `GET/PUT /v1/live/current/scene/document`.
+- The intent is to move browser clients to `authoring/scene` while keeping the
+  older flat scene route only as transitional compatibility.
+
+### 7.16 `PUT /v1/live/current/authoring/scene`
+
+- Status: `canonical`
+- Purpose: replace the canonical full-document authoring scene
+- Request body: JSON `SceneDocument`
+- Response body: JSON `SceneDocument`
+
+Notes:
+
+- Invalid payloads return `400`.
+- The committed scene still flows through the same canonical scene validation
+  and rewrite path used by the existing scene document commit helper.
+
+### 7.17 `PATCH /v1/live/current/authoring/scene`
+
+- Status: `canonical`
+- Purpose: apply a merge-patch style coarse authoring mutation over the current
+  `SceneDocument`
+- Request body: `ScenePatchRequest`
+- Response body: JSON `SceneDocument`
+
+#### `ScenePatchRequest`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `merge_patch` | `json object` | Merge patch applied over the current `SceneDocument` JSON representation | Current implementation uses recursive object merge semantics and full document revalidation before commit. |
+
+Honesty note:
+
+- This is a coarse patch surface during migration.
+- It is not yet the final narrow `authoring/model/*` or `authoring/physics/*`
+  mutation family.
+- It still materially improves over mandatory full-document replacement for
+  simple authoring commits.
+
+### 7.18 `POST /v1/live/current/authoring/transactions`
+
+- Status: `canonical`
+- Purpose: canonical coarse-grained authoring commit surface
+- Request body: `AuthoringTransactionRequest`
+- Response body: `AuthoringTransactionResponse`
+
+#### `AuthoringTransactionRequest`
+
+Current mounted variants:
+
+| Variant | Meaning |
+|---|---|
+| `replace_scene` | Commit a full `SceneDocument` as one authoring transaction |
+| `merge_patch` | Commit a merge patch over the current `SceneDocument` |
+
+#### `AuthoringTransactionResponse`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `transaction_kind` | `string` | Executed transaction kind | Current values mirror the request discriminator. |
+| `scene_revision` | `u64` | Revision of the committed scene | Taken from the committed `SceneDocument`. |
+| `committed_scene` | `json object` | Full committed `SceneDocument` | Returned so the browser can resynchronize local authoring state. |
+
+Current implementation note:
+
+- This is the mounted canonical commit surface, but it is still coarse-grained.
+- Long-term narrow authoring transactions for model/material/magnetization/study
+  projections are still planned.
+
+### 7.18.1 `GET /v1/live/current/authoring/study/runtime`
+
+- Status: `canonical`
+- Purpose: fetch the requested runtime selection stored in the canonical
+  authoring scene
+- Request body: none
+- Response body: `StudyRuntimeResource`
+
+#### `StudyRuntimeResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `backend` | `string | null` | Optional backend marker already stored on `SceneDocument.study` | Transitional carry-over from the full scene contract. |
+| `requested_backend` | `string` | Requested solver family / discretization | Values such as `auto`, `fdm`, or `fem`. |
+| `requested_device` | `string` | Requested execution device | Values such as `auto`, `cpu`, or `gpu`. |
+| `requested_precision` | `string` | Requested numeric precision | Values such as `double` or `single`. |
+| `requested_mode` | `string` | Requested execution mode | Values such as `strict`, `extended`, or `hybrid`. |
+| `requested_cpu_threads` | `u32 | null` | Requested CPU thread override | `null` means auto / runtime default. |
+
+### 7.18.2 `PATCH /v1/live/current/authoring/study/runtime`
+
+- Status: `canonical`
+- Purpose: patch the requested runtime selection without replacing the full
+  `SceneDocument`
+- Request body: `StudyRuntimePatchRequest`
+- Response body: `StudyRuntimeResource`
+
+#### `StudyRuntimePatchRequest`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `requested_backend` | `string?` | Replace requested backend selection | Optional partial mutation field. |
+| `requested_device` | `string?` | Replace requested device selection | Optional partial mutation field. |
+| `requested_precision` | `string?` | Replace requested precision selection | Optional partial mutation field. |
+| `requested_mode` | `string?` | Replace requested execution mode | Optional partial mutation field. |
+| `requested_cpu_threads` | `u32 | null` | Replace or clear requested CPU thread override | Omit to keep unchanged, set `null` to restore auto. |
+
+Current implementation note:
+
+- This route is the first narrow canonical projection over `SceneDocument.study`
+  used for runtime-selection authoring.
+- It lets browser runtime-selection edits avoid coarse `POST /authoring/transactions`
+  when only requested execution intent changed.
+
+### 7.18.3 `GET /v1/live/current/authoring/model/materials/{material_id}`
+
+- Status: `canonical`
+- Purpose: fetch one canonical material asset from the current authoring scene
+- Request body: none
+- Response body: `MaterialResource`
+
+#### `MaterialResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `id` | `string` | Canonical material asset id | Shared with `SceneObject.material_ref`. |
+| `name` | `string` | Material display name | Stable authoring label. |
+| `properties.Ms` | `f64 | null` | Saturation magnetization | SI units: A/m. |
+| `properties.Aex` | `f64 | null` | Exchange stiffness | SI units: J/m. |
+| `properties.alpha` | `f64` | Gilbert damping | Dimensionless. |
+| `properties.Dind` | `f64 | null` | Interfacial DMI coefficient | Current UI-facing material field. |
+
+### 7.18.4 `PATCH /v1/live/current/authoring/model/materials/{material_id}`
+
+- Status: `canonical`
+- Purpose: patch one canonical material asset without replacing the full
+  `SceneDocument`
+- Request body: `MaterialPatchRequest`
+- Response body: `MaterialResource`
+
+#### `MaterialPatchRequest`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `name` | `string?` | Replace material display name | Optional partial mutation field. |
+| `properties.Ms` | `f64 | null` | Replace or clear saturation magnetization | Omit to keep unchanged. |
+| `properties.Aex` | `f64 | null` | Replace or clear exchange stiffness | Omit to keep unchanged. |
+| `properties.alpha` | `f64?` | Replace Gilbert damping | Omit to keep unchanged. |
+| `properties.Dind` | `f64 | null` | Replace or clear interfacial DMI coefficient | Omit to keep unchanged. |
+
+Current implementation note:
+
+- This route narrows one of the most frequently edited `SceneDocument.materials`
+  mutations into a first-class authoring resource.
+- It is still backed by commit-time scene revalidation, so the canonical source
+  of truth remains the whole `SceneDocument`.
+
+### 7.19 `GET /v1/live/current/authoring/script/source`
+
+- Status: `canonical`
+- Purpose: fetch the current canonical Python source for the active workspace
+- Request body: none
+- Response body: `ScriptSourceResponse`
+
+#### `ScriptSourceResponse`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `script_path` | `string` | Local path of the active script entrypoint | Current source of truth path for script-backed workspaces. |
+| `source` | `string` | Current script source text | Full current Python source. |
+| `bytes` | `usize` | Source byte length | Convenience summary for UI tooling. |
+
+### 7.20 `POST /v1/live/current/authoring/script/sync`
+
+- Status: `canonical`
+- Purpose: rewrite canonical Python from the current authoring state
+- Request body: `ScriptSyncRequest`
+- Response body: `ScriptSyncResponse`
+
+Current implementation note:
+
+- This route currently delegates to the same rewrite helper that previously sat
+  behind the removed public flat route `POST /v1/live/current/script/sync`.
+- The authoring route is now the canonical mounted placement for browser calls.
+
 ## 8. Display and Commands
 
 ### 8.1 `GET /v1/live/current/display`
@@ -1229,8 +1531,9 @@ Current transport rule:
 
 ## 13. Transitional Endpoint Appendix
 
-The following routes are mounted today but are not canonical. They must be
-treated as transitional compatibility only.
+The following routes are transitional compatibility routes or recently retired
+legacy routes that still matter for migration planning. They must not be
+treated as the canonical browser contract.
 
 | Route | Status | Current role | Canonical replacement or destination |
 |---|---|---|---|
@@ -1239,17 +1542,15 @@ treated as transitional compatibility only.
 | `GET /v1/live/current/bootstrap` | `transitional` | Monolithic initial session blob | `GET /v1/live/current/status` plus named resources |
 | `GET /v1/live/current/state` | `transitional` | Legacy whole-state snapshot | Named resources under `/v1/live/current/*` |
 | `GET /v1/live/current/poll` | `transitional` | Legacy delta polling over whole-state blobs | Status polling plus revision-driven resource fetches |
-| `GET /v1/live/current/events` | `transitional` | Legacy current-live event stream | Future resource-first SSE/event family |
-| `POST /v1/live/current/publish` | `transitional` | Legacy publish bridge for the monolithic live snapshot | Resource-family publishers inside the control plane |
-| `POST /v1/live/current/create` | `transitional` | Legacy workspace bootstrap/create helper | Future explicit session/workspace creation contract |
+| `GET /v1/live/current/events` | `removed from public router` | Former legacy current-live event stream | Use `GET /ws/live/current` only as an optional accelerator; canonical reads stay resource-first |
+| `POST /v1/live/current/publish` | `internalized` | Former public publish bridge for the monolithic live snapshot | Internal runner bridge: `POST /v1/internal/live/current/publish` |
+| `POST /v1/live/current/create` | `removed from public router` | Former legacy workspace bootstrap/create helper | Future explicit session/workspace creation contract |
 | `GET /v1/live/feature-flags` | `transitional` | Legacy diagnostics/feature-flag probe | Diagnostics policy only; not part of the canonical browser contract |
-| `GET /v1/live/current/commands/next` | `transitional` | Legacy pull-based command queue consumption | Structured command queue behind `POST /commands` plus future read models |
-| `GET /v1/live/current/control/wait` | `transitional` | Legacy blocking wait channel for control queue | Future event/read-model family |
-| `POST /v1/live/current/state/export` | `transitional` | Legacy state export | `POST /v1/live/current/session/export` |
-| `POST /v1/live/current/state/import` | `transitional` | Legacy state import | `POST /v1/live/current/session/import/*` |
-| `POST /v1/live/current/script/sync` | `transitional` | Legacy flat script-sync placement | Future `authoring/script/sync` family |
-| `POST /v1/live/current/scene` | `transitional` | Legacy flat scene mutation placement | Future `authoring/scene` family |
-| `GET /v1/live/current/artifacts/file` | `transitional` | Legacy artifact-file fetch route | `GET /v1/live/current/artifacts/:artifact_id` |
+| `GET /v1/live/current/commands/next` | `removed from public router` | Former legacy pull-based command queue consumption | Structured command queue behind `POST /commands` plus future read models |
+| `GET /v1/live/current/control/wait` | `internalized` | Former public blocking wait channel for the runner bridge | Internal runner bridge: `GET /v1/internal/live/current/control/wait` |
+| `POST /v1/live/current/script/sync` | `removed from public router` | Former legacy flat script-sync placement | `POST /v1/live/current/authoring/script/sync` |
+| `GET/PUT /v1/live/current/scene/document` | `transitional` | Legacy flat scene-document placement | `GET/PUT /v1/live/current/authoring/scene` |
+| `GET /v1/live/current/artifacts/file` | `removed from public router` | Former legacy artifact-file fetch route | `GET /v1/live/current/artifacts/:artifact_id` |
 | `GET /v1/docs/physics` | `transitional` | Legacy physics docs listing | Remains separate from the control-room runtime contract |
 | `GET /v1/quantities/catalog` | `transitional` | Legacy flat quantity catalog route kept for short-term compatibility | `GET /v1/live/current/quantities/catalog` |
 | `POST /v1/run` | `transitional` | Legacy run-launch helper | Future session/run creation contract |
@@ -1264,15 +1565,15 @@ resource-first families in the current server.
 | Family | Status | Purpose |
 |---|---|---|
 | `/v1/live/current/workspace/*` | `target-only` | Workspace-only UI state such as selection, ribbon, layout, tree expansion, viewport presets |
-| `/v1/live/current/authoring/*` | `target-only` | Canonical scene/model/material/magnetization/physics/study/script authoring resources |
+| wider `/v1/live/current/authoring/*` families beyond mounted scene/script routes | `target-only` | Canonical model/material/magnetization/physics/study/builder authoring resources |
 | `/v1/live/current/mesh/*` | `target-only` | Mesh policy, reports, quality, history, per-object and shared-domain mesh resources |
 | `/v1/live/current/domain/coordinates` | `target-only` | Explicit coordinate buffers for non-implicit domains |
 | `/v1/live/current/domain/regions` | `target-only` | Region/material ownership mappings |
 | `/v1/live/current/domain/active-mask` | `target-only` | Explicit active-mask data |
 | `/v1/live/current/fields/:quantity_id/stats` | `target-only` | Dedicated stats resource |
 | `/v1/live/current/fields/:quantity_id/availability` | `target-only` | Dedicated availability resource |
-| future command-status read model | `target-only` | Read-only command status / completion resource family |
-| future stage-execution resource | `target-only` | Explicit runtime stage execution read model |
+| richer command completion/rejection resource | `target-only` | Authoritative runtime completion and rejection events beyond the current queued/dispatched ledger |
+| run history beyond `/runs/current` | `target-only` | Persistent run list and historical run summaries |
 
 The complete target tree remains documented in
 `docs/specs/control-room-api-tree-v1.md`.
@@ -1290,13 +1591,13 @@ resource-first architecture.
 | `capability_profile_version` | `/v1/capabilities.profile_version` | partially covered |
 | `session` | `status.session` | partially covered |
 | `run` | `status.run` | partially covered |
-| `live_state` | status + fields + scalars + future runtime-state resources | must be decomposed |
-| `runtime_status` | `status.solver` plus future runtime-state resource | contract gap remains |
+| `live_state` | status + fields + scalars + `solver/status` + `solver/energies/*` | partially decomposed |
+| `runtime_status` | `status.solver` + `solver/status` | partially covered |
 | `capabilities` | `status.capabilities` and `/v1/capabilities` | covered in split form |
 | `metadata` | future dedicated metadata resource | contract gap remains |
 | `mesh_workspace` | future `/v1/live/current/mesh/*` | target-only |
-| `stage_execution` | future stage-execution resource | target-only |
-| `scene_document` | future `/v1/live/current/authoring/scene` | target-only |
+| `stage_execution` | `GET /v1/live/current/stages/execution` | covered |
+| `scene_document` | `GET/PUT /v1/live/current/authoring/scene` | covered |
 | `script_builder` | future `/v1/live/current/authoring/*` projections | target-only |
 | `model_builder_graph` | future `/v1/live/current/authoring/builder/graph` | target-only |
 | `scalar_rows` | `GET /v1/live/current/scalars` | covered |

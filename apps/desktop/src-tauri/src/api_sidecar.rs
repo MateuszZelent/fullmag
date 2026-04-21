@@ -10,7 +10,7 @@ const EXE_SUFFIX: &str = ".exe";
 #[cfg(not(windows))]
 const EXE_SUFFIX: &str = "";
 
-const CANDIDATE_PORTS: &[u16] = &[8080, 8081, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089];
+const CANDIDATE_PORTS: &[u16] = &[8081, 8080, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089];
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Manages a `fullmag-api` child process started alongside the Tauri window.

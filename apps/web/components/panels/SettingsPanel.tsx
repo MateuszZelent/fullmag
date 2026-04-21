@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 import { useViewport, useCommand, useModel } from "../runs/control-room/context-hooks";
 import { Button } from "../ui/button";
 import MeshSettingsPanel from "./MeshSettingsPanel";
@@ -133,6 +134,9 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   const viewport = useViewport();
   const cmd = useCommand();
   const model = useModel();
+  const femDiscretization = cmd.domainCapabilities
+    ? isFemDiscretization(cmd.domainCapabilities)
+    : cmd.isFemBackend;
   // studyNodeContext removed — routing now via inspectorRegistry
   const showSolverTelemetrySection = false;
   const showEnergySection = false;
@@ -298,7 +302,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
               >
                 Focus 3D
               </Button>
-              {cmd.isFemBackend ? (
+              {femDiscretization ? (
                 <>
                   <Button
                     size="sm"
@@ -321,7 +325,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
             </div>
           </div>
         </section>
-      ) : airboxSelected && cmd.isFemBackend ? (
+      ) : airboxSelected && femDiscretization ? (
         <section className="rounded-xl border border-border/40 bg-gradient-to-b from-card/50 to-card/20 px-4 py-3 shadow-[0_2px_12px_rgba(0,0,0,0.15)] backdrop-blur-xl mb-1">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">

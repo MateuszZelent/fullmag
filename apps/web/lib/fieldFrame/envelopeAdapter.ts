@@ -12,6 +12,8 @@
 import type { FieldFrameEnvelope, FieldFrameStats } from "./types";
 import type { FemLiveMesh, StepUpdateV2, SpatialPreviewState } from "@/lib/session/types";
 import type { LiveState, PreviewState } from "@/lib/useSessionStream";
+import type { CapabilityMap } from "@/src/api/types";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 
 export interface EnvelopeAdapterInput {
   sessionId: string | null;
@@ -20,7 +22,8 @@ export interface EnvelopeAdapterInput {
   femMesh: FemLiveMesh | null;
   preview: PreviewState | null;
   stepUpdateV2: StepUpdateV2 | null;
-  isFemBackend: boolean;
+  domainCapabilities?: CapabilityMap | null;
+  legacyFemBackend: boolean;
   /** Currently selected quantity. */
   quantityId: string;
 }
@@ -34,7 +37,17 @@ export interface EnvelopeAdapterInput {
 export function buildEnvelopeFromLegacyState(
   input: EnvelopeAdapterInput,
 ): FieldFrameEnvelope | null {
-  const { sessionId, runId, liveState, femMesh, preview, stepUpdateV2, isFemBackend, quantityId } =
+  const {
+    sessionId,
+    runId,
+    liveState,
+    femMesh,
+    preview,
+    stepUpdateV2,
+    domainCapabilities,
+    legacyFemBackend,
+    quantityId,
+  } =
     input;
 
   if (!sessionId || !runId) return null;
@@ -71,6 +84,7 @@ export function buildEnvelopeFromLegacyState(
       : quantityDomain === "surface_only"
         ? "surface_only"
         : "magnetic_only";
+  const femDiscretization = resolveFemDiscretization(domainCapabilities, legacyFemBackend);
 
   return {
     sessionId,
@@ -85,7 +99,7 @@ export function buildEnvelopeFromLegacyState(
     component: "3D",
     nComp: 3,
     domain,
-    location: isFemBackend ? "node" : "grid_cell",
+    location: femDiscretization ? "node" : "grid_cell",
     dtype: "f64",
     payloadKind: "inline-json",
     payloadId: null,

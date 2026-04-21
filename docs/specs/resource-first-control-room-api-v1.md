@@ -172,10 +172,16 @@ Rules:
 ```text
 GET    /v1/live/current/workspace/*
 PUT    /v1/live/current/workspace/*
+GET    /v1/live/current/scene/document
+PUT    /v1/live/current/scene/document
 GET    /v1/live/current/authoring/scene
 PUT    /v1/live/current/authoring/scene
 PATCH  /v1/live/current/authoring/scene
 POST   /v1/live/current/authoring/transactions
+GET    /v1/live/current/authoring/study/runtime
+PATCH  /v1/live/current/authoring/study/runtime
+GET    /v1/live/current/authoring/model/materials/:material_id
+PATCH  /v1/live/current/authoring/model/materials/:material_id
 GET    /v1/live/current/authoring/model/*
 PATCH  /v1/live/current/authoring/model/*
 PATCH  /v1/live/current/authoring/physics/*
@@ -190,8 +196,11 @@ POST   /v1/live/current/commands
 Rules:
 
 - workspace resources carry selection/ribbon/layout state and must not mutate physics semantics,
+- `scene/document` is the currently mounted full-document scene resource during cutover,
 - `authoring/scene` is the canonical full-document authoring resource,
 - narrow `authoring/*` endpoints are semantic projections over the same scene revision,
+- `authoring/study/runtime` is the canonical narrow surface for requested backend/device/precision/mode intent,
+- `authoring/model/materials/:material_id` is the first mounted narrow material mutation surface,
 - model-builder, inspector, and ribbon edits must land in `authoring/*` or `workspace/*`, not in
   preview endpoints or ad hoc side channels,
 - display state is exposed as one readable/mutable consolidated resource,
@@ -237,7 +246,18 @@ Implemented and canonical today:
 - `scalars`,
 - `display`,
 - `commands`,
+- `commands/status`,
+- `commands/:command_id`,
+- `runs/current`,
+- `stages/execution`,
+- `solver/status`,
+- `solver/energies/current`,
+- `solver/energies/history`,
 - `assets/import`,
+- `authoring/scene`,
+- `authoring/transactions`,
+- `authoring/script/source`,
+- `authoring/script/sync`,
 - `artifacts`,
 - `eigen/*`,
 - `logs/engine`,
@@ -268,9 +288,10 @@ Still mounted but transitional:
 Still target-only:
 
 - `workspace/*`,
-- wide `authoring/*`,
+- wide `authoring/*` beyond mounted scene/transactions/script routes,
 - broad `mesh/*`,
-- explicit runtime stage-execution and command-status read models.
+- run history beyond `runs/current`,
+- command completion/rejection resources beyond the current queued/dispatched ledger.
 
 ## 4. Revision and cache contract
 

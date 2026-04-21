@@ -1,6 +1,8 @@
 import type {
+  CommandDetail,
   CommandRequest,
   CommandResponse,
+  CommandQueueStatus,
 } from "../../types";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
 
@@ -38,5 +40,13 @@ export class CommandsModule {
       body,
       requestOptions,
     );
+  }
+
+  async status(options?: RequestOptions): Promise<CommandQueueStatus> {
+    return this.client.get<CommandQueueStatus>("/v1/live/current/commands/status", options);
+  }
+
+  async get(commandId: string, options?: RequestOptions): Promise<CommandDetail> {
+    return this.client.get<CommandDetail>(`/v1/live/current/commands/${commandId}`, options);
   }
 }

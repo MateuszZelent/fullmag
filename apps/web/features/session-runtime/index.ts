@@ -10,6 +10,7 @@ export {
   selectConnection,
   selectWorkspaceStatus,
   selectIsFemBackend,
+  selectDomainCapabilities,
   selectSession,
   selectRun,
   selectLiveState,

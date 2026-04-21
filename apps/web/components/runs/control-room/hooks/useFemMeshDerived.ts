@@ -43,6 +43,8 @@ import {
   type ArrowVisibilityStatus,
 } from "../../../../features/viewport-fem/model/femArrowVisibility";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "../../../../lib/debug/frontendDiagnosticFlags";
+import type { CapabilityMap } from "@/src/api/types";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 
 function flattenTriples(values: ArrayLike<ArrayLike<number>>): number[] {
   const flat = new Array(values.length * 3);
@@ -170,6 +172,7 @@ export interface UseFemMeshDerivedParams {
   effectiveViewMode: ViewportMode;
   activeQuantityId: string;
   isFemBackend: boolean;
+  domainCapabilities?: CapabilityMap | null;
   meshGenerating: boolean;
   commandStatus: any;
   meshSummary: any;
@@ -271,6 +274,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
     effectiveViewMode,
     activeQuantityId,
     isFemBackend,
+    domainCapabilities,
     meshGenerating,
     commandStatus,
     meshSummary,
@@ -311,6 +315,9 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
     setMeshSelection,
     appendFrontendTrace,
   } = params;
+  const femDiscretization = domainCapabilities
+    ? isFemDiscretization(domainCapabilities)
+    : isFemBackend;
 
   // -------------------------------------------------------------------------
   // Memos: mesh parts & filtering
@@ -504,9 +511,9 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
   }, [femMeshData, femMeshDataRef]);
 
   const femHasFieldData = Boolean(femMeshData?.fieldData);
-  const femMagnetization3DActive = isFemBackend && effectiveViewMode === "3D" && activeQuantityId === "m" && femHasFieldData;
+  const femMagnetization3DActive = femDiscretization && effectiveViewMode === "3D" && activeQuantityId === "m" && femHasFieldData;
   const arrowVisibility = resolveArrowVisibility({
-    isFemBackend,
+    isFemBackend: femDiscretization,
     effectiveViewMode,
     femHasFieldData,
     meshShowArrows,
@@ -807,11 +814,11 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
   /* Slice count */
   const maxSliceCount = useMemo(() => {
     if (spatialPreview?.spatial_kind === "grid") return 1;
-    if (isFemBackend && femMeshData) return FEM_SLICE_COUNT;
+    if (femDiscretization && femMeshData) return FEM_SLICE_COUNT;
     if (plane === "xy") return Math.max(1, previewGrid[2]);
     if (plane === "xz") return Math.max(1, previewGrid[1]);
     return Math.max(1, previewGrid[0]);
-  }, [femMeshData, isFemBackend, plane, spatialPreview?.spatial_kind, previewGrid]);
+  }, [femDiscretization, femMeshData, plane, spatialPreview?.spatial_kind, previewGrid]);
 
   // Effect: clamp sliceIndex
   useEffect(() => {
@@ -821,7 +828,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
   /* Field stats */
   const fieldStats = useMemo<FieldStats | null>(() => {
     if (!selectedVectors) return null;
-    const n = isFemBackend ? (effectiveFemMesh?.nodes.length ?? 0) : Math.floor(selectedVectors.length / 3);
+    const n = femDiscretization ? (effectiveFemMesh?.nodes.length ?? 0) : Math.floor(selectedVectors.length / 3);
     if (n <= 0 || selectedVectors.length < n * 3) return null;
     let sumX = 0, sumY = 0, sumZ = 0;
     let minX = Infinity, minY = Infinity, minZ = Infinity;
@@ -835,7 +842,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
     }
     const inv = 1/n;
     return { meanX: sumX*inv, meanY: sumY*inv, meanZ: sumZ*inv, minX, minY, minZ, maxX, maxY, maxZ };
-  }, [selectedVectors, isFemBackend, effectiveFemMesh]);
+  }, [selectedVectors, femDiscretization, effectiveFemMesh]);
 
   /* Material */
   const material = useMemo<MaterialSummary | null>(() => {
@@ -853,7 +860,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
 
   /* Empty state */
   const emptyStateMessage = useMemo(() => {
-    if (isFemBackend && !femMeshData) {
+    if (femDiscretization && !femMeshData) {
       if (workspaceStatus === "materializing_script")
         return { title: "Materializing FEM mesh", description: latestEngineMessage ?? "Importing geometry and preparing the FEM mesh." };
       if (workspaceStatus === "bootstrapping")
@@ -861,7 +868,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
       return { title: "Waiting for FEM preview data", description: latestEngineMessage ?? "The mesh topology is not available yet." };
     }
     // Mesh topology exists but no field data for the selected quantity
-    if (isFemBackend && femMeshData && !femMeshData.fieldData && activeQuantityId) {
+    if (femDiscretization && femMeshData && !femMeshData.fieldData && activeQuantityId) {
       return {
         title: `No live frame for "${activeQuantityId}"`,
         description: "Mesh topology is ready but the solver has not yet sent vector data for this quantity. Waiting for the next step update.",
@@ -870,7 +877,7 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
     if (workspaceStatus === "materializing_script")
       return { title: "Materializing workspace", description: latestEngineMessage ?? "Preparing problem description and first preview." };
     return { title: "No preview data yet", description: latestEngineMessage ?? "Waiting for the first live field snapshot." };
-  }, [activeQuantityId, femMeshData, isFemBackend, latestEngineMessage, workspaceStatus]);
+  }, [activeQuantityId, femDiscretization, femMeshData, latestEngineMessage, workspaceStatus]);
 
   const sessionFooter = useMemo<SessionFooterData>(() => ({
     requestedBackend: session?.requested_backend ?? null,

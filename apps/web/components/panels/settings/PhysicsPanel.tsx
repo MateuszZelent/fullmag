@@ -26,6 +26,7 @@ import type {
   ScriptBuilderMagneticInteractionKind,
 } from "../../../lib/session/types";
 import { asRecord } from "../../runs/control-room/helpers";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 
 function formatVector(value: number[] | null | undefined, unit: string): string {
   if (!value || value.length < 3) return "—";
@@ -251,6 +252,10 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
   const model = useModel();
   const solverPlan = model.solverPlan;
   const context = useMemo(() => parsePhysicsNodeContext(nodeId), [nodeId]);
+  const femDiscretization = resolveFemDiscretization(
+    cmd.domainCapabilities,
+    cmd.isFemBackend,
+  );
 
   const externalField =
     model.sceneDocument?.study.external_field
@@ -472,7 +477,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
           <div className="grid gap-1">
             <InfoRow
               label="Family"
-              value={solverPlan?.demagSolver?.family ?? (cmd.isFemBackend && solverPlan?.demagEnabled ? "hypre" : "—")}
+              value={solverPlan?.demagSolver?.family ?? (femDiscretization && solverPlan?.demagEnabled ? "hypre" : "—")}
             />
             <InfoRow
               label="Resolved method"

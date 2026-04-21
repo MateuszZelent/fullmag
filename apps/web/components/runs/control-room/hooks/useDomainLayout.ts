@@ -15,9 +15,11 @@ import type {
   SpatialPreviewState,
 } from "../../../../lib/session/types";
 import type {
+  CapabilityMap,
   GpuTelemetryDevice,
   GpuTelemetryResponse,
 } from "../../../../src/api/types";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 import type { AntennaOverlay, BuilderObjectOverlay } from "../shared";
 import {
   asVec3,
@@ -35,6 +37,7 @@ export interface UseDomainLayoutParams {
   latestEngineMessage: string | null;
   workspaceStatus: string | null;
   isFemBackend: boolean;
+  domainCapabilities?: CapabilityMap | null;
   effectiveStep: number;
   effectiveTime: number;
   runtimeEngineLabel: string | null;
@@ -49,6 +52,7 @@ export interface UseDomainLayoutParams {
   meshWorkspace: MeshWorkspaceState | null;
   liveState: LiveState | null;
   state: SessionState | null;
+  latestFieldGrid: [number, number, number] | null;
   spatialPreview: SpatialPreviewState | null;
   scriptBuilder: ScriptBuilderState | null;
   runtimeStatus: { can_accept_commands?: boolean } | null;
@@ -99,6 +103,7 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
     latestEngineMessage,
     workspaceStatus,
     isFemBackend,
+    domainCapabilities,
     effectiveStep,
     effectiveTime,
     runtimeEngineLabel,
@@ -113,11 +118,15 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
     meshWorkspace,
     liveState,
     state,
+    latestFieldGrid,
     spatialPreview,
     scriptBuilder,
     runtimeStatus,
     isWaitingForCompute,
   } = params;
+  const femDiscretization = domainCapabilities
+    ? isFemDiscretization(domainCapabilities)
+    : isFemBackend;
 
   const currentStage = useMemo(() => parseStageExecutionMessage(latestEngineMessage), [latestEngineMessage]);
 
@@ -127,7 +136,7 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
       const lowerMessage = (latestEngineMessage ?? "").toLowerCase();
       const hasGmshPercent = /\[\s*\d{1,3}%\]/.test(latestEngineMessage ?? "");
       const isLong = lowerMessage.includes("generating 3d tetrahedral mesh") && !hasGmshPercent;
-      return { label: isFemBackend ? "Materializing FEM workspace" : "Materializing workspace",
+      return { label: femDiscretization ? "Materializing FEM workspace" : "Materializing workspace",
                detail: latestEngineMessage ?? "Preparing geometry import and execution plan",
                progressMode: isLong ? "indeterminate" : "determinate", progressValue: pv };
     }
@@ -154,7 +163,7 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
                progressMode: "determinate", progressValue: 100 };
     return { label: "Workspace idle", detail: latestEngineMessage ?? "No active task",
              progressMode: "idle", progressValue: undefined };
-  }, [effectiveStep, effectiveTime, currentStage, isFemBackend, latestEngineMessage, runtimeEngineLabel, session?.requested_backend, workspaceStatus]);
+  }, [effectiveStep, effectiveTime, currentStage, femDiscretization, latestEngineMessage, runtimeEngineLabel, session?.requested_backend, workspaceStatus]);
 
   const runtimeEngineGpuDevice = useMemo<GpuTelemetryDevice | null>(() => {
     const devices = gpuTelemetry?.devices ?? [];
@@ -229,7 +238,7 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
     [builderObjectBounds],
   );
   const domainFrame = useMemo<DomainFrameState | null>(() => {
-    if (!isFemBackend) {
+    if (!femDiscretization) {
       return null;
     }
     if (liveMeshDomainFrame) {
@@ -299,7 +308,7 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
     builderObjectBounds,
     builderObjectCenter,
     builderObjectExtent,
-    isFemBackend,
+    femDiscretization,
     layoutWorldCenter,
     layoutWorldExtent,
     layoutWorldExtentSource,
@@ -313,7 +322,7 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
 
   /* Unified world extent (metres) for both FDM and FEM */
   const worldExtent = useMemo<[number, number, number] | null>(() => {
-    if (isFemBackend) {
+    if (femDiscretization) {
       return domainFrame?.effective_extent ?? null;
     }
     // FDM: compute from grid_cells × cell_size
@@ -327,19 +336,19 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
       ];
     }
     return null;
-  }, [artifactLayout, domainFrame, isFemBackend]);
+  }, [artifactLayout, domainFrame, femDiscretization]);
   const worldCenter = useMemo<[number, number, number] | null>(() => {
-    if (isFemBackend) {
+    if (femDiscretization) {
       return domainFrame?.effective_center ?? null;
     }
     return scriptBuilderUniverse?.center ?? null;
-  }, [domainFrame, isFemBackend, scriptBuilderUniverse]);
+  }, [domainFrame, femDiscretization, scriptBuilderUniverse]);
   const worldExtentSource = useMemo<string | null>(() => {
-    if (!isFemBackend) {
+    if (!femDiscretization) {
       return "fdm_grid";
     }
     return domainFrame?.effective_source ?? null;
-  }, [domainFrame, isFemBackend]);
+  }, [domainFrame, femDiscretization]);
   const antennaOverlays = useMemo<AntennaOverlay[]>(() => {
     if (!meshBoundsMin || !meshBoundsMax || scriptBuilderCurrentModules.length === 0) {
       return [];
@@ -422,20 +431,20 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
   const mesherCurrentSettings = (meshingCapabilities?.current_settings as Record<string, unknown> | undefined) ?? null;
 
   /* Grid */
-  const _rawSolverGrid = liveState?.grid ?? state?.latest_fields.grid;
+  const _rawSolverGrid = liveState?.grid ?? latestFieldGrid ?? state?.latest_fields.grid;
   const solverGrid = useMemo<[number, number, number]>(
     () => [_rawSolverGrid?.[0] ?? 0, _rawSolverGrid?.[1] ?? 0, _rawSolverGrid?.[2] ?? 0] as [number, number, number],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [_rawSolverGrid?.[0], _rawSolverGrid?.[1], _rawSolverGrid?.[2]],
   );
   const _rawPreviewGrid =
-    spatialPreview?.preview_grid ?? liveState?.preview_grid ?? state?.latest_fields.grid ?? solverGrid;
+    spatialPreview?.preview_grid ?? liveState?.preview_grid ?? latestFieldGrid ?? state?.latest_fields.grid ?? solverGrid;
   const previewGrid = useMemo<[number, number, number]>(
     () => [_rawPreviewGrid?.[0] ?? 0, _rawPreviewGrid?.[1] ?? 0, _rawPreviewGrid?.[2] ?? 0] as [number, number, number],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [_rawPreviewGrid?.[0], _rawPreviewGrid?.[1], _rawPreviewGrid?.[2]],
   );
-  const totalCells = !isFemBackend ? solverGrid[0] * solverGrid[1] * solverGrid[2] : null;
+  const totalCells = !femDiscretization ? solverGrid[0] * solverGrid[1] * solverGrid[2] : null;
   const activeCells = useMemo(() => {
     if (typeof artifactLayout?.active_cell_count === "number") return artifactLayout.active_cell_count;
     return totalCells;

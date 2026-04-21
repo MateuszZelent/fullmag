@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { MAGNETIC_PRESET_CATALOG } from "@/lib/magnetizationPresetCatalog";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { ViewportHost, useWorkspaceGraphStore } from "@/features";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import type { TextureTransform3D as PreviewTextureTransform3D } from "@/lib/textureTransform";
@@ -119,6 +120,9 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const _cmd = useCommand();
   const _model = useModel();
   const ctx = { ..._transport, ..._viewport, ..._cmd, ..._model };
+  const femDiscretization = ctx.domainCapabilities
+    ? isFemDiscretization(ctx.domainCapabilities)
+    : ctx.isFemBackend;
   const minimalViewportSelectionPath = FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.useMinimalViewportSelectionPath;
   const setSelectedObjectId = ctx.setSelectedObjectId;
   const setSelectedSidebarNodeId = ctx.setSelectedSidebarNodeId;
@@ -374,14 +378,14 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   ]);
   const displayObjectOverlays = useMemo(
     () => {
-      if (ctx.isFemBackend && ctx.meshParts.length > 0) {
+      if (femDiscretization && ctx.meshParts.length > 0) {
         return ctx.objectOverlays.filter((overlay) =>
           ctx.visibleMagneticObjectIds.includes(overlay.id),
         );
       }
       return ctx.objectOverlays.filter((overlay) => visibleObjectIds.includes(overlay.id));
     },
-    [ctx.isFemBackend, ctx.meshParts.length, ctx.objectOverlays, ctx.visibleMagneticObjectIds, visibleObjectIds],
+    [ctx.meshParts.length, ctx.objectOverlays, ctx.visibleMagneticObjectIds, femDiscretization, visibleObjectIds],
   );
   const patchMeshPartViewState = useCallback(
     (partIds: string[], patch: Partial<MeshEntityViewStateMap[string]>) => {
@@ -481,7 +485,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     [ctx.effectiveFemMesh?.mesh_parts, ctx.effectiveFemMesh?.object_segments, selectedFemObjectId],
   );
   const missingExactScopeSegment = Boolean(
-    ctx.isFemBackend &&
+    femDiscretization &&
       ctx.femMeshData &&
       ctx.femMeshData.nElements > 0 &&
       selectedFemObjectId &&
@@ -573,22 +577,22 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   /* ── Determine which viewport is active ── */
   const isFdm3DActive =
     ctx.effectiveViewMode === "3D" &&
-    !ctx.isFemBackend &&
+    !femDiscretization &&
     (ctx.isVectorQuantity || hasVectorData) &&
     !globalScalarPreview;
   // Use classic FDM mesh view ONLY if no unstructured mesh data is available
-  const isFdmMeshActive = ctx.effectiveViewMode === "Mesh" && !ctx.isFemBackend && !ctx.femMeshData;
+  const isFdmMeshActive = ctx.effectiveViewMode === "Mesh" && !femDiscretization && !ctx.femMeshData;
   const showFdm3D =
     (isFdm3DActive && FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdm3D) ||
     (isFdmMeshActive && FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdmMeshWorkspace);
   const showFemBoundsPreview =
-    ctx.isFemBackend &&
+    femDiscretization &&
     !ctx.femMeshData &&
     (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
     displayObjectOverlays.length > 0;
   const femLiveRenderDebugData = useMemo<FemLiveRenderDebugData | null>(
     () =>
-      ctx.isFemBackend
+      femDiscretization
         ? {
             backendLabel: "fem",
             viewMode: ctx.effectiveViewMode,
@@ -614,12 +618,12 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       ctx.effectiveViewMode,
       ctx.fieldDataRevision,
       ctx.fieldDataTimestamp,
-      ctx.isFemBackend,
       ctx.liveFieldSourceStep,
       ctx.previewSourceStep,
       ctx.quantityDescriptor?.label,
       ctx.selectedQuantity,
       ctx.selectedVectorSourceKind,
+      femDiscretization,
       scaledFemMeshData?.fieldData,
       scaledFemMeshData?.fieldRevision,
     ],
@@ -1003,7 +1007,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
               hasSessionData: Boolean(ctx.selectedVectors?.length || ctx.preview),
               hasFemMesh: Boolean(ctx.femMeshData),
               selectedResultNodeId: graphViewportResultNodeId,
-              discretization: ctx.isFemBackend ? "fem" : "fdm",
+              discretization: femDiscretization ? "fem" : "fdm",
             }}
             selection={{
               selectedObjectId: viewportSelectedObjectId,
@@ -1048,7 +1052,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             renderComponent={(componentKey) => {
               switch (componentKey) {
                 case "UnifiedViewport3D":
-                  if (ctx.isFemBackend && ctx.femMeshData) {
+                  if (femDiscretization && ctx.femMeshData) {
                     return (
                       <ViewportErrorBoundary label="Hosted Unified 3D Viewport">
                         <FemMeshView3D
@@ -1407,7 +1411,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
           physics 2.5D · preview extruded
         </div>
       ) : null}
-      {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showFemSelectionBadges && ctx.isFemBackend ? (
+      {FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showFemSelectionBadges && femDiscretization ? (
         <div
           className="viewportOverlay absolute right-4 top-14 flex items-center gap-2"
           style={VIEWPORT_BADGE_STYLE}

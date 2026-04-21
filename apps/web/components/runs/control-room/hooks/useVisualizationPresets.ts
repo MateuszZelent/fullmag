@@ -21,6 +21,8 @@ import type {
   VectorComponent,
   ViewportMode,
 } from "../shared";
+import type { CapabilityMap } from "@/src/api/types";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 import {
   cloneVisualizationPreset,
   createDefaultVisualizationPreset,
@@ -37,6 +39,7 @@ export interface UseVisualizationPresetsParams {
   /* Current UI state for building presets */
   effectiveViewMode: ViewportMode;
   isFemBackend: boolean;
+  domainCapabilities?: CapabilityMap | null;
   requestedPreviewQuantity: string;
   meshRenderMode: RenderMode;
   meshOpacity: number;
@@ -114,6 +117,7 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
   const {
     effectiveViewMode,
     isFemBackend,
+    domainCapabilities,
     requestedPreviewQuantity,
     meshRenderMode,
     meshOpacity,
@@ -172,11 +176,14 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
     setFdmVisualizationSettings,
     updatePreview,
   } = params;
+  const femDiscretization = domainCapabilities
+    ? isFemDiscretization(domainCapabilities)
+    : isFemBackend;
 
   const buildVisualizationPresetFromCurrent = useCallback(
     (name: string, id?: string): VisualizationPreset => {
       const mode: VisualizationPreset["mode"] = effectiveViewMode === "2D" ? "2D" : "3D";
-      const domain: VisualizationPreset["domain"] = isFemBackend ? "fem" : "fdm";
+      const domain: VisualizationPreset["domain"] = femDiscretization ? "fem" : "fdm";
       const now = Date.now();
       const basePreset = createDefaultVisualizationPreset({
         id,
@@ -240,7 +247,7 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
       femFerromagnetVisibilityMode,
       femVectorDomainFilter,
       fdmVisualizationSettings,
-      isFemBackend,
+      femDiscretization,
       meshClipAxis,
       meshClipEnabled,
       meshClipPos,
@@ -468,7 +475,7 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
         handleViewModeChange("3D");
       }
 
-      if (isFemBackend && preset.domain === "fem") {
+      if (femDiscretization && preset.domain === "fem") {
         // Arrow config is always global (no per-part arrow settings)
         setMeshShowArrows(preset.fem.show_arrows);
         setFemArrowColorMode(preset.fem.arrow_color_mode);
@@ -513,12 +520,12 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
         if (requestedPreviewMaxPoints !== preset.fem.max_points) {
           void updatePreview("/maxPoints", { maxPoints: preset.fem.max_points });
         }
-      } else if (!isFemBackend && preset.domain === "fdm") {
+      } else if (!femDiscretization && preset.domain === "fdm") {
         setFdmVisualizationSettings({ ...preset.fdm });
       }
     },
     [
-      isFemBackend,
+      femDiscretization,
       localVisualizationPresets,
       handleViewModeChange,
       previewControlsActive,

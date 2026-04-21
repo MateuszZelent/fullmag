@@ -11,9 +11,13 @@ import { useEffect, useRef } from "react";
 import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
 import { useLiveStatus } from "@/src/hooks/resources/useLiveStatus";
 import { previewComponentFromDisplaySelection } from "@/src/api/displaySelection";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 import type { NormalizedSessionState } from "../model/deriveSessionReadModel";
 import type { LiveStatus, EnergySummary, MetricsSummary } from "@/src/api/types";
 import type {
+  CurrentDisplaySelection,
+  LatestFieldFrame,
+  PreviewConfig,
   SessionManifest,
   RunManifest,
   ScalarRow,
@@ -28,6 +32,7 @@ const EMPTY_SCALAR_ROWS: ScalarRow[] = [];
 const EMPTY_ENGINE_LOG: never[] = [];
 const EMPTY_QUANTITIES: never[] = [];
 const EMPTY_ARTIFACTS: never[] = [];
+const EMPTY_LATEST_FIELD_FRAMES: Record<string, LatestFieldFrame> = {};
 
 // ── Solver-state → RuntimeStatusKind mapping ────────────────────────
 
@@ -68,6 +73,52 @@ function displayComponentFromStatus(
     return "3D";
   }
   return previewComponentFromDisplaySelection(display);
+}
+
+function mapCurrentDisplaySelection(
+  status: LiveStatus,
+): CurrentDisplaySelection | null {
+  const ds = status.display;
+  if (!ds?.active_quantity_id) {
+    return null;
+  }
+  return {
+    revision: status.resources.display_revision,
+    selection: {
+      quantity: ds.active_quantity_id,
+      kind: "vector_field",
+      view_mode: ds.view_mode,
+      field_component: ds.field_component,
+      layer: ds.slice_layer ?? 0,
+      all_layers: ds.slice_mode === "all",
+      x_chosen_size: ds.x_chosen_size ?? 0,
+      y_chosen_size: ds.y_chosen_size ?? 0,
+      every_n: ds.vector_density ?? 0,
+      max_points: ds.max_points ?? 0,
+      auto_scale_enabled: ds.auto_contrast,
+    },
+  };
+}
+
+function mapPreviewConfig(
+  status: LiveStatus,
+): PreviewConfig | null {
+  const ds = status.display;
+  if (!ds?.active_quantity_id) {
+    return null;
+  }
+  return {
+    revision: status.resources.display_revision,
+    quantity: ds.active_quantity_id,
+    component: displayComponentFromStatus(ds),
+    layer: ds.slice_layer ?? 0,
+    all_layers: ds.slice_mode === "all",
+    every_n: ds.vector_density ?? 0,
+    x_chosen_size: ds.x_chosen_size ?? 0,
+    y_chosen_size: ds.y_chosen_size ?? 0,
+    auto_scale_enabled: ds.auto_contrast,
+    max_points: ds.max_points ?? 0,
+  };
 }
 
 // ── LiveStatus → SessionManifest ────────────────────────────────────
@@ -265,6 +316,8 @@ function mapLiveStatusToNormalized(
   const runtimeStatus = mapSolverStateToRuntimeStatus(status.solver.state);
   const preview = mapPreviewState(status);
   const workspaceStatus = runtimeStatus.code || status.solver.state || "idle";
+  const displaySelection = mapCurrentDisplaySelection(status);
+  const previewConfig = mapPreviewConfig(status);
 
   return {
     stateVersion: status.resources.fields_revision,
@@ -284,7 +337,13 @@ function mapLiveStatusToNormalized(
     meshWorkspace: null,
     stepUpdateV2: null,
     workspaceStatus,
-    isFemBackend: status.domain.discretization === "fem",
+    isFemBackend: isFemDiscretization(status.capabilities),
+    domainCapabilities: status.capabilities,
+    resourceRevisions: status.resources,
+    displaySelection,
+    previewConfig,
+    latestFieldFrames: EMPTY_LATEST_FIELD_FRAMES,
+    latestFieldGrid: liveState.grid.some((value) => value > 0) ? liveState.grid : null,
     fieldFrameEnvelope: mapFieldFrameEnvelope(status),
   };
 }
@@ -306,7 +365,7 @@ export function useNewApiBridge(
   );
   const setConnection = useSessionRuntimeStore((s) => s.setConnection);
 
-  const prevRevisionRef = useRef<number | null>(null);
+  const prevRevisionKeyRef = useRef<string | null>(null);
   const prevConnectionRef = useRef<"connecting" | "connected" | "disconnected">(
     "connecting",
   );
@@ -336,16 +395,20 @@ export function useNewApiBridge(
     }
     if (!status) return;
 
-    // Deduplicate by field_revision (monotonically increasing)
-    if (
-      prevRevisionRef.current != null &&
-      prevRevisionRef.current === status.resources.fields_revision
-    ) {
+    const nextRevisionKey = [
+      status.session.session_id,
+      status.run?.run_id ?? "no-run",
+      status.resources.fields_revision,
+      status.resources.display_revision,
+      status.resources.domain_generation_id,
+      status.resources.scalars_revision,
+    ].join(":");
+    if (prevRevisionKeyRef.current === nextRevisionKey) {
       return;
     }
 
     const normalized = mapLiveStatusToNormalized(status);
     applyNormalizedState(normalized);
-    prevRevisionRef.current = status.resources.fields_revision;
+    prevRevisionKeyRef.current = nextRevisionKey;
   }, [enabled, status, applyNormalizedState]);
 }

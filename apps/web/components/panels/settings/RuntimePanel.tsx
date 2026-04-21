@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 
 import { useCommand, useModel, useViewport } from "../../runs/control-room/context-hooks";
 import { extractFemCpuThreadSummary } from "../../runs/control-room/helpers";
@@ -33,8 +34,11 @@ export default function RuntimePanel({ nodeId }: { nodeId?: string }) {
     () => extractFemCpuThreadSummary(cmd.engineLog),
     [cmd.engineLog],
   );
+  const femDiscretization = cmd.domainCapabilities
+    ? isFemDiscretization(cmd.domainCapabilities)
+    : cmd.isFemBackend;
 
-  const workloadLabel = cmd.isFemBackend && model.femMesh
+  const workloadLabel = femDiscretization && model.femMesh
     ? `${model.femMesh.nodes.length.toLocaleString()} nodes · ${model.femMesh.elements.length.toLocaleString()} tets`
     : viewport.totalCells && viewport.totalCells > 0
       ? `${viewport.totalCells.toLocaleString()} cells`
@@ -110,7 +114,7 @@ export default function RuntimePanel({ nodeId }: { nodeId?: string }) {
         <div className="mt-3 flex flex-wrap gap-1.5">
           {solverPlan?.demagEnabled && <StatusBadge label="Demag" />}
           {solverPlan?.exchangeEnabled && <StatusBadge label="Exchange" />}
-          {cmd.isFemBackend && <StatusBadge label="FEM" tone="info" />}
+          {femDiscretization && <StatusBadge label="FEM" tone="info" />}
         </div>
       </SidebarSection>
     </>

@@ -7,6 +7,8 @@ import { fmtTime, fmtDuration, fmtStepValue, fmtSIOrDash, fmtExpOrDash } from "@
 import type { ActivityInfo } from "@/components/runs/control-room/types";
 import { useViewport } from "@/components/runs/control-room/context-hooks";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
+import type { CapabilityMap } from "@/src/api/types";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 import { useViewportTelemetrySnapshot, type ViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 
 interface BottomTelemetryDockProps {
@@ -99,8 +101,12 @@ function telemetryAccentClassName(tone: "ok" | "warn" | "error"): string {
 
 function selectPrimary3dViewportEntry(
   entries: ViewportTelemetryEntry[],
+  domainCapabilities: CapabilityMap | null,
   isFemBackend: boolean,
 ): ViewportTelemetryEntry | null {
+  const preferFemViewport = domainCapabilities
+    ? isFemDiscretization(domainCapabilities)
+    : isFemBackend;
   const matching = entries.filter((entry) => {
     if (entry.renderer !== "webgl") {
       return false;
@@ -108,7 +114,7 @@ function selectPrimary3dViewportEntry(
     if (entry.label === "bounds-preview") {
       return false;
     }
-    return isFemBackend ? entry.label.startsWith("fem-") : entry.label === "fdm-viewport";
+    return preferFemViewport ? entry.label.startsWith("fem-") : entry.label === "fdm-viewport";
   });
   if (matching.length === 0) {
     return null;
@@ -146,6 +152,7 @@ export default function BottomTelemetryDock({
   const viewport = useViewport();
   const connection = useSessionRuntimeStore((state) => state.connection);
   const isFemBackend = useSessionRuntimeStore((state) => state.isFemBackend);
+  const domainCapabilities = useSessionRuntimeStore((state) => state.domainCapabilities);
   const lastUpdateTimestamp = useSessionRuntimeStore((state) => state.lastUpdateTimestamp);
   const viewportEntries = useViewportTelemetrySnapshot();
   const [now, setNow] = useState(() => Date.now());
@@ -174,8 +181,8 @@ export default function BottomTelemetryDock({
     [lastUpdateTimestamp, now],
   );
   const primary3dViewportEntry = useMemo(
-    () => selectPrimary3dViewportEntry(viewportEntries, isFemBackend),
-    [isFemBackend, viewportEntries],
+    () => selectPrimary3dViewportEntry(viewportEntries, domainCapabilities, isFemBackend),
+    [domainCapabilities, isFemBackend, viewportEntries],
   );
   const viewportAgeMs = useMemo(() => {
     const timestamp = primary3dViewportEntry?.lastFrameAtUnixMs;

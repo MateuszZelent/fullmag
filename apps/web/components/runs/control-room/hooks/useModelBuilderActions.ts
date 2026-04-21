@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
+import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import type {
   ModelBuilderGraphV2,
   SceneDocument,
@@ -129,6 +130,16 @@ export function useModelBuilderActions({
     >
   >(
     (update) => {
+      let nextRuntimeSelection:
+        | {
+            requested_backend: string;
+            requested_device: string;
+            requested_precision: string;
+            requested_mode: string;
+            requested_cpu_threads: number | null;
+          }
+        | null = null;
+
       setModelBuilderGraph((currentGraph) =>
         applyModelBuilderRequestedRuntime(currentGraph, update, modelBuilderDefaults),
       );
@@ -145,6 +156,7 @@ export function useModelBuilderActions({
         };
         const nextRuntime =
           typeof update === "function" ? update(currentRuntime) : update;
+        nextRuntimeSelection = nextRuntime;
         return {
           ...previousScene,
           study: {
@@ -153,6 +165,14 @@ export function useModelBuilderActions({
           },
         };
       });
+
+      if (nextRuntimeSelection) {
+        void getLiveApiClient()
+          .scene.patchStudyRuntime(nextRuntimeSelection)
+          .catch((error) => {
+            console.error("failed to patch authoring study runtime", error);
+          });
+      }
     },
     [modelBuilderDefaults, setModelBuilderGraph, setSceneDocumentDraft],
   );

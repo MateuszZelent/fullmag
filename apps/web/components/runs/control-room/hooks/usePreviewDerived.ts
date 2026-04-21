@@ -40,7 +40,7 @@ export interface UsePreviewDerivedParams {
   selectedQuantity: string;
   component: VectorComponent;
   quantityDescriptorById: Map<string, QuantityDescriptor>;
-  isFemBackend: boolean;
+  femDiscretization: boolean;
   effectiveStep: number;
   fieldMap: Record<string, Float64Array | null>;
 }
@@ -56,7 +56,7 @@ export function usePreviewDerived({
   selectedQuantity,
   component,
   quantityDescriptorById,
-  isFemBackend,
+  femDiscretization,
   effectiveStep,
   fieldMap,
 }: UsePreviewDerivedParams) {
@@ -137,7 +137,7 @@ export function usePreviewDerived({
   const selectedVectors = useMemo(() => {
     if (isGlobalScalarQuantity(activeQuantityId)) return null;
     const liveField = fieldMap[activeQuantityId] ?? null;
-    if (isFemBackend && liveField && liveField.length > 0) {
+    if (femDiscretization && liveField && liveField.length > 0) {
       return liveField;
     }
     if (renderPreviewMatchesActiveQuantity && renderPreview?.vector_field_values) {
@@ -147,7 +147,7 @@ export function usePreviewDerived({
   }, [
     activeQuantityId,
     fieldMap,
-    isFemBackend,
+    femDiscretization,
     isGlobalScalarQuantity,
     renderPreviewMatchesActiveQuantity,
     renderPreview?.vector_field_values,

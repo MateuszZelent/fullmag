@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SESSION_ID="${1:-}"
-API_URL="${FULLMAG_API_URL:-http://localhost:8080}"
+API_URL="${FULLMAG_API_URL:-http://localhost:8081}"
 WEB_BIND_HOST="${FULLMAG_WEB_BIND_HOST:-0.0.0.0}"
 WEB_PUBLIC_HOST="${FULLMAG_WEB_HOST:-localhost}"
 CONTROL_ROOM_URL_FILE=".fullmag/control-room-url.txt"
@@ -202,5 +202,5 @@ fi
 
 printf '%s\n' "${WEB_URL_BASE}" > "${CONTROL_ROOM_URL_FILE}"
 
-FULLMAG_API_PROXY_TARGET="http://localhost:8080" \
-  "${PNPM_CMD[@]}" --dir apps/web exec node dev-server.mjs --hostname "${WEB_BIND_HOST}" --port "${WEB_PORT}" --api-target "http://localhost:8080"
+FULLMAG_API_PROXY_TARGET="http://localhost:8081" \
+  "${PNPM_CMD[@]}" --dir apps/web exec node dev-server.mjs --hostname "${WEB_BIND_HOST}" --port "${WEB_PORT}" --api-target "http://localhost:8081"

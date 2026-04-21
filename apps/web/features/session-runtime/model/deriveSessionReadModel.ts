@@ -8,7 +8,10 @@
 import type {
   SessionManifest,
   RunManifest,
+  CurrentDisplaySelection,
   FemLiveMesh,
+  LatestFieldFrame,
+  PreviewConfig,
   ScalarRow,
   EngineLogEntry,
   StepUpdateV2,
@@ -26,12 +29,15 @@ import type {
 import type { SessionState } from "@/lib/session/types";
 import type { FieldFrameEnvelope } from "@/lib/fieldFrame/types";
 import { buildEnvelopeFromLegacyState } from "@/lib/fieldFrame/envelopeAdapter";
+import type { CapabilityMap, ResourceRevisionMap } from "@/src/api/types";
+import { synthesizeCapabilitiesFromDiscretization } from "@/src/domain/capabilities";
 
 // Empty stable arrays to avoid unnecessary re-renders
 const EMPTY_SCALAR_ROWS: ScalarRow[] = [];
 const EMPTY_ENGINE_LOG: EngineLogEntry[] = [];
 const EMPTY_QUANTITIES: QuantityDescriptor[] = [];
 const EMPTY_ARTIFACTS: ArtifactEntry[] = [];
+const EMPTY_LATEST_FIELD_FRAMES: Record<string, LatestFieldFrame> = {};
 
 export interface NormalizedSessionState {
   stateVersion: number | null;
@@ -52,6 +58,12 @@ export interface NormalizedSessionState {
   stepUpdateV2: StepUpdateV2 | null;
   workspaceStatus: string;
   isFemBackend: boolean;
+  domainCapabilities: CapabilityMap | null;
+  resourceRevisions: ResourceRevisionMap | null;
+  displaySelection: CurrentDisplaySelection | null;
+  previewConfig: PreviewConfig | null;
+  latestFieldFrames: Record<string, LatestFieldFrame>;
+  latestFieldGrid: [number, number, number] | null;
   /** Canonical field-frame envelope synthesized from legacy state. */
   fieldFrameEnvelope: FieldFrameEnvelope | null;
 }
@@ -83,6 +95,12 @@ export function deriveSessionReadModel(
       stepUpdateV2: null,
       workspaceStatus: "idle",
       isFemBackend: false,
+      domainCapabilities: null,
+      resourceRevisions: null,
+      displaySelection: null,
+      previewConfig: null,
+      latestFieldFrames: EMPTY_LATEST_FIELD_FRAMES,
+      latestFieldGrid: null,
       fieldFrameEnvelope: null,
     };
   }
@@ -102,6 +120,10 @@ export function deriveSessionReadModel(
   const commandStatus = state.command_status ?? null;
   const meshWorkspace = state.mesh_workspace ?? null;
   const stepUpdateV2 = state.step_update_v2 ?? null;
+  const displaySelection = state.display_selection ?? null;
+  const previewConfig = state.preview_config ?? null;
+  const latestFieldFrames = state.latest_fields?.frames ?? EMPTY_LATEST_FIELD_FRAMES;
+  const latestFieldGrid = state.latest_fields?.grid ?? null;
 
   const workspaceStatus =
     runtimeStatus?.code ?? liveState?.status ?? session?.status ?? run?.status ?? "idle";
@@ -124,6 +146,7 @@ export function deriveSessionReadModel(
     resolvedBackend === "fem" ||
     femMesh != null ||
     (spatialPreview as Record<string, unknown> | null)?.spatial_kind === "mesh";
+  const domainCapabilities = synthesizeCapabilitiesFromDiscretization(isFemBackend);
 
   return {
     stateVersion: typeof state.state_version === "number" ? state.state_version : null,
@@ -144,6 +167,12 @@ export function deriveSessionReadModel(
     stepUpdateV2,
     workspaceStatus,
     isFemBackend,
+    domainCapabilities,
+    resourceRevisions: null,
+    displaySelection,
+    previewConfig,
+    latestFieldFrames,
+    latestFieldGrid,
     fieldFrameEnvelope: buildEnvelopeFromLegacyState({
       sessionId: session?.session_id ?? null,
       runId: run?.run_id ?? null,
@@ -151,7 +180,8 @@ export function deriveSessionReadModel(
       femMesh,
       preview,
       stepUpdateV2,
-      isFemBackend,
+      domainCapabilities,
+      legacyFemBackend: isFemBackend,
       quantityId: "m",
     }),
   };

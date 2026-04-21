@@ -9,7 +9,7 @@ function parseArgs(argv) {
   const args = {
     hostname: process.env.FULLMAG_WEB_BIND_HOST || "0.0.0.0",
     port: Number(process.env.PORT || process.env.FULLMAG_WEB_PORT || 3000),
-    apiTarget: process.env.FULLMAG_API_PROXY_TARGET || "http://localhost:8080",
+    apiTarget: process.env.FULLMAG_API_PROXY_TARGET || "http://localhost:8081",
     staticRoot: process.env.FULLMAG_STATIC_WEB_ROOT || "",
   };
 

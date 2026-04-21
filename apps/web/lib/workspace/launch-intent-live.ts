@@ -5,18 +5,7 @@ import { resolveApiBase } from "@/lib/apiBase";
 import { apiGet } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import { recordFrontendDebugEvent } from "./navigation-debug";
-
-type JsonRecord = Record<string, unknown>;
-
-function asRecord(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonRecord)
-    : null;
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
+import type { LiveStatus } from "@/src/api/types";
 
 function inferEntryKind(path: string | null): LaunchEntryKind {
   if (!path) return "project";
@@ -59,44 +48,30 @@ export async function detectLiveSessionIntent(): Promise<DetectedLiveSession | n
   }
 
   const promise = (async (): Promise<DetectedLiveSession | null> => {
-  recordFrontendDebugEvent("live-intent", "bootstrap_fetch_start", { baseUrl });
-  let payload: unknown;
+  recordFrontendDebugEvent("live-intent", "status_fetch_start", { baseUrl });
+  let payload: LiveStatus;
   try {
-    payload = await apiGet<unknown>(`${baseUrl}/v1/live/current/bootstrap`);
+    payload = await apiGet<LiveStatus>(`${baseUrl}/v1/live/current/status`);
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
-      recordFrontendDebugEvent("live-intent", "bootstrap_fetch_not_found", { baseUrl });
+      recordFrontendDebugEvent("live-intent", "status_fetch_not_found", { baseUrl });
       return null;
     }
     if (error instanceof ApiError) {
-      recordFrontendDebugEvent("live-intent", "bootstrap_fetch_http_error", {
+      recordFrontendDebugEvent("live-intent", "status_fetch_http_error", {
         baseUrl,
         status: error.status,
       });
       return null;
     }
-    recordFrontendDebugEvent("live-intent", "bootstrap_fetch_network_error", { baseUrl });
+    recordFrontendDebugEvent("live-intent", "status_fetch_network_error", { baseUrl });
     return null;
   }
-  const root = asRecord(payload);
-  if (!root) {
-    return null;
-  }
-  const mode = asString(root.mode);
-  if (mode === "hub") {
-    return null;
-  }
-
-  const session = asRecord(root.session);
-  if (!session) {
-    return null;
-  }
-
-  const runId = asString(session.run_id) ?? asString(session.session_id);
-  const scriptPath = asString(session.script_path);
-  const problemName = asString(session.problem_name) ?? "Live Simulation";
-  const backend = asString(session.requested_backend);
-  const status = asString(session.status);
+  const runId = payload.run?.run_id ?? payload.session.session_id;
+  const scriptPath = null;
+  const problemName = payload.session.name || "Live Simulation";
+  const backend = payload.domain.discretization ?? null;
+  const status = payload.solver.state ?? null;
   const entryKind = inferEntryKind(scriptPath);
   const targetStage = inferStage(status);
 
@@ -110,7 +85,7 @@ export async function detectLiveSessionIntent(): Promise<DetectedLiveSession | n
       displayName: problemName,
       launchAssetId: null,
       metadata: {
-        detectedBy: "live_bootstrap",
+        detectedBy: "live_status",
         backend,
         problemName,
         status,
@@ -121,7 +96,7 @@ export async function detectLiveSessionIntent(): Promise<DetectedLiveSession | n
     scriptPath,
     status,
   };
-  recordFrontendDebugEvent("live-intent", "bootstrap_fetch_success", {
+  recordFrontendDebugEvent("live-intent", "status_fetch_success", {
     baseUrl,
     runId,
     targetStage,

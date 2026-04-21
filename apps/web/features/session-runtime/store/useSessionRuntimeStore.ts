@@ -19,10 +19,14 @@
 import { create } from "zustand";
 import type { NormalizedSessionState } from "../model/deriveSessionReadModel";
 import type { ConnectionStatus } from "../model/sessionRuntime.types";
+import type { CapabilityMap, ResourceRevisionMap } from "@/src/api/types";
 import type {
+  CurrentDisplaySelection,
   SessionManifest,
   RunManifest,
   FemLiveMesh,
+  LatestFieldFrame,
+  PreviewConfig,
   ScalarRow,
   EngineLogEntry,
   StepUpdateV2,
@@ -63,6 +67,12 @@ interface SessionRuntimeStoreState {
   stepUpdateV2: StepUpdateV2 | null;
   workspaceStatus: string;
   isFemBackend: boolean;
+  domainCapabilities: CapabilityMap | null;
+  resourceRevisions: ResourceRevisionMap | null;
+  displaySelection: CurrentDisplaySelection | null;
+  previewConfig: PreviewConfig | null;
+  latestFieldFrames: Record<string, LatestFieldFrame>;
+  latestFieldGrid: [number, number, number] | null;
   /** Canonical field-frame envelope (synthesized from legacy state). */
   fieldFrameEnvelope: FieldFrameEnvelope | null;
 
@@ -99,6 +109,12 @@ const INITIAL_STATE: Omit<SessionRuntimeStoreState,
   stepUpdateV2: null,
   workspaceStatus: "idle",
   isFemBackend: false,
+  domainCapabilities: null,
+  resourceRevisions: null,
+  displaySelection: null,
+  previewConfig: null,
+  latestFieldFrames: {},
+  latestFieldGrid: null,
   fieldFrameEnvelope: null,
   bootstrapTimestamp: null,
   lastUpdateTimestamp: null,
@@ -135,6 +151,10 @@ export const useSessionRuntimeStore = create<SessionRuntimeStoreState>((set) => 
 export const selectConnection = (s: SessionRuntimeStoreState) => s.connection;
 export const selectWorkspaceStatus = (s: SessionRuntimeStoreState) => s.workspaceStatus;
 export const selectIsFemBackend = (s: SessionRuntimeStoreState) => s.isFemBackend;
+export const selectDomainCapabilities = (s: SessionRuntimeStoreState) => s.domainCapabilities;
+export const selectResourceRevisions = (s: SessionRuntimeStoreState) => s.resourceRevisions;
+export const selectDisplaySelection = (s: SessionRuntimeStoreState) => s.displaySelection;
+export const selectPreviewConfig = (s: SessionRuntimeStoreState) => s.previewConfig;
 export const selectSession = (s: SessionRuntimeStoreState) => s.session;
 export const selectRun = (s: SessionRuntimeStoreState) => s.run;
 export const selectLiveState = (s: SessionRuntimeStoreState) => s.liveState;
@@ -149,4 +169,6 @@ export const selectArtifacts = (s: SessionRuntimeStoreState) => s.artifacts;
 export const selectScriptBuilder = (s: SessionRuntimeStoreState) => s.scriptBuilder;
 export const selectMeshWorkspace = (s: SessionRuntimeStoreState) => s.meshWorkspace;
 export const selectStepUpdateV2 = (s: SessionRuntimeStoreState) => s.stepUpdateV2;
+export const selectLatestFieldFrames = (s: SessionRuntimeStoreState) => s.latestFieldFrames;
+export const selectLatestFieldGrid = (s: SessionRuntimeStoreState) => s.latestFieldGrid;
 export const selectFieldFrameEnvelope = (s: SessionRuntimeStoreState) => s.fieldFrameEnvelope;

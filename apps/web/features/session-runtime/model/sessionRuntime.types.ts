@@ -26,6 +26,10 @@ export interface SessionRuntimeSnapshot {
   artifacts: import("@/lib/useSessionStream").ArtifactEntry[];
   femMesh: import("@/lib/session/types").FemLiveMesh | null;
   preview: import("@/lib/useSessionStream").PreviewState | null;
+  displaySelection: import("@/lib/session/types").CurrentDisplaySelection | null;
+  previewConfig: import("@/lib/session/types").PreviewConfig | null;
+  latestFieldFrames: Record<string, import("@/lib/session/types").LatestFieldFrame>;
+  latestFieldGrid: [number, number, number] | null;
 
   /** Script builder / model graph from backend */
   scriptBuilder: import("@/lib/useSessionStream").ScriptBuilderState | null;
@@ -40,6 +44,8 @@ export interface SessionRuntimeSnapshot {
   /** Derived convenience */
   workspaceStatus: string;
   isFemBackend: boolean;
+  domainCapabilities: import("@/src/api/types").CapabilityMap | null;
+  resourceRevisions: import("@/src/api/types").ResourceRevisionMap | null;
 }
 
 /**

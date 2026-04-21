@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildEnvelopeFromLegacyState, type EnvelopeAdapterInput } from "../envelopeAdapter";
+import { synthesizeCapabilitiesFromDiscretization } from "@/src/domain/capabilities";
 
 function makeInput(overrides: Partial<EnvelopeAdapterInput> = {}): EnvelopeAdapterInput {
   return {
@@ -35,7 +36,8 @@ function makeInput(overrides: Partial<EnvelopeAdapterInput> = {}): EnvelopeAdapt
     femMesh: null,
     preview: null,
     stepUpdateV2: null,
-    isFemBackend: false,
+    domainCapabilities: null,
+    legacyFemBackend: false,
     quantityId: "m",
     ...overrides,
   };
@@ -74,7 +76,8 @@ describe("buildEnvelopeFromLegacyState", () => {
   it("uses mesh generation id from femMesh for FEM", () => {
     const result = buildEnvelopeFromLegacyState(
       makeInput({
-        isFemBackend: true,
+        domainCapabilities: synthesizeCapabilitiesFromDiscretization(true),
+        legacyFemBackend: false,
         femMesh: {
           nodes: [],
           elements: [],
@@ -91,7 +94,8 @@ describe("buildEnvelopeFromLegacyState", () => {
   it("falls back to mesh_id when generation_id is absent", () => {
     const result = buildEnvelopeFromLegacyState(
       makeInput({
-        isFemBackend: true,
+        domainCapabilities: synthesizeCapabilitiesFromDiscretization(true),
+        legacyFemBackend: false,
         femMesh: {
           nodes: [],
           elements: [],
@@ -102,6 +106,17 @@ describe("buildEnvelopeFromLegacyState", () => {
     );
     expect(result).not.toBeNull();
     expect(result!.meshGenerationId).toBe("mesh-99");
+  });
+
+  it("falls back to legacy discretization boolean when capabilities are unavailable", () => {
+    const result = buildEnvelopeFromLegacyState(
+      makeInput({
+        domainCapabilities: null,
+        legacyFemBackend: true,
+      }),
+    );
+    expect(result).not.toBeNull();
+    expect(result!.location).toBe("node");
   });
 
   it("prefers stepUpdateV2 diagnostics over liveState", () => {

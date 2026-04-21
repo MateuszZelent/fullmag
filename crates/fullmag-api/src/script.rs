@@ -1,8 +1,7 @@
-//! Script builder, Python helper invocation, and magnetization state IO.
+//! Script builder and Python helper invocation.
 
 use crate::error::ApiError;
 use crate::types::*;
-use crate::ReadMagnetizationStateHelperResponse;
 use fullmag_authoring::{
     scene_document_from_script_builder, scene_document_problem_projection,
     scene_document_to_script_builder, SceneDocument, ScriptBuilderState,
@@ -10,6 +9,7 @@ use fullmag_authoring::{
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
+use std::sync::Arc;
 
 pub(crate) fn repo_root() -> PathBuf {
     if let Some(root) = std::env::var_os("FULLMAG_REPO_ROOT") {
@@ -21,6 +21,94 @@ pub(crate) fn repo_root() -> PathBuf {
         .parent()
         .expect("workspace root should exist")
         .to_path_buf()
+}
+
+pub(crate) async fn sync_current_live_script_with_request(
+    state: &Arc<AppState>,
+    req: ScriptSyncRequest,
+) -> Result<ScriptSyncResponse, ApiError> {
+    let (script_path, scene_document) = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        let script_path = snapshot.session.script_path.trim();
+        if script_path.is_empty() {
+            return Err(ApiError::bad_request(
+                "active local live workspace does not expose a script path",
+            ));
+        }
+        (PathBuf::from(script_path), snapshot.scene_document.clone())
+    };
+
+    if !script_path.is_file() {
+        return Err(ApiError::bad_request(format!(
+            "script path does not exist: {}",
+            script_path.display()
+        )));
+    }
+
+    let overrides = if let Some(overrides) = req.overrides.clone() {
+        Some(overrides)
+    } else if let Some(scene_document) = scene_document.as_ref() {
+        Some(scene_document_overrides(scene_document)?)
+    } else {
+        None
+    };
+    eprintln!(
+        "[fullmag-api] RX <- frontend script sync {}",
+        script_path.display()
+    );
+    let response = rewrite_script_via_python_helper(
+        &state.repo_root,
+        &state.current_workspace_root,
+        &script_path,
+        overrides.as_ref(),
+    )?;
+    eprintln!(
+        "[fullmag-api] TX -> frontend script sync ok {}",
+        response.script_path
+    );
+    Ok(response)
+}
+
+pub(crate) async fn get_current_live_script_source(
+    state: &Arc<AppState>,
+) -> Result<ScriptSourceResponse, ApiError> {
+    let script_path = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        let script_path = snapshot.session.script_path.trim();
+        if script_path.is_empty() {
+            return Err(ApiError::bad_request(
+                "active local live workspace does not expose a script path",
+            ));
+        }
+        PathBuf::from(script_path)
+    };
+
+    if !script_path.is_file() {
+        return Err(ApiError::bad_request(format!(
+            "script path does not exist: {}",
+            script_path.display()
+        )));
+    }
+
+    let source = std::fs::read_to_string(&script_path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to read current live script '{}': {}",
+            script_path.display(),
+            error
+        ))
+    })?;
+
+    Ok(ScriptSourceResponse {
+        script_path: script_path.display().to_string(),
+        bytes: source.len(),
+        source,
+    })
 }
 
 pub(crate) fn rewrite_script_via_python_helper(
@@ -125,102 +213,6 @@ pub(crate) fn scene_document_overrides(scene_document: &SceneDocument) -> Result
     Ok(scene_document_problem_projection(scene_document)
         .map_err(|error| ApiError::bad_request(error.message))?
         .rewrite_overrides)
-}
-
-pub(crate) fn read_magnetization_state_with_python(
-    repo_root: &Path,
-    path: &Path,
-    format: Option<&str>,
-    dataset: Option<&str>,
-    sample_index: Option<i64>,
-) -> Result<ReadMagnetizationStateHelperResponse, ApiError> {
-    let mut helper_args = vec![
-        "-m".to_string(),
-        "fullmag.runtime.helper".to_string(),
-        "read-magnetization-state".to_string(),
-        "--path".to_string(),
-        path.display().to_string(),
-    ];
-    if let Some(format) = format {
-        helper_args.push("--format".to_string());
-        helper_args.push(format.to_string());
-    }
-    if let Some(dataset) = dataset {
-        helper_args.push("--dataset".to_string());
-        helper_args.push(dataset.to_string());
-    }
-    if let Some(sample_index) = sample_index {
-        helper_args.push("--sample".to_string());
-        helper_args.push(sample_index.to_string());
-    }
-
-    let output = run_python_helper(repo_root, &helper_args)?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ApiError::bad_request(format!(
-            "python magnetization-state reader failed: {}",
-            stderr.trim()
-        )));
-    }
-    serde_json::from_slice::<ReadMagnetizationStateHelperResponse>(&output.stdout).map_err(
-        |error| {
-            ApiError::internal(format!(
-                "failed to deserialize state reader output: {}",
-                error
-            ))
-        },
-    )
-}
-
-pub(crate) fn convert_magnetization_state_with_python(
-    repo_root: &Path,
-    input_path: &Path,
-    output_path: &Path,
-    input_format: Option<&str>,
-    output_format: Option<&str>,
-    input_dataset: Option<&str>,
-    output_dataset: Option<&str>,
-    sample_index: Option<i64>,
-) -> Result<(), ApiError> {
-    let mut helper_args = vec![
-        "-m".to_string(),
-        "fullmag.runtime.helper".to_string(),
-        "convert-magnetization-state".to_string(),
-        "--input-path".to_string(),
-        input_path.display().to_string(),
-        "--output-path".to_string(),
-        output_path.display().to_string(),
-    ];
-    if let Some(input_format) = input_format {
-        helper_args.push("--input-format".to_string());
-        helper_args.push(input_format.to_string());
-    }
-    if let Some(output_format) = output_format {
-        helper_args.push("--output-format".to_string());
-        helper_args.push(output_format.to_string());
-    }
-    if let Some(input_dataset) = input_dataset {
-        helper_args.push("--input-dataset".to_string());
-        helper_args.push(input_dataset.to_string());
-    }
-    if let Some(output_dataset) = output_dataset {
-        helper_args.push("--output-dataset".to_string());
-        helper_args.push(output_dataset.to_string());
-    }
-    if let Some(sample_index) = sample_index {
-        helper_args.push("--sample".to_string());
-        helper_args.push(sample_index.to_string());
-    }
-
-    let output = run_python_helper(repo_root, &helper_args)?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ApiError::bad_request(format!(
-            "python magnetization-state converter failed: {}",
-            stderr.trim()
-        )));
-    }
-    Ok(())
 }
 
 pub(crate) fn run_python_helper(

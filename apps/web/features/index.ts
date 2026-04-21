@@ -17,6 +17,7 @@ export {
   selectConnection,
   selectWorkspaceStatus,
   selectIsFemBackend,
+  selectDomainCapabilities,
   selectLiveState,
   selectFemMesh,
   type SessionRuntimeSnapshot,

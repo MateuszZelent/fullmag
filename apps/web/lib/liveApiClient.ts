@@ -1,7 +1,7 @@
 "use client";
 
 import { resolveApiBase } from "./apiBase";
-import { apiGet, apiGetArrayBuffer, apiGetOptional, apiPost } from "./api/client";
+import { apiPost } from "./api/client";
 import { ApiError } from "./api/errors";
 import {
   getLiveApiClient,
@@ -16,7 +16,6 @@ import type {
 } from "@/src/api/types";
 import type { MeshCommandTarget } from "./session/types";
 import type { SceneDocument } from "./session/types";
-import { FRONTEND_DIAGNOSTIC_FLAGS } from "./debug/frontendDiagnosticFlags";
 
 type JsonObject = Record<string, unknown>;
 type JsonBody = unknown;
@@ -166,22 +165,6 @@ function ensureResourceClient() {
   }
 }
 
-async function requestGet<T>(url: string, options?: RequestOptions): Promise<T> {
-  try {
-    return await apiGet<T>(url, options);
-  } catch (error) {
-    normalizeApiError(error);
-  }
-}
-
-async function requestGetOptional<T>(url: string, options?: RequestOptions): Promise<T | null> {
-  try {
-    return await apiGetOptional<T>(url, options);
-  } catch (error) {
-    normalizeApiError(error);
-  }
-}
-
 async function requestPost<T>(url: string, body: JsonBody, options?: RequestOptions): Promise<T> {
   try {
     return await apiPost<T>(url, body, options);
@@ -190,40 +173,16 @@ async function requestPost<T>(url: string, body: JsonBody, options?: RequestOpti
   }
 }
 
-async function requestGetArrayBuffer(url: string, options?: RequestOptions): Promise<ArrayBuffer> {
-  try {
-    return await apiGetArrayBuffer(url, options);
-  } catch (error) {
-    normalizeApiError(error);
-  }
-}
-
 export function currentLiveApiClient() {
   const baseUrl = resolveApiBase();
-  const binaryFieldTransportEnabled =
-    FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFieldTransport;
-  const binaryFemTopologyTransportEnabled =
-    FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFemTopologyTransport;
-  const fieldTransportMode = binaryFieldTransportEnabled ? "bin" : "json";
-  const meshTransportMode = binaryFemTopologyTransportEnabled ? "bin" : "json";
-  const withSnapshotTransport = (path: string) => {
-    const url = new URL(path);
-    url.searchParams.set("field_transport", fieldTransportMode);
-    url.searchParams.set("mesh_transport", meshTransportMode);
-    return url.toString();
-  };
 
   return {
     urls: {
-      bootstrap: withSnapshotTransport(`${baseUrl}/v1/live/current/bootstrap`),
-      poll: withSnapshotTransport(`${baseUrl}/v1/live/current/poll`),
       runtimeCapabilities: `${baseUrl}/v1/capabilities`,
       commands: `${baseUrl}/v1/live/current/commands`,
       importAsset: `${baseUrl}/v1/live/current/assets/import`,
-      exportState: `${baseUrl}/v1/live/current/state/export`,
-      importState: `${baseUrl}/v1/live/current/state/import`,
-      scriptSync: `${baseUrl}/v1/live/current/script/sync`,
-      scene: `${baseUrl}/v1/live/current/scene`,
+      scriptSync: `${baseUrl}/v1/live/current/authoring/script/sync`,
+      scene: `${baseUrl}/v1/live/current/authoring/scene`,
       gpuTelemetry: `${baseUrl}/v1/live/current/gpu/telemetry`,
       artifacts: `${baseUrl}/v1/live/current/artifacts`,
       eigenSpectrum: `${baseUrl}/v1/live/current/eigen/spectrum`,
@@ -231,15 +190,6 @@ export function currentLiveApiClient() {
       eigenBranches: `${baseUrl}/v1/live/current/eigen/branches`,
       eigenMode: `${baseUrl}/v1/live/current/eigen/mode`,
       quantitiesCatalog: `${baseUrl}/v1/live/current/quantities/catalog`,
-    },
-    fetchBootstrap<T = JsonObject>(options?: RequestOptions) {
-      return requestGet<T>(withSnapshotTransport(`${baseUrl}/v1/live/current/bootstrap`), options);
-    },
-    async fetchPoll(params: { sinceVersion: number; scalarRowsTotal: number }, options?: RequestOptions) {
-      const url = new URL(withSnapshotTransport(`${baseUrl}/v1/live/current/poll`));
-      url.searchParams.set("since_version", String(params.sinceVersion));
-      url.searchParams.set("scalar_rows_total", String(params.scalarRowsTotal));
-      return requestGetOptional<JsonObject>(url.toString(), options);
     },
     fetchScalarsHistory(options?: RequestOptions) {
       const client = ensureResourceClient();
@@ -294,14 +244,11 @@ export function currentLiveApiClient() {
     importAsset(payload: JsonBody, options?: RequestOptions) {
       return requestPost<JsonObject>(`${baseUrl}/v1/live/current/assets/import`, payload, options);
     },
-    exportState(payload: JsonBody, options?: RequestOptions) {
-      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/state/export`, payload, options);
-    },
-    importState(payload: JsonBody, options?: RequestOptions) {
-      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/state/import`, payload, options);
-    },
     syncScript(payload: JsonBody = {}, options?: RequestOptions) {
-      return requestPost<JsonObject>(`${baseUrl}/v1/live/current/script/sync`, payload, options);
+      const client = ensureResourceClient();
+      return client.scene
+        .syncScript(payload as Record<string, unknown>, options)
+        .then((response) => response as unknown as JsonObject);
     },
     getDisplay(options?: RequestOptions) {
       const client = ensureResourceClient();
@@ -328,7 +275,8 @@ export function currentLiveApiClient() {
       );
     },
     updateSceneDocument(payload: JsonBody, options?: RequestOptions) {
-      return requestPost<SceneDocument>(`${baseUrl}/v1/live/current/scene`, payload, options);
+      const client = ensureResourceClient();
+      return client.scene.update(payload as SceneDocument, options);
     },
     fetchGpuTelemetry(options?: RequestOptions) {
       const client = ensureResourceClient();

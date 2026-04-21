@@ -10,7 +10,9 @@ use crate::error::ApiError;
 use crate::schemas::commands::{
     CommandRequest, CommandResponse, LegacyCommandRequest, StructuredCommandRequest,
 };
-use crate::types::{AppState, MeshCommandTarget, SessionCommand};
+use crate::types::{
+    AppState, CommandLifecycleState, MeshCommandTarget, SessionCommand, TrackedCommandRecord,
+};
 
 #[utoipa::path(
     post,
@@ -65,7 +67,19 @@ pub async fn submit_command(
     };
     let mut enqueued = command;
     enqueued.seq = seq;
-    state.current_control_queue.lock().await.push_back(enqueued);
+    state.current_control_queue.lock().await.push_back(enqueued.clone());
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        ledger.push_back(TrackedCommandRecord {
+            command: enqueued,
+            status: CommandLifecycleState::Queued,
+            dispatched_at_unix_ms: None,
+            error: None,
+        });
+        while ledger.len() > 256 {
+            ledger.pop_front();
+        }
+    }
     let _ = state.current_control_events.send(seq);
 
     let response = CommandResponse {

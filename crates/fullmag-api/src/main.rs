@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
 };
 use base64::Engine;
-use fullmag_authoring::{MagnetizationAsset, SceneDocument, ScriptBuilderInitialState};
+use fullmag_authoring::{MagnetizationAsset, SceneDocument};
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
 use fullmag_plan::{generate_random_unit_vectors, sample_preset_texture, TextureSamplePoint};
 use serde::{Deserialize, Serialize};
@@ -43,22 +43,6 @@ mod script;
 mod session;
 mod session_persistence;
 mod types;
-
-#[derive(Debug, Deserialize, Default)]
-struct CurrentLiveSnapshotQuery {
-    #[serde(default)]
-    field_transport: Option<String>,
-    #[serde(default)]
-    mesh_transport: Option<String>,
-}
-
-fn binary_field_transport_requested(mode: Option<&str>) -> bool {
-    matches!(mode, Some("bin"))
-}
-
-fn binary_mesh_transport_requested(mode: Option<&str>) -> bool {
-    matches!(mode, Some("bin"))
-}
 
 fn latest_fields_wire_value(
     snapshot: &SessionStateResponse,
@@ -287,6 +271,7 @@ async fn main() {
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
+        current_command_ledger: Arc::new(Mutex::new(VecDeque::new())),
         current_control_events: watch::channel(0).0,
         current_control_next_seq: Arc::new(Mutex::new(0)),
         current_live_snapshot_version: Arc::new(AtomicU64::new(0)),
@@ -298,46 +283,18 @@ async fn main() {
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/meta/vision", get(vision))
+        // ── Internal runner bridge (not part of the public browser contract) ──
         .route(
-            "/v1/live/current/bootstrap",
-            get(get_current_live_bootstrap),
-        )
-        .route("/v1/live/current/state", get(get_current_live_state))
-        .route("/v1/live/current/poll", get(get_current_live_poll))
-        .route("/v1/live/current/events", get(get_current_live_events))
-        .route("/v1/live/current/publish", post(publish_current_live_state))
-        .route(
-            "/v1/live/current/create",
-            post(create_current_live_workspace),
-        )
-        // ── Data-plane field store (read-only, no command queue) ───────
-        // ── Feature flags (diagnostics) ──────────────────────────────
-        .route("/v1/live/feature-flags", get(get_feature_flags))
-        .route(
-            "/v1/live/current/commands/next",
-            get(dequeue_current_live_command),
+            "/v1/internal/live/current/publish",
+            post(publish_current_live_state),
         )
         .route(
-            "/v1/live/current/control/wait",
+            "/v1/internal/live/current/control/wait",
             get(wait_current_live_control),
         )
-        .route(
-            "/v1/live/current/state/export",
-            post(export_current_live_state),
-        )
-        .route(
-            "/v1/live/current/state/import",
-            post(import_current_live_state),
-        )
-        .route(
-            "/v1/live/current/script/sync",
-            post(sync_current_live_script),
-        )
-        .route("/v1/live/current/scene", post(update_current_live_scene))
-        .route(
-            "/v1/live/current/artifacts/file",
-            get(read_current_live_artifact),
-        )
+        // ── Diagnostics / feature flags ───────────────────────────────
+        // ── Feature flags (diagnostics) ──────────────────────────────
+        .route("/v1/live/feature-flags", get(get_feature_flags))
         .route("/v1/docs/physics", get(list_physics_docs))
         .route("/v1/quantities/catalog", get(get_quantities_catalog))
         .route("/v1/run", post(start_run))
@@ -369,7 +326,7 @@ async fn main() {
     let port: u16 = std::env::var("FULLMAG_API_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(8080);
+        .unwrap_or(8081);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!(%addr, "starting fullmag-api");
 
@@ -495,69 +452,9 @@ pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
     })
 }
 
-async fn get_current_live_bootstrap(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<CurrentLiveSnapshotQuery>,
-) -> Result<Response, ApiError> {
-    eprintln!("[fullmag-api][LEGACY] hit: GET /v1/live/current/bootstrap — migrate to GET /v1/live/current/status + resource endpoints");
-    let binary_field_transport = binary_field_transport_requested(query.field_transport.as_deref());
-    let binary_mesh_transport = binary_mesh_transport_requested(query.mesh_transport.as_deref());
-    // Try to serve from the live state directly (serialize on-demand).
-    // The publish hot path no longer eagerly serializes the full snapshot,
-    // so we serialize here when the HTTP endpoint is actually called.
-    if let Some(live) = state.current_live_state.read().await.as_ref() {
-        let public_json = serialize_current_live_response(
-            live,
-            true,
-            binary_field_transport,
-            binary_mesh_transport,
-        )
-        .map_err(|e| ApiError::internal(format!("failed to serialize live state: {}", e)))?;
-        // Update the cached snapshot opportunistically for SSE consumers.
-        *state.current_live_public_snapshot.write().await = Some(public_json.clone());
-        let current_version = live.state_version;
-        let (preview_source_step, preview_vector_len, preview_vector_avg) =
-            preview_debug_metrics(live.preview.as_ref());
-        let live_mag_len = live
-            .live_state
-            .as_ref()
-            .and_then(|state| state.latest_step.magnetization.as_ref())
-            .map(|values| values.len())
-            .unwrap_or(0);
-        let live_mag_avg = live
-            .live_state
-            .as_ref()
-            .and_then(|state| state.latest_step.magnetization.as_ref())
-            .and_then(|values| average_vector_components(values, 3));
-        state
-            .current_live_snapshot_version
-            .store(current_version, std::sync::atomic::Ordering::Relaxed);
-        eprintln!(
-            "[fullmag-api] TX -> frontend bootstrap version={} step={} scalar_rows={} live_mag_len={} live_mag_avg={} preview={} preview_step={} preview_vec_len={} preview_vec_avg={} fields={}",
-            current_version,
-            live.live_state.as_ref().map(|state| state.latest_step.step).unwrap_or(0),
-            live.scalar_rows.len(),
-            live_mag_len,
-            format_debug_vector_average(live_mag_avg),
-            live.preview.is_some(),
-            preview_source_step,
-            preview_vector_len,
-            format_debug_vector_average(preview_vector_avg),
-            live.latest_fields.len(),
-        );
-        let json = bootstrap_workspace_payload(&public_json)?;
-        return Ok(([(CONTENT_TYPE, "application/json")], json).into_response());
-    }
-
-    // No live workspace — auto-create a bootstrapping interactive workspace
-    // so the control room can immediately transition out of the loading state.
-    let json = auto_create_workspace(&state).await?;
-    let payload = bootstrap_workspace_payload(&json)?;
-    Ok(([(CONTENT_TYPE, "application/json")], payload).into_response())
-}
-
 /// Create an empty interactive workspace and publish it to the live state.
 /// Returns the serialized public snapshot JSON.
+#[allow(dead_code)]
 async fn auto_create_workspace(state: &AppState) -> Result<String, ApiError> {
     let now = unix_time_millis_now();
     let session_id = format!("ui-session-{}-{}", now, std::process::id());
@@ -625,6 +522,7 @@ async fn auto_create_workspace(state: &AppState) -> Result<String, ApiError> {
     Ok(public_json)
 }
 
+#[allow(dead_code)]
 fn bootstrap_workspace_payload(snapshot_json: &str) -> Result<String, ApiError> {
     let value: Value = serde_json::from_str(snapshot_json).map_err(|error| {
         ApiError::internal(format!(
@@ -656,6 +554,7 @@ struct CreateWorkspaceRequest {
     backend: Option<String>,
 }
 
+#[allow(dead_code)]
 async fn create_current_live_workspace(
     State(state): State<Arc<AppState>>,
     Json(_req): Json<CreateWorkspaceRequest>,
@@ -673,78 +572,12 @@ async fn create_current_live_workspace(
     Ok(([(CONTENT_TYPE, "application/json")], payload).into_response())
 }
 
-async fn get_current_live_state(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<CurrentLiveSnapshotQuery>,
-) -> Result<Response, ApiError> {
-    get_current_live_bootstrap(State(state), Query(query)).await
-}
-
-async fn get_current_live_poll(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<CurrentLivePollQuery>,
-) -> Result<Response, ApiError> {
-    eprintln!("[fullmag-api][LEGACY] hit: GET /v1/live/current/poll — migrate to GET /v1/live/current/status + resource endpoints");
-    let guard = state.current_live_state.read().await;
-    let Some(snapshot) = guard.as_ref() else {
-        return Ok(StatusCode::NO_CONTENT.into_response());
-    };
-    if query
-        .since_version
-        .is_some_and(|since_version| since_version >= snapshot.state_version)
-    {
-        return Ok(StatusCode::NO_CONTENT.into_response());
-    }
-    let scalar_rows_delta_start = query.scalar_rows_total.unwrap_or(0);
-    let scalar_rows_delta = snapshot
-        .scalar_rows
-        .len()
-        .saturating_sub(scalar_rows_delta_start);
-    let (preview_source_step, preview_vector_len, preview_vector_avg) =
-        preview_debug_metrics(snapshot.preview.as_ref());
-    let live_mag_len = snapshot
-        .live_state
-        .as_ref()
-        .and_then(|state| state.latest_step.magnetization.as_ref())
-        .map(|values| values.len())
-        .unwrap_or(0);
-    let live_mag_avg = snapshot
-        .live_state
-        .as_ref()
-        .and_then(|state| state.latest_step.magnetization.as_ref())
-        .and_then(|values| average_vector_components(values, 3));
-    eprintln!(
-        "[fullmag-api] TX -> frontend poll version={} since={} delta_rows={} step={} live_mag_len={} live_mag_avg={} preview={} preview_step={} preview_vec_len={} preview_vec_avg={} fields={}",
-        snapshot.state_version,
-        query.since_version.unwrap_or(0),
-        scalar_rows_delta,
-        snapshot
-            .live_state
-            .as_ref()
-            .map(|state| state.latest_step.step)
-            .unwrap_or(0),
-        live_mag_len,
-        format_debug_vector_average(live_mag_avg),
-        snapshot.preview.is_some(),
-        preview_source_step,
-        preview_vector_len,
-        format_debug_vector_average(preview_vector_avg),
-        snapshot.latest_fields.len(),
-    );
-    let json = serialize_current_live_poll_response(
-        snapshot,
-        scalar_rows_delta_start,
-        binary_field_transport_requested(query.field_transport.as_deref()),
-        binary_mesh_transport_requested(query.mesh_transport.as_deref()),
-    )?;
-    Ok(([(CONTENT_TYPE, "application/json")], json).into_response())
-}
-
 /// `GET /v1/live/feature-flags` — return the current feature flags.
 async fn get_feature_flags(State(state): State<Arc<AppState>>) -> Json<FeatureFlags> {
     Json(state.feature_flags.clone())
 }
 
+#[allow(dead_code)]
 async fn get_current_live_events(
     State(state): State<Arc<AppState>>,
 ) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, ApiError> {
@@ -790,23 +623,20 @@ fn is_preview_control_command(command: &SessionCommand) -> bool {
     )
 }
 
-async fn enqueue_current_control_command(
-    state: &Arc<AppState>,
-    mut command: SessionCommand,
-) -> SessionCommand {
-    let seq = {
-        let mut next_seq = state.current_control_next_seq.lock().await;
-        *next_seq = next_seq.saturating_add(1);
-        *next_seq
-    };
-    command.seq = seq;
-    state
-        .current_control_queue
-        .lock()
-        .await
-        .push_back(command.clone());
-    let _ = state.current_control_events.send(seq);
-    command
+async fn mark_command_dispatched(state: &Arc<AppState>, command: &SessionCommand) {
+    let mut ledger = state.current_command_ledger.lock().await;
+    if let Some(record) = ledger
+        .iter_mut()
+        .find(|record| record.command.command_id == command.command_id)
+    {
+        record.status = crate::types::CommandLifecycleState::Dispatched;
+        record.dispatched_at_unix_ms = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or(0),
+        );
+    }
 }
 
 async fn take_next_current_control_command_after(
@@ -814,23 +644,38 @@ async fn take_next_current_control_command_after(
     after_seq: u64,
     include_preview: bool,
 ) -> Option<SessionCommand> {
-    let mut queue = state.current_control_queue.lock().await;
-    let mut index = 0usize;
-    while index < queue.len() {
-        let Some(command) = queue.get(index) else {
+    let mut stale = Vec::new();
+    let selected = {
+        let mut queue = state.current_control_queue.lock().await;
+        let mut index = 0usize;
+        let mut selected = None;
+        while index < queue.len() {
+            let Some(command) = queue.get(index) else {
+                break;
+            };
+            if command.seq <= after_seq {
+                if let Some(removed) = queue.remove(index) {
+                    stale.push(removed);
+                }
+                continue;
+            }
+            if !include_preview && is_preview_control_command(command) {
+                index += 1;
+                continue;
+            }
+            selected = queue.remove(index);
             break;
-        };
-        if command.seq <= after_seq {
-            let _ = queue.remove(index);
-            continue;
         }
-        if !include_preview && is_preview_control_command(command) {
-            index += 1;
-            continue;
-        }
-        return queue.remove(index);
+        selected
+    };
+
+    for command in &stale {
+        mark_command_dispatched(state, command).await;
     }
-    None
+    if let Some(command) = &selected {
+        mark_command_dispatched(state, command).await;
+    }
+    selected
 }
 
 async fn publish_current_live_state(
@@ -855,6 +700,7 @@ async fn publish_current_live_state(
         *state.current_display_selection.write().await = display_selection.clone();
         state.current_control_queue.lock().await.clear();
         state.current_command_responses.lock().await.clear();
+        state.current_command_ledger.lock().await.clear();
         *state.current_control_next_seq.lock().await = 0;
         let _ = state.current_control_events.send(0);
         let _ = std::fs::remove_dir_all(&state.current_workspace_root);
@@ -1064,6 +910,7 @@ async fn publish_current_live_state(
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 
+#[allow(dead_code)]
 async fn dequeue_current_live_command(
     State(state): State<Arc<AppState>>,
 ) -> Result<Response, ApiError> {
@@ -1110,22 +957,7 @@ async fn wait_current_live_control(
     }
 }
 
-async fn export_current_live_state(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ExportMagnetizationStateRequest>,
-) -> Result<Json<ExportMagnetizationStateResponse>, ApiError> {
-    let response = export_magnetization_state_for_current_workspace(&state, req).await?;
-    Ok(Json(response))
-}
-
-async fn import_current_live_state(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ImportMagnetizationStateRequest>,
-) -> Result<Json<ImportMagnetizationStateResponse>, ApiError> {
-    let response = import_magnetization_state_for_current_workspace(&state, req).await?;
-    Ok(Json(response))
-}
-
+#[allow(dead_code)]
 async fn read_current_live_artifact(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ArtifactFileQuery>,
@@ -1402,395 +1234,42 @@ fn import_asset_into_dir(
     Ok(response)
 }
 
-#[derive(Debug, Deserialize)]
-struct ReadMagnetizationStateHelperResponse {
-    format: String,
-    dataset: Option<String>,
-    sample_index: Option<i64>,
-    vector_count: usize,
-    values: Vec<[f64; 3]>,
-}
-
-fn normalize_magnetization_state_format(
-    requested: Option<&str>,
-    file_name: Option<&str>,
-) -> Result<String, ApiError> {
-    let normalized = requested
-        .map(|value| value.trim().to_lowercase())
-        .filter(|value| !value.is_empty());
-    if let Some(value) = normalized {
-        return match value.as_str() {
-            "json" => Ok("json".to_string()),
-            "zarr" => Ok("zarr".to_string()),
-            "h5" | "hdf5" => Ok("h5".to_string()),
-            _ => Err(ApiError::bad_request(format!(
-                "unsupported magnetization state format '{}'",
-                value
-            ))),
-        };
-    }
-
-    let lower = file_name.unwrap_or_default().to_lowercase();
-    if lower.ends_with(".zarr.zip") || lower.ends_with(".zarr") {
-        return Ok("zarr".to_string());
-    }
-    if lower.ends_with(".h5") || lower.ends_with(".hdf5") {
-        return Ok("h5".to_string());
-    }
-    Ok("json".to_string())
-}
-
-fn preferred_magnetization_state_suffix(format: &str) -> &'static str {
-    match format {
-        "json" => ".json",
-        "zarr" => ".zarr.zip",
-        "h5" => ".h5",
-        _ => ".json",
-    }
-}
-
-fn ensure_magnetization_state_file_name(file_name: &str, format: &str) -> String {
-    let safe = sanitize_file_name(file_name);
-    if safe.is_empty() {
-        return default_magnetization_state_file_name(format);
-    }
-    let lower = safe.to_lowercase();
-    if format == "zarr" && lower.ends_with(".zarr") {
-        return format!("{safe}.zip");
-    }
-    if format == "h5" && (lower.ends_with(".h5") || lower.ends_with(".hdf5")) {
-        return safe;
-    }
-    if lower.ends_with(preferred_magnetization_state_suffix(format)) {
-        return safe;
-    }
-    format!("{safe}{}", preferred_magnetization_state_suffix(format))
-}
-
-fn default_magnetization_state_file_name(format: &str) -> String {
-    let timestamp = unix_time_millis_now();
-    format!(
-        "m_state_{}{}",
-        timestamp,
-        preferred_magnetization_state_suffix(format)
-    )
-}
-
-fn magnetization_state_json_payload(values: &[[f64; 3]]) -> Vec<u8> {
-    serde_json::to_vec_pretty(&serde_json::json!({
-        "kind": "magnetization_state",
-        "observable": "m",
-        "format": "json",
-        "vector_count": values.len(),
-        "values": values,
-    }))
-    .expect("magnetization state JSON encoding should succeed")
-}
-
-fn flat_magnetization_to_vectors(values: &[f64]) -> Result<Vec<[f64; 3]>, ApiError> {
-    if values.len() % 3 != 0 {
-        return Err(ApiError::internal(format!(
-            "expected flat magnetization length divisible by 3, got {}",
-            values.len()
-        )));
-    }
-    Ok(values
-        .chunks_exact(3)
-        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-        .collect())
-}
-
-fn current_workspace_magnetization_source(
-    snapshot: &SessionStateResponse,
-    artifact_dir: &Path,
-    repo_root: &Path,
-) -> Result<Vec<[f64; 3]>, ApiError> {
-    if let Some(live_state) = snapshot.live_state.as_ref() {
-        if let Some(values) = live_state.latest_step.magnetization.as_ref() {
-            return flat_magnetization_to_vectors(values);
-        }
-    }
-
-    for candidate in ["m_final.json", "m_initial.json"] {
-        let path = artifact_dir.join(candidate);
-        if path.is_file() {
-            return read_magnetization_state_with_python(repo_root, &path, None, None, None)
-                .map(|loaded| loaded.values);
-        }
-    }
-
-    Err(ApiError::not_found(
-        "no current magnetization state is available yet for export",
-    ))
-}
-
-async fn export_magnetization_state_for_current_workspace(
-    state: &Arc<AppState>,
-    req: ExportMagnetizationStateRequest,
-) -> Result<ExportMagnetizationStateResponse, ApiError> {
-    let (artifact_dir, vectors) = {
-        let current = state.current_live_state.read().await;
-        let snapshot = current
-            .as_ref()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        let artifact_dir = current_artifact_dir(snapshot)
-            .unwrap_or_else(|| state.current_workspace_root.join("artifacts"));
-        let vectors =
-            current_workspace_magnetization_source(snapshot, &artifact_dir, &state.repo_root)?;
-        (artifact_dir, vectors)
-    };
-
-    let format =
-        normalize_magnetization_state_format(req.format.as_deref(), req.file_name.as_deref())?;
-    let file_name = req
-        .file_name
-        .as_deref()
-        .map(|value| ensure_magnetization_state_file_name(value, &format))
-        .unwrap_or_else(|| default_magnetization_state_file_name(&format));
-    let exports_dir = artifact_dir.join("exports");
-    let export_path = exports_dir.join(&file_name);
-    std::fs::create_dir_all(&exports_dir)?;
-
-    if format == "json" {
-        std::fs::write(&export_path, magnetization_state_json_payload(&vectors))?;
-    } else {
-        let temp_source_path = exports_dir.join(format!(".state-export-{}.json", uuid_v4_hex()));
-        std::fs::write(
-            &temp_source_path,
-            magnetization_state_json_payload(&vectors),
-        )?;
-        let convert_result = convert_magnetization_state_with_python(
-            &state.repo_root,
-            &temp_source_path,
-            &export_path,
-            Some("json"),
-            Some(&format),
-            None,
-            req.dataset.as_deref(),
-            None,
-        );
-        let _ = std::fs::remove_file(&temp_source_path);
-        convert_result?;
-    }
-
-    let content_base64 =
-        base64::engine::general_purpose::STANDARD.encode(std::fs::read(&export_path)?);
-    let vector_count = vectors.len();
-    let artifacts = read_artifacts_from_dir(Some(&artifact_dir))?;
-    let (messages, public_json) = {
-        let mut current = state.current_live_state.write().await;
-        let snapshot = current
-            .as_mut()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        snapshot.artifacts = artifacts;
-        let messages = build_current_live_ws_messages(&state, snapshot)?;
-        let public_json = serialize_current_live_response(snapshot, true, false, false)?;
-        (messages, public_json)
-    };
-    *state.current_live_public_snapshot.write().await = Some(public_json);
-    send_current_live_ws_messages(&state, messages);
-
-    Ok(ExportMagnetizationStateResponse {
-        file_name,
-        format,
-        stored_path: make_repo_relative(&state.repo_root, &export_path),
-        vector_count,
-        content_base64,
-    })
-}
-
-async fn import_magnetization_state_for_current_workspace(
-    state: &Arc<AppState>,
-    req: ImportMagnetizationStateRequest,
-) -> Result<ImportMagnetizationStateResponse, ApiError> {
-    let format = normalize_magnetization_state_format(req.format.as_deref(), Some(&req.file_name))?;
-    let file_name = ensure_magnetization_state_file_name(&req.file_name, &format);
-    let (session_id, imports_dir, session_status) = {
-        let current = state.current_live_state.read().await;
-        let snapshot = current
-            .as_ref()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        let session_id = snapshot.session.session_id.clone();
-        let artifact_dir = current_artifact_dir(snapshot)
-            .unwrap_or_else(|| state.current_workspace_root.join("artifacts"));
-        (
-            session_id,
-            artifact_dir.join("imports"),
-            snapshot.session.status.clone(),
-        )
-    };
-
-    if req.apply_to_workspace
-        && !matches!(
-            session_status.as_str(),
-            "awaiting_command" | "waiting_for_compute"
-        )
-    {
-        return Err(ApiError::bad_request(
-            "workspace state import can only be applied while awaiting_command or waiting_for_compute",
-        ));
-    }
-
-    let imported = import_asset_into_dir(
-        state,
-        &session_id,
-        imports_dir.clone(),
-        ImportSessionAssetRequest {
-            file_name: file_name.clone(),
-            content_base64: req.content_base64.clone(),
-            target_realization: "magnetization_state".to_string(),
-        },
-    )?;
-    let stored_abs_path = state.repo_root.join(&imported.stored_path);
-    let loaded = read_magnetization_state_with_python(
-        &state.repo_root,
-        &stored_abs_path,
-        Some(&format),
-        req.dataset.as_deref(),
-        req.sample_index,
-    )?;
-    let command = if req.apply_to_workspace {
-        Some(
-            enqueue_current_control_command(
-                state,
-                SessionCommand {
-                    seq: 0,
-                    command_id: format!("cmd-{}", uuid_v4_hex()),
-                    kind: "load_state".to_string(),
-                    created_at_unix_ms: unix_time_millis_now(),
-                    until_seconds: None,
-                    max_steps: None,
-                    torque_tolerance: None,
-                    energy_tolerance: None,
-                    integrator: None,
-                    fixed_timestep: None,
-                    max_error: None,
-                    relax_algorithm: None,
-                    relax_alpha: None,
-                    mesh_options: None,
-                    mesh_target: None,
-                    mesh_reason: None,
-                    state_path: Some(stored_abs_path.display().to_string()),
-                    state_format: Some(loaded.format.clone()),
-                    state_dataset: loaded.dataset.clone(),
-                    state_sample_index: req.sample_index.or(loaded.sample_index),
-                    display_selection: None,
-                    preview_config: None,
-                    stages: None,
-                },
-            )
-            .await,
-        )
-    } else {
-        None
-    };
-
-    let artifacts = read_artifacts_from_dir(imports_dir.parent())?;
-    let (messages, public_json) = {
-        let mut current = state.current_live_state.write().await;
-        let snapshot = current
-            .as_mut()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        snapshot.artifacts = artifacts;
-        if req.attach_to_script_builder {
-            if snapshot.scene_document.is_none() && !snapshot.session.script_path.trim().is_empty()
-            {
-                let scene_document = load_scene_document_state(
-                    &state.repo_root,
-                    &state.current_workspace_root,
-                    Path::new(snapshot.session.script_path.trim()),
-                )?;
-                snapshot.builder_adapter = scene_document_builder_projection(&scene_document).ok();
-                snapshot.scene_document = Some(scene_document);
-            }
-            if let Some(scene_document) = snapshot.scene_document.as_mut() {
-                scene_document.study.initial_state = Some(ScriptBuilderInitialState {
-                    magnet_name: None,
-                    source_path: stored_abs_path.display().to_string(),
-                    format: loaded.format.clone(),
-                    dataset: loaded.dataset.clone(),
-                    sample_index: req.sample_index.or(loaded.sample_index),
-                });
-                scene_document.revision = scene_document.revision.saturating_add(1);
-                snapshot.builder_adapter = scene_document_builder_projection(scene_document).ok();
-            }
-        }
-        let messages = build_current_live_ws_messages(&state, snapshot)?;
-        let public_json = serialize_current_live_response(snapshot, true, false, false)?;
-        (messages, public_json)
-    };
-    *state.current_live_public_snapshot.write().await = Some(public_json);
-    send_current_live_ws_messages(&state, messages);
-
-    if let Some(command) = command {
-        let _ = command;
-    }
-
-    Ok(ImportMagnetizationStateResponse {
-        asset_id: imported.asset_id,
-        session_id,
-        stored_path: imported.stored_path,
-        file_name,
-        format: loaded.format,
-        vector_count: loaded.vector_count,
-        applied_to_workspace: req.apply_to_workspace,
-        attached_to_script_builder: req.attach_to_script_builder,
-    })
-}
-
+#[allow(dead_code)]
 async fn sync_current_live_script(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScriptSyncRequest>,
 ) -> Result<Json<ScriptSyncResponse>, ApiError> {
-    let (script_path, scene_document) = {
-        let current = state.current_live_state.read().await;
-        let snapshot = current
-            .as_ref()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        let script_path = snapshot.session.script_path.trim();
-        if script_path.is_empty() {
-            return Err(ApiError::bad_request(
-                "active local live workspace does not expose a script path",
-            ));
-        }
-        (PathBuf::from(script_path), snapshot.scene_document.clone())
-    };
-
-    if !script_path.is_file() {
-        return Err(ApiError::bad_request(format!(
-            "script path does not exist: {}",
-            script_path.display()
-        )));
-    }
-
-    let overrides = if let Some(overrides) = req.overrides.clone() {
-        Some(overrides)
-    } else if let Some(scene_document) = scene_document.as_ref() {
-        Some(scene_document_overrides(scene_document)?)
-    } else {
-        None
-    };
-    eprintln!(
-        "[fullmag-api] RX <- frontend script sync {}",
-        script_path.display()
-    );
-    let response = rewrite_script_via_python_helper(
-        &state.repo_root,
-        &state.current_workspace_root,
-        &script_path,
-        overrides.as_ref(),
-    )?;
-    eprintln!(
-        "[fullmag-api] TX -> frontend script sync ok {}",
-        response.script_path
-    );
-    Ok(Json(response))
+    crate::script::sync_current_live_script_with_request(&state, req)
+        .await
+        .map(Json)
 }
 
-async fn update_current_live_scene(
-    State(state): State<Arc<AppState>>,
-    Json(mut scene_document): Json<SceneDocument>,
-) -> Result<Json<SceneDocument>, ApiError> {
+pub(crate) async fn get_or_load_current_live_scene_document(
+    state: &Arc<AppState>,
+) -> Result<SceneDocument, ApiError> {
+    let mut current = state.current_live_state.write().await;
+    let snapshot = current
+        .as_mut()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    if snapshot.scene_document.is_none() && !snapshot.session.script_path.trim().is_empty() {
+        let current_scene = load_scene_document_state(
+            &state.repo_root,
+            &state.current_workspace_root,
+            Path::new(snapshot.session.script_path.trim()),
+        )?;
+        snapshot.builder_adapter = scene_document_builder_projection(&current_scene).ok();
+        snapshot.scene_document = Some(current_scene);
+    }
+    snapshot
+        .scene_document
+        .clone()
+        .ok_or_else(|| ApiError::not_found("no scene document available for current workspace"))
+}
+
+pub(crate) async fn commit_current_live_scene_document(
+    state: &Arc<AppState>,
+    mut scene_document: SceneDocument,
+) -> Result<SceneDocument, ApiError> {
     let preset_texture_count = scene_document
         .magnetization_assets
         .iter()
@@ -1930,7 +1409,7 @@ async fn update_current_live_scene(
         summary = %scene_magnetization_summary(&scene_document),
         "frontend scene update committed"
     );
-    Ok(Json(scene_document))
+    Ok(scene_document)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -3038,43 +2517,6 @@ pub(crate) fn serialize_current_live_response(
         state_version: snapshot.state_version,
     })
     .map_err(|error| ApiError::internal(format!("failed to serialize current state: {}", error)))
-}
-
-fn serialize_current_live_poll_response(
-    snapshot: &SessionStateResponse,
-    scalar_rows_delta_start: usize,
-    binary_field_transport: bool,
-    binary_mesh_transport: bool,
-) -> Result<String, ApiError> {
-    let step_update_v2 = snapshot.build_step_update_v2();
-    let delta_start = scalar_rows_delta_start.min(snapshot.scalar_rows.len());
-    serde_json::to_string(&SessionStateResponseWire {
-        session: &snapshot.session,
-        run: snapshot.run.as_ref(),
-        live_state: live_state_wire_value(
-            snapshot.live_state.as_ref(),
-            binary_field_transport,
-            binary_mesh_transport,
-        )?,
-        runtime_status: &snapshot.runtime_status,
-        metadata: snapshot.metadata.as_ref(),
-        mesh_workspace: snapshot.mesh_workspace.as_ref(),
-        stage_execution: snapshot.stage_execution.as_ref(),
-        scene_document: snapshot.scene_document.as_ref(),
-        scalar_rows: &snapshot.scalar_rows[delta_start..],
-        scalar_rows_total: snapshot.scalar_rows.len(),
-        engine_log: &snapshot.engine_log,
-        quantities: &snapshot.quantities,
-        fem_mesh: fem_mesh_wire_value(snapshot.fem_mesh.as_ref(), binary_mesh_transport)?,
-        latest_fields: latest_fields_wire_value(snapshot, binary_field_transport)?,
-        artifacts: &snapshot.artifacts,
-        display_selection: &snapshot.display_selection,
-        preview_config: &snapshot.preview_config,
-        preview: preview_wire_value(snapshot.preview.as_ref(), binary_field_transport)?,
-        step_update_v2: step_update_v2_wire_value(step_update_v2, binary_field_transport)?,
-        state_version: snapshot.state_version,
-    })
-    .map_err(|error| ApiError::internal(format!("failed to serialize poll state: {}", error)))
 }
 
 /// Read from AppState's live state (read lock) and serialize the full public

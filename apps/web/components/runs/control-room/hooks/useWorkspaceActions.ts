@@ -47,6 +47,8 @@ import {
   type WorkspaceTabInput,
 } from "@/lib/workspace/workspace-store";
 import type { ControlRoomApi } from "../controlRoomApi";
+import type { CapabilityMap, SaveProfile } from "@/src/api/types";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 
 type NormalizedViewportMode = ViewportMode | "charts";
 
@@ -64,6 +66,43 @@ function normalizeViewportMode(mode: string): NormalizedViewportMode | null {
 
 type BuilderAutoSync = ReturnType<typeof useBuilderAutoSync>;
 
+function normalizeSessionExportProfile(value: string): SaveProfile {
+  switch (value.trim().toLowerCase()) {
+    case "resume":
+      return "resume";
+    case "solved":
+    case "zarr":
+      return "solved";
+    case "archive":
+    case "h5":
+      return "archive";
+    case "recovery":
+      return "recovery";
+    case "compact":
+    case "json":
+    default:
+      return "compact";
+  }
+}
+
+function sessionExportFileName(profile: SaveProfile): string {
+  const timestamp = new Date().toISOString().replaceAll(":", "-");
+  return `fullmag-session-${profile}-${timestamp}.fms`;
+}
+
+function formatByteSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export interface UseWorkspaceActionsParams {
   enqueueCommand: (payload: Record<string, unknown>) => Promise<void>;
   updatePreview: (path: string, payload?: Record<string, unknown>) => Promise<void>;
@@ -74,6 +113,7 @@ export interface UseWorkspaceActionsParams {
   localBuilderSignature: string;
   session: { script_path?: string | null } | null;
   isFemBackend: boolean;
+  domainCapabilities?: CapabilityMap | null;
   workspaceStatus: string | null;
   effectiveViewMode: ViewportMode;
   previewControlsActive: boolean;
@@ -144,9 +184,7 @@ export interface UseWorkspaceActionsReturn {
   handleStateImport: (
     file: File,
     options?: {
-      format?: string;
-      applyToWorkspace?: boolean;
-      attachToScriptBuilder?: boolean;
+      restoreMode?: string;
     },
   ) => Promise<void>;
   syncScriptBuilder: () => Promise<void>;
@@ -180,6 +218,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     localBuilderSignature,
     session,
     isFemBackend,
+    domainCapabilities,
     workspaceStatus,
     effectiveViewMode,
     previewControlsActive,
@@ -223,6 +262,9 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     addResultWorkspaceEntry,
     lastLoggedCommandStatusRef,
   } = params;
+  const femDiscretization = domainCapabilities
+    ? isFemDiscretization(domainCapabilities)
+    : isFemBackend;
   const currentStage = useWorkspaceStore((state) => state.currentStage);
   const openWorkspaceTab = useWorkspaceStore((state) => state.openTab);
   const activateWorkspaceTab = useWorkspaceStore((state) => state.activateTab);
@@ -374,7 +416,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       return;
     }
     if (normalizedMode === "Mesh") {
-      if (isFemBackend) openFemMeshWorkspace("mesh");
+      if (femDiscretization) openFemMeshWorkspace("mesh");
       else {
         transitionToViewMode("3D");
       }
@@ -392,7 +434,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     activateWorkspaceTab,
     currentStage,
     effectiveViewMode,
-    isFemBackend,
+    femDiscretization,
     openFemMeshWorkspace,
     setComponent,
     transitionToViewMode,
@@ -517,28 +559,17 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     setStateIoBusy(true);
     setStateIoMessage(null);
     try {
-      const response = await liveApi.exportState({ format }) as {
-        file_name?: unknown;
-        content_base64?: unknown;
-        stored_path?: unknown;
-      };
-      const fileName =
-        typeof response.file_name === "string" && response.file_name.trim().length > 0
-          ? response.file_name
-          : `m_state.${format}`;
-      const contentBase64 =
-        typeof response.content_base64 === "string" ? response.content_base64 : "";
-      if (!contentBase64) {
-        throw new Error("Export response did not contain file content");
-      }
-      downloadBase64File(fileName, contentBase64);
-      setStateIoMessage(
-        typeof response.stored_path === "string" && response.stored_path.trim().length > 0
-          ? `Exported ${fileName} to ${response.stored_path}`
-          : `Exported ${fileName}`,
-      );
+      const profile = normalizeSessionExportProfile(format);
+      const uiState = useWorkspaceStore.getState().exportUiStateSnapshot();
+      const response = await liveApi.exportSession({
+        profile,
+        ui_state: uiState,
+      });
+      const fileName = sessionExportFileName(profile);
+      downloadBase64File(fileName, response.fms_base64);
+      setStateIoMessage(`Saved session as ${fileName} (${formatByteSize(response.size_bytes)})`);
     } catch (error) {
-      setStateIoMessage(error instanceof Error ? error.message : "Failed to export state");
+      setStateIoMessage(error instanceof Error ? error.message : "Failed to save session");
     } finally {
       setStateIoBusy(false);
     }
@@ -548,37 +579,34 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
   const handleStateImport = useCallback(async (
     file: File,
     options?: {
-      format?: string;
-      applyToWorkspace?: boolean;
-      attachToScriptBuilder?: boolean;
+      restoreMode?: string;
     },
   ) => {
     setStateIoBusy(true);
     setStateIoMessage(null);
     try {
       const contentBase64 = await fileToBase64(file);
-      const response = await liveApi.importState({
-        file_name: file.name,
-        content_base64: contentBase64,
-        format: options?.format ?? undefined,
-        apply_to_workspace: options?.applyToWorkspace ?? true,
-        attach_to_script_builder: options?.attachToScriptBuilder ?? true,
-      }) as { stored_path?: unknown; applied_to_workspace?: unknown };
-      const importedPath =
-        typeof response.stored_path === "string" && response.stored_path.trim().length > 0
-          ? response.stored_path
-          : file.name;
-      const applied =
-        typeof response.applied_to_workspace === "boolean"
-          ? response.applied_to_workspace
-          : (options?.applyToWorkspace ?? true);
+      const inspection = await liveApi.inspectSessionImport({
+        fms_base64: contentBase64,
+      });
+      const response = await liveApi.commitSessionImport({
+        fms_base64: contentBase64,
+        restore_mode: options?.restoreMode,
+      });
+      if (response.ui_state !== undefined) {
+        useWorkspaceStore.getState().importUiStateSnapshot(response.ui_state);
+      }
+      const warnings =
+        response.warnings.length > 0
+          ? response.warnings
+          : inspection.inspection.warnings;
+      const warningText =
+        warnings.length > 0 ? ` Warnings: ${warnings.join("; ")}` : "";
       setStateIoMessage(
-        applied
-          ? `Imported ${file.name} and applied it to the workspace`
-          : `Imported ${file.name} to ${importedPath}`,
+        `Opened session ${inspection.inspection.name} (${response.restore_class.replaceAll("_", " ")}).${warningText}`,
       );
     } catch (error) {
-      setStateIoMessage(error instanceof Error ? error.message : "Failed to import state");
+      setStateIoMessage(error instanceof Error ? error.message : "Failed to open session");
     } finally {
       setStateIoBusy(false);
     }
@@ -736,7 +764,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
   /* ── requestPreviewQuantity ── */
   const requestPreviewQuantity = useCallback((nextQuantity: string) => {
     startTransition(() => {
-      if (isFemBackend && effectiveViewMode === "Mesh") handleViewModeChange("3D");
+      if (femDiscretization && effectiveViewMode === "Mesh") handleViewModeChange("3D");
       setSelectedQuantity(nextQuantity);
     });
     // Data-plane fast path: if the field buffer is already cached locally,
@@ -749,7 +777,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     if (previewControlsActive) {
       void updatePreview("/quantity", { quantity: nextQuantity });
     }
-  }, [cachedFieldQuantities, effectiveViewMode, isFemBackend, previewControlsActive, updatePreview]);
+  }, [cachedFieldQuantities, effectiveViewMode, femDiscretization, previewControlsActive, updatePreview]);
 
   /* ── openResultWorkspaceEntry ── */
   const openResultWorkspaceEntry = useCallback(
@@ -835,14 +863,14 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       if (entry.quantityId) {
         requestPreviewQuantity(entry.quantityId);
       }
-      if (isFemBackend && effectiveViewMode === "Mesh") {
+      if (femDiscretization && effectiveViewMode === "Mesh") {
         handleViewModeChange("3D");
       }
     },
     [
       activateWorkspaceTab,
       effectiveViewMode,
-      isFemBackend,
+      femDiscretization,
       openAnalyze,
       openWorkspaceTab,
       requestPreviewQuantity,

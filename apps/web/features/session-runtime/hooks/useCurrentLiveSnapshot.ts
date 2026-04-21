@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * Transitional snapshot bridge for Control Room.
+ * Transitional snapshot bridge for compatibility-only callers.
  *
- * This hook replaces direct use of useCurrentLiveStream in the control-room
- * tree while keeping the same normalized SessionState payload available to
- * existing adapters.
+ * Active Control Room runtime disables this path when the resource-first
+ * bridge is enabled, but we keep it temporarily for compatibility wrappers
+ * that still expect a whole-state SessionState payload.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";

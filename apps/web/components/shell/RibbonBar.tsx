@@ -21,6 +21,8 @@ import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
 import type { GeometryPresetKind } from "@/lib/geometryPresetCatalog";
 import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
 import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
+import type { CapabilityMap } from "@/src/api/types";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 
 // ── Registry imports ──
 import {
@@ -49,7 +51,8 @@ type RibbonTab =
 
 interface RibbonBarProps {
   viewMode?: string;
-  isFemBackend?: boolean;
+  femDiscretization?: boolean;
+  domainCapabilities?: CapabilityMap | null;
   solverRunning?: boolean;
   sidebarVisible?: boolean;
   selectedNodeId?: string | null;
@@ -220,7 +223,11 @@ function buildContext(
   const can = (command: RibbonCommand) => canExecuteRibbonCommand(props, command);
 
   return {
-    isFemBackend: Boolean(props.isFemBackend),
+    isFemBackend: resolveFemDiscretization(
+      props.domainCapabilities,
+      Boolean(props.femDiscretization),
+    ),
+    domainCapabilities: props.domainCapabilities ?? null,
     canRun: Boolean(props.canRun),
     canRelax: Boolean(props.canRelax),
     canPause: Boolean(props.canPause),
@@ -446,7 +453,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     activeContextualTabId,
     props.workspaceMode,
     props.viewMode,
-    props.isFemBackend,
+    props.femDiscretization,
     props.solverRunning,
     props.sidebarVisible,
     props.selectedNodeId,

@@ -45,6 +45,8 @@ The canonical local control-room API must keep these families separate:
    Realized solver domain actually used by renderers and field transport.
 1. `quantities/*`, `fields/*`, `scalars`
    Already-computed numerical data.
+1. `runs/*`, `stages/*`, `solver/*`
+   Runtime read-models for run lifecycle, stage execution, solver state, and energy projections.
 1. `display`, `commands`
    Runtime display selection and explicit control actions.
 1. `artifacts/*`, `logs/*`, `session/*`, `gpu/*`, `eigen/*`
@@ -245,8 +247,25 @@ The canonical local control-room API tree is:
         │       ├── stats
         │       └── availability
         ├── scalars
+        ├── runs
+        │   ├── current
+        │   └── :run_id
+        ├── stages
+        │   ├── execution
+        │   ├── current
+        │   └── :stage_id
+        ├── solver
+        │   ├── status
+        │   ├── energies
+        │   │   ├── current
+        │   │   └── history
+        │   ├── metrics
+        │   ├── diagnostics
+        │   └── checkpoints
         ├── display
         ├── commands
+        │   ├── status
+        │   └── :command_id
         ├── artifacts
         │   ├── index
         │   └── :artifact_id
@@ -308,10 +327,12 @@ PATCH /v1/live/current/authoring/scene
 POST  /v1/live/current/authoring/transactions
 GET   /v1/live/current/authoring/model/tree
 GET   /v1/live/current/authoring/model/nodes/:node_id
+GET   /v1/live/current/authoring/model/materials/:material_id
 PATCH /v1/live/current/authoring/model/objects/:object_id/geometry
 PATCH /v1/live/current/authoring/model/materials/:material_id
 PATCH /v1/live/current/authoring/model/magnetization-assets/:asset_id
 PATCH /v1/live/current/authoring/physics/objects/:object_id/interactions/:interaction_kind
+GET   /v1/live/current/authoring/study/runtime
 PATCH /v1/live/current/authoring/study/runtime
 PATCH /v1/live/current/authoring/study/pipeline
 POST  /v1/live/current/authoring/script/sync
@@ -385,6 +406,8 @@ GET   /v1/live/current/display
 PUT   /v1/live/current/display
 PATCH /v1/live/current/display
 POST  /v1/live/current/commands
+GET   /v1/live/current/commands/status
+GET   /v1/live/current/commands/:command_id
 ```
 
 Rules:
@@ -394,7 +417,30 @@ Rules:
 - `PUT /display` replaces the full display resource,
 - `PATCH /display` mutates only the provided fields,
 - `commands` controls solve, relax, stop, remesh, export, and other explicit runtime actions,
+- `commands/status` and `commands/:command_id` are runtime read-models over the command ledger and
+  long-term grow into authoritative completion/rejection resources,
 - neither route family is allowed to smuggle model-builder mutations.
+
+### 5.6 Runs, stages, solver
+
+Representative routes:
+
+```text
+GET /v1/live/current/runs/current
+GET /v1/live/current/stages/execution
+GET /v1/live/current/solver/status
+GET /v1/live/current/solver/energies/current
+GET /v1/live/current/solver/energies/history
+```
+
+Rules:
+
+- these are runtime read-model resources, not mutation endpoints,
+- they close the gap between thin `status` and the old monolithic `/state` snapshot,
+- solver energies are explicit projections over scalar history or the latest step, not a second
+  source of physics truth,
+- run/stage/solver resources must remain cacheable JSON summaries and must not turn back into a
+  bootstrap blob.
 
 ## 6. UI action to endpoint mapping
 
@@ -446,22 +492,27 @@ cache-invalidating identity.
 
 ## 8. Legacy routes that must not survive the refactor
 
-These are explicitly non-canonical and must be removed or kept only behind a deliberate migration
-flag during a short cutover:
+These are explicitly non-canonical and must be removed from the public browser contract or kept
+only behind a deliberate short-lived compatibility layer:
 
 ```text
 GET  /v1/live/current/bootstrap
 GET  /v1/live/current/poll
 GET  /v1/live/current/state
 POST /v1/live/current/preview/*
-GET  /v1/live/current/commands/next
-GET  /v1/live/current/control/wait
-GET  /v1/live/current/artifacts/file
 GET  /v1/quantities/catalog
 POST /v1/live/current/state/export
 POST /v1/live/current/state/import
 POST /v1/live/current/scene                    (legacy flat placement)
 POST /v1/live/current/script/sync              (legacy flat placement)
+```
+
+As of `2026-04-21`, runner bridge traffic is no longer part of the public browser contract.
+The remaining internal-only bridge paths are:
+
+```text
+POST /v1/internal/live/current/publish
+GET  /v1/internal/live/current/control/wait
 ```
 
 ## 9. Current implementation note

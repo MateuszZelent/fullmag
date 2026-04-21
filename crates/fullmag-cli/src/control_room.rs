@@ -30,9 +30,17 @@ pub(crate) fn api_base_url() -> String {
     format!("http://localhost:{}", api_port())
 }
 
+pub(crate) fn internal_live_api_url(path: &str) -> String {
+    format!(
+        "{}/v1/internal/live/current/{}",
+        api_base_url(),
+        path.trim_start_matches('/')
+    )
+}
+
 pub(crate) fn resolve_api_port() -> Result<u16> {
     const CANDIDATE_API_PORTS: &[u16] =
-        &[8080, 8081, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089];
+        &[8081, 8080, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089];
     for &port in CANDIDATE_API_PORTS {
         if port_is_bindable(port) {
             return Ok(port);
@@ -540,7 +548,7 @@ pub(crate) fn publish_current_live_state(
     payload: &CurrentLivePublishPayload,
 ) -> Result<()> {
     current_live_api_client()
-        .post(format!("{}/v1/live/current/publish", api_base_url()))
+        .post(internal_live_api_url("publish"))
         .json(&CurrentLivePublishRequest {
             session_id,
             session: payload.session.as_ref(),

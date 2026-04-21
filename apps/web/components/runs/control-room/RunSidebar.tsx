@@ -30,6 +30,7 @@ import { parseResultNodeContext } from "@/features/analyze/model/resultNodeConte
 import { resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 import type { EigenModeSummary } from "@/components/analyze/eigenTypes";
 import type { StudyPipelineDocumentState } from "@/lib/session/types";
 
@@ -152,8 +153,11 @@ export default function RunSidebar() {
   const [treeOpen, setTreeOpen] = useState(true);
   const [treeQuery, setTreeQuery] = useState("");
   const [treeFilterScope, setTreeFilterScope] = useState<TreeFilterScope>("all");
+  const femDiscretization = cmd.domainCapabilities
+    ? isFemDiscretization(cmd.domainCapabilities)
+    : cmd.isFemBackend;
   const universeRole = useMemo(() => {
-    if (!cmd.isFemBackend) {
+    if (!femDiscretization) {
       return "Grid / simulation domain";
     }
     switch (model.worldExtentSource) {
@@ -168,7 +172,7 @@ export default function RunSidebar() {
       default:
         return "Workspace framing";
     }
-  }, [cmd.isFemBackend, model.worldExtentSource]);
+  }, [femDiscretization, model.worldExtentSource]);
   const runtimeDeclaredUniverse = model.domainFrame?.declared_universe ?? null;
   const artifactPaths = useMemo(
     () => (cmd.artifacts ?? []).map((artifact) => artifact.path),
@@ -414,7 +418,7 @@ export default function RunSidebar() {
         graph: model.modelBuilderGraph,
         sceneDocument: model.sceneDocument,
         studyLabel: launchIntent?.displayName ?? model.modelBuilderGraph?.study.label ?? "Simulation",
-        backend: cmd.isFemBackend ? "FEM" : "FDM",
+        backend: femDiscretization ? "FEM" : "FDM",
         universeMode: runtimeDeclaredUniverse?.mode ?? null,
         universeDeclaredSize: runtimeDeclaredUniverse?.size ?? null,
         universeEffectiveSize: model.worldExtent,
@@ -473,7 +477,7 @@ export default function RunSidebar() {
         pipelineStageIndexesByNodeId,
       }),
     [
-      model.modelBuilderGraph, model.sceneDocument, model.effectiveFemMesh, tp.hasSolverTelemetry, cmd.isFemBackend, model.material,
+      model.modelBuilderGraph, model.sceneDocument, model.effectiveFemMesh, tp.hasSolverTelemetry, femDiscretization, model.material,
       model.scriptBuilderDemagRealization, cmd.capabilities, cmd.metadata,
       model.mesherSourceKind, model.meshFeOrder, model.meshName,
       model.solverPlan?.integrator, model.solverPlan?.relaxation?.algorithm,
@@ -488,7 +492,7 @@ export default function RunSidebar() {
 
   /* ── Determine active node (from explicit selection or viewport context) ── */
   const fallbackNodeId = useMemo(() => {
-    const isMeshView = cmd.isFemBackend && vp.effectiveViewMode === "Mesh";
+    const isMeshView = femDiscretization && vp.effectiveViewMode === "Mesh";
     const sharedAirboxDomain =
       model.effectiveFemMesh?.domain_mesh_mode === "shared_domain_mesh_with_air";
     if (isMeshView) {
@@ -517,7 +521,7 @@ export default function RunSidebar() {
     if (firstObjectId) return `obj-${firstObjectId}`;
     return "objects";
   }, [activeStageLayout.leftDock, vp.effectiveViewMode, model.effectiveFemMesh?.domain_mesh_mode, model.femDockTab, cmd.interactiveControlsEnabled,
-      cmd.isFemBackend, model.modelBuilderGraph, model.sceneDocument, vp.previewControlsActive]);
+      femDiscretization, model.modelBuilderGraph, model.sceneDocument, vp.previewControlsActive]);
 
   const activeNodeId = (graphEnabled ? graphSelection.activeNodeId : null) ?? model.selectedSidebarNodeId ?? fallbackNodeId;
   const filteredModelTreeNodes = useMemo(
@@ -684,7 +688,7 @@ export default function RunSidebar() {
       if (defaultFieldQuantity) {
         vp.requestPreviewQuantity(defaultFieldQuantity);
       }
-      if (cmd.isFemBackend && vp.effectiveViewMode === "Mesh") {
+      if (femDiscretization && vp.effectiveViewMode === "Mesh") {
         vp.handleViewModeChange("3D");
       }
       return;
@@ -721,7 +725,7 @@ export default function RunSidebar() {
     switch (id) {
       case "geometry":
       case "objects":
-        if (cmd.isFemBackend && !model.effectiveFemMesh) model.openFemMeshWorkspace("mesh");
+        if (femDiscretization && !model.effectiveFemMesh) model.openFemMeshWorkspace("mesh");
         else vp.handleViewModeChange("3D");
         return;
       case "mesh":
@@ -737,7 +741,7 @@ export default function RunSidebar() {
       case "universe-mesh-algorithm":
       case "universe-mesh-quality":
       case "universe-mesh-pipeline": {
-        if (!cmd.isFemBackend) return;
+        if (!femDiscretization) return;
         const preset = meshWorkspaceNodeToPreset(id);
         if (preset) {
           model.applyMeshWorkspacePreset(preset);
@@ -750,7 +754,7 @@ export default function RunSidebar() {
         return;
       }
       case "results": case "res-fields":
-        if (cmd.isFemBackend && vp.effectiveViewMode === "Mesh") vp.handleViewModeChange("3D");
+        if (femDiscretization && vp.effectiveViewMode === "Mesh") vp.handleViewModeChange("3D");
         return;
       case "antennas":
         // Show the inspector with AntennaPanel
@@ -774,7 +778,7 @@ export default function RunSidebar() {
         // Per-object mesh nodes (e.g. "geo-nanoflower-mesh") → open mesh workspace
         const isObjectMeshNode = id.startsWith("geo-") && id.endsWith("-mesh");
         if (isObjectMeshNode) {
-          if (cmd.isFemBackend) {
+          if (femDiscretization) {
             model.openFemMeshWorkspace("mesh");
           } else {
             vp.handleViewModeChange("Mesh");
@@ -782,7 +786,7 @@ export default function RunSidebar() {
           return;
         }
         if (isUniverseNode || isGeometryScopedNode) {
-          if (cmd.isFemBackend && !model.effectiveFemMesh) model.openFemMeshWorkspace("mesh");
+          if (femDiscretization && !model.effectiveFemMesh) model.openFemMeshWorkspace("mesh");
           else vp.handleViewModeChange("3D");
           return;
         }
@@ -801,7 +805,7 @@ export default function RunSidebar() {
         }
       }
     }
-  }, [cmd.isFemBackend, model, vp, selectModelNode]);
+  }, [femDiscretization, model, vp, selectModelNode]);
 
   const handleTreeContextAction = useCallback((nodeId: string, action: string) => {
     if (nodeId.startsWith("res-analysis-")) {
@@ -935,7 +939,7 @@ export default function RunSidebar() {
         return;
       }
       selectModelNode(nodeId);
-      if (cmd.isFemBackend && !model.effectiveFemMesh) {
+      if (femDiscretization && !model.effectiveFemMesh) {
         model.requestFocusObject(objectId);
         model.openFemMeshWorkspace("mesh");
         return;
@@ -944,7 +948,7 @@ export default function RunSidebar() {
       model.requestFocusObject(objectId);
       return;
     }
-  }, [cmd.isFemBackend, model, selectModelNode, vp]);
+  }, [femDiscretization, model, selectModelNode, vp]);
 
   const handleTreeToggle = useCallback(() => {
     setTreeOpen((prev) => !prev);
@@ -971,7 +975,7 @@ export default function RunSidebar() {
             Explorer
           </span>
           <span className="ml-auto rounded-sm bg-primary/80 px-1.5 py-0.5 text-[0.58rem] font-mono font-bold tracking-tight text-primary-foreground shadow-sm">
-            {cmd.isFemBackend ? "FEM" : "FDM"}
+            {femDiscretization ? "FEM" : "FDM"}
           </span>
         </button>
         {treeOpen ? (

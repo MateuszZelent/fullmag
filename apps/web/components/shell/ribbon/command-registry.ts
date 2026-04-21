@@ -3,6 +3,8 @@ import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
 import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
 import type { GeometryPresetKind } from "@/lib/geometryPresetCatalog";
 import type { PrimitiveKind } from "@/features/geometry-builder/model/types";
+import type { CapabilityMap } from "@/src/api/types";
+import { isFemDiscretization } from "@/src/domain/capabilities";
 
 export type ResultAnalysisKind =
   | "spectrum"
@@ -18,6 +20,7 @@ export type ResultAnalysisKind =
 export interface RibbonCommandContext {
   viewMode?: string;
   isFemBackend?: boolean;
+  domainCapabilities?: CapabilityMap | null;
   meshGenerating?: boolean;
   canRun?: boolean;
   canRelax?: boolean;
@@ -106,6 +109,13 @@ export interface RibbonCommandContext {
 }
 
 type CanonicalViewportMode = "3D" | "2D" | "Mesh" | "Analyze" | "charts";
+
+function supportsFemMeshActions(ctx: RibbonCommandContext): boolean {
+  if (ctx.domainCapabilities) {
+    return isFemDiscretization(ctx.domainCapabilities);
+  }
+  return Boolean(ctx.isFemBackend);
+}
 
 function normalizeViewportMode(mode: string | undefined | null): CanonicalViewportMode | null {
   if (typeof mode !== "string") {
@@ -246,19 +256,19 @@ export function canExecuteRibbonCommand(
     case "antenna.add":
       return typeof ctx.onAddAntenna === "function";
     case "mesh.build-selected":
-      return Boolean(ctx.isFemBackend) && !ctx.meshGenerating && typeof ctx.onBuildMeshSelected === "function";
+      return supportsFemMeshActions(ctx) && !ctx.meshGenerating && typeof ctx.onBuildMeshSelected === "function";
     case "mesh.build-all":
-      return Boolean(ctx.isFemBackend) && !ctx.meshGenerating && typeof ctx.onBuildMeshAll === "function";
+      return supportsFemMeshActions(ctx) && !ctx.meshGenerating && typeof ctx.onBuildMeshAll === "function";
     case "mesh.open-inspector":
-      return Boolean(ctx.isFemBackend) && typeof ctx.onOpenMeshInspector === "function";
+      return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshInspector === "function";
     case "mesh.open-quality":
-      return Boolean(ctx.isFemBackend) && typeof ctx.onOpenMeshQuality === "function";
+      return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshQuality === "function";
     case "mesh.open-size-settings":
-      return Boolean(ctx.isFemBackend) && typeof ctx.onOpenMeshSizeSettings === "function";
+      return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshSizeSettings === "function";
     case "mesh.open-method-settings":
-      return Boolean(ctx.isFemBackend) && typeof ctx.onOpenMeshMethodSettings === "function";
+      return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshMethodSettings === "function";
     case "mesh.open-pipeline":
-      return Boolean(ctx.isFemBackend) && typeof ctx.onOpenMeshPipeline === "function";
+      return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshPipeline === "function";
     case "study.add-primitive":
       return typeof ctx.onStudyAddPrimitive === "function";
     case "study.add-macro":

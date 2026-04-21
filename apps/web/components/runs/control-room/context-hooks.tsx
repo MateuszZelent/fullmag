@@ -15,6 +15,7 @@
  * ═══════════════════════════════════════════════════════════════════ */
 
 import { createContext, useContext } from "react";
+import type { CapabilityMap } from "@/src/api/types";
 import type { GpuTelemetryDevice } from "../../../lib/liveApiClient";
 import type {
   ArtifactEntry,
@@ -215,6 +216,7 @@ export interface CommandContextValue {
   session: SessionManifest | null;
   run: RunManifest | null;
   capabilities: BackendCapabilities | null;
+  domainCapabilities: CapabilityMap | null;
   metadata: Record<string, unknown> | null;
   engineLog: EngineLogEntry[];
   quantities: QuantityDescriptor[];
@@ -265,9 +267,7 @@ export interface CommandContextValue {
   handleStateImport: (
     file: File,
     options?: {
-      format?: string;
-      applyToWorkspace?: boolean;
-      attachToScriptBuilder?: boolean;
+      restoreMode?: string;
     },
   ) => Promise<void>;
   syncScriptBuilder: () => Promise<void>;

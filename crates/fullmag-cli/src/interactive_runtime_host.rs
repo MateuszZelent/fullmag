@@ -4,6 +4,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use fullmag_ir::{BackendPlanIR, FemDomainMeshModeIR};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::control_room::*;
@@ -15,6 +16,31 @@ use super::*;
 struct CurrentLiveControlState {
     display_selection: CurrentDisplaySelection,
     queue: VecDeque<SessionCommand>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiStatusDisplaySelection {
+    active_quantity_id: String,
+    view_mode: String,
+    field_component: String,
+    auto_contrast: bool,
+    slice_mode: String,
+    slice_layer: i32,
+    vector_density: u32,
+    max_points: u32,
+    x_chosen_size: u32,
+    y_chosen_size: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiStatusResources {
+    display_revision: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiStatusSnapshot {
+    display: ApiStatusDisplaySelection,
+    resources: ApiStatusResources,
 }
 
 #[derive(Clone)]
@@ -814,7 +840,7 @@ fn wait_for_current_live_control(
     timeout_ms: u64,
 ) -> Result<Option<SessionCommand>> {
     let response = match current_live_api_client()
-        .get(format!("{}/v1/live/current/control/wait", api_base_url()))
+        .get(internal_live_api_url("control/wait"))
         .query(&[
             ("afterSeq", after_seq.to_string()),
             ("timeoutMs", timeout_ms.to_string()),
@@ -840,17 +866,33 @@ fn wait_for_current_live_control(
 }
 
 fn current_live_display_selection() -> Result<CurrentDisplaySelection> {
-    current_live_api_client()
-        .get(format!(
-            "{}/v1/live/current/preview/selection",
-            api_base_url()
-        ))
+    let status = current_live_api_client()
+        .get(format!("{}/v1/live/current/status", api_base_url()))
         .send()
-        .context("failed to fetch current live display selection")?
+        .context("failed to fetch current live status for display selection")?
         .error_for_status()
-        .context("current live display selection endpoint returned error")?
-        .json::<CurrentDisplaySelection>()
-        .context("failed to decode current live display selection")
+        .context("current live status endpoint returned error")?
+        .json::<ApiStatusSnapshot>()
+        .context("failed to decode current live status")?;
+
+    Ok(CurrentDisplaySelection::from_preview_request(
+        &fullmag_runner::LivePreviewRequest {
+            revision: status.resources.display_revision,
+            quantity: status.display.active_quantity_id,
+            component: if status.display.view_mode.eq_ignore_ascii_case("3d") {
+                "3D".to_string()
+            } else {
+                status.display.field_component
+            },
+            layer: status.display.slice_layer.max(0) as u32,
+            all_layers: status.display.slice_mode == "all",
+            every_n: status.display.vector_density,
+            x_chosen_size: status.display.x_chosen_size,
+            y_chosen_size: status.display.y_chosen_size,
+            auto_scale_enabled: status.display.auto_contrast,
+            max_points: status.display.max_points,
+        },
+    ))
 }
 
 fn upsert_runtime_engine_metadata(metadata: &mut Option<Value>, runtime_engine: Value) {

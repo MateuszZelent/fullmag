@@ -1,3 +1,4 @@
+pub mod authoring;
 pub mod artifacts;
 pub mod assets;
 pub mod commands;
@@ -7,7 +8,9 @@ pub mod eigen;
 pub mod fields;
 pub mod gpu;
 pub mod quantities;
+pub mod runtime;
 pub mod scalars;
+pub mod scene;
 pub mod session;
 pub mod status;
 pub mod system;

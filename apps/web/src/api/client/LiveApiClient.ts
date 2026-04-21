@@ -21,9 +21,13 @@ import { ArtifactsModule } from "./modules/ArtifactsModule";
 import { EigenModule } from "./modules/EigenModule";
 import { SessionModule } from "./modules/SessionModule";
 import { GpuModule } from "./modules/GpuModule";
+import { LogsModule } from "./modules/LogsModule";
 import { SystemModule } from "./modules/SystemModule";
 import { QuantitiesModule } from "./modules/QuantitiesModule";
 import { SceneModule } from "./modules/SceneModule";
+import { RunsModule } from "./modules/RunsModule";
+import { StagesModule } from "./modules/StagesModule";
+import { SolverModule } from "./modules/SolverModule";
 
 // ── Config ────────────────────────────────────────────────────────────
 
@@ -54,9 +58,13 @@ export class LiveApiClient {
   readonly eigen: EigenModule;
   readonly session: SessionModule;
   readonly gpu: GpuModule;
+  readonly logs: LogsModule;
   readonly system: SystemModule;
   readonly quantities: QuantitiesModule;
   readonly scene: SceneModule;
+  readonly runs: RunsModule;
+  readonly stages: StagesModule;
+  readonly solver: SolverModule;
 
   private cache: ResourceCache;
   private config: LiveApiClientConfig;
@@ -75,9 +83,13 @@ export class LiveApiClient {
     this.eigen = new EigenModule(this);
     this.session = new SessionModule(this);
     this.gpu = new GpuModule(this);
+    this.logs = new LogsModule(this);
     this.system = new SystemModule(this);
     this.quantities = new QuantitiesModule(this);
     this.scene = new SceneModule(this);
+    this.runs = new RunsModule(this);
+    this.stages = new StagesModule(this);
+    this.solver = new SolverModule(this);
   }
 
   // ── Public HTTP helpers (used by modules) ───────────────────────────

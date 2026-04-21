@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::Json;
-use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::schemas::common::HealthResponse;
+use crate::schemas::logs::EngineLogResource;
 use crate::types::{AppState, GpuTelemetryResponse};
 
 #[utoipa::path(
@@ -52,21 +52,24 @@ pub async fn get_capabilities(
     get,
     path = "/v1/live/current/logs/engine",
     responses(
-        (status = 200, description = "Engine log entries"),
+        (status = 200, description = "Engine log entries", body = EngineLogResource),
         (status = 404, description = "No active workspace"),
     ),
     tag = "system"
 )]
-pub async fn get_engine_log(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+pub async fn get_engine_log(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<EngineLogResource>, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
-    Ok(Json(serde_json::json!({
-        "entries": snapshot.engine_log,
-        "total": snapshot.engine_log.len(),
-    })))
+    Ok(Json(EngineLogResource {
+        revision: snapshot.engine_log.len() as u64,
+        total: snapshot.engine_log.len(),
+        entries: snapshot.engine_log.clone(),
+    }))
 }
 
 #[utoipa::path(

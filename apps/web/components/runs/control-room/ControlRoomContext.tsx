@@ -13,7 +13,11 @@ import type { GpuTelemetryResponse } from "../../../src/api/types";
 import { createControlRoomApi } from "./controlRoomApi";
 import { decodeFieldVector } from "../../../src/api/codecs/fieldVectorCodec";
 import { decodeTopology } from "../../../src/api/codecs/topologyCodec";
+import { useSceneDocument } from "../../../src/hooks/resources/useSceneDocument";
+import { useStageExecution } from "../../../src/hooks/resources/useStageExecution";
+import { getLiveApiClient } from "../../../src/api/client/LiveApiClient";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
+import { useSessionRuntimeStore } from "../../../features/session-runtime/store/useSessionRuntimeStore";
 import { useCurrentLiveSnapshot } from "../../../features/session-runtime/hooks/useCurrentLiveSnapshot";
 import { useWorkspaceStore } from "../../../lib/workspace/workspace-store";
 import { useBuilderAutoSync } from "./hooks/useBuilderAutoSync";
@@ -74,8 +78,13 @@ import {
 } from "../../../lib/session/modelBuilderGraph";
 import {
   buildSceneDocumentFromScriptBuilder,
+  buildScriptBuilderFromSceneDocument,
 } from "../../../lib/session/sceneDocument";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import {
+  isFemDiscretization,
+  synthesizeCapabilitiesFromDiscretization,
+} from "@/src/domain/capabilities";
 import { DEFAULT_SOLVER_SETTINGS } from "../../panels/SolverSettingsPanel";
 import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
 import { DEFAULT_MESH_OPTIONS } from "@/lib/mesh/options";
@@ -229,8 +238,47 @@ function femMeshTransportKey(mesh: FemLiveMesh | null): string | null {
 
 /* ── Provider ── */
 export function ControlRoomProvider({ children }: { children: ReactNode }) {
-  const { state, connection, error, refresh: refreshLiveState } = useCurrentLiveSnapshot();
+  const resourceFirstRuntimeEnabled =
+    FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.resourceFirstSessionRuntime;
+  const {
+    state,
+    connection: legacyConnection,
+    error: legacyError,
+    refresh: refreshLegacyLiveState,
+  } = useCurrentLiveSnapshot({
+    enabled: !resourceFirstRuntimeEnabled,
+  });
   const liveApi = useMemo(() => createControlRoomApi(), []);
+  const runtimeConnection = useSessionRuntimeStore((s) => s.connection);
+  const runtimeConnectionError = useSessionRuntimeStore((s) => s.error);
+  const runtimeDomainCapabilities = useSessionRuntimeStore((s) => s.domainCapabilities);
+  const runtimeSession = useSessionRuntimeStore((s) => s.session);
+  const runtimeRun = useSessionRuntimeStore((s) => s.run);
+  const runtimeMetadata = useSessionRuntimeStore((s) => s.metadata);
+  const runtimeLiveState = useSessionRuntimeStore((s) => s.liveState);
+  const runtimePreview = useSessionRuntimeStore((s) => s.preview);
+  const runtimeFemMesh = useSessionRuntimeStore((s) => s.femMesh);
+  const runtimeScriptBuilder = useSessionRuntimeStore((s) => s.scriptBuilder);
+  const runtimeRuntimeStatus = useSessionRuntimeStore((s) => s.runtimeStatus);
+  const runtimeCommandStatus = useSessionRuntimeStore((s) => s.commandStatus);
+  const runtimeEngineLog = useSessionRuntimeStore((s) => s.engineLog);
+  const runtimeScalarRows = useSessionRuntimeStore((s) => s.scalarRows);
+  const runtimeQuantities = useSessionRuntimeStore((s) => s.quantities);
+  const runtimeArtifacts = useSessionRuntimeStore((s) => s.artifacts);
+  const runtimeMeshWorkspace = useSessionRuntimeStore((s) => s.meshWorkspace);
+  const runtimeDisplaySelection = useSessionRuntimeStore((s) => s.displaySelection);
+  const runtimePreviewConfig = useSessionRuntimeStore((s) => s.previewConfig);
+  const runtimeLatestFieldFrames = useSessionRuntimeStore((s) => s.latestFieldFrames);
+  const runtimeLatestFieldGrid = useSessionRuntimeStore((s) => s.latestFieldGrid);
+  const connection = resourceFirstRuntimeEnabled ? runtimeConnection : legacyConnection;
+  const error = resourceFirstRuntimeEnabled ? runtimeConnectionError : legacyError;
+  const refreshLiveState = useCallback(async () => {
+    if (resourceFirstRuntimeEnabled) {
+      await getLiveApiClient().status.get();
+      return;
+    }
+    await refreshLegacyLiveState();
+  }, [refreshLegacyLiveState, resourceFirstRuntimeEnabled]);
 
   // Runtime bridge adapter: sync Control Room transport into session-runtime store.
   useSessionRuntimeBridgeRouter({ state, connection, error });
@@ -371,8 +419,24 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   }, [activeWorkspaceTab, viewMode]);
 
   /* ── Derived from SSE state ── */
-  const session = state?.session ?? null;
-  const metadata = (state?.metadata as Record<string, unknown> | null) ?? null;
+  const session = resourceFirstRuntimeEnabled
+    ? (runtimeSession ?? state?.session ?? null)
+    : (state?.session ?? null);
+  const sceneResourceSessionKey =
+    runtimeSession?.session_id ??
+    session?.session_id ??
+    null;
+  const { document: resourceSceneDocument } = useSceneDocument({
+    enabled: resourceFirstRuntimeEnabled,
+    sessionKey: sceneResourceSessionKey,
+  });
+  const { stageExecution: resourceStageExecution } = useStageExecution({
+    enabled: resourceFirstRuntimeEnabled,
+    sessionKey: sceneResourceSessionKey,
+  });
+  const metadata = resourceFirstRuntimeEnabled
+    ? runtimeMetadata
+    : ((state?.metadata as Record<string, unknown> | null) ?? null);
   const problemMeta =
     metadata?.problem_meta && typeof metadata.problem_meta === "object"
       ? (metadata.problem_meta as Record<string, unknown>)
@@ -448,14 +512,26 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     },
     [resultWorkspaceEntries],
   );
-  const run = state?.run ?? null;
-  const liveState = state?.live_state ?? null;
-  const displaySelection = state?.display_selection ?? null;
-  const previewConfig = state?.preview_config ?? null;
-  const preview = state?.preview ?? null;
+  const run = resourceFirstRuntimeEnabled
+    ? (runtimeRun ?? state?.run ?? null)
+    : (state?.run ?? null);
+  const liveState = resourceFirstRuntimeEnabled
+    ? (runtimeLiveState ?? state?.live_state ?? null)
+    : (state?.live_state ?? null);
+  const displaySelection = resourceFirstRuntimeEnabled
+    ? runtimeDisplaySelection
+    : (state?.display_selection ?? null);
+  const previewConfig = resourceFirstRuntimeEnabled
+    ? runtimePreviewConfig
+    : (state?.preview_config ?? null);
+  const preview = resourceFirstRuntimeEnabled
+    ? (runtimePreview ?? state?.preview ?? null)
+    : (state?.preview ?? null);
   const spatialPreview = preview?.kind === "spatial" ? preview : null;
   const globalScalarPreview = preview?.kind === "global_scalar" ? preview : null;
-  const streamFemMesh = state?.fem_mesh ?? liveState?.fem_mesh ?? null;
+  const streamFemMesh = resourceFirstRuntimeEnabled
+    ? (runtimeFemMesh ?? state?.fem_mesh ?? liveState?.fem_mesh ?? null)
+    : (state?.fem_mesh ?? liveState?.fem_mesh ?? null);
   const binaryFemTopologyTransportEnabled =
     FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFemTopologyTransport;
   const femMeshTopologyCacheRef = useRef<Map<string, FemLiveMesh>>(new Map());
@@ -547,14 +623,20 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     hydratedFemMesh && streamFemMeshKey && femMeshTransportKey(hydratedFemMesh) === streamFemMeshKey
       ? hydratedFemMesh
       : streamFemMesh;
-  const remoteSceneDocument = state?.scene_document ?? null;
+  const remoteSceneDocument = resourceSceneDocument ?? (!resourceFirstRuntimeEnabled
+    ? (state?.scene_document ?? null)
+    : null);
   const meshConfigSignature = useMemo(
     () => buildMeshConfigurationSignature(sceneDocumentDraft ?? remoteSceneDocument),
     [remoteSceneDocument, sceneDocumentDraft],
   );
   meshConfigSignatureRef.current = meshConfigSignature;
-  const scriptBuilder = state?.script_builder ?? null;
-  const remoteModelBuilderGraph = state?.model_builder_graph ?? null;
+  const scriptBuilder = resourceFirstRuntimeEnabled
+    ? runtimeScriptBuilder
+    : (state?.script_builder ?? null);
+  const remoteModelBuilderGraph = resourceFirstRuntimeEnabled
+    ? null
+    : (state?.model_builder_graph ?? null);
   const scriptInitialState = scriptBuilder?.initial_state ?? null;
   const studyStages = useMemo(
     () => selectModelBuilderStages(modelBuilderGraph),
@@ -584,13 +666,21 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     () => selectModelBuilderExcitationAnalysis(modelBuilderGraph),
     [modelBuilderGraph],
   );
-  const runtimeStatus = state?.runtime_status ?? null;
-  const commandStatus = state?.command_status ?? null;
-  const stageExecution = state?.stage_execution ?? null;
-  const capabilities = state?.capabilities ?? null;
+  const runtimeStatus = resourceFirstRuntimeEnabled
+    ? runtimeRuntimeStatus
+    : (state?.runtime_status ?? null);
+  const commandStatus = resourceFirstRuntimeEnabled
+    ? runtimeCommandStatus
+    : (state?.command_status ?? null);
+  const stageExecution = resourceFirstRuntimeEnabled
+    ? resourceStageExecution
+    : (state?.stage_execution ?? null);
+  const capabilities = resourceFirstRuntimeEnabled ? null : (state?.capabilities ?? null);
   // Reference-stable scalarRows: only changes ref when the history tip changes.
   // This prevents cascading useMemo invalidation on unrelated runtime ticks.
-  const rawScalarRows = state?.scalar_rows ?? EMPTY_SCALAR_ROWS;
+  const rawScalarRows = resourceFirstRuntimeEnabled
+    ? (runtimeScalarRows.length > 0 ? runtimeScalarRows : (state?.scalar_rows ?? EMPTY_SCALAR_ROWS))
+    : (state?.scalar_rows ?? EMPTY_SCALAR_ROWS);
   const stableScalarRowsRef = useRef(rawScalarRows);
   const scalarRowsFingerprintRef = useRef("");
   const scalarRowsFp = scalarRowsTipFingerprint(rawScalarRows);
@@ -600,13 +690,21 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   }
   const scalarRows = stableScalarRowsRef.current;
   const scalarRowsTotal =
-    typeof state?.scalar_rows_total === "number"
+    !resourceFirstRuntimeEnabled && typeof state?.scalar_rows_total === "number"
       ? state.scalar_rows_total
       : scalarRows.length;
-  const engineLog = state?.engine_log ?? EMPTY_ENGINE_LOG;
-  const quantities = state?.quantities ?? EMPTY_QUANTITIES;
-  const artifactsArr = state?.artifacts ?? EMPTY_ARTIFACTS;
-  const meshWorkspace = (state?.mesh_workspace as MeshWorkspaceState | null) ?? null;
+  const engineLog = resourceFirstRuntimeEnabled
+    ? (runtimeEngineLog.length > 0 ? runtimeEngineLog : (state?.engine_log ?? EMPTY_ENGINE_LOG))
+    : (state?.engine_log ?? EMPTY_ENGINE_LOG);
+  const quantities = resourceFirstRuntimeEnabled
+    ? (runtimeQuantities.length > 0 ? runtimeQuantities : (state?.quantities ?? EMPTY_QUANTITIES))
+    : (state?.quantities ?? EMPTY_QUANTITIES);
+  const artifactsArr = resourceFirstRuntimeEnabled
+    ? (runtimeArtifacts.length > 0 ? runtimeArtifacts : (state?.artifacts ?? EMPTY_ARTIFACTS))
+    : (state?.artifacts ?? EMPTY_ARTIFACTS);
+  const meshWorkspace = resourceFirstRuntimeEnabled
+    ? (runtimeMeshWorkspace ?? ((state?.mesh_workspace as MeshWorkspaceState | null) ?? null))
+    : ((state?.mesh_workspace as MeshWorkspaceState | null) ?? null);
   // Derive quality data from the session-carried summary (P1-1 fix).
   const meshQualityData = useMemo<MeshQualityData | null>(() => {
     const s = meshWorkspace?.mesh_quality_summary;
@@ -757,16 +855,19 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     scriptBackendHint;
   const isFemBackend =
     resolvedBackend === "fem" || femMesh != null || spatialPreview?.spatial_kind === "mesh";
+  const domainCapabilities =
+    runtimeDomainCapabilities ?? synthesizeCapabilitiesFromDiscretization(isFemBackend);
+  const effectiveIsFemBackend = isFemDiscretization(domainCapabilities);
 
   const solverNotStartedMessage =
     workspaceStatus === "materializing_script"
-      ? (isFemBackend
+      ? (effectiveIsFemBackend
           ? "Solver has not started yet. FEM materialization and tetrahedral meshing are still in progress."
           : "Solver has not started yet. Workspace materialization is still in progress.")
       : workspaceStatus === "bootstrapping"
         ? "Solver has not started yet. Workspace bootstrap is still in progress."
         : workspaceStatus === "waiting_for_compute"
-          ? (isFemBackend
+          ? (effectiveIsFemBackend
               ? "Waiting for compute — adjust mesh in the control room, then click COMPUTE."
               : "Waiting for compute — inspect the workspace in the control room, then click COMPUTE.")
           : "Solver telemetry is not available yet.";
@@ -1028,7 +1129,12 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const incomingGraph =
-      remoteModelBuilderGraph ?? (scriptBuilder ? buildModelBuilderGraphV2(scriptBuilder) : null);
+      remoteModelBuilderGraph ??
+      (scriptBuilder
+        ? buildModelBuilderGraphV2(scriptBuilder)
+        : (remoteSceneDocument
+            ? buildModelBuilderGraphV2(buildScriptBuilderFromSceneDocument(remoteSceneDocument))
+            : null));
     if (!workspaceHydrationKey || !incomingGraph) {
       return;
     }
@@ -1336,6 +1442,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     latestEngineMessage,
     workspaceStatus,
     isFemBackend,
+    domainCapabilities,
     effectiveStep,
     effectiveTime,
     runtimeEngineLabel,
@@ -1350,6 +1457,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshWorkspace,
     liveState,
     state,
+    latestFieldGrid: resourceFirstRuntimeEnabled
+      ? runtimeLatestFieldGrid
+      : (state?.latest_fields.grid ?? null),
     spatialPreview,
     scriptBuilder,
     runtimeStatus,
@@ -1463,10 +1573,12 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   // Used by requestPreviewQuantity and applyVisualizationPreset to skip
   // the control-plane POST when the field is already in memory.
   const cachedFieldQuantities = useMemo<ReadonlySet<string>>(() => {
-    const frames = state?.latest_fields?.frames;
+    const frames = resourceFirstRuntimeEnabled
+      ? runtimeLatestFieldFrames
+      : (state?.latest_fields?.frames ?? null);
     if (!frames) return new Set<string>();
     return new Set(Object.keys(frames));
-  }, [state?.latest_fields?.frames]);
+  }, [resourceFirstRuntimeEnabled, runtimeLatestFieldFrames, state?.latest_fields?.frames]);
 
   const {
     handleCompute,
@@ -1509,6 +1621,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     localBuilderSignature,
     session,
     isFemBackend,
+    domainCapabilities,
     workspaceStatus,
     effectiveViewMode,
     previewControlsActive,
@@ -1567,6 +1680,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   } = useVisualizationPresets({
     effectiveViewMode,
     isFemBackend,
+    domainCapabilities,
     requestedPreviewQuantity,
     meshRenderMode,
     meshOpacity,
@@ -1662,7 +1776,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     if (requestedPreviewQuantity) setSelectedQuantity(requestedPreviewQuantity);
   }, [requestedPreviewQuantity]);
 
-  const latestFieldFrames = state?.latest_fields.frames ?? {};
+  const latestFieldFrames = resourceFirstRuntimeEnabled
+    ? runtimeLatestFieldFrames
+    : (state?.latest_fields.frames ?? {});
   const binaryFieldTransportEnabled =
     FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFieldTransport;
   const binaryFieldCacheRef = useRef<Map<string, BinaryFieldFrame>>(new Map());
@@ -2017,6 +2133,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     effectiveViewMode,
     activeQuantityId,
     isFemBackend,
+    domainCapabilities,
     meshGenerating,
     commandStatus,
     meshSummary,
@@ -2131,8 +2248,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   ]);
 
   const commandValue = useMemo<CommandContextValue>(() => ({
-    connection, error, session, run, capabilities, metadata, engineLog: mergedEngineLog, quantities, artifacts: artifactsArr,
-    workspaceStatus, isWaitingForCompute, solverNotStartedMessage, isFemBackend, runtimeEngineLabel,
+    connection, error, session, run, capabilities, domainCapabilities, metadata, engineLog: mergedEngineLog, quantities, artifacts: artifactsArr,
+    workspaceStatus, isWaitingForCompute, solverNotStartedMessage, isFemBackend: effectiveIsFemBackend, runtimeEngineLabel,
     runtimeEngineGpuLabel, runtimeEngineGpuDevice,
     activity, sessionFooter, runtimeStatus, stageExecution, runtimeCanAcceptCommands,
     commandStatus, activeCommandKind, activeCommandState,
@@ -2143,8 +2260,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setRunUntilInput, enqueueCommand, handleCompute, handleSimulationAction,
     handleStateExport, handleStateImport, syncScriptBuilder,
   }), [
-    connection, error, session, run, capabilities, metadata, mergedEngineLog, quantities, artifactsArr,
-    workspaceStatus, isWaitingForCompute, solverNotStartedMessage, isFemBackend, runtimeEngineLabel,
+    connection, error, session, run, capabilities, domainCapabilities, metadata, mergedEngineLog, quantities, artifactsArr,
+    workspaceStatus, isWaitingForCompute, solverNotStartedMessage, effectiveIsFemBackend, runtimeEngineLabel,
     runtimeEngineGpuLabel, runtimeEngineGpuDevice,
     activity, sessionFooter, runtimeStatus, stageExecution, runtimeCanAcceptCommands,
     commandStatus, activeCommandKind, activeCommandState,
@@ -2292,7 +2409,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     resetViewportDisplayState,
   ]);
 
-  if (!state) {
+  const controlRoomReady = resourceFirstRuntimeEnabled
+    ? (connection !== "connecting" && (session != null || remoteSceneDocument != null || error != null))
+    : state != null;
+
+  if (!controlRoomReady) {
     return (
       <div className="flex flex-col items-center justify-center h-full w-full">
         <div className="flex flex-col items-center gap-3 text-muted-foreground animate-pulse">
