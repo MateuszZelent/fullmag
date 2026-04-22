@@ -1726,6 +1726,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
           />
         )
       : null;
+  const shouldRenderLegacyFdm3D = showFdm3D && !graphHostedContent;
 
   return (
     <div className="flex flex-col flex-1 h-full min-h-0 min-w-0 relative overflow-hidden [&>*]:min-w-0 [&>*]:min-h-0 [&>*:not(.viewportOverlay)]:flex-1 [&>*:not(.viewportOverlay)]:w-full">
@@ -1849,7 +1850,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         </div>
       ) : null}
 
-      {showFdm3D ? (
+      {shouldRenderLegacyFdm3D ? (
         <div className="absolute inset-0">
           <ViewportErrorBoundary label="FDM 3D Viewport">
           <VectorFieldView3D
@@ -1881,7 +1882,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             onTextureTransformCommit={applyTextureTransform}
             activeTransformScope={ctx.activeTransformScope}
             onTransformScopeChange={(scope) => ctx.setActiveTransformScope(scope)}
-            viewportVisible={showFdm3D}
+            viewportVisible={shouldRenderLegacyFdm3D}
           />
           </ViewportErrorBoundary>
         </div>

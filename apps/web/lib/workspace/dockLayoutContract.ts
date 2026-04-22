@@ -535,7 +535,7 @@ export function buildDockLayoutEnvelopeForModel(
   return {
     ...result.envelope,
     wasRecovered: false,
-    lastRepairAtUnixMs: result.envelope.wasRecovered ? nowUnixMs() : null,
+    lastRepairAtUnixMs: null,
     lastRepairReason: result.envelope.lastRepairReason,
   };
 }

@@ -232,6 +232,21 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const _cmd = useCommand();
   const _model = useModel();
   const ctx = { ..._transport, ..._viewport, ..._cmd, ..._model };
+
+  /* Local elapsed / throughput – updated every second via setInterval so that
+   * the status bar stays live without polluting transportValue with Date.now(). */
+  const [_now, _setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!ctx.sessionStartedAt || ctx.sessionFinishedAt > ctx.sessionStartedAt) return;
+    const id = setInterval(() => _setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [ctx.sessionStartedAt, ctx.sessionFinishedAt]);
+  const elapsed = ctx.sessionStartedAt
+    ? (ctx.sessionFinishedAt > ctx.sessionStartedAt
+        ? ctx.sessionFinishedAt - ctx.sessionStartedAt
+        : _now - ctx.sessionStartedAt)
+    : 0;
+  const stepsPerSec = elapsed > 0 ? (ctx.effectiveStep / elapsed) * 1000 : 0;
   const femDiscretization = resolveFemDiscretization(
     ctx.domainCapabilities,
     ctx.isFemBackend,
@@ -1540,8 +1555,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         step={ctx.effectiveLiveState?.step ?? ctx.run?.total_steps ?? 0}
         stepDisplay={fmtStepValue(ctx.effectiveLiveState?.step ?? ctx.run?.total_steps ?? 0, ctx.hasSolverTelemetry)}
         simTime={fmtSIOrDash(ctx.effectiveLiveState?.time ?? ctx.run?.final_time ?? 0, "s", ctx.hasSolverTelemetry)}
-        wallTime={ctx.elapsed > 0 ? fmtDuration(ctx.elapsed) : "—"}
-        throughput={ctx.stepsPerSec > 0 ? `${ctx.stepsPerSec.toFixed(1)} st/s` : "—"}
+        wallTime={elapsed > 0 ? fmtDuration(elapsed) : "—"}
+        throughput={stepsPerSec > 0 ? `${stepsPerSec.toFixed(1)} st/s` : "—"}
         backend={ctx.session?.requested_backend ?? ""}
         runtimeEngine={ctx.runtimeEngineLabel ?? undefined}
         runtimeGpuLabel={ctx.runtimeEngineGpuLabel ?? undefined}

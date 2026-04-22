@@ -118,6 +118,9 @@ function ShellControls({
   const stepLockState = useRef(createCameraStepLockState());
   const profile = CAMERA_CONTROL_PROFILES[controlProfile];
   const handleChange = useCallback(() => {
+    if (navigation !== "cad") {
+      return;
+    }
     const controls = controlsRef.current;
     if (!controls) {
       return;
@@ -131,7 +134,7 @@ function ShellControls({
     if (snapped) {
       controls.update();
     }
-  }, [controlsRef, profile]);
+  }, [controlsRef, navigation, profile]);
 
   if (navigation === "cad") {
     return (
@@ -158,12 +161,12 @@ function ShellControls({
     <TrackballControls
       ref={controlsRef}
       enabled={enabled}
+      staticMoving
+      dynamicDampingFactor={0}
       rotateSpeed={profile.rotateSpeed}
       zoomSpeed={profile.zoomSpeed}
       panSpeed={profile.panSpeed}
-      dynamicDampingFactor={profile.dampingFactor}
       target={target}
-      onChange={handleChange}
       onStart={handleStart}
       onEnd={handleEnd}
     />

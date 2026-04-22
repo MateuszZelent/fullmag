@@ -685,6 +685,18 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
     setDockLayout: (stage, preset, model) =>
       set((state) => {
         const envelope = buildDockLayoutEnvelopeForModel(model, preset);
+        const currentEnvelope = state.dockLayoutByStage[stage][preset];
+        if (currentEnvelope) {
+          const currentSerialized = JSON.stringify(currentEnvelope.model);
+          const nextSerialized = JSON.stringify(envelope.model);
+          if (
+            currentSerialized === nextSerialized &&
+            currentEnvelope.templateId === envelope.templateId &&
+            currentEnvelope.dockingLayoutSchemaVersion === envelope.dockingLayoutSchemaVersion
+          ) {
+            return state;
+          }
+        }
         const nextState = {
           dockLayoutByStage: {
             ...state.dockLayoutByStage,

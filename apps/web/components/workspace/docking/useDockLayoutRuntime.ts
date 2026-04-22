@@ -41,6 +41,28 @@ function cloneModel(model: unknown): DockLayoutModel {
   return JSON.parse(JSON.stringify(model)) as DockLayoutModel;
 }
 
+function metricsEqual(a: DockLayoutRuntimeMetrics, b: DockLayoutRuntimeMetrics): boolean {
+  if (
+    a.preset !== b.preset ||
+    a.templateId !== b.templateId ||
+    a.dockingLayoutSchemaVersion !== b.dockingLayoutSchemaVersion ||
+    a.wasRecovered !== b.wasRecovered ||
+    a.lastRepairReason !== b.lastRepairReason ||
+    a.lastRepairAtUnixMs !== b.lastRepairAtUnixMs
+  ) {
+    return false;
+  }
+  if (a.repairReasons.length !== b.repairReasons.length) {
+    return false;
+  }
+  for (let index = 0; index < a.repairReasons.length; index += 1) {
+    if (a.repairReasons[index] !== b.repairReasons[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function updateMetricsFromEnvelope(
   preset: DockResponsivePreset,
   envelope: DockLayoutEnvelope,
@@ -93,7 +115,7 @@ export function useDockLayoutRuntime({
       currentModelJsonRef.current = nextSerialized;
     }
 
-    setMetrics({
+    const nextMetrics: DockLayoutRuntimeMetrics = {
       preset,
       templateId: result.envelope.templateId,
       dockingLayoutSchemaVersion: result.envelope.dockingLayoutSchemaVersion,
@@ -101,7 +123,8 @@ export function useDockLayoutRuntime({
       lastRepairReason: result.envelope.lastRepairReason,
       lastRepairAtUnixMs: result.envelope.lastRepairAtUnixMs,
       repairReasons: result.repairReasons,
-    });
+    };
+    setMetrics((previous) => (metricsEqual(previous, nextMetrics) ? previous : nextMetrics));
 
     if (result.changed && result.repairReasons.length > 0) {
       console.warn("[docking] repaired layout on store sync", {
@@ -111,7 +134,7 @@ export function useDockLayoutRuntime({
       });
     }
 
-    if (result.changed) {
+    if (result.changed && existing !== nextSerialized) {
       persistModel(nextModel);
     }
   }, [layoutEnvelope, preset, persistModel]);
@@ -126,8 +149,13 @@ export function useDockLayoutRuntime({
       const result = normalizeDockLayoutEnvelope(raw, preset);
       const nextModelJson = result.envelope.model;
       const nextSerialized = JSON.stringify(nextModelJson);
+      const previousSerialized = currentModelJsonRef.current;
 
-      setMetrics({
+      if (previousSerialized === nextSerialized) {
+        return;
+      }
+
+      const nextMetrics: DockLayoutRuntimeMetrics = {
         preset,
         templateId: result.envelope.templateId,
         dockingLayoutSchemaVersion: result.envelope.dockingLayoutSchemaVersion,
@@ -135,7 +163,8 @@ export function useDockLayoutRuntime({
         lastRepairReason: result.envelope.lastRepairReason,
         lastRepairAtUnixMs: result.envelope.lastRepairAtUnixMs,
         repairReasons: result.repairReasons,
-      });
+      };
+      setMetrics((previous) => (metricsEqual(previous, nextMetrics) ? previous : nextMetrics));
 
       if (result.changed && result.repairReasons.length > 0) {
         console.warn("[docking] repaired layout on model change", {
@@ -146,11 +175,7 @@ export function useDockLayoutRuntime({
       }
 
       currentModelJsonRef.current = nextSerialized;
-      if (result.changed) {
-        persistModel(nextModelJson);
-        return;
-      }
-      persistModel(raw);
+      persistModel(nextModelJson);
     },
     [persistModel, preset],
   );

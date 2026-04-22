@@ -54,18 +54,26 @@ function RightInspectorPanel() {
   return <AnalyzeRightInspector />;
 }
 
-export default function WorkspaceDockingShell() {
-  const currentStage = useWorkspaceStore((state) => state.currentStage);
-  const stageLayouts = useWorkspaceStore((state) => state.dockLayoutByStage[state.currentStage]);
-  const setDockLayout = useWorkspaceStore((state) => state.setDockLayout);
-  const setDockLayoutToDefaultTemplate = useWorkspaceStore(
-    (state) => state.setDockLayoutToDefaultTemplate,
-  );
-  const clearDockingLayoutStorage = useWorkspaceStore((state) => state.clearDockingLayoutStorage);
-
+function BottomDockPanel() {
   const cmd = useCommand();
   const modelState = useModel();
   const tp = useTransport();
+
+  /* Local elapsed / throughput – updated every second via setInterval so that
+   * the status bar stays live without polluting transportValue with Date.now(). */
+  const [_now, _setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!tp.sessionStartedAt || tp.sessionFinishedAt > tp.sessionStartedAt) return;
+    const id = setInterval(() => _setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [tp.sessionStartedAt, tp.sessionFinishedAt]);
+  const elapsed = tp.sessionStartedAt
+    ? (tp.sessionFinishedAt > tp.sessionStartedAt
+        ? tp.sessionFinishedAt - tp.sessionStartedAt
+        : _now - tp.sessionStartedAt)
+    : 0;
+  const stepsPerSec = elapsed > 0 ? (tp.effectiveStep / elapsed) * 1000 : 0;
+
   const solverIntegrator =
     modelState.solverPlan?.integrator ?? modelState.solverSettings.integrator;
   const solverAdaptiveDtMin = modelState.solverPlan?.adaptive?.dtMin;
@@ -99,6 +107,53 @@ export default function WorkspaceDockingShell() {
       : resolveFiniteMax(solverDtSamples);
   }, [solverAdaptiveDtMax, tp.hasSolverTelemetry, solverDtSamples]);
 
+  const solverMaxError = useMemo(() => {
+    const planAtol = modelState.solverPlan?.adaptive?.atol;
+    if (typeof planAtol === "number" && Number.isFinite(planAtol)) return planAtol;
+    const parsed = Number.parseFloat(modelState.solverSettings.maxError);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [modelState.solverPlan?.adaptive?.atol, modelState.solverSettings.maxError]);
+
+  return (
+    <div className="flex h-full divide-x divide-border/20 overflow-hidden">
+      <div className="flex-1 min-w-0 overflow-hidden">
+        <BottomUtilityDock
+          activity={cmd.activity}
+          workspaceStatus={cmd.workspaceStatus}
+          effectiveStep={tp.effectiveStep}
+          effectiveTime={tp.effectiveTime}
+          effectiveDt={tp.effectiveDt}
+          effectiveDmDt={tp.effectiveDmDt}
+          effectiveTorqueT={tp.effectiveTorqueT}
+          effectiveHEff={tp.effectiveHEff}
+          stepsPerSec={stepsPerSec}
+          elapsed={elapsed}
+          hasSolverTelemetry={tp.hasSolverTelemetry}
+          eTotal={tp.effectiveETotal}
+          activityDetail={cmd.activity?.detail ?? null}
+          solverIntegrator={solverIntegrator}
+          solverMaxError={solverMaxError}
+          solverMinDt={solverMinDt}
+          solverMaxDt={solverMaxDt}
+          solverFixedDt={fixedDt}
+        />
+      </div>
+      <div className="w-52 shrink-0 overflow-hidden">
+        <ChartsDock />
+      </div>
+    </div>
+  );
+}
+
+export default function WorkspaceDockingShell() {
+  const currentStage = useWorkspaceStore((state) => state.currentStage);
+  const stageLayouts = useWorkspaceStore((state) => state.dockLayoutByStage[state.currentStage]);
+  const setDockLayout = useWorkspaceStore((state) => state.setDockLayout);
+  const setDockLayoutToDefaultTemplate = useWorkspaceStore(
+    (state) => state.setDockLayoutToDefaultTemplate,
+  );
+  const clearDockingLayoutStorage = useWorkspaceStore((state) => state.clearDockingLayoutStorage);
+
   const [viewportWidth, setViewportWidth] = useState(1920);
   const responsivePreset = resolveDockResponsivePreset(viewportWidth);
   const stageLayout = stageLayouts[responsivePreset];
@@ -125,7 +180,7 @@ export default function WorkspaceDockingShell() {
       void action;
       runtime.onModelChange(nextModel);
     },
-    [runtime],
+    [runtime.onModelChange],
   );
 
   const factory = useCallback(
@@ -155,41 +210,7 @@ export default function WorkspaceDockingShell() {
         );
       }
       if (component === "dock-bottom") {
-        const solverMaxError = (() => {
-          const planAtol = modelState.solverPlan?.adaptive?.atol;
-          if (typeof planAtol === "number" && Number.isFinite(planAtol)) return planAtol;
-          const parsed = Number.parseFloat(modelState.solverSettings.maxError);
-          return Number.isFinite(parsed) ? parsed : null;
-        })();
-        return (
-          <div className="flex h-full divide-x divide-border/20 overflow-hidden">
-            <div className="flex-1 min-w-0 overflow-hidden">
-              <BottomUtilityDock
-                activity={cmd.activity}
-                workspaceStatus={cmd.workspaceStatus}
-                effectiveStep={tp.effectiveStep}
-                effectiveTime={tp.effectiveTime}
-                effectiveDt={tp.effectiveDt}
-                effectiveDmDt={tp.effectiveDmDt}
-                effectiveTorqueT={tp.effectiveTorqueT}
-                effectiveHEff={tp.effectiveHEff}
-                stepsPerSec={tp.stepsPerSec}
-                elapsed={tp.elapsed}
-                hasSolverTelemetry={tp.hasSolverTelemetry}
-                eTotal={tp.effectiveETotal}
-                activityDetail={cmd.activity?.detail ?? null}
-                solverIntegrator={solverIntegrator}
-                solverMaxError={solverMaxError}
-                solverMinDt={solverMinDt}
-                solverMaxDt={solverMaxDt}
-                solverFixedDt={fixedDt}
-              />
-            </div>
-            <div className="w-52 shrink-0 overflow-hidden">
-              <ChartsDock />
-            </div>
-          </div>
-        );
+        return <BottomDockPanel />;
       }
 
       return (
@@ -203,34 +224,11 @@ export default function WorkspaceDockingShell() {
         </div>
       );
     },
-    [
-      cmd.activity,
-      cmd.workspaceStatus,
-      fixedDt,
-      modelState.solverPlan?.adaptive?.atol,
-      solverIntegrator,
-      solverMaxDt,
-      solverMinDt,
-      modelState.solverSettings.maxError,
-      tp.effectiveDmDt,
-      tp.effectiveDt,
-      tp.effectiveStep,
-      tp.effectiveTime,
-      tp.effectiveHEff,
-      tp.effectiveTorqueT,
-      tp.effectiveETotal,
-      tp.elapsed,
-      tp.hasSolverTelemetry,
-      tp.stepsPerSec,
-    ],
+    [],
   );
 
   const classNameMapper = useCallback((className: string) => `workspace-docking ${className}`, []);
 
-  const modelKey = useMemo(
-    () => `${currentStage}:${responsivePreset}`,
-    [currentStage, responsivePreset],
-  );
   const currentPresetStats = runtime.metrics;
   const hasRecovery = currentPresetStats.wasRecovered;
   const recoveryLabel = hasRecovery
@@ -271,7 +269,6 @@ export default function WorkspaceDockingShell() {
       )}
       <TooltipProvider delayDuration={250}>
         <FlexLayout
-          key={modelKey}
           model={runtime.model}
           factory={factory}
           classNameMapper={classNameMapper}

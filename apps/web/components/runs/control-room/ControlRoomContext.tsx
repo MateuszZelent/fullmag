@@ -929,13 +929,12 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
       effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag]);
 
-  /* Status bar */
-  const elapsed = session
-    ? (session.finished_at_unix_ms > session.started_at_unix_ms
-        ? session.finished_at_unix_ms - session.started_at_unix_ms
-        : Date.now() - session.started_at_unix_ms)
-    : 0;
-  const stepsPerSec = elapsed > 0 ? (effectiveStep / elapsed) * 1000 : 0;
+  /* Status bar — expose stable timestamps instead of Date.now() so that
+   * transportValue is not recreated on every render while the session runs.
+   * Consumers that display live elapsed time compute it themselves via
+   * a local setInterval(Date.now - sessionStartedAt, 1000). */
+  const sessionStartedAt = session?.started_at_unix_ms ?? 0;
+  const sessionFinishedAt = session?.finished_at_unix_ms ?? 0;
 
   const solverPlan = useMemo(() => extractSolverPlan(metadata, session), [metadata, session]);
   const quantityDescriptorById = useMemo(
@@ -2242,7 +2241,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const transportValue = useMemo<TransportContextValue>(() => ({
     effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag,
     effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
-    elapsed, stepsPerSec,
+    sessionStartedAt, sessionFinishedAt,
     liveState, effectiveLiveState, scalarRows, scalarRowsTotal,
     dmDtSpark, dtSpark, eTotalSpark,
     preview,
@@ -2257,7 +2256,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   }), [
     effectiveStep, effectiveTime, effectiveDt, effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag,
     effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
-    elapsed, stepsPerSec,
+    sessionStartedAt, sessionFinishedAt,
     liveState, effectiveLiveState, scalarRows, scalarRowsTotal,
     dmDtSpark, dtSpark, eTotalSpark,
     preview,

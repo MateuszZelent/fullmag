@@ -26,7 +26,9 @@ export const EMPTY_ENGINE_LOG: EngineLogEntry[] = [];
 export const EMPTY_QUANTITIES: QuantityDescriptor[] = [];
 export const EMPTY_ARTIFACTS: ArtifactEntry[] = [];
 export const DEFAULT_AIR_MESH_OPACITY = 28;
-export const GPU_TELEMETRY_POLL_MS = 1000;
+/** GPU telemetry is polled less frequently (5 s) since it no longer drives
+ *  transportValue and only updates the command-context GPU readout. */
+export const GPU_TELEMETRY_POLL_MS = 5000;
 
 export const DEFAULT_FDM_VISUALIZATION_SETTINGS: VisualizationPresetFdmState = {
   quality: "high",

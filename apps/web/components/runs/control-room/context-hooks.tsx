@@ -108,8 +108,10 @@ export interface TransportContextValue {
   effectiveEAni: number;
   effectiveEDmi: number;
   effectiveETotal: number;
-  elapsed: number;
-  stepsPerSec: number;
+  /** Unix ms when session started; stable reference – does not contain Date.now(). */
+  sessionStartedAt: number;
+  /** Unix ms when session finished (0 while still running). */
+  sessionFinishedAt: number;
   liveState: LiveState | null;
   effectiveLiveState: LiveState | null;
   scalarRows: ScalarRow[];

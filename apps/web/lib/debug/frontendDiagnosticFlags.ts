@@ -11,7 +11,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
   },
   shell: {
     useDockingShell: true,
-    showRibbonBar: true,
+    showRibbonBar: false,
     showSidebar: true,
     showViewportBar: true,
     showPreviewNotices: true,

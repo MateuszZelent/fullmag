@@ -136,7 +136,7 @@ export function useFemViewportModel({
       previewMaxPoints: PREVIEW_MAX_POINTS_DEFAULT,
       shrinkFactor: 1,
       projection: "perspective",
-      navigation: "trackball",
+      navigation: "cad",
       clip: {
         enabled: false,
         axis: "x",
