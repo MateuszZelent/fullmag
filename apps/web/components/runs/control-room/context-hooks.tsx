@@ -56,6 +56,7 @@ import type {
 } from "../../../lib/session/types";
 import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
 import type { MeshOptionsState, MeshQualityData } from "@/lib/mesh/options";
+import type { FemViewportLayerState } from "@/features/viewport-unified/model/unifiedViewportTypes";
 import type {
   ClipAxis,
   FemColorField,
@@ -315,6 +316,7 @@ export interface ModelContextValue {
   femArrowThickness: number;
   femVectorDomainFilter: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
   femFerromagnetVisibilityMode: "hide" | "ghost";
+  femViewportLayers: FemViewportLayerState;
   fdmVisualizationSettings: VisualizationPresetFdmState;
   visualizationProjectPresets: VisualizationPreset[];
   visualizationLocalPresets: VisualizationPreset[];
@@ -420,6 +422,7 @@ export interface ModelContextValue {
     React.SetStateAction<"auto" | "magnetic_only" | "full_domain" | "airbox_only">
   >;
   setFemFerromagnetVisibilityMode: React.Dispatch<React.SetStateAction<"hide" | "ghost">>;
+  setFemViewportLayers: React.Dispatch<React.SetStateAction<FemViewportLayerState>>;
   setFdmVisualizationSettings: React.Dispatch<
     React.SetStateAction<VisualizationPresetFdmState>
   >;

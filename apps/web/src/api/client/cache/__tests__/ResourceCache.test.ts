@@ -104,7 +104,8 @@ describe("ResourceCache", () => {
   });
 
   it("fieldKey returns deterministic key", () => {
-    expect(ResourceCache.fieldKey("m", 7, 2)).toBe("field:2:m:7");
+    expect(ResourceCache.fieldKey("m", 7, 2)).toBe("field:2:m:7:full");
+    expect(ResourceCache.fieldKey("m", 7, 2, "x")).toBe("field:2:m:7:x");
   });
 
   // ── remove ───────────────────────────────────────────────────────

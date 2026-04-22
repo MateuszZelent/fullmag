@@ -89,6 +89,7 @@ function mapCurrentDisplaySelection(
       kind: "vector_field",
       view_mode: ds.view_mode,
       field_component: ds.field_component,
+      vector_glyphs: ds.vector_glyphs,
       layer: ds.slice_layer ?? 0,
       all_layers: ds.slice_mode === "all",
       x_chosen_size: ds.x_chosen_size ?? 0,
@@ -111,6 +112,7 @@ function mapPreviewConfig(
     revision: status.resources.display_revision,
     quantity: ds.active_quantity_id,
     component: displayComponentFromStatus(ds),
+    vector_glyphs: ds.vector_glyphs,
     layer: ds.slice_layer ?? 0,
     all_layers: ds.slice_mode === "all",
     every_n: ds.vector_density ?? 0,
@@ -270,7 +272,13 @@ function mapFieldFrameEnvelope(
 
   const ds = status.display;
   const quantityId = ds?.active_quantity_id ?? "m";
-  const component = displayComponentFromStatus(ds);
+  const component: FieldFrameEnvelope["component"] = !ds
+    ? "3D"
+    : ds.view_mode === "3d"
+      ? ds.vector_glyphs
+        ? "3D"
+        : ds.field_component
+      : ds.field_component;
 
   return {
     sessionId: status.session.session_id,
@@ -285,7 +293,7 @@ function mapFieldFrameEnvelope(
     sourceStep: status.run.solver_steps,
     sourceTime: status.run.solver_time,
     quantityId,
-    component: component as FieldFrameEnvelope["component"],
+    component,
     nComp: 3,
     domain: "magnetic_only",
     location: status.capabilities.node_fields ? "node" : "grid_cell",

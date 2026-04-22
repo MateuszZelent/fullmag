@@ -32,6 +32,7 @@ import type {
 } from "@/lib/session/types";
 import type { FieldFrameEnvelope, FieldFrameStats } from "@/lib/fieldFrame/types";
 import type { DecodedFieldVector } from "@/src/api/codecs/types";
+import type { FieldComponent } from "@/src/api/types";
 import { scalarWindowToRows } from "@/src/api/client/modules/ScalarHistoryAdapter";
 import {
   applyMeshSharedDomainManifest,
@@ -130,6 +131,34 @@ function mapResourceQuantities(
   });
 }
 
+export interface FieldVectorFetchDecision {
+  shouldFetch: boolean;
+  component: FieldComponent;
+}
+
+export function decideFieldVectorFetch(args: {
+  viewMode: string | null;
+  component: FieldFrameEnvelope["component"];
+}): FieldVectorFetchDecision {
+  if (args.viewMode === "2d") {
+    return {
+      shouldFetch: false,
+      component: "full",
+    };
+  }
+  const selected =
+    args.component === "x" ||
+    args.component === "y" ||
+    args.component === "z" ||
+    args.component === "magnitude"
+      ? args.component
+      : "full";
+  return {
+    shouldFetch: true,
+    component: selected,
+  };
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────
 
 /**
@@ -151,7 +180,9 @@ export function useDataPlaneBridge(
   const sessionId = useSessionRuntimeStore((s) => s.session?.session_id);
   const runId = useSessionRuntimeStore((s) => s.run?.run_id);
   const isFemBackend = useSessionRuntimeStore((s) => s.isFemBackend);
+  const displaySelection = useSessionRuntimeStore((s) => s.displaySelection);
   const resourceRevisions = useSessionRuntimeStore((s) => s.resourceRevisions);
+  const currentViewMode = displaySelection?.selection.view_mode ?? null;
   const runtimeScopeKey =
     sessionId && runId
       ? `${sessionId}:${runId}`
@@ -197,36 +228,53 @@ export function useDataPlaneBridge(
   const fetchFieldVector = useCallback(
     async (envelope: FieldFrameEnvelope) => {
       if (!enabled) return;
+      const fetchDecision = decideFieldVectorFetch({
+        viewMode: currentViewMode,
+        component: envelope.component,
+      });
+      if (!fetchDecision.shouldFetch) {
+        return;
+      }
       const rev = envelope.fieldRevision;
-      const cacheKey = `${envelope.quantityId}:${rev}`;
+      const requestedComponent = fetchDecision.component;
+      const meshGenerationIdRaw = Number.parseInt(envelope.meshGenerationId ?? "0", 10);
+      const meshGenerationId = Number.isFinite(meshGenerationIdRaw)
+        ? meshGenerationIdRaw
+        : 0;
+      const cacheKey = `${envelope.quantityId}:${requestedComponent}:${rev}:${meshGenerationId}`;
       if (fetchedFieldRevRef.current === cacheKey) return;
 
       try {
         const client = getLiveApiClient();
-        const resourceKey = `data-plane:field:${runtimeScopeKey ?? "no-scope"}:${envelope.quantityId}`;
+        const resourceKey = `data-plane:field:${runtimeScopeKey ?? "no-scope"}:${envelope.quantityId}:${requestedComponent}`;
         const cached = client.getCache().get<DecodedFieldVector>(resourceKey);
         let result: DecodedFieldVector;
-        if (cached && cached.revision === rev) {
+        if (
+          cached &&
+          cached.revision === rev &&
+          cached.generationId === meshGenerationId
+        ) {
           result = cached.data;
         } else {
-          const response = await client.fields.getVectorResponse(envelope.quantityId, {
-            cache: "default",
-            headers:
-              cached?.eTag != null
-                ? {
-                    "If-None-Match": cached.eTag,
-                  }
-                : undefined,
-          });
+          const response = await client.fields.getVectorResponse(
+            envelope.quantityId,
+            {
+              component: requestedComponent,
+              etag: cached?.eTag ?? undefined,
+            },
+          );
           if (response.status === 304 && cached) {
             result = cached.data;
           } else {
+            if (response.buffer == null) {
+              throw new Error(`field vector response for ${envelope.quantityId} had no buffer`);
+            }
             result = await decodeFieldVectorOffThread(response.buffer);
             client.getCache().set(
               resourceKey,
               result,
               rev,
-              0,
+              meshGenerationId,
               response.headers.get("etag"),
             );
           }
@@ -301,7 +349,13 @@ export function useDataPlaneBridge(
         if (ENABLE_DEBUG) {
           console.info(
             "[fullmag-debug][data-plane] field vector fetched",
-            { quantityId: envelope.quantityId, revision: rev, cacheKey },
+            {
+              quantityId: envelope.quantityId,
+              revision: rev,
+              requestedComponent,
+              meshGenerationId,
+              cacheKey,
+            },
           );
         }
       } catch (err) {
@@ -312,7 +366,7 @@ export function useDataPlaneBridge(
         console.warn("[fullmag][data-plane] field fetch failed", err);
       }
     },
-    [applyNormalizedState, enabled, runtimeScopeKey],
+    [applyNormalizedState, currentViewMode, enabled, runtimeScopeKey],
   );
 
   // ── Scalar history fetching ─────────────────────────────────────
@@ -747,6 +801,7 @@ export function useDataPlaneBridge(
           cacheKey: `data-plane:artifacts:${cacheKey}`,
           revision,
           fetcher: () => client.artifacts.list(),
+          responseFetcher: (opts) => client.artifacts.listResponse(opts),
         });
         fetchedArtifactsKeyRef.current = cacheKey;
 

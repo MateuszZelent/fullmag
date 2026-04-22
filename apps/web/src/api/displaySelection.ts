@@ -10,11 +10,12 @@ export type DisplayPreviewComponent =
 export function displaySelectionFromPreviewComponent(
   component: DisplayPreviewComponent,
   fallbackFieldComponent: DisplaySelection["field_component"] = "magnitude",
-): Pick<DisplaySelection, "view_mode" | "field_component"> {
+): Pick<DisplaySelection, "view_mode" | "field_component" | "vector_glyphs"> {
   if (component === "3D") {
     return {
       view_mode: "3d",
       field_component: fallbackFieldComponent,
+      vector_glyphs: true,
     };
   }
   return {
@@ -23,13 +24,14 @@ export function displaySelectionFromPreviewComponent(
       component === "x" || component === "y" || component === "z"
         ? component
         : "magnitude",
+    vector_glyphs: false,
   };
 }
 
 export function displayPatchFromPreviewComponent(
   component: DisplayPreviewComponent,
   fallbackFieldComponent: DisplaySelection["field_component"] = "magnitude",
-): Pick<DisplayPatchRequest, "view_mode" | "field_component"> {
+): Pick<DisplayPatchRequest, "view_mode" | "field_component" | "vector_glyphs"> {
   return displaySelectionFromPreviewComponent(component, fallbackFieldComponent);
 }
 

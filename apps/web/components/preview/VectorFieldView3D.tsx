@@ -44,6 +44,7 @@ import {
   Maximize2,
   MousePointer2,
 } from "lucide-react";
+import type { ReactNode } from "react";
 import { ViewportToolbar3D } from "./ViewportToolbar3D";
 import { ViewportToolGroup, ViewportToolSeparator } from "./ViewportToolGroup";
 import { ViewportIconAction } from "./ViewportIconAction";
@@ -102,6 +103,8 @@ interface Props {
   settings?: VisualizationPresetFdmState;
   onSettingsChange?: Dispatch<SetStateAction<VisualizationPresetFdmState>>;
   viewportVisible?: boolean;
+  /** Optional extra R3F nodes rendered inside the scene (e.g. geometry builder layer). */
+  authoringOverlay?: ReactNode;
 }
 
 export type QualityLevel = "low" | "high" | "ultra";
@@ -740,6 +743,7 @@ function VectorFieldView3DInner({
   settings: externalSettings,
   onSettingsChange,
   viewportVisible = true,
+  authoringOverlay = null,
 }: Props) {
   const { hostRef, hostNode } = useCanvasHost<HTMLDivElement>();
   const [internalSettings, setInternalSettings] = useState<Settings>(loadSettings);
@@ -1568,6 +1572,8 @@ function VectorFieldView3DInner({
                 onCommit={onTextureTransformCommit}
               />
             )}
+
+            {authoringOverlay}
           </Canvas>
         ) : null}
       </div>

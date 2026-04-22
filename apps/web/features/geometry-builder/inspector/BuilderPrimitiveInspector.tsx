@@ -14,9 +14,6 @@ import {
   Cylinder,
   Disc,
   Triangle,
-  Move,
-  RotateCcw,
-  Maximize2,
   Eye,
   EyeOff,
   Lock,
@@ -28,8 +25,11 @@ import {
   AlertTriangle,
   CheckCircle,
   XCircle,
+  Maximize2,
+  ArrowRight,
 } from "lucide-react";
 import { useGeometryBuilderStore } from "../store/useGeometryBuilderStore";
+import { PRIMITIVE_CAPABILITIES } from "../model/types";
 import type { PrimitiveNode, PrimitiveKind, Transform3D, Vec3 } from "../model/types";
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -445,6 +445,17 @@ export default function BuilderPrimitiveInspector({
       {/* ── Placement Diagnostics ────────────────────────────── */}
       {validation && (
         <Section title="Placement">
+          {/* Preview-only capability warning */}
+          {PRIMITIVE_CAPABILITIES[node.primitiveKind].status === "preview" && (
+            <div className="flex items-start gap-2 rounded-md bg-amber-500/10 border border-amber-500/20 px-2 py-1.5 text-[10px] text-amber-400">
+              <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+              <span>
+                <span className="font-semibold capitalize">{node.primitiveKind}</span> is preview-only for the current backend. Use Box or Cylinder for production meshes.
+              </span>
+            </div>
+          )}
+
+          {/* Overall placement status */}
           <div className="flex items-center gap-2">
             {validation.withinUniverse && !validation.selfInvalid ? (
               <CheckCircle size={14} className="text-emerald-400" />
@@ -457,6 +468,8 @@ export default function BuilderPrimitiveInspector({
                 : "Placement issues detected"}
             </span>
           </div>
+
+          {/* Diagnostic messages */}
           {validation.diagnostics.map((diag, i) => (
             <div
               key={`${diag.code}-${i}`}
@@ -472,6 +485,68 @@ export default function BuilderPrimitiveInspector({
               <span>{diag.message}</span>
             </div>
           ))}
+
+          {/* Suggested actions */}
+          {validation.suggestedActions.length > 0 && (
+            <div className="space-y-1 pt-1">
+              <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Suggested actions</div>
+              {validation.suggestedActions.map((action, i) => {
+                if (action.kind === "expand_universe") {
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[10px] text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 transition-colors"
+                      onClick={() => {
+                        const { setUniverseSize, setUniverseOrigin } = useGeometryBuilderStore.getState();
+                        setUniverseSize(action.requiredSize);
+                        setUniverseOrigin(action.requiredOrigin);
+                      }}
+                    >
+                      <Maximize2 size={11} className="shrink-0" />
+                      <span>Expand Universe to fit</span>
+                      <ArrowRight size={10} className="ml-auto shrink-0" />
+                    </button>
+                  );
+                }
+                if (action.kind === "move_inside") {
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[10px] text-sky-400 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/20 transition-colors"
+                      onClick={() => {
+                        const { setPrimitiveTransform, getPrimitive } = useGeometryBuilderStore.getState();
+                        const p = getPrimitive(node.id);
+                        if (p) {
+                          setPrimitiveTransform(node.id, {
+                            ...p.transform,
+                            translation: action.suggestedTranslation,
+                          });
+                        }
+                      }}
+                    >
+                      <ArrowRight size={11} className="shrink-0" />
+                      <span>Move inside Universe</span>
+                      <ArrowRight size={10} className="ml-auto shrink-0" />
+                    </button>
+                  );
+                }
+                if (action.kind === "clip_with_ack") {
+                  return (
+                    <div
+                      key={i}
+                      className="flex items-start gap-2 rounded-md px-2 py-1.5 text-[10px] text-muted-foreground bg-muted/30 border border-border/30"
+                    >
+                      <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+                      <span>Clipping changes solver geometry — confirm in Universe inspector before building.</span>
+                    </div>
+                  );
+                }
+                return null;
+              })}
+            </div>
+          )}
         </Section>
       )}
 

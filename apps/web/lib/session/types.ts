@@ -358,6 +358,7 @@ export interface PreviewConfig {
   revision: number;
   quantity: string;
   component: string;
+  vector_glyphs?: boolean;
   layer: number;
   all_layers: boolean;
   every_n: number;
@@ -381,6 +382,7 @@ export interface DisplaySelection {
   kind: DisplayKind;
   view_mode: "2d" | "3d";
   field_component: "x" | "y" | "z" | "magnitude";
+  vector_glyphs?: boolean;
   layer: number;
   all_layers: boolean;
   x_chosen_size: number;

@@ -3,10 +3,18 @@
  *
  * Single source of truth for geometry authoring state.
  * Manages: geometry graph, dirty state, revision chain,
- * builder mode, universe constraints, and primitive CRUD.
+ * builder mode, viewport tool, universe constraints, and primitive CRUD.
  *
  * ADR: Store is domain-only — no rendering concerns.
  * UI components subscribe to narrow selectors.
+ *
+ * Dirty chain (P1):
+ *   param/transform change -> geometryDraftDirty=true -> geometryRealizationDirty=true
+ *                          -> meshDirty=true -> initialStateDirty=true -> resultsDirty=true
+ *   visible change           -> no physics dirty
+ *   enabled change           -> full dirty chain
+ *   locked change            -> no physics dirty
+ *   rename                   -> geometryRealizationDirty only (name goes to IR; mesh not affected)
  */
 
 import { create } from "zustand";
@@ -17,7 +25,6 @@ import type {
   PrimitiveNode,
   PrimitiveKind,
   PrimitiveParams,
-  BooleanNode,
   GeometryNode,
   UniverseNode,
   Transform3D,
@@ -30,10 +37,15 @@ import type {
   PlacementValidation,
   UniverseConstraintPolicy,
   BuilderSelectionTarget,
+  GeometryViewportTool,
+  GeometrySnapSettings,
   Vec3,
 } from "../model/types";
 import { IDENTITY_TRANSFORM, CLEAN_STATE } from "../model/types";
-import { defaultPrimitiveParams } from "../model/defaults";
+import {
+  createDefaultPrimitive,
+  type DefaultPrimitiveContext,
+} from "../model/defaults";
 import { validatePlacement } from "../validation/placementValidation";
 
 // ── Undo entry ────────────────────────────────────────────────
@@ -42,6 +54,24 @@ interface UndoEntry {
   nodes: GeometryNode[];
   graphRevision: number;
   description: string;
+}
+
+// ── Transform transaction ─────────────────────────────────────
+
+/**
+ * Active transform transaction: batches gizmo drag micro-updates into one undo entry.
+ * Call `beginTransformTransaction` before drag, `commitTransformTransaction` on release.
+ */
+interface TransformTransaction {
+  primitiveId: string;
+  snapshotBeforeNodes: GeometryNode[];
+  snapshotBeforeRevision: number;
+  previewTransform: Transform3D;
+}
+
+interface BuilderCameraFocusRequest {
+  kind: "selected" | "all";
+  revision: number;
 }
 
 // ── Store state ───────────────────────────────────────────────
@@ -55,29 +85,42 @@ export interface GeometryBuilderState {
   // ── Builder mode ───────────────────────────────────────────
   builderMode: GeometryBuilderMode;
 
+  // ── Viewport tool ──────────────────────────────────────────
+  viewportTool: GeometryViewportTool;
+  snapSettings: GeometrySnapSettings;
+
   // ── Selection ──────────────────────────────────────────────
   builderSelection: BuilderSelectionTarget;
 
   // ── Constraint policy ──────────────────────────────────────
   constraintPolicy: UniverseConstraintPolicy;
+  clipAcknowledged: boolean;
 
   // ── Realized snapshots ─────────────────────────────────────
   geometryRealization: GeometryRealizationSnapshot | null;
   meshSnapshot: MeshSnapshot | null;
+  cameraFocusRequest: BuilderCameraFocusRequest | null;
 
   // ── Undo/Redo ──────────────────────────────────────────────
   undoStack: UndoEntry[];
   redoStack: UndoEntry[];
 
+  // ── Pending transform transaction ─────────────────────────
+  activeTransformTransaction: TransformTransaction | null;
+
   // ── Actions: builder mode ──────────────────────────────────
   enableBuilder: () => void;
   disableBuilder: () => void;
   setSubmode: (submode: GeometryBuilderSubmode) => void;
+  setViewportTool: (tool: GeometryViewportTool) => void;
+  toggleSnap: () => void;
 
   // ── Actions: universe ──────────────────────────────────────
   setUniverseSize: (size: Vec3) => void;
   setUniverseOrigin: (origin: Vec3) => void;
   setUniverseVisibility: (visible: boolean) => void;
+  setUniversePolicy: (policy: UniverseConstraintPolicy) => void;
+  setClipAcknowledged: (acknowledged: boolean) => void;
 
   // ── Actions: primitive CRUD ────────────────────────────────
   addPrimitive: (kind: PrimitiveKind) => string;
@@ -85,18 +128,56 @@ export interface GeometryBuilderState {
   duplicatePrimitive: (id: string) => string | null;
   renamePrimitive: (id: string, name: string) => void;
   setPrimitiveParams: (id: string, params: PrimitiveParams) => void;
+  /**
+   * Set transform directly (outside a transaction).
+   * Pushes an undo entry. For drag operations, prefer transform transactions.
+   */
   setPrimitiveTransform: (id: string, transform: Transform3D) => void;
   setPrimitiveVisible: (id: string, visible: boolean) => void;
   setPrimitiveEnabled: (id: string, enabled: boolean) => void;
   setPrimitiveLocked: (id: string, locked: boolean) => void;
 
+  // ── Actions: transform transactions ───────────────────────
+  /**
+   * Begin a drag transaction for a primitive. Saves a pre-drag snapshot for undo.
+   * Subsequent `updateTransformPreview` calls do NOT push undo.
+   */
+  beginTransformTransaction: (id: string) => void;
+  /**
+   * Update the live preview transform during a drag. No undo is pushed.
+   */
+  updateTransformPreview: (id: string, transform: Transform3D) => void;
+  /**
+   * Commit the drag transaction: applies `transform` as the final value and
+   * pushes one undo entry representing the whole drag.
+   */
+  commitTransformTransaction: (id: string, transform: Transform3D) => void;
+  /**
+   * Cancel the drag transaction: restores pre-drag state and discards undo.
+   */
+  cancelTransformTransaction: (id: string) => void;
+
   // ── Actions: selection ─────────────────────────────────────
   selectBuilderTarget: (target: BuilderSelectionTarget) => void;
   clearBuilderSelection: () => void;
+  requestFocusSelected: () => void;
+  requestFrameAll: () => void;
 
   // ── Actions: build lifecycle ───────────────────────────────
   buildGeometry: () => void;
   buildMesh: () => void;
+
+  // ── Actions: universe utilities ───────────────────────────
+  /**
+   * Expand the Universe to fit all enabled primitives with an optional
+   * per-axis padding fraction (default: 0.10 = 10 %).
+   * No-op if there are no enabled primitives.
+   */
+  fitUniverseToObjects: (paddingFraction?: number) => void;
+  /**
+   * Reset the Universe to the default 1 µm³ cube centred at origin.
+   */
+  resetUniverseToDefault: () => void;
 
   // ── Actions: undo/redo ─────────────────────────────────────
   undo: () => void;
@@ -108,6 +189,7 @@ export interface GeometryBuilderState {
   getPrimitive: (id: string) => PrimitiveNode | null;
   getAllPrimitives: () => PrimitiveNode[];
   isRunBlocked: () => boolean;
+  getGeometryBuildBlockedReason: () => string | null;
   getRunBlockedReason: () => string | null;
   validateNode: (id: string) => PlacementValidation;
   validateAll: () => PlacementValidation[];
@@ -124,6 +206,7 @@ function createDefaultUniverse(): UniverseNode {
     origin: [0, 0, 0],
     visibility: true,
     lockTransforms: true,
+    policy: "preview_only_block_build",
   };
 }
 
@@ -144,19 +227,6 @@ const nameCounters: Record<PrimitiveKind, number> = {
   disk: 0,
   triangular_prism: 0,
 };
-
-const PRIMITIVE_DISPLAY_NAMES: Record<PrimitiveKind, string> = {
-  box: "Box",
-  cylinder: "Cylinder",
-  sphere: "Sphere",
-  disk: "Disk",
-  triangular_prism: "Triangle",
-};
-
-function nextPrimitiveName(kind: PrimitiveKind): string {
-  nameCounters[kind] += 1;
-  return `${PRIMITIVE_DISPLAY_NAMES[kind]} ${String(nameCounters[kind]).padStart(3, "0")}`;
-}
 
 // ── Store ─────────────────────────────────────────────────────
 
@@ -188,6 +258,21 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
         ...s.revisions,
         geometryGraphRevision: s.revisions.geometryGraphRevision + 1,
       },
+      clipAcknowledged: false,
+    }));
+  }
+
+  function markRealizationDirty() {
+    set((s) => ({
+      dirty: {
+        ...s.dirty,
+        geometryRealizationDirty: true,
+      },
+      revisions: {
+        ...s.revisions,
+        geometryGraphRevision: s.revisions.geometryGraphRevision + 1,
+      },
+      clipAcknowledged: false,
     }));
   }
 
@@ -206,18 +291,33 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
     dirty: CLEAN_STATE,
     revisions: { geometryGraphRevision: 0, geometryRealizationRevision: null, meshRevision: null },
     builderMode: { enabled: false, submode: "select" },
+    viewportTool: "camera",
+    snapSettings: {
+      enabled: false,
+      translateStepMeters: 10e-9,
+      rotateStepDeg: 5,
+      scaleStep: 0.05,
+    },
     builderSelection: { type: "none" },
-    constraintPolicy: "preview_only_block_commit",
+    constraintPolicy: "preview_only_block_build",
+    clipAcknowledged: false,
     geometryRealization: null,
     meshSnapshot: null,
+    cameraFocusRequest: null,
     undoStack: [],
     redoStack: [],
+    activeTransformTransaction: null,
 
     // ── Builder mode ─────────────────────────────────────────
 
     enableBuilder: () => set({ builderMode: { enabled: true, submode: "select" } }),
     disableBuilder: () => set({ builderMode: { enabled: false, submode: "select" } }),
     setSubmode: (submode) => set((s) => ({ builderMode: { ...s.builderMode, submode } })),
+    setViewportTool: (tool) => set({ viewportTool: tool }),
+    toggleSnap: () =>
+      set((s) => ({
+        snapSettings: { ...s.snapSettings, enabled: !s.snapSettings.enabled },
+      })),
 
     // ── Universe ─────────────────────────────────────────────
 
@@ -243,35 +343,35 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
       }));
     },
 
+    setUniversePolicy: (policy) => {
+      set((s) => ({
+        graph: { ...s.graph, universe: { ...s.graph.universe, policy } },
+        constraintPolicy: policy,
+        clipAcknowledged: policy === "clip_with_explicit_ack" ? s.clipAcknowledged : false,
+      }));
+    },
+    setClipAcknowledged: (acknowledged) => set({ clipAcknowledged: acknowledged }),
+
     // ── Primitive CRUD ───────────────────────────────────────
 
     addPrimitive: (kind) => {
-      const id = `prim-${nanoid(8)}`;
-      const universeSize = get().graph.universe.size;
-      const params = defaultPrimitiveParams(kind, universeSize);
-      const name = nextPrimitiveName(kind);
-
-      const node: PrimitiveNode = {
-        id,
-        kind: "primitive",
-        primitiveKind: kind,
-        name,
-        enabled: true,
-        visible: true,
-        locked: false,
-        transform: { ...IDENTITY_TRANSFORM },
-        params,
-        materialBindingId: null,
-        tags: [],
+      const state = get();
+      const existingPrimitives = state.graph.nodes.filter(
+        (n): n is PrimitiveNode => n.kind === "primitive",
+      );
+      const ctx: DefaultPrimitiveContext = {
+        universe: state.graph.universe,
+        existingPrimitives,
       };
+      const node = createDefaultPrimitive(kind, ctx, nameCounters);
 
-      pushUndo(`Add ${name}`);
+      pushUndo(`Add ${node.name}`);
       set((s) => ({
         graph: { ...s.graph, nodes: [...s.graph.nodes, node] },
-        builderSelection: { type: "primitive", id },
+        builderSelection: { type: "primitive", id: node.id },
       }));
       markGeometryDirty();
-      return id;
+      return node.id;
     },
 
     removePrimitive: (id) => {
@@ -307,7 +407,9 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
     },
 
     renamePrimitive: (id, name) => {
+      // Rename only dirties realization (name goes to IR region name), not mesh.
       updateNode(id, (n) => (n.kind === "primitive" ? { ...n, name } : n));
+      markRealizationDirty();
     },
 
     setPrimitiveParams: (id, params) => {
@@ -317,33 +419,133 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
     },
 
     setPrimitiveTransform: (id, transform) => {
+      // Direct (non-transaction) transform: push undo immediately.
       pushUndo("Transform primitive");
       updateNode(id, (n) => (n.kind === "primitive" ? { ...n, transform } : n));
       markGeometryDirty();
     },
 
     setPrimitiveVisible: (id, visible) => {
+      // Visibility change: no physics dirty.
       updateNode(id, (n) => (n.kind === "primitive" ? { ...n, visible } : n));
     },
 
     setPrimitiveEnabled: (id, enabled) => {
+      // Enabled change affects which bodies enter the solver → full dirty chain.
       pushUndo(enabled ? "Enable primitive" : "Disable primitive");
       updateNode(id, (n) => (n.kind === "primitive" ? { ...n, enabled } : n));
       markGeometryDirty();
     },
 
     setPrimitiveLocked: (id, locked) => {
+      // Lock is editor-only, no physics dirty.
       updateNode(id, (n) => (n.kind === "primitive" ? { ...n, locked } : n));
+    },
+
+    // ── Transform transactions ────────────────────────────────
+
+    beginTransformTransaction: (id) => {
+      const { graph, revisions } = get();
+      set({
+        activeTransformTransaction: {
+          primitiveId: id,
+          snapshotBeforeNodes: structuredClone(graph.nodes),
+          snapshotBeforeRevision: revisions.geometryGraphRevision,
+          previewTransform: (graph.nodes.find((n) => n.id === id) as PrimitiveNode | undefined)?.transform
+            ?? IDENTITY_TRANSFORM,
+        },
+      });
+    },
+
+    updateTransformPreview: (id, transform) => {
+      // Update live preview without dirtying or pushing undo.
+      set((s) => ({
+        graph: {
+          ...s.graph,
+          nodes: s.graph.nodes.map((n) =>
+            n.id === id && n.kind === "primitive" ? { ...n, transform } : n,
+          ),
+        },
+        activeTransformTransaction: s.activeTransformTransaction
+          ? { ...s.activeTransformTransaction, previewTransform: transform }
+          : null,
+      }));
+    },
+
+    commitTransformTransaction: (id, transform) => {
+      const tx = get().activeTransformTransaction;
+      if (!tx || tx.primitiveId !== id) {
+        // No active transaction — fall back to direct setPrimitiveTransform semantics.
+        get().setPrimitiveTransform(id, transform);
+        return;
+      }
+      // Push one undo entry for the whole drag.
+      set((s) => ({
+        undoStack: [
+          ...s.undoStack.slice(-49),
+          {
+            nodes: tx.snapshotBeforeNodes,
+            graphRevision: tx.snapshotBeforeRevision,
+            description: "Transform primitive",
+          },
+        ],
+        redoStack: [],
+        graph: {
+          ...s.graph,
+          nodes: s.graph.nodes.map((n) =>
+            n.id === id && n.kind === "primitive" ? { ...n, transform } : n,
+          ),
+        },
+        activeTransformTransaction: null,
+      }));
+      markGeometryDirty();
+    },
+
+    cancelTransformTransaction: (id) => {
+      const tx = get().activeTransformTransaction;
+      if (!tx || tx.primitiveId !== id) return;
+      // Restore pre-drag snapshot.
+      set((s) => ({
+        graph: { ...s.graph, nodes: tx.snapshotBeforeNodes },
+        revisions: { ...s.revisions, geometryGraphRevision: tx.snapshotBeforeRevision },
+        activeTransformTransaction: null,
+      }));
     },
 
     // ── Selection ────────────────────────────────────────────
 
     selectBuilderTarget: (target) => set({ builderSelection: target }),
     clearBuilderSelection: () => set({ builderSelection: { type: "none" } }),
+    requestFocusSelected: () =>
+      set((s) => ({
+        cameraFocusRequest: {
+          kind: "selected",
+          revision: (s.cameraFocusRequest?.revision ?? 0) + 1,
+        },
+      })),
+    requestFrameAll: () =>
+      set((s) => ({
+        cameraFocusRequest: {
+          kind: "all",
+          revision: (s.cameraFocusRequest?.revision ?? 0) + 1,
+        },
+      })),
 
     // ── Build lifecycle ──────────────────────────────────────
 
     buildGeometry: () => {
+      const blockedReason = get().getGeometryBuildBlockedReason();
+      if (blockedReason) {
+        return;
+      }
+      const stateBeforeBuild = get();
+      if (
+        stateBeforeBuild.constraintPolicy === "auto_fit_universe" &&
+        stateBeforeBuild.validateAll().some((v) => v.intersectsUniverseBoundary || v.exceedsUniverse)
+      ) {
+        stateBeforeBuild.fitUniverseToObjects();
+      }
+
       const { graph, revisions } = get();
       const primitives = graph.nodes.filter(
         (n): n is PrimitiveNode => n.kind === "primitive" && n.enabled,
@@ -386,9 +588,70 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
       }));
     },
 
+    fitUniverseToObjects: (paddingFraction = 0.10) => {
+      const { graph } = get();
+      const enabledPrims = graph.nodes.filter(
+        (n): n is PrimitiveNode => n.kind === "primitive" && n.enabled,
+      );
+      if (enabledPrims.length === 0) return;
+
+      const mins = enabledPrims.map(computeBoundsMin);
+      const maxs = enabledPrims.map(computeBoundsMax);
+
+      const mergedMin: Vec3 = [
+        Math.min(...mins.map((m) => m[0])),
+        Math.min(...mins.map((m) => m[1])),
+        Math.min(...mins.map((m) => m[2])),
+      ];
+      const mergedMax: Vec3 = [
+        Math.max(...maxs.map((m) => m[0])),
+        Math.max(...maxs.map((m) => m[1])),
+        Math.max(...maxs.map((m) => m[2])),
+      ];
+
+      const span: Vec3 = [
+        mergedMax[0] - mergedMin[0],
+        mergedMax[1] - mergedMin[1],
+        mergedMax[2] - mergedMin[2],
+      ];
+      const padding: Vec3 = [
+        Math.max(span[0] * paddingFraction, 1e-9),
+        Math.max(span[1] * paddingFraction, 1e-9),
+        Math.max(span[2] * paddingFraction, 1e-9),
+      ];
+      const newSize: Vec3 = [span[0] + 2 * padding[0], span[1] + 2 * padding[1], span[2] + 2 * padding[2]];
+      const newOrigin: Vec3 = [
+        (mergedMin[0] + mergedMax[0]) / 2,
+        (mergedMin[1] + mergedMax[1]) / 2,
+        (mergedMin[2] + mergedMax[2]) / 2,
+      ];
+
+      set((s) => ({
+        graph: {
+          ...s.graph,
+          universe: { ...s.graph.universe, size: newSize, origin: newOrigin },
+        },
+        dirty: { ...s.dirty, geometryDraftDirty: true, geometryRealizationDirty: true, meshDirty: true },
+        revisions: { ...s.revisions, geometryGraphRevision: s.revisions.geometryGraphRevision + 1 },
+        clipAcknowledged: false,
+      }));
+    },
+
+    resetUniverseToDefault: () => {
+      set((s) => ({
+        graph: {
+          ...s.graph,
+          universe: { ...s.graph.universe, size: [1e-6, 1e-6, 1e-6], origin: [0, 0, 0] },
+        },
+        dirty: { ...s.dirty, geometryDraftDirty: true, geometryRealizationDirty: true, meshDirty: true },
+        revisions: { ...s.revisions, geometryGraphRevision: s.revisions.geometryGraphRevision + 1 },
+        clipAcknowledged: false,
+      }));
+    },
+
     buildMesh: () => {
-      const { geometryRealization, revisions } = get();
-      if (!geometryRealization) return;
+      const { geometryRealization, revisions, dirty } = get();
+      if (!geometryRealization || dirty.geometryRealizationDirty) return;
 
       const snapshot: MeshSnapshot = {
         revision: (revisions.meshRevision ?? 0) + 1,
@@ -473,12 +736,56 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
     },
 
     isRunBlocked: () => {
-      const { dirty, meshSnapshot, geometryRealization } = get();
+      const { dirty, meshSnapshot, geometryRealization, getGeometryBuildBlockedReason } = get();
+      const geometryBuildBlockedReason = getGeometryBuildBlockedReason();
+      if (dirty.geometryDraftDirty || dirty.geometryRealizationDirty) {
+        if (geometryBuildBlockedReason) return true;
+      }
       return dirty.meshDirty || !meshSnapshot || !geometryRealization;
     },
 
+    getGeometryBuildBlockedReason: () => {
+      const { graph, constraintPolicy, clipAcknowledged } = get();
+      const enabledPrimitives = graph.nodes.filter(
+        (n): n is PrimitiveNode => n.kind === "primitive" && n.enabled,
+      );
+      if (enabledPrimitives.length === 0) {
+        return "No enabled primitives. Add or enable an object before Build Geometry.";
+      }
+      const validations = enabledPrimitives.map((primitive) =>
+        validatePlacement(primitive, graph.universe),
+      );
+      const hasSelfInvalid = validations.some((v) => v.selfInvalid);
+      if (hasSelfInvalid) {
+        return "Fix validation errors before Build Geometry.";
+      }
+      const hasBoundaryIssues = validations.some(
+        (v) => v.intersectsUniverseBoundary || v.exceedsUniverse,
+      );
+      if (!hasBoundaryIssues) {
+        return null;
+      }
+      if (constraintPolicy === "auto_fit_universe") {
+        return null;
+      }
+      if (constraintPolicy === "clip_with_explicit_ack") {
+        if (!clipAcknowledged) {
+          return "Clipping changes solver geometry. Confirm clipping in Universe inspector before Build Geometry.";
+        }
+        return null;
+      }
+      if (constraintPolicy === "preview_only_block_build") {
+        return "Objects exceed Universe bounds. Fit Universe, move objects, or switch policy before Build Geometry.";
+      }
+      return "Build Geometry blocked by Universe policy. Resolve out-of-bounds objects first.";
+    },
+
     getRunBlockedReason: () => {
-      const { dirty, meshSnapshot, geometryRealization } = get();
+      const { dirty, meshSnapshot, geometryRealization, getGeometryBuildBlockedReason } = get();
+      if (dirty.geometryDraftDirty || dirty.geometryRealizationDirty) {
+        const geometryBuildBlockedReason = getGeometryBuildBlockedReason();
+        if (geometryBuildBlockedReason) return geometryBuildBlockedReason;
+      }
       if (!geometryRealization) return "Geometry not built. Click Build Geometry first.";
       if (dirty.geometryRealizationDirty) return "Geometry changed since last build. Rebuild geometry first.";
       if (!meshSnapshot) return "Mesh not built. Click Build Mesh first.";
@@ -490,7 +797,7 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
       const state = get();
       const node = state.graph.nodes.find((n) => n.id === id);
       if (!node || node.kind !== "primitive") {
-        return { withinUniverse: true, intersectsUniverseBoundary: false, exceedsUniverse: false, selfInvalid: false, diagnostics: [] };
+        return { withinUniverse: true, intersectsUniverseBoundary: false, exceedsUniverse: false, selfInvalid: false, diagnostics: [], suggestedActions: [] };
       }
       return validatePlacement(node as PrimitiveNode, state.graph.universe);
     },

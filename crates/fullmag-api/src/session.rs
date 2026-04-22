@@ -107,12 +107,12 @@ fn fem_mesh_identity(mesh: &fullmag_runner::FemMeshPayload) -> String {
     )
 }
 
-fn apply_fem_mesh_update(current: &mut SessionStateResponse, fem_mesh: fullmag_runner::FemMeshPayload) {
-    let changed = current
-        .fem_mesh
-        .as_ref()
-        .map(fem_mesh_identity)
-        != Some(fem_mesh_identity(&fem_mesh));
+fn apply_fem_mesh_update(
+    current: &mut SessionStateResponse,
+    fem_mesh: fullmag_runner::FemMeshPayload,
+) {
+    let changed =
+        current.fem_mesh.as_ref().map(fem_mesh_identity) != Some(fem_mesh_identity(&fem_mesh));
     current.fem_mesh = Some(fem_mesh);
     if changed {
         bump_mesh_revision(current);

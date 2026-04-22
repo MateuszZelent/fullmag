@@ -2,8 +2,15 @@
  * P1 — Default primitive parameters factory.
  *
  * Produces sensible, universe-aware defaults for each primitive kind.
+ * All returned length values are in SI metres.
+ *
+ * Sizing rule:
+ *   targetSize = clamp(min(universeSize) × 0.25, MIN_DEFAULT_SIZE_M, MAX_DEFAULT_SIZE_M)
+ * Fallback when Universe is invalid (any dimension ≤ 0):
+ *   targetSize = MAX_DEFAULT_SIZE_M  (200 nm)
  */
 
+import { nanoid } from "nanoid";
 import type {
   PrimitiveKind,
   PrimitiveParams,
@@ -12,39 +19,72 @@ import type {
   SphereParams,
   DiskParams,
   TriangularPrismParams,
+  PrimitiveNode,
+  UniverseNode,
   Vec3,
+  Transform3D,
 } from "./types";
+import { IDENTITY_TRANSFORM } from "./types";
 
-/** Scale-safe fraction of universe size used for default primitive sizing. */
+// ── Size constants (SI metres) ────────────────────────────────
+
+/** Minimum default primitive size: 20 nm. */
+export const MIN_DEFAULT_SIZE_M = 20e-9;
+
+/** Maximum / fallback default primitive size: 200 nm. */
+export const MAX_DEFAULT_SIZE_M = 200e-9;
+
+/** Fraction of Universe minimum dimension used as a starting size estimate. */
 const DEFAULT_SCALE_FRACTION = 0.25;
 
-function uniformSize(universeSize: Vec3, fraction: number): number {
+/** Primitive display names used to generate deterministic labels. */
+const PRIMITIVE_DISPLAY_NAMES: Record<PrimitiveKind, string> = {
+  box: "Box",
+  cylinder: "Cylinder",
+  sphere: "Sphere",
+  disk: "Disk",
+  triangular_prism: "Triangle",
+};
+
+// ── Size computation ──────────────────────────────────────────
+
+/**
+ * Returns a sensible scalar target size for a primitive given the Universe.
+ * Result is clamped to [MIN_DEFAULT_SIZE_M, MAX_DEFAULT_SIZE_M].
+ */
+export function defaultTargetSize(universeSize: Vec3): number {
   const minDim = Math.min(...universeSize);
-  return minDim * fraction;
+  if (!Number.isFinite(minDim) || minDim <= 0) {
+    return MAX_DEFAULT_SIZE_M;
+  }
+  const raw = minDim * DEFAULT_SCALE_FRACTION;
+  return Math.min(Math.max(raw, MIN_DEFAULT_SIZE_M), MAX_DEFAULT_SIZE_M);
 }
 
+// ── Per-kind default params ───────────────────────────────────
+
 export function defaultBoxParams(universeSize: Vec3): BoxParams {
-  const s = uniformSize(universeSize, DEFAULT_SCALE_FRACTION);
+  const s = defaultTargetSize(universeSize);
   return { size: [s, s, s] };
 }
 
 export function defaultCylinderParams(universeSize: Vec3): CylinderParams {
-  const s = uniformSize(universeSize, DEFAULT_SCALE_FRACTION);
+  const s = defaultTargetSize(universeSize);
   return { radius: s / 2, height: s, axis: "z" };
 }
 
 export function defaultSphereParams(universeSize: Vec3): SphereParams {
-  const s = uniformSize(universeSize, DEFAULT_SCALE_FRACTION);
+  const s = defaultTargetSize(universeSize);
   return { radius: s / 2 };
 }
 
 export function defaultDiskParams(universeSize: Vec3): DiskParams {
-  const s = uniformSize(universeSize, DEFAULT_SCALE_FRACTION);
-  return { radius: s / 2, thickness: s * 0.1, axis: "z" };
+  const s = defaultTargetSize(universeSize);
+  return { radius: s / 2, thickness: Math.max(s * 0.1, 1e-9), axis: "z" };
 }
 
 export function defaultTriangularPrismParams(universeSize: Vec3): TriangularPrismParams {
-  const s = uniformSize(universeSize, DEFAULT_SCALE_FRACTION);
+  const s = defaultTargetSize(universeSize);
   return { base: s, triangleHeight: s, depth: s, axis: "z" };
 }
 
@@ -64,4 +104,131 @@ export function defaultPrimitiveParams(
     case "triangular_prism":
       return { kind: "triangular_prism", data: defaultTriangularPrismParams(universeSize) };
   }
+}
+
+// ── Default primitive placement ───────────────────────────────
+
+export interface DefaultPrimitiveContext {
+  universe: UniverseNode;
+  existingPrimitives: PrimitiveNode[];
+  preferredSizeMeters?: number;
+}
+
+/**
+ * Computes the AABB half-extent for a primitive (ignores rotation, conservative).
+ */
+function halfExtentOf(p: PrimitiveNode): Vec3 {
+  const [sx, sy, sz] = p.transform.scale;
+  switch (p.params.kind) {
+    case "box":
+      return [
+        (p.params.data.size[0] / 2) * sx,
+        (p.params.data.size[1] / 2) * sy,
+        (p.params.data.size[2] / 2) * sz,
+      ];
+    case "cylinder": {
+      const { radius, height, axis } = p.params.data;
+      if (axis === "x") return [(height / 2) * sx, radius * sy, radius * sz];
+      if (axis === "y") return [radius * sx, (height / 2) * sy, radius * sz];
+      return [radius * sx, radius * sy, (height / 2) * sz];
+    }
+    case "sphere":
+      return [p.params.data.radius * sx, p.params.data.radius * sy, p.params.data.radius * sz];
+    case "disk": {
+      const { radius, thickness, axis } = p.params.data;
+      if (axis === "x") return [(thickness / 2) * sx, radius * sy, radius * sz];
+      if (axis === "y") return [radius * sx, (thickness / 2) * sy, radius * sz];
+      return [radius * sx, radius * sy, (thickness / 2) * sz];
+    }
+    case "triangular_prism": {
+      const { base, triangleHeight, depth, axis } = p.params.data;
+      if (axis === "x") return [(depth / 2) * sx, (base / 2) * sy, (triangleHeight / 2) * sz];
+      if (axis === "y") return [(base / 2) * sx, (depth / 2) * sy, (triangleHeight / 2) * sz];
+      return [(base / 2) * sx, (triangleHeight / 2) * sy, (depth / 2) * sz];
+    }
+  }
+}
+
+/**
+ * Creates a new PrimitiveNode with sensible defaults and smart placement:
+ *
+ * 1. If no existing primitives → place at Universe centre.
+ * 2. If existing primitives exist → place to the +X side of the combined bounding box
+ *    with a small gap, if it fits within Universe.
+ * 3. If it doesn't fit → fall back to Universe centre and add a warning tag.
+ */
+export function createDefaultPrimitive(
+  kind: PrimitiveKind,
+  ctx: DefaultPrimitiveContext,
+  nameCounters: Record<PrimitiveKind, number>,
+): PrimitiveNode {
+  const { universe, existingPrimitives, preferredSizeMeters } = ctx;
+  const universeSize = universe.size;
+  const params = defaultPrimitiveParams(kind, universeSize);
+
+  // Determine the half-size of this new primitive for placement purposes.
+  const targetSize =
+    preferredSizeMeters ?? defaultTargetSize(universeSize);
+  const halfSize = targetSize / 2;
+
+  // Universe AABB
+  const uMinX = universe.origin[0] - universeSize[0] / 2;
+  const uMaxX = universe.origin[0] + universeSize[0] / 2;
+
+  nameCounters[kind] += 1;
+  const name = `${PRIMITIVE_DISPLAY_NAMES[kind]} ${String(nameCounters[kind]).padStart(3, "0")}`;
+
+  let translation: Vec3 = [
+    universe.origin[0],
+    universe.origin[1],
+    universe.origin[2],
+  ];
+  const tags: string[] = [];
+
+  const enabledPrimitives = existingPrimitives.filter((p) => p.enabled);
+
+  if (enabledPrimitives.length > 0) {
+    // Find the maximum +X bound of existing objects.
+    let maxXBound = -Infinity;
+    for (const p of enabledPrimitives) {
+      const he = halfExtentOf(p);
+      maxXBound = Math.max(maxXBound, p.transform.translation[0] + he[0]);
+    }
+
+    const gap = halfSize * 0.5;
+    const candidateX = maxXBound + gap + halfSize;
+
+    if (candidateX + halfSize <= uMaxX) {
+      translation = [candidateX, universe.origin[1], universe.origin[2]];
+    } else {
+      // Doesn't fit beside existing objects; place at centre with warning.
+      translation = [universe.origin[0], universe.origin[1], universe.origin[2]];
+      tags.push("placement_warning:no_space_beside");
+    }
+  }
+
+  // Ensure translation stays within Universe AABB on X
+  if (translation[0] - halfSize < uMinX) {
+    translation = [uMinX + halfSize, translation[1], translation[2]];
+    tags.push("placement_warning:clamped_to_universe");
+  }
+
+  const transform: Transform3D = {
+    ...IDENTITY_TRANSFORM,
+    translation,
+  };
+
+  return {
+    id: `prim-${nanoid(8)}`,
+    kind: "primitive",
+    primitiveKind: kind,
+    name,
+    enabled: true,
+    visible: true,
+    locked: false,
+    transform,
+    params,
+    materialBindingId: null,
+    tags,
+  };
 }

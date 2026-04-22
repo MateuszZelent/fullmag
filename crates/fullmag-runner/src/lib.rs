@@ -17,9 +17,9 @@ pub mod capabilities;
 mod cpu_reference;
 mod dispatch;
 pub mod eigen;
-mod fem_eigen;
 #[path = "fem_reference.rs"]
 mod fem_baseline;
+mod fem_eigen;
 pub mod interactive;
 mod interactive_runtime;
 #[cfg(feature = "cuda")]
@@ -1063,13 +1063,11 @@ fn fem_runtime_engine_info(
     engine: dispatch::FemEngine,
 ) -> (&'static str, &'static str, &'static str) {
     match engine {
-        dispatch::FemEngine::CpuNative => {
-            (
-                dispatch::fem_engine_id(engine),
-                "CPU FEM (MFEM/libCEED/hypre)",
-                "cpu",
-            )
-        }
+        dispatch::FemEngine::CpuNative => (
+            dispatch::fem_engine_id(engine),
+            "CPU FEM (MFEM/libCEED/hypre)",
+            "cpu",
+        ),
         dispatch::FemEngine::NativeGpu => (dispatch::fem_engine_id(engine), "GPU FEM", "gpu"),
     }
 }

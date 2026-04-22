@@ -8,6 +8,8 @@
     "web:typegen": "pnpm --dir apps/web typegen",
     "web:typecheck": "pnpm --dir apps/web typecheck",
     "web:build": "pnpm --dir apps/web build",
-    "web:lint": "pnpm --dir apps/web lint"
+    "web:lint": "pnpm --dir apps/web lint",
+    "web:test:quantity-api-gates": "pnpm --dir apps/web test:quantity-api-gates",
+    "fullmag:check-api-clean": "bash ./scripts/ci-resource-first-gates.sh --strict"
   }
 }

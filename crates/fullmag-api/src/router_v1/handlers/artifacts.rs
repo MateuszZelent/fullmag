@@ -4,31 +4,44 @@ use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
 use axum::http::header::CONTENT_TYPE;
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
-use axum::Json;
 
 use crate::artifacts::{sanitize_artifact_relative_path, try_resolve_artifact_path};
 use crate::error::ApiError;
 use crate::session::current_artifact_dir;
-use crate::types::{AppState, ArtifactEntry};
+use crate::types::AppState;
 
 #[utoipa::path(
     get,
     path = "/v1/live/current/artifacts",
     responses(
         (status = 200, description = "List of artifacts"),
+        (status = 304, description = "Artifact list not modified for the supplied ETag"),
         (status = 404, description = "No active workspace"),
     ),
     tag = "artifacts"
 )]
 pub async fn list_artifacts(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<ArtifactEntry>>, ApiError> {
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    Ok(Json(snapshot.artifacts.clone()))
+    let body = snapshot.artifacts.clone();
+    let artifact_fingerprint = body
+        .iter()
+        .map(|entry| format!("{}:{}", entry.kind, entry.path))
+        .collect::<Vec<_>>()
+        .join("|");
+    let etag = super::stable_strong_etag(&format!(
+        "artifacts:{}:{}",
+        body.len(),
+        artifact_fingerprint
+    ));
+    Ok(super::conditional_json_response(&headers, &etag, &body))
 }
 
 #[utoipa::path(

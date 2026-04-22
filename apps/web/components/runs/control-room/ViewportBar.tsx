@@ -9,7 +9,10 @@ import type { DisplayPatchRequest } from "@/src/api/types";
 import { synthesizeCapabilitiesFromDiscretization } from "@/src/domain/capabilities";
 import { UnifiedViewportBar } from "@/features/viewport-unified";
 import { useUnifiedDisplayControls } from "@/features/viewport-unified/hooks/useUnifiedDisplayControls";
-import type { UnifiedRenderState } from "@/features/viewport-unified/model/unifiedViewportTypes";
+import {
+  DEFAULT_FEM_VIEWPORT_LAYER_STATE,
+  type UnifiedRenderState,
+} from "@/features/viewport-unified/model/unifiedViewportTypes";
 
 import type { RenderMode } from "../../preview/FemMeshView3D";
 import type { VectorComponent } from "./shared";
@@ -88,12 +91,14 @@ export const ViewportBar = memo(function ViewportBar() {
     clipEnabled: model.meshClipEnabled,
     clipAxis: model.meshClipAxis,
     clipPosition: model.meshClipPos,
+    femLayers: model.femViewportLayers,
   }), [
     model.meshClipAxis,
     model.meshClipEnabled,
     model.meshClipPos,
     model.meshOpacity,
     model.meshRenderMode,
+    model.femViewportLayers,
     status,
     viewport.component,
     viewport.previewControlsActive,
@@ -152,6 +157,16 @@ export const ViewportBar = memo(function ViewportBar() {
 
     if (next.clipPosition !== renderState.clipPosition && typeof next.clipPosition === "number") {
       model.setMeshClipPos(next.clipPosition);
+    }
+
+    const currentLayers = renderState.femLayers ?? DEFAULT_FEM_VIEWPORT_LAYER_STATE;
+    const nextLayers = next.femLayers ?? DEFAULT_FEM_VIEWPORT_LAYER_STATE;
+    if (
+      nextLayers.showPrimitives !== currentLayers.showPrimitives ||
+      nextLayers.showMesh !== currentLayers.showMesh ||
+      nextLayers.showQuantity !== currentLayers.showQuantity
+    ) {
+      model.setFemViewportLayers(nextLayers);
     }
   }, [displayControls, model, renderState, viewport]);
 

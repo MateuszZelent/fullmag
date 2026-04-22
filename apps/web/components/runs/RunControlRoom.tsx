@@ -68,6 +68,7 @@ import {
 } from "../workspace/modes/WorkspaceModeInspectors";
 import { useAnalyzeStore } from "@/features/analyze";
 import { useWorkspaceGraphBridge } from "@/features/workspace-graph";
+import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import type { WorkspaceMode } from "./control-room/context-hooks";
 import SettingsDialog from "../workspace/overlays/SettingsDialog";
 import PhysicsDocsDrawer from "../workspace/overlays/PhysicsDocsDrawer";
@@ -286,12 +287,40 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const launchIntent = useWorkspaceStore((state) => state.launchIntent);
   const rightInspectorOpen = useWorkspaceStore((state) => state.rightInspectorOpen);
   const setRightInspectorOpen = useWorkspaceStore((state) => state.setRightInspectorOpen);
+  const activeCoreTab = useWorkspaceStore((state) => state.activeCoreTab);
   const setActiveCoreTab = useWorkspaceStore((state) => state.setActiveCoreTab);
   const setActiveContextualTab = useWorkspaceStore((state) => state.setActiveContextualTab);
   const workspaceTabsByStage = useWorkspaceStore((state) => state.workspaceTabsByStage);
   const activeWorkspaceTabByStage = useWorkspaceStore((state) => state.activeWorkspaceTabByStage);
   const currentStage = useWorkspaceStore((state) => state.currentStage);
   const analyzeResultsWorkspace = useAnalyzeStore((state) => state.resultsWorkspace);
+  const builderModeEnabled = useGeometryBuilderStore((state) => state.builderMode.enabled);
+  const builderRunBlocked = useGeometryBuilderStore((state) =>
+    state.builderMode.enabled ? state.isRunBlocked() : false,
+  );
+  const builderSelection = useGeometryBuilderStore((state) => state.builderSelection);
+  const addBuilderPrimitive = useGeometryBuilderStore((state) => state.addPrimitive);
+  const removeBuilderPrimitive = useGeometryBuilderStore((state) => state.removePrimitive);
+  const duplicateBuilderPrimitive = useGeometryBuilderStore((state) => state.duplicatePrimitive);
+  const buildBuilderGeometry = useGeometryBuilderStore((state) => state.buildGeometry);
+  const buildBuilderMesh = useGeometryBuilderStore((state) => state.buildMesh);
+  const validateBuilderAll = useGeometryBuilderStore((state) => state.validateAll);
+  const setBuilderViewportTool = useGeometryBuilderStore((state) => state.setViewportTool);
+  const requestBuilderFocusSelected = useGeometryBuilderStore(
+    (state) => state.requestFocusSelected,
+  );
+  const requestBuilderFrameAll = useGeometryBuilderStore(
+    (state) => state.requestFrameAll,
+  );
+  const setBuilderPrimitiveTransform = useGeometryBuilderStore((state) => state.setPrimitiveTransform);
+  const getBuilderPrimitive = useGeometryBuilderStore((state) => state.getPrimitive);
+  const getGeometryBuildBlockedReason = useGeometryBuilderStore(
+    (state) => state.getGeometryBuildBlockedReason,
+  );
+  const builderUniverseOrigin = useGeometryBuilderStore((state) => state.graph.universe.origin);
+  const toggleBuilderSnap = useGeometryBuilderStore((state) => state.toggleSnap);
+  const enableBuilderMode = useGeometryBuilderStore((state) => state.enableBuilder);
+  const disableBuilderMode = useGeometryBuilderStore((state) => state.disableBuilder);
   const [viewportSize, setViewportSize] = useState({ width: 1920, height: 1080 });
 
   useEffect(() => {
@@ -333,6 +362,33 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   useEffect(() => {
     setRightInspectorOpen(Boolean(activeStageLayout.rightDock));
   }, [activeStageLayout.rightDock, setRightInspectorOpen]);
+
+  useEffect(() => {
+    const geometryTabActive = activeCoreTab === "Geometry";
+    if (geometryTabActive && !builderModeEnabled) {
+      enableBuilderMode();
+    } else if (!geometryTabActive && builderModeEnabled) {
+      disableBuilderMode();
+    }
+    if (!geometryTabActive) {
+      return;
+    }
+    if (workspaceMode !== "build") {
+      setWorkspaceMode("build");
+    }
+    if (ctx.effectiveViewMode !== "3D") {
+      ctx.handleViewModeChange("3D");
+    }
+  }, [
+    activeCoreTab,
+    builderModeEnabled,
+    ctx.effectiveViewMode,
+    ctx.handleViewModeChange,
+    disableBuilderMode,
+    enableBuilderMode,
+    setWorkspaceMode,
+    workspaceMode,
+  ]);
 
   const spatialPreview = ctx.preview?.kind === "spatial" ? ctx.preview : null;
   const [meshBuildDialogOpen, setMeshBuildDialogOpen] = useState(false);
@@ -492,6 +548,74 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     ctx.setSelectedSidebarNodeId(`obj-${nextObjectId}`);
     ctx.setObjectViewMode("context");
   }, [ctx]);
+
+  const selectedBuilderPrimitiveId =
+    builderSelection.type === "primitive" ? builderSelection.id : null;
+
+  const handleBuilderAddPrimitive = useCallback((kind: "box" | "cylinder" | "sphere" | "disk" | "triangular_prism") => {
+    if (workspaceMode !== "build") {
+      setWorkspaceMode("build");
+    }
+    if (ctx.effectiveViewMode !== "3D") {
+      ctx.handleViewModeChange("3D");
+    }
+    addBuilderPrimitive(kind);
+    setBuilderViewportTool("move");
+  }, [addBuilderPrimitive, ctx, setBuilderViewportTool, setWorkspaceMode, workspaceMode]);
+
+  const handleBuilderSetViewportMode = useCallback((mode: "camera" | "manipulate") => {
+    setBuilderViewportTool(mode === "camera" ? "camera" : selectedBuilderPrimitiveId ? "move" : "select");
+  }, [selectedBuilderPrimitiveId, setBuilderViewportTool]);
+
+  const handleBuilderSetTransformTool = useCallback((tool: "move" | "rotate" | "scale") => {
+    setBuilderViewportTool(tool);
+  }, [setBuilderViewportTool]);
+
+  const handleBuilderCenterInUniverse = useCallback((primitiveId: string) => {
+    const primitive = getBuilderPrimitive(primitiveId);
+    if (!primitive) return;
+    setBuilderPrimitiveTransform(primitiveId, {
+      ...primitive.transform,
+      translation: [...builderUniverseOrigin],
+    });
+  }, [builderUniverseOrigin, getBuilderPrimitive, setBuilderPrimitiveTransform]);
+
+  const handleBuilderBuildMesh = useCallback(async () => {
+    // Keep builder-local lifecycle state coherent for geometry badges/run-gate.
+    buildBuilderMesh();
+    // Also enqueue canonical runtime mesh generation when FEM path is active.
+    if (femDiscretization) {
+      try {
+        await ctx.handleStudyDomainMeshGenerate("geometry_builder_build_mesh");
+      } catch {
+        // Mesh pipeline already surfaces command errors in the shared command state.
+      }
+    }
+  }, [buildBuilderMesh, ctx, femDiscretization]);
+
+  const handleBuilderBuildAll = useCallback(() => {
+    if (getGeometryBuildBlockedReason()) {
+      setRightInspectorOpen(true);
+      return;
+    }
+    buildBuilderGeometry();
+    void handleBuilderBuildMesh();
+  }, [buildBuilderGeometry, getGeometryBuildBlockedReason, handleBuilderBuildMesh, setRightInspectorOpen]);
+
+  const handleBuilderValidateGeometry = useCallback(() => {
+    void validateBuilderAll();
+    setRightInspectorOpen(true);
+  }, [setRightInspectorOpen, validateBuilderAll]);
+
+  const handleBuilderFocusSelected = useCallback(() => {
+    requestBuilderFocusSelected();
+    setBuilderViewportTool("camera");
+  }, [requestBuilderFocusSelected, setBuilderViewportTool]);
+
+  const handleBuilderFrameAll = useCallback(() => {
+    requestBuilderFrameAll();
+    setBuilderViewportTool("camera");
+  }, [requestBuilderFrameAll, setBuilderViewportTool]);
 
   const handleObjectAddInteraction = useCallback(
     (objectId: string, kind: ScriptBuilderMagneticInteractionKind) => {
@@ -1264,8 +1388,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         solverRunning={ctx.workspaceStatus === "running"}
         sidebarVisible={!ctx.sidebarCollapsed}
         selectedNodeId={ctx.selectedSidebarNodeId}
-        canRun={ctx.canRunCommand}
-        canRelax={ctx.canRelaxCommand}
+        canRun={ctx.canRunCommand && !builderRunBlocked}
+        canRelax={ctx.canRelaxCommand && !builderRunBlocked}
         canPause={ctx.canPauseCommand}
         canStop={ctx.canStopCommand}
         canSkip={ctx.canSkipCommand}
@@ -1317,6 +1441,19 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         activeTransformScope={ctx.activeTransformScope}
         onSetTransformScope={handleSetTransformScope}
         onSetTextureTransformMode={handleSetTextureTransformMode}
+        onBuilderAddPrimitive={handleBuilderAddPrimitive}
+        onBuilderRemovePrimitive={removeBuilderPrimitive}
+        onBuilderDuplicatePrimitive={duplicateBuilderPrimitive}
+        onBuilderBuildGeometry={buildBuilderGeometry}
+        onBuilderBuildMesh={() => { void handleBuilderBuildMesh(); }}
+        onBuilderBuildAll={handleBuilderBuildAll}
+        onBuilderValidateGeometry={handleBuilderValidateGeometry}
+        onBuilderSetViewportMode={handleBuilderSetViewportMode}
+        onBuilderSetTransformTool={handleBuilderSetTransformTool}
+        onBuilderToggleSnap={toggleBuilderSnap}
+        onBuilderFocusSelected={handleBuilderFocusSelected}
+        onBuilderFrameAll={handleBuilderFrameAll}
+        onBuilderCenterInUniverse={handleBuilderCenterInUniverse}
       /> : null}
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showBackendErrorNotice && activeBackendError ? (
         <div className="border-b border-rose-500/20 bg-rose-950/10 px-3 py-3">

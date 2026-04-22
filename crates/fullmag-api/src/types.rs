@@ -86,6 +86,8 @@ pub(crate) struct AppState {
     pub current_control_next_seq: Arc<Mutex<u64>>,
     /// Runtime feature flags for disabling heavy subsystems during diagnostics.
     pub feature_flags: crate::feature_flags::FeatureFlags,
+    /// P4: binary projection/slice cache decoupled from the session snapshot lock.
+    pub quantity_data_plane: Arc<crate::quantity_data_plane::QuantityDataPlaneStore>,
 }
 
 #[derive(Debug, Clone)]

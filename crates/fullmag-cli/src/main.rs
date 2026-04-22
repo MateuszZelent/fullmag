@@ -620,14 +620,15 @@ fn local_engine_resolution(
     preferred_runtime_family: &str,
     explicit_selection: bool,
 ) -> (Option<String>, Option<String>, bool) {
-    let planned_backend = fullmag_plan::plan(problem).ok().map(|plan| plan.backend_plan);
+    let planned_backend = fullmag_plan::plan(problem)
+        .ok()
+        .map(|plan| plan.backend_plan);
     let is_time_domain_fem = matches!(planned_backend.as_ref(), Some(BackendPlanIR::Fem(_)))
         || (planned_backend.is_none()
             && resolved_backend == BackendTarget::Fem
             && matches!(
                 problem.study,
-                fullmag_ir::StudyIR::TimeEvolution { .. }
-                    | fullmag_ir::StudyIR::Relaxation { .. }
+                fullmag_ir::StudyIR::TimeEvolution { .. } | fullmag_ir::StudyIR::Relaxation { .. }
             ));
     let local_time_domain_fem_unavailable =
         is_time_domain_fem && !fullmag_runner::is_native_fem_time_domain_available();

@@ -19,6 +19,7 @@ import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
 import type { GeometryPresetKind } from "@/lib/geometryPresetCatalog";
 import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
 import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
+import type { PrimitiveKind } from "@/features/geometry-builder/model/types";
 import type { CapabilityMap } from "@/src/api/types";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { useWorkspaceRibbon } from "@/src/hooks/resources/useWorkspaceRibbon";
@@ -150,6 +151,20 @@ interface RibbonBarProps {
     objectId: string,
     mode: "translate" | "rotate" | "scale",
   ) => void;
+  // Geometry Builder callbacks
+  onBuilderAddPrimitive?: (kind: PrimitiveKind) => void;
+  onBuilderRemovePrimitive?: (id: string) => void;
+  onBuilderDuplicatePrimitive?: (id: string) => void;
+  onBuilderBuildGeometry?: () => void;
+  onBuilderBuildMesh?: () => void;
+  onBuilderBuildAll?: () => void;
+  onBuilderValidateGeometry?: () => void;
+  onBuilderSetViewportMode?: (mode: "camera" | "manipulate") => void;
+  onBuilderSetTransformTool?: (tool: "move" | "rotate" | "scale") => void;
+  onBuilderToggleSnap?: () => void;
+  onBuilderFocusSelected?: () => void;
+  onBuilderFrameAll?: () => void;
+  onBuilderCenterInUniverse?: (id: string) => void;
 }
 
 /* ── Helpers ──────────────────────────────────────── */
@@ -441,6 +456,7 @@ export default function RibbonBar(props: RibbonBarProps) {
   });
   const workspaceRibbonHydratingRef = useRef(false);
   const lastPersistedWorkspaceRibbonRef = useRef<string | null>(null);
+  const lastHydratedWorkspaceRibbonRevisionRef = useRef<number | null>(null);
   const lastSessionIdRef = useRef<string | null>(null);
   const builderEnabled = useGeometryBuilderStore((s) => s.builderMode.enabled);
   const builderDirtyGeometry = useGeometryBuilderStore(
@@ -459,16 +475,21 @@ export default function RibbonBar(props: RibbonBarProps) {
     }
     lastSessionIdRef.current = sessionId;
     lastPersistedWorkspaceRibbonRef.current = null;
+    lastHydratedWorkspaceRibbonRevisionRef.current = null;
     workspaceRibbonHydratingRef.current = false;
   }, [sessionId]);
 
   useEffect(() => {
     if (!sessionId) {
       lastPersistedWorkspaceRibbonRef.current = null;
+      lastHydratedWorkspaceRibbonRevisionRef.current = null;
       workspaceRibbonHydratingRef.current = false;
       return;
     }
     if (!workspaceRibbon) {
+      return;
+    }
+    if (lastHydratedWorkspaceRibbonRevisionRef.current === workspaceRibbon.revision) {
       return;
     }
     const nextIdentity = workspaceRibbonIdentity(workspaceRibbon);
@@ -481,8 +502,10 @@ export default function RibbonBar(props: RibbonBarProps) {
     // hydration may restore tab state, but it must not push stage changes back
     // into the broader workspace store from inside the ribbon component.
     if (currentIdentity === workspaceRibbonTabIdentity(workspaceRibbon)) {
+      lastHydratedWorkspaceRibbonRevisionRef.current = workspaceRibbon.revision;
       return;
     }
+    lastHydratedWorkspaceRibbonRevisionRef.current = workspaceRibbon.revision;
     workspaceRibbonHydratingRef.current = true;
     setActiveCoreTab(workspaceRibbon.active_core_tab);
     setActiveContextualTab(workspaceRibbon.active_contextual_tab ?? null);

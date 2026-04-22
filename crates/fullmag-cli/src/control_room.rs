@@ -65,8 +65,7 @@ pub(crate) fn resolve_api_port() -> Result<u16> {
         return Ok(8081);
     }
 
-    const CANDIDATE_API_PORTS: &[u16] =
-        &[8080, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089];
+    const CANDIDATE_API_PORTS: &[u16] = &[8080, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089];
     for &port in CANDIDATE_API_PORTS {
         if api_is_ready(port) {
             return Ok(port);
@@ -198,8 +197,8 @@ pub(crate) fn bootstrap_control_plane(
         None
     } else {
         eprintln!("  starting fullmag-api on :{} ...", api_port());
-        let api_log =
-            fs::File::create(log_dir.join("fullmag-api.log")).context("failed to create api log")?;
+        let api_log = fs::File::create(log_dir.join("fullmag-api.log"))
+            .context("failed to create api log")?;
         let api_err = api_log.try_clone()?;
         if stream_api_logs_to_terminal {
             eprintln!("  streaming fullmag-api logs to terminal (and saving to .fullmag/logs/fullmag-api.log)");
@@ -407,7 +406,11 @@ pub(crate) fn spawn_control_room(
     dev_mode: bool,
     requested_port: Option<u16>,
     live_workspace: &LocalLiveWorkspace,
-) -> Result<(u16, Option<std::process::Child>, Option<std::process::Child>)> {
+) -> Result<(
+    u16,
+    Option<std::process::Child>,
+    Option<std::process::Child>,
+)> {
     let ready =
         bootstrap_control_plane(session_id, dev_mode, requested_port, Some(live_workspace))?;
     open_in_browser(&ready);

@@ -38,6 +38,13 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
 }
 
 impl From<std::io::Error> for ApiError {

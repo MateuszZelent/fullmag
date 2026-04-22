@@ -895,6 +895,11 @@ Cache note:
 - Request body: none
 - Response body: `MeshActiveBuildResource`
 
+Cache note:
+
+- This route now emits `ETag` and supports `If-None-Match` / `304 Not Modified`
+  for HTTP cache revalidation in addition to revision-based browser caching.
+
 #### `MeshActiveBuildResource`
 
 | Field | Type | Meaning | Notes |
@@ -906,6 +911,47 @@ Cache note:
 | `effective_per_object_targets` | `json object | null` | Effective per-object target summary map | Optional projection from mesh workspace state. |
 | `last_build_summary` | `json object | null` | Thin summary of the last completed build | Optional when no build completed yet. |
 | `last_build_error` | `string | null` | Last build error string | Optional diagnostic field. |
+
+### 7.14.10a `GET /v1/live/current/mesh/builds/history`
+
+- Status: `canonical`
+- Purpose: fetch the mesh build history projection
+- Request body: none
+- Response body: `MeshBuildHistoryResource`
+
+Cache note:
+
+- This route now emits `ETag` and supports `If-None-Match` / `304 Not Modified`
+  for HTTP cache revalidation in addition to revision-based browser caching.
+
+#### `MeshBuildHistoryResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Mesh build projection revision | Backed by `status.resources.mesh_build_revision`. |
+| `history` | `json object[]` | Chronological mesh build summaries | Current payload mirrors the thin `mesh_history` projection from the mesh workspace store. |
+
+### 7.14.10b `GET /v1/live/current/mesh/builds/last-success`
+
+- Status: `canonical`
+- Purpose: fetch the most recent successful mesh build projection
+- Request body: none
+- Response body: `MeshLastSuccessfulBuildResource`
+
+Cache note:
+
+- This route now emits `ETag` and supports `If-None-Match` / `304 Not Modified`
+  for HTTP cache revalidation in addition to revision-based browser caching.
+
+#### `MeshLastSuccessfulBuildResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Mesh build projection revision | Backed by `status.resources.mesh_build_revision`. |
+| `last_success` | `json object | null` | Most recent successful mesh build summary | Optional when no successful build has completed yet. |
+| `effective_airbox_target` | `json object | null` | Effective universe/airbox target summary | Optional projection from mesh workspace state. |
+| `effective_per_object_targets` | `json object | null` | Effective per-object target summary map | Optional projection from mesh workspace state. |
+| `last_build_error` | `string | null` | Last mesh build error string | Optional diagnostic field from the broader mesh build pipeline. |
 
 ### 7.14.11 `POST /v1/live/current/mesh/builds/commands`
 
@@ -1500,6 +1546,11 @@ Idempotency note:
 - Purpose: artifact index for the active workspace
 - Request body: none
 - Response body: `ArtifactEntry[]`
+
+Cache note:
+
+- This route now emits `ETag` and supports `If-None-Match` / `304 Not Modified`
+  so the browser can reuse the previous artifact index when the list has not changed.
 
 #### `ArtifactEntry`
 

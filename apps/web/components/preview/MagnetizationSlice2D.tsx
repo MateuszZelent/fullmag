@@ -11,6 +11,13 @@ type VectorComponent = "x" | "y" | "z" | "magnitude";
 interface Props {
   grid: [number, number, number];
   vectors: Float64Array | null;
+  /**
+   * Optional pre-sliced scalar raster from `/fields/:id/slice/scalar`.
+   * When provided, component extraction from `vectors` is skipped.
+   */
+  scalarValues?: Float64Array | null;
+  /** `[xPixels, yPixels]` for `scalarValues`. */
+  scalarShape?: [number, number] | null;
   quantityLabel: string;
   /** e.g. "m", "H_ex", "H_demag", "H_ext", "H_eff" */
   quantityId?: string;
@@ -104,6 +111,8 @@ function extractComponent(
 export default function MagnetizationSlice2D({
   grid,
   vectors,
+  scalarValues = null,
+  scalarShape = null,
   quantityLabel,
   quantityId,
   component,
@@ -115,8 +124,38 @@ export default function MagnetizationSlice2D({
 
   // ─── Extract scalar field data ────────────────────────────────────
   const { data, xLen, yLen, dMin, dMax } = useMemo(() => {
-    if (!vectors || grid[0] === 0)
+    if (
+      scalarValues &&
+      scalarShape &&
+      scalarShape[0] > 0 &&
+      scalarShape[1] > 0 &&
+      scalarValues.length > 0
+    ) {
+      const xLen = scalarShape[0];
+      const yLen = scalarShape[1];
+      const expectedCount = xLen * yLen;
+      const count = Math.min(expectedCount, scalarValues.length);
+      const points: [number, number, number][] = [];
+      let dMin = Number.POSITIVE_INFINITY;
+      let dMax = Number.NEGATIVE_INFINITY;
+
+      for (let idx = 0; idx < count; idx++) {
+        const x = idx % xLen;
+        const y = Math.floor(idx / xLen);
+        const v = scalarValues[idx];
+        if (v < dMin) dMin = v;
+        if (v > dMax) dMax = v;
+        points.push([x, y, v]);
+      }
+
+      if (!Number.isFinite(dMin)) dMin = 0;
+      if (!Number.isFinite(dMax)) dMax = 0;
+      return { data: points, xLen, yLen, dMin, dMax };
+    }
+
+    if (!vectors || grid[0] === 0) {
       return { data: [] as [number, number, number][], xLen: 0, yLen: 0, dMin: 0, dMax: 0 };
+    }
 
     const [Nx, Ny, Nz] = grid;
     let xLen: number, yLen: number;
@@ -169,7 +208,7 @@ export default function MagnetizationSlice2D({
     if (!Number.isFinite(dMax)) dMax = 0;
 
     return { data: points, xLen, yLen, dMin, dMax };
-  }, [vectors, grid, component, plane, sliceIndex]);
+  }, [component, grid, plane, scalarShape, scalarValues, sliceIndex, vectors]);
 
   // ─── Init / update chart ──────────────────────────────────────────
   useEffect(() => {

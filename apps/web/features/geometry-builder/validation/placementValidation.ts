@@ -1,8 +1,15 @@
 /**
- * P5 — Placement Validation Engine
+ * P1 — Placement Validation Engine
  *
  * Validates primitive placement against Universe bounds.
- * Uses conservative world AABB check for MVP.
+ * Conservative world-space AABB check (ignores rotation).
+ *
+ * P1 additions:
+ *  - NaN/Inf guard on transform translation and scale.
+ *  - Preview-only warning for sphere, disk, triangular_prism.
+ *  - Distinguishes "partially crosses boundary" (warning) from
+ *    "center or all volume outside Universe" (error).
+ *  - Computes suggested corrective actions: expand_universe / move_inside.
  */
 
 import type {
@@ -10,8 +17,10 @@ import type {
   UniverseNode,
   PlacementValidation,
   GeometryDiagnostic,
+  GeometrySuggestedAction,
   Vec3,
 } from "../model/types";
+import { PRIMITIVE_CAPABILITIES } from "../model/types";
 
 /**
  * Compute the world-space AABB of a primitive.
@@ -80,38 +89,43 @@ export function validatePlacement(
   universe: UniverseNode,
 ): PlacementValidation {
   const diagnostics: GeometryDiagnostic[] = [];
-  const pAABB = computeWorldAABB(primitive);
-  const uAABB = universeAABB(universe);
+  const suggestedActions: GeometrySuggestedAction[] = [];
+  let selfInvalid = false;
 
-  let exceedsUniverse = false;
-  let intersectsUniverseBoundary = false;
-
-  // Check each axis
-  for (let i = 0; i < 3; i++) {
-    if (pAABB.min[i] < uAABB.min[i]) {
-      exceedsUniverse = true;
-      intersectsUniverseBoundary = true;
-      diagnostics.push({
-        nodeId: primitive.id,
-        severity: "error",
-        code: "out_of_bounds",
-        message: `Object exceeds Universe bounds on -${AXES[i]}`,
-      });
-    }
-    if (pAABB.max[i] > uAABB.max[i]) {
-      exceedsUniverse = true;
-      intersectsUniverseBoundary = true;
-      diagnostics.push({
-        nodeId: primitive.id,
-        severity: "error",
-        code: "out_of_bounds",
-        message: `Object exceeds Universe bounds on +${AXES[i]}`,
-      });
-    }
+  // ── 1. NaN / Inf guard ─────────────────────────────────────
+  const { translation, scale } = primitive.transform;
+  const transformValues = [...translation, ...scale];
+  if (transformValues.some((v) => !isFinite(v))) {
+    selfInvalid = true;
+    diagnostics.push({
+      nodeId: primitive.id,
+      severity: "error",
+      code: "invalid_transform",
+      message: "Transform contains NaN or Infinity values",
+    });
+    // Cannot compute meaningful AABB — return early.
+    return {
+      withinUniverse: false,
+      intersectsUniverseBoundary: false,
+      exceedsUniverse: true,
+      selfInvalid: true,
+      diagnostics,
+      suggestedActions,
+    };
   }
 
-  // Check degenerate dimensions
-  let selfInvalid = false;
+  // ── 2. Preview-only capability warning ────────────────────
+  const capability = PRIMITIVE_CAPABILITIES[primitive.params.kind];
+  if (capability.status === "preview") {
+    diagnostics.push({
+      nodeId: primitive.id,
+      severity: "warning",
+      code: "preview_only_unsupported",
+      message: `${primitive.params.kind} is a preview primitive and is not yet supported in FDM or FEM solvers`,
+    });
+  }
+
+  // ── 3. Scale sanity check ──────────────────────────────────
   for (let i = 0; i < 3; i++) {
     if (primitive.transform.scale[i] <= 0) {
       selfInvalid = true;
@@ -124,7 +138,7 @@ export function validatePlacement(
     }
   }
 
-  // Check zero-size params
+  // ── 4. Zero-size param check ───────────────────────────────
   switch (primitive.params.kind) {
     case "box":
       if (primitive.params.data.size.some((s) => s <= 0)) {
@@ -151,14 +165,116 @@ export function validatePlacement(
       }
       break;
     case "triangular_prism":
-      if (primitive.params.data.base <= 0 || primitive.params.data.triangleHeight <= 0 || primitive.params.data.depth <= 0) {
+      if (
+        primitive.params.data.base <= 0 ||
+        primitive.params.data.triangleHeight <= 0 ||
+        primitive.params.data.depth <= 0
+      ) {
         selfInvalid = true;
         diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Triangular prism has zero or negative dimensions" });
       }
       break;
   }
 
-  const withinUniverse = !exceedsUniverse;
+  // ── 5. Universe bounds check ───────────────────────────────
+  const pAABB = computeWorldAABB(primitive);
+  const uAABB = universeAABB(universe);
+
+  // Center of primitive AABB
+  const primCenterX = (pAABB.min[0] + pAABB.max[0]) / 2;
+  const primCenterY = (pAABB.min[1] + pAABB.max[1]) / 2;
+  const primCenterZ = (pAABB.min[2] + pAABB.max[2]) / 2;
+  const primCenter: Vec3 = [primCenterX, primCenterY, primCenterZ];
+
+  let exceedsUniverse = false;
+  let intersectsUniverseBoundary = false;
+
+  for (let i = 0; i < 3; i++) {
+    const below = pAABB.min[i] < uAABB.min[i];
+    const above = pAABB.max[i] > uAABB.max[i];
+
+    if (below || above) {
+      intersectsUniverseBoundary = true;
+
+      // Determine if the primitive center is also outside → error; otherwise → warning
+      const centerOutside =
+        primCenter[i] < uAABB.min[i] || primCenter[i] > uAABB.max[i];
+
+      if (centerOutside) {
+        exceedsUniverse = true;
+        diagnostics.push({
+          nodeId: primitive.id,
+          severity: "error",
+          code: "out_of_bounds",
+          message: `Object center is outside Universe on ${AXES[i]} axis`,
+        });
+      } else {
+        diagnostics.push({
+          nodeId: primitive.id,
+          severity: "warning",
+          code: "crosses_boundary",
+          message: `Object crosses Universe boundary on ${AXES[i]} axis`,
+        });
+      }
+    }
+  }
+
+  // ── 6. Suggested actions ───────────────────────────────────
+  if (intersectsUniverseBoundary) {
+    // expand_universe: compute a universe that tightly contains the primitive (with 10% padding)
+    const PADDING = 0.1;
+    const requiredSize: Vec3 = [
+      (pAABB.max[0] - pAABB.min[0]) * (1 + PADDING),
+      (pAABB.max[1] - pAABB.min[1]) * (1 + PADDING),
+      (pAABB.max[2] - pAABB.min[2]) * (1 + PADDING),
+    ];
+    // Merge required with current universe extents so existing primitives still fit
+    const mergedMin: Vec3 = [
+      Math.min(uAABB.min[0], pAABB.min[0]),
+      Math.min(uAABB.min[1], pAABB.min[1]),
+      Math.min(uAABB.min[2], pAABB.min[2]),
+    ];
+    const mergedMax: Vec3 = [
+      Math.max(uAABB.max[0], pAABB.max[0]),
+      Math.max(uAABB.max[1], pAABB.max[1]),
+      Math.max(uAABB.max[2], pAABB.max[2]),
+    ];
+    const expandedSize: Vec3 = [
+      (mergedMax[0] - mergedMin[0]) * (1 + PADDING),
+      (mergedMax[1] - mergedMin[1]) * (1 + PADDING),
+      (mergedMax[2] - mergedMin[2]) * (1 + PADDING),
+    ];
+    const expandedOrigin: Vec3 = [
+      (mergedMin[0] + mergedMax[0]) / 2,
+      (mergedMin[1] + mergedMax[1]) / 2,
+      (mergedMin[2] + mergedMax[2]) / 2,
+    ];
+    suggestedActions.push({
+      kind: "expand_universe",
+      requiredSize: expandedSize,
+      requiredOrigin: expandedOrigin,
+    });
+
+    // move_inside: compute clamped translation
+    const clampedTranslation = clampToUniverse(primitive, universe);
+    const [tx, ty, tz] = primitive.transform.translation;
+    if (
+      Math.abs(clampedTranslation[0] - tx) > 0 ||
+      Math.abs(clampedTranslation[1] - ty) > 0 ||
+      Math.abs(clampedTranslation[2] - tz) > 0
+    ) {
+      suggestedActions.push({
+        kind: "move_inside",
+        suggestedTranslation: clampedTranslation,
+      });
+    }
+
+    suggestedActions.push({
+      kind: "clip_with_ack",
+    });
+  }
+
+  const withinUniverse = !exceedsUniverse && !intersectsUniverseBoundary;
 
   return {
     withinUniverse,
@@ -166,6 +282,7 @@ export function validatePlacement(
     exceedsUniverse,
     selfInvalid,
     diagnostics,
+    suggestedActions,
   };
 }
 

@@ -15,14 +15,13 @@ use crate::schemas::commands::CommandResponse;
 use crate::schemas::mesh::{
     MeshActiveBuildResource, MeshBuildCommandRequest, MeshBuildHistoryResource,
     MeshCapabilitiesResource, MeshInterfaceConfigReplaceRequest, MeshInterfaceConfigResource,
-    MeshInterfaceQualityResource, MeshInterfaceReportResource,
-    MeshLastSuccessfulBuildResource, MeshObjectConfigReplaceRequest, MeshObjectConfigResource,
-    MeshObjectQualityResource, MeshObjectReportResource, MeshObjectSizeFieldResource,
-    MeshObjectSegmentResource, MeshPartResource, MeshSharedDomainManifestResource,
-    MeshSharedDomainConfigReplaceRequest, MeshSharedDomainConfigResource,
-    MeshSharedDomainQualityResource, MeshSharedDomainReportResource,
-    MeshSummaryResource, MeshUniverseConfigReplaceRequest, MeshUniverseConfigResource,
-    MeshUniverseQualityResource, MeshUniverseReportResource,
+    MeshInterfaceQualityResource, MeshInterfaceReportResource, MeshLastSuccessfulBuildResource,
+    MeshObjectConfigReplaceRequest, MeshObjectConfigResource, MeshObjectQualityResource,
+    MeshObjectReportResource, MeshObjectSegmentResource, MeshObjectSizeFieldResource,
+    MeshPartResource, MeshSharedDomainConfigReplaceRequest, MeshSharedDomainConfigResource,
+    MeshSharedDomainManifestResource, MeshSharedDomainQualityResource,
+    MeshSharedDomainReportResource, MeshSummaryResource, MeshUniverseConfigReplaceRequest,
+    MeshUniverseConfigResource, MeshUniverseQualityResource, MeshUniverseReportResource,
 };
 use crate::types::{AppState, SessionCommand, SessionStateResponse};
 use fullmag_authoring::{
@@ -84,16 +83,18 @@ pub async fn get_mesh_capabilities(
     path = "/v1/live/current/mesh/builds/active",
     responses(
         (status = 200, description = "Current active mesh build projection", body = MeshActiveBuildResource),
+        (status = 304, description = "Active mesh build projection not modified for the supplied ETag"),
         (status = 404, description = "No active workspace or mesh summary"),
     ),
     tag = "mesh"
 )]
 pub async fn get_mesh_active_build(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<MeshActiveBuildResource>, ApiError> {
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
-    Ok(Json(MeshActiveBuildResource {
+    let body = MeshActiveBuildResource {
         revision: snapshot.mesh_build_revision,
         active_build: mesh_workspace.get("active_build").cloned(),
         mesh_pipeline_status: mesh_workspace.get("mesh_pipeline_status").cloned(),
@@ -104,7 +105,12 @@ pub async fn get_mesh_active_build(
             .get("last_build_error")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-    }))
+    };
+    let etag = super::stable_strong_etag(&format!(
+        "mesh-build-active:{}",
+        snapshot.mesh_build_revision
+    ));
+    Ok(super::conditional_json_response(&headers, &etag, &body))
 }
 
 #[utoipa::path(
@@ -112,13 +118,15 @@ pub async fn get_mesh_active_build(
     path = "/v1/live/current/mesh/builds/history",
     responses(
         (status = 200, description = "Mesh build history", body = MeshBuildHistoryResource),
+        (status = 304, description = "Mesh build history not modified for the supplied ETag"),
         (status = 404, description = "No active workspace or mesh summary"),
     ),
     tag = "mesh"
 )]
 pub async fn get_mesh_build_history(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<MeshBuildHistoryResource>, ApiError> {
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
     let history = mesh_workspace
@@ -126,10 +134,15 @@ pub async fn get_mesh_build_history(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    Ok(Json(MeshBuildHistoryResource {
+    let body = MeshBuildHistoryResource {
         revision: snapshot.mesh_build_revision,
         history,
-    }))
+    };
+    let etag = super::stable_strong_etag(&format!(
+        "mesh-build-history:{}",
+        snapshot.mesh_build_revision
+    ));
+    Ok(super::conditional_json_response(&headers, &etag, &body))
 }
 
 #[utoipa::path(
@@ -137,16 +150,18 @@ pub async fn get_mesh_build_history(
     path = "/v1/live/current/mesh/builds/last-success",
     responses(
         (status = 200, description = "Last successful mesh build projection", body = MeshLastSuccessfulBuildResource),
+        (status = 304, description = "Last successful mesh build projection not modified for the supplied ETag"),
         (status = 404, description = "No active workspace or mesh summary"),
     ),
     tag = "mesh"
 )]
 pub async fn get_mesh_last_successful_build(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<MeshLastSuccessfulBuildResource>, ApiError> {
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
-    Ok(Json(MeshLastSuccessfulBuildResource {
+    let body = MeshLastSuccessfulBuildResource {
         revision: snapshot.mesh_build_revision,
         last_success: mesh_workspace.get("last_build_summary").cloned(),
         effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
@@ -155,7 +170,12 @@ pub async fn get_mesh_last_successful_build(
             .get("last_build_error")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-    }))
+    };
+    let etag = super::stable_strong_etag(&format!(
+        "mesh-build-last-success:{}",
+        snapshot.mesh_build_revision
+    ));
+    Ok(super::conditional_json_response(&headers, &etag, &body))
 }
 
 #[utoipa::path(
@@ -202,9 +222,10 @@ pub async fn submit_mesh_build_command(
         preview_config: None,
         stages: None,
     };
-    let response =
-        crate::router_v1::handlers::commands::enqueue_session_command_impl(state, &headers, command)
-            .await?;
+    let response = crate::router_v1::handlers::commands::enqueue_session_command_impl(
+        state, &headers, command,
+    )
+    .await?;
     Ok(Json(response))
 }
 
@@ -723,8 +744,9 @@ pub async fn get_mesh_object_topology(
     let snapshot = current_snapshot(&state).await?;
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
-            let object_mesh = subset_object_mesh(mesh, &object_id)
-                .ok_or_else(|| ApiError::not_found(format!("object mesh not found: {object_id}")))?;
+            let object_mesh = subset_object_mesh(mesh, &object_id).ok_or_else(|| {
+                ApiError::not_found(format!("object mesh not found: {object_id}"))
+            })?;
             let binary = serialize_fem_mesh_topology_binary_v1(&object_mesh);
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let etag = super::stable_strong_etag(&format!(
@@ -763,7 +785,9 @@ pub async fn get_mesh_interface_config(
         .map(|entry| serde_json::to_value(&entry.config))
         .transpose()
         .map_err(|error| {
-            ApiError::internal(format!("failed to serialize interface mesh config: {error}"))
+            ApiError::internal(format!(
+                "failed to serialize interface mesh config: {error}"
+            ))
         })?;
     Ok(Json(MeshInterfaceConfigResource {
         revision: snapshot.mesh_revision,
@@ -1003,7 +1027,14 @@ fn object_quality(
         .and_then(Value::as_u64)
         .map(|marker| marker as u32);
     let per_domain_quality = marker
-        .and_then(|marker| snapshot.fem_mesh.as_ref()?.per_domain_quality.get(&marker).cloned())
+        .and_then(|marker| {
+            snapshot
+                .fem_mesh
+                .as_ref()?
+                .per_domain_quality
+                .get(&marker)
+                .cloned()
+        })
         .and_then(|quality| serde_json::to_value(quality).ok());
     Some(json!({
         "marker": marker,

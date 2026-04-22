@@ -720,6 +720,7 @@ export function normalizeDisplaySelection(raw: any): CurrentDisplaySelection | n
               selection.component === "z"
             ? selection.component
             : "magnitude",
+      vector_glyphs: Boolean(selection.vector_glyphs ?? false),
       layer: Number(selection.layer ?? 0),
       all_layers: Boolean(selection.all_layers),
       x_chosen_size: Number(selection.x_chosen_size ?? 0),
@@ -753,6 +754,7 @@ function normalizePreviewConfig(raw: any): PreviewConfig | null {
     revision: Number(raw.revision ?? 0),
     quantity: String(raw.quantity ?? "m"),
     component: String(raw.component ?? "3D"),
+    vector_glyphs: Boolean(raw.vector_glyphs ?? false),
     layer: Number(raw.layer ?? 0),
     all_layers: Boolean(raw.all_layers),
     every_n: Number(raw.every_n ?? 50),
@@ -776,6 +778,7 @@ function previewConfigFromDisplaySelection(
       displaySelection.selection.view_mode === "3d"
         ? "3D"
         : displaySelection.selection.field_component,
+    vector_glyphs: Boolean(displaySelection.selection.vector_glyphs ?? false),
     layer: displaySelection.selection.layer,
     all_layers: displaySelection.selection.all_layers,
     every_n: displaySelection.selection.every_n,

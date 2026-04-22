@@ -25,3 +25,15 @@ export type {
 // Viewport host (Layer 8)
 export { ViewportHost } from "./shell/ViewportHost";
 export type { ViewportHostProps, ComponentKeyRenderer } from "./shell/ViewportHost";
+
+// Coordinate conversion helpers
+export {
+  physicalPositionToScene,
+  scenePositionToPhysical,
+  sceneDeltaToPhysical,
+  physicalScaleToScene,
+  sceneScaleToPhysical,
+  physicalQuatToScene,
+  sceneQuatToPhysical,
+} from "./coordinates/physicalToScene";
+export type { Vec3Tuple, QuatTuple } from "./coordinates/physicalToScene";

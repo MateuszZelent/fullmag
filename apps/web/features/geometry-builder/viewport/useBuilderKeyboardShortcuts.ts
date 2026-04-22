@@ -15,11 +15,22 @@ export function useBuilderKeyboardShortcuts() {
   const selectedPrimitiveId = useGeometryBuilderStore((s) =>
     s.builderSelection.type === "primitive" ? s.builderSelection.id : null,
   );
+  const activeTransformPrimitiveId = useGeometryBuilderStore(
+    (s) => s.activeTransformTransaction?.primitiveId ?? null,
+  );
+  const viewportTool = useGeometryBuilderStore((s) => s.viewportTool);
   const removePrimitive = useGeometryBuilderStore((s) => s.removePrimitive);
   const duplicatePrimitive = useGeometryBuilderStore((s) => s.duplicatePrimitive);
   const undo = useGeometryBuilderStore((s) => s.undo);
   const redo = useGeometryBuilderStore((s) => s.redo);
   const clearBuilderSelection = useGeometryBuilderStore((s) => s.clearBuilderSelection);
+  const setViewportTool = useGeometryBuilderStore((s) => s.setViewportTool);
+  const requestFocusSelected = useGeometryBuilderStore((s) => s.requestFocusSelected);
+  const requestFrameAll = useGeometryBuilderStore((s) => s.requestFrameAll);
+  const cancelTransformTransaction = useGeometryBuilderStore(
+    (s) => s.cancelTransformTransaction,
+  );
+  const toggleSnap = useGeometryBuilderStore((s) => s.toggleSnap);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -28,6 +39,50 @@ export function useBuilderKeyboardShortcuts() {
       // Ignore when typing in input fields
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+        return;
+      }
+
+      // Skip if any modifier key held (except Ctrl for undo/redo/duplicate)
+      const noModifier = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+
+      // Tool mode shortcuts (Q/W/E/R) — no modifier, single key
+      if (noModifier) {
+        switch (e.key.toUpperCase()) {
+          case "Q":
+            e.preventDefault();
+            setViewportTool("camera");
+            return;
+          case "W":
+            e.preventDefault();
+            setViewportTool("move");
+            return;
+          case "E":
+            e.preventDefault();
+            setViewportTool("rotate");
+            return;
+          case "R":
+            e.preventDefault();
+            setViewportTool("scale");
+            return;
+          case "S":
+            e.preventDefault();
+            setViewportTool("select");
+            return;
+          case "G":
+            e.preventDefault();
+            toggleSnap();
+            return;
+          case "F":
+            e.preventDefault();
+            requestFocusSelected();
+            setViewportTool("camera");
+            return;
+        }
+      }
+      if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toUpperCase() === "F") {
+        e.preventDefault();
+        requestFrameAll();
+        setViewportTool("camera");
         return;
       }
 
@@ -65,14 +120,40 @@ export function useBuilderKeyboardShortcuts() {
 
       // Escape — deselect
       if (e.key === "Escape") {
+        if (activeTransformPrimitiveId) {
+          e.preventDefault();
+          cancelTransformTransaction(activeTransformPrimitiveId);
+          setViewportTool("select");
+          return;
+        }
         if (selectedPrimitiveId) {
           e.preventDefault();
           clearBuilderSelection();
+          return;
+        }
+        if (viewportTool !== "camera") {
+          e.preventDefault();
+          setViewportTool("camera");
         }
         return;
       }
     },
-    [builderActive, selectedPrimitiveId, removePrimitive, duplicatePrimitive, undo, redo, clearBuilderSelection],
+    [
+      activeTransformPrimitiveId,
+      builderActive,
+      cancelTransformTransaction,
+      selectedPrimitiveId,
+      removePrimitive,
+      duplicatePrimitive,
+      undo,
+      redo,
+      clearBuilderSelection,
+      setViewportTool,
+      requestFocusSelected,
+      requestFrameAll,
+      toggleSnap,
+      viewportTool,
+    ],
   );
 
   useEffect(() => {

@@ -124,6 +124,103 @@ export interface MetricsSummary {
   steps_per_second: number | null;
 }
 
+// ── Field component selection ────────────────────────────────────────
+
+/** Component selector for 3-D field vectors. Mirrors `ComponentSelection` in Rust. */
+export type FieldComponent =
+  | "full"
+  | "magnitude"
+  | "x"
+  | "y"
+  | "z"
+  | `c${number}`;
+
+/** Query options when requesting a field vector binary buffer. */
+export interface FieldVectorOptions {
+  component?: FieldComponent;
+  /** ETag from a previous response; triggers If-None-Match/304 caching. */
+  etag?: string;
+}
+
+// ── Field slice (2-D) ────────────────────────────────────────────────
+
+export type SlicePlane = "xy" | "xz" | "yz";
+
+/**
+ * Query parameters for a 2-D field slice request.
+ * All sizing values are in world-space units (metres) except `max_points` and `arrow_every`.
+ */
+export interface FieldSliceQuery {
+  plane: SlicePlane;
+  component?: FieldComponent;
+  /** World-space coordinate of the cut. Mutually exclusive with `cut_norm`. */
+  cut_world?: number;
+  /** Normalised [0, 1] position along the perpendicular axis. */
+  cut_norm?: number;
+  x_size?: number;
+  y_size?: number;
+  max_points?: number;
+  include_arrows?: boolean;
+  arrow_every?: number;
+  max_arrows?: number;
+}
+
+/** JSON metadata returned from `/fields/{id}/slice/meta`. */
+export interface FieldSliceMeta {
+  quantity_id: string;
+  plane: SlicePlane;
+  component: string;
+  cut_kind: "normalized" | "world";
+  cut_norm: number;
+  cut_world: number | null;
+  field_revision: number;
+  domain_generation_id: number;
+  sampling_method: string;
+  etag: string;
+  slice_revision: string;
+  x_pixels: number;
+  y_pixels: number;
+  grid: FieldSliceGrid;
+  bounds: FieldSliceBounds | null;
+  scalar: FieldSliceBinaryDescriptor;
+  arrows: FieldSliceBinaryDescriptor;
+}
+
+export interface FieldSliceGrid {
+  x_size: number;
+  y_size: number;
+  point_count: number;
+}
+
+export interface FieldSliceBounds {
+  u_min: number;
+  u_max: number;
+  v_min: number;
+  v_max: number;
+}
+
+export interface FieldSliceBinaryDescriptor {
+  available: boolean;
+  n_comp: number;
+  point_count: number;
+  min: number | null;
+  max: number | null;
+  etag: string | null;
+  href: string | null;
+}
+
+/**
+ * Binary response wrapper that carries optional ETag and HTTP status.
+ * Extends `BinaryResourceResponse` to allow a null buffer on 304.
+ */
+export interface FieldBinaryResponse {
+  /** null when status is 304 (Not Modified). */
+  buffer: ArrayBuffer | null;
+  etag: string | null;
+  status: 200 | 304;
+  headers: Headers;
+}
+
 // ── Realtime websocket ───────────────────────────────────────────────
 
 export type RealtimeResourceName =

@@ -59,8 +59,26 @@ export class MeshModule {
     );
   }
 
+  async getActiveBuildResponse(
+    opts?: RequestOptions,
+  ): Promise<JsonResourceResponse<MeshActiveBuildResource>> {
+    return this.client.getJsonResponse<MeshActiveBuildResource>(
+      "/v1/live/current/mesh/builds/active",
+      opts,
+    );
+  }
+
   async getBuildHistory(opts?: RequestOptions): Promise<MeshBuildHistoryResource> {
     return this.client.get<MeshBuildHistoryResource>(
+      "/v1/live/current/mesh/builds/history",
+      opts,
+    );
+  }
+
+  async getBuildHistoryResponse(
+    opts?: RequestOptions,
+  ): Promise<JsonResourceResponse<MeshBuildHistoryResource>> {
+    return this.client.getJsonResponse<MeshBuildHistoryResource>(
       "/v1/live/current/mesh/builds/history",
       opts,
     );
@@ -70,6 +88,15 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshLastSuccessfulBuildResource> {
     return this.client.get<MeshLastSuccessfulBuildResource>(
+      "/v1/live/current/mesh/builds/last-success",
+      opts,
+    );
+  }
+
+  async getLastSuccessfulBuildResponse(
+    opts?: RequestOptions,
+  ): Promise<JsonResourceResponse<MeshLastSuccessfulBuildResource>> {
+    return this.client.getJsonResponse<MeshLastSuccessfulBuildResource>(
       "/v1/live/current/mesh/builds/last-success",
       opts,
     );

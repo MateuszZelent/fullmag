@@ -11,7 +11,8 @@
 
 import { memo, useCallback } from "react";
 import type { CapabilityMap } from "../../../src/api/types";
-import type { UnifiedRenderState } from "../model/unifiedViewportTypes";
+import type { UnifiedRenderState, FemViewportLayerState } from "../model/unifiedViewportTypes";
+import { DEFAULT_FEM_VIEWPORT_LAYER_STATE } from "../model/unifiedViewportTypes";
 import { CapabilityPanel } from "./CapabilityPanel";
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -153,6 +154,40 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
         {gridDepth != null && (
           <span className={chipClass()}>Z depth: {gridDepth}</span>
         )}
+      </CapabilityPanel>
+
+      {/* ── FEM layer visibility (explicit_topology) ────────── */}
+      <CapabilityPanel capabilities={capabilities} requires="explicit_topology">
+        <span className="text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
+          Layers
+        </span>
+        {(
+          [
+            { key: "showPrimitives", label: "Primitives" },
+            { key: "showMesh",       label: "Mesh" },
+            { key: "showQuantity",   label: "Quantity" },
+          ] as const
+        ).map(({ key, label }) => {
+          const layers: FemViewportLayerState = renderState.femLayers ?? DEFAULT_FEM_VIEWPORT_LAYER_STATE;
+          return (
+            <label
+              key={key}
+              className="inline-flex items-center gap-1.5 text-[0.65rem] text-muted-foreground cursor-pointer select-none"
+            >
+              <input
+                type="checkbox"
+                checked={layers[key]}
+                onChange={(e) =>
+                  patch({
+                    femLayers: { ...layers, [key]: e.target.checked },
+                  })
+                }
+                disabled={disabled}
+              />
+              <span>{label}</span>
+            </label>
+          );
+        })}
       </CapabilityPanel>
 
       {/* ── Wireframe mode (FEM — explicit_topology) ───────── */}

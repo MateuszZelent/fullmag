@@ -296,8 +296,9 @@ where
                         Ok(success) => match success.json::<T>() {
                             Ok(parsed) if ready(&parsed) => return Ok(parsed),
                             Ok(_) => {
-                                last_error =
-                                    Some(anyhow!("{label} responded but readiness invariant failed"));
+                                last_error = Some(anyhow!(
+                                    "{label} responded but readiness invariant failed"
+                                ));
                             }
                             Err(error) => {
                                 last_error = Some(error).map(anyhow::Error::from);

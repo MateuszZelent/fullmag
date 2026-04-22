@@ -12,6 +12,26 @@ import type {
   RenderGeometry,
 } from "../../../src/domain/adapters/SpatialDomainAdapter";
 
+/**
+ * Top-level FEM layer visibility toggles (P3).
+ * Mirrors the three semantic rendering layers present in FEM viewports:
+ * geometric bodies (primitives), mesh wireframe, and the field quantity overlay.
+ */
+export interface FemViewportLayerState {
+  /** Show geometric primitive bodies (solids). */
+  showPrimitives: boolean;
+  /** Show mesh wireframe overlay. */
+  showMesh: boolean;
+  /** Show field quantity colour overlay. */
+  showQuantity: boolean;
+}
+
+export const DEFAULT_FEM_VIEWPORT_LAYER_STATE: FemViewportLayerState = {
+  showPrimitives: true,
+  showMesh: false,
+  showQuantity: true,
+};
+
 export interface UnifiedRenderState {
   // Common
   selectedLayer: number;
@@ -34,6 +54,12 @@ export interface UnifiedRenderState {
   arrowThickness?: number;
   vectorDomainFilter?: string;
   ferromagnetVisibilityMode?: string;
+
+  /**
+   * P3 — FEM layer visibility toggles. Present only when `explicit_topology`
+   * capability is active. Undefined for FDM.
+   */
+  femLayers?: FemViewportLayerState;
 }
 
 export const DEFAULT_UNIFIED_RENDER_STATE: UnifiedRenderState = {

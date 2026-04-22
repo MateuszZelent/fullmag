@@ -22,6 +22,8 @@ import {
 import { DEFAULT_CONVERGENCE_THRESHOLD } from "../../panels/SolverSettingsPanel";
 import { FemPartExplorerPanel } from "../../preview/fem/FemPartExplorerPanel";
 import type { PartQualitySummary } from "../../preview/fem/FemPartExplorerPanel";
+import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
+import GeometryInspectorRouter from "@/features/geometry-builder/inspector/GeometryInspectorRouter";
 
 const ROLE_GROUPS: Array<{ role: FemMeshPart["role"]; label: string }> = [
   { role: "magnetic_object", label: "Magnetic" },
@@ -290,6 +292,8 @@ function WorkspaceRightToolbox() {
 }
 
 export function BuildRightInspector() {
+  const builderActive = useGeometryBuilderStore((s) => s.builderMode.enabled);
+  if (builderActive) return <GeometryInspectorRouter />;
   return <WorkspaceRightToolbox />;
 }
 

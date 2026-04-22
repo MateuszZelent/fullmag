@@ -232,6 +232,7 @@ fn test_app_state() -> Arc<AppState> {
         current_control_events: control_events_tx,
         current_control_next_seq: Arc::new(Mutex::new(0)),
         feature_flags: FeatureFlags::default(),
+        quantity_data_plane: Arc::new(crate::quantity_data_plane::QuantityDataPlaneStore::new()),
     })
 }
 
@@ -654,6 +655,7 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         current_control_events: control_events_tx,
         current_control_next_seq: Arc::new(Mutex::new(0)),
         feature_flags: FeatureFlags::default(),
+        quantity_data_plane: Arc::new(crate::quantity_data_plane::QuantityDataPlaneStore::new()),
     });
 
     let session = SessionManifest {
@@ -1763,6 +1765,57 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
 }
 
 #[tokio::test]
+async fn mesh_active_build_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "active_build": { "build_id": "mesh-build-1", "status": "running" },
+            "mesh_pipeline_status": { "phase": "remesh", "queued": true },
+            "effective_airbox_target": { "hmax": "5e-9" },
+            "effective_per_object_targets": { "body": { "hmax": "2e-9" } },
+            "last_build_summary": { "elements": 42 },
+            "last_build_error": "stale topology"
+        }));
+        snapshot.mesh_build_revision = 13;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/builds/active")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/builds/active")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
 async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
     let state = test_app_state_with_live_session().await;
     let app = build_v1_router().with_state(state.clone());
@@ -1864,6 +1917,138 @@ async fn mesh_build_history_returns_history_projection() {
 }
 
 #[tokio::test]
+async fn mesh_build_history_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_history": [
+                { "mesh_name": "mesh-a", "node_count": 11 },
+                { "mesh_name": "mesh-b", "node_count": 17 }
+            ]
+        }));
+        snapshot.mesh_build_revision = 29;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/builds/history")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/builds/history")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn mesh_last_successful_build_returns_projection() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": { "mesh_name": "mesh-b", "node_count": 17 },
+            "effective_airbox_target": { "hmax": "5e-9" },
+            "effective_per_object_targets": { "body": { "hmax": "2e-9" } },
+            "last_build_error": "previous remesh failed"
+        }));
+        snapshot.mesh_build_revision = 31;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/builds/last-success")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 31);
+    assert_eq!(json["last_success"]["mesh_name"], "mesh-b");
+    assert_eq!(json["last_success"]["node_count"], 17);
+    assert_eq!(json["effective_airbox_target"]["hmax"], "5e-9");
+    assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
+    assert_eq!(json["last_build_error"], "previous remesh failed");
+}
+
+#[tokio::test]
+async fn mesh_last_successful_build_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": { "mesh_name": "mesh-b", "node_count": 17 },
+            "effective_airbox_target": { "hmax": "5e-9" },
+            "effective_per_object_targets": { "body": { "hmax": "2e-9" } },
+            "last_build_error": "previous remesh failed"
+        }));
+        snapshot.mesh_build_revision = 31;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/builds/last-success")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/builds/last-success")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_topology_returns_binary_fmmt_payload() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -1883,7 +2068,10 @@ async fn mesh_shared_domain_topology_returns_binary_fmmt_payload() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response.headers().get("content-type").and_then(|value| value.to_str().ok()),
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
         Some("application/octet-stream"),
     );
     let body = body_bytes(response).await;
@@ -3430,6 +3618,58 @@ async fn engine_log_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn artifacts_list_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.artifacts = vec![
+            crate::types::ArtifactEntry {
+                path: "results/final.ovf".into(),
+                kind: "field".into(),
+            },
+            crate::types::ArtifactEntry {
+                path: "plots/energy.csv".into(),
+                kind: "table".into(),
+            },
+        ];
+    }
+    let app = build_v1_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/artifacts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/artifacts")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
 async fn asyncapi_document_returns_200() {
     let app = test_router();
     let response = app
@@ -3509,5 +3749,731 @@ async fn middleware_headers_on_all_endpoints() {
             .to_str()
             .unwrap(),
         "1.0.0"
+    );
+}
+
+// ─── P1: field vector component selection ─────────────────────────────────
+
+/// Insert a minimal 2×2×1 nComp=3 field into `latest_fields` and return the router.
+async fn test_router_with_mock_field() -> axum::Router {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 11;
+        // 4 points × 3 components, interleaved: p0=[1,0,0], p1=[0,1,0], p2=[0,0,1], p3=[1,2,2]
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 2.0, 2.0]
+                ],
+                "layout": {
+                    "grid_cells": [2, 2, 1]
+                }
+            }
+        }))
+        .expect("mock latest_fields should deserialize");
+    }
+    build_v1_router().with_state(state)
+}
+
+/// Same as `test_router_with_mock_field`, but marks runtime as FEM without
+/// topology buffers so slice endpoints must return 409.
+async fn test_router_with_mock_field_fem_without_topology() -> axum::Router {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 11;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 2.0, 2.0]
+                ],
+                "layout": {
+                    "grid_cells": [2, 2, 1]
+                }
+            }
+        }))
+        .expect("mock latest_fields should deserialize");
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: "fem-empty-topology".to_string(),
+            mesh_id: "fem-empty-topology:1".to_string(),
+            nodes: Vec::new(),
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("101".to_string()),
+            per_domain_quality: Default::default(),
+        });
+    }
+    build_v1_router().with_state(state)
+}
+
+#[tokio::test]
+async fn field_vector_full_returns_ncomp_3() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let ncomp = response
+        .headers()
+        .get("x-fullmag-n-comp")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok());
+    assert_eq!(ncomp, Some(3), "nComp header should be 3 for full vector");
+
+    let bytes = body_bytes(response).await;
+    // FMVP v2 header is 48 bytes; 4 points × 3 × 8 = 96 bytes payload
+    assert_eq!(
+        bytes.len(),
+        48 + 4 * 3 * 8,
+        "full vector payload length mismatch"
+    );
+    assert_eq!(&bytes[..4], b"FMVP", "missing FMVP magic");
+    assert_eq!(bytes[4], 2, "expected FMVP version 2");
+    assert_eq!(bytes[6], 3, "nComp header byte should be 3");
+}
+
+#[tokio::test]
+async fn field_vector_x_component_returns_scalar() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?format=bin&component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let ncomp = response
+        .headers()
+        .get("x-fullmag-n-comp")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok());
+    assert_eq!(ncomp, Some(1), "x component should produce nComp=1");
+
+    let bytes = body_bytes(response).await;
+    // nComp=1, 4 points × 1 × 8 = 32 bytes payload
+    assert_eq!(
+        bytes.len(),
+        48 + 4 * 1 * 8,
+        "x component payload length mismatch"
+    );
+    assert_eq!(bytes[6], 1, "nComp header byte should be 1 for scalar");
+
+    // Verify x values: p0.x=1.0, p1.x=0.0, p2.x=0.0, p3.x=1.0
+    let vals: Vec<f64> = (0..4)
+        .map(|i| f64::from_le_bytes(bytes[48 + i * 8..48 + i * 8 + 8].try_into().unwrap()))
+        .collect();
+    assert!(
+        (vals[0] - 1.0).abs() < 1e-12,
+        "p0.x should be 1.0, got {}",
+        vals[0]
+    );
+    assert!(
+        (vals[1] - 0.0).abs() < 1e-12,
+        "p1.x should be 0.0, got {}",
+        vals[1]
+    );
+    assert!(
+        (vals[2] - 0.0).abs() < 1e-12,
+        "p2.x should be 0.0, got {}",
+        vals[2]
+    );
+    assert!(
+        (vals[3] - 1.0).abs() < 1e-12,
+        "p3.x should be 1.0, got {}",
+        vals[3]
+    );
+}
+
+#[tokio::test]
+async fn field_vector_y_component_returns_scalar() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?format=bin&component=y")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    assert_eq!(bytes.len(), 48 + 4 * 8, "y component payload length");
+    assert_eq!(bytes[6], 1, "nComp byte should be 1");
+
+    let vals: Vec<f64> = (0..4)
+        .map(|i| f64::from_le_bytes(bytes[48 + i * 8..48 + i * 8 + 8].try_into().unwrap()))
+        .collect();
+    assert!((vals[0] - 0.0).abs() < 1e-12, "p0.y");
+    assert!((vals[1] - 1.0).abs() < 1e-12, "p1.y");
+    assert!((vals[2] - 0.0).abs() < 1e-12, "p2.y");
+    assert!((vals[3] - 2.0).abs() < 1e-12, "p3.y");
+}
+
+#[tokio::test]
+async fn field_vector_z_component_returns_scalar() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?format=bin&component=z")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    assert_eq!(bytes.len(), 48 + 4 * 8, "z component payload length");
+
+    let vals: Vec<f64> = (0..4)
+        .map(|i| f64::from_le_bytes(bytes[48 + i * 8..48 + i * 8 + 8].try_into().unwrap()))
+        .collect();
+    assert!((vals[0] - 0.0).abs() < 1e-12, "p0.z");
+    assert!((vals[1] - 0.0).abs() < 1e-12, "p1.z");
+    assert!((vals[2] - 1.0).abs() < 1e-12, "p2.z");
+    assert!((vals[3] - 2.0).abs() < 1e-12, "p3.z");
+}
+
+#[tokio::test]
+async fn field_vector_c1_alias_matches_y() {
+    let app = test_router_with_mock_field().await;
+    let resp_c1 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?format=bin&component=c1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp_c1.status(), StatusCode::OK);
+    let bytes_c1 = body_bytes(resp_c1).await;
+    // c1 = y, so should match exact byte layout of y
+    let vals: Vec<f64> = (0..4)
+        .map(|i| f64::from_le_bytes(bytes_c1[48 + i * 8..48 + i * 8 + 8].try_into().unwrap()))
+        .collect();
+    assert!((vals[1] - 1.0).abs() < 1e-12, "c1[1] == y[1] == 1.0");
+    assert!((vals[3] - 2.0).abs() < 1e-12, "c1[3] == y[3] == 2.0");
+}
+
+#[tokio::test]
+async fn field_vector_magnitude_returns_scalar() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?format=bin&component=magnitude")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    assert_eq!(bytes.len(), 48 + 4 * 8, "magnitude payload length");
+    assert_eq!(bytes[6], 1, "nComp byte should be 1 for magnitude");
+
+    let vals: Vec<f64> = (0..4)
+        .map(|i| f64::from_le_bytes(bytes[48 + i * 8..48 + i * 8 + 8].try_into().unwrap()))
+        .collect();
+    // p0=[1,0,0] → |m|=1; p1=[0,1,0] → 1; p2=[0,0,1] → 1; p3=[1,2,2] → 3
+    assert!(
+        (vals[0] - 1.0).abs() < 1e-10,
+        "p0 magnitude should be 1.0, got {}",
+        vals[0]
+    );
+    assert!(
+        (vals[1] - 1.0).abs() < 1e-10,
+        "p1 magnitude should be 1.0, got {}",
+        vals[1]
+    );
+    assert!(
+        (vals[2] - 1.0).abs() < 1e-10,
+        "p2 magnitude should be 1.0, got {}",
+        vals[2]
+    );
+    assert!(
+        (vals[3] - 3.0).abs() < 1e-10,
+        "p3 magnitude should be 3.0, got {}",
+        vals[3]
+    );
+}
+
+#[tokio::test]
+async fn field_vector_invalid_component_returns_400() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                // "c5" is out of range for a 3-component field
+                .uri("/v1/live/current/fields/m/vector?format=bin&component=c5")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn field_vector_component_etag_304() {
+    let app = test_router_with_mock_field().await;
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?format=bin&component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("ETag must be present on first response")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?format=bin&component=x")
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty(), "304 body must be empty");
+}
+
+#[tokio::test]
+async fn field_vector_different_components_have_different_etags() {
+    let app = test_router_with_mock_field().await;
+
+    let resp_x = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?format=bin&component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let etag_x = resp_x
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .unwrap()
+        .to_string();
+
+    let resp_y = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?format=bin&component=y")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let etag_y = resp_y
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .unwrap()
+        .to_string();
+
+    assert_ne!(
+        etag_x, etag_y,
+        "x and y components must produce distinct ETags"
+    );
+}
+
+// ─── P2: 2-D field slice endpoints ────────────────────────────────────────
+
+#[tokio::test]
+async fn slice_meta_missing_plane_returns_400() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn slice_meta_cut_world_and_cut_norm_conflict_returns_400() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/meta?plane=xy&cut_world=0.0&cut_norm=0.5")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn slice_meta_xy_plane_returns_json() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/meta?plane=xy")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["plane"], "xy");
+    assert!(json["etag"].is_string(), "slice/meta should include etag");
+    assert!(json["x_pixels"].is_number());
+    assert!(json["y_pixels"].is_number());
+}
+
+#[tokio::test]
+async fn slice_scalar_xy_returns_binary() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/scalar?plane=xy&component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let ct = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.contains("octet-stream"),
+        "slice/scalar content-type should be octet-stream, got: {ct}"
+    );
+
+    let bytes = body_bytes(response).await;
+    assert!(
+        !bytes.is_empty(),
+        "slice/scalar binary payload must not be empty"
+    );
+}
+
+#[tokio::test]
+async fn slice_scalar_xy_etag_304() {
+    let app = test_router_with_mock_field().await;
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/scalar?plane=xy&component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("ETag must be present")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/scalar?plane=xy&component=x")
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty(), "304 body must be empty");
+}
+
+#[tokio::test]
+async fn slice_scalar_missing_field_returns_404() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/nonexistent/slice/scalar?plane=xy")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn slice_arrows_returns_binary_when_include_arrows_true() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/arrows?plane=xy&include_arrows=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    assert!(
+        !bytes.is_empty(),
+        "slice/arrows binary payload must not be empty"
+    );
+}
+
+#[tokio::test]
+async fn slice_meta_fem_without_topology_returns_409() {
+    let app = test_router_with_mock_field_fem_without_topology().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/meta?plane=xy")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn slice_scalar_fem_without_topology_returns_409() {
+    let app = test_router_with_mock_field_fem_without_topology().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/scalar?plane=xy&component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn slice_arrows_etag_changes_when_arrow_sampling_params_change() {
+    let app = test_router_with_mock_field().await;
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/arrows?plane=xy&include_arrows=true&arrow_every=2&max_arrows=100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag_first = first
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("missing ETag for arrows request #1")
+        .to_string();
+
+    let second = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/arrows?plane=xy&include_arrows=true&arrow_every=4&max_arrows=100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let etag_second = second
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("missing ETag for arrows request #2")
+        .to_string();
+
+    let third = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/arrows?plane=xy&include_arrows=true&arrow_every=4&max_arrows=200")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(third.status(), StatusCode::OK);
+    let etag_third = third
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("missing ETag for arrows request #3")
+        .to_string();
+
+    assert_ne!(
+        etag_first, etag_second,
+        "ETag should change when arrow_every changes"
+    );
+    assert_ne!(
+        etag_second, etag_third,
+        "ETag should change when max_arrows changes"
+    );
+}
+
+#[test]
+fn openapi_contains_field_slice_paths() {
+    let openapi = <crate::openapi::ApiDoc as utoipa::OpenApi>::openapi();
+    let value = serde_json::to_value(openapi).expect("OpenAPI should be serializable");
+    let paths = value
+        .get("paths")
+        .and_then(|p| p.as_object())
+        .expect("OpenAPI paths must be an object");
+
+    assert!(
+        paths.contains_key("/v1/live/current/fields/{quantity_id}/slice/meta"),
+        "OpenAPI missing /slice/meta path"
+    );
+    assert!(
+        paths.contains_key("/v1/live/current/fields/{quantity_id}/slice/scalar"),
+        "OpenAPI missing /slice/scalar path"
+    );
+    assert!(
+        paths.contains_key("/v1/live/current/fields/{quantity_id}/slice/arrows"),
+        "OpenAPI missing /slice/arrows path"
+    );
+}
+
+#[test]
+fn openapi_contains_field_slice_contract() {
+    let openapi = <crate::openapi::ApiDoc as utoipa::OpenApi>::openapi();
+    let value = serde_json::to_value(openapi).expect("OpenAPI should be serializable");
+    let paths = value
+        .get("paths")
+        .and_then(|p| p.as_object())
+        .expect("OpenAPI paths must be an object");
+    let components = value
+        .get("components")
+        .and_then(|c| c.get("schemas"))
+        .and_then(|s| s.as_object())
+        .expect("OpenAPI schemas must be present");
+
+    let vector_get = paths
+        .get("/v1/live/current/fields/{quantity_id}/vector")
+        .and_then(|p| p.get("get"))
+        .expect("vector GET path missing");
+    let vector_params = vector_get
+        .get("parameters")
+        .and_then(|p| p.as_array())
+        .expect("vector GET parameters missing");
+    assert!(
+        vector_params.iter().any(|p| {
+            p.get("name").and_then(|n| n.as_str()) == Some("component")
+                && p.get("in").and_then(|i| i.as_str()) == Some("query")
+        }),
+        "vector GET should expose query param `component`"
+    );
+
+    let slice_meta_get = paths
+        .get("/v1/live/current/fields/{quantity_id}/slice/meta")
+        .and_then(|p| p.get("get"))
+        .expect("slice/meta GET path missing");
+    let slice_meta_params = slice_meta_get
+        .get("parameters")
+        .and_then(|p| p.as_array())
+        .expect("slice/meta parameters missing");
+    assert!(
+        slice_meta_params
+            .iter()
+            .any(|p| p.get("name").and_then(|n| n.as_str()) == Some("plane")),
+        "slice/meta should expose query param `plane`"
+    );
+    assert!(
+        slice_meta_get
+            .get("responses")
+            .and_then(|r| r.get("409"))
+            .is_some(),
+        "slice/meta should document 409 response"
+    );
+
+    assert!(
+        components.contains_key("FieldSliceMeta"),
+        "OpenAPI missing FieldSliceMeta schema"
+    );
+    assert!(
+        components.contains_key("FieldSliceGrid"),
+        "OpenAPI missing FieldSliceGrid schema"
+    );
+    assert!(
+        components.contains_key("FieldSliceBounds"),
+        "OpenAPI missing FieldSliceBounds schema"
+    );
+    assert!(
+        components.contains_key("FieldSliceBinaryDescriptor"),
+        "OpenAPI missing FieldSliceBinaryDescriptor schema"
     );
 }

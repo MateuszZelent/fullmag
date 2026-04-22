@@ -11,6 +11,7 @@ import type {
   PrimitiveNode,
   DirtyState,
   PrimitiveKind,
+  BuilderSelectionTarget,
 } from "../model/types";
 
 const PRIMITIVE_ICONS: Record<PrimitiveKind, string> = {
@@ -60,6 +61,7 @@ function primitiveBadge(node: PrimitiveNode): string {
 function buildPrimitiveTreeNode(
   node: PrimitiveNode,
   dirty: DirtyState,
+  onSelect?: (target: BuilderSelectionTarget) => void,
 ): TreeNodeData {
   const nodeId = `builder-prim-${node.id}`;
 
@@ -97,6 +99,7 @@ function buildPrimitiveTreeNode(
     status: primitiveStatus(node, dirty),
     defaultOpen: false,
     domain: "build",
+    onClick: onSelect ? () => onSelect({ type: "primitive", id: node.id }) : undefined,
     children,
   };
 }
@@ -108,6 +111,7 @@ function buildPrimitiveTreeNode(
 export function buildGeometryBuilderTreeNodes(
   graph: GeometryGraphDocument,
   dirty: DirtyState,
+  onSelect?: (target: BuilderSelectionTarget) => void,
 ): TreeNodeData {
   const primitives = graph.nodes.filter(
     (n): n is PrimitiveNode => n.kind === "primitive",
@@ -120,10 +124,11 @@ export function buildGeometryBuilderTreeNodes(
     badge: `${formatDimension(graph.universe.size[0])} × ${formatDimension(graph.universe.size[1])} × ${formatDimension(graph.universe.size[2])}`,
     status: "ready",
     domain: "build",
+    onClick: onSelect ? () => onSelect({ type: "universe", id: graph.universe.id }) : undefined,
   };
 
   const primitiveNodes = primitives.map((p) =>
-    buildPrimitiveTreeNode(p, dirty),
+    buildPrimitiveTreeNode(p, dirty, onSelect),
   );
 
   const lifecycleStatus: NodeStatus = dirty.geometryRealizationDirty

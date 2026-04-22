@@ -33,6 +33,8 @@ import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import type { EigenModeSummary } from "@/components/analyze/eigenTypes";
 import type { StudyPipelineDocumentState } from "@/lib/session/types";
+import { buildGeometryBuilderTreeNodes } from "@/features/geometry-builder";
+import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 
 function removeStudyPipelineNode(
   nodes: StudyPipelineDocumentState["nodes"],
@@ -153,6 +155,12 @@ export default function RunSidebar() {
   const [treeOpen, setTreeOpen] = useState(true);
   const [treeQuery, setTreeQuery] = useState("");
   const [treeFilterScope, setTreeFilterScope] = useState<TreeFilterScope>("all");
+  const builderEnabled = useGeometryBuilderStore((state) => state.builderMode.enabled);
+  const builderGraph = useGeometryBuilderStore((state) => state.graph);
+  const builderDirty = useGeometryBuilderStore((state) => state.dirty);
+  const builderSelection = useGeometryBuilderStore((state) => state.builderSelection);
+  const selectBuilderTarget = useGeometryBuilderStore((state) => state.selectBuilderTarget);
+  const clearBuilderSelection = useGeometryBuilderStore((state) => state.clearBuilderSelection);
   const femDiscretization = resolveFemDiscretization(cmd.domainCapabilities, false);
   const universeRole = useMemo(() => {
     if (!femDiscretization) {
@@ -411,8 +419,8 @@ export default function RunSidebar() {
 
   /* ── Build model tree nodes ── */
   const modelTreeNodes = useMemo(
-    () =>
-      buildFullmagModelTree({
+    () => {
+      const baseNodes = buildFullmagModelTree({
         graph: model.modelBuilderGraph,
         sceneDocument: model.sceneDocument,
         studyLabel: launchIntent?.displayName ?? model.modelBuilderGraph?.study.label ?? "Simulation",
@@ -473,18 +481,64 @@ export default function RunSidebar() {
         completedStudyStageIndexes: stageExecutionState.completedStageIndexes,
         studyStageStatuses: stageExecutionState.stageStatuses,
         pipelineStageIndexesByNodeId,
-      }),
+      });
+      if (!builderEnabled) {
+        return baseNodes;
+      }
+      const builderTreeNode = buildGeometryBuilderTreeNodes(
+        builderGraph,
+        builderDirty,
+        selectBuilderTarget,
+      );
+      return [builderTreeNode, ...baseNodes];
+    },
     [
-      model.modelBuilderGraph, model.sceneDocument, model.effectiveFemMesh, tp.hasSolverTelemetry, femDiscretization, model.material,
-      model.scriptBuilderDemagRealization, cmd.capabilities, cmd.metadata,
-      model.mesherSourceKind, model.meshFeOrder, model.meshName,
-      model.solverPlan?.integrator, model.solverPlan?.relaxation?.algorithm,
-      model.solverSettings.integrator, model.solverSettings.relaxAlgorithm, model.solverSettings.torqueTolerance,
-      tp.effectiveDmDt, tp.scalarRows.length, model.worldCenter, model.worldExtent, runtimeDeclaredUniverse?.mode, runtimeDeclaredUniverse?.padding, runtimeDeclaredUniverse?.size,
-      universeRole, hasResultsSection, resultQuantityTree.field, resultQuantityTree.scalar, resultWorkspaceEntriesForTree, eigenModeCount, eigenModeSummaries, hasEigenDispersionArtifact,
-      launchIntent?.displayName, model.airPart?.element_count, model.airPart?.node_count,
-      model.visualizationProjectPresets, model.visualizationLocalPresets, model.activeVisualizationPresetRef,
-      stageExecutionState.activeStageIndex, stageExecutionState.completedStageIndexes, stageExecutionState.stageStatuses, pipelineStageIndexesByNodeId,
+      builderDirty,
+      builderEnabled,
+      builderGraph,
+      cmd.capabilities,
+      cmd.metadata,
+      eigenModeCount,
+      eigenModeSummaries,
+      femDiscretization,
+      hasEigenDispersionArtifact,
+      hasResultsSection,
+      launchIntent?.displayName,
+      model.airPart?.element_count,
+      model.airPart?.node_count,
+      model.effectiveFemMesh,
+      model.material,
+      model.meshFeOrder,
+      model.meshName,
+      model.mesherSourceKind,
+      model.modelBuilderGraph,
+      model.sceneDocument,
+      model.scriptBuilderDemagRealization,
+      model.solverPlan?.integrator,
+      model.solverPlan?.relaxation?.algorithm,
+      model.solverSettings.integrator,
+      model.solverSettings.relaxAlgorithm,
+      model.solverSettings.torqueTolerance,
+      model.visualizationLocalPresets,
+      model.visualizationProjectPresets,
+      model.activeVisualizationPresetRef,
+      model.worldCenter,
+      model.worldExtent,
+      pipelineStageIndexesByNodeId,
+      resultQuantityTree.field,
+      resultQuantityTree.scalar,
+      resultWorkspaceEntriesForTree,
+      runtimeDeclaredUniverse?.mode,
+      runtimeDeclaredUniverse?.padding,
+      runtimeDeclaredUniverse?.size,
+      selectBuilderTarget,
+      stageExecutionState.activeStageIndex,
+      stageExecutionState.completedStageIndexes,
+      stageExecutionState.stageStatuses,
+      tp.effectiveDmDt,
+      tp.hasSolverTelemetry,
+      tp.scalarRows.length,
+      universeRole,
     ],
   );
 
@@ -521,7 +575,22 @@ export default function RunSidebar() {
   }, [activeStageLayout.leftDock, vp.effectiveViewMode, model.effectiveFemMesh?.domain_mesh_mode, model.femDockTab, cmd.interactiveControlsEnabled,
       femDiscretization, model.modelBuilderGraph, model.sceneDocument, vp.previewControlsActive]);
 
-  const activeNodeId = (graphEnabled ? graphSelection.activeNodeId : null) ?? model.selectedSidebarNodeId ?? fallbackNodeId;
+  const builderActiveNodeId = useMemo(() => {
+    if (!builderEnabled) return null;
+    if (builderSelection.type === "primitive") {
+      return `builder-prim-${builderSelection.id}`;
+    }
+    if (builderSelection.type === "universe") {
+      return "builder-universe";
+    }
+    return "builder-root";
+  }, [builderEnabled, builderSelection]);
+
+  const activeNodeId =
+    builderActiveNodeId ??
+    (graphEnabled ? graphSelection.activeNodeId : null) ??
+    model.selectedSidebarNodeId ??
+    fallbackNodeId;
   const filteredModelTreeNodes = useMemo(
     () => filterTreeNodes(modelTreeNodes, treeQuery, treeFilterScope),
     [modelTreeNodes, treeFilterScope, treeQuery],
@@ -531,6 +600,31 @@ export default function RunSidebar() {
     [filteredModelTreeNodes],
   );
   const selectModelNode = useCallback((id: string) => {
+    if (builderEnabled && id.startsWith("builder-")) {
+      if (id === "builder-universe") {
+        selectBuilderTarget({ type: "universe", id: "universe" });
+        model.setSelectedSidebarNodeId(id);
+        return;
+      }
+      if (
+        id === "builder-root" ||
+        id === "builder-primitives" ||
+        id === "builder-lifecycle"
+      ) {
+        clearBuilderSelection();
+        model.setSelectedSidebarNodeId(id);
+        return;
+      }
+      if (id.startsWith("builder-prim-")) {
+        const primitiveSegment = id.slice("builder-prim-".length);
+        const primitiveId = primitiveSegment.split("/")[0];
+        if (primitiveId.length > 0) {
+          selectBuilderTarget({ type: "primitive", id: primitiveId });
+          model.setSelectedSidebarNodeId(`builder-prim-${primitiveId}`);
+          return;
+        }
+      }
+    }
     if (graphEnabled) {
       const resultContext = parseResultNodeContext(id);
       let activeResultNodeId: string | null = null;
@@ -643,7 +737,15 @@ export default function RunSidebar() {
     }
     model.setSelectedEntityId(null);
     model.setFocusedEntityId(null);
-  }, [graphEnabled, model, setGraphSelection, vp]);
+  }, [
+    builderEnabled,
+    clearBuilderSelection,
+    graphEnabled,
+    model,
+    selectBuilderTarget,
+    setGraphSelection,
+    vp,
+  ]);
 
   /* ── Tree click handler ── */
   const handleTreeClick = useCallback((id: string) => {

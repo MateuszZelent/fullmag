@@ -131,8 +131,13 @@ export class ResourceCache {
     return `domain:${genId}:${kind}`;
   }
 
-  static fieldKey(quantityId: string, revision: number, genId: number): string {
-    return `field:${genId}:${quantityId}:${revision}`;
+  static fieldKey(
+    quantityId: string,
+    revision: number,
+    genId: number,
+    component: string = "full",
+  ): string {
+    return `field:${genId}:${quantityId}:${revision}:${component}`;
   }
 
   // ── Internal ────────────────────────────────────────────────────────

@@ -20,6 +20,10 @@ import { useWorkspaceSelection } from "../../../src/hooks/resources/useWorkspace
 import { getLiveApiClient } from "../../../src/api/client/LiveApiClient";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
 import { useSessionRuntimeStore } from "../../../features/session-runtime/store/useSessionRuntimeStore";
+import {
+  DEFAULT_FEM_VIEWPORT_LAYER_STATE,
+  type FemViewportLayerState,
+} from "@/features/viewport-unified/model/unifiedViewportTypes";
 import { useWorkspaceStore } from "../../../lib/workspace/workspace-store";
 import { useBuilderAutoSync } from "./hooks/useBuilderAutoSync";
 import { useDomainLayout } from "./hooks/useDomainLayout";
@@ -328,6 +332,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [femFerromagnetVisibilityMode, setFemFerromagnetVisibilityMode] = useState<
     "hide" | "ghost"
   >("hide");
+  const [femViewportLayers, setFemViewportLayers] = useState<FemViewportLayerState>(
+    DEFAULT_FEM_VIEWPORT_LAYER_STATE,
+  );
   const [fdmVisualizationSettings, setFdmVisualizationSettings] =
     useState<VisualizationPresetFdmState>(DEFAULT_FDM_VISUALIZATION_SETTINGS);
   const [runUntilInput, setRunUntilInput] = useState("1e-12");
@@ -2351,6 +2358,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       setMeshShowArrows(result.globals.meshShowArrows);
       setAirMeshVisible(result.globals.airMeshVisible);
       setAirMeshOpacity(result.globals.airMeshOpacity);
+      setFemViewportLayers(DEFAULT_FEM_VIEWPORT_LAYER_STATE);
     }
   }, [
     selectedSidebarNodeId, selectedObjectId, selectedEntityId,
@@ -2386,7 +2394,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshShowArrows,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
-    femVectorDomainFilter, femFerromagnetVisibilityMode,
+    femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers,
     fdmVisualizationSettings,
     visualizationProjectPresets: projectVisualizationPresets,
     visualizationLocalPresets: localVisualizationPresets,
@@ -2437,7 +2445,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     activeWorkspaceTabId,
     setSolverSettings, setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis, setMeshRenderMode, setMeshOpacity, setMeshClipEnabled, setMeshClipAxis,
     setMeshClipPos, setMeshShowArrows, setFemArrowColorMode, setFemArrowMonoColor, setFemArrowAlpha, setFemArrowLengthScale, setFemArrowThickness, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
-    setFemVectorDomainFilter, setFemFerromagnetVisibilityMode,
+    setFemVectorDomainFilter, setFemFerromagnetVisibilityMode, setFemViewportLayers,
     setSelectedSidebarNodeId, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setAirMeshVisible, setAirMeshOpacity, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
     openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset,
@@ -2446,7 +2454,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshShowArrows,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
-    femVectorDomainFilter, femFerromagnetVisibilityMode,
+    femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers,
     fdmVisualizationSettings, projectVisualizationPresets, localVisualizationPresets, activeVisualizationPresetRef,
     meshSelection, meshOptions, meshQualityData, meshGenerating, femDockTab,
     effectiveFemMesh, femMeshData, femTopologyKey, femColorField,

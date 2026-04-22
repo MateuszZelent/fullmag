@@ -4,7 +4,8 @@
  * P3 — Geometry Builder Overview Inspector
  *
  * Shown when no primitive is selected in the builder.
- * Displays quick-create buttons, builder status, and keyboard shortcuts.
+ * Displays quick-create buttons, builder status, build actions, and
+ * keyboard shortcuts.
  */
 
 import {
@@ -15,9 +16,16 @@ import {
   Triangle,
   Keyboard,
   Info,
+  Layers,
+  Grid3x3,
+  Maximize2,
+  AlertTriangle,
 } from "lucide-react";
+import { useCallback } from "react";
 import { useGeometryBuilderStore } from "../store/useGeometryBuilderStore";
 import type { PrimitiveKind } from "../model/types";
+import { useCommand, useModel } from "@/components/runs/control-room/context-hooks";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 
 const QUICK_CREATE: Array<{
   kind: PrimitiveKind;
@@ -48,11 +56,49 @@ const SHORTCUTS = [
 ];
 
 export default function BuilderOverviewInspector() {
+  const command = useCommand();
+  const model = useModel();
   const addPrimitive = useGeometryBuilderStore((s) => s.addPrimitive);
   const primitiveCount = useGeometryBuilderStore((s) => s.getAllPrimitives().length);
   const dirty = useGeometryBuilderStore((s) => s.dirty);
   const isRunBlocked = useGeometryBuilderStore((s) => s.isRunBlocked());
   const runBlockedReason = useGeometryBuilderStore((s) => s.getRunBlockedReason());
+  const geometryBuildBlockedReason = useGeometryBuilderStore((s) =>
+    s.getGeometryBuildBlockedReason(),
+  );
+  const geometryRealization = useGeometryBuilderStore((s) => s.geometryRealization);
+  const buildGeometry = useGeometryBuilderStore((s) => s.buildGeometry);
+  const buildMesh = useGeometryBuilderStore((s) => s.buildMesh);
+  const fitUniverseToObjects = useGeometryBuilderStore((s) => s.fitUniverseToObjects);
+  const validateAll = useGeometryBuilderStore((s) => s.validateAll);
+  const femDiscretization = resolveFemDiscretization(
+    command.domainCapabilities,
+    command.isFemBackend,
+  );
+  const meshGenerating = model.meshGenerating;
+
+  const validations = validateAll();
+  const hasOutsideBounds = validations.some((v) => v.intersectsUniverseBoundary || v.exceedsUniverse);
+
+  // Build Geometry: enabled when geometry is dirty and store policy allows build
+  const canBuildGeometry =
+    (dirty.geometryDraftDirty || dirty.geometryRealizationDirty) &&
+    !geometryBuildBlockedReason;
+  // Build Mesh: enabled when realization is present and mesh is out of date
+  const canBuildMesh =
+    geometryRealization !== null &&
+    dirty.meshDirty &&
+    !dirty.geometryRealizationDirty &&
+    !meshGenerating;
+  // Fit Universe: enabled when objects cross or exceed universe bounds
+  const canFitUniverse = hasOutsideBounds && primitiveCount > 0;
+
+  const handleBuildMesh = useCallback(() => {
+    buildMesh();
+    if (femDiscretization) {
+      void model.handleStudyDomainMeshGenerate("geometry_builder_build_mesh");
+    }
+  }, [buildMesh, femDiscretization, model]);
 
   return (
     <div className="flex flex-col gap-4 p-3 text-sm">
@@ -74,6 +120,67 @@ export default function BuilderOverviewInspector() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* ── Build Actions ─────────────────────────────────────── */}
+      <div className="space-y-2">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 border-b border-border pb-1">
+          Build
+        </h3>
+        <div className="space-y-1.5">
+          <button
+            type="button"
+            disabled={!canBuildGeometry}
+            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-40 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30"
+            onClick={buildGeometry}
+          >
+            <Layers size={13} />
+            Build Geometry
+            {dirty.geometryDraftDirty && (
+              <span className="ml-auto text-[9px] font-normal text-emerald-400/70">● modified</span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            disabled={!canBuildMesh}
+            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-40 bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25 border border-cyan-500/30"
+            onClick={handleBuildMesh}
+          >
+            <Grid3x3 size={13} />
+            {meshGenerating ? "Queueing Mesh Build…" : "Build Mesh"}
+            {dirty.meshDirty && geometryRealization && (
+              <span className="ml-auto text-[9px] font-normal text-cyan-400/70">● out of date</span>
+            )}
+          </button>
+
+          {canFitUniverse && (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-colors bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 border border-amber-500/30"
+              onClick={() => fitUniverseToObjects()}
+            >
+              <Maximize2 size={13} />
+              Fit Universe
+              <span className="ml-auto text-[9px] font-normal text-amber-400/70">
+                {validations.filter((v) => v.intersectsUniverseBoundary || v.exceedsUniverse).length} outside
+              </span>
+            </button>
+          )}
+        </div>
+
+        {/* Build status messages */}
+        {!canBuildGeometry && !dirty.geometryDraftDirty && !dirty.geometryRealizationDirty && (
+          <p className="text-[10px] text-muted-foreground">
+            {geometryRealization ? "Geometry is up to date." : "Geometry not built. Click Build Geometry first."}
+          </p>
+        )}
+        {geometryBuildBlockedReason && (
+          <div className="flex items-start gap-1.5 text-[10px] text-red-400">
+            <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+            <span>{geometryBuildBlockedReason}</span>
+          </div>
+        )}
       </div>
 
       {/* ── Status ───────────────────────────────────────────── */}

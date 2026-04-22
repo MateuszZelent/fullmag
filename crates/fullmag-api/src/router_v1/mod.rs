@@ -53,6 +53,18 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
             get(handlers::fields::get_field_vector),
         )
         .route(
+            "/v1/live/current/fields/:quantity_id/slice/meta",
+            get(handlers::fields::get_field_slice_meta),
+        )
+        .route(
+            "/v1/live/current/fields/:quantity_id/slice/scalar",
+            get(handlers::fields::get_field_slice_scalar),
+        )
+        .route(
+            "/v1/live/current/fields/:quantity_id/slice/arrows",
+            get(handlers::fields::get_field_slice_arrows),
+        )
+        .route(
             "/v1/live/current/scalars",
             get(handlers::scalars::get_scalars),
         )

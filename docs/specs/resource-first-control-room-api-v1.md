@@ -199,6 +199,8 @@ GET    /v1/live/current/workspace/*
 PUT    /v1/live/current/workspace/*
 GET    /v1/live/current/mesh/summary
 GET    /v1/live/current/mesh/builds/active
+GET    /v1/live/current/mesh/builds/history
+GET    /v1/live/current/mesh/builds/last-success
 POST   /v1/live/current/mesh/builds/commands
 GET    /v1/live/current/mesh/universe/config
 PUT    /v1/live/current/mesh/universe/config
@@ -298,6 +300,8 @@ Implemented and canonical today:
 - `commands/:command_id`,
 - `mesh/summary`,
 - `mesh/builds/active`,
+- `mesh/builds/history`,
+- `mesh/builds/last-success`,
 - `mesh/builds/commands`,
 - `mesh/universe/config`,
 - `mesh/shared-domain/config`,
@@ -410,6 +414,9 @@ Minimum requirements:
 - typed error mapping for control-room failures,
 - optional ETag/revision headers for large binary resources and selected
   heavier JSON read-models where HTTP revalidation materially reduces transfer.
+  Current JSON examples include `mesh/summary`, `mesh/builds/active`,
+  `mesh/builds/history`, `mesh/builds/last-success`,
+  `mesh/shared-domain/manifest`, `logs/engine`, and `artifacts`.
 
 ## 7. Anti-regression rules
 

@@ -30,10 +30,13 @@ mod artifacts;
 mod assets;
 mod error;
 mod feature_flags;
+mod field_projection;
+mod field_slice;
 mod field_store;
 mod openapi;
 mod preview;
 mod quantities;
+mod quantity_data_plane;
 mod router_v1;
 mod schemas;
 mod script;
@@ -332,6 +335,7 @@ async fn main() {
         current_control_events: watch::channel(0).0,
         current_control_next_seq: Arc::new(Mutex::new(0)),
         feature_flags,
+        quantity_data_plane: Arc::new(crate::quantity_data_plane::QuantityDataPlaneStore::new()),
     });
 
     let cors = router_v1::middleware::cors::cors_layer();

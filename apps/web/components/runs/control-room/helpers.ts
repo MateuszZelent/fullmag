@@ -64,6 +64,7 @@ export function sameDisplaySelection(
     left.kind === right.kind &&
     left.view_mode === right.view_mode &&
     left.field_component === right.field_component &&
+    Boolean(left.vector_glyphs ?? false) === Boolean(right.vector_glyphs ?? false) &&
     left.layer === right.layer &&
     left.all_layers === right.all_layers &&
     left.x_chosen_size === right.x_chosen_size &&
@@ -95,6 +96,7 @@ export function buildRequestedDisplaySelection({
       PreviewConfig,
       | "quantity"
       | "component"
+      | "vector_glyphs"
       | "layer"
       | "all_layers"
       | "every_n"
@@ -150,6 +152,10 @@ export function buildRequestedDisplaySelection({
         field_component:
           displaySelection?.selection.field_component ??
           fallbackDisplaySelection.field_component,
+        vector_glyphs:
+          displaySelection?.selection.vector_glyphs ??
+          previewConfig?.vector_glyphs ??
+          false,
       };
     })(),
     layer:
@@ -191,6 +197,7 @@ export function buildRequestedDisplaySelection({
   if (nextSelection.kind !== "vector_field") {
     nextSelection.view_mode = "2d";
     nextSelection.field_component = "magnitude";
+    nextSelection.vector_glyphs = false;
   }
 
   return nextSelection;

@@ -358,8 +358,11 @@ fn sync_display_selection_from_status(shared: &Arc<(Mutex<CurrentLiveControlStat
             return;
         }
         state.display_selection = next_selection.clone();
-        state.queue.retain(|command| !is_display_sync_kind(&command.kind));
-        state.queue
+        state
+            .queue
+            .retain(|command| !is_display_sync_kind(&command.kind));
+        state
+            .queue
             .push_back(synthetic_display_sync_command(next_selection));
         cvar.notify_all();
     }
@@ -961,9 +964,12 @@ fn runtime_engine_metadata_from_provenance(
                 "CPU FEM (MFEM/libCEED/hypre)",
                 "cpu",
             ),
-            "fem_cpu_baseline_internal" => {
-                ("fem", "fem_cpu_baseline_internal", "CPU FEM Baseline", "cpu")
-            }
+            "fem_cpu_baseline_internal" => (
+                "fem",
+                "fem_cpu_baseline_internal",
+                "CPU FEM Baseline",
+                "cpu",
+            ),
             "cpu_baseline_fem_eigen" => (
                 "fem_eigen",
                 "fem_eigen_cpu_baseline",
@@ -993,9 +999,12 @@ fn runtime_engine_metadata_from_provenance(
                 "CPU FEM Eigen Baseline",
                 "cpu",
             ),
-            other if other.contains("fem") && other.contains("cpu") => {
-                ("fem", "fem_cpu_native", "CPU FEM (MFEM/libCEED/hypre)", "cpu")
-            }
+            other if other.contains("fem") && other.contains("cpu") => (
+                "fem",
+                "fem_cpu_native",
+                "CPU FEM (MFEM/libCEED/hypre)",
+                "cpu",
+            ),
             other if other.contains("cuda") => ("fdm", "fdm_cuda", "CUDA FDM", "cuda"),
             _ => ("unknown", "unknown", "Runtime", "unknown"),
         };

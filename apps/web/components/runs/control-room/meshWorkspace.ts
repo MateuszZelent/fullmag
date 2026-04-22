@@ -306,9 +306,14 @@ export function deriveMeshBuildRuntimeState(args: {
   meshGenerating: boolean;
   scriptSyncBusy: boolean;
 }): MeshBuildRuntimeState {
-  const { meshWorkspace, meshGenerating, scriptSyncBusy } = args;
+  const { meshWorkspace, commandStatus, meshGenerating, scriptSyncBusy } = args;
+  const commandRejected =
+    commandStatus?.state === "rejected" ||
+    commandStatus?.completion_state === "failed" ||
+    commandStatus?.completion_state === "rejected";
+  const commandFailureReason = commandRejected ? (commandStatus?.reason ?? null) : null;
   const workspaceFailed = meshWorkspace?.last_build_error ?? null;
-  const failureMessage = workspaceFailed;
+  const failureMessage = commandFailureReason ?? workspaceFailed;
   if (failureMessage) {
     return {
       status: "failure",

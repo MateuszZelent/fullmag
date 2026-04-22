@@ -127,11 +127,6 @@ export function useDockLayoutRuntime({
       const nextModelJson = result.envelope.model;
       const nextSerialized = JSON.stringify(nextModelJson);
 
-      if (currentModelJsonRef.current !== nextSerialized) {
-        setModel(Model.fromJson(cloneModel(nextModelJson)));
-        currentModelJsonRef.current = nextSerialized;
-      }
-
       setMetrics({
         preset,
         templateId: result.envelope.templateId,
@@ -150,11 +145,11 @@ export function useDockLayoutRuntime({
         });
       }
 
+      currentModelJsonRef.current = nextSerialized;
       if (result.changed) {
         persistModel(nextModelJson);
         return;
       }
-
       persistModel(raw);
     },
     [persistModel, preset],

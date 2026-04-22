@@ -45,6 +45,8 @@ export interface RequestOptions {
   timeout?: number;
   headers?: HeadersInit;
   cache?: RequestCache;
+  /** When true, a 304 Not Modified response is returned as-is instead of being treated as an error. */
+  allowNotModified?: boolean;
 }
 
 // ── Client ────────────────────────────────────────────────────────────

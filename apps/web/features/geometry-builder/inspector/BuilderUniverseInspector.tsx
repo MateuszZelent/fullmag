@@ -4,12 +4,15 @@
  * P3 — Geometry Builder Universe Inspector
  *
  * Inspector panel for the Universe node in geometry builder.
- * Shows universe bounds, origin, constraint policy, and visibility.
+ * Shows: universe bounds, origin, constraint policy, diagnostics (crossing
+ * / outside objects), and action buttons (Fit, Center, Reset).
  */
 
-import { Box, Eye, EyeOff, Shield } from "lucide-react";
+import { Box, Eye, EyeOff, Maximize2, AlignCenter, RotateCcw, AlertTriangle, CheckCircle } from "lucide-react";
 import { useGeometryBuilderStore } from "../store/useGeometryBuilderStore";
 import type { Vec3, UniverseConstraintPolicy } from "../model/types";
+
+// ── Helpers ───────────────────────────────────────────────────
 
 function formatSI(value: number): string {
   const abs = Math.abs(value);
@@ -17,6 +20,8 @@ function formatSI(value: number): string {
   if (abs >= 1e-6) return `${(value * 1e6).toFixed(3)} μm`;
   return `${(value * 1e9).toFixed(3)} nm`;
 }
+
+// ── Sub-components ────────────────────────────────────────────
 
 function NumberField({
   label,
@@ -66,13 +71,13 @@ function Vec3Field({
   return (
     <div className="space-y-1">
       <div className="text-xs font-medium text-muted-foreground">{label}</div>
-      {labels.map((axisLabel, i) => (
+      {(labels as string[]).map((axisLabel, i) => (
         <NumberField
           key={axisLabel}
           label={axisLabel}
           value={value[i]}
           onChange={(v) => {
-            const next: Vec3 = [...value];
+            const next: Vec3 = [...value] as Vec3;
             next[i] = v;
             onChange(next);
           }}
@@ -100,11 +105,36 @@ function Section({
   );
 }
 
-const POLICY_LABELS: Record<UniverseConstraintPolicy, string> = {
-  block_commit: "Block commit",
-  clamp_on_release: "Clamp on release",
-  preview_only_block_commit: "Preview + block commit",
-};
+// ── Policy configuration ──────────────────────────────────────
+
+const POLICY_OPTIONS: Array<{
+  value: UniverseConstraintPolicy;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "preview_only_block_build",
+    label: "Preview + Block Build",
+    description: "Show warning; block Build Geometry when objects exceed bounds.",
+  },
+  {
+    value: "block_build",
+    label: "Block Build",
+    description: "Strictly block Build Geometry for any out-of-bounds object.",
+  },
+  {
+    value: "auto_fit_universe",
+    label: "Auto-fit Universe",
+    description: "Automatically expand the Universe to fit all objects before build.",
+  },
+  {
+    value: "clip_with_explicit_ack",
+    label: "Clip with Acknowledgment",
+    description: "Clip objects at Universe boundary; requires explicit confirmation.",
+  },
+];
+
+// ── Main component ────────────────────────────────────────────
 
 export default function BuilderUniverseInspector() {
   const universe = useGeometryBuilderStore((s) => s.graph.universe);
@@ -112,6 +142,33 @@ export default function BuilderUniverseInspector() {
   const setUniverseSize = useGeometryBuilderStore((s) => s.setUniverseSize);
   const setUniverseOrigin = useGeometryBuilderStore((s) => s.setUniverseOrigin);
   const setUniverseVisibility = useGeometryBuilderStore((s) => s.setUniverseVisibility);
+  const setUniversePolicy = useGeometryBuilderStore((s) => s.setUniversePolicy);
+  const clipAcknowledged = useGeometryBuilderStore((s) => s.clipAcknowledged);
+  const setClipAcknowledged = useGeometryBuilderStore((s) => s.setClipAcknowledged);
+  const fitUniverseToObjects = useGeometryBuilderStore((s) => s.fitUniverseToObjects);
+  const resetUniverseToDefault = useGeometryBuilderStore((s) => s.resetUniverseToDefault);
+  const validateAll = useGeometryBuilderStore((s) => s.validateAll);
+  const getAllPrimitives = useGeometryBuilderStore((s) => s.getAllPrimitives);
+  const setUniverseOriginToCenter = () => {
+    // Center origin on enabled primitives bounding box
+    const prims = getAllPrimitives().filter((p) => p.enabled);
+    if (prims.length === 0) {
+      setUniverseOrigin([0, 0, 0]);
+      return;
+    }
+    // Compute centroid of translations
+    const sum = prims.reduce(
+      (acc, p) => [acc[0] + p.transform.translation[0], acc[1] + p.transform.translation[1], acc[2] + p.transform.translation[2]] as Vec3,
+      [0, 0, 0] as Vec3,
+    );
+    setUniverseOrigin([sum[0] / prims.length, sum[1] / prims.length, sum[2] / prims.length]);
+  };
+
+  // Diagnostics
+  const validations = validateAll();
+  const crossingCount = validations.filter((v) => v.intersectsUniverseBoundary && !v.exceedsUniverse).length;
+  const outsideCount = validations.filter((v) => v.exceedsUniverse).length;
+  const hasBoundaryIssues = crossingCount > 0 || outsideCount > 0;
 
   return (
     <div className="flex flex-col gap-4 p-3 text-sm">
@@ -146,6 +203,121 @@ export default function BuilderUniverseInspector() {
         />
       </Section>
 
+      {/* ── Diagnostics ──────────────────────────────────────── */}
+      <Section title="Diagnostics">
+        {!hasBoundaryIssues ? (
+          <div className="flex items-center gap-1.5 text-[10px] text-emerald-400">
+            <CheckCircle size={12} />
+            <span>All objects within Universe bounds.</span>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {outsideCount > 0 && (
+              <div className="flex items-start gap-1.5 text-[10px] text-red-400">
+                <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                <span>
+                  {outsideCount} object{outsideCount !== 1 ? "s" : ""} exceed Universe bounds. Fit Universe, move objects, or explicitly clip.
+                </span>
+              </div>
+            )}
+            {crossingCount > 0 && (
+              <div className="flex items-start gap-1.5 text-[10px] text-amber-400">
+                <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                <span>
+                  {crossingCount} object{crossingCount !== 1 ? "s" : ""} cross the Universe boundary.
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </Section>
+
+      {/* ── Actions ──────────────────────────────────────────── */}
+      <Section title="Actions">
+        <div className="space-y-1.5">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-foreground bg-muted/50 hover:bg-muted border border-border/50 hover:border-border transition-colors disabled:opacity-40 disabled:pointer-events-none"
+            onClick={() => fitUniverseToObjects()}
+            title="Expand Universe to fit all enabled objects with 10% padding"
+          >
+            <Maximize2 size={12} className="text-amber-400" />
+            Fit to Objects
+          </button>
+
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-foreground bg-muted/50 hover:bg-muted border border-border/50 hover:border-border transition-colors"
+            onClick={setUniverseOriginToCenter}
+            title="Centre the Universe origin on the mean position of all enabled objects"
+          >
+            <AlignCenter size={12} className="text-sky-400" />
+            Center on Objects
+          </button>
+
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-foreground bg-muted/50 hover:bg-muted border border-border/50 hover:border-border transition-colors"
+            onClick={resetUniverseToDefault}
+            title="Reset Universe to default 1 µm³ cube centred at origin"
+          >
+            <RotateCcw size={12} className="text-muted-foreground" />
+            Reset to Default
+          </button>
+        </div>
+      </Section>
+
+      {/* ── Constraint policy ────────────────────────────────── */}
+      <Section title="Constraint Policy">
+        <div className="space-y-1">
+          {POLICY_OPTIONS.map(({ value, label, description }) => (
+            <label
+              key={value}
+              className="flex items-start gap-2 rounded-md p-2 cursor-pointer hover:bg-muted/40 transition-colors"
+            >
+              <input
+                type="radio"
+                name="universe-policy"
+                value={value}
+                checked={constraintPolicy === value}
+                onChange={() => setUniversePolicy(value)}
+                className="mt-0.5 accent-primary shrink-0"
+              />
+              <div>
+                <div className="text-xs font-medium text-foreground">{label}</div>
+                <div className="text-[10px] text-muted-foreground leading-tight mt-0.5">{description}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+        {constraintPolicy === "clip_with_explicit_ack" && hasBoundaryIssues ? (
+          <div className="mt-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2">
+            <div className="flex items-start gap-1.5 text-[10px] text-amber-400">
+              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+              <span>
+                Clipping changes solver geometry. Confirm clipping before Build Geometry.
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                className={`rounded px-2.5 py-1 text-[10px] font-medium transition-colors ${
+                  clipAcknowledged
+                    ? "border border-emerald-500/40 bg-emerald-500/20 text-emerald-300"
+                    : "border border-amber-500/40 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30"
+                }`}
+                onClick={() => setClipAcknowledged(!clipAcknowledged)}
+              >
+                {clipAcknowledged ? "Clipping acknowledged" : "Acknowledge clipping"}
+              </button>
+              {clipAcknowledged ? (
+                <span className="text-[10px] text-emerald-300/80">Build Geometry unlocked for clip policy.</span>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </Section>
+
       {/* ── Visualization ────────────────────────────────────── */}
       <Section title="Display">
         <button
@@ -160,18 +332,6 @@ export default function BuilderUniverseInspector() {
           {universe.visibility ? <Eye size={12} /> : <EyeOff size={12} />}
           {universe.visibility ? "Visible" : "Hidden"}
         </button>
-      </Section>
-
-      {/* ── Constraint policy ────────────────────────────────── */}
-      <Section title="Constraint Policy">
-        <div className="flex items-center gap-2">
-          <Shield size={14} className="text-amber-400" />
-          <span className="text-xs">{POLICY_LABELS[constraintPolicy]}</span>
-        </div>
-        <div className="text-[10px] text-muted-foreground">
-          Objects that exceed Universe bounds will be previewed with a warning.
-          Commit is blocked until placement is valid.
-        </div>
       </Section>
     </div>
   );

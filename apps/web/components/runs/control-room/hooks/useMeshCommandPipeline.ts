@@ -104,6 +104,7 @@ export function useMeshCommandPipeline({
       active_quantity_id: selection.quantity,
       view_mode: selection.view_mode,
       field_component: selection.field_component,
+      vector_glyphs: Boolean(selection.vector_glyphs ?? false),
       auto_contrast: selection.auto_scale_enabled,
       vector_density: selection.every_n,
       slice_mode: selection.all_layers ? "all" : "single",
@@ -135,6 +136,9 @@ export function useMeshCommandPipeline({
       patch.field_component === "magnitude"
     ) {
       nextSelection.field_component = patch.field_component;
+    }
+    if (typeof patch.vector_glyphs === "boolean") {
+      nextSelection.vector_glyphs = patch.vector_glyphs;
     }
     if (typeof patch.auto_contrast === "boolean") {
       nextSelection.auto_scale_enabled = patch.auto_contrast;
@@ -354,6 +358,7 @@ export function useMeshCommandPipeline({
         displayPatch = {
           view_mode: nextSelection.view_mode,
           field_component: nextSelection.field_component,
+          vector_glyphs: Boolean(nextSelection.vector_glyphs ?? false),
         };
         break;
       case "/layer":

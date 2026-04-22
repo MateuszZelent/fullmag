@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   BinaryResourceResponse,
+  JsonResourceResponse,
   MeshActiveBuildResource,
   MeshBuildHistoryResource,
   MeshCapabilitiesResource,
@@ -63,6 +64,7 @@ function useMeshJsonResource<T>(
   resourceName: string,
   fetcher: () => Promise<T>,
   options?: MeshHookOptions,
+  responseFetcher?: (opts?: RequestOptions) => Promise<JsonResourceResponse<T>>,
 ): MeshResourceResult<T> {
   const enabled = options?.enabled ?? true;
   const sessionKey = options?.sessionKey ?? null;
@@ -73,6 +75,8 @@ function useMeshJsonResource<T>(
   const mountedRef = useRef(true);
   const lastFetchKeyRef = useRef<string | null>(null);
   const fetchKey = `${sessionKey ?? "no-session"}:${resourceName}:${revision ?? "no-revision"}`;
+  const cacheKey = `mesh-json:${fetchKey}`;
+  const cacheRevision = revision ?? 0;
 
   const refresh = useCallback(async () => {
     if (!enabled || !sessionKey) {
@@ -86,7 +90,46 @@ function useMeshJsonResource<T>(
 
     setLoading(true);
     try {
-      const nextData = await fetcher();
+      const client = getLiveApiClient();
+      const cached = client.getCache().get<T>(cacheKey);
+      if (cached && cached.revision === cacheRevision) {
+        lastFetchKeyRef.current = fetchKey;
+        setData(cached.data);
+        setError(null);
+        setLoading(false);
+        return;
+      }
+
+      let nextData: T;
+      if (responseFetcher) {
+        const response = await responseFetcher({
+          cache: "default",
+          headers:
+            cached?.eTag != null
+              ? {
+                  "If-None-Match": cached.eTag,
+                }
+              : undefined,
+        });
+        nextData =
+          response.status === 304 && cached
+            ? cached.data
+            : (response.data as T);
+        if (response.data == null && !(response.status === 304 && cached)) {
+          nextData = await fetcher();
+        }
+        if (response.status !== 304 && response.data != null) {
+          client.getCache().set(
+            cacheKey,
+            response.data,
+            cacheRevision,
+            0,
+            response.headers.get("etag"),
+          );
+        }
+      } else {
+        nextData = await fetcher();
+      }
       if (!mountedRef.current) {
         return;
       }
@@ -112,7 +155,7 @@ function useMeshJsonResource<T>(
       setError(apiError);
       setLoading(false);
     }
-  }, [enabled, fetchKey, fetcher, resourceName, sessionKey]);
+  }, [cacheKey, cacheRevision, enabled, fetchKey, fetcher, resourceName, responseFetcher, sessionKey]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -319,16 +362,19 @@ export function useMeshBuilds(options?: {
     "mesh-builds-active",
     () => getLiveApiClient().mesh.getActiveBuild(),
     options,
+    (opts) => getLiveApiClient().mesh.getActiveBuildResponse(opts),
   );
   const history = useMeshJsonResource<MeshBuildHistoryResource>(
     "mesh-builds-history",
     () => getLiveApiClient().mesh.getBuildHistory(),
     options,
+    (opts) => getLiveApiClient().mesh.getBuildHistoryResponse(opts),
   );
   const lastSuccess = useMeshJsonResource<MeshLastSuccessfulBuildResource>(
     "mesh-builds-last-success",
     () => getLiveApiClient().mesh.getLastSuccessfulBuild(),
     options,
+    (opts) => getLiveApiClient().mesh.getLastSuccessfulBuildResponse(opts),
   );
 
   const refresh = useCallback(async () => {
