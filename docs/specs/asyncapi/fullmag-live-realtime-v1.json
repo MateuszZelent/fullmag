@@ -97,6 +97,9 @@
           "artifacts_revision",
           "engine_log_revision",
           "display_revision",
+          "workspace_revision",
+          "mesh_revision",
+          "mesh_build_revision",
           "commands_revision",
           "stages_revision"
         ],
@@ -107,6 +110,9 @@
           "artifacts_revision": { "type": "integer", "minimum": 0 },
           "engine_log_revision": { "type": "integer", "minimum": 0 },
           "display_revision": { "type": "integer", "minimum": 0 },
+          "workspace_revision": { "type": "integer", "minimum": 0 },
+          "mesh_revision": { "type": "integer", "minimum": 0 },
+          "mesh_build_revision": { "type": "integer", "minimum": 0 },
           "commands_revision": { "type": "integer", "minimum": 0 },
           "stages_revision": { "type": "integer", "minimum": 0 },
           "scene_revision": { "type": ["integer", "null"], "minimum": 0 }
@@ -125,6 +131,9 @@
               "domain",
               "artifacts",
               "logs",
+              "workspace",
+              "mesh",
+              "mesh_builds",
               "commands",
               "stages",
               "scene_document"

@@ -201,6 +201,7 @@ GET    /v1/live/current/mesh/universe/config
 PUT    /v1/live/current/mesh/universe/config
 GET    /v1/live/current/mesh/shared-domain/config
 PUT    /v1/live/current/mesh/shared-domain/config
+GET    /v1/live/current/mesh/shared-domain/manifest
 GET    /v1/live/current/mesh/objects/:object_id/config
 PUT    /v1/live/current/mesh/objects/:object_id/config
 GET    /v1/live/current/authoring/scene
@@ -229,8 +230,14 @@ Rules:
 - workspace resources carry selection/ribbon/layout state and must not mutate physics semantics,
 - the currently mounted workspace subset is `selection`, `tree/active-node`, `ribbon`, and `layout`,
 - `mesh/*` is the canonical family for mounted mesh summary, active build projection, universe/shared-domain/object config,
+- `mesh/shared-domain/manifest` is the thin JSON bridge for FEM tree/selection metadata such as
+  `mesh_parts` and `object_segments`,
 - `POST /mesh/builds/commands` is the canonical remesh enqueue path,
 - `authoring/scene` is the canonical full-document authoring resource,
+- the intended 3D browser pipeline is three-layered:
+  canonical `authoring/scene` for primitives and transforms,
+  `mesh/shared-domain/manifest` plus binary topology for realized mesh structure,
+  and `display` plus quantity resources for shading/vector overlays,
 - the flat `scene/document` placement has been retired from the public router,
 - narrow `authoring/*` endpoints are semantic projections over the same scene revision,
 - `authoring/study/runtime` is the canonical narrow surface for requested backend/device/precision/mode intent,
@@ -247,6 +254,7 @@ Rules:
 - family-specific command routes are allowed where they keep intent explicit, with
   `mesh/builds/commands` now mounted as the canonical remesh route,
 - `POST /commands` accepts only the discriminated `kind` union body,
+- public mesh/remesh enqueue is no longer part of the generic `/commands` surface,
 - scene/script synchronization must preserve canonical Python and `ProblemIR` semantics.
 
 ### 3.5 Supporting resource families

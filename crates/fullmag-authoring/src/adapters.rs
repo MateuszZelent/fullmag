@@ -1,9 +1,10 @@
 use crate::{
     validate_scene_document, MagnetizationAsset, SceneCurrentModulesState, SceneDocument,
     SceneDocumentValidationError, SceneEditorState, SceneGeometry, SceneMaterialAsset,
-    SceneMetadata, SceneObject, SceneOutputsState, SceneStudyState, ScriptBuilderGeometryEntry,
-    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
-    ScriptBuilderMagnetizationState, ScriptBuilderPerGeometryMeshState, ScriptBuilderState,
+    SceneMeshInterface, SceneMetadata, SceneObject, SceneOutputsState, SceneStudyState,
+    ScriptBuilderGeometryEntry, ScriptBuilderMagneticInteractionEntry,
+    ScriptBuilderMagneticInteractionKind, ScriptBuilderMagnetizationState,
+    ScriptBuilderMeshInterfaceState, ScriptBuilderPerGeometryMeshState, ScriptBuilderState,
     StudyPipelineNode, Transform3D,
 };
 use serde_json::{Map, Value};
@@ -70,6 +71,11 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             universe_mesh: builder.universe.clone(),
             shared_domain_mesh: builder.mesh.clone(),
             mesh_defaults: builder.mesh.clone(),
+            mesh_interfaces: builder
+                .mesh_interfaces
+                .iter()
+                .map(scene_mesh_interface_from_builder)
+                .collect(),
             stages: builder.stages.clone(),
             study_pipeline: builder.study_pipeline.clone(),
             initial_state: builder.initial_state.clone(),
@@ -173,6 +179,12 @@ pub fn scene_document_to_script_builder(
         study_pipeline: normalized_scene.study.study_pipeline.clone(),
         initial_state: normalized_scene.study.initial_state.clone(),
         geometries,
+        mesh_interfaces: normalized_scene
+            .study
+            .mesh_interfaces
+            .iter()
+            .map(builder_mesh_interface_from_scene)
+            .collect(),
         current_modules: normalized_scene.current_modules.modules.clone(),
         excitation_analysis: normalized_scene.current_modules.excitation_analysis.clone(),
     })
@@ -256,6 +268,17 @@ pub fn scene_document_to_script_builder_overrides(
                 })
             },
         },
+        "mesh_interfaces": scene
+            .study
+            .mesh_interfaces
+            .iter()
+            .map(|interface| serde_json::json!({
+                "interface_id": interface.interface_id,
+                "owner_a": interface.owner_a,
+                "owner_b": interface.owner_b,
+                "config": geometry_mesh_override_value(&interface.config),
+            }))
+            .collect::<Vec<_>>(),
         "universe": builder.universe.as_ref().map(|universe| serde_json::json!({
             "mode": universe.mode,
             "size": universe.size,
@@ -316,6 +339,28 @@ pub fn scene_document_to_script_builder_overrides(
             "samples": analysis.samples,
         })).unwrap_or(Value::Null),
     }))
+}
+
+fn scene_mesh_interface_from_builder(
+    interface: &ScriptBuilderMeshInterfaceState,
+) -> SceneMeshInterface {
+    SceneMeshInterface {
+        interface_id: interface.interface_id.clone(),
+        owner_a: interface.owner_a.clone(),
+        owner_b: interface.owner_b.clone(),
+        config: interface.config.clone(),
+    }
+}
+
+fn builder_mesh_interface_from_scene(
+    interface: &SceneMeshInterface,
+) -> ScriptBuilderMeshInterfaceState {
+    ScriptBuilderMeshInterfaceState {
+        interface_id: interface.interface_id.clone(),
+        owner_a: interface.owner_a.clone(),
+        owner_b: interface.owner_b.clone(),
+        config: interface.config.clone(),
+    }
 }
 
 fn normalize_study_pipeline_labels(scene: &mut SceneDocument) {
@@ -1191,6 +1236,49 @@ mod tests {
                     build_requested: true,
                 }),
             }],
+            mesh_interfaces: vec![ScriptBuilderMeshInterfaceState {
+                interface_id: "object:flower|air".to_string(),
+                owner_a: "object:flower".to_string(),
+                owner_b: "air".to_string(),
+                config: ScriptBuilderPerGeometryMeshState {
+                    mode: "custom".to_string(),
+                    size_mode: Some("custom".to_string()),
+                    hmax: String::new(),
+                    hmin: String::new(),
+                    maximum_element_size: None,
+                    minimum_element_size: None,
+                    calibrate_for: None,
+                    size_preset: None,
+                    order: None,
+                    source: None,
+                    algorithm_2d: None,
+                    algorithm_3d: None,
+                    size_factor: None,
+                    size_from_curvature: None,
+                    curvature_factor: None,
+                    growth_rate: String::new(),
+                    maximum_element_growth_rate: None,
+                    narrow_regions: None,
+                    narrow_region_resolution: None,
+                    resolved_size_from_curvature: None,
+                    resolved_narrow_regions: None,
+                    resolved_growth_rate: None,
+                    smoothing_steps: None,
+                    optimize: None,
+                    optimize_iterations: None,
+                    compute_quality: None,
+                    per_element_quality: None,
+                    bulk_hmax: None,
+                    bulk_hmin: None,
+                    interface_hmax: Some("4e-9".to_string()),
+                    interface_thickness: Some("8e-9".to_string()),
+                    transition_distance: Some("24e-9".to_string()),
+                    transition_growth: Some(1.2),
+                    size_fields: Vec::new(),
+                    operations: Vec::new(),
+                    build_requested: false,
+                },
+            }],
             current_modules: vec![ScriptBuilderCurrentModuleState {
                 kind: "antenna_field_source".to_string(),
                 name: "cpw_1".to_string(),
@@ -1228,6 +1316,7 @@ mod tests {
         assert_eq!(round_trip.mesh, builder.mesh);
         assert_eq!(round_trip.universe, builder.universe);
         assert_eq!(round_trip.study_pipeline, builder.study_pipeline);
+        assert_eq!(round_trip.mesh_interfaces, builder.mesh_interfaces);
         assert_eq!(round_trip.initial_state, builder.initial_state);
         assert_eq!(round_trip.current_modules, builder.current_modules);
         assert_eq!(round_trip.excitation_analysis, builder.excitation_analysis);

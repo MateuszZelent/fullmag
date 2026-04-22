@@ -26,7 +26,7 @@ pub use display::{
     DisplayViewMode,
 };
 pub use events::{
-    CommandAckEvent, CommandCompletedEvent, CommandRejectedEvent, DisplayUpdatedEvent,
-    RuntimeEventEnvelope, RuntimeStatus, RuntimeStatusChangedEvent, StepDeltaEvent,
+    CommandAckEvent, CommandCompletedEvent, CommandRejectedEvent, RuntimeEventEnvelope,
+    RuntimeStatus, RuntimeStatusChangedEvent, StepDeltaEvent,
 };
 pub use runtime::InteractiveRuntime;

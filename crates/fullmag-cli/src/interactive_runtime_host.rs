@@ -79,7 +79,7 @@ impl CurrentLiveDisplaySelectionHandle {
         std::thread::spawn(move || {
             let mut after_seq = 0u64;
             while !worker.stop.load(Ordering::Relaxed) {
-                match wait_for_current_live_control(after_seq, 15_000) {
+                match wait_for_current_live_control(after_seq, 1_000) {
                     Ok(Some(command)) => {
                         after_seq = after_seq.max(command.seq);
                         eprintln!(
@@ -97,12 +97,11 @@ impl CurrentLiveDisplaySelectionHandle {
                         }
                         let (lock, cvar) = &*worker.shared;
                         if let Ok(mut state) = lock.lock() {
-                            apply_preview_command_to_state(&mut state, &command);
                             state.queue.push_back(command);
                             cvar.notify_all();
                         }
                     }
-                    Ok(None) => {}
+                    Ok(None) => sync_display_selection_from_status(&worker.shared),
                     Err(_) => std::thread::sleep(Duration::from_millis(100)),
                 }
             }
@@ -123,10 +122,10 @@ impl CurrentLiveDisplaySelectionHandle {
         self.display_selection_snapshot().preview_request()
     }
 
-    pub(super) fn apply_preview_command(&self, command: &SessionCommand) {
+    pub(super) fn apply_display_sync_command(&self, command: &SessionCommand) {
         let (lock, _) = &*self.shared;
         if let Ok(mut state) = lock.lock() {
-            apply_preview_command_to_state(&mut state, command);
+            apply_display_sync_to_state(&mut state, command);
         }
     }
 
@@ -152,33 +151,34 @@ impl CurrentLiveDisplaySelectionHandle {
         state.queue.pop_front()
     }
 
-    /// Drain all consecutive preview/display-selection commands, apply each to
+    /// Drain all consecutive display-sync commands, apply each to
     /// the internal display selection state, and return only the **last** one.
-    /// Non-preview commands are returned immediately without draining.
-    /// This prevents processing N identical preview refreshes when a burst of
-    /// display_selection_update commands arrives.
+    /// Non-display commands are returned immediately without draining.
+    /// This prevents redundant refresh work when several display revisions are
+    /// observed in quick succession.
     pub(super) fn wait_next_command_coalesced(&self, timeout: Duration) -> Option<SessionCommand> {
         let cmd = self.wait_next_command(timeout)?;
-        if !is_preview_kind(&cmd.kind) {
+        if !is_display_sync_kind(&cmd.kind) {
             return Some(cmd);
         }
-        // Apply the first preview command to display selection state.
-        apply_preview_command_to_state_external(&self.shared, &cmd);
+        apply_display_sync_to_state_external(&self.shared, &cmd);
         let mut latest = cmd;
         let mut coalesced_count = 0u32;
-        // Drain any additional preview commands already queued.
+        // Drain any additional display-sync commands already queued.
         loop {
             let (lock, _) = &*self.shared;
             let mut state = match lock.lock() {
                 Ok(s) => s,
                 Err(_) => break,
             };
-            // Find the first preview command in the queue.
-            let preview_idx = state.queue.iter().position(|c| is_preview_kind(&c.kind));
-            match preview_idx {
+            let sync_idx = state
+                .queue
+                .iter()
+                .position(|c| is_display_sync_kind(&c.kind));
+            match sync_idx {
                 Some(idx) => {
                     let next = state.queue.remove(idx).unwrap();
-                    apply_preview_command_to_state(&mut state, &next);
+                    apply_display_sync_to_state(&mut state, &next);
                     drop(state);
                     latest = next;
                     coalesced_count += 1;
@@ -188,7 +188,7 @@ impl CurrentLiveDisplaySelectionHandle {
         }
         if coalesced_count > 0 {
             eprintln!(
-                "[fullmag-host] coalesced {} redundant preview commands (keeping seq={})",
+                "[fullmag-host] coalesced {} redundant display syncs (keeping seq={})",
                 coalesced_count, latest.seq
             );
         }
@@ -243,9 +243,8 @@ impl CurrentLiveDisplaySelectionHandle {
             let typed = crate::command_bridge::classify_command(&command);
 
             match typed {
-                Some(fullmag_runner::LiveControlCommand::SetDisplaySelection(_))
-                | Some(fullmag_runner::LiveControlCommand::RefreshDisplay) => {
-                    self.apply_preview_command(&command);
+                Some(fullmag_runner::LiveControlCommand::SetDisplaySelection(_)) => {
+                    self.apply_display_sync_command(&command);
                 }
                 Some(fullmag_runner::LiveControlCommand::Pause) => {
                     self.set_running_interrupt(InteractiveStageInterrupt::Pause);
@@ -283,19 +282,14 @@ impl CurrentLiveDisplaySelectionHandle {
     }
 }
 
-fn is_preview_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "display_selection_update" | "preview_update" | "preview_refresh"
-    )
+fn is_display_sync_kind(kind: &str) -> bool {
+    kind == "display_sync"
 }
 
-fn apply_preview_command_to_state(state: &mut CurrentLiveControlState, command: &SessionCommand) {
+fn apply_display_sync_to_state(state: &mut CurrentLiveControlState, command: &SessionCommand) {
     let typed = crate::command_bridge::classify_command(command);
     match typed {
-        Some(fullmag_runner::LiveControlCommand::SetDisplaySelection(_))
-        | Some(fullmag_runner::LiveControlCommand::RefreshDisplay) => {
-            // Resolve the actual display selection from the command payload
+        Some(fullmag_runner::LiveControlCommand::SetDisplaySelection(_)) => {
             let resolved = command.display_selection.clone().or_else(|| {
                 command
                     .preview_config
@@ -306,18 +300,68 @@ fn apply_preview_command_to_state(state: &mut CurrentLiveControlState, command: 
                 state.display_selection = display_selection;
             }
         }
-        _ => {} // Non-display commands don't update display selection state
+        _ => {}
     }
 }
 
-/// Apply a preview command to the shared display selection state (used by coalescing).
-fn apply_preview_command_to_state_external(
+fn apply_display_sync_to_state_external(
     shared: &Arc<(Mutex<CurrentLiveControlState>, Condvar)>,
     command: &SessionCommand,
 ) {
     let (lock, _) = &**shared;
     if let Ok(mut state) = lock.lock() {
-        apply_preview_command_to_state(&mut state, command);
+        apply_display_sync_to_state(&mut state, command);
+    }
+}
+
+fn synthetic_display_sync_command(selection: CurrentDisplaySelection) -> SessionCommand {
+    let created_at_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+
+    SessionCommand {
+        seq: selection.revision,
+        command_id: format!("display-sync-{}", selection.revision),
+        kind: "display_sync".to_string(),
+        created_at_unix_ms,
+        until_seconds: None,
+        max_steps: None,
+        torque_tolerance: None,
+        energy_tolerance: None,
+        integrator: None,
+        fixed_timestep: None,
+        max_error: None,
+        relax_algorithm: None,
+        relax_alpha: None,
+        mesh_options: None,
+        mesh_target: None,
+        mesh_reason: None,
+        state_path: None,
+        state_format: None,
+        state_dataset: None,
+        state_sample_index: None,
+        display_selection: Some(selection.clone()),
+        preview_config: Some(selection.preview_request()),
+        stages: None,
+    }
+}
+
+fn sync_display_selection_from_status(shared: &Arc<(Mutex<CurrentLiveControlState>, Condvar)>) {
+    let Ok(next_selection) = current_live_display_selection() else {
+        return;
+    };
+
+    let (lock, cvar) = &**shared;
+    if let Ok(mut state) = lock.lock() {
+        if state.display_selection.revision == next_selection.revision {
+            return;
+        }
+        state.display_selection = next_selection.clone();
+        state.queue.retain(|command| !is_display_sync_kind(&command.kind));
+        state.queue
+            .push_back(synthetic_display_sync_command(next_selection));
+        cvar.notify_all();
     }
 }
 
@@ -463,19 +507,16 @@ impl InteractiveRuntimeHost {
         self.refresh_idle_preview(continuation_slice, live_workspace);
     }
 
-    pub(super) fn handle_preview_command(
+    pub(super) fn handle_display_sync(
         &mut self,
         command: &SessionCommand,
         live_workspace: &LocalLiveWorkspace,
     ) -> bool {
-        if !matches!(
-            command.kind.as_str(),
-            "display_selection_update" | "preview_update" | "preview_refresh"
-        ) {
+        if !is_display_sync_kind(command.kind.as_str()) {
             return false;
         }
 
-        self.control.apply_preview_command(command);
+        self.control.apply_display_sync_command(command);
         let continuation_magnetization = self.continuation_magnetization();
         let current_generation = self
             .preview_source

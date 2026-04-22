@@ -117,6 +117,14 @@ Mesh semantics must stay split out even though mesh intent also round-trips thro
 The model tree may show mesh children under an object, but the canonical dedicated API family for
 meshing policy is still `mesh/*`.
 
+For FEM viewport work this implies a three-stage browser contract:
+
+- `authoring/scene` defines primitives, transforms, and semantic object identity,
+- `mesh/shared-domain/manifest` plus binary topology defines the realized mesh tree and 3D
+  selection structure,
+- `display` plus quantity/field resources defines shading, arrows, slices, and other quantity
+  overlays.
+
 ### 3.5 Display and commands stay runtime-only
 
 `display` and `commands` are not authoring substitutes.
@@ -214,6 +222,7 @@ The canonical local control-room API tree is:
         │   │   └── quality
         │   ├── shared-domain
         │   │   ├── config
+        │   │   ├── manifest
         │   │   ├── report
         │   │   ├── topology
         │   │   └── quality
@@ -422,7 +431,8 @@ Rules:
 - `GET /display` returns the full current resource snapshot,
 - `PUT /display` replaces the full display resource,
 - `PATCH /display` mutates only the provided fields,
-- `commands` controls solve, relax, stop, remesh, export, and other explicit runtime actions,
+- `commands` controls solve, relax, stop, export, and other explicit runtime actions,
+- `mesh/builds/*` owns mesh build lifecycle and remesh intent,
 - `commands/status` and `commands/:command_id` are runtime read-models over the command ledger and
   long-term grow into authoritative completion/rejection resources,
 - neither route family is allowed to smuggle model-builder mutations.
@@ -528,6 +538,13 @@ POST /v1/internal/live/current/scalars
 POST /v1/internal/live/current/fields
 GET  /v1/internal/live/current/control/wait
 ```
+
+Internal bridge note:
+
+- `control/wait` now carries only queued solver/control commands.
+- Display selection sync for idle/paused preview refresh follows the canonical
+  `display_revision` resource signal from `GET /v1/live/current/status`, not
+  legacy preview command kinds.
 
 ## 9. Current implementation note
 

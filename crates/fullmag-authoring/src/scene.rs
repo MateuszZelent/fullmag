@@ -84,6 +84,15 @@ pub struct SceneObject {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SceneMeshInterface {
+    pub interface_id: String,
+    pub owner_a: String,
+    pub owner_b: String,
+    #[serde(default)]
+    pub config: ScriptBuilderPerGeometryMeshState,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SceneGeometry {
     pub geometry_kind: String,
     #[serde(default)]
@@ -235,6 +244,8 @@ pub struct SceneStudyState {
     pub shared_domain_mesh: ScriptBuilderMeshState,
     #[serde(default = "default_mesh")]
     pub mesh_defaults: ScriptBuilderMeshState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mesh_interfaces: Vec<SceneMeshInterface>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stages: Vec<ScriptBuilderStageState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

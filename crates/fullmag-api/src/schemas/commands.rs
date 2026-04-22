@@ -1,4 +1,3 @@
-use crate::types::MeshCommandTarget;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -36,14 +35,6 @@ pub enum StructuredCommandRequest {
     Resume,
     Stop,
     Skip,
-    Remesh {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mesh_options: Option<serde_json::Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mesh_target: Option<MeshCommandTarget>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mesh_reason: Option<String>,
-    },
     SaveVtk,
     Solve,
     Close,

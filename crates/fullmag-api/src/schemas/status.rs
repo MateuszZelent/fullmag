@@ -96,6 +96,8 @@ pub struct ResourceRevisionMap {
     pub engine_log_revision: u64,
     pub display_revision: u64,
     pub workspace_revision: u64,
+    pub mesh_revision: u64,
+    pub mesh_build_revision: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

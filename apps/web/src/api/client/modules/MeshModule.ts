@@ -2,22 +2,41 @@ import type {
   CommandResponse,
   MeshActiveBuildResource,
   MeshBuildCommandRequest,
+  MeshBuildHistoryResource,
+  MeshCapabilitiesResource,
+  MeshInterfaceConfigReplaceRequest,
+  MeshInterfaceConfigResource,
+  MeshInterfaceQualityResource,
+  MeshInterfaceReportResource,
+  MeshLastSuccessfulBuildResource,
   MeshObjectConfigReplaceRequest,
   MeshObjectConfigResource,
+  MeshObjectQualityResource,
+  MeshObjectReportResource,
+  MeshObjectSizeFieldResource,
   MeshSharedDomainConfigReplaceRequest,
   MeshSharedDomainConfigResource,
+  MeshSharedDomainManifestResource,
+  MeshSharedDomainQualityResource,
+  MeshSharedDomainReportResource,
+  MeshSummaryResource,
   MeshUniverseConfigReplaceRequest,
   MeshUniverseConfigResource,
-  MeshWorkspaceResource,
+  MeshUniverseQualityResource,
+  MeshUniverseReportResource,
 } from "../../types";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
 
 export class MeshModule {
   constructor(private client: LiveApiClient) {}
 
-  async getSummary(opts?: RequestOptions): Promise<MeshWorkspaceResource> {
-    return this.client.get<MeshWorkspaceResource>(
-      "/v1/live/current/mesh/summary",
+  async getSummary(opts?: RequestOptions): Promise<MeshSummaryResource> {
+    return this.client.get<MeshSummaryResource>("/v1/live/current/mesh/summary", opts);
+  }
+
+  async getCapabilities(opts?: RequestOptions): Promise<MeshCapabilitiesResource> {
+    return this.client.get<MeshCapabilitiesResource>(
+      "/v1/live/current/mesh/capabilities",
       opts,
     );
   }
@@ -25,6 +44,22 @@ export class MeshModule {
   async getActiveBuild(opts?: RequestOptions): Promise<MeshActiveBuildResource> {
     return this.client.get<MeshActiveBuildResource>(
       "/v1/live/current/mesh/builds/active",
+      opts,
+    );
+  }
+
+  async getBuildHistory(opts?: RequestOptions): Promise<MeshBuildHistoryResource> {
+    return this.client.get<MeshBuildHistoryResource>(
+      "/v1/live/current/mesh/builds/history",
+      opts,
+    );
+  }
+
+  async getLastSuccessfulBuild(
+    opts?: RequestOptions,
+  ): Promise<MeshLastSuccessfulBuildResource> {
+    return this.client.get<MeshLastSuccessfulBuildResource>(
+      "/v1/live/current/mesh/builds/last-success",
       opts,
     );
   }
@@ -58,6 +93,20 @@ export class MeshModule {
     );
   }
 
+  async getUniverseReport(opts?: RequestOptions): Promise<MeshUniverseReportResource> {
+    return this.client.get<MeshUniverseReportResource>(
+      "/v1/live/current/mesh/universe/report",
+      opts,
+    );
+  }
+
+  async getUniverseQuality(opts?: RequestOptions): Promise<MeshUniverseQualityResource> {
+    return this.client.get<MeshUniverseQualityResource>(
+      "/v1/live/current/mesh/universe/quality",
+      opts,
+    );
+  }
+
   async getSharedDomainConfig(
     opts?: RequestOptions,
   ): Promise<MeshSharedDomainConfigResource> {
@@ -78,6 +127,37 @@ export class MeshModule {
     );
   }
 
+  async getSharedDomainReport(
+    opts?: RequestOptions,
+  ): Promise<MeshSharedDomainReportResource> {
+    return this.client.get<MeshSharedDomainReportResource>(
+      "/v1/live/current/mesh/shared-domain/report",
+      opts,
+    );
+  }
+
+  async getSharedDomainQuality(
+    opts?: RequestOptions,
+  ): Promise<MeshSharedDomainQualityResource> {
+    return this.client.get<MeshSharedDomainQualityResource>(
+      "/v1/live/current/mesh/shared-domain/quality",
+      opts,
+    );
+  }
+
+  async getSharedDomainManifest(
+    opts?: RequestOptions,
+  ): Promise<MeshSharedDomainManifestResource> {
+    return this.client.get<MeshSharedDomainManifestResource>(
+      "/v1/live/current/mesh/shared-domain/manifest",
+      opts,
+    );
+  }
+
+  async getSharedDomainTopology(opts?: RequestOptions): Promise<ArrayBuffer> {
+    return this.client.getBinary("/v1/live/current/mesh/shared-domain/topology", opts);
+  }
+
   async getObjectConfig(
     objectId: string,
     opts?: RequestOptions,
@@ -96,6 +176,88 @@ export class MeshModule {
     return this.client.put<MeshObjectConfigResource>(
       `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/config`,
       request,
+      opts,
+    );
+  }
+
+  async getObjectReport(
+    objectId: string,
+    opts?: RequestOptions,
+  ): Promise<MeshObjectReportResource> {
+    return this.client.get<MeshObjectReportResource>(
+      `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/report`,
+      opts,
+    );
+  }
+
+  async getObjectQuality(
+    objectId: string,
+    opts?: RequestOptions,
+  ): Promise<MeshObjectQualityResource> {
+    return this.client.get<MeshObjectQualityResource>(
+      `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/quality`,
+      opts,
+    );
+  }
+
+  async getObjectSizeField(
+    objectId: string,
+    opts?: RequestOptions,
+  ): Promise<MeshObjectSizeFieldResource> {
+    return this.client.get<MeshObjectSizeFieldResource>(
+      `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/size-field`,
+      opts,
+    );
+  }
+
+  async getObjectTopology(
+    objectId: string,
+    opts?: RequestOptions,
+  ): Promise<ArrayBuffer> {
+    return this.client.getBinary(
+      `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/topology`,
+      opts,
+    );
+  }
+
+  async getInterfaceConfig(
+    interfaceId: string,
+    opts?: RequestOptions,
+  ): Promise<MeshInterfaceConfigResource> {
+    return this.client.get<MeshInterfaceConfigResource>(
+      `/v1/live/current/mesh/interfaces/${encodeURIComponent(interfaceId)}/config`,
+      opts,
+    );
+  }
+
+  async replaceInterfaceConfig(
+    interfaceId: string,
+    request: MeshInterfaceConfigReplaceRequest,
+    opts?: RequestOptions,
+  ): Promise<MeshInterfaceConfigResource> {
+    return this.client.put<MeshInterfaceConfigResource>(
+      `/v1/live/current/mesh/interfaces/${encodeURIComponent(interfaceId)}/config`,
+      request,
+      opts,
+    );
+  }
+
+  async getInterfaceReport(
+    interfaceId: string,
+    opts?: RequestOptions,
+  ): Promise<MeshInterfaceReportResource> {
+    return this.client.get<MeshInterfaceReportResource>(
+      `/v1/live/current/mesh/interfaces/${encodeURIComponent(interfaceId)}/report`,
+      opts,
+    );
+  }
+
+  async getInterfaceQuality(
+    interfaceId: string,
+    opts?: RequestOptions,
+  ): Promise<MeshInterfaceQualityResource> {
+    return this.client.get<MeshInterfaceQualityResource>(
+      `/v1/live/current/mesh/interfaces/${encodeURIComponent(interfaceId)}/quality`,
       opts,
     );
   }

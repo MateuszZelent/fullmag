@@ -62,7 +62,8 @@ Musi być oceniany jako dostarczenie runtime layer, którą da się bezpośredni
 
 - `awaiting_command` ma już live runtime ownership dla części ścieżek.
 - istnieje unified control stream z `seq`.
-- `preview_update` i `preview_refresh` są spięte z tym samym control-plane co solver commands.
+- display sync nie idzie już przez legacy `preview_update` / `preview_refresh`;
+  host obserwuje kanoniczne `display_revision` i budzi refresh przez wewnętrzny `display_sync`.
 - FDM i FEM potrafią wykonać część interactive flow bez pełnej rematerializacji problemu.
 
 ### 2.2 Co nadal nie działa jak w amumax
@@ -112,7 +113,7 @@ Są first-class display selection i mają spełniać te same reguły co `m`, `H_
 
 - ten sam `SetDisplaySelection`,
 - ten sam `CommandAck`,
-- ten sam `DisplayUpdated`,
+- ten sam canonical display publish przez `display_revision`,
 - ten sam ownership przez runtime,
 - brak fallbacków z `scalar_rows`,
 - brak osobnego toru semantycznego w UI lub API.
@@ -173,7 +174,6 @@ Jeden uporządkowany strumień:
 - `Break`
 - `Close`
 - `SetDisplaySelection`
-- `RefreshDisplay`
 
 Każda komenda ma:
 
@@ -357,7 +357,6 @@ Frontend ma przejść z modelu "best effort preview state" na model:
    - `CommandAck`
    - `CommandRejected`
    - `CommandCompleted`
-   - `DisplayUpdated`
    - `RuntimeStatusChanged`
    - `StepDelta`
 3. Rozdzielić:
@@ -467,7 +466,7 @@ Frontend ma przejść z modelu "best effort preview state" na model:
 ### Exit criteria
 
 - `SetDisplaySelection` podczas `running` nie czeka na koniec segmentu.
-- `RefreshDisplay` działa podczas `running`.
+- display sync podczas `running` działa przez `display_revision`, bez legacy preview commandów.
 - `E_ex <-> E_demag <-> E_total` podczas `running` nie czeka na koniec segmentu.
 - `pause` daje runtime state `paused`, a nie `awaiting_command` po cancelu segmentu.
 
@@ -518,9 +517,9 @@ Frontend ma przejść z modelu "best effort preview state" na model:
    - `VectorField`
    - `SpatialScalar`
    - `GlobalScalar`
-3. Snapshot display musi być jawnie wywoływany przez komendy:
+3. Snapshot display musi być jawnie wywoływany przez canonical display sync:
    - `SetDisplaySelection`
-   - `RefreshDisplay`
+   - `display_revision` -> internal `display_sync`
 4. Dodać runtime-local cache:
    - key: `(state_revision, display_selection_without_revision)`
    - invalidacja przy zmianie `state_revision`
@@ -590,7 +589,7 @@ Frontend ma przejść z modelu "best effort preview state" na model:
    - inferred preview freshness
 3. UI ma reagować na:
    - `CommandAck`
-   - `DisplayUpdated`
+   - zmianę `display_revision` / display resource
    - `RuntimeStatusChanged`
    - `CommandCompleted`
 4. Dodać jawne stany przycisków:

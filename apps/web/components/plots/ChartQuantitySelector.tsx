@@ -35,12 +35,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -255,61 +249,40 @@ export default function ChartQuantitySelector({
         <span className="text-[0.58rem] font-bold uppercase tracking-[0.18em] text-muted-foreground/60">
           Scope
         </span>
-        <TooltipProvider delayDuration={300}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div>
-                <Select
-                  value={chartState.selectedDomain ?? "__all__"}
-                  onValueChange={handleDomainChange}
-                  disabled={!scopeInteractive}
-                >
-                  <SelectTrigger
-                    className={cn(
-                      "h-7 w-40 text-[0.7rem] bg-muted/30 border-border/40",
-                      !scopeInteractive && "opacity-60 cursor-default",
-                    )}
-                  >
-                    <SelectValue placeholder="Scope" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__all__">
-                      {multiDomain ? "Universe (all)" : "Universe"}
-                    </SelectItem>
-                    {domains.map((domain) => (
-                      <SelectItem key={domain.id} value={domain.id}>
-                        {domain.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </TooltipTrigger>
-            {!scopeInteractive && (
-              <TooltipContent side="bottom" className="max-w-64 text-xs">
-                {supportsObjectScope ? (
-                  <>
-                    <p className="font-semibold mb-0.5">Scope: Universe</p>
-                    <p className="text-muted-foreground">
-                      Per-object scope becomes available once this study exposes
-                      more than one addressable domain.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p className="font-semibold mb-0.5">Scope is fixed to Universe</p>
-                    <p className="text-muted-foreground">
-                      The current live chart trace is built from canonical
-                      `scalar_rows` / `scalars.csv`. Per-object scalar history is
-                      not wired into Charts yet, so choosing a domain here would
-                      be misleading.
-                    </p>
-                  </>
-                )}
-              </TooltipContent>
-            )}
-          </Tooltip>
-        </TooltipProvider>
+        <div
+          title={
+            !scopeInteractive
+              ? supportsObjectScope
+                ? "Scope: Universe. Per-object scope is available once multiple domains are addressable."
+                : "Scope fixed to Universe. Per-object scalar history is not wired into Charts yet."
+              : undefined
+          }
+        >
+          <Select
+            value={chartState.selectedDomain ?? "__all__"}
+            onValueChange={handleDomainChange}
+            disabled={!scopeInteractive}
+          >
+            <SelectTrigger
+              className={cn(
+                "h-7 w-40 text-[0.7rem] bg-muted/30 border-border/40",
+                !scopeInteractive && "opacity-60 cursor-default",
+              )}
+            >
+              <SelectValue placeholder="Scope" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">
+                {multiDomain ? "Universe (all)" : "Universe"}
+              </SelectItem>
+              {domains.map((domain) => (
+                <SelectItem key={domain.id} value={domain.id}>
+                  {domain.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         {/* Separator */}
         <div className="h-4 w-px bg-border/30" />
@@ -325,27 +298,22 @@ export default function ChartQuantitySelector({
             const isActive = chartState.activePreset === presetId;
             const PresetIcon = presetMeta.icon;
             return (
-              <Tooltip key={presetId}>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={isActive ? "default" : "outline"}
-                    size="sm"
-                    className={cn(
-                      "h-7 gap-1.5 rounded-md px-2.5 text-[0.68rem] font-semibold tracking-[0.01em] transition-all",
-                      isActive
-                        ? "bg-primary/90 text-primary-foreground shadow-sm shadow-primary/20"
-                        : "bg-muted/20 border-border/30 text-muted-foreground hover:bg-muted/45 hover:text-foreground",
-                    )}
-                    onClick={() => handlePreset(presetId)}
-                  >
-                    <PresetIcon className={PRESET_ICON_CLASS} />
-                    {preset.label}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-64 text-xs">
-                  {presetMeta.description}
-                </TooltipContent>
-              </Tooltip>
+              <Button
+                key={presetId}
+                variant={isActive ? "default" : "outline"}
+                size="sm"
+                className={cn(
+                  "h-7 gap-1.5 rounded-md px-2.5 text-[0.68rem] font-semibold tracking-[0.01em] transition-all",
+                  isActive
+                    ? "bg-primary/90 text-primary-foreground shadow-sm shadow-primary/20"
+                    : "bg-muted/20 border-border/30 text-muted-foreground hover:bg-muted/45 hover:text-foreground",
+                )}
+                onClick={() => handlePreset(presetId)}
+                title={presetMeta.description}
+              >
+                <PresetIcon className={PRESET_ICON_CLASS} />
+                {preset.label}
+              </Button>
             );
           })}
         </div>

@@ -348,6 +348,40 @@ function mapLiveStatusToNormalized(
   };
 }
 
+function sameRuntimeScope(
+  previous: ReturnType<typeof useSessionRuntimeStore.getState>,
+  next: NormalizedSessionState,
+): boolean {
+  return (
+    previous.session?.session_id === next.session?.session_id &&
+    previous.run?.run_id === next.run?.run_id
+  );
+}
+
+function preserveDataPlaneState(
+  previous: ReturnType<typeof useSessionRuntimeStore.getState>,
+  next: NormalizedSessionState,
+): NormalizedSessionState {
+  if (!sameRuntimeScope(previous, next)) {
+    return next;
+  }
+
+  return {
+    ...next,
+    scalarRows: previous.scalarRows,
+    engineLog: previous.engineLog,
+    quantities: previous.quantities,
+    artifacts: previous.artifacts,
+    femMesh: previous.femMesh,
+    scriptBuilder: previous.scriptBuilder,
+    commandStatus: previous.commandStatus,
+    meshWorkspace: previous.meshWorkspace,
+    stepUpdateV2: previous.stepUpdateV2,
+    latestFieldFrames: previous.latestFieldFrames,
+    latestFieldGrid: previous.latestFieldGrid,
+  };
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────
 
 /**
@@ -398,16 +432,16 @@ export function useNewApiBridge(
     const nextRevisionKey = [
       status.session.session_id,
       status.run?.run_id ?? "no-run",
-      status.resources.fields_revision,
-      status.resources.display_revision,
-      status.resources.domain_generation_id,
-      status.resources.scalars_revision,
+      JSON.stringify(status.resources),
     ].join(":");
     if (prevRevisionKeyRef.current === nextRevisionKey) {
       return;
     }
 
-    const normalized = mapLiveStatusToNormalized(status);
+    const normalized = preserveDataPlaneState(
+      useSessionRuntimeStore.getState(),
+      mapLiveStatusToNormalized(status),
+    );
     applyNormalizedState(normalized);
     prevRevisionKeyRef.current = nextRevisionKey;
   }, [enabled, status, applyNormalizedState]);

@@ -10,6 +10,7 @@
  *  - field vectors  (when field_revision bumps)
  *  - scalar windows (when scalar_revision bumps)
  *  - domain/topology (when domain_generation_id bumps)
+ *  - shared FEM mesh topology (when mesh_revision bumps)
  *  - engine logs    (when engine_log_revision bumps)
  *
  * The fetched data is written back to the store through
@@ -22,17 +23,25 @@ import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
 import { decodeTopology } from "@/src/api/codecs/topologyCodec";
 import { synthesizeCapabilitiesFromDiscretization } from "@/src/domain/capabilities";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { normalizeMeshWorkspace } from "@/lib/session/normalize";
 import type {
-  FemLiveMesh,
   LatestFieldFrame,
   QuantityDescriptor,
   ScalarRow as StoreScalarRow,
 } from "@/lib/session/types";
 import type { FieldFrameEnvelope, FieldFrameStats } from "@/lib/fieldFrame/types";
 import { scalarWindowToRows } from "@/src/api/client/modules/ScalarHistoryAdapter";
+import {
+  applyMeshSharedDomainManifest,
+  buildFemMeshFromDecodedTopology,
+  mergeFemMeshResource,
+} from "@/src/hooks/resources/meshFemResource";
 
 const ENABLE_DEBUG =
-  typeof process !== "undefined" && process.env.NODE_ENV !== "production";
+  typeof process !== "undefined" &&
+  process.env.NODE_ENV !== "production" &&
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging;
 
 function adaptScalarRow(
   row: Record<string, number | string | null>,
@@ -53,57 +62,6 @@ function adaptScalarRow(
     max_dm_dt: Number(row.max_dm_dt ?? 0),
     max_h_eff: Number(row.max_h_eff ?? 0),
     max_h_demag: Number(row.max_h_demag ?? 0),
-  };
-}
-
-function buildFemMeshFromTopology(
-  generationId: string,
-  topology: ReturnType<typeof decodeTopology>,
-): FemLiveMesh {
-  return {
-    mesh_name: "resource-topology",
-    mesh_id: `resource-topology:${generationId}`,
-    generation_id: generationId,
-    nodes: Array.from({ length: topology.nodeCount }, (_, index) => {
-      const base = index * 3;
-      return [
-        topology.positions[base] ?? 0,
-        topology.positions[base + 1] ?? 0,
-        topology.positions[base + 2] ?? 0,
-      ];
-    }),
-    elements: Array.from({ length: topology.elementCount }, (_, index) => {
-      const base = index * 4;
-      return [
-        topology.indices[base] ?? 0,
-        topology.indices[base + 1] ?? 0,
-        topology.indices[base + 2] ?? 0,
-        topology.indices[base + 3] ?? 0,
-      ];
-    }),
-    element_markers: Array.from(topology.elementMarkers),
-    boundary_faces: Array.from({ length: topology.boundaryFaceCount }, (_, index) => {
-      const base = index * 3;
-      return [
-        topology.boundaryFaces[base] ?? 0,
-        topology.boundaryFaces[base + 1] ?? 0,
-        topology.boundaryFaces[base + 2] ?? 0,
-      ];
-    }),
-    boundary_markers: Array.from(topology.boundaryMarkers),
-    topology_buffers: {
-      nodes: topology.positions,
-      elements: topology.indices,
-      boundary_faces: topology.boundaryFaces,
-      element_markers: topology.elementMarkers,
-      boundary_markers: topology.boundaryMarkers,
-    },
-    topology_transport: "binary",
-    node_count: topology.nodeCount,
-    element_count: topology.elementCount,
-    boundary_face_count: topology.boundaryFaceCount,
-    object_segments: [],
-    mesh_parts: [],
   };
 }
 
@@ -189,7 +147,15 @@ export function useDataPlaneBridge(
     (s) => s.liveState?.step ?? s.stateVersion,
   );
   const sessionId = useSessionRuntimeStore((s) => s.session?.session_id);
+  const runId = useSessionRuntimeStore((s) => s.run?.run_id);
+  const isFemBackend = useSessionRuntimeStore((s) => s.isFemBackend);
   const resourceRevisions = useSessionRuntimeStore((s) => s.resourceRevisions);
+  const runtimeScopeKey =
+    sessionId && runId
+      ? `${sessionId}:${runId}`
+      : sessionId
+        ? `${sessionId}:no-run`
+        : null;
 
   const applyNormalizedState = useSessionRuntimeStore(
     (s) => s.applyNormalizedState,
@@ -199,28 +165,30 @@ export function useDataPlaneBridge(
   const fetchedFieldRevRef = useRef<string | null>(null);
   const fetchedScalarRevRef = useRef<number | null>(null);
   const fetchedDomainGenRef = useRef<string | null>(null);
+  const fetchedMeshRevRef = useRef<number | null>(null);
   const fetchedCatalogKeyRef = useRef<string | null>(null);
   const fetchedArtifactsKeyRef = useRef<string | null>(null);
   const fetchedEngineLogKeyRef = useRef<string | null>(null);
   const scalarAccumulatorRef = useRef<StoreScalarRow[]>([]);
 
   // Reset accumulators when session changes
-  const prevSessionRef = useRef<string | undefined>(undefined);
+  const prevRuntimeScopeRef = useRef<string | null>(null);
   useEffect(() => {
     if (!enabled) {
       return;
     }
-    if (sessionId !== prevSessionRef.current) {
-      prevSessionRef.current = sessionId;
+    if (runtimeScopeKey !== prevRuntimeScopeRef.current) {
+      prevRuntimeScopeRef.current = runtimeScopeKey;
       scalarAccumulatorRef.current = [];
       fetchedFieldRevRef.current = null;
       fetchedScalarRevRef.current = null;
       fetchedDomainGenRef.current = null;
+      fetchedMeshRevRef.current = null;
       fetchedCatalogKeyRef.current = null;
       fetchedArtifactsKeyRef.current = null;
       fetchedEngineLogKeyRef.current = null;
     }
-  }, [enabled, sessionId]);
+  }, [enabled, runtimeScopeKey]);
 
   // ── Field vector fetching ───────────────────────────────────────
 
@@ -397,12 +365,22 @@ export function useDataPlaneBridge(
 
         const isFem = meta.discretization === "fem";
         const domainCapabilities = synthesizeCapabilitiesFromDiscretization(isFem);
+        const current = useSessionRuntimeStore.getState();
         const femMesh = isFem
-          ? buildFemMeshFromTopology(genId, decodeTopology(await client.domain.getTopology()))
+          ? mergeFemMeshResource(
+              {
+                ...buildFemMeshFromDecodedTopology(
+                  decodeTopology(await client.domain.getTopology()),
+                  null,
+                ),
+                generation_id: genId,
+                mesh_id: `resource-topology:${genId}`,
+              },
+              current.femMesh,
+            )
           : null;
 
         // Merge into store
-        const current = useSessionRuntimeStore.getState();
         applyNormalizedState({
           stateVersion: current.stateVersion,
           session: current.session,
@@ -443,6 +421,142 @@ export function useDataPlaneBridge(
         }
       } catch (err) {
         console.warn("[fullmag][data-plane] domain fetch failed", err);
+      }
+    },
+    [applyNormalizedState, enabled],
+  );
+
+  const fetchMeshTopology = useCallback(
+    async (revision: number) => {
+      if (!enabled) return;
+      if (fetchedMeshRevRef.current === revision) return;
+
+      try {
+        const client = getLiveApiClient();
+        const [summaryResource, manifestResource, topologyBuffer] = await Promise.all([
+          client.mesh.getSummary(),
+          client.mesh.getSharedDomainManifest(),
+          client.mesh.getSharedDomainTopology(),
+        ]);
+
+        if (topologyBuffer.byteLength === 0) {
+          const current = useSessionRuntimeStore.getState();
+          applyNormalizedState({
+            stateVersion: current.stateVersion,
+            session: current.session,
+            run: current.run,
+            metadata: null,
+            liveState: current.liveState,
+            scalarRows: current.scalarRows,
+            engineLog: current.engineLog,
+            quantities: current.quantities,
+            artifacts: current.artifacts,
+            femMesh: null,
+            preview: current.preview,
+            scriptBuilder: current.scriptBuilder,
+            runtimeStatus: current.runtimeStatus,
+            commandStatus: current.commandStatus,
+            meshWorkspace: current.meshWorkspace,
+            stepUpdateV2: current.stepUpdateV2,
+            workspaceStatus: current.workspaceStatus,
+            isFemBackend: current.isFemBackend,
+            domainCapabilities: current.domainCapabilities,
+            resourceRevisions: current.resourceRevisions,
+            displaySelection: current.displaySelection,
+            previewConfig: current.previewConfig,
+            latestFieldFrames: current.latestFieldFrames,
+            latestFieldGrid: current.latestFieldGrid,
+            fieldFrameEnvelope: current.fieldFrameEnvelope,
+          });
+          return;
+        }
+
+        const meshSummary =
+          normalizeMeshWorkspace({
+            mesh_summary: summaryResource.mesh_summary ?? null,
+          })?.mesh_summary ?? null;
+        const resourceFemMesh = applyMeshSharedDomainManifest(
+          buildFemMeshFromDecodedTopology(
+            decodeTopology(topologyBuffer),
+            meshSummary,
+          ),
+          manifestResource,
+        );
+
+        const current = useSessionRuntimeStore.getState();
+        fetchedMeshRevRef.current = revision;
+        applyNormalizedState({
+          stateVersion: current.stateVersion,
+          session: current.session,
+          run: current.run,
+          metadata: null,
+          liveState: current.liveState,
+          scalarRows: current.scalarRows,
+          engineLog: current.engineLog,
+          quantities: current.quantities,
+          artifacts: current.artifacts,
+          femMesh: mergeFemMeshResource(resourceFemMesh, current.femMesh),
+          preview: current.preview,
+          scriptBuilder: current.scriptBuilder,
+          runtimeStatus: current.runtimeStatus,
+          commandStatus: current.commandStatus,
+          meshWorkspace: current.meshWorkspace,
+          stepUpdateV2: current.stepUpdateV2,
+          workspaceStatus: current.workspaceStatus,
+          isFemBackend: current.isFemBackend,
+          domainCapabilities: current.domainCapabilities,
+          resourceRevisions: current.resourceRevisions,
+          displaySelection: current.displaySelection,
+          previewConfig: current.previewConfig,
+          latestFieldFrames: current.latestFieldFrames,
+          latestFieldGrid: current.latestFieldGrid,
+          fieldFrameEnvelope: current.fieldFrameEnvelope,
+        });
+
+        if (ENABLE_DEBUG) {
+          console.info("[fullmag-debug][data-plane] mesh topology fetched", {
+            revision,
+            generationId: resourceFemMesh.generation_id,
+            nodeCount: resourceFemMesh.node_count,
+            elementCount: resourceFemMesh.element_count,
+          });
+        }
+      } catch (err) {
+        if (
+          err instanceof LiveApiError &&
+          (err.status === 404 || err.status === 204)
+        ) {
+          const current = useSessionRuntimeStore.getState();
+          applyNormalizedState({
+            stateVersion: current.stateVersion,
+            session: current.session,
+            run: current.run,
+            metadata: null,
+            liveState: current.liveState,
+            scalarRows: current.scalarRows,
+            engineLog: current.engineLog,
+            quantities: current.quantities,
+            artifacts: current.artifacts,
+            femMesh: null,
+            preview: current.preview,
+            scriptBuilder: current.scriptBuilder,
+            runtimeStatus: current.runtimeStatus,
+            commandStatus: current.commandStatus,
+            meshWorkspace: current.meshWorkspace,
+            stepUpdateV2: current.stepUpdateV2,
+            workspaceStatus: current.workspaceStatus,
+            isFemBackend: current.isFemBackend,
+            domainCapabilities: current.domainCapabilities,
+            resourceRevisions: current.resourceRevisions,
+            displaySelection: current.displaySelection,
+            previewConfig: current.previewConfig,
+            latestFieldFrames: current.latestFieldFrames,
+            latestFieldGrid: current.latestFieldGrid,
+            fieldFrameEnvelope: current.fieldFrameEnvelope,
+          });
+          return;
+        }
+        console.warn("[fullmag][data-plane] mesh topology fetch failed", err);
       }
     },
     [applyNormalizedState, enabled],
@@ -613,55 +727,64 @@ export function useDataPlaneBridge(
 
   // Watch field revision changes
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || !runtimeScopeKey) {
       return;
     }
     if (fieldFrameEnvelope && fieldFrameEnvelope.fieldRevision > 0) {
       fetchFieldVector(fieldFrameEnvelope);
     }
-  }, [enabled, fieldFrameEnvelope, fetchFieldVector]);
+  }, [enabled, fetchFieldVector, fieldFrameEnvelope, runtimeScopeKey]);
 
   // Watch scalar revision changes
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || !runtimeScopeKey) {
       return;
     }
     if (scalarRevision != null && scalarRevision > 0) {
       fetchScalars(scalarRevision);
     }
-  }, [enabled, scalarRevision, fetchScalars]);
+  }, [enabled, fetchScalars, runtimeScopeKey, scalarRevision]);
 
   // Watch domain generation changes
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || !runtimeScopeKey) {
       return;
     }
     if (fieldFrameEnvelope?.meshGenerationId) {
       fetchDomain(fieldFrameEnvelope.meshGenerationId);
     }
-  }, [enabled, fieldFrameEnvelope?.meshGenerationId, fetchDomain]);
+  }, [enabled, fetchDomain, fieldFrameEnvelope?.meshGenerationId, runtimeScopeKey]);
 
   useEffect(() => {
-    if (!enabled || !sessionId || !resourceRevisions) {
+    if (!enabled || !runtimeScopeKey || !resourceRevisions || !isFemBackend) {
       return;
     }
-    const cacheKey = `${sessionId}:${resourceRevisions.fields_revision}`;
+    if (resourceRevisions.mesh_revision > 0) {
+      void fetchMeshTopology(resourceRevisions.mesh_revision);
+    }
+  }, [enabled, fetchMeshTopology, isFemBackend, resourceRevisions, runtimeScopeKey]);
+
+  useEffect(() => {
+    if (!enabled || !runtimeScopeKey || !resourceRevisions) {
+      return;
+    }
+    const cacheKey = `${runtimeScopeKey}:${resourceRevisions.fields_revision}`;
     void fetchQuantities(cacheKey);
-  }, [enabled, fetchQuantities, resourceRevisions, sessionId]);
+  }, [enabled, fetchQuantities, resourceRevisions, runtimeScopeKey]);
 
   useEffect(() => {
-    if (!enabled || !sessionId || !resourceRevisions) {
+    if (!enabled || !runtimeScopeKey || !resourceRevisions) {
       return;
     }
-    const cacheKey = `${sessionId}:${resourceRevisions.artifacts_revision}`;
+    const cacheKey = `${runtimeScopeKey}:${resourceRevisions.artifacts_revision}`;
     void fetchArtifacts(cacheKey);
-  }, [enabled, fetchArtifacts, resourceRevisions, sessionId]);
+  }, [enabled, fetchArtifacts, resourceRevisions, runtimeScopeKey]);
 
   useEffect(() => {
-    if (!enabled || !sessionId || !resourceRevisions) {
+    if (!enabled || !runtimeScopeKey || !resourceRevisions) {
       return;
     }
-    const cacheKey = `${sessionId}:${resourceRevisions.engine_log_revision}`;
+    const cacheKey = `${runtimeScopeKey}:${resourceRevisions.engine_log_revision}`;
     void fetchEngineLog(cacheKey);
-  }, [enabled, fetchEngineLog, resourceRevisions, sessionId]);
+  }, [enabled, fetchEngineLog, resourceRevisions, runtimeScopeKey]);
 }

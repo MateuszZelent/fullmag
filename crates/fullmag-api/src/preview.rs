@@ -298,7 +298,7 @@ pub(crate) fn cached_preview_field_owned(
     current.preview_cache.get(quantity).cloned()
 }
 
-pub(crate) fn cached_preview_update_matches_selection(
+pub(crate) fn cached_display_fields_match_selection(
     fields: &[LivePreviewField],
     display_selection: &CurrentDisplaySelection,
 ) -> bool {

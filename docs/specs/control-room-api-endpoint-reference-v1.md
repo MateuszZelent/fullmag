@@ -756,7 +756,7 @@ Notes:
 - Returns `404` when the command id is not present in the current in-memory
   ledger.
 - The current mounted detail view exposes submission parameters relevant to
-  `run`, `relax`, `pause`, `resume`, `stop`, `skip`, and `remesh` flows.
+  `run`, `relax`, `pause`, `resume`, `stop`, `skip`, `save_vtk`, `solve`, and `close` flows.
 
 ### 7.14.1 `GET /v1/live/current/workspace/selection`
 
@@ -887,7 +887,7 @@ Honesty note:
 
 | Field | Type | Meaning | Notes |
 |---|---|---|---|
-| `revision` | `u64` | Mesh build projection revision | Current implementation uses the live snapshot `state_version`. |
+| `revision` | `u64` | Mesh build projection revision | Backed by `status.resources.mesh_build_revision`. |
 | `active_build` | `json object | null` | Current active build descriptor | Optional when no build is active. |
 | `mesh_pipeline_status` | `json object | null` | Thin pipeline-status projection | Optional when unavailable. |
 | `effective_airbox_target` | `json object | null` | Effective universe/airbox target summary | Optional projection from mesh workspace state. |
@@ -913,14 +913,14 @@ Honesty note:
 
 | Field | Type | Meaning | Notes |
 |---|---|---|---|
-| `mesh_options` | `json | null` | Optional mesh-options payload | Current implementation forwards this payload into the structured `remesh` command. |
-| `mesh_target` | `MeshCommandTarget | null` | Optional explicit remesh target | Same target vocabulary as the `remesh` command variant. |
+| `mesh_options` | `json | null` | Optional mesh-options payload | Forwarded into the internal mesh build queue payload. |
+| `mesh_target` | `MeshCommandTarget | null` | Optional explicit remesh target | Same target vocabulary as the mesh build queue. |
 | `mesh_reason` | `string | null` | Optional human-readable remesh reason | Provenance/diagnostic hint. |
 
 Honesty note:
 
 - This is now the canonical remesh enqueue route for the browser.
-- `POST /v1/live/current/commands` still accepts `kind = remesh` temporarily for compatibility, but new frontend code should target `mesh/builds/commands`.
+- `POST /v1/live/current/commands` no longer exposes public `kind = remesh`; browser mesh flows must target `mesh/builds/commands`.
 
 ### 7.14.12 `GET /v1/live/current/mesh/universe/config`
 
@@ -963,6 +963,32 @@ Honesty note:
 |---|---|---|---|
 | `revision` | `u64` | Canonical scene revision after the change | Bumped through the shared scene commit helper. |
 | `config` | `json object` | Current shared-domain mesh config | Current implementation keeps `study.shared_domain_mesh` and `study.mesh_defaults` aligned on write. |
+
+### 7.14.15a `GET /v1/live/current/mesh/shared-domain/manifest`
+
+- Status: `canonical`
+- Purpose: fetch the thin FEM mesh manifest used by the browser tree and 3D selection model
+- Request body: none
+- Response body: `MeshSharedDomainManifestResource`
+
+#### `MeshSharedDomainManifestResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Mesh-family revision | Backed by `status.resources.mesh_revision`. |
+| `mesh_name` | `string` | Realized shared-domain mesh name | Thin identifier only; heavy geometry stays binary. |
+| `mesh_id` | `string` | Realized shared-domain mesh id | Cache/debug identity. |
+| `generation_id` | `string \| null` | Optional realized generation id | Mirrors the realized FEM mesh payload. |
+| `domain_mesh_mode` | `string \| null` | Realized domain mesh mode | For example `shared_domain_mesh_with_air`. |
+| `object_segments` | `MeshObjectSegmentResource[]` | Canonical per-object segment ranges into the shared mesh | Used for object addressing and object-topology derivation. |
+| `mesh_parts` | `MeshPartResource[]` | Thin tree/selection metadata for airbox, objects, interfaces, and boundaries | JSON control-plane metadata only; not a replacement for binary topology. |
+
+Implementation note:
+
+- this route is the JSON partner of `mesh/shared-domain/topology`,
+- the intended browser pipeline is `authoring/scene` for primitives, `mesh/shared-domain/manifest`
+  plus binary topology for realized mesh structure, and `display` plus quantities/fields for
+  shading and vector overlays.
 
 ### 7.14.16 `GET /v1/live/current/mesh/objects/:object_id/config`
 
@@ -1367,15 +1393,6 @@ The canonical request body is the discriminated `kind` union.
 |---|---|---|
 | `kind` | literal `skip` | Skip the current stage or current blocking wait state |
 
-##### Variant: `remesh`
-
-| Field | Type | Meaning | Notes |
-|---|---|---|---|
-| `kind` | literal `remesh` | Discriminator | Required |
-| `mesh_options` | `json | null` | Optional mesh-options payload | Currently untyped JSON bridge payload. |
-| `mesh_target` | `MeshCommandTarget | null` | Optional explicit remesh target | See variant table below. |
-| `mesh_reason` | `string | null` | Optional human-readable remesh reason | Provenance/diagnostic hint. |
-
 ##### `MeshCommandTarget`
 
 | Shape | Meaning |
@@ -1397,7 +1414,7 @@ Request-shape rule:
 
 - `POST /commands` accepts only the structured discriminated `kind` union.
 - Loose `command + params` envelopes are no longer part of the public command contract.
-- Remesh is also available through the dedicated canonical route `POST /v1/live/current/mesh/builds/commands`.
+- Mesh build/remesh is available only through the dedicated canonical route `POST /v1/live/current/mesh/builds/commands`.
 
 #### `CommandResponse`
 
@@ -1855,7 +1872,7 @@ treated as the canonical browser contract.
 | `POST /v1/live/current/create` | `removed from public router` | Former legacy workspace bootstrap/create helper | Future explicit session/workspace creation contract |
 | `GET /v1/live/feature-flags` | `removed from public router` | Retired legacy diagnostics/feature-flag probe | Use canonical capabilities and local diagnostics policy instead |
 | `GET /v1/live/current/commands/next` | `removed from public router` | Former legacy pull-based command queue consumption | Structured command queue behind `POST /commands` plus future read models |
-| `GET /v1/live/current/control/wait` | `internalized` | Former public blocking wait channel for the runner bridge | Internal runner bridge: `GET /v1/internal/live/current/control/wait` |
+| `GET /v1/live/current/control/wait` | `internalized` | Former public blocking wait channel for the runner bridge | Internal runner bridge: `GET /v1/internal/live/current/control/wait`; display sync now follows canonical `display_revision` instead of hidden preview command kinds |
 | `POST /v1/live/current/script/sync` | `removed from public router` | Former legacy flat script-sync placement | `POST /v1/live/current/authoring/script/sync` |
 | `GET/PUT /v1/live/current/scene/document` | `removed from public router` | Retired legacy flat scene-document placement | `GET/PUT /v1/live/current/authoring/scene` |
 | `GET /v1/live/current/artifacts/file` | `removed from public router` | Former legacy artifact-file fetch route | `GET /v1/live/current/artifacts/:artifact_id` |
@@ -1872,19 +1889,6 @@ resource-first families in the current server.
 | `/v1/live/current/workspace/tree/expansion` | `target-only` | Persisted expansion state for workspace/model trees |
 | `/v1/live/current/workspace/viewport-presets` | `target-only` | Named viewport/camera presets and similar workspace-only presentation state |
 | wider `/v1/live/current/authoring/*` families beyond mounted scene/script routes | `target-only` | Canonical model/material/magnetization/physics/study/builder authoring resources |
-| `/v1/live/current/mesh/capabilities` | `target-only` | Mesh capability vocabulary and mesh-engine support summary |
-| `/v1/live/current/mesh/universe/report` | `target-only` | Realized universe/airbox mesh report |
-| `/v1/live/current/mesh/universe/quality` | `target-only` | Universe/airbox quality metrics |
-| `/v1/live/current/mesh/shared-domain/report` | `target-only` | Realized shared-domain mesh report |
-| `/v1/live/current/mesh/shared-domain/topology` | `target-only` | Shared-domain topology payload distinct from solver-domain topology |
-| `/v1/live/current/mesh/shared-domain/quality` | `target-only` | Shared-domain quality metrics |
-| `/v1/live/current/mesh/objects/:object_id/report` | `target-only` | Realized per-object mesh report |
-| `/v1/live/current/mesh/objects/:object_id/quality` | `target-only` | Per-object quality metrics |
-| `/v1/live/current/mesh/objects/:object_id/topology` | `target-only` | Per-object topology payload |
-| `/v1/live/current/mesh/objects/:object_id/size-field` | `target-only` | Per-object size-field inspection resource |
-| `/v1/live/current/mesh/interfaces/:interface_id/*` | `target-only` | Interface refinement, report, and quality resources |
-| `/v1/live/current/mesh/builds/history` | `target-only` | Historical mesh-build ledger |
-| `/v1/live/current/mesh/builds/last-success` | `target-only` | Last successful build projection |
 | `/v1/live/current/domain/coordinates` | `target-only` | Explicit coordinate buffers for non-implicit domains |
 | `/v1/live/current/domain/regions` | `target-only` | Region/material ownership mappings |
 | `/v1/live/current/domain/active-mask` | `target-only` | Explicit active-mask data |
@@ -1913,7 +1917,7 @@ resource-first architecture.
 | `runtime_status` | `status.solver` + `solver/status` | partially covered |
 | `capabilities` | `status.capabilities` and `/v1/capabilities` | covered in split form |
 | `metadata` | future dedicated metadata resource | contract gap remains |
-| `mesh_workspace` | `/v1/live/current/mesh/summary` + `/v1/live/current/mesh/builds/active` + remaining future `/v1/live/current/mesh/*` | partially covered |
+| `mesh_workspace` | `/v1/live/current/mesh/summary` + `/v1/live/current/mesh/builds/active` + `/v1/live/current/mesh/shared-domain/manifest` + remaining future `/v1/live/current/mesh/*` | partially covered |
 | `stage_execution` | `GET /v1/live/current/stages/execution` | covered |
 | `scene_document` | `GET/PUT /v1/live/current/authoring/scene` | covered |
 | `script_builder` | future `/v1/live/current/authoring/*` projections | target-only |
@@ -1922,7 +1926,7 @@ resource-first architecture.
 | `scalar_rows_total` | `GET /v1/live/current/scalars.total_rows` | covered |
 | `engine_log` | `GET /v1/live/current/logs/engine` | covered |
 | `quantities` | `GET /v1/live/current/quantities/catalog` | covered |
-| `fem_mesh` | `domain/meta` + `domain/topology` | covered in split form |
+| `fem_mesh` | `domain/meta` + `domain/topology` + `mesh/shared-domain/manifest` + `mesh/objects/:object_id/topology` | covered in split form |
 | `latest_fields` | `fields/catalog`, `fields/:quantity_id/meta`, `fields/:quantity_id/vector` | covered in split form |
 | `artifacts` | `GET /v1/live/current/artifacts` | covered |
 | `display_selection` | `status.display` + `GET/PUT/PATCH /display` | covered |

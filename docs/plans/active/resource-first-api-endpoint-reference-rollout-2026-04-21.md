@@ -95,6 +95,13 @@ POST   /v1/internal/live/current/fields
 GET    /v1/internal/live/current/control/wait
 ```
 
+Current bridge note:
+
+- `control/wait` is now solver-command-only.
+- Idle or paused display refresh sync follows the canonical display resource
+  revision from `GET /v1/live/current/status` rather than legacy preview queue
+  commands.
+
 Recently retired public legacy routes no longer mounted include:
 
 ```text

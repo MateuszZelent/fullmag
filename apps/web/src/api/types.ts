@@ -76,6 +76,8 @@ export interface ResourceRevisionMap {
   engine_log_revision: number;
   display_revision: number;
   workspace_revision: number;
+  mesh_revision: number;
+  mesh_build_revision: number;
 }
 
 export interface CapabilityMap {
@@ -117,6 +119,8 @@ export type RealtimeResourceName =
   | "domain"
   | "artifacts"
   | "logs"
+  | "mesh"
+  | "mesh_builds"
   | "commands"
   | "stages"
   | "scene_document";
@@ -129,6 +133,8 @@ export interface RealtimeResourceRevisionMap {
   engine_log_revision: number;
   display_revision: number;
   workspace_revision: number;
+  mesh_revision: number;
+  mesh_build_revision: number;
   commands_revision: number;
   stages_revision: number;
   scene_revision?: number | null;
@@ -372,16 +378,26 @@ export interface DisplayPatchRequest {
   y_chosen_size?: number;
 }
 
-/**
- * Transitional alias kept while legacy wrappers are being tightened.
- * New code should prefer `DisplayPatchRequest`.
- */
-export type DisplayUpdate = DisplayPatchRequest;
-
 // ── Commands ──────────────────────────────────────────────────────────
 
 export type MeshConfigRecord = Record<string, unknown>;
 export type MeshWorkspaceRecord = Record<string, unknown>;
+export type MeshReportRecord = Record<string, unknown>;
+export type MeshQualityRecord = Record<string, unknown>;
+
+export interface MeshSummaryResource {
+  revision: number;
+  mesh_summary?: MeshWorkspaceRecord | null;
+  mesh_quality_summary?: MeshWorkspaceRecord | null;
+  effective_airbox_target?: MeshWorkspaceRecord | null;
+  effective_per_object_targets?: MeshWorkspaceRecord | null;
+}
+
+export interface MeshCapabilitiesResource {
+  revision: number;
+  mesh_capabilities?: MeshWorkspaceRecord | null;
+  mesh_adaptivity_state?: MeshWorkspaceRecord | null;
+}
 
 export interface MeshUniverseConfigResource {
   revision: number;
@@ -392,6 +408,16 @@ export interface MeshUniverseConfigReplaceRequest {
   config: MeshConfigRecord;
 }
 
+export interface MeshUniverseReportResource {
+  revision: number;
+  report?: MeshReportRecord | null;
+}
+
+export interface MeshUniverseQualityResource {
+  revision: number;
+  quality?: MeshQualityRecord | null;
+}
+
 export interface MeshSharedDomainConfigResource {
   revision: number;
   config: MeshConfigRecord;
@@ -399,6 +425,57 @@ export interface MeshSharedDomainConfigResource {
 
 export interface MeshSharedDomainConfigReplaceRequest {
   config: MeshConfigRecord;
+}
+
+export interface MeshSharedDomainReportResource {
+  revision: number;
+  report?: MeshReportRecord | null;
+}
+
+export interface MeshSharedDomainQualityResource {
+  revision: number;
+  quality?: MeshQualityRecord | null;
+}
+
+export interface MeshObjectSegmentEntry {
+  object_id: string;
+  geometry_id?: string | null;
+  node_start: number;
+  node_count: number;
+  element_start: number;
+  element_count: number;
+  boundary_face_start: number;
+  boundary_face_count: number;
+}
+
+export interface MeshPartEntry {
+  id: string;
+  label: string;
+  role: "air" | "magnetic_object" | "interface" | "outer_boundary" | string;
+  object_id?: string | null;
+  geometry_id?: string | null;
+  material_id?: string | null;
+  element_start: number;
+  element_count: number;
+  boundary_face_start: number;
+  boundary_face_count: number;
+  boundary_face_indices: number[];
+  node_start: number;
+  node_count: number;
+  node_indices: number[];
+  surface_faces: [number, number, number][];
+  bounds_min?: [number, number, number] | null;
+  bounds_max?: [number, number, number] | null;
+}
+
+export interface MeshSharedDomainManifestResource {
+  revision: number;
+  mesh_name: string;
+  mesh_id: string;
+  generation_id?: string | null;
+  domain_mesh_mode?: string | null;
+  object_segments: MeshObjectSegmentEntry[];
+  mesh_parts: MeshPartEntry[];
 }
 
 export interface MeshObjectConfigResource {
@@ -411,9 +488,46 @@ export interface MeshObjectConfigReplaceRequest {
   config?: MeshConfigRecord | null;
 }
 
-export interface MeshWorkspaceResource {
+export interface MeshObjectReportResource {
   revision: number;
-  mesh_workspace: MeshWorkspaceRecord;
+  object_id: string;
+  report?: MeshReportRecord | null;
+}
+
+export interface MeshObjectQualityResource {
+  revision: number;
+  object_id: string;
+  quality?: MeshQualityRecord | null;
+}
+
+export interface MeshObjectSizeFieldResource {
+  revision: number;
+  object_id: string;
+  size_field?: MeshWorkspaceRecord | null;
+}
+
+export interface MeshInterfaceConfigResource {
+  revision: number;
+  interface_id: string;
+  config?: MeshConfigRecord | null;
+}
+
+export interface MeshInterfaceConfigReplaceRequest {
+  config?: MeshConfigRecord | null;
+  owner_a?: string | null;
+  owner_b?: string | null;
+}
+
+export interface MeshInterfaceReportResource {
+  revision: number;
+  interface_id: string;
+  report?: MeshReportRecord | null;
+}
+
+export interface MeshInterfaceQualityResource {
+  revision: number;
+  interface_id: string;
+  quality?: MeshQualityRecord | null;
 }
 
 export interface MeshActiveBuildResource {
@@ -423,6 +537,19 @@ export interface MeshActiveBuildResource {
   effective_airbox_target?: MeshWorkspaceRecord | null;
   effective_per_object_targets?: MeshWorkspaceRecord | null;
   last_build_summary?: MeshWorkspaceRecord | null;
+  last_build_error?: string | null;
+}
+
+export interface MeshBuildHistoryResource {
+  revision: number;
+  history: MeshWorkspaceRecord[];
+}
+
+export interface MeshLastSuccessfulBuildResource {
+  revision: number;
+  last_success?: MeshWorkspaceRecord | null;
+  effective_airbox_target?: MeshWorkspaceRecord | null;
+  effective_per_object_targets?: MeshWorkspaceRecord | null;
   last_build_error?: string | null;
 }
 
@@ -474,13 +601,6 @@ export interface SkipCommandRequest {
   kind: "skip";
 }
 
-export interface RemeshCommandRequest {
-  kind: "remesh";
-  mesh_options?: unknown;
-  mesh_target?: MeshCommandTargetRequest;
-  mesh_reason?: string;
-}
-
 export interface SaveVtkCommandRequest {
   kind: "save_vtk";
 }
@@ -500,7 +620,6 @@ export type StructuredCommandRequest =
   | ResumeCommandRequest
   | StopCommandRequest
   | SkipCommandRequest
-  | RemeshCommandRequest
   | SaveVtkCommandRequest
   | SolveCommandRequest
   | CloseCommandRequest;

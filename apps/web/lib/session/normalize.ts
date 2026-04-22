@@ -1627,7 +1627,7 @@ function normalizeDomainFrame(raw: any) {
   };
 }
 
-function normalizeMeshWorkspace(raw: any): MeshWorkspaceState | null {
+export function normalizeMeshWorkspace(raw: any): MeshWorkspaceState | null {
   if (!raw || typeof raw !== "object") {
     return null;
   }

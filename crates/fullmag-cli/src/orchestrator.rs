@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::args::*;
 use crate::control_room::*;
+use crate::dev_smoke::run_post_materialization_dev_smoke_tests;
 use crate::formatting::*;
 use crate::interactive_runtime_host::{CurrentLiveDisplaySelectionHandle, InteractiveRuntimeHost};
 use crate::live_workspace::*;
@@ -3311,6 +3312,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             live_workspace.push_log("info", line);
         }
     }
+    if args.dev && !args.headless {
+        let _ = run_post_materialization_dev_smoke_tests(
+            &session_id,
+            &initial_execution_plan,
+            &live_workspace,
+        );
+    }
 
     let stage_count = stages.len();
     let mut aggregated_steps = Vec::<fullmag_runner::StepStats>::new();
@@ -3607,8 +3615,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             };
 
             match cmd.kind.as_str() {
-                "display_selection_update" | "preview_update" | "preview_refresh" => {
-                    display_selection_handle.apply_preview_command(&cmd);
+                "display_sync" => {
+                    display_selection_handle.apply_display_sync_command(&cmd);
                     let display_selection = display_selection_handle.display_selection_snapshot();
                     if let Err(error) = refresh_problem_preview_state(
                         &stages[0].ir,
@@ -4406,7 +4414,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 continue;
             };
 
-            if interactive_runtime_host.handle_preview_command(&command, &live_workspace) {
+            if interactive_runtime_host.handle_display_sync(&command, &live_workspace) {
                 continue;
             }
 

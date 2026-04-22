@@ -3,7 +3,7 @@
  *
  * Command infrastructure and mesh operation callbacks:
  *  appendFrontendTrace, enqueueCommand, buildMeshOptionsPayload,
- *  enqueueStudyDomainRemesh, updatePreview,
+ *  enqueueStudyDomainRemesh, patchDisplay, updatePreview,
  *  handleStudyDomainMeshGenerate, handleAirboxMeshGenerate,
  *  handleObjectMeshOverrideRebuild, handleLassoRefine.
  */
@@ -58,6 +58,11 @@ export interface UseMeshCommandPipelineReturn {
   enqueueCommand: (payload: Record<string, unknown>) => Promise<void>;
   buildMeshOptionsPayload: (options: MeshOptionsState, refinementZonesOverride?: MeshOptionsState["refinementZones"]) => Record<string, unknown>;
   enqueueStudyDomainRemesh: (meshReason: string, meshOptionsPayload: Record<string, unknown>, meshTarget?: MeshCommandTarget) => Promise<void>;
+  patchDisplay: (
+    patch: DisplayPatchRequest,
+    optimisticSelectionOverride?: DisplaySelection,
+    message?: string,
+  ) => Promise<void>;
   updatePreview: (path: string, payload?: Record<string, unknown>) => Promise<void>;
   meshGenTopologyRef: MutableRefObject<string | null>;
   meshGenGenerationRef: MutableRefObject<string | null>;
@@ -109,6 +114,51 @@ export function useMeshCommandPipeline({
     }),
     [],
   );
+
+  const applyDisplayPatchToSelection = useCallback((selection: DisplaySelection, patch: DisplayPatchRequest): DisplaySelection => {
+    const nextSelection: DisplaySelection = { ...selection };
+    if (typeof patch.active_quantity_id === "string" && patch.active_quantity_id.trim().length > 0) {
+      nextSelection.quantity = patch.active_quantity_id;
+      nextSelection.kind = kindForQuantity(nextSelection.quantity) as DisplaySelection["kind"];
+      if (nextSelection.kind !== "vector_field") {
+        nextSelection.view_mode = "2d";
+        nextSelection.field_component = "magnitude";
+      }
+    }
+    if (patch.view_mode === "2d" || patch.view_mode === "3d") {
+      nextSelection.view_mode = patch.view_mode;
+    }
+    if (
+      patch.field_component === "x" ||
+      patch.field_component === "y" ||
+      patch.field_component === "z" ||
+      patch.field_component === "magnitude"
+    ) {
+      nextSelection.field_component = patch.field_component;
+    }
+    if (typeof patch.auto_contrast === "boolean") {
+      nextSelection.auto_scale_enabled = patch.auto_contrast;
+    }
+    if (typeof patch.vector_density === "number" && Number.isFinite(patch.vector_density)) {
+      nextSelection.every_n = patch.vector_density;
+    }
+    if (patch.slice_mode === "all" || patch.slice_mode === "single") {
+      nextSelection.all_layers = patch.slice_mode === "all";
+    }
+    if (typeof patch.slice_layer === "number" && Number.isFinite(patch.slice_layer)) {
+      nextSelection.layer = patch.slice_layer;
+    }
+    if (typeof patch.max_points === "number" && Number.isFinite(patch.max_points)) {
+      nextSelection.max_points = patch.max_points;
+    }
+    if (typeof patch.x_chosen_size === "number" && Number.isFinite(patch.x_chosen_size)) {
+      nextSelection.x_chosen_size = patch.x_chosen_size;
+    }
+    if (typeof patch.y_chosen_size === "number" && Number.isFinite(patch.y_chosen_size)) {
+      nextSelection.y_chosen_size = patch.y_chosen_size;
+    }
+    return nextSelection;
+  }, [kindForQuantity]);
 
   const appendFrontendTrace = useCallback((level: string, message: string) => {
     if (level === "error") {
@@ -247,6 +297,32 @@ export function useMeshCommandPipeline({
     [appendFrontendTrace, liveApi],
   );
 
+  const patchDisplay = useCallback(async (
+    patch: DisplayPatchRequest,
+    optimisticSelectionOverride?: DisplaySelection,
+    message?: string,
+  ) => {
+    const nextSelection = optimisticSelectionOverride ?? applyDisplayPatchToSelection(
+      requestedDisplaySelection,
+      patch,
+    );
+    setOptimisticDisplaySelection(nextSelection);
+    setPreviewPostInFlight(true);
+    setPreviewMessage(message ?? (patch.active_quantity_id ? `Switching to ${nextSelection.quantity}` : "Updating display"));
+    try {
+      await liveApi.patchDisplay(patch);
+    }
+    catch (e) {
+      setOptimisticDisplaySelection(null);
+      setPreviewMessage(e instanceof Error ? e.message : "Failed to update preview");
+    }
+    finally { setPreviewPostInFlight(false); }
+  }, [
+    applyDisplayPatchToSelection,
+    liveApi,
+    requestedDisplaySelection,
+  ]);
+
   const updatePreview = useCallback(async (path: string, payload: Record<string, unknown> = {}) => {
     if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {
       // eslint-disable-next-line no-console
@@ -317,20 +393,14 @@ export function useMeshCommandPipeline({
         setPreviewMessage(`Unsupported display mutation: ${path}`);
         return;
     }
-    setOptimisticDisplaySelection(nextSelection);
-    setPreviewPostInFlight(true);
-    setPreviewMessage(`Switching to ${nextSelection.quantity}`);
-    try {
-      await liveApi.patchDisplay(displayPatch ?? selectionToDisplayPatch(nextSelection));
-    }
-    catch (e) {
-      setOptimisticDisplaySelection(null);
-      setPreviewMessage(e instanceof Error ? e.message : "Failed to update preview");
-    }
-    finally { setPreviewPostInFlight(false); }
+    await patchDisplay(
+      displayPatch ?? selectionToDisplayPatch(nextSelection),
+      nextSelection,
+      `Switching to ${nextSelection.quantity}`,
+    );
   }, [
     kindForQuantity,
-    liveApi,
+    patchDisplay,
     requestedDisplaySelection,
     selectionToDisplayPatch,
   ]);
@@ -495,6 +565,7 @@ export function useMeshCommandPipeline({
     enqueueCommand,
     buildMeshOptionsPayload,
     enqueueStudyDomainRemesh,
+    patchDisplay,
     updatePreview,
     meshGenTopologyRef,
     meshGenGenerationRef,

@@ -41,7 +41,7 @@ pub(crate) fn display_refresh_due(
         || local_step % cadence == 0
 }
 
-pub(crate) fn cached_preview_refresh_due(
+pub(crate) fn cached_display_refresh_due(
     last_cached_preview_revision: Option<u64>,
     display_state: &DisplaySelectionState,
     local_step: u64,
@@ -123,7 +123,7 @@ pub(crate) fn display_is_global_scalar(display_state: &DisplaySelectionState) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{cached_preview_refresh_due, display_refresh_due};
+    use super::{cached_display_refresh_due, display_refresh_due};
     use crate::interactive::display::DisplaySelectionState;
 
     #[test]
@@ -143,17 +143,17 @@ mod tests {
     }
 
     #[test]
-    fn cached_preview_refresh_due_honors_field_every_n() {
+    fn cached_display_refresh_due_honors_field_every_n() {
         let mut display_state = DisplaySelectionState::default();
         display_state.revision = 3;
 
-        assert!(cached_preview_refresh_due(None, &display_state, 0, 25));
-        assert!(cached_preview_refresh_due(Some(2), &display_state, 17, 25));
-        assert!(cached_preview_refresh_due(Some(3), &display_state, 0, 25));
-        assert!(cached_preview_refresh_due(Some(3), &display_state, 1, 25));
-        assert!(!cached_preview_refresh_due(Some(3), &display_state, 2, 25));
-        assert!(!cached_preview_refresh_due(Some(3), &display_state, 24, 25));
-        assert!(cached_preview_refresh_due(Some(3), &display_state, 25, 25));
+        assert!(cached_display_refresh_due(None, &display_state, 0, 25));
+        assert!(cached_display_refresh_due(Some(2), &display_state, 17, 25));
+        assert!(cached_display_refresh_due(Some(3), &display_state, 0, 25));
+        assert!(cached_display_refresh_due(Some(3), &display_state, 1, 25));
+        assert!(!cached_display_refresh_due(Some(3), &display_state, 2, 25));
+        assert!(!cached_display_refresh_due(Some(3), &display_state, 24, 25));
+        assert!(cached_display_refresh_due(Some(3), &display_state, 25, 25));
     }
 }
 
@@ -739,7 +739,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 &display_state,
                 current_local_stats.step,
             );
-            let cached_preview_due = cached_preview_refresh_due(
+            let cached_display_due = cached_display_refresh_due(
                 last_cached_preview_revision,
                 &display_state,
                 current_local_stats.step,
@@ -756,7 +756,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             } else {
                 None
             };
-            let cached_preview_fields = if cached_preview_due {
+            let cached_preview_fields = if cached_display_due {
                 build_cached_grid_preview_fields(
                     &display_state,
                     &current_observables,
@@ -779,7 +779,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
             }
-            if cached_preview_due {
+            if cached_display_due {
                 last_cached_preview_revision = Some(display_state.revision);
             }
             match action {
@@ -833,7 +833,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 &display_state,
                 local_stats.step,
             );
-            let cached_preview_due = cached_preview_refresh_due(
+            let cached_display_due = cached_display_refresh_due(
                 last_cached_preview_revision,
                 &display_state,
                 local_stats.step,
@@ -843,7 +843,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             // Only run the expensive full observe when vector-field data is
             // actually needed (preview refresh or cached preview refresh).
             let needs_observables =
-                (preview_due && !display_is_global_scalar(&display_state)) || cached_preview_due;
+                (preview_due && !display_is_global_scalar(&display_state)) || cached_display_due;
 
             if needs_observables {
                 let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
@@ -861,7 +861,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             } else {
                 None
             };
-            let cached_preview_fields = if cached_preview_due {
+            let cached_preview_fields = if cached_display_due {
                 build_cached_grid_preview_fields(
                     &display_state,
                     &current_observables,
@@ -887,7 +887,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
             }
-            if cached_preview_due {
+            if cached_display_due {
                 last_cached_preview_revision = Some(display_state.revision);
             }
             steps.push(local_stats.clone());
@@ -1441,7 +1441,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 &display_state,
                 current_local_stats.step,
             );
-            let cached_preview_due = cached_preview_refresh_due(
+            let cached_display_due = cached_display_refresh_due(
                 last_cached_preview_revision,
                 &display_state,
                 current_local_stats.step,
@@ -1457,7 +1457,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             } else {
                 None
             };
-            let cached_preview_fields = if cached_preview_due {
+            let cached_preview_fields = if cached_display_due {
                 match pending_cached_preview_snapshots.take() {
                     Some(snapshots) => Some(self.resolve_cached_preview_prefetch(snapshots)?),
                     None => {
@@ -1486,7 +1486,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
             }
-            if cached_preview_due {
+            if cached_display_due {
                 last_cached_preview_revision = Some(display_state.revision);
             }
             match action {
@@ -1517,7 +1517,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             // Only start async cached-preview GPU→CPU copies when the next
             // iteration will actually consume them.
             let next_cached_step = (total_stats.step - base_step) + 1;
-            if cached_preview_refresh_due(
+            if cached_display_refresh_due(
                 last_cached_preview_revision,
                 &post_step_display_state,
                 next_cached_step,
@@ -1539,7 +1539,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 &display_state,
                 local_stats.step,
             );
-            let cached_preview_due = cached_preview_refresh_due(
+            let cached_display_due = cached_display_refresh_due(
                 last_cached_preview_revision,
                 &display_state,
                 local_stats.step,
@@ -1571,7 +1571,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
             }
-            if cached_preview_due {
+            if cached_display_due {
                 last_cached_preview_revision = Some(display_state.revision);
             }
             steps.push(local_stats.clone());
@@ -1721,7 +1721,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 &display_state,
                 current_local_stats.step,
             );
-            let cached_preview_due = cached_preview_refresh_due(
+            let cached_display_due = cached_display_refresh_due(
                 last_cached_preview_revision,
                 &display_state,
                 current_local_stats.step,
@@ -1737,7 +1737,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             } else {
                 None
             };
-            let cached_preview_fields = if cached_preview_due {
+            let cached_preview_fields = if cached_display_due {
                 match pending_cached_preview_snapshots.take() {
                     Some(snapshots) => Some(self.resolve_cached_preview_prefetch(snapshots)?),
                     None => {
@@ -1766,7 +1766,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
             }
-            if cached_preview_due {
+            if cached_display_due {
                 last_cached_preview_revision = Some(display_state.revision);
             }
             match action {
@@ -1797,7 +1797,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             // Only start async cached-preview GPU→CPU copies when the next
             // iteration will actually consume them.
             let next_cached_step = (total_stats.step - base_step) + 1;
-            if cached_preview_refresh_due(
+            if cached_display_refresh_due(
                 last_cached_preview_revision,
                 &post_step_display_state,
                 next_cached_step,
@@ -1820,7 +1820,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 &display_state,
                 local_stats.step,
             );
-            let cached_preview_due = cached_preview_refresh_due(
+            let cached_display_due = cached_display_refresh_due(
                 last_cached_preview_revision,
                 &display_state,
                 local_stats.step,
@@ -1852,7 +1852,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
             }
-            if cached_preview_due {
+            if cached_display_due {
                 last_cached_preview_revision = Some(display_state.revision);
             }
             match action {
@@ -2063,7 +2063,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 &display_state,
                 current_local_stats.step,
             );
-            let cached_preview_due = cached_preview_refresh_due(
+            let cached_display_due = cached_display_refresh_due(
                 last_cached_preview_revision,
                 &display_state,
                 current_local_stats.step,
@@ -2079,7 +2079,7 @@ impl CpuInteractiveFemPreviewRuntime {
             } else {
                 None
             };
-            let cached_preview_fields = if cached_preview_due {
+            let cached_preview_fields = if cached_display_due {
                 build_cached_mesh_preview_fields(
                     &display_state,
                     &current_observables,
@@ -2101,7 +2101,7 @@ impl CpuInteractiveFemPreviewRuntime {
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
             }
-            if cached_preview_due {
+            if cached_display_due {
                 last_cached_preview_revision = Some(display_state.revision);
             }
             match action {
@@ -2151,7 +2151,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 &display_state,
                 local_stats.step,
             );
-            let cached_preview_due = cached_preview_refresh_due(
+            let cached_display_due = cached_display_refresh_due(
                 last_cached_preview_revision,
                 &display_state,
                 local_stats.step,
@@ -2161,7 +2161,7 @@ impl CpuInteractiveFemPreviewRuntime {
             // Only run the expensive full observe when vector-field data is
             // actually needed (preview refresh or cached preview refresh).
             let needs_observables =
-                (preview_due && !display_is_global_scalar(&display_state)) || cached_preview_due;
+                (preview_due && !display_is_global_scalar(&display_state)) || cached_display_due;
 
             if needs_observables {
                 let observe_start = std::time::Instant::now();
@@ -2190,7 +2190,7 @@ impl CpuInteractiveFemPreviewRuntime {
             } else {
                 None
             };
-            let cached_preview_fields = if cached_preview_due {
+            let cached_preview_fields = if cached_display_due {
                 build_cached_mesh_preview_fields(
                     &display_state,
                     &current_observables,
@@ -2215,7 +2215,7 @@ impl CpuInteractiveFemPreviewRuntime {
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
             }
-            if cached_preview_due {
+            if cached_display_due {
                 last_cached_preview_revision = Some(display_state.revision);
             }
             steps.push(local_stats.clone());
@@ -2704,7 +2704,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 &display_state,
                 current_local_stats.step,
             );
-            let cached_preview_due = cached_preview_refresh_due(
+            let cached_display_due = cached_display_refresh_due(
                 last_cached_preview_revision,
                 &display_state,
                 current_local_stats.step,
@@ -2716,7 +2716,7 @@ impl GpuInteractiveFemPreviewRuntime {
             } else {
                 None
             };
-            let cached_preview_fields = if cached_preview_due {
+            let cached_preview_fields = if cached_display_due {
                 let preview_cfg = display_state.preview_request();
                 let quantities = cached_preview_quantities_for(&display_state);
                 if quantities.is_empty() {
@@ -2740,7 +2740,7 @@ impl GpuInteractiveFemPreviewRuntime {
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
             }
-            if cached_preview_due {
+            if cached_display_due {
                 last_cached_preview_revision = Some(display_state.revision);
             }
             match action {
@@ -2778,7 +2778,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 &display_state,
                 local_stats.step,
             );
-            let cached_preview_due = cached_preview_refresh_due(
+            let cached_display_due = cached_display_refresh_due(
                 last_cached_preview_revision,
                 &display_state,
                 local_stats.step,
@@ -2790,7 +2790,7 @@ impl GpuInteractiveFemPreviewRuntime {
             } else {
                 None
             };
-            let cached_preview_fields = if cached_preview_due {
+            let cached_preview_fields = if cached_display_due {
                 let preview_cfg = display_state.preview_request();
                 let quantities = cached_preview_quantities_for(&display_state);
                 if quantities.is_empty() {
@@ -2817,7 +2817,7 @@ impl GpuInteractiveFemPreviewRuntime {
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
             }
-            if cached_preview_due {
+            if cached_display_due {
                 last_cached_preview_revision = Some(display_state.revision);
             }
             steps.push(local_stats.clone());

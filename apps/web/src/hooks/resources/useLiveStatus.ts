@@ -99,7 +99,12 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
   }, [poll, enabled]);
 
   useEffect(() => {
-    if (!enabled || !FRONTEND_DIAGNOSTIC_FLAGS.session.enableLiveWebSocket) {
+    const hasActiveSession = Boolean(status?.session?.session_id);
+    if (
+      !enabled ||
+      !FRONTEND_DIAGNOSTIC_FLAGS.session.enableLiveWebSocket ||
+      !hasActiveSession
+    ) {
       realtimeClientRef.current?.close();
       realtimeClientRef.current = null;
       return;
@@ -127,7 +132,7 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
         realtimeClientRef.current = null;
       }
     };
-  }, [enabled, queueRefresh]);
+  }, [enabled, queueRefresh, status?.session?.session_id]);
 
   return {
     status,

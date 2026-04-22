@@ -8,6 +8,7 @@ use std::ffi::OsString;
 mod args;
 mod command_bridge;
 mod control_room;
+mod dev_smoke;
 mod diagnostics;
 mod feature_flags;
 mod formatting;

@@ -43,6 +43,8 @@ struct PersistedCurrentLiveSnapshot {
     preview_config: crate::types::CurrentPreviewConfig,
     preview: Option<crate::types::PreviewState>,
     builder_adapter: Option<fullmag_authoring::ScriptBuilderState>,
+    mesh_revision: u64,
+    mesh_build_revision: u64,
 }
 
 impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
@@ -69,6 +71,8 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
             preview_config: value.preview_config.clone(),
             preview: value.preview.clone(),
             builder_adapter: value.builder_adapter.clone(),
+            mesh_revision: value.mesh_revision,
+            mesh_build_revision: value.mesh_build_revision,
         }
     }
 }
@@ -99,6 +103,8 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             preview: value.preview,
             builder_adapter: value.builder_adapter,
             state_version: 0,
+            mesh_revision: value.mesh_revision,
+            mesh_build_revision: value.mesh_build_revision,
         }
     }
 }

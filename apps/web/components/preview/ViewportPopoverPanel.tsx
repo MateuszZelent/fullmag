@@ -151,23 +151,16 @@ export function ViewportPopoverTrigger({
   preferredVertical = "bottom",
 }: ViewportPopoverTriggerProps) {
   const triggerRef = useRef<HTMLDivElement | null>(null);
-  const [anchorElement, setAnchorElement] = useState<HTMLElement | null>(null);
   const array = Children.toArray(children);
   const trigger = array[0];
   const panel = array[1];
 
   return (
-    <div
-      ref={(node) => {
-        triggerRef.current = node;
-        setAnchorElement(node);
-      }}
-      className={cn("relative inline-flex", className)}
-    >
+    <div ref={triggerRef} className={cn("relative inline-flex", className)}>
       {trigger}
       {panel && isValidElement<ViewportPopoverPanelProps>(panel)
         ? cloneElement(panel, {
-            anchorElement,
+            anchorRef: triggerRef as RefObject<HTMLElement | null>,
             preferredHorizontal: panel.props.preferredHorizontal ?? preferredHorizontal,
             preferredVertical: panel.props.preferredVertical ?? preferredVertical,
           })

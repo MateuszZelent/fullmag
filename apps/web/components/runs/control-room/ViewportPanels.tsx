@@ -7,6 +7,7 @@ import { MAGNETIC_PRESET_CATALOG } from "@/lib/magnetizationPresetCatalog";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { ViewportHost, useWorkspaceGraphStore } from "@/features";
 import { isFemDiscretization } from "@/src/domain/capabilities";
+import { displayPatchFromPreviewComponent } from "@/src/api/displaySelection";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import type { TextureTransform3D as PreviewTextureTransform3D } from "@/lib/textureTransform";
@@ -145,7 +146,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const femMeshData = ctx.femMeshData;
   const visibleSubmeshSnapshot = ctx.visibleSubmeshSnapshot;
   const setVisibleSubmeshSnapshot = ctx.setVisibleSubmeshSnapshot;
-  const updatePreview = ctx.updatePreview;
+  const patchDisplay = ctx.patchDisplay;
   const spatialPreview = ctx.preview?.kind === "spatial" ? ctx.preview : null;
   const globalScalarPreview = ctx.preview?.kind === "global_scalar" ? ctx.preview : null;
   const hasVectorData = Boolean(ctx.selectedVectors && ctx.selectedVectors.length > 0);
@@ -452,20 +453,20 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     [ctx.previewQuantityOptions, ctx.quantities],
   );
   const handlePreviewMaxPointsChange = useCallback(
-    (nextMaxPoints: number) => void updatePreview("/maxPoints", { maxPoints: nextMaxPoints }),
-    [updatePreview],
+    (nextMaxPoints: number) => void patchDisplay({ max_points: nextMaxPoints }),
+    [patchDisplay],
   );
   const handleFemSliceComponentChange = useCallback(
     (nextComponent: "x" | "y" | "z" | "magnitude") => {
       if (ctx.previewControlsActive) {
-        void updatePreview("/component", {
-          component: nextComponent === "magnitude" ? "3D" : nextComponent,
-        });
+        void patchDisplay(displayPatchFromPreviewComponent(
+          nextComponent === "magnitude" ? "3D" : nextComponent,
+        ));
         return;
       }
       ctx.setComponent(nextComponent);
     },
-    [ctx, updatePreview],
+    [ctx, patchDisplay],
   );
   const hasExactScopeSegment = useMemo(
     () => {
@@ -669,6 +670,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
           focusObjectRequest={ctx.focusObjectRequest}
           worldExtent={ctx.worldExtent}
           worldCenter={ctx.worldCenter}
+          enableObjectInteractions={false}
           onRequestObjectSelect={handleRequestObjectSelect}
           onGeometryTranslate={ctx.applyGeometryTranslation}
         />
@@ -975,6 +977,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         focusObjectRequest={ctx.focusObjectRequest}
         worldExtent={ctx.worldExtent}
         worldCenter={ctx.worldCenter}
+        enableObjectInteractions={false}
         onRequestObjectSelect={handleRequestObjectSelect}
         onGeometryTranslate={ctx.applyGeometryTranslation}
       />

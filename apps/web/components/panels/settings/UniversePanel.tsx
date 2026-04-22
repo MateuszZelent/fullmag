@@ -221,7 +221,6 @@ export default function UniversePanel() {
   useEffect(() => {
     setActiveTab(universeTabFromNodeId(selectedNodeId));
   }, [selectedNodeId]);
-  const remeshStatus = ctx.commandStatus?.command_kind === "remesh" ? ctx.commandStatus : null;
   const meshSummary = ctx.meshWorkspace?.mesh_summary ?? null;
   const qualitySummary = ctx.meshWorkspace?.mesh_quality_summary ?? null;
   const payloadRamEstimate = formatBytes(
@@ -752,7 +751,7 @@ export default function UniversePanel() {
                 )}
                 <div className="rounded-md border border-border/30 bg-background/35 px-2.5 py-2 text-[0.68rem] leading-relaxed text-muted-foreground">
                   {ctx.commandMessage
-                    ?? remeshStatus?.reason
+                    ?? ctx.meshWorkspace?.last_build_error
                     ?? "Change airbox sizing here, then use the Mesh ribbon to sync the script, queue a study-domain remesh and follow the build in the modal."}
                   {qualitySummary
                     ? ` Current avg quality ${qualitySummary.avg_quality.toFixed(3)}.`

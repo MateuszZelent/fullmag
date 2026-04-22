@@ -137,10 +137,8 @@ export default function TopHeader(props: TopHeaderProps) {
         <div className="hidden items-center gap-0.5 border-l border-white/5 pl-3 lg:flex">
           {menus.map((menu) => (
             <DropdownMenu.Root key={menu.label}>
-              <DropdownMenu.Trigger asChild>
-                <button className="px-2 py-1 text-[0.72rem] font-medium text-muted-foreground outline-none cursor-default rounded transition-colors hover:bg-muted/40 hover:text-foreground data-[state=open]:bg-muted/40 data-[state=open]:text-foreground">
-                  {menu.label}
-                </button>
+              <DropdownMenu.Trigger className="px-2 py-1 text-[0.72rem] font-medium text-muted-foreground outline-none cursor-default rounded transition-colors hover:bg-muted/40 hover:text-foreground data-[state=open]:bg-muted/40 data-[state=open]:text-foreground">
+                {menu.label}
               </DropdownMenu.Trigger>
 
               <DropdownMenu.Portal>

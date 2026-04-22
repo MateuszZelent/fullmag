@@ -9,11 +9,11 @@ import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 import {
   mergeScalarWindows,
-  type LegacyScalarRow,
+  type ScalarHistoryRow,
 } from "../../api/client/modules/ScalarHistoryAdapter";
 
 interface UseScalarHistoryResult {
-  scalars: LegacyScalarRow[];
+  scalars: ScalarHistoryRow[];
   totalRows: number;
   loading: boolean;
   error: LiveApiError | null;
@@ -25,7 +25,7 @@ const POLL_INTERVAL_MS = 2000;
 export function useScalarHistory(
   scalarRevision: number | null,
 ): UseScalarHistoryResult {
-  const [scalars, setScalars] = useState<LegacyScalarRow[]>([]);
+  const [scalars, setScalars] = useState<ScalarHistoryRow[]>([]);
   const [totalRows, setTotalRows] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<LiveApiError | null>(null);

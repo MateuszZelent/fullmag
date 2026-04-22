@@ -4,7 +4,7 @@
 
 import type { ScalarWindow } from "../../generated/openapi-types";
 
-export interface LegacyScalarRow {
+export interface ScalarHistoryRow {
   step: number;
   t: number;
   time: number | null;
@@ -14,8 +14,8 @@ export interface LegacyScalarRow {
 function scalarRowFromWindow(
   window: ScalarWindow,
   values: number[],
-): LegacyScalarRow {
-  const row: LegacyScalarRow = {
+): ScalarHistoryRow {
+  const row: ScalarHistoryRow = {
     step: 0,
     t: 0,
     time: null,
@@ -39,14 +39,14 @@ function scalarRowFromWindow(
   return row;
 }
 
-export function scalarWindowToRows(window: ScalarWindow): LegacyScalarRow[] {
+export function scalarWindowToRows(window: ScalarWindow): ScalarHistoryRow[] {
   return window.rows.map((values) => scalarRowFromWindow(window, values));
 }
 
 export function mergeScalarWindows(
-  existing: LegacyScalarRow[],
+  existing: ScalarHistoryRow[],
   incoming: ScalarWindow,
-): LegacyScalarRow[] {
+): ScalarHistoryRow[] {
   const newRows = scalarWindowToRows(incoming);
   if (existing.length === 0) {
     return newRows;

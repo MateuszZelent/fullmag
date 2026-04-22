@@ -1,0 +1,306 @@
+# Plan Naprawy Wizualizacji 3D po Refaktorze API
+
+- Status: active
+- Last updated: 2026-04-21
+- Scope: control-room 3D viewport, FEM mesh transport, viewport chrome, mesh lifecycle
+- Repo baseline compared:
+  - `29e8151` (`2026-04-20 19:46:08 +0200`) `feat(web): unified viewport module + comprehensive frontend contract tests`
+  - `2086635` (`2026-04-20 19:32:15 +0200`) `feat(web): add API migration stages 7-8: display consolidation, adapters, and legacy facade`
+  - `d54fe07` (`2026-04-20 22:26:49 +0200`) `feat(api): implement resource-first control room API and update related schemas`
+- Related files:
+  - `apps/web/components/runs/control-room/ControlRoomContext.tsx`
+  - `apps/web/components/runs/control-room/ViewportPanels.tsx`
+  - `apps/web/components/runs/control-room/ViewportBar.tsx`
+  - `apps/web/components/runs/control-room/WorkspaceControlStrip.tsx`
+  - `apps/web/components/preview/FemMeshView3D.tsx`
+  - `apps/web/components/preview/fem/FemViewportToolbar.tsx`
+  - `apps/web/features/session-runtime/hooks/useNewApiBridge.ts`
+  - `apps/web/features/session-runtime/hooks/useDataPlaneBridge.ts`
+  - `apps/web/src/hooks/resources/useMeshResources.ts`
+  - `apps/web/lib/debug/frontendDiagnosticFlags.ts`
+  - `crates/fullmag-api/src/router_v1/handlers/mesh.rs`
+
+## 1. Cel
+
+Przywrócić pełny, produkcyjny interfejs 3D po przejściu na resource-first API:
+
+1. FEM `3D` i `Mesh` muszą znowu tworzyć geometrię i mesh po starcie oraz po każdym remeshu.
+2. Toolbar-y i chrome z baseline z `2026-04-20` muszą wrócić do spójnego stanu.
+3. UI nie może wpadać w tryb pusty, diagnostyczny albo uproszczony, jeśli sesja ma poprawny mesh.
+4. Mesh summary, topology i build lifecycle muszą być odświeżane z jednego, spójnego kontraktu.
+
+## 2. Zweryfikowany stan na 2026-04-21
+
+### 2.1 Co było w baseline z 2026-04-20
+
+Na podstawie commitów z `2026-04-20` oraz aktualnych plików, które od tamtej pory nie zostały uproszczone funkcjonalnie:
+
+- górny `RibbonBar` istniał i nadal istnieje,
+- `WorkspaceControlStrip` istniał i nadal istnieje,
+- `ViewportBar` istniał i nadal istnieje,
+- `FemViewportToolbar` nadal istnieje jako rozbudowany overlay w `FemMeshView3D`,
+- domyślne flagi w `apps/web/lib/debug/frontendDiagnosticFlags.ts` nadal mają:
+  - `shell.showRibbonBar = true`,
+  - `shell.showViewportBar = true`,
+  - `viewportRouting.enableFem3D = true`,
+  - `viewportRouting.enableFemMeshWorkspace = true`,
+  - `femViewport.showToolbar = true`.
+
+Wniosek: problem nie wygląda jak fizyczne usunięcie toolbarów z kodu. Problem wygląda jak regres w danych, routingu albo warunkach renderowania, przez który pełny viewport nie dostaje poprawnego FEM mesh/topology i nie dochodzi do ścieżki pełnego renderu.
+
+### 2.2 Co jest popsute teraz
+
+Obecny objaw zgłaszany przez użytkownika:
+
+- interfejs 3D dla FEM jest ułomny,
+- nie tworzy geometrii ani meshu,
+- wygląda na uproszczony względem stanu z `2026-04-20`.
+
+Zweryfikowane technicznie luki:
+
+1. `ControlRoomContext.tsx` przestawił `meshWorkspace` z runtime store na nowe `useMeshWorkspaceResourceState(...)`.
+2. `useNewApiBridge.ts` nadal mapuje `LiveStatus` do stanu z `femMesh: null` i `meshWorkspace: null`.
+3. `useDataPlaneBridge.ts` pobiera ciężkie dane dla:
+   - fields,
+   - scalars,
+   - domain/topology po `domain_generation_id`,
+   - quantities,
+   - artifacts,
+   - engine logs.
+4. `useDataPlaneBridge.ts` nie reaguje na `mesh_revision` ani `mesh_build_revision`.
+5. Nowy resource-first mesh layer wystawia rewizje `mesh_revision` / `mesh_build_revision`, ale nie ma jeszcze równoważnego mostu, który przebuduje `femMesh` po zmianie meshu.
+6. `ViewportPanels.tsx` nadal renderuje pełny `FemMeshView3D`, ale tylko jeśli `ctx.femMeshData` jest poprawnie zbudowane.
+7. Gdy `ctx.femMeshData` nie powstaje, UI wpada w pusty/diagnostyczny fallback, co daje wrażenie, że toolbar zniknął.
+
+### 2.3 Najbardziej prawdopodobna główna przyczyna
+
+Po refaktorze API system rozdzielił:
+
+- `meshWorkspace` jako resource-first projection,
+- `femMesh` / topology jako osobny ciężki payload.
+
+To rozdzielenie jest niepełne. `meshWorkspace` już idzie nową ścieżką, ale `femMesh` nadal zależy od starego triggera `domain_generation_id`. Jeśli remesh zmienia mesh bez ponownego przebicia się przez tę starą ścieżkę, viewport dostaje nowy summary/build status, ale nie dostaje nowej topologii potrzebnej do renderu.
+
+## 3. Wniosek z porównania commitów
+
+Najważniejsza różnica między baseline z `2026-04-20` a obecnym drzewem roboczym nie polega na wycięciu toolbarów. Najważniejsza różnica polega na przełączeniu ownership stanu:
+
+- wcześniej `ControlRoomContext` czytał `meshWorkspace` bezpośrednio z runtime/session state,
+- teraz `ControlRoomContext` czyta `meshWorkspace` wyłącznie z resource-first hooków,
+- ale `femMesh` i jego topologia nie zostały dociągnięte do tego samego modelu rewizji.
+
+To jest regres architektoniczny, nie kosmetyczny.
+
+## 4. Definicja naprawy
+
+Za naprawione uznajemy tylko stan, w którym:
+
+1. wejście do widoku `3D` dla FEM pokazuje geometrię bez ręcznego odświeżania,
+2. wejście do widoku `Mesh` dla FEM pokazuje shared-domain mesh i reaguje na remesh,
+3. `FemViewportToolbar` renderuje się normalnie w pełnej ścieżce viewportu,
+4. `RibbonBar`, `WorkspaceControlStrip` i `ViewportBar` są widoczne jak w baseline z `2026-04-20`,
+5. build mesh pokazuje aktywny status, sukces i błąd,
+6. testy łapią regres, w której `meshWorkspace` się odświeża, a `femMesh` pozostaje pusty albo przestarzały.
+
+## 5. Plan naprawy
+
+### Faza 0. Zamrożenie baseline i diagnostyka
+
+Cel: mieć mierzalny punkt odniesienia przed zmianami.
+
+Zakres:
+
+- odtworzyć lokalnie stan z `d54fe07` i potwierdzić, który chrome jest wtedy widoczny,
+- zapisać screen lub checklistę dla:
+  - `RibbonBar`,
+  - `WorkspaceControlStrip`,
+  - `ViewportBar`,
+  - `FemViewportToolbar`,
+  - `MeshBuildModal`,
+- dopisać tymczasowe logi w `ControlRoomContext.tsx` i `useDataPlaneBridge.ts` dla:
+  - `mesh_revision`,
+  - `mesh_build_revision`,
+  - `domain_generation_id`,
+  - `femTopologyKey`,
+  - `effectiveFemMesh?.generation_id`,
+  - `meshWorkspace?.mesh_summary?.generation_id`.
+
+Wyjście z fazy:
+
+- wiemy dokładnie, który sygnał rewizji zmienia się po remeshu,
+- wiemy, czy brak geometrii wynika z braku fetchu topologii, czy z błędu w składaniu `femMeshData`.
+
+### Faza 1. Przywrócenie kanonicznego transportu topologii FEM
+
+Cel: sprawić, żeby zmiana `mesh_revision` aktualizowała realny `femMesh`, nie tylko summary/build metadata.
+
+Zakres:
+
+- dodać w frontendzie resource-first ścieżkę obserwującą `mesh_revision`,
+- oprzeć ją o:
+  - `GET /v1/live/current/mesh/shared-domain/topology`,
+  - ewentualnie później `GET /v1/live/current/mesh/objects/:id/topology` dla widoków per-object,
+- po każdym wzroście `mesh_revision`:
+  - pobrać topologię binarną,
+  - zdekodować ją,
+  - zbudować `FemLiveMesh`,
+  - zapisać go do runtime store albo nowego wspólnego selector/hooka.
+
+Ważne:
+
+- nie wolno dalej polegać wyłącznie na `domain_generation_id` jako triggerze odświeżenia meshu,
+- `mesh_revision` ma stać się kanonicznym triggerem dla topologii shared-domain mesh.
+
+Wyjście z fazy:
+
+- po remeshu viewport ma nową geometrię bez restartu sesji,
+- `effectiveFemMesh` i `meshWorkspace.mesh_summary` wskazują ten sam generation/context.
+
+### Faza 2. Scalenie `meshWorkspace` i `femMesh` w jeden model odczytu
+
+Cel: usunąć niespójność między summary a topologią.
+
+Zakres:
+
+- wyprowadzić jeden wspólny read-model, np. `useCurrentFemMeshProjection()`, który zwraca razem:
+  - `meshWorkspace`,
+  - `femMesh`,
+  - `topologyKey`,
+  - `meshBuildState`,
+  - `meshGenerationId`,
+- w `ControlRoomContext.tsx` usunąć rozjechane źródła prawdy:
+  - `resourceMeshWorkspace`,
+  - `runtimeFemMesh`,
+  - `liveState?.fem_mesh`,
+  - lokalne binary hydration fallbacki bez wspólnego ownership,
+- ustalić jedną kolejność fallbacków:
+  1. resource-first topology z `mesh_revision`,
+  2. runtime fem mesh z data plane,
+  3. legacy `liveState?.fem_mesh` tylko jako tymczasowy compatibility fallback.
+
+Wyjście z fazy:
+
+- `ViewportPanels.tsx` i `useFemMeshDerived.ts` dostają zawsze spójny komplet danych,
+- `femTopologyKey` zmienia się tylko wtedy, gdy rzeczywiście zmienił się mesh.
+
+### Faza 3. Przywrócenie pełnej ścieżki renderowania FEM 3D
+
+Cel: upewnić się, że po odzyskaniu danych UI nie wpada w fallback diagnostyczny.
+
+Zakres:
+
+- przejrzeć `ViewportPanels.tsx` i potwierdzić, że normalna ścieżka produkcyjna nie używa `minimalViewportSelectionPath`,
+- utrzymać:
+  - `enableFem3D = true`,
+  - `enableFemMeshWorkspace = true`,
+  - `femViewport.showToolbar = true`,
+- dopilnować, żeby brak chwilowego field data nie wycinał samej geometrii,
+- dopilnować, żeby `FemMeshView3D` renderował mesh nawet wtedy, gdy quantity frame jeszcze nie dotarł.
+
+Wyjście z fazy:
+
+- `3D` pokazuje przynajmniej geometrię i mesh shell nawet przy braku aktualnych wektorów,
+- toolbar nie znika tylko dlatego, że solver jeszcze nie wysłał pola.
+
+### Faza 4. Przywrócenie chrome i toolbarów do baseline z 2026-04-20
+
+Cel: odzyskać pełne UX, nie tylko sam canvas.
+
+Zakres:
+
+- porównać runtime rendering dla:
+  - `RibbonBar.tsx`,
+  - `WorkspaceControlStrip.tsx`,
+  - `ViewportBar.tsx`,
+  - `FemViewportToolbar.tsx`,
+- potwierdzić, czy któryś z toolbarów jest dziś ukrywany przez:
+  - błędne capability,
+  - `previewBusy`,
+  - brak `femMeshData`,
+  - localStorage diagnostic profile pod kluczem `fullmag.frontend_diagnostic_flags.v1`,
+- zachować obecny unified viewport bar, ale dopilnować, żeby miał poprawny `renderState` i capability po resource-first cutover.
+
+Wyjście z fazy:
+
+- użytkownik widzi te same główne warstwy chrome co w stanie z `2026-04-20`,
+- ewentualne uproszczenia są świadome i jawnie oznaczone, a nie efektem awarii danych.
+
+### Faza 5. Naprawa lifecycle remeshu i statusów builda
+
+Cel: przywrócić pełną pętlę `queue remesh -> active build -> success/failure -> odświeżony viewport`.
+
+Zakres:
+
+- potwierdzić, że `queueRemesh` zawsze idzie przez `client.mesh.submitBuildCommand(...)`,
+- potwierdzić, że backend po remeshu bumpuje:
+  - `mesh_revision`,
+  - `mesh_build_revision`,
+- przejrzeć `meshWorkspace.ts`, bo obecnie uproszczono tam interpretację błędów i sukcesów,
+- upewnić się, że UI nadal pokazuje:
+  - `active_build`,
+  - `mesh_pipeline_status`,
+  - `last_build_summary`,
+  - `last_build_error`.
+
+Wyjście z fazy:
+
+- użytkownik widzi sensowny status builda,
+- udany remesh kończy się odświeżeniem geometrii,
+- nieudany remesh kończy się czytelnym błędem, a nie cichą pustką viewportu.
+
+### Faza 6. Testy regresyjne
+
+Cel: zablokować powrót tego samego typu awarii.
+
+Minimalny pakiet testów:
+
+1. test hooka/resource bridge:
+   - zmiana `mesh_revision` powoduje fetch topologii i aktualizację `femMesh`.
+2. test read-modelu:
+   - `meshWorkspace` + `femMesh` składają spójny `femTopologyKey`.
+3. test komponentu:
+   - `ViewportPanels` renderuje `FemMeshView3D` i toolbar przy dostępnej topologii.
+4. test kontraktowy API:
+   - remesh bumpuje `mesh_revision` i `mesh_build_revision` zgodnie z oczekiwaniem.
+5. test UI:
+   - brak field data nie usuwa samej geometrii FEM.
+
+## 6. Priorytety wykonawcze
+
+### P0
+
+- Faza 1
+- Faza 2
+- pierwszy test na `mesh_revision -> topology fetch`
+
+To jest blokada krytyczna, bo bez tego nie ma geometrii.
+
+### P1
+
+- Faza 3
+- Faza 4
+
+To przywraca realny UX z baseline z `2026-04-20`.
+
+### P2
+
+- Faza 5
+- Faza 6
+
+To domyka stabilność i chroni przed kolejnym rozjazdem frontend/API.
+
+## 7. Otwarte pytania
+
+1. Czy `domain/topology` ma zostać tylko compatibility path, a `mesh/shared-domain/topology` ma zostać jedyną kanoniczną ścieżką dla FEM viewportu?
+2. Czy `mesh_revision` ma bumpować się także przy zmianach samej konfiguracji meshu bez nowego builda, czy tylko przy zmianie realnej topologii/projection?
+3. Czy obiektowe i interfejsowe topology endpoints są potrzebne już teraz do przywrócenia viewportu, czy można je zostawić na etap po odzyskaniu shared-domain mesh?
+4. Czy lokalny profil diagnostyczny w `localStorage` nie nadpisuje przypadkiem toolbar flags na części środowisk developerskich?
+
+## 8. Rekomendowana kolejność wdrożenia
+
+1. Dodać obserwację `mesh_revision` i fetch topologii shared-domain mesh.
+2. Spiąć wynik w jeden read-model używany przez `ControlRoomContext`.
+3. Dopiero potem debugować brakujące toolbar-y i uproszczenia UI.
+4. Na końcu uporządkować remesh lifecycle i testy.
+
+To jest celowo twarda kolejność. Debugowanie chrome przed naprawą przepływu topologii będzie mylące, bo większość objawów UI jest wtórna do braku danych wejściowych.

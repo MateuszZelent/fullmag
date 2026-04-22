@@ -21,7 +21,7 @@ import type {
   VectorComponent,
   ViewportMode,
 } from "../shared";
-import type { CapabilityMap } from "@/src/api/types";
+import type { CapabilityMap, DisplayPatchRequest } from "@/src/api/types";
 import { isFemDiscretization } from "@/src/domain/capabilities";
 import {
   cloneVisualizationPreset,
@@ -110,7 +110,7 @@ export interface UseVisualizationPresetsParams {
   setFdmVisualizationSettings: Dispatch<SetStateAction<VisualizationPresetFdmState>>;
 
   /* Callback */
-  updatePreview: (path: string, payload?: Record<string, unknown>) => Promise<void>;
+  patchDisplay: (patch: DisplayPatchRequest) => Promise<void>;
 }
 
 export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
@@ -174,7 +174,7 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
     setAirMeshOpacity,
     setMeshEntityViewState,
     setFdmVisualizationSettings,
-    updatePreview,
+    patchDisplay,
   } = params;
   const femDiscretization = domainCapabilities
     ? isFemDiscretization(domainCapabilities)
@@ -463,7 +463,7 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
         });
         // Data-plane fast path: skip control-plane POST if field is already cached.
         if (!cachedFieldQuantities.has(preset.quantity) && previewControlsActive) {
-          void updatePreview("/quantity", { quantity: preset.quantity });
+          void patchDisplay({ active_quantity_id: preset.quantity });
         }
       }
       if (preset.mode === "2D") {
@@ -518,7 +518,7 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
         }
 
         if (requestedPreviewMaxPoints !== preset.fem.max_points) {
-          void updatePreview("/maxPoints", { maxPoints: preset.fem.max_points });
+          void patchDisplay({ max_points: preset.fem.max_points });
         }
       } else if (!femDiscretization && preset.domain === "fdm") {
         setFdmVisualizationSettings({ ...preset.fdm });
@@ -533,7 +533,7 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
       projectVisualizationPresets,
       requestedPreviewMaxPoints,
       selectedQuantity,
-      updatePreview,
+      patchDisplay,
     ],
   );
 

@@ -107,6 +107,8 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             engine_log_revision: snapshot.engine_log.len() as u64,
             display_revision,
             workspace_revision,
+            mesh_revision: snapshot.mesh_revision,
+            mesh_build_revision: snapshot.mesh_build_revision,
             commands_revision,
             stages_revision: snapshot
                 .stage_execution
@@ -179,6 +181,24 @@ fn current_live_realtime_changes(
             recommended_fetch: Some("/v1/live/current/logs/engine".to_string()),
         },
     ];
+    if realtime_state.revisions.mesh_revision > 0 {
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::Mesh,
+            revision: realtime_state.revisions.mesh_revision,
+            resource_id: None,
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            recommended_fetch: Some("/v1/live/current/mesh/summary".to_string()),
+        });
+    }
+    if realtime_state.revisions.mesh_build_revision > 0 {
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::MeshBuilds,
+            revision: realtime_state.revisions.mesh_build_revision,
+            resource_id: None,
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            recommended_fetch: Some("/v1/live/current/mesh/builds/active".to_string()),
+        });
+    }
     if realtime_state.revisions.commands_revision > 0 {
         changes.push(RealtimeResourceChange {
             resource: RealtimeResourceName::Commands,
@@ -494,13 +514,6 @@ pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
     })
 }
 
-fn is_preview_control_command(command: &SessionCommand) -> bool {
-    matches!(
-        command.kind.as_str(),
-        "display_selection_update" | "preview_update" | "preview_refresh"
-    )
-}
-
 async fn mark_command_dispatched(state: &Arc<AppState>, command: &SessionCommand) {
     let mut ledger = state.current_command_ledger.lock().await;
     if let Some(record) = ledger
@@ -520,12 +533,11 @@ async fn mark_command_dispatched(state: &Arc<AppState>, command: &SessionCommand
 async fn take_next_current_control_command_after(
     state: &Arc<AppState>,
     after_seq: u64,
-    include_preview: bool,
 ) -> Option<SessionCommand> {
     let mut stale = Vec::new();
     let selected = {
         let mut queue = state.current_control_queue.lock().await;
-        let mut index = 0usize;
+        let index = 0usize;
         let mut selected = None;
         while index < queue.len() {
             let Some(command) = queue.get(index) else {
@@ -535,10 +547,6 @@ async fn take_next_current_control_command_after(
                 if let Some(removed) = queue.remove(index) {
                     stale.push(removed);
                 }
-                continue;
-            }
-            if !include_preview && is_preview_control_command(command) {
-                index += 1;
                 continue;
             }
             selected = queue.remove(index);
@@ -720,10 +728,11 @@ where
         let _ = std::fs::remove_dir_all(&state.current_workspace_root);
     }
     let display_selection = state.current_display_selection.read().await.clone();
-    let selected_cached_preview_updated = preview_fields
+    let selected_cached_display_fields_match_selection = preview_fields
         .as_ref()
-        .is_some_and(|fields| cached_preview_update_matches_selection(fields, &display_selection));
-    let has_cached_preview_update = clear_preview_cache || selected_cached_preview_updated;
+        .is_some_and(|fields| cached_display_fields_match_selection(fields, &display_selection));
+    let has_cached_display_fields =
+        clear_preview_cache || selected_cached_display_fields_match_selection;
     let preview_config = display_selection.preview_request();
     let mut current = state.current_live_state.write().await;
     let mut next = match current.take() {
@@ -774,7 +783,7 @@ where
     let should_rebuild_preview = !state.feature_flags.disable_preview_3d
         && (has_fresh_preview
             || has_latest_fields_update
-            || has_cached_preview_update
+            || has_cached_display_fields
             || (matches!(
                 next.display_selection.selection.kind,
                 fullmag_runner::DisplayKind::GlobalScalar
@@ -852,7 +861,7 @@ where
 async fn dequeue_current_live_command(
     State(state): State<Arc<AppState>>,
 ) -> Result<Response, ApiError> {
-    let command = take_next_current_control_command_after(&state, 0, false).await;
+    let command = take_next_current_control_command_after(&state, 0).await;
     match command {
         Some(command) => Ok(Json(command).into_response()),
         None => Ok(StatusCode::NO_CONTENT.into_response()),
@@ -864,9 +873,7 @@ async fn wait_current_live_control(
     Query(query): Query<ControlWaitQuery>,
 ) -> Result<Response, ApiError> {
     let _ = current_live_session_id(&state).await?;
-    if let Some(command) =
-        take_next_current_control_command_after(&state, query.after_seq, true).await
-    {
+    if let Some(command) = take_next_current_control_command_after(&state, query.after_seq).await {
         return Ok(Json(command).into_response());
     }
 
@@ -879,8 +886,7 @@ async fn wait_current_live_control(
                 .await
                 .map_err(|_| ApiError::internal("control command stream closed"))?;
             if let Some(command) =
-                take_next_current_control_command_after(&state_for_wait, query.after_seq, true)
-                    .await
+                take_next_current_control_command_after(&state_for_wait, query.after_seq).await
             {
                 return Ok::<SessionCommand, ApiError>(command);
             }
@@ -1295,6 +1301,7 @@ pub(crate) async fn commit_current_live_scene_document(
             snapshot.scene_document = Some(current_scene);
         }
         let previous_scene = snapshot.scene_document.clone();
+        let previous_mesh_signature = previous_scene.as_ref().map(scene_mesh_signature);
         let next_revision = snapshot
             .scene_document
             .as_ref()
@@ -1317,6 +1324,7 @@ pub(crate) async fn commit_current_live_scene_document(
             }
         };
         snapshot.builder_adapter = Some(builder_state);
+        let next_mesh_signature = scene_mesh_signature(&scene_document);
         snapshot.scene_document = Some(scene_document.clone());
         let allow_live_magnetization_rebuild = snapshot
             .live_state
@@ -1343,6 +1351,10 @@ pub(crate) async fn commit_current_live_scene_document(
         // Polling clients gate updates on `state_version`, so scene-authoring
         // changes must advance it just like solver publishes do.
         snapshot.state_version = snapshot.state_version.wrapping_add(1);
+        if previous_mesh_signature.as_ref() != Some(&next_mesh_signature) {
+            snapshot.mesh_revision = snapshot.mesh_revision.wrapping_add(1).max(1);
+            snapshot.mesh_build_revision = snapshot.mesh_build_revision.wrapping_add(1).max(1);
+        }
         let realtime_state = current_live_realtime_state_from_snapshot(
             state,
             snapshot,
@@ -2032,6 +2044,26 @@ fn detect_preset_texture_changes(
         }
     }
     out
+}
+
+fn scene_mesh_signature(scene: &SceneDocument) -> Value {
+    json!({
+        "universe": scene.universe,
+        "study_universe_mesh": scene.study.universe_mesh,
+        "shared_domain_mesh": scene.study.shared_domain_mesh,
+        "mesh_defaults": scene.study.mesh_defaults,
+        "mesh_interfaces": scene.study.mesh_interfaces,
+        "objects": scene.objects.iter().map(|object| json!({
+            "id": object.id,
+            "name": object.name,
+            "geometry": object.geometry,
+            "transform": object.transform,
+            "material_ref": object.material_ref,
+            "region_name": object.region_name,
+            "object_mesh": object.object_mesh,
+            "mesh_override": object.mesh_override,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 async fn list_physics_docs(

@@ -15,6 +15,7 @@ import { decodeFieldVector } from "../../../src/api/codecs/fieldVectorCodec";
 import { decodeTopology } from "../../../src/api/codecs/topologyCodec";
 import { useSceneDocument } from "../../../src/hooks/resources/useSceneDocument";
 import { useStageExecution } from "../../../src/hooks/resources/useStageExecution";
+import { useMeshWorkspaceResourceState } from "../../../src/hooks/resources/useMeshResources";
 import { useWorkspaceSelection } from "../../../src/hooks/resources/useWorkspaceSelection";
 import { getLiveApiClient } from "../../../src/api/client/LiveApiClient";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
@@ -267,7 +268,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const runtimeScalarRows = useSessionRuntimeStore((s) => s.scalarRows);
   const runtimeQuantities = useSessionRuntimeStore((s) => s.quantities);
   const runtimeArtifacts = useSessionRuntimeStore((s) => s.artifacts);
-  const runtimeMeshWorkspace = useSessionRuntimeStore((s) => s.meshWorkspace);
+  const runtimeResourceRevisions = useSessionRuntimeStore((s) => s.resourceRevisions);
   const runtimeDisplaySelection = useSessionRuntimeStore((s) => s.displaySelection);
   const runtimePreviewConfig = useSessionRuntimeStore((s) => s.previewConfig);
   const runtimeLatestFieldFrames = useSessionRuntimeStore((s) => s.latestFieldFrames);
@@ -437,6 +438,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   } = useWorkspaceSelection({
     enabled: true,
     sessionKey: sceneResourceSessionKey,
+  });
+  const {
+    meshWorkspace: resourceMeshWorkspace,
+  } = useMeshWorkspaceResourceState({
+    enabled: true,
+    sessionKey: sceneResourceSessionKey,
+    meshRevision: runtimeResourceRevisions?.mesh_revision ?? null,
+    meshBuildRevision: runtimeResourceRevisions?.mesh_build_revision ?? null,
   });
   const workspaceSelectionHydratingRef = useRef(false);
   const lastPersistedWorkspaceSelectionRef = useRef<string | null>(null);
@@ -671,7 +680,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const engineLog = runtimeEngineLog.length > 0 ? runtimeEngineLog : EMPTY_ENGINE_LOG;
   const quantities = runtimeQuantities.length > 0 ? runtimeQuantities : EMPTY_QUANTITIES;
   const artifactsArr = runtimeArtifacts.length > 0 ? runtimeArtifacts : EMPTY_ARTIFACTS;
-  const meshWorkspace = runtimeMeshWorkspace as MeshWorkspaceState | null;
+  const meshWorkspace = resourceMeshWorkspace as MeshWorkspaceState | null;
   // Derive quality data from the session-carried summary (P1-1 fix).
   const meshQualityData = useMemo<MeshQualityData | null>(() => {
     const s = meshWorkspace?.mesh_quality_summary;
@@ -1572,6 +1581,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     enqueueCommand,
     buildMeshOptionsPayload,
     enqueueStudyDomainRemesh,
+    patchDisplay,
     updatePreview,
     meshGenTopologyRef,
     meshGenGenerationRef,
@@ -1649,6 +1659,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setResultWorkspacePinned,
   } = useWorkspaceActions({
     enqueueCommand,
+    patchDisplay,
     updatePreview,
     appendFrontendTrace,
     liveApi,
@@ -1773,7 +1784,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setAirMeshOpacity,
     setMeshEntityViewState,
     setFdmVisualizationSettings,
-    updatePreview,
+    patchDisplay,
   });
 
   /* Sparklines */
@@ -2262,6 +2273,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     previewIsStale, previewIsInitialSampleStale,
     setViewMode, setComponent, setPlane, setSliceIndex, setSelectedQuantity,
     setConsoleCollapsed, setSidebarCollapsed,
+    patchDisplay,
     updatePreview, handleViewModeChange, handleCapture, handleExport, requestPreviewQuantity,
   }), [
     setWorkspaceMode,
@@ -2278,6 +2290,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     requestedPreviewXChosenSize, requestedPreviewYChosenSize, requestedPreviewAutoScale,
     requestedPreviewMaxPoints, previewEveryNOptions, previewMaxPointOptions,
     previewIsStale, previewIsInitialSampleStale,
+    patchDisplay,
     updatePreview, handleViewModeChange, handleCapture, handleExport, requestPreviewQuantity,
   ]);
 

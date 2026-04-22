@@ -34,6 +34,20 @@ pub(crate) async fn submit_structured_command_impl(
     headers: &HeaderMap,
     req: StructuredCommandRequest,
 ) -> Result<CommandResponse, ApiError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let command_id = format!("fm-{}", uuid::Uuid::new_v4());
+    let command = command_from_structured(req, command_id, now);
+    enqueue_session_command_impl(state, headers, command).await
+}
+
+pub(crate) async fn enqueue_session_command_impl(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    command: SessionCommand,
+) -> Result<CommandResponse, ApiError> {
     let _guard = state.current_live_state.read().await;
     if _guard.is_none() {
         return Err(ApiError::not_found("no active local live workspace"));
@@ -52,14 +66,7 @@ pub(crate) async fn submit_structured_command_impl(
             return Ok(response);
         }
     }
-
-    let command_id = format!("fm-{}", uuid::Uuid::new_v4());
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-
-    let command = command_from_structured(req, command_id.clone(), now);
+    let command_id = command.command_id.clone();
 
     // Enqueue
     let seq = {
@@ -202,17 +209,6 @@ fn command_from_structured(
         }
         StructuredCommandRequest::Skip => {
             new_session_command(command_id, "skip", created_at_unix_ms)
-        }
-        StructuredCommandRequest::Remesh {
-            mesh_options,
-            mesh_target,
-            mesh_reason,
-        } => {
-            let mut command = new_session_command(command_id, "remesh", created_at_unix_ms);
-            command.mesh_options = mesh_options;
-            command.mesh_target = mesh_target;
-            command.mesh_reason = mesh_reason;
-            command
         }
         StructuredCommandRequest::SaveVtk => {
             new_session_command(command_id, "save_vtk", created_at_unix_ms)

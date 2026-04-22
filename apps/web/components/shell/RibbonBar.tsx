@@ -2,9 +2,7 @@
 
 import React, { useMemo, useCallback, useEffect, useRef } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import {
-  Tooltip, TooltipTrigger, TooltipContent, TooltipProvider,
-} from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { WorkspaceMode } from "../runs/control-room/context-hooks";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
@@ -210,14 +208,6 @@ function contextualTabsForSelection(p: RibbonBarProps): ContextualRibbonTab[] {
   return tabs;
 }
 
-function normalizeWorkspaceMode(
-  value: string | null | undefined,
-): WorkspaceMode {
-  return value === "build" || value === "study" || value === "analyze"
-    ? value
-    : "study";
-}
-
 function workspaceRibbonIdentity(value: {
   workspace_mode?: string | null;
   active_core_tab?: string | null;
@@ -225,6 +215,16 @@ function workspaceRibbonIdentity(value: {
 } | null | undefined): string {
   return JSON.stringify([
     value?.workspace_mode ?? null,
+    value?.active_core_tab ?? null,
+    value?.active_contextual_tab ?? null,
+  ]);
+}
+
+function workspaceRibbonTabIdentity(value: {
+  active_core_tab?: string | null;
+  active_contextual_tab?: string | null;
+} | null | undefined): string {
+  return JSON.stringify([
     value?.active_core_tab ?? null,
     value?.active_contextual_tab ?? null,
   ]);
@@ -305,53 +305,29 @@ function defaultTabForMode(mode: WorkspaceMode | undefined): RibbonTab {
 
 /* ── Render helpers ──────────────────────────────── */
 
-const RibbonActionTrigger = React.forwardRef<
-  HTMLButtonElement,
-  {
-    action: RibbonAction;
-    previewPending?: boolean;
-  } & React.ButtonHTMLAttributes<HTMLButtonElement>
->(({ action, previewPending, ...props }, ref) => {
-  const propsOnClick = props.onClick;
+function ribbonActionTriggerClassName(
+  action: RibbonAction,
+  previewPending?: boolean,
+  className?: string,
+): string {
   const isPrimaryAction = action.accent && !action.disabled;
-  const isHandlingRef = useRef(false);
+  return cn(
+    "flex min-h-[52px] min-w-[58px] flex-col items-center justify-center gap-1 rounded-md border p-1 transition-all",
+    action.active
+      ? "border-primary/20 bg-primary/10 text-primary shadow-inner"
+      : isPrimaryAction
+        ? "border-transparent bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
+        : "border-transparent text-foreground hover:border-border/50 hover:bg-muted/80",
+    previewPending && action.active && "animate-pulse shadow-[0_0_0_1px_rgba(99,102,241,0.35)]",
+    action.disabled && "pointer-events-none cursor-not-allowed opacity-40",
+    className,
+  );
+}
 
-  const handleClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    if (isHandlingRef.current) {
-      return;
-    }
-    isHandlingRef.current = true;
-    try {
-      propsOnClick?.(e);
-      if (e.defaultPrevented) {
-        return;
-      }
-      action.action?.();
-    } finally {
-      queueMicrotask(() => {
-        isHandlingRef.current = false;
-      });
-    }
-  }, [action, propsOnClick]);
+function RibbonActionTriggerContent({ action }: { action: RibbonAction }) {
+  const isPrimaryAction = action.accent && !action.disabled;
   return (
-    <button
-      ref={ref}
-      {...props}
-      type={props.type ?? "button"}
-      className={cn(
-        "flex min-h-[52px] min-w-[58px] flex-col items-center justify-center gap-1 rounded-md border p-1 transition-all",
-        action.active
-          ? "border-primary/20 bg-primary/10 text-primary shadow-inner"
-          : isPrimaryAction
-            ? "border-transparent bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
-            : "border-transparent text-foreground hover:border-border/50 hover:bg-muted/80",
-        previewPending && action.active && "animate-pulse shadow-[0_0_0_1px_rgba(99,102,241,0.35)]",
-        action.disabled && "pointer-events-none cursor-not-allowed opacity-40",
-        props.className,
-      )}
-      disabled={action.disabled}
-      onClick={handleClick}
-    >
+    <>
       <span
         className={cn(
           "flex flex-col items-center",
@@ -376,6 +352,47 @@ const RibbonActionTrigger = React.forwardRef<
       >
         {action.label}
       </span>
+    </>
+  );
+}
+
+const RibbonActionTrigger = React.forwardRef<
+  HTMLButtonElement,
+  {
+    action: RibbonAction;
+    previewPending?: boolean;
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>
+>(({ action, previewPending, ...props }, ref) => {
+  const propsOnClick = props.onClick;
+  const isHandlingRef = useRef(false);
+
+  const handleClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    if (isHandlingRef.current) {
+      return;
+    }
+    isHandlingRef.current = true;
+    try {
+      propsOnClick?.(e);
+      if (e.defaultPrevented) {
+        return;
+      }
+      action.action?.();
+    } finally {
+      queueMicrotask(() => {
+        isHandlingRef.current = false;
+      });
+    }
+  }, [action, propsOnClick]);
+  return (
+    <button
+      ref={ref}
+      {...props}
+      type={props.type ?? "button"}
+      className={ribbonActionTriggerClassName(action, previewPending, props.className)}
+      disabled={action.disabled}
+      onClick={handleClick}
+    >
+      <RibbonActionTriggerContent action={action} />
     </button>
   );
 });
@@ -405,13 +422,13 @@ function ribbonGroupToneClass(tone: RibbonGroup["tone"] | undefined): string {
 export default function RibbonBar(props: RibbonBarProps) {
   const sessionId = useSessionRuntimeStore((s) => s.session?.session_id ?? null);
   const currentStage = useWorkspaceStore((s) => s.currentStage);
-  const setCurrentStage = useWorkspaceStore((s) => s.setCurrentStage);
   const activeCoreTab = useWorkspaceStore((s) => s.activeCoreTab);
   const setActiveCoreTab = useWorkspaceStore((s) => s.setActiveCoreTab);
   const activeContextualTab = useWorkspaceStore((s) => s.activeContextualTab);
   const setActiveContextualTab = useWorkspaceStore((s) => s.setActiveContextualTab);
   const {
     ribbon: workspaceRibbon,
+    error: workspaceRibbonError,
     loading: workspaceRibbonLoading,
     replaceRibbon: replaceWorkspaceRibbon,
   } = useWorkspaceRibbon({
@@ -420,6 +437,7 @@ export default function RibbonBar(props: RibbonBarProps) {
   });
   const workspaceRibbonHydratingRef = useRef(false);
   const lastPersistedWorkspaceRibbonRef = useRef<string | null>(null);
+  const lastSessionIdRef = useRef<string | null>(null);
   const builderEnabled = useGeometryBuilderStore((s) => s.builderMode.enabled);
   const builderDirtyGeometry = useGeometryBuilderStore(
     (s) => s.dirty.geometryDraftDirty || s.dirty.geometryRealizationDirty,
@@ -430,6 +448,16 @@ export default function RibbonBar(props: RibbonBarProps) {
     s.builderSelection.type === "primitive" ? s.builderSelection.id : null,
   );
   const workspaceStage = props.workspaceMode ?? currentStage;
+
+  useEffect(() => {
+    if (lastSessionIdRef.current === sessionId) {
+      return;
+    }
+    lastSessionIdRef.current = sessionId;
+    lastPersistedWorkspaceRibbonRef.current = null;
+    workspaceRibbonHydratingRef.current = false;
+  }, [sessionId]);
+
   useEffect(() => {
     if (!sessionId) {
       lastPersistedWorkspaceRibbonRef.current = null;
@@ -441,16 +469,17 @@ export default function RibbonBar(props: RibbonBarProps) {
     }
     const nextIdentity = workspaceRibbonIdentity(workspaceRibbon);
     lastPersistedWorkspaceRibbonRef.current = nextIdentity;
-    const currentIdentity = workspaceRibbonIdentity({
-      workspace_mode: workspaceStage,
+    const currentIdentity = workspaceRibbonTabIdentity({
       active_core_tab: activeCoreTab,
       active_contextual_tab: activeContextualTab,
     });
-    if (currentIdentity === nextIdentity) {
+    // Workspace mode is owned by the workspace shell/router path. Ribbon resource
+    // hydration may restore tab state, but it must not push stage changes back
+    // into the broader workspace store from inside the ribbon component.
+    if (currentIdentity === workspaceRibbonTabIdentity(workspaceRibbon)) {
       return;
     }
     workspaceRibbonHydratingRef.current = true;
-    setCurrentStage(normalizeWorkspaceMode(workspaceRibbon.workspace_mode));
     setActiveCoreTab(workspaceRibbon.active_core_tab);
     setActiveContextualTab(workspaceRibbon.active_contextual_tab ?? null);
     queueMicrotask(() => {
@@ -462,13 +491,16 @@ export default function RibbonBar(props: RibbonBarProps) {
     sessionId,
     setActiveContextualTab,
     setActiveCoreTab,
-    setCurrentStage,
     workspaceRibbon,
-    workspaceStage,
   ]);
 
   useEffect(() => {
-    if (!sessionId || workspaceRibbonLoading || workspaceRibbonHydratingRef.current) {
+    if (
+      !sessionId
+      || workspaceRibbonLoading
+      || workspaceRibbonHydratingRef.current
+      || workspaceRibbonError
+    ) {
       return;
     }
     const nextIdentity = workspaceRibbonIdentity({
@@ -494,6 +526,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     activeCoreTab,
     replaceWorkspaceRibbon,
     sessionId,
+    workspaceRibbonError,
     workspaceRibbonLoading,
     workspaceStage,
   ]);
@@ -699,8 +732,12 @@ export default function RibbonBar(props: RibbonBarProps) {
                   {group.actions.filter((a) => !a.hidden).map((action) =>
                     action.menuItems && action.menuItems.length > 0 ? (
                       <DropdownMenu.Root key={action.id}>
-                        <DropdownMenu.Trigger asChild>
-                          <RibbonActionTrigger action={action} previewPending={props.previewPending} />
+                        <DropdownMenu.Trigger
+                          type="button"
+                          className={ribbonActionTriggerClassName(action, props.previewPending)}
+                          disabled={action.disabled}
+                        >
+                          <RibbonActionTriggerContent action={action} />
                         </DropdownMenu.Trigger>
                         <DropdownMenu.Portal>
                           <DropdownMenu.Content
@@ -742,17 +779,16 @@ export default function RibbonBar(props: RibbonBarProps) {
                         </DropdownMenu.Portal>
                       </DropdownMenu.Root>
                     ) : action.tooltip ? (
-                      <Tooltip key={action.id}>
-                        <TooltipTrigger asChild>
-                          <RibbonActionTrigger action={action} previewPending={props.previewPending} />
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom" className="text-xs border border-border shadow-xl">
-                          <span className="font-semibold">{action.tooltip}</span>
-                          {action.shortcut && (
-                            <kbd className="opacity-80 font-mono text-[10px] bg-muted px-1.5 py-0.5 rounded ml-2 border border-border">{action.shortcut}</kbd>
-                          )}
-                        </TooltipContent>
-                      </Tooltip>
+                      <RibbonActionTrigger
+                        key={action.id}
+                        action={action}
+                        previewPending={props.previewPending}
+                        title={
+                          action.shortcut
+                            ? `${action.tooltip} (${action.shortcut})`
+                            : action.tooltip
+                        }
+                      />
                     ) : (
                       <RibbonActionTrigger
                         key={action.id}

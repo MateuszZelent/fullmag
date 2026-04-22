@@ -24,23 +24,12 @@ pub(crate) fn classify_command(command: &SessionCommand) -> Option<LiveControlCo
     )
 }
 
-/// Whether the command classification represents a display-related action
-/// (`SetDisplaySelection` or `RefreshDisplay`).
-#[allow(dead_code)]
-pub(crate) fn is_display_command(typed: &LiveControlCommand) -> bool {
-    matches!(
-        typed,
-        LiveControlCommand::SetDisplaySelection(_) | LiveControlCommand::RefreshDisplay
-    )
-}
-
 /// Whether the command classification represents a runtime interrupt
 /// that should wake the solver step loop.
 pub(crate) fn is_interrupt_command(typed: &LiveControlCommand) -> bool {
     matches!(
         typed,
-        LiveControlCommand::RefreshDisplay
-            | LiveControlCommand::Pause
+        LiveControlCommand::Pause
             | LiveControlCommand::Break
             | LiveControlCommand::Close
             | LiveControlCommand::SkipStage

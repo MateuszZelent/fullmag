@@ -279,7 +279,7 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
   const computeAntennaField = useCallback(() => {
     vp.requestPreviewQuantity("H_ant");
     if (vp.previewControlsActive) {
-      void vp.updatePreview("/refresh", {});
+      void vp.patchDisplay({ active_quantity_id: "H_ant" });
     }
   }, [vp]);
 

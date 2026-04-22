@@ -107,11 +107,9 @@ export default function AppBar(props: AppBarProps) {
         </span>
 
         <DropdownMenu.Root>
-          <DropdownMenu.Trigger asChild>
-            <button className="flex items-center gap-1 rounded-md border border-border/40 px-2 py-1 text-[0.72rem] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground">
-              Fullmag
-              <ChevronDown size={12} />
-            </button>
+          <DropdownMenu.Trigger className="flex items-center gap-1 rounded-md border border-border/40 px-2 py-1 text-[0.72rem] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground">
+            Fullmag
+            <ChevronDown size={12} />
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content

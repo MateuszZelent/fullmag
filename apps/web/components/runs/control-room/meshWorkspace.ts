@@ -306,20 +306,9 @@ export function deriveMeshBuildRuntimeState(args: {
   meshGenerating: boolean;
   scriptSyncBusy: boolean;
 }): MeshBuildRuntimeState {
-  const { meshWorkspace, commandStatus, meshGenerating, scriptSyncBusy } = args;
-  const remeshCommand = commandStatus?.command_kind === "remesh" ? commandStatus : null;
-  const commandRejected =
-    remeshCommand?.state === "rejected"
-      ? remeshCommand.reason ?? "Mesh build command was rejected"
-      : null;
-  const commandFailed =
-    remeshCommand?.state === "completed" &&
-    remeshCommand.completion_state != null &&
-    remeshCommand.completion_state !== "ok"
-      ? remeshCommand.completion_state
-      : null;
+  const { meshWorkspace, meshGenerating, scriptSyncBusy } = args;
   const workspaceFailed = meshWorkspace?.last_build_error ?? null;
-  const failureMessage = commandRejected ?? commandFailed ?? workspaceFailed;
+  const failureMessage = workspaceFailed;
   if (failureMessage) {
     return {
       status: "failure",
@@ -340,8 +329,6 @@ export function deriveMeshBuildRuntimeState(args: {
   }
 
   const structuredSuccess =
-    remeshCommand?.state === "completed" &&
-    remeshCommand.completion_state === "ok" &&
     activeBuild == null &&
     meshWorkspace?.last_build_summary != null;
   if (structuredSuccess) {

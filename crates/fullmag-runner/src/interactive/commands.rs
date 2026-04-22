@@ -92,10 +92,8 @@ pub enum LiveControlCommand {
     /// Close the interactive session entirely.
     Close,
 
-    /// Change the displayed quantity / component / layer.
+    /// Synchronize display selection from the canonical display resource.
     SetDisplaySelection(super::DisplaySelection),
-    /// Refresh the display from current backend state.
-    RefreshDisplay,
 
     /// Execute a sequence of stages (run/relax) automatically.
     RunSequence { stages: Vec<SequenceStage> },
@@ -121,8 +119,6 @@ pub enum RuntimeControlOutcome {
     PauseRequested,
     /// A break has been requested — end the current segment cleanly.
     BreakRequested,
-    /// Display has been updated — continue execution.
-    DisplayUpdated,
     /// Close the runtime entirely.
     CloseRequested,
 }
@@ -157,10 +153,9 @@ pub fn parse_session_command(
         "resume" => Some(LiveControlCommand::Resume),
         "stop" | "break" => Some(LiveControlCommand::Break),
         "close" => Some(LiveControlCommand::Close),
-        "display_selection_update" | "preview_update" => display_selection
+        "display_sync" => display_selection
             .cloned()
             .map(|ds| LiveControlCommand::SetDisplaySelection(ds.selection)),
-        "preview_refresh" => Some(LiveControlCommand::RefreshDisplay),
         "run_sequence" => {
             let stages = stages.unwrap_or_default();
             if stages.is_empty() {

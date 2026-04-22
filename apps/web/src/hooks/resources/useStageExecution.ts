@@ -74,11 +74,13 @@ export function useStageExecution(options?: {
           ? err
           : LiveApiError.networkError("stage-execution", err);
       if (apiError.status === 404) {
+        lastFetchedSessionKeyRef.current = sessionKey;
         setStageExecution(null);
         setError(null);
         setLoading(false);
         return;
       }
+      lastFetchedSessionKeyRef.current = sessionKey;
       setError(apiError);
       setLoading(false);
     }

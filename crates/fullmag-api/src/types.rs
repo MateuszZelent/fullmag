@@ -414,6 +414,12 @@ pub(crate) struct SessionStateResponse {
     /// Monotonic state version counter.  Bumped on every publish.
     #[serde(skip)]
     pub state_version: u64,
+    /// Revision for mesh config/report/topology/capabilities resources.
+    #[serde(skip)]
+    pub mesh_revision: u64,
+    /// Revision for mesh build lifecycle resources.
+    #[serde(skip)]
+    pub mesh_build_revision: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -968,6 +974,7 @@ mod tests {
                 physics_stack: vec![],
                 mesh: None,
             }],
+            mesh_interfaces: Vec::new(),
             current_modules: Vec::new(),
             excitation_analysis: None,
         }
@@ -1034,6 +1041,8 @@ mod tests {
             preview: None,
             builder_adapter: Some(builder),
             state_version: 0,
+            mesh_revision: 0,
+            mesh_build_revision: 0,
         };
 
         let value = serde_json::to_value(SessionStateResponseView {

@@ -102,9 +102,6 @@ describe("commandKindLabel", () => {
     expect(commandKindLabel("solve")).toBe("Compute");
     expect(commandKindLabel("remesh")).toBe("Remesh");
     expect(commandKindLabel("save_vtk")).toBe("Export VTK");
-    expect(commandKindLabel("display_selection_update")).toBe("Display selection");
-    expect(commandKindLabel("preview_update")).toBe("Display update");
-    expect(commandKindLabel("preview_refresh")).toBe("Preview refresh");
   });
   it("returns 'Command' for null/undefined/empty", () => {
     expect(commandKindLabel(null)).toBe("Command");

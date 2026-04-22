@@ -30,6 +30,14 @@ pub(crate) fn api_base_url() -> String {
     format!("http://localhost:{}", api_port())
 }
 
+pub(crate) fn swagger_ui_url() -> String {
+    format!("{}/v1/docs/swagger/", api_base_url())
+}
+
+pub(crate) fn openapi_json_url() -> String {
+    format!("{}/v1/openapi.json", api_base_url())
+}
+
 pub(crate) fn internal_live_api_url(path: &str) -> String {
     format!(
         "{}/v1/internal/live/current/{}",
@@ -325,6 +333,8 @@ pub(crate) fn bootstrap_control_plane(
 
 pub(crate) fn open_in_browser(ready: &ControlPlaneReady) {
     eprintln!("  gui server: {}", ready.web_url);
+    eprintln!("  swagger ui: {}", swagger_ui_url());
+    eprintln!("  openapi json: {}", openapi_json_url());
     if let Ok(opener) = which_opener() {
         let _ = ProcessCommand::new(opener)
             .arg(&ready.web_url)

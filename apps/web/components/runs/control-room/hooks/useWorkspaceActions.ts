@@ -47,7 +47,7 @@ import {
   type WorkspaceTabInput,
 } from "@/lib/workspace/workspace-store";
 import type { ControlRoomApi } from "../controlRoomApi";
-import type { CapabilityMap, SaveProfile } from "@/src/api/types";
+import type { CapabilityMap, DisplayPatchRequest, SaveProfile } from "@/src/api/types";
 import { isFemDiscretization } from "@/src/domain/capabilities";
 
 type NormalizedViewportMode = ViewportMode | "charts";
@@ -105,6 +105,7 @@ function formatByteSize(bytes: number): string {
 
 export interface UseWorkspaceActionsParams {
   enqueueCommand: (payload: Record<string, unknown>) => Promise<void>;
+  patchDisplay: (patch: DisplayPatchRequest) => Promise<void>;
   updatePreview: (path: string, payload?: Record<string, unknown>) => Promise<void>;
   appendFrontendTrace: (level: string, message: string) => void;
   liveApi: ControlRoomApi;
@@ -210,6 +211,7 @@ export interface UseWorkspaceActionsReturn {
 export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorkspaceActionsReturn {
   const {
     enqueueCommand,
+    patchDisplay,
     updatePreview,
     appendFrontendTrace,
     liveApi,
@@ -772,12 +774,18 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     if (cachedFieldQuantities.has(nextQuantity)) {
       return;
     }
-    // Fallback: ask the backend to compute/publish the field via the
-    // preview command queue (control-plane path).
+    // Fallback: update the canonical display resource so the runtime can
+    // observe the new display revision and refresh the selected quantity.
     if (previewControlsActive) {
-      void updatePreview("/quantity", { quantity: nextQuantity });
+      void patchDisplay({ active_quantity_id: nextQuantity });
     }
-  }, [cachedFieldQuantities, effectiveViewMode, femDiscretization, previewControlsActive, updatePreview]);
+  }, [
+    cachedFieldQuantities,
+    effectiveViewMode,
+    femDiscretization,
+    patchDisplay,
+    previewControlsActive,
+  ]);
 
   /* ── openResultWorkspaceEntry ── */
   const openResultWorkspaceEntry = useCallback(

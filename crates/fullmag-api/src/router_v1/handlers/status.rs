@@ -126,6 +126,8 @@ pub(crate) fn build_live_status(
             .revision
             .max(workspace_ribbon.revision)
             .max(workspace_layout.revision),
+        mesh_revision: snapshot.mesh_revision,
+        mesh_build_revision: snapshot.mesh_build_revision,
     };
 
     let capabilities = CapabilityMap {

@@ -68,9 +68,8 @@ pub use interactive::display::{
     DisplayViewMode,
 };
 pub use interactive::events::{
-    CommandAckEvent, CommandCompletedEvent, CommandRejectedEvent, DisplayUpdatedEvent,
-    MeshCommandTargetEvent, RuntimeEventEnvelope, RuntimeStatus, RuntimeStatusChangedEvent,
-    StepDeltaEvent,
+    CommandAckEvent, CommandCompletedEvent, CommandRejectedEvent, MeshCommandTargetEvent,
+    RuntimeEventEnvelope, RuntimeStatus, RuntimeStatusChangedEvent, StepDeltaEvent,
 };
 pub use interactive::runtime::InteractiveRuntime;
 pub use interactive_runtime::{InteractiveFdmPreviewRuntime, InteractiveFemPreviewRuntime};

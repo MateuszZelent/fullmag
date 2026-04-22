@@ -34,8 +34,6 @@ impl<'a> CheckpointContext<'a> {
     /// - `PauseRequested` — the user requested pause; the loop should yield cleanly
     /// - `BreakRequested` — the user requested break; end the segment
     /// - `CloseRequested` — the session is closing
-    /// - `DisplayUpdated` — a display selection change was detected; the loop
-    ///   updated `last_preview_revision` internally but should continue stepping
     pub fn check_control(&self) -> RuntimeControlOutcome {
         // Check interrupt first — it's the fast path for pause/break/close
         if let Some(flag) = self.interrupt_requested {

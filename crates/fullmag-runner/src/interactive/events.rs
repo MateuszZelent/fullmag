@@ -1,4 +1,4 @@
-use super::{DisplayKind, DisplaySelectionState};
+use super::DisplaySelectionState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -110,18 +110,6 @@ pub struct CommandCompletedEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DisplayUpdatedEvent {
-    pub session_id: String,
-    pub display_selection: DisplaySelectionState,
-    pub display_kind: DisplayKind,
-    pub published_at_unix_ms: u128,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_step: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_time: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeStatusChangedEvent {
     pub session_id: String,
     pub status: RuntimeStatus,
@@ -150,7 +138,6 @@ pub enum RuntimeEventEnvelope {
     CommandAck(CommandAckEvent),
     CommandRejected(CommandRejectedEvent),
     CommandCompleted(CommandCompletedEvent),
-    DisplayUpdated(DisplayUpdatedEvent),
     RuntimeStatusChanged(RuntimeStatusChangedEvent),
     StepDelta(StepDeltaEvent),
 }

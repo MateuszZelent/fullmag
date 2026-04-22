@@ -5,7 +5,6 @@
  */
 import type {
   CommandRequest,
-  MeshCommandTargetRequest,
 } from "../../types";
 
 /**
@@ -48,15 +47,6 @@ export function normalizeCommandRequest(
       return { kind: "stop" };
     case "skip":
       return { kind: "skip" };
-    case "remesh":
-      return {
-        kind: "remesh",
-        mesh_options: params.mesh_options,
-        mesh_target: isMeshCommandTarget(params.mesh_target)
-          ? params.mesh_target
-          : undefined,
-        mesh_reason: stringFromUnknown(params.mesh_reason),
-      };
     case "save_vtk":
       return { kind: "save_vtk" };
     case "solve":
@@ -96,22 +86,4 @@ function numberFromUnknown(value: unknown): number | undefined {
 
 function integerFromUnknown(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function isMeshCommandTarget(value: unknown): value is MeshCommandTargetRequest {
-  if (!isRecord(value) || typeof value.kind !== "string") {
-    return false;
-  }
-  if (
-    value.kind === "study_domain" ||
-    value.kind === "adaptive_followup" ||
-    value.kind === "airbox"
-  ) {
-    return true;
-  }
-  return value.kind === "object_mesh" && typeof value.object_id === "string";
 }

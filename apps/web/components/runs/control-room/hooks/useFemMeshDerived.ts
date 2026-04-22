@@ -537,11 +537,17 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
       return;
     }
     setMeshEntityViewState((prev) => {
+      const prevKeys = Object.keys(prev);
       const next: MeshEntityViewStateMap = {};
+      let changed = prevKeys.length !== meshParts.length;
       for (const part of meshParts) {
-        next[part.id] = prev[part.id] ?? defaultMeshEntityViewState(part);
+        const existing = prev[part.id];
+        if (!existing) {
+          changed = true;
+        }
+        next[part.id] = existing ?? defaultMeshEntityViewState(part);
       }
-      return next;
+      return changed ? next : prev;
     });
   }, [effectiveFemMesh?.generation_id, meshParts]);
 

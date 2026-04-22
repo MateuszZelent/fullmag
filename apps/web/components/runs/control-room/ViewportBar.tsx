@@ -63,10 +63,7 @@ export const ViewportBar = memo(function ViewportBar() {
     await getLiveApiClient().display.patch(patch);
   }, []);
 
-  const displayControls = useUnifiedDisplayControls(
-    viewport.updatePreview,
-    patchDisplay,
-  );
+  const displayControls = useUnifiedDisplayControls(patchDisplay);
 
   const capabilities =
     status?.capabilities ??

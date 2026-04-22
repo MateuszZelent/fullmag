@@ -200,9 +200,6 @@ export function buildRequestedDisplaySelection({
 
 export function commandKindLabel(kind: string | null | undefined): string {
   switch (kind) {
-    case "display_selection_update": return "Display selection";
-    case "preview_update": return "Display update";
-    case "preview_refresh": return "Preview refresh";
     case "run": return "Run";
     case "relax": return "Relax";
     case "pause": return "Pause";

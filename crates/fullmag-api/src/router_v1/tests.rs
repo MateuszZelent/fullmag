@@ -28,7 +28,7 @@ use crate::types::{
     SessionStateResponse, StageExecutionRecord, StageExecutionState, StepUpdateView,
     TrackedCommandRecord,
 };
-use fullmag_runner::RuntimeStatus;
+use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, RuntimeStatus};
 
 use super::build_v1_router;
 
@@ -126,10 +126,88 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
             physics_stack: vec![],
             mesh: None,
         }],
+        mesh_interfaces: Vec::new(),
         current_modules: Vec::new(),
         excitation_analysis: None,
     };
     fullmag_authoring::scene_document_from_script_builder(&builder)
+}
+
+fn sample_fem_mesh_payload() -> FemMeshPayload {
+    FemMeshPayload {
+        mesh_name: "test-mesh".to_string(),
+        mesh_id: "test-mesh:1".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        elements: vec![[0, 1, 2, 3]],
+        element_markers: vec![7],
+        boundary_faces: vec![[0, 1, 2]],
+        boundary_markers: vec![3],
+        object_segments: vec![FemMeshObjectSegment {
+            object_id: "body".to_string(),
+            geometry_id: Some("body".to_string()),
+            node_start: 0,
+            node_count: 4,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+        }],
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: Some("shared_domain".to_string()),
+        domain_frame: None,
+        generation_id: Some("42".to_string()),
+        per_domain_quality: Default::default(),
+    }
+}
+
+fn sample_fem_mesh_payload_with_manifest() -> FemMeshPayload {
+    let mut mesh = sample_fem_mesh_payload();
+    mesh.mesh_parts = vec![
+        FemMeshPartPayload {
+            id: "airbox".to_string(),
+            label: "airbox".to_string(),
+            role: "air".to_string(),
+            object_id: None,
+            geometry_id: None,
+            material_id: None,
+            element_start: 0,
+            element_count: 0,
+            boundary_face_start: 0,
+            boundary_face_count: 0,
+            boundary_face_indices: vec![],
+            node_start: 0,
+            node_count: 0,
+            node_indices: vec![],
+            surface_faces: vec![],
+            bounds_min: Some([-1.0, -1.0, -1.0]),
+            bounds_max: Some([2.0, 2.0, 2.0]),
+        },
+        FemMeshPartPayload {
+            id: "body".to_string(),
+            label: "body".to_string(),
+            role: "magnetic_object".to_string(),
+            object_id: Some("body".to_string()),
+            geometry_id: Some("body".to_string()),
+            material_id: Some("mat-body".to_string()),
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+            boundary_face_indices: vec![0],
+            node_start: 0,
+            node_count: 4,
+            node_indices: vec![0, 1, 2, 3],
+            surface_faces: vec![[0, 1, 2]],
+            bounds_min: Some([0.0, 0.0, 0.0]),
+            bounds_max: Some([1.0, 1.0, 1.0]),
+        },
+    ];
+    mesh
 }
 
 /// Minimal `AppState` with no active live session.
@@ -221,6 +299,8 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         preview: None,
         builder_adapter: None,
         state_version: 0,
+        mesh_revision: 0,
+        mesh_build_revision: 0,
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -534,6 +614,8 @@ async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) 
         preview: None,
         builder_adapter: None,
         state_version: 0,
+        mesh_revision: 0,
+        mesh_build_revision: 0,
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -633,6 +715,8 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         preview: None,
         builder_adapter: None,
         state_version: 0,
+        mesh_revision: 0,
+        mesh_build_revision: 0,
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -859,6 +943,8 @@ async fn status_returns_200_with_live_session() {
     assert!(json["domain"].is_object());
     assert!(json["resources"].is_object());
     assert_eq!(json["resources"]["workspace_revision"], 0);
+    assert_eq!(json["resources"]["mesh_revision"], 0);
+    assert_eq!(json["resources"]["mesh_build_revision"], 0);
     assert!(json["capabilities"].is_object());
     assert!(json["energies"].is_object());
     assert!(json["metrics"].is_object());
@@ -1469,7 +1555,7 @@ async fn mesh_summary_returns_current_mesh_workspace() {
             "mesh_summary": { "nodes": 12, "elements": 24 },
             "mesh_quality_summary": { "min_quality": 0.82 }
         }));
-        snapshot.state_version = 11;
+        snapshot.mesh_revision = 11;
     }
     let app = build_v1_router().with_state(state);
 
@@ -1486,11 +1572,8 @@ async fn mesh_summary_returns_current_mesh_workspace() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["revision"], 11);
-    assert_eq!(json["mesh_workspace"]["mesh_summary"]["nodes"], 12);
-    assert_eq!(
-        json["mesh_workspace"]["mesh_quality_summary"]["min_quality"],
-        0.82
-    );
+    assert_eq!(json["mesh_summary"]["nodes"], 12);
+    assert_eq!(json["mesh_quality_summary"]["min_quality"], 0.82);
 }
 
 #[tokio::test]
@@ -1505,7 +1588,7 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
             "last_build_summary": { "elements": 42 },
             "last_build_error": "stale topology"
         }));
-        snapshot.state_version = 13;
+        snapshot.mesh_build_revision = 13;
     }
     let app = build_v1_router().with_state(state);
 
@@ -1569,6 +1652,121 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
         Some(serde_json::json!("object_mesh"))
     );
     assert_eq!(command.mesh_reason.as_deref(), Some("user_request"));
+}
+
+#[tokio::test]
+async fn commands_endpoint_rejects_public_remesh_variant() {
+    let app = test_router_with_session().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/live/current/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "remesh",
+                        "mesh_reason": "legacy"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        response.status().is_client_error(),
+        "expected 4xx for legacy public remesh command, got {}",
+        response.status()
+    );
+}
+
+#[tokio::test]
+async fn mesh_build_history_returns_history_projection() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_history": [
+                { "mesh_name": "mesh-a", "node_count": 11 },
+                { "mesh_name": "mesh-b", "node_count": 17 }
+            ]
+        }));
+        snapshot.mesh_build_revision = 29;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/builds/history")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 29);
+    assert_eq!(json["history"][0]["mesh_name"], "mesh-a");
+    assert_eq!(json["history"][1]["node_count"], 17);
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_topology_returns_binary_fmmt_payload() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+    }
+    let app = build_v1_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/shared-domain/topology")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").and_then(|value| value.to_str().ok()),
+        Some("application/octet-stream"),
+    );
+    let body = body_bytes(response).await;
+    assert!(body.starts_with(b"FMMT"));
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_returns_tree_metadata() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        snapshot.mesh_revision = 41;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 41);
+    assert_eq!(json["mesh_name"], "test-mesh");
+    assert_eq!(json["object_segments"][0]["object_id"], "body");
+    assert_eq!(json["mesh_parts"][0]["role"], "air");
+    assert_eq!(json["mesh_parts"][1]["object_id"], "body");
 }
 
 #[tokio::test]
@@ -1761,6 +1959,59 @@ async fn mesh_object_config_put_commits_scene_projection() {
     assert_eq!(mesh.mode, "override");
     assert_eq!(mesh.hmax, "2e-9");
     assert_eq!(object.mesh_override.as_ref(), Some(mesh));
+}
+
+#[tokio::test]
+async fn mesh_interface_config_put_commits_scene_projection() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v1_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/live/current/mesh/interfaces/object%3Abody%7Cair/config")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "config": {
+                            "mode": "custom",
+                            "hmax": "3e-9",
+                            "interface_hmax": "1e-9",
+                            "interface_thickness": "2e-9",
+                            "transition_distance": "6e-9",
+                            "build_requested": true
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["interface_id"], "object:body|air");
+    assert_eq!(json["config"]["interface_hmax"], "1e-9");
+
+    let guard = state.current_live_state.read().await;
+    let committed = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("scene document committed");
+    let interface = committed
+        .study
+        .mesh_interfaces
+        .iter()
+        .find(|entry| entry.interface_id == "object:body|air")
+        .expect("interface mesh present");
+    assert_eq!(interface.owner_a, "object:body");
+    assert_eq!(interface.owner_b, "air");
+    assert_eq!(interface.config.interface_hmax.as_deref(), Some("1e-9"));
 }
 
 // ─── retired flat scene route ─────────────────────────────────────────────

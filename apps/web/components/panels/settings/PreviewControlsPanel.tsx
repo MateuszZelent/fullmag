@@ -2,6 +2,7 @@
 
 import { useViewport } from "../../runs/control-room/context-hooks";
 import { fmtPreviewEveryN, fmtPreviewMaxPoints, type PreviewComponent } from "../../runs/control-room/shared";
+import { displayPatchFromPreviewComponent } from "@/src/api/displaySelection";
 import { Button } from "../../ui/button";
 import { SidebarSection, InfoRow, ToggleRow } from "./primitives";
 import SelectField from "../../ui/SelectField";
@@ -46,7 +47,7 @@ export default function PreviewControlsPanel() {
             <SelectField
               label="Component"
               value={ctx.requestedPreviewComponent}
-              onchange={(val) => void ctx.updatePreview("/component", { component: val as PreviewComponent })}
+              onchange={(val) => void ctx.patchDisplay(displayPatchFromPreviewComponent(val as PreviewComponent))}
               disabled={ctx.previewBusy}
               options={[
                 { value: "3D", label: "3D Vector" },
@@ -59,7 +60,7 @@ export default function PreviewControlsPanel() {
             <SelectField
               label="Refresh Rate"
               value={String(ctx.requestedPreviewEveryN)}
-              onchange={(val) => void ctx.updatePreview("/everyN", { everyN: Number(val) })}
+              onchange={(val) => void ctx.patchDisplay({ vector_density: Number(val) })}
               disabled={ctx.previewBusy}
               options={ctx.previewEveryNOptions.map((v) => ({ value: String(v), label: fmtPreviewEveryN(v) }))}
               tooltip="Control how frequently the live preview fetches standard fields from the running GPU block."
@@ -67,7 +68,7 @@ export default function PreviewControlsPanel() {
             <SelectField
               label="Max Points"
               value={String(ctx.requestedPreviewMaxPoints)}
-              onchange={(val) => void ctx.updatePreview("/maxPoints", { maxPoints: Number(val) })}
+              onchange={(val) => void ctx.patchDisplay({ max_points: Number(val) })}
               disabled={ctx.previewBusy}
               options={ctx.previewMaxPointOptions.map((v) => ({ value: String(v), label: fmtPreviewMaxPoints(v) }))}
               tooltip="Limit the number of rendering points to improve browser frame rates during live playback."
@@ -77,7 +78,7 @@ export default function PreviewControlsPanel() {
               <ToggleRow
                 label="Auto-fit Camera Bounds"
                 checked={ctx.requestedPreviewAutoScale}
-                onChange={(next) => void ctx.updatePreview("/autoScaleEnabled", { autoScaleEnabled: next })}
+                onChange={(next) => void ctx.patchDisplay({ auto_contrast: next })}
                 disabled={ctx.previewBusy}
               />
             </div>

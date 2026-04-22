@@ -5,7 +5,7 @@ use crate::error::ApiError;
 use crate::quantities::{build_quantities, extract_fem_mesh_from_metadata};
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 pub(crate) async fn current_live_session_id(state: &AppState) -> Result<String, ApiError> {
@@ -36,6 +36,88 @@ pub(crate) fn effective_runtime_status_code(snapshot: &SessionStateResponse) -> 
 
 pub(crate) fn refresh_runtime_status(snapshot: &mut SessionStateResponse) {
     snapshot.runtime_status = build_runtime_status_view(&effective_runtime_status_code(snapshot));
+}
+
+fn next_revision(current: u64) -> u64 {
+    current.wrapping_add(1).max(1)
+}
+
+fn bump_mesh_revision(current: &mut SessionStateResponse) {
+    current.mesh_revision = next_revision(current.mesh_revision);
+}
+
+fn bump_mesh_build_revision(current: &mut SessionStateResponse) {
+    current.mesh_build_revision = next_revision(current.mesh_build_revision);
+}
+
+fn mesh_resource_signature(mesh_workspace: &Value) -> Value {
+    json!({
+        "mesh_summary": mesh_workspace.get("mesh_summary").cloned().unwrap_or(Value::Null),
+        "mesh_quality_summary": mesh_workspace.get("mesh_quality_summary").cloned().unwrap_or(Value::Null),
+        "mesh_capabilities": mesh_workspace.get("mesh_capabilities").cloned().unwrap_or(Value::Null),
+        "mesh_adaptivity_state": mesh_workspace.get("mesh_adaptivity_state").cloned().unwrap_or(Value::Null),
+        "effective_airbox_target": mesh_workspace.get("effective_airbox_target").cloned().unwrap_or(Value::Null),
+        "effective_per_object_targets": mesh_workspace
+            .get("effective_per_object_targets")
+            .cloned()
+            .unwrap_or(Value::Null),
+    })
+}
+
+fn mesh_build_resource_signature(mesh_workspace: &Value) -> Value {
+    json!({
+        "active_build": mesh_workspace.get("active_build").cloned().unwrap_or(Value::Null),
+        "mesh_pipeline_status": mesh_workspace.get("mesh_pipeline_status").cloned().unwrap_or(Value::Null),
+        "mesh_history": mesh_workspace.get("mesh_history").cloned().unwrap_or(Value::Null),
+        "last_build_summary": mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null),
+        "last_build_error": mesh_workspace.get("last_build_error").cloned().unwrap_or(Value::Null),
+        "effective_airbox_target": mesh_workspace.get("effective_airbox_target").cloned().unwrap_or(Value::Null),
+        "effective_per_object_targets": mesh_workspace
+            .get("effective_per_object_targets")
+            .cloned()
+            .unwrap_or(Value::Null),
+    })
+}
+
+fn apply_mesh_workspace_update(current: &mut SessionStateResponse, mesh_workspace: Value) {
+    let previous_mesh_signature = current.mesh_workspace.as_ref().map(mesh_resource_signature);
+    let previous_build_signature = current
+        .mesh_workspace
+        .as_ref()
+        .map(mesh_build_resource_signature);
+    let next_mesh_signature = mesh_resource_signature(&mesh_workspace);
+    let next_build_signature = mesh_build_resource_signature(&mesh_workspace);
+    current.mesh_workspace = Some(mesh_workspace);
+    if previous_build_signature.as_ref() != Some(&next_build_signature) {
+        bump_mesh_build_revision(current);
+    }
+    if previous_mesh_signature.as_ref() != Some(&next_mesh_signature) {
+        bump_mesh_revision(current);
+    }
+}
+
+fn fem_mesh_identity(mesh: &fullmag_runner::FemMeshPayload) -> String {
+    format!(
+        "{}:{}:{}:{}:{}",
+        mesh.generation_id.as_deref().unwrap_or(""),
+        mesh.mesh_id,
+        mesh.nodes.len(),
+        mesh.elements.len(),
+        mesh.boundary_faces.len()
+    )
+}
+
+fn apply_fem_mesh_update(current: &mut SessionStateResponse, fem_mesh: fullmag_runner::FemMeshPayload) {
+    let changed = current
+        .fem_mesh
+        .as_ref()
+        .map(fem_mesh_identity)
+        != Some(fem_mesh_identity(&fem_mesh));
+    current.fem_mesh = Some(fem_mesh);
+    if changed {
+        bump_mesh_revision(current);
+        bump_mesh_build_revision(current);
+    }
 }
 
 pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> SessionStateResponse {
@@ -113,6 +195,8 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         preview: None,
         builder_adapter: None,
         state_version: 0,
+        mesh_revision: 0,
+        mesh_build_revision: 0,
     }
 }
 
@@ -241,7 +325,7 @@ pub(crate) fn apply_current_live_snapshot(
         apply_current_live_metadata(current, metadata);
     }
     if let Some(mesh_workspace) = req.mesh_workspace {
-        current.mesh_workspace = Some(mesh_workspace);
+        apply_mesh_workspace_update(current, mesh_workspace);
     }
     if let Some(stage_execution) = req.stage_execution {
         current.stage_execution = Some(stage_execution);
@@ -256,12 +340,12 @@ pub(crate) fn apply_current_live_snapshot(
             current.session.status = live_state.status.clone();
         }
         if let Some(fem_mesh) = live_state.latest_step.fem_mesh.clone() {
-            current.fem_mesh = Some(fem_mesh);
+            apply_fem_mesh_update(current, fem_mesh);
         }
         current.live_state = Some(live_state);
     }
     if let Some(fem_mesh) = req.fem_mesh {
-        current.fem_mesh = Some(fem_mesh);
+        apply_fem_mesh_update(current, fem_mesh);
     }
     if let Some(row) = req.latest_scalar_row {
         upsert_scalar_row(&mut current.scalar_rows, row);
@@ -304,7 +388,7 @@ pub(crate) fn apply_current_live_session_frame(
         apply_current_live_metadata(current, metadata);
     }
     if let Some(mesh_workspace) = frame.mesh_workspace {
-        current.mesh_workspace = Some(mesh_workspace);
+        apply_mesh_workspace_update(current, mesh_workspace);
     }
     if let Some(stage_execution) = frame.stage_execution {
         current.stage_execution = Some(stage_execution);
@@ -327,12 +411,12 @@ pub(crate) fn apply_current_live_runtime_frame(
             current.session.status = live_state.status.clone();
         }
         if let Some(fem_mesh) = live_state.latest_step.fem_mesh.clone() {
-            current.fem_mesh = Some(fem_mesh);
+            apply_fem_mesh_update(current, fem_mesh);
         }
         current.live_state = Some(live_state);
     }
     if let Some(fem_mesh) = frame.fem_mesh {
-        current.fem_mesh = Some(fem_mesh);
+        apply_fem_mesh_update(current, fem_mesh);
     }
     if let Some(engine_log) = frame.engine_log {
         current.engine_log = engine_log;

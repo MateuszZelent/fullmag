@@ -1,5 +1,7 @@
 "use client";
 
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+
 export interface FrontendDebugEvent {
   ts: number;
   scope: string;
@@ -44,7 +46,11 @@ export function recordFrontendDebugEvent(
   } catch {
     // Ignore performance API failures.
   }
-  if (typeof process !== "undefined" && process.env.NODE_ENV !== "production") {
+  if (
+    typeof process !== "undefined" &&
+    process.env.NODE_ENV !== "production" &&
+    FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging
+  ) {
     console.info(`[fullmag-debug][${scope}] ${event}`, detail ?? {});
     if (entry.stack) {
       console.info(entry.stack);

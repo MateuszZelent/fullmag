@@ -517,6 +517,58 @@ pub struct ScriptBuilderPerGeometryMeshState {
     pub build_requested: bool,
 }
 
+impl Default for ScriptBuilderPerGeometryMeshState {
+    fn default() -> Self {
+        Self {
+            mode: default_inherit_mesh_mode(),
+            size_mode: None,
+            hmax: String::new(),
+            hmin: String::new(),
+            maximum_element_size: None,
+            minimum_element_size: None,
+            calibrate_for: None,
+            size_preset: None,
+            order: None,
+            source: None,
+            algorithm_2d: None,
+            algorithm_3d: None,
+            size_factor: None,
+            size_from_curvature: None,
+            curvature_factor: None,
+            growth_rate: String::new(),
+            maximum_element_growth_rate: None,
+            narrow_regions: None,
+            narrow_region_resolution: None,
+            resolved_size_from_curvature: None,
+            resolved_narrow_regions: None,
+            resolved_growth_rate: None,
+            smoothing_steps: None,
+            optimize: None,
+            optimize_iterations: None,
+            compute_quality: None,
+            per_element_quality: None,
+            bulk_hmax: None,
+            bulk_hmin: None,
+            interface_hmax: None,
+            interface_thickness: None,
+            transition_distance: None,
+            transition_growth: None,
+            size_fields: Vec::new(),
+            operations: Vec::new(),
+            build_requested: false,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ScriptBuilderMeshInterfaceState {
+    pub interface_id: String,
+    pub owner_a: String,
+    pub owner_b: String,
+    #[serde(default)]
+    pub config: ScriptBuilderPerGeometryMeshState,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderGeometryEntry {
     pub name: String,
@@ -597,6 +649,8 @@ pub struct ScriptBuilderState {
     pub initial_state: Option<ScriptBuilderInitialState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub geometries: Vec<ScriptBuilderGeometryEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mesh_interfaces: Vec<ScriptBuilderMeshInterfaceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_modules: Vec<ScriptBuilderCurrentModuleState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -139,7 +139,7 @@ export function createControlRoomApi(): ControlRoomApi {
       if (generationId) {
         params.set("generation_id", generationId);
       }
-      const path = `/v1/live/current/domain/topology${
+      const path = `/v1/live/current/mesh/shared-domain/topology${
         params.size > 0 ? `?${params.toString()}` : ""
       }`;
       return client.getBinary(path, options);

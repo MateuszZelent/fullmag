@@ -28,6 +28,7 @@ interface BoundsPreview3DProps {
   focusObjectRequest?: FocusObjectRequest | null;
   worldExtent?: [number, number, number] | null;
   worldCenter?: [number, number, number] | null;
+  enableObjectInteractions?: boolean;
   onRequestObjectSelect?: (id: string) => void;
   onGeometryTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
 }
@@ -216,12 +217,14 @@ function OverlayBoxes({
   overlays,
   geomCenter,
   selectedObjectId,
+  enableObjectInteractions,
   onRequestObjectSelect,
   onGeometryTranslate,
 }: {
   overlays: BuilderObjectOverlay[];
   geomCenter: THREE.Vector3;
   selectedObjectId?: string | null;
+  enableObjectInteractions: boolean;
   onRequestObjectSelect?: (id: string) => void;
   onGeometryTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
 }) {
@@ -253,10 +256,14 @@ function OverlayBoxes({
             <mesh
               position={center}
               renderOrder={4}
-              onClick={(event) => {
-                event.stopPropagation();
-                onRequestObjectSelect?.(overlay.id);
-              }}
+              onClick={
+                enableObjectInteractions && onRequestObjectSelect
+                  ? (event) => {
+                      event.stopPropagation();
+                      onRequestObjectSelect(overlay.id);
+                    }
+                  : undefined
+              }
             >
               <boxGeometry args={size} />
               <meshStandardMaterial
@@ -281,7 +288,7 @@ function OverlayBoxes({
           </group>
         );
 
-        if (selected && onGeometryTranslate) {
+        if (selected && enableObjectInteractions && onGeometryTranslate) {
           return (
             <PivotControls
               key={overlay.id}
@@ -316,6 +323,7 @@ export default function BoundsPreview3D({
   focusObjectRequest = null,
   worldExtent = null,
   worldCenter = null,
+  enableObjectInteractions = true,
   onRequestObjectSelect,
   onGeometryTranslate,
 }: BoundsPreview3DProps) {
@@ -440,6 +448,7 @@ export default function BoundsPreview3D({
             overlays={objectOverlays}
             geomCenter={frameCenter}
             selectedObjectId={selectedObjectId}
+            enableObjectInteractions={enableObjectInteractions}
             onRequestObjectSelect={onRequestObjectSelect}
             onGeometryTranslate={onGeometryTranslate}
           />

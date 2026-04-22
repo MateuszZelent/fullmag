@@ -1,9 +1,7 @@
 /**
  * Unified display-control actions.
  *
- * Bridges legacy preview-mutation calls with the canonical resource-first
- * DisplayUpdate API, falling back to legacy preview posts only when a caller
- * does not provide the new update handler.
+ * Uses the canonical resource-first display patch API.
  */
 
 import { useCallback } from "react";
@@ -11,121 +9,66 @@ import { displayPatchFromPreviewComponent } from "../../../src/api/displaySelect
 import type { DisplayPatchRequest } from "../../../src/api/types";
 
 export function useUnifiedDisplayControls(
-  legacyUpdatePreview:
-    | ((path: string, payload?: Record<string, unknown>) => Promise<void>)
-    | null,
-  newDisplayUpdate: ((update: DisplayPatchRequest) => Promise<void>) | null,
+  updateDisplay: (update: DisplayPatchRequest) => Promise<void>,
 ) {
   const setComponent = useCallback(
     (component: string) => {
-      if (newDisplayUpdate) {
-        return newDisplayUpdate(displayPatchFromPreviewComponent(
-          component === "3D" ||
-            component === "x" ||
-            component === "y" ||
-            component === "z" ||
-            component === "magnitude"
-            ? component
-            : "magnitude",
-        ));
-      }
-      return legacyUpdatePreview?.("/component", { component });
+      return updateDisplay(displayPatchFromPreviewComponent(
+        component === "3D" ||
+          component === "x" ||
+          component === "y" ||
+          component === "z" ||
+          component === "magnitude"
+          ? component
+          : "magnitude",
+      ));
     },
-    [legacyUpdatePreview, newDisplayUpdate],
+    [updateDisplay],
   );
 
   const setEveryN = useCallback(
-    (everyN: number) => {
-      if (newDisplayUpdate) {
-        return newDisplayUpdate({ vector_density: everyN });
-      }
-      return legacyUpdatePreview?.("/everyN", { everyN });
-    },
-    [legacyUpdatePreview, newDisplayUpdate],
+    (everyN: number) => updateDisplay({ vector_density: everyN }),
+    [updateDisplay],
   );
 
   const setMaxPoints = useCallback(
-    (maxPoints: number) => {
-      if (newDisplayUpdate) {
-        return newDisplayUpdate({ max_points: maxPoints });
-      }
-      return legacyUpdatePreview?.("/maxPoints", { maxPoints });
-    },
-    [legacyUpdatePreview, newDisplayUpdate],
+    (maxPoints: number) => updateDisplay({ max_points: maxPoints }),
+    [updateDisplay],
   );
 
   const setAutoScale = useCallback(
-    (enabled: boolean) => {
-      if (newDisplayUpdate) {
-        return newDisplayUpdate({ auto_contrast: enabled });
-      }
-      return legacyUpdatePreview?.("/autoScaleEnabled", {
-        autoScaleEnabled: enabled,
-      });
-    },
-    [legacyUpdatePreview, newDisplayUpdate],
+    (enabled: boolean) => updateDisplay({ auto_contrast: enabled }),
+    [updateDisplay],
   );
 
   const setLayer = useCallback(
-    (layer: number) => {
-      if (newDisplayUpdate) {
-        return newDisplayUpdate({ slice_layer: layer });
-      }
-      return legacyUpdatePreview?.("/layer", { layer });
-    },
-    [legacyUpdatePreview, newDisplayUpdate],
+    (layer: number) => updateDisplay({ slice_layer: layer }),
+    [updateDisplay],
   );
 
   const setAllLayers = useCallback(
-    (all: boolean) => {
-      if (newDisplayUpdate) {
-        return newDisplayUpdate({ slice_mode: all ? "all" : "single" });
-      }
-      return legacyUpdatePreview?.("/allLayers", { allLayers: all });
-    },
-    [legacyUpdatePreview, newDisplayUpdate],
+    (all: boolean) => updateDisplay({ slice_mode: all ? "all" : "single" }),
+    [updateDisplay],
   );
 
   const setColormap = useCallback(
-    (colormap: string) => {
-      if (newDisplayUpdate) {
-        return newDisplayUpdate({ colormap });
-      }
-      return legacyUpdatePreview?.("/colormap", { colormap });
-    },
-    [legacyUpdatePreview, newDisplayUpdate],
+    (colormap: string) => updateDisplay({ colormap }),
+    [updateDisplay],
   );
 
   const setQuantity = useCallback(
-    (quantityId: string) => {
-      if (newDisplayUpdate) {
-        return newDisplayUpdate({ active_quantity_id: quantityId });
-      }
-      return legacyUpdatePreview?.("/selection", { quantityId });
-    },
-    [legacyUpdatePreview, newDisplayUpdate],
+    (quantityId: string) => updateDisplay({ active_quantity_id: quantityId }),
+    [updateDisplay],
   );
 
   const setVectorGlyphs = useCallback(
-    (enabled: boolean) => {
-      if (newDisplayUpdate) {
-        return newDisplayUpdate({ vector_glyphs: enabled });
-      }
-      return legacyUpdatePreview?.("/vectorGlyphs", {
-        vectorGlyphs: enabled,
-      });
-    },
-    [legacyUpdatePreview, newDisplayUpdate],
+    (enabled: boolean) => updateDisplay({ vector_glyphs: enabled }),
+    [updateDisplay],
   );
 
   const setContrastRange = useCallback(
-    (min: number, max: number) => {
-      if (newDisplayUpdate) {
-        return newDisplayUpdate({ contrast_min: min, contrast_max: max });
-      }
-      return legacyUpdatePreview?.("/contrastRange", { min, max });
-    },
-    [legacyUpdatePreview, newDisplayUpdate],
+    (min: number, max: number) => updateDisplay({ contrast_min: min, contrast_max: max }),
+    [updateDisplay],
   );
 
   return {

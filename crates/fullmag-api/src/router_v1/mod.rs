@@ -87,8 +87,20 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
             get(handlers::mesh::get_mesh_summary),
         )
         .route(
+            "/v1/live/current/mesh/capabilities",
+            get(handlers::mesh::get_mesh_capabilities),
+        )
+        .route(
             "/v1/live/current/mesh/builds/active",
             get(handlers::mesh::get_mesh_active_build),
+        )
+        .route(
+            "/v1/live/current/mesh/builds/history",
+            get(handlers::mesh::get_mesh_build_history),
+        )
+        .route(
+            "/v1/live/current/mesh/builds/last-success",
+            get(handlers::mesh::get_mesh_last_successful_build),
         )
         .route(
             "/v1/live/current/mesh/builds/commands",
@@ -100,14 +112,67 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
                 .put(handlers::mesh::replace_mesh_universe_config),
         )
         .route(
+            "/v1/live/current/mesh/universe/report",
+            get(handlers::mesh::get_mesh_universe_report),
+        )
+        .route(
+            "/v1/live/current/mesh/universe/quality",
+            get(handlers::mesh::get_mesh_universe_quality),
+        )
+        .route(
             "/v1/live/current/mesh/shared-domain/config",
             get(handlers::mesh::get_mesh_shared_domain_config)
                 .put(handlers::mesh::replace_mesh_shared_domain_config),
         )
         .route(
+            "/v1/live/current/mesh/shared-domain/report",
+            get(handlers::mesh::get_mesh_shared_domain_report),
+        )
+        .route(
+            "/v1/live/current/mesh/shared-domain/quality",
+            get(handlers::mesh::get_mesh_shared_domain_quality),
+        )
+        .route(
+            "/v1/live/current/mesh/shared-domain/manifest",
+            get(handlers::mesh::get_mesh_shared_domain_manifest),
+        )
+        .route(
+            "/v1/live/current/mesh/shared-domain/topology",
+            get(handlers::mesh::get_mesh_shared_domain_topology),
+        )
+        .route(
             "/v1/live/current/mesh/objects/:object_id/config",
             get(handlers::mesh::get_mesh_object_config)
                 .put(handlers::mesh::replace_mesh_object_config),
+        )
+        .route(
+            "/v1/live/current/mesh/objects/:object_id/report",
+            get(handlers::mesh::get_mesh_object_report),
+        )
+        .route(
+            "/v1/live/current/mesh/objects/:object_id/quality",
+            get(handlers::mesh::get_mesh_object_quality),
+        )
+        .route(
+            "/v1/live/current/mesh/objects/:object_id/size-field",
+            get(handlers::mesh::get_mesh_object_size_field),
+        )
+        .route(
+            "/v1/live/current/mesh/objects/:object_id/topology",
+            get(handlers::mesh::get_mesh_object_topology),
+        )
+        .route(
+            "/v1/live/current/mesh/interfaces/:interface_id/config",
+            get(handlers::mesh::get_mesh_interface_config)
+                .put(handlers::mesh::replace_mesh_interface_config),
+        )
+        .route(
+            "/v1/live/current/mesh/interfaces/:interface_id/report",
+            get(handlers::mesh::get_mesh_interface_report),
+        )
+        .route(
+            "/v1/live/current/mesh/interfaces/:interface_id/quality",
+            get(handlers::mesh::get_mesh_interface_quality),
         )
         .route(
             "/v1/live/current/authoring/scene",
