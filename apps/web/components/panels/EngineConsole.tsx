@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useMemo } from "react";
-import type { LiveState, ScalarRow, SessionManifest, RunManifest, ArtifactEntry, EngineLogEntry, CommandStatus, MeshWorkspaceState, QuantityDescriptor } from "../../lib/useSessionStream";
+import type { LiveState, ScalarRow, SessionManifest, RunManifest, ArtifactEntry, EngineLogEntry, CommandStatus, MeshWorkspaceState, QuantityDescriptor } from "@/lib/session/types";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { fmtSI, fmtExp, fmtTime, fmtDuration, fmtExpOrDash } from "@/lib/format";

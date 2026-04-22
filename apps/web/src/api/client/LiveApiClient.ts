@@ -30,6 +30,7 @@ import { StagesModule } from "./modules/StagesModule";
 import { SolverModule } from "./modules/SolverModule";
 import { WorkspaceModule } from "./modules/WorkspaceModule";
 import { MeshModule } from "./modules/MeshModule";
+import type { BinaryResourceResponse, JsonResourceResponse } from "../types";
 
 // ── Config ────────────────────────────────────────────────────────────
 
@@ -42,6 +43,8 @@ export interface LiveApiClientConfig {
 export interface RequestOptions {
   signal?: AbortSignal;
   timeout?: number;
+  headers?: HeadersInit;
+  cache?: RequestCache;
 }
 
 // ── Client ────────────────────────────────────────────────────────────
@@ -106,6 +109,21 @@ export class LiveApiClient {
     return this.parseJson<T>(response, url);
   }
 
+  async getJsonResponse<T>(
+    path: string,
+    opts?: RequestOptions,
+  ): Promise<JsonResourceResponse<T>> {
+    const url = this.resolveUrl(path);
+    const response = await this.executeRequest("GET", url, undefined, opts, {
+      acceptStatuses: [304],
+    });
+    if (response.status === 304) {
+      return { data: null, headers: response.headers, status: response.status };
+    }
+    const data = await this.parseJson<T>(response, url);
+    return { data, headers: response.headers, status: response.status };
+  }
+
   async getBinary(path: string, opts?: RequestOptions): Promise<ArrayBuffer> {
     const url = this.resolveUrl(path);
     const response = await this.executeRequest("GET", url, undefined, opts);
@@ -123,9 +141,11 @@ export class LiveApiClient {
   async getBinaryResponse(
     path: string,
     opts?: RequestOptions,
-  ): Promise<{ buffer: ArrayBuffer; headers: Headers; status: number }> {
+  ): Promise<BinaryResourceResponse> {
     const url = this.resolveUrl(path);
-    const response = await this.executeRequest("GET", url, undefined, opts);
+    const response = await this.executeRequest("GET", url, undefined, opts, {
+      acceptStatuses: [304],
+    });
     try {
       const buffer = await response.arrayBuffer();
       return { buffer, headers: response.headers, status: response.status };
@@ -182,16 +202,23 @@ export class LiveApiClient {
     url: string,
     body?: unknown,
     opts?: RequestOptions,
-    execution?: { retryable?: boolean },
+    execution?: { retryable?: boolean; acceptStatuses?: number[] },
   ): Promise<Response> {
     const timeout = opts?.timeout ?? this.config.timeout ?? DEFAULT_TIMEOUT;
     const maxRetries = this.config.maxRetries ?? DEFAULT_MAX_RETRIES;
     const retryable = execution?.retryable ?? true;
+    const acceptStatuses = execution?.acceptStatuses ?? [];
 
     // 1. Build headers and apply requestId
     const headers = new Headers();
     if (body !== undefined) {
       headers.set("Content-Type", "application/json");
+    }
+    if (opts?.headers) {
+      const requestHeaders = new Headers(opts.headers);
+      requestHeaders.forEach((value, key) => {
+        headers.set(key, value);
+      });
     }
     const requestId = applyRequestId(headers);
 
@@ -212,7 +239,7 @@ export class LiveApiClient {
           headers,
           body: body !== undefined ? JSON.stringify(body) : undefined,
           signal: controller.signal,
-          cache: "no-store",
+          cache: opts?.cache ?? "no-store",
         });
 
       const response = await withRetry(
@@ -225,7 +252,8 @@ export class LiveApiClient {
       checkContractVersion(response);
 
       // 6. Handle HTTP errors
-      if (!response.ok) {
+      const acceptedStatus = acceptStatuses.includes(response.status);
+      if (!response.ok && !acceptedStatus) {
         let errorBody = `HTTP ${response.status}`;
         try {
           const payload = await response.json();
@@ -260,7 +288,7 @@ export class LiveApiClient {
       diag.finish(
         response.status,
         contentLength ? parseInt(contentLength, 10) : null,
-        false,
+        acceptedStatus,
       );
 
       return response;

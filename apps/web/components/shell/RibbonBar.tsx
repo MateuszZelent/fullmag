@@ -421,6 +421,9 @@ function ribbonGroupToneClass(tone: RibbonGroup["tone"] | undefined): string {
 
 export default function RibbonBar(props: RibbonBarProps) {
   const sessionId = useSessionRuntimeStore((s) => s.session?.session_id ?? null);
+  const workspaceRevision = useSessionRuntimeStore(
+    (s) => s.resourceRevisions?.workspace_revision ?? null,
+  );
   const currentStage = useWorkspaceStore((s) => s.currentStage);
   const activeCoreTab = useWorkspaceStore((s) => s.activeCoreTab);
   const setActiveCoreTab = useWorkspaceStore((s) => s.setActiveCoreTab);
@@ -434,6 +437,7 @@ export default function RibbonBar(props: RibbonBarProps) {
   } = useWorkspaceRibbon({
     enabled: true,
     sessionKey: sessionId,
+    revision: workspaceRevision,
   });
   const workspaceRibbonHydratingRef = useRef(false);
   const lastPersistedWorkspaceRibbonRef = useRef<string | null>(null);

@@ -69,6 +69,10 @@ test:
 repo-check:
     python3 scripts/check_repo_consistency.py
 
+resource-first-gates mode="strict":
+    if [ "{{mode}}" = "report" ]; then ./scripts/ci-resource-first-gates.sh --report; \
+    else ./scripts/ci-resource-first-gates.sh --strict; fi
+
 control-room session="":
     if [ -n "{{session}}" ]; then ./scripts/dev-control-room.sh "{{session}}"; else ./scripts/dev-control-room.sh; fi
 

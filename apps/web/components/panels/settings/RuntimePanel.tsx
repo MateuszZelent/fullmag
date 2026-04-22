@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { isFemDiscretization } from "@/src/domain/capabilities";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 
 import { useCommand, useModel, useViewport } from "../../runs/control-room/context-hooks";
 import { extractFemCpuThreadSummary } from "../../runs/control-room/helpers";
@@ -34,9 +34,7 @@ export default function RuntimePanel({ nodeId }: { nodeId?: string }) {
     () => extractFemCpuThreadSummary(cmd.engineLog),
     [cmd.engineLog],
   );
-  const femDiscretization = cmd.domainCapabilities
-    ? isFemDiscretization(cmd.domainCapabilities)
-    : cmd.isFemBackend;
+  const femDiscretization = resolveFemDiscretization(cmd.domainCapabilities, false);
 
   const workloadLabel = femDiscretization && model.femMesh
     ? `${model.femMesh.nodes.length.toLocaleString()} nodes · ${model.femMesh.elements.length.toLocaleString()} tets`

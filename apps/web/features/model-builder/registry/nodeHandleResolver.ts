@@ -9,6 +9,7 @@
  */
 
 import type { NodeHandle, NodeKind, NodeDomain, NodeScope, SourceOfTruth } from "../types";
+import { parseStudyNodeContext } from "@/lib/study-builder/node-context";
 
 // ---------------------------------------------------------------------------
 // Static node table — nodes with fixed ids
@@ -603,39 +604,57 @@ const PREFIX_RULES: PrefixRule[] = [
 // ---------------------------------------------------------------------------
 
 function isStudyStageNodeId(id: string): boolean {
-  return id.startsWith("study-stage-") || id.startsWith("study-macro-") || id.startsWith("study-group-");
+  return (
+    id.startsWith("study-stage-node:")
+    || id.startsWith("study-stage-flat:")
+    || id.startsWith("study-stage-")
+    || id.startsWith("study-macro-")
+    || id.startsWith("study-group-")
+  );
 }
 
 function resolveStudyStageHandle(id: string): NodeHandle | null {
-  // Detail child nodes: "study-stage-<uuid>/overview", "study-stage-<uuid>/solver"
-  const slashIdx = id.indexOf("/");
-  if (slashIdx > 0) {
-    const parentId = id.slice(0, slashIdx);
-    const detail = id.slice(slashIdx + 1);
-    const detailKindMap: Record<string, NodeKind> = {
-      overview: "study.stage.detail.overview",
-      solver: "study.stage.detail.solver",
-      "time-range": "study.stage.detail.time_range",
-      "stop-criteria": "study.stage.detail.stop_criteria",
-      equilibrium: "study.stage.detail.equilibrium",
-      operator: "study.stage.detail.operator",
-      sweep: "study.stage.detail.sweep",
-      settle: "study.stage.detail.settle",
-      outputs: "study.stage.detail.outputs",
-      materialized: "study.stage.detail.materialized",
-    };
-    const nodeKind = detailKindMap[detail];
-    if (nodeKind) {
-      return {
-        id,
-        nodeKind,
-        domain: "study",
-        scope: "solver_affecting",
-        sourceOfTruth: "study_pipeline",
-        parentId,
-        entityId: detail,
-      };
+  const detailKindMap: Record<string, NodeKind> = {
+    overview: "study.stage.detail.overview",
+    solver: "study.stage.detail.solver",
+    "time-range": "study.stage.detail.time_range",
+    "stop-criteria": "study.stage.detail.stop_criteria",
+    equilibrium: "study.stage.detail.equilibrium",
+    operator: "study.stage.detail.operator",
+    sweep: "study.stage.detail.sweep",
+    settle: "study.stage.detail.settle",
+    outputs: "study.stage.detail.outputs",
+    materialized: "study.stage.detail.materialized",
+  };
+
+  const studyContext = parseStudyNodeContext(id);
+  if (studyContext?.kind === "study-stage") {
+    const parentId =
+      studyContext.source === "pipeline"
+        ? `study-stage-node:${studyContext.stageKey}`
+        : `study-stage-flat:${studyContext.stageKey}`;
+    if (studyContext.detail) {
+      const nodeKind = detailKindMap[studyContext.detail];
+      if (nodeKind) {
+        return {
+          id,
+          nodeKind,
+          domain: "study",
+          scope: "solver_affecting",
+          sourceOfTruth: "study_pipeline",
+          parentId,
+          entityId: studyContext.detail,
+        };
+      }
     }
+    return {
+      id,
+      nodeKind: "study.stage.run",
+      domain: "study",
+      scope: "solver_affecting",
+      sourceOfTruth: "study_pipeline",
+      entityId: studyContext.stageKey,
+    };
   }
 
   if (id.startsWith("study-group-")) {

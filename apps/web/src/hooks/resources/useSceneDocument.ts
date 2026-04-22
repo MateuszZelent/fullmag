@@ -16,14 +16,20 @@ interface UseSceneDocumentResult {
 export function useSceneDocument(options?: {
   enabled?: boolean;
   sessionKey?: string | null;
+  revision?: number | null;
 }): UseSceneDocumentResult {
   const enabled = options?.enabled ?? true;
   const sessionKey = options?.sessionKey ?? null;
+  const revision = options?.revision ?? null;
   const [document, setDocument] = useState<SceneDocument | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<LiveApiError | null>(null);
   const mountedRef = useRef(true);
-  const lastFetchedSessionKeyRef = useRef<string | null>(null);
+  const lastFetchedIdentityRef = useRef<string | null>(null);
+
+  const fetchIdentity = sessionKey
+    ? `${sessionKey}:${revision == null ? "no-revision" : revision}`
+    : null;
 
   const fetchSceneDocument = useCallback(async () => {
     if (!enabled || !sessionKey) {
@@ -41,7 +47,7 @@ export function useSceneDocument(options?: {
       if (!mountedRef.current) {
         return;
       }
-      lastFetchedSessionKeyRef.current = sessionKey;
+      lastFetchedIdentityRef.current = `${sessionKey}:${nextDocument.revision}`;
       setDocument(nextDocument);
       setError(null);
       setLoading(false);
@@ -49,19 +55,26 @@ export function useSceneDocument(options?: {
       if (!mountedRef.current) {
         return;
       }
-      setError(
+      const apiError =
         err instanceof LiveApiError
           ? err
-          : LiveApiError.networkError("scene-document", err),
-      );
+          : LiveApiError.networkError("scene-document", err);
+      if (apiError.status === 404) {
+        lastFetchedIdentityRef.current = fetchIdentity;
+        setDocument(null);
+        setError(null);
+        setLoading(false);
+        return;
+      }
+      setError(apiError);
       setLoading(false);
     }
-  }, [enabled, sessionKey]);
+  }, [enabled, fetchIdentity, sessionKey]);
 
   useEffect(() => {
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
-      lastFetchedSessionKeyRef.current = null;
+      lastFetchedIdentityRef.current = null;
       setDocument(null);
       setError(null);
       setLoading(false);
@@ -70,14 +83,14 @@ export function useSceneDocument(options?: {
       };
     }
 
-    if (lastFetchedSessionKeyRef.current !== sessionKey) {
+    if (lastFetchedIdentityRef.current !== fetchIdentity) {
       void fetchSceneDocument();
     }
 
     return () => {
       mountedRef.current = false;
     };
-  }, [enabled, fetchSceneDocument, sessionKey]);
+  }, [enabled, fetchIdentity, fetchSceneDocument, sessionKey]);
 
   return {
     document,

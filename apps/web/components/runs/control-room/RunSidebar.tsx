@@ -30,7 +30,7 @@ import { parseResultNodeContext } from "@/features/analyze/model/resultNodeConte
 import { resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
-import { isFemDiscretization } from "@/src/domain/capabilities";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import type { EigenModeSummary } from "@/components/analyze/eigenTypes";
 import type { StudyPipelineDocumentState } from "@/lib/session/types";
 
@@ -153,9 +153,7 @@ export default function RunSidebar() {
   const [treeOpen, setTreeOpen] = useState(true);
   const [treeQuery, setTreeQuery] = useState("");
   const [treeFilterScope, setTreeFilterScope] = useState<TreeFilterScope>("all");
-  const femDiscretization = cmd.domainCapabilities
-    ? isFemDiscretization(cmd.domainCapabilities)
-    : cmd.isFemBackend;
+  const femDiscretization = resolveFemDiscretization(cmd.domainCapabilities, false);
   const universeRole = useMemo(() => {
     if (!femDiscretization) {
       return "Grid / simulation domain";

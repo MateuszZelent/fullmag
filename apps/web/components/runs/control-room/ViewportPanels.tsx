@@ -6,7 +6,7 @@ import dynamic from "next/dynamic";
 import { MAGNETIC_PRESET_CATALOG } from "@/lib/magnetizationPresetCatalog";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { ViewportHost, useWorkspaceGraphStore } from "@/features";
-import { isFemDiscretization } from "@/src/domain/capabilities";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { displayPatchFromPreviewComponent } from "@/src/api/displaySelection";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
@@ -121,9 +121,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const _cmd = useCommand();
   const _model = useModel();
   const ctx = { ..._transport, ..._viewport, ..._cmd, ..._model };
-  const femDiscretization = ctx.domainCapabilities
-    ? isFemDiscretization(ctx.domainCapabilities)
-    : ctx.isFemBackend;
+  const femDiscretization = resolveFemDiscretization(ctx.domainCapabilities, false);
   const minimalViewportSelectionPath = FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.useMinimalViewportSelectionPath;
   const setSelectedObjectId = ctx.setSelectedObjectId;
   const setSelectedSidebarNodeId = ctx.setSelectedSidebarNodeId;

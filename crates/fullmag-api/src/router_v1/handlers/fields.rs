@@ -3,8 +3,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
-use axum::http::header::CONTENT_TYPE;
-use axum::response::IntoResponse;
+use axum::http::HeaderMap;
 use axum::Json;
 
 use crate::error::ApiError;
@@ -215,18 +214,25 @@ fn json_field_grid(raw: &serde_json::Value) -> Option<[u32; 3]> {
     ),
     responses(
         (status = 200, description = "Binary FMVP v2 field vector", content_type = "application/octet-stream"),
+        (status = 304, description = "Field vector not modified for the supplied ETag"),
         (status = 404, description = "Field not found"),
     ),
     tag = "fields"
 )]
 pub async fn get_field_vector(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     AxumPath(quantity_id): AxumPath<String>,
 ) -> Result<axum::response::Response, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let gen_id = snapshot
+        .fem_mesh
+        .as_ref()
+        .and_then(|mesh| mesh.generation_id.as_deref())
+        .unwrap_or("no-generation");
 
     let spec = quantity_spec(&quantity_id);
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
@@ -241,7 +247,11 @@ pub async fn get_field_vector(
         };
         let grid = json_field_grid(raw).unwrap_or([element_count as u32, 1, 1]);
         let binary = serialize_field_vector_binary_v2(&quantity_id, n_comp, grid, &values);
-        return Ok(([(CONTENT_TYPE, "application/octet-stream")], binary).into_response());
+        let etag = super::stable_strong_etag(&format!(
+            "fields:{quantity_id}:{}:{gen_id}",
+            snapshot.state_version
+        ));
+        return Ok(super::conditional_binary_response(&headers, &etag, binary));
     }
 
     // Try preview_cache
@@ -252,7 +262,11 @@ pub async fn get_field_vector(
             field.preview_grid,
             &field.vector_field_values,
         );
-        return Ok(([(CONTENT_TYPE, "application/octet-stream")], binary).into_response());
+        let etag = super::stable_strong_etag(&format!(
+            "preview-fields:{quantity_id}:{}:{gen_id}",
+            snapshot.state_version
+        ));
+        return Ok(super::conditional_binary_response(&headers, &etag, binary));
     }
 
     // Try live magnetization fallback
@@ -266,9 +280,11 @@ pub async fn get_field_vector(
                         [(mag.len() / 3) as u32, 1, 1]
                     };
                     let binary = serialize_field_vector_binary_v2("m", n_comp, grid, mag);
-                    return Ok(
-                        ([(CONTENT_TYPE, "application/octet-stream")], binary).into_response()
-                    );
+                    let etag = super::stable_strong_etag(&format!(
+                        "live-magnetization:{}:{gen_id}",
+                        snapshot.state_version
+                    ));
+                    return Ok(super::conditional_binary_response(&headers, &etag, binary));
                 }
             }
         }

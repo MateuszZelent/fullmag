@@ -33,6 +33,7 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
     let workspace_selection = state.current_workspace_selection.read().await;
     let workspace_ribbon = state.current_workspace_ribbon.read().await;
     let workspace_layout = state.current_workspace_layout.read().await;
+    let commands_revision = state.current_command_ledger.lock().await.len() as u64;
 
     Ok(Json(build_live_status(
         state.current_workspace_root.as_path(),
@@ -42,6 +43,7 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
         &workspace_selection,
         &workspace_ribbon,
         &workspace_layout,
+        commands_revision,
     )))
 }
 
@@ -53,6 +55,7 @@ pub(crate) fn build_live_status(
     workspace_selection: &CurrentWorkspaceSelection,
     workspace_ribbon: &CurrentWorkspaceRibbon,
     workspace_layout: &CurrentWorkspaceLayout,
+    commands_revision: u64,
 ) -> LiveStatus {
     let session = SessionSummary {
         session_id: snapshot.session.session_id.clone(),
@@ -128,6 +131,13 @@ pub(crate) fn build_live_status(
             .max(workspace_layout.revision),
         mesh_revision: snapshot.mesh_revision,
         mesh_build_revision: snapshot.mesh_build_revision,
+        commands_revision,
+        stages_revision: snapshot
+            .stage_execution
+            .as_ref()
+            .map(|_| snapshot.state_version)
+            .unwrap_or(0),
+        scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
     };
 
     let capabilities = CapabilityMap {

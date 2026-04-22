@@ -37,7 +37,7 @@ import type {
   MeshQualitySummary,
   SessionFooterData,
 } from "../types";
-import type { EngineLogEntry } from "../../../../lib/useSessionStream";
+import type { EngineLogEntry } from "@/lib/session/types";
 import {
   resolveArrowVisibility,
   type ArrowVisibilityStatus,
@@ -531,7 +531,9 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
 
   useEffect(() => {
     if (!meshParts.length) {
-      setMeshEntityViewState({});
+      setMeshEntityViewState((prev) => (
+        Object.keys(prev).length > 0 ? {} : prev
+      ));
       setSelectedEntityId(null);
       setFocusedEntityId(null);
       return;

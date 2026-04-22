@@ -10,7 +10,7 @@ import type {
   ScriptBuilderStageState,
   ScriptBuilderState,
   SessionManifest,
-} from "../../../lib/useSessionStream";
+} from "@/lib/session/types";
 import type {
   ScriptBuilderCurrentModuleEntry,
   ScriptBuilderExcitationAnalysisEntry,

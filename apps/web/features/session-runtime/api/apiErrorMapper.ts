@@ -5,7 +5,7 @@
  * Distinguishes retryable vs non-retryable errors.
  */
 
-import { ApiHttpError } from "@/lib/liveApiClient";
+import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
 
 export type ErrorClassification =
   | "validation_error"     // 4xx - bad input, don't retry
@@ -25,7 +25,7 @@ export interface ClassifiedError {
 }
 
 export function classifyApiError(error: unknown): ClassifiedError {
-  if (error instanceof ApiHttpError) {
+  if (error instanceof LiveApiError && typeof error.status === "number") {
     const status = error.status;
     if (status === 401 || status === 403) {
       return { classification: "auth_error", message: error.message, status, retryable: false, original: error };

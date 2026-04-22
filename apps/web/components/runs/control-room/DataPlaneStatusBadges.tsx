@@ -2,7 +2,7 @@
 
 import { memo, useMemo } from "react";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
-import { isFemDiscretization } from "@/src/domain/capabilities";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { cn } from "@/lib/utils";
 
 /**
@@ -17,16 +17,13 @@ export const DataPlaneStatusBadges = memo(function DataPlaneStatusBadges() {
   const liveState = useSessionRuntimeStore((s) => s.liveState);
   const stepUpdateV2 = useSessionRuntimeStore((s) => s.stepUpdateV2);
   const femMesh = useSessionRuntimeStore((s) => s.femMesh);
-  const isFemBackend = useSessionRuntimeStore((s) => s.isFemBackend);
   const domainCapabilities = useSessionRuntimeStore((s) => s.domainCapabilities);
   const connection = useSessionRuntimeStore((s) => s.connection);
   const scalarRows = useSessionRuntimeStore((s) => s.scalarRows);
 
   const badges = useMemo(() => {
     const b: Badge[] = [];
-    const femDiscretization = domainCapabilities
-      ? isFemDiscretization(domainCapabilities)
-      : isFemBackend;
+    const femDiscretization = resolveFemDiscretization(domainCapabilities, false);
 
     // Connection
     if (connection !== "connected") {
@@ -65,7 +62,7 @@ export const DataPlaneStatusBadges = memo(function DataPlaneStatusBadges() {
     }
 
     return b;
-  }, [connection, domainCapabilities, femMesh, isFemBackend, liveState, scalarRows.length, stepUpdateV2]);
+  }, [connection, domainCapabilities, femMesh, liveState, scalarRows.length, stepUpdateV2]);
 
   if (badges.length === 0) return null;
 

@@ -2,16 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
-import type { HostCapabilityMatrix } from "./liveApiClient";
+import type { RuntimeCapabilityMatrix } from "@/src/api/types";
 
 export interface UseRuntimeCapabilitiesResult {
-  capabilities: HostCapabilityMatrix | null;
+  capabilities: RuntimeCapabilityMatrix | null;
   loading: boolean;
   error: string | null;
 }
 
 export function useRuntimeCapabilities(): UseRuntimeCapabilitiesResult {
-  const [capabilities, setCapabilities] = useState<HostCapabilityMatrix | null>(null);
+  const [capabilities, setCapabilities] = useState<RuntimeCapabilityMatrix | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,7 +24,7 @@ export function useRuntimeCapabilities(): UseRuntimeCapabilitiesResult {
       .getCapabilities()
       .then((next) => {
         if (cancelled) return;
-        setCapabilities(next as HostCapabilityMatrix);
+        setCapabilities(next);
         setError(null);
       })
       .catch((nextError) => {

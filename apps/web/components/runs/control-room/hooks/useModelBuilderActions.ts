@@ -10,7 +10,7 @@ import type {
   ScriptBuilderUniverseState,
   StudyPipelineDocumentState,
 } from "../../../../lib/session/types";
-import type { ScriptBuilderInitialState, ScriptBuilderStageState } from "../../../../lib/useSessionStream";
+import type { ScriptBuilderInitialState, ScriptBuilderStageState } from "@/lib/session/types";
 import type { SolverSettingsState } from "../../../panels/SolverSettingsPanel";
 import type { MeshOptionsState } from "../../../panels/MeshSettingsPanel";
 import {

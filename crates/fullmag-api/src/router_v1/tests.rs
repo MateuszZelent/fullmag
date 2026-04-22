@@ -945,6 +945,9 @@ async fn status_returns_200_with_live_session() {
     assert_eq!(json["resources"]["workspace_revision"], 0);
     assert_eq!(json["resources"]["mesh_revision"], 0);
     assert_eq!(json["resources"]["mesh_build_revision"], 0);
+    assert_eq!(json["resources"]["commands_revision"], 0);
+    assert_eq!(json["resources"]["stages_revision"], 0);
+    assert!(json["resources"]["scene_revision"].is_null());
     assert!(json["capabilities"].is_object());
     assert!(json["energies"].is_object());
     assert!(json["metrics"].is_object());
@@ -1007,6 +1010,105 @@ async fn domain_topology_returns_204_for_fdm() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn domain_topology_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 17;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/domain/topology")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/domain/topology")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn field_vector_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 23;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0]
+                ],
+                "layout": {
+                    "grid_cells": [2, 1, 1]
+                }
+            }
+        }))
+        .expect("latest_fields payload should deserialize");
+    }
+    let app = build_v1_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
 }
 
 // ─── quantities endpoints ───────────────────────────────────────────────────
@@ -1577,6 +1679,53 @@ async fn mesh_summary_returns_current_mesh_workspace() {
 }
 
 #[tokio::test]
+async fn mesh_summary_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_summary": { "nodes": 12, "elements": 24 },
+            "mesh_quality_summary": { "min_quality": 0.82 }
+        }));
+        snapshot.mesh_revision = 11;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/summary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/summary")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
 async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -1742,6 +1891,50 @@ async fn mesh_shared_domain_topology_returns_binary_fmmt_payload() {
 }
 
 #[tokio::test]
+async fn mesh_shared_domain_topology_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 41;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/shared-domain/topology")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/shared-domain/topology")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_manifest_returns_tree_metadata() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -1767,6 +1960,50 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
     assert_eq!(json["object_segments"][0]["object_id"], "body");
     assert_eq!(json["mesh_parts"][0]["role"], "air");
     assert_eq!(json["mesh_parts"][1]["object_id"], "body");
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        snapshot.mesh_revision = 41;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/shared-domain/manifest")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
 }
 
 #[tokio::test]
@@ -3150,6 +3387,46 @@ async fn engine_log_returns_200_with_session() {
     assert_eq!(json["revision"], 0);
     assert!(json["entries"].is_array());
     assert_eq!(json["total"], 0);
+}
+
+#[tokio::test]
+async fn engine_log_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v1_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/logs/engine")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/logs/engine")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
 }
 
 #[tokio::test]

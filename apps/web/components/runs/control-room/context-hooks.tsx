@@ -15,8 +15,11 @@
  * ═══════════════════════════════════════════════════════════════════ */
 
 import { createContext, useContext } from "react";
-import type { CapabilityMap, DisplayPatchRequest } from "@/src/api/types";
-import type { GpuTelemetryDevice } from "../../../lib/liveApiClient";
+import type {
+  CapabilityMap,
+  DisplayPatchRequest,
+  GpuTelemetryDevice,
+} from "@/src/api/types";
 import type {
   ArtifactEntry,
   BackendCapabilities,
@@ -33,7 +36,7 @@ import type {
   ScriptBuilderStageState,
   ScriptBuilderState,
   SessionManifest,
-} from "../../../lib/useSessionStream";
+} from "@/lib/session/types";
 import type {
   DomainFrameState,
   FemMeshPart,

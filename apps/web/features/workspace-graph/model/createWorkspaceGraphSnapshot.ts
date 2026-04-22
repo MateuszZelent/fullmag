@@ -1,4 +1,4 @@
-import type { QuantityDescriptor } from "@/lib/useSessionStream";
+import type { QuantityDescriptor } from "@/lib/session/types";
 import type { StudyPipelineDocument, StudyPipelineNode } from "@/lib/study-builder/types";
 import type { WorkspaceGraphBridgeInput, WorkspaceGraphState, StudyNodeRef, QuantityFrameViewModel } from "./types";
 

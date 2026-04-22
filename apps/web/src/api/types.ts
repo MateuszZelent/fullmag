@@ -78,6 +78,21 @@ export interface ResourceRevisionMap {
   workspace_revision: number;
   mesh_revision: number;
   mesh_build_revision: number;
+  commands_revision: number;
+  stages_revision: number;
+  scene_revision?: number | null;
+}
+
+export interface BinaryResourceResponse {
+  buffer: ArrayBuffer;
+  headers: Headers;
+  status: number;
+}
+
+export interface JsonResourceResponse<T> {
+  data: T | null;
+  headers: Headers;
+  status: number;
 }
 
 export interface CapabilityMap {

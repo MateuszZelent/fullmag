@@ -15,7 +15,13 @@
 
 import { useEffect, useState } from "react";
 import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
-import type { RuntimeFeatureFlags } from "../liveApiClient";
+
+export interface RuntimeFeatureFlags {
+  disable_charts: boolean;
+  disable_preview_2d: boolean;
+  disable_preview_3d: boolean;
+  disable_session_state_broadcast: boolean;
+}
 
 const DEFAULT_FLAGS: RuntimeFeatureFlags = {
   disable_charts: false,

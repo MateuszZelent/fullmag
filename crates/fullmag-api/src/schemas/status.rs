@@ -98,6 +98,10 @@ pub struct ResourceRevisionMap {
     pub workspace_revision: u64,
     pub mesh_revision: u64,
     pub mesh_build_revision: u64,
+    pub commands_revision: u64,
+    pub stages_revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scene_revision: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

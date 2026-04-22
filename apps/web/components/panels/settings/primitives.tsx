@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import Sparkline from "../../ui/Sparkline";
-import type { ScalarRow } from "../../../lib/useSessionStream";
+import type { ScalarRow } from "@/lib/session/types";
 
 const SPARK_HISTORY_LIMIT = 40;
 

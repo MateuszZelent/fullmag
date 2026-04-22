@@ -2,7 +2,7 @@
  * Pure utility functions extracted from ControlRoomContext.tsx.
  * No React hooks — only plain functions and constants.
  */
-import type { GpuTelemetryDevice } from "../../../lib/liveApiClient";
+import type { GpuTelemetryDevice } from "@/src/api/types";
 import type {
   MeshEntityViewStateMap,
   SceneDocument,
@@ -18,7 +18,7 @@ import {
   cloneVisualizationPreset,
   createDefaultVisualizationPreset,
 } from "./visualizationPresets";
-import type { ScalarRow, EngineLogEntry, QuantityDescriptor, ArtifactEntry } from "../../../lib/useSessionStream";
+import type { ScalarRow, EngineLogEntry, QuantityDescriptor, ArtifactEntry } from "@/lib/session/types";
 
 /* ── Stable empty arrays ── */
 export const EMPTY_SCALAR_ROWS: ScalarRow[] = [];
@@ -166,9 +166,36 @@ export function sameVisualizationPresetRef(
   right: VisualizationPresetRef | null | undefined,
 ): boolean {
   if (!left || !right) {
-    return false;
+    return left == null && right == null;
   }
   return left.source === right.source && left.preset_id === right.preset_id;
+}
+
+export function sameMeshEntityViewStateMap(
+  left: MeshEntityViewStateMap,
+  right: MeshEntityViewStateMap,
+): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  for (const key of leftKeys) {
+    const lhs = left[key];
+    const rhs = right[key];
+    if (!lhs || !rhs) {
+      return false;
+    }
+    if (
+      lhs.visible !== rhs.visible ||
+      lhs.renderMode !== rhs.renderMode ||
+      lhs.opacity !== rhs.opacity ||
+      lhs.colorField !== rhs.colorField
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function sameVisualizationPresets(

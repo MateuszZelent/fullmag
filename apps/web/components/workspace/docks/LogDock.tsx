@@ -1,6 +1,6 @@
 "use client";
 
-import type { EngineLogEntry } from "@/lib/useSessionStream";
+import type { EngineLogEntry } from "@/lib/session/types";
 
 interface LogDockProps {
   engineLog: EngineLogEntry[];
@@ -25,4 +25,3 @@ export default function LogDock({ engineLog }: LogDockProps) {
     </div>
   );
 }
-

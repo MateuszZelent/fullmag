@@ -18,7 +18,7 @@ import type {
   CommandStatus,
   MeshWorkspaceState,
   ScriptBuilderState,
-} from "@/lib/useSessionStream";
+} from "@/lib/session/types";
 import type { FieldFrameEnvelope } from "@/lib/fieldFrame/types";
 import type { CapabilityMap, ResourceRevisionMap } from "@/src/api/types";
 

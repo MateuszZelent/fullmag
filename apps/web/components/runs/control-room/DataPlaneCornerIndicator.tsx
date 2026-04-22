@@ -2,7 +2,7 @@
 
 import { memo, useEffect, useMemo, useState } from "react";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
-import { isFemDiscretization } from "@/src/domain/capabilities";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { cn } from "@/lib/utils";
 
 type IndicatorTone = "ok" | "warn" | "error";
@@ -17,7 +17,6 @@ export const DataPlaneCornerIndicator = memo(function DataPlaneCornerIndicator({
   const connection = useSessionRuntimeStore((s) => s.connection);
   const liveState = useSessionRuntimeStore((s) => s.liveState);
   const stepUpdateV2 = useSessionRuntimeStore((s) => s.stepUpdateV2);
-  const isFemBackend = useSessionRuntimeStore((s) => s.isFemBackend);
   const domainCapabilities = useSessionRuntimeStore((s) => s.domainCapabilities);
   const femMesh = useSessionRuntimeStore((s) => s.femMesh);
   const lastUpdateTimestamp = useSessionRuntimeStore((s) => s.lastUpdateTimestamp);
@@ -32,9 +31,7 @@ export const DataPlaneCornerIndicator = memo(function DataPlaneCornerIndicator({
 
   const indicator = useMemo(() => {
     const step = stepUpdateV2?.diagnostics?.step ?? liveState?.step ?? null;
-    const femDiscretization = domainCapabilities
-      ? isFemDiscretization(domainCapabilities)
-      : isFemBackend;
+    const femDiscretization = resolveFemDiscretization(domainCapabilities, false);
     const meshGen = femDiscretization ? femMesh?.generation_id ?? femMesh?.mesh_id ?? null : null;
     const effectiveTimestamp = lastDataTimestamp ?? lastUpdateTimestamp;
     const ageMs = effectiveTimestamp != null ? Math.max(0, now - effectiveTimestamp) : null;
@@ -82,7 +79,6 @@ export const DataPlaneCornerIndicator = memo(function DataPlaneCornerIndicator({
     domainCapabilities,
     femMesh?.generation_id,
     femMesh?.mesh_id,
-    isFemBackend,
     label,
     lastDataTimestamp,
     lastUpdateTimestamp,

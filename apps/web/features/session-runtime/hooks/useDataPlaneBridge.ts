@@ -21,7 +21,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
 import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
-import { decodeTopology } from "@/src/api/codecs/topologyCodec";
+import { decodeFieldVectorOffThread, decodeTopologyOffThread } from "@/src/api/codecs/decodeOffThread";
 import { synthesizeCapabilitiesFromDiscretization } from "@/src/domain/capabilities";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { normalizeMeshWorkspace } from "@/lib/session/normalize";
@@ -31,12 +31,14 @@ import type {
   ScalarRow as StoreScalarRow,
 } from "@/lib/session/types";
 import type { FieldFrameEnvelope, FieldFrameStats } from "@/lib/fieldFrame/types";
+import type { DecodedFieldVector } from "@/src/api/codecs/types";
 import { scalarWindowToRows } from "@/src/api/client/modules/ScalarHistoryAdapter";
 import {
   applyMeshSharedDomainManifest,
   buildFemMeshFromDecodedTopology,
   mergeFemMeshResource,
 } from "@/src/hooks/resources/meshFemResource";
+import { getCachedJsonResource } from "./dataPlaneCache";
 
 const ENABLE_DEBUG =
   typeof process !== "undefined" &&
@@ -201,7 +203,34 @@ export function useDataPlaneBridge(
 
       try {
         const client = getLiveApiClient();
-        const result = await client.fields.getVector(envelope.quantityId);
+        const resourceKey = `data-plane:field:${runtimeScopeKey ?? "no-scope"}:${envelope.quantityId}`;
+        const cached = client.getCache().get<DecodedFieldVector>(resourceKey);
+        let result: DecodedFieldVector;
+        if (cached && cached.revision === rev) {
+          result = cached.data;
+        } else {
+          const response = await client.fields.getVectorResponse(envelope.quantityId, {
+            cache: "default",
+            headers:
+              cached?.eTag != null
+                ? {
+                    "If-None-Match": cached.eTag,
+                  }
+                : undefined,
+          });
+          if (response.status === 304 && cached) {
+            result = cached.data;
+          } else {
+            result = await decodeFieldVectorOffThread(response.buffer);
+            client.getCache().set(
+              resourceKey,
+              result,
+              rev,
+              0,
+              response.headers.get("etag"),
+            );
+          }
+        }
         fetchedFieldRevRef.current = cacheKey;
 
         // Build updated envelope with stats from the fetched field
@@ -283,7 +312,7 @@ export function useDataPlaneBridge(
         console.warn("[fullmag][data-plane] field fetch failed", err);
       }
     },
-    [applyNormalizedState, enabled],
+    [applyNormalizedState, enabled, runtimeScopeKey],
   );
 
   // ── Scalar history fetching ─────────────────────────────────────
@@ -360,17 +389,53 @@ export function useDataPlaneBridge(
 
       try {
         const client = getLiveApiClient();
-        const meta = await client.domain.getMeta();
-        fetchedDomainGenRef.current = genId;
+        const numericGenerationId = Number.parseInt(genId, 10);
+        const meta = await getCachedJsonResource({
+          client,
+          cacheKey: `data-plane:domain-meta:${runtimeScopeKey ?? "no-scope"}:${genId}`,
+          revision: Number.isFinite(numericGenerationId) ? numericGenerationId : 0,
+          generationId: Number.isFinite(numericGenerationId) ? numericGenerationId : 0,
+          fetcher: () => client.domain.getMeta(),
+        });
 
         const isFem = meta.discretization === "fem";
         const domainCapabilities = synthesizeCapabilitiesFromDiscretization(isFem);
         const current = useSessionRuntimeStore.getState();
+        const topologyCacheKey = `data-plane:domain-topology:${runtimeScopeKey ?? "no-scope"}:${meta.generation_id}`;
         const femMesh = isFem
           ? mergeFemMeshResource(
               {
                 ...buildFemMeshFromDecodedTopology(
-                  decodeTopology(await client.domain.getTopology()),
+                  await decodeTopologyOffThread(
+                    await (async () => {
+                      const cached = client.getCache().get<ArrayBuffer>(
+                        topologyCacheKey,
+                      );
+                      if (cached && cached.revision === meta.generation_id) {
+                        return cached.data;
+                      }
+                      const response = await client.domain.getTopologyResponse({
+                        cache: "default",
+                        headers:
+                          cached?.eTag != null
+                            ? {
+                                "If-None-Match": cached.eTag,
+                              }
+                            : undefined,
+                      });
+                      if (response.status === 304 && cached) {
+                        return cached.data;
+                      }
+                      client.getCache().set(
+                        topologyCacheKey,
+                        response.buffer,
+                        meta.generation_id,
+                        meta.generation_id,
+                        response.headers.get("etag"),
+                      );
+                      return response.buffer;
+                    })(),
+                  ),
                   null,
                 ),
                 generation_id: genId,
@@ -379,6 +444,7 @@ export function useDataPlaneBridge(
               current.femMesh,
             )
           : null;
+        fetchedDomainGenRef.current = genId;
 
         // Merge into store
         applyNormalizedState({
@@ -423,7 +489,7 @@ export function useDataPlaneBridge(
         console.warn("[fullmag][data-plane] domain fetch failed", err);
       }
     },
-    [applyNormalizedState, enabled],
+    [applyNormalizedState, enabled, runtimeScopeKey],
   );
 
   const fetchMeshTopology = useCallback(
@@ -433,10 +499,49 @@ export function useDataPlaneBridge(
 
       try {
         const client = getLiveApiClient();
+        const topologyCacheKey = `data-plane:mesh-shared-domain-topology:${runtimeScopeKey ?? "no-scope"}`;
         const [summaryResource, manifestResource, topologyBuffer] = await Promise.all([
-          client.mesh.getSummary(),
-          client.mesh.getSharedDomainManifest(),
-          client.mesh.getSharedDomainTopology(),
+          getCachedJsonResource({
+            client,
+            cacheKey: `data-plane:mesh-summary:${runtimeScopeKey ?? "no-scope"}:${revision}`,
+            revision,
+            fetcher: () => client.mesh.getSummary(),
+            responseFetcher: (opts) => client.mesh.getSummaryResponse(opts),
+          }),
+          getCachedJsonResource({
+            client,
+            cacheKey: `data-plane:mesh-manifest:${runtimeScopeKey ?? "no-scope"}:${revision}`,
+            revision,
+            fetcher: () => client.mesh.getSharedDomainManifest(),
+            responseFetcher: (opts) =>
+              client.mesh.getSharedDomainManifestResponse(opts),
+          }),
+          (async () => {
+            const cached = client.getCache().get<ArrayBuffer>(topologyCacheKey);
+            if (cached && cached.revision === revision) {
+              return cached.data;
+            }
+            const response = await client.mesh.getSharedDomainTopologyResponse({
+              cache: "default",
+              headers:
+                cached?.eTag != null
+                  ? {
+                      "If-None-Match": cached.eTag,
+                    }
+                  : undefined,
+            });
+            if (response.status === 304 && cached) {
+              return cached.data;
+            }
+            client.getCache().set(
+              topologyCacheKey,
+              response.buffer,
+              revision,
+              0,
+              response.headers.get("etag"),
+            );
+            return response.buffer;
+          })(),
         ]);
 
         if (topologyBuffer.byteLength === 0) {
@@ -477,7 +582,7 @@ export function useDataPlaneBridge(
           })?.mesh_summary ?? null;
         const resourceFemMesh = applyMeshSharedDomainManifest(
           buildFemMeshFromDecodedTopology(
-            decodeTopology(topologyBuffer),
+            await decodeTopologyOffThread(topologyBuffer),
             meshSummary,
           ),
           manifestResource,
@@ -559,21 +664,31 @@ export function useDataPlaneBridge(
         console.warn("[fullmag][data-plane] mesh topology fetch failed", err);
       }
     },
-    [applyNormalizedState, enabled],
+    [applyNormalizedState, enabled, runtimeScopeKey],
   );
 
   // ── Quantities / artifacts fetching ────────────────────────────
 
   const fetchQuantities = useCallback(
-    async (cacheKey: string) => {
+    async (cacheKey: string, revision: number) => {
       if (!enabled) return;
       if (fetchedCatalogKeyRef.current === cacheKey) return;
 
       try {
         const client = getLiveApiClient();
         const [quantityCatalog, fieldCatalog] = await Promise.all([
-          client.quantities.getCatalog(),
-          client.fields.getCatalog(),
+          getCachedJsonResource({
+            client,
+            cacheKey: `data-plane:quantities-catalog:${cacheKey}`,
+            revision,
+            fetcher: () => client.quantities.getCatalog(),
+          }),
+          getCachedJsonResource({
+            client,
+            cacheKey: `data-plane:fields-catalog:${cacheKey}`,
+            revision,
+            fetcher: () => client.fields.getCatalog(),
+          }),
         ]);
         fetchedCatalogKeyRef.current = cacheKey;
 
@@ -621,12 +736,18 @@ export function useDataPlaneBridge(
   );
 
   const fetchArtifacts = useCallback(
-    async (cacheKey: string) => {
+    async (cacheKey: string, revision: number) => {
       if (!enabled) return;
       if (fetchedArtifactsKeyRef.current === cacheKey) return;
 
       try {
-        const artifacts = await getLiveApiClient().artifacts.list();
+        const client = getLiveApiClient();
+        const artifacts = await getCachedJsonResource({
+          client,
+          cacheKey: `data-plane:artifacts:${cacheKey}`,
+          revision,
+          fetcher: () => client.artifacts.list(),
+        });
         fetchedArtifactsKeyRef.current = cacheKey;
 
         const current = useSessionRuntimeStore.getState();
@@ -672,12 +793,19 @@ export function useDataPlaneBridge(
   );
 
   const fetchEngineLog = useCallback(
-    async (cacheKey: string) => {
+    async (cacheKey: string, revision: number) => {
       if (!enabled) return;
       if (fetchedEngineLogKeyRef.current === cacheKey) return;
 
       try {
-        const engineLog = await getLiveApiClient().logs.getEngine();
+        const client = getLiveApiClient();
+        const engineLog = await getCachedJsonResource({
+          client,
+          cacheKey: `data-plane:engine-log:${cacheKey}`,
+          revision,
+          fetcher: () => client.logs.getEngine(),
+          responseFetcher: (opts) => client.logs.getEngineResponse(opts),
+        });
         fetchedEngineLogKeyRef.current = cacheKey;
 
         const current = useSessionRuntimeStore.getState();
@@ -769,7 +897,7 @@ export function useDataPlaneBridge(
       return;
     }
     const cacheKey = `${runtimeScopeKey}:${resourceRevisions.fields_revision}`;
-    void fetchQuantities(cacheKey);
+    void fetchQuantities(cacheKey, resourceRevisions.fields_revision);
   }, [enabled, fetchQuantities, resourceRevisions, runtimeScopeKey]);
 
   useEffect(() => {
@@ -777,7 +905,7 @@ export function useDataPlaneBridge(
       return;
     }
     const cacheKey = `${runtimeScopeKey}:${resourceRevisions.artifacts_revision}`;
-    void fetchArtifacts(cacheKey);
+    void fetchArtifacts(cacheKey, resourceRevisions.artifacts_revision);
   }, [enabled, fetchArtifacts, resourceRevisions, runtimeScopeKey]);
 
   useEffect(() => {
@@ -785,6 +913,6 @@ export function useDataPlaneBridge(
       return;
     }
     const cacheKey = `${runtimeScopeKey}:${resourceRevisions.engine_log_revision}`;
-    void fetchEngineLog(cacheKey);
+    void fetchEngineLog(cacheKey, resourceRevisions.engine_log_revision);
   }, [enabled, fetchEngineLog, resourceRevisions, runtimeScopeKey]);
 }

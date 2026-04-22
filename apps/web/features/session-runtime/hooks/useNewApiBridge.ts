@@ -24,7 +24,7 @@ import type {
   RuntimeStatusState,
   RuntimeStatusKind,
 } from "@/lib/session/types";
-import type { LiveState, PreviewState } from "@/lib/useSessionStream";
+import type { LiveState, PreviewState } from "@/lib/session/types";
 import type { FieldFrameEnvelope } from "@/lib/fieldFrame/types";
 
 // Stable empty arrays to prevent unnecessary re-renders

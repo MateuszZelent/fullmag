@@ -39,6 +39,9 @@ The backend does not publish one giant "world state" blob.
 
 The backend publishes **named resources** with explicit revisions and generation ids.
 The frontend fetches resources on demand and caches them by revision.
+`GET /v1/live/current/status` stays thin, but its `resources` map is expected to
+carry the revision pointers needed to drive follow-up fetches for display,
+workspace, mesh, commands, stages, and authoring scene projections.
 
 ### 2.2 Thin control plane, binary data plane
 
@@ -405,7 +408,8 @@ Minimum requirements:
 - structured request logging on the backend,
 - contract/version checks in the frontend client,
 - typed error mapping for control-room failures,
-- optional ETag/revision headers for large binary resources.
+- optional ETag/revision headers for large binary resources and selected
+  heavier JSON read-models where HTTP revalidation materially reduces transfer.
 
 ## 7. Anti-regression rules
 

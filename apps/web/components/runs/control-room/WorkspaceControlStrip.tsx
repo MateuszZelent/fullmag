@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 import { fmtExp, fmtSI } from "./shared";
 import { useTransport, useViewport, useCommand, useModel } from "./context-hooks";
 import { MESH_WORKSPACE_PRESETS } from "./meshWorkspace";
-import { isFemDiscretization } from "@/src/domain/capabilities";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { appendNode, createPrimitiveNode, insertNodeNear } from "@/lib/study-builder/operations";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import { migrateFlatStagesToStudyPipeline } from "@/lib/study-builder/migrate";
@@ -116,9 +116,7 @@ const WorkspaceControlStrip = memo(function WorkspaceControlStrip() {
   const model = useModel();
   /* Backward-compatible ctx alias */
   const ctx = { ...transport, ...viewport, ...cmd, ...model };
-  const femDiscretization = ctx.domainCapabilities
-    ? isFemDiscretization(ctx.domainCapabilities)
-    : ctx.isFemBackend;
+  const femDiscretization = resolveFemDiscretization(ctx.domainCapabilities, false);
   const solverAccelerator = solverAcceleratorLabel(
     ctx.runtimeEngineLabel,
     ctx.runtimeEngineGpuLabel,

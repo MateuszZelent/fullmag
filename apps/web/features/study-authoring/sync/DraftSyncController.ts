@@ -20,7 +20,7 @@
  *                                          → conflict (409, surface to UI)
  */
 
-import { ApiHttpError } from "@/lib/liveApiClient";
+import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
 import type { SceneDocument } from "@/lib/session/types";
 import type { DraftSyncStatus, DraftValidationError } from "../model/sceneDraft.types";
 
@@ -182,7 +182,8 @@ export class DraftSyncController {
       if (this.currentCommit?.id !== entry.id) return; // Superseded
 
       const isNonRetryable =
-        error instanceof ApiHttpError &&
+        error instanceof LiveApiError &&
+        typeof error.status === "number" &&
         error.status >= 400 &&
         error.status < 500;
 

@@ -9,6 +9,7 @@ export interface CacheEntry<T = unknown> {
   generationId: number;
   fetchedAt: number;
   byteSize: number;
+  eTag?: string | null;
 }
 
 export interface CacheStats {
@@ -30,7 +31,13 @@ export class ResourceCache {
     this.maxBytes = maxBytes;
   }
 
-  set<T>(key: string, data: T, revision: number, generationId: number = 0): void {
+  set<T>(
+    key: string,
+    data: T,
+    revision: number,
+    generationId: number = 0,
+    eTag?: string | null,
+  ): void {
     const byteSize = this.estimateSize(data);
 
     // Remove existing entry first
@@ -52,6 +59,7 @@ export class ResourceCache {
       generationId,
       fetchedAt: Date.now(),
       byteSize,
+      eTag: eTag ?? null,
     };
     this.store.set(key, entry as CacheEntry);
     this.accessOrder.push(key);

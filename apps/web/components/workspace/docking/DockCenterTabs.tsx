@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import type { Dispatch, SetStateAction } from "react";
 import { Pin, X } from "lucide-react";
 
 import AnalyzeViewport from "@/components/runs/control-room/AnalyzeViewport";
@@ -75,20 +74,37 @@ function analyzeSelectionForTab(tab: WorkspaceTab):
   }
 }
 
+function sameAnalyzeSelection(
+  current: { domain: "eigenmodes" | "vortex"; tab: AnalyzeTab; selectedModeIndex: number | null },
+  next: { domain: "eigenmodes" | "vortex"; tab: AnalyzeTab; selectedModeIndex?: number | null },
+): boolean {
+  return (
+    current.domain === next.domain &&
+    current.tab === next.tab &&
+    (current.selectedModeIndex ?? null) === (next.selectedModeIndex ?? null)
+  );
+}
+
 function applyWorkspaceTabSelection(
   stage: WorkspaceMode,
   tab: WorkspaceTab,
   api: {
+    currentWorkspaceMode: WorkspaceMode;
     setWorkspaceMode: (next: WorkspaceMode | ((prev: WorkspaceMode) => WorkspaceMode)) => void;
-    setViewMode: Dispatch<SetStateAction<"3D" | "2D" | "Mesh" | "Analyze">>;
     handleViewModeChange: (mode: string) => void;
     effectiveViewMode: "3D" | "2D" | "Mesh" | "Analyze";
     requestPreviewQuantity: (quantity: string) => void;
+    selectedQuantity: string;
     model: ReturnType<typeof useModel>;
   },
 ): void {
   if (tab.payload?.resultWorkspaceId) {
-    api.model.openResultWorkspaceEntry(tab.payload.resultWorkspaceId);
+    if (
+      api.currentWorkspaceMode !== "analyze" ||
+      api.model.activeResultWorkspaceId !== tab.payload.resultWorkspaceId
+    ) {
+      api.model.openResultWorkspaceEntry(tab.payload.resultWorkspaceId);
+    }
     return;
   }
 
@@ -119,7 +135,7 @@ function applyWorkspaceTabSelection(
   }
   if (tab.kind === "result-quantity") {
     api.setWorkspaceMode(stage);
-    if (tab.payload?.quantityId) {
+    if (tab.payload?.quantityId && tab.payload.quantityId !== api.selectedQuantity) {
       api.requestPreviewQuantity(tab.payload.quantityId);
     }
     if (api.effectiveViewMode !== "3D") {
@@ -130,12 +146,16 @@ function applyWorkspaceTabSelection(
 
   const analyzeSelection = analyzeSelectionForTab(tab);
   if (analyzeSelection) {
-    api.setWorkspaceMode("analyze");
-    api.model.openAnalyze({
-      domain: analyzeSelection.domain,
-      tab: analyzeSelection.tab,
-      selectedModeIndex: analyzeSelection.selectedModeIndex ?? null,
-    });
+    if (api.currentWorkspaceMode !== "analyze") {
+      api.setWorkspaceMode("analyze");
+    }
+    if (!sameAnalyzeSelection(api.model.analyzeSelection, analyzeSelection)) {
+      api.model.openAnalyze({
+        domain: analyzeSelection.domain,
+        tab: analyzeSelection.tab,
+        selectedModeIndex: analyzeSelection.selectedModeIndex ?? null,
+      });
+    }
     return;
   }
 
@@ -157,6 +177,9 @@ export default function DockCenterTabs() {
   const model = useModel();
   const tp = useTransport();
   const featureFlags = useRuntimeFeatureFlags();
+  const currentWorkspaceMode = vp.workspaceMode;
+  const effectiveViewMode = vp.effectiveViewMode;
+  const selectedQuantity = vp.selectedQuantity;
 
   // Block rendering until feature flags are resolved to avoid mounting Three.js
   // canvases that would be immediately disabled (causes WebGL context churn).
@@ -197,14 +220,15 @@ export default function DockCenterTabs() {
       return;
     }
     applyWorkspaceTabSelection(currentStage, activeTab, {
+      currentWorkspaceMode,
       setWorkspaceMode: vp.setWorkspaceMode,
-      setViewMode: vp.setViewMode,
       handleViewModeChange: vp.handleViewModeChange,
-      effectiveViewMode: vp.effectiveViewMode,
+      effectiveViewMode,
       requestPreviewQuantity: vp.requestPreviewQuantity,
+      selectedQuantity,
       model,
     });
-  }, [activeTab?.id, currentStage, vp.effectiveViewMode]);
+  }, [activeTab, currentStage, currentWorkspaceMode, effectiveViewMode, selectedQuantity, model, vp.handleViewModeChange, vp.requestPreviewQuantity, vp.setWorkspaceMode]);
 
   const spatialPreview = tp.preview?.kind === "spatial" ? tp.preview : null;
   const previewNoticesVisible = FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices;

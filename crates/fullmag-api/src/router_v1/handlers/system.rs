@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::Json;
 
 use crate::error::ApiError;
@@ -53,23 +54,35 @@ pub async fn get_capabilities(
     path = "/v1/live/current/logs/engine",
     responses(
         (status = 200, description = "Engine log entries", body = EngineLogResource),
+        (status = 304, description = "Engine log not modified for the supplied ETag"),
         (status = 404, description = "No active workspace"),
     ),
     tag = "system"
 )]
 pub async fn get_engine_log(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<EngineLogResource>, ApiError> {
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
-    Ok(Json(EngineLogResource {
+    let body = EngineLogResource {
         revision: snapshot.engine_log.len() as u64,
         total: snapshot.engine_log.len(),
         entries: snapshot.engine_log.clone(),
-    }))
+    };
+    let etag = super::stable_strong_etag(&format!(
+        "engine-log:{}:{}",
+        snapshot.engine_log.len(),
+        snapshot
+            .engine_log
+            .last()
+            .map(|entry| entry.timestamp_unix_ms)
+            .unwrap_or(0)
+    ));
+    Ok(super::conditional_json_response(&headers, &etag, &body))
 }
 
 #[utoipa::path(

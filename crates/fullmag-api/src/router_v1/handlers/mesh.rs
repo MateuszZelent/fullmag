@@ -4,7 +4,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
-use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
@@ -37,22 +36,26 @@ use fullmag_runner::{FemMeshObjectSegment, FemMeshPayload};
     path = "/v1/live/current/mesh/summary",
     responses(
         (status = 200, description = "Current mesh summary", body = MeshSummaryResource),
+        (status = 304, description = "Mesh summary not modified for the supplied ETag"),
         (status = 404, description = "No active workspace or mesh summary"),
     ),
     tag = "mesh"
 )]
 pub async fn get_mesh_summary(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<MeshSummaryResource>, ApiError> {
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
-    Ok(Json(MeshSummaryResource {
+    let body = MeshSummaryResource {
         revision: snapshot.mesh_revision,
         mesh_summary: mesh_workspace.get("mesh_summary").cloned(),
         mesh_quality_summary: mesh_workspace.get("mesh_quality_summary").cloned(),
         effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
         effective_per_object_targets: mesh_workspace.get("effective_per_object_targets").cloned(),
-    }))
+    };
+    let etag = super::stable_strong_etag(&format!("mesh-summary:{}", snapshot.mesh_revision));
+    Ok(super::conditional_json_response(&headers, &etag, &body))
 }
 
 #[utoipa::path(
@@ -429,6 +432,7 @@ pub async fn get_mesh_shared_domain_quality(
     path = "/v1/live/current/mesh/shared-domain/manifest",
     responses(
         (status = 200, description = "Shared-domain mesh manifest for tree/selection metadata", body = MeshSharedDomainManifestResource),
+        (status = 304, description = "Shared-domain mesh manifest not modified for the supplied ETag"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace"),
     ),
@@ -436,23 +440,31 @@ pub async fn get_mesh_shared_domain_quality(
 )]
 pub async fn get_mesh_shared_domain_manifest(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     match snapshot.fem_mesh.as_ref() {
-        Some(mesh) => Ok(Json(MeshSharedDomainManifestResource {
-            revision: snapshot.mesh_revision,
-            mesh_name: mesh.mesh_name.clone(),
-            mesh_id: mesh.mesh_id.clone(),
-            generation_id: mesh.generation_id.clone(),
-            domain_mesh_mode: mesh.domain_mesh_mode.clone(),
-            object_segments: mesh
-                .object_segments
-                .iter()
-                .map(MeshObjectSegmentResource::from)
-                .collect(),
-            mesh_parts: mesh.mesh_parts.iter().map(MeshPartResource::from).collect(),
-        })
-        .into_response()),
+        Some(mesh) => {
+            let body = MeshSharedDomainManifestResource {
+                revision: snapshot.mesh_revision,
+                mesh_name: mesh.mesh_name.clone(),
+                mesh_id: mesh.mesh_id.clone(),
+                generation_id: mesh.generation_id.clone(),
+                domain_mesh_mode: mesh.domain_mesh_mode.clone(),
+                object_segments: mesh
+                    .object_segments
+                    .iter()
+                    .map(MeshObjectSegmentResource::from)
+                    .collect(),
+                mesh_parts: mesh.mesh_parts.iter().map(MeshPartResource::from).collect(),
+            };
+            let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+            let etag = super::stable_strong_etag(&format!(
+                "mesh-shared-domain-manifest:{generation_id}:{}",
+                snapshot.mesh_revision
+            ));
+            Ok(super::conditional_json_response(&headers, &etag, &body))
+        }
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }
 }
@@ -462,6 +474,7 @@ pub async fn get_mesh_shared_domain_manifest(
     path = "/v1/live/current/mesh/shared-domain/topology",
     responses(
         (status = 200, description = "Binary shared-domain FEM topology (FMMT)", content_type = "application/octet-stream"),
+        (status = 304, description = "Shared-domain topology not modified for the supplied ETag"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace"),
     ),
@@ -469,12 +482,18 @@ pub async fn get_mesh_shared_domain_manifest(
 )]
 pub async fn get_mesh_shared_domain_topology(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
             let binary = serialize_fem_mesh_topology_binary_v1(mesh);
-            Ok(([(CONTENT_TYPE, "application/octet-stream")], binary).into_response())
+            let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+            let etag = super::stable_strong_etag(&format!(
+                "mesh-shared-domain-topology:{generation_id}:{}",
+                snapshot.mesh_revision
+            ));
+            Ok(super::conditional_binary_response(&headers, &etag, binary))
         }
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }
@@ -690,6 +709,7 @@ pub async fn get_mesh_object_size_field(
     ),
     responses(
         (status = 200, description = "Binary per-object FEM topology (FMMT)", content_type = "application/octet-stream"),
+        (status = 304, description = "Per-object topology not modified for the supplied ETag"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace or object mesh"),
     ),
@@ -697,6 +717,7 @@ pub async fn get_mesh_object_size_field(
 )]
 pub async fn get_mesh_object_topology(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(object_id): Path<String>,
 ) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
@@ -705,7 +726,12 @@ pub async fn get_mesh_object_topology(
             let object_mesh = subset_object_mesh(mesh, &object_id)
                 .ok_or_else(|| ApiError::not_found(format!("object mesh not found: {object_id}")))?;
             let binary = serialize_fem_mesh_topology_binary_v1(&object_mesh);
-            Ok(([(CONTENT_TYPE, "application/octet-stream")], binary).into_response())
+            let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+            let etag = super::stable_strong_etag(&format!(
+                "mesh-object-topology:{object_id}:{generation_id}:{}",
+                snapshot.mesh_revision
+            ));
+            Ok(super::conditional_binary_response(&headers, &etag, binary))
         }
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }

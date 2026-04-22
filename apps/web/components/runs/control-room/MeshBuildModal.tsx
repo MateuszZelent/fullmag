@@ -2,7 +2,7 @@
 
 import { CheckCircle2, Loader2, AlertTriangle, X, Minimize2, GitCommitHorizontal, Layers, Triangle } from "lucide-react";
 
-import type { EngineLogEntry, MeshWorkspaceState } from "../../../lib/useSessionStream";
+import type { EngineLogEntry, MeshWorkspaceState } from "@/lib/session/types";
 import { Button } from "../../ui/button";
 import { cn } from "@/lib/utils";
 import BackendErrorNotice from "./BackendErrorNotice";

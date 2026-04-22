@@ -27,6 +27,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resource-first migration gates
+        run: ./scripts/ci-resource-first-gates.sh --strict
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:

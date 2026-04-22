@@ -11,7 +11,7 @@
 
 import type { FieldFrameEnvelope, FieldFrameStats } from "./types";
 import type { FemLiveMesh, StepUpdateV2, SpatialPreviewState } from "@/lib/session/types";
-import type { LiveState, PreviewState } from "@/lib/useSessionStream";
+import type { LiveState, PreviewState } from "@/lib/session/types";
 import type { CapabilityMap } from "@/src/api/types";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 

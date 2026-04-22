@@ -1,4 +1,6 @@
 import type {
+  BinaryResourceResponse,
+  JsonResourceResponse,
   CommandResponse,
   MeshActiveBuildResource,
   MeshBuildCommandRequest,
@@ -32,6 +34,15 @@ export class MeshModule {
 
   async getSummary(opts?: RequestOptions): Promise<MeshSummaryResource> {
     return this.client.get<MeshSummaryResource>("/v1/live/current/mesh/summary", opts);
+  }
+
+  async getSummaryResponse(
+    opts?: RequestOptions,
+  ): Promise<JsonResourceResponse<MeshSummaryResource>> {
+    return this.client.getJsonResponse<MeshSummaryResource>(
+      "/v1/live/current/mesh/summary",
+      opts,
+    );
   }
 
   async getCapabilities(opts?: RequestOptions): Promise<MeshCapabilitiesResource> {
@@ -154,8 +165,27 @@ export class MeshModule {
     );
   }
 
+  async getSharedDomainManifestResponse(
+    opts?: RequestOptions,
+  ): Promise<JsonResourceResponse<MeshSharedDomainManifestResource>> {
+    return this.client.getJsonResponse<MeshSharedDomainManifestResource>(
+      "/v1/live/current/mesh/shared-domain/manifest",
+      opts,
+    );
+  }
+
   async getSharedDomainTopology(opts?: RequestOptions): Promise<ArrayBuffer> {
-    return this.client.getBinary("/v1/live/current/mesh/shared-domain/topology", opts);
+    const response = await this.getSharedDomainTopologyResponse(opts);
+    return response.buffer;
+  }
+
+  async getSharedDomainTopologyResponse(
+    opts?: RequestOptions,
+  ): Promise<BinaryResourceResponse> {
+    return this.client.getBinaryResponse(
+      "/v1/live/current/mesh/shared-domain/topology",
+      opts,
+    );
   }
 
   async getObjectConfig(
@@ -214,7 +244,15 @@ export class MeshModule {
     objectId: string,
     opts?: RequestOptions,
   ): Promise<ArrayBuffer> {
-    return this.client.getBinary(
+    const response = await this.getObjectTopologyResponse(objectId, opts);
+    return response.buffer;
+  }
+
+  async getObjectTopologyResponse(
+    objectId: string,
+    opts?: RequestOptions,
+  ): Promise<BinaryResourceResponse> {
+    return this.client.getBinaryResponse(
       `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/topology`,
       opts,
     );

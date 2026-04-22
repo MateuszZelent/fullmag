@@ -2,7 +2,7 @@ import {
   Play, Settings, Loader2, Pause, Circle, Diamond,
   ArrowRight, CheckCircle2, XCircle, AlertTriangle, Dot,
 } from "lucide-react";
-import type { LiveState, ScalarRow, SessionManifest, RunManifest, EngineLogEntry } from "../../../lib/useSessionStream";
+import type { LiveState, ScalarRow, SessionManifest, RunManifest, EngineLogEntry } from "@/lib/session/types";
 import { fmtTime, fmtExp, fmtDuration } from "@/lib/format";
 
 export interface LogEntry {

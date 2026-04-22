@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useMemo } from "react";
-import type { QuantityDescriptor, ScalarRow } from "../../lib/useSessionStream";
+import type { QuantityDescriptor, ScalarRow } from "@/lib/session/types";
 import Plot from "./DynamicPlot";
 import { scalarSeriesList, type ScalarSeriesMeta } from "../../lib/quantities/scalars";
 import { normalizeUnitLabel } from "../../lib/format";

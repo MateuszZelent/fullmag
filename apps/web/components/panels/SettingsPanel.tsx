@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { isFemDiscretization } from "@/src/domain/capabilities";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { useViewport, useCommand, useModel } from "../runs/control-room/context-hooks";
 import { Button } from "../ui/button";
 import MeshSettingsPanel from "./MeshSettingsPanel";
@@ -134,9 +134,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   const viewport = useViewport();
   const cmd = useCommand();
   const model = useModel();
-  const femDiscretization = cmd.domainCapabilities
-    ? isFemDiscretization(cmd.domainCapabilities)
-    : cmd.isFemBackend;
+  const femDiscretization = resolveFemDiscretization(cmd.domainCapabilities, false);
   // studyNodeContext removed — routing now via inspectorRegistry
   const showSolverTelemetrySection = false;
   const showEnergySection = false;

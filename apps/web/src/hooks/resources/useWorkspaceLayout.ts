@@ -22,14 +22,20 @@ interface UseWorkspaceLayoutResult {
 export function useWorkspaceLayout(options?: {
   enabled?: boolean;
   sessionKey?: string | null;
+  revision?: number | null;
 }): UseWorkspaceLayoutResult {
   const enabled = options?.enabled ?? true;
   const sessionKey = options?.sessionKey ?? null;
+  const revision = options?.revision ?? null;
   const [layout, setLayout] = useState<WorkspaceLayoutResource | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<LiveApiError | null>(null);
   const mountedRef = useRef(true);
-  const lastFetchedSessionKeyRef = useRef<string | null>(null);
+  const lastFetchedIdentityRef = useRef<string | null>(null);
+
+  const fetchIdentity = sessionKey
+    ? `${sessionKey}:${revision == null ? "no-revision" : revision}`
+    : null;
 
   const fetchWorkspaceLayout = useCallback(async () => {
     if (!enabled || !sessionKey) {
@@ -47,7 +53,7 @@ export function useWorkspaceLayout(options?: {
       if (!mountedRef.current) {
         return;
       }
-      lastFetchedSessionKeyRef.current = sessionKey;
+      lastFetchedIdentityRef.current = `${sessionKey}:${nextLayout.revision}`;
       setLayout(nextLayout);
       setError(null);
       setLoading(false);
@@ -60,15 +66,17 @@ export function useWorkspaceLayout(options?: {
           ? err
           : LiveApiError.networkError("workspace-layout", err);
       if (apiError.status === 404) {
+        lastFetchedIdentityRef.current = fetchIdentity;
         setLayout(null);
         setError(null);
         setLoading(false);
         return;
       }
+      lastFetchedIdentityRef.current = fetchIdentity;
       setError(apiError);
       setLoading(false);
     }
-  }, [enabled, sessionKey]);
+  }, [enabled, fetchIdentity, sessionKey]);
 
   const replaceLayout = useCallback(
     async (
@@ -83,6 +91,7 @@ export function useWorkspaceLayout(options?: {
         if (!mountedRef.current) {
           return nextLayout;
         }
+        lastFetchedIdentityRef.current = `${sessionKey}:${nextLayout.revision}`;
         setLayout(nextLayout);
         setError(null);
         setLoading(false);
@@ -106,7 +115,7 @@ export function useWorkspaceLayout(options?: {
   useEffect(() => {
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
-      lastFetchedSessionKeyRef.current = null;
+      lastFetchedIdentityRef.current = null;
       setLayout(null);
       setError(null);
       setLoading(false);
@@ -115,14 +124,14 @@ export function useWorkspaceLayout(options?: {
       };
     }
 
-    if (lastFetchedSessionKeyRef.current !== sessionKey) {
+    if (lastFetchedIdentityRef.current !== fetchIdentity) {
       void fetchWorkspaceLayout();
     }
 
     return () => {
       mountedRef.current = false;
     };
-  }, [enabled, fetchWorkspaceLayout, sessionKey]);
+  }, [enabled, fetchIdentity, fetchWorkspaceLayout, sessionKey]);
 
   return {
     layout,

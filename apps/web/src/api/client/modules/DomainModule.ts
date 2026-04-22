@@ -1,3 +1,4 @@
+import type { BinaryResourceResponse } from "../../types";
 import type { DomainMeta } from "../../generated/openapi-types";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
 
@@ -9,6 +10,11 @@ export class DomainModule {
   }
 
   async getTopology(opts?: RequestOptions): Promise<ArrayBuffer> {
-    return this.client.getBinary("/v1/live/current/domain/topology", opts);
+    const response = await this.getTopologyResponse(opts);
+    return response.buffer;
+  }
+
+  async getTopologyResponse(opts?: RequestOptions): Promise<BinaryResourceResponse> {
+    return this.client.getBinaryResponse("/v1/live/current/domain/topology", opts);
   }
 }

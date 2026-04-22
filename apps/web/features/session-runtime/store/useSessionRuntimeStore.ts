@@ -41,7 +41,7 @@ import type {
   CommandStatus,
   MeshWorkspaceState,
   ScriptBuilderState,
-} from "@/lib/useSessionStream";
+} from "@/lib/session/types";
 
 interface SessionRuntimeStoreState {
   stateVersion: number | null;

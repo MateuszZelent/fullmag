@@ -9,7 +9,7 @@ import type { SpatialDomainAdapter } from "../../domain/adapters/SpatialDomainAd
 import { createDomainAdapter } from "../../domain/adapters/createDomainAdapter";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { ResourceCache } from "../../api/client/cache/ResourceCache";
-import { decodeTopology } from "../../api/codecs/topologyCodec";
+import { decodeTopologyOffThread } from "../../api/codecs/decodeOffThread";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 interface UseDomainResourceResult {
@@ -31,13 +31,14 @@ export function useDomainResource(
     setLoading(true);
     setError(null);
 
-      try {
+    try {
         const client = getLiveApiClient();
-        const cacheKey = ResourceCache.domainKey(genId, "adapter");
-        const cached = client.getCache().get<SpatialDomainAdapter>(cacheKey);
-        if (cached && cached.generationId === genId) {
+        const adapterCacheKey = ResourceCache.domainKey(genId, "adapter");
+        const topologyCacheKey = ResourceCache.domainKey(genId, "topology");
+        const cachedAdapter = client.getCache().get<SpatialDomainAdapter>(adapterCacheKey);
+        if (cachedAdapter && cachedAdapter.generationId === genId) {
           fetchedGenRef.current = genId;
-          setAdapter(cached.data);
+          setAdapter(cachedAdapter.data);
           setLoading(false);
           return;
         }
@@ -46,16 +47,42 @@ export function useDomainResource(
 
         let topology;
         if (meta.discretization === "fem") {
-          const topologyBuffer = await client.domain.getTopology();
-        topology = decodeTopology(topologyBuffer);
-      }
+          const cachedTopology = client.getCache().get<ArrayBuffer>(topologyCacheKey);
+          let topologyBuffer: ArrayBuffer;
+          if (cachedTopology && cachedTopology.generationId === genId) {
+            topologyBuffer = cachedTopology.data;
+          } else {
+            const response = await client.domain.getTopologyResponse({
+              cache: "default",
+              headers:
+                cachedTopology?.eTag != null
+                  ? {
+                      "If-None-Match": cachedTopology.eTag,
+                    }
+                  : undefined,
+            });
+            if (response.status === 304 && cachedTopology) {
+              topologyBuffer = cachedTopology.data;
+            } else {
+              topologyBuffer = response.buffer;
+              client.getCache().set(
+                topologyCacheKey,
+                topologyBuffer,
+                genId,
+                genId,
+                response.headers.get("etag"),
+              );
+            }
+          }
+          topology = await decodeTopologyOffThread(topologyBuffer);
+        }
 
-      const newAdapter = createDomainAdapter(meta, topology);
-      client.getCache().invalidateByGeneration(genId);
-      client.getCache().set(cacheKey, newAdapter, genId, genId);
-      fetchedGenRef.current = genId;
-      setAdapter(newAdapter);
-      setLoading(false);
+        const newAdapter = createDomainAdapter(meta, topology);
+        client.getCache().invalidateByGeneration(genId);
+        client.getCache().set(adapterCacheKey, newAdapter, genId, genId);
+        fetchedGenRef.current = genId;
+        setAdapter(newAdapter);
+        setLoading(false);
     } catch (err) {
       const apiErr =
         err instanceof LiveApiError

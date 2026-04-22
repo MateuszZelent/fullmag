@@ -41,6 +41,7 @@ import {
   normalizePersistedObjectViewMode,
   normalizeVisualizationPresetRef,
   resultWorkspaceIcon,
+  sameMeshEntityViewStateMap,
   samePersistedMeshEntityViewState,
   sameVisualizationPresetRef,
   sameVisualizationPresets,
@@ -53,7 +54,7 @@ import type {
   FemLiveMesh,
   MeshWorkspaceState,
   ScriptBuilderStageState,
-} from "../../../lib/useSessionStream";
+} from "@/lib/session/types";
 import type {
   MeshEntityViewStateMap,
   ModelBuilderGraphV2,
@@ -426,10 +427,12 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const { document: resourceSceneDocument } = useSceneDocument({
     enabled: true,
     sessionKey: sceneResourceSessionKey,
+    revision: runtimeResourceRevisions?.scene_revision ?? null,
   });
   const { stageExecution: resourceStageExecution } = useStageExecution({
     enabled: true,
     sessionKey: sceneResourceSessionKey,
+    revision: runtimeResourceRevisions?.stages_revision ?? null,
   });
   const {
     selection: workspaceSelection,
@@ -438,6 +441,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   } = useWorkspaceSelection({
     enabled: true,
     sessionKey: sceneResourceSessionKey,
+    revision: runtimeResourceRevisions?.workspace_revision ?? null,
   });
   const {
     meshWorkspace: resourceMeshWorkspace,
@@ -1199,9 +1203,12 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         ? hydratedScene.editor.air_mesh_opacity
         : DEFAULT_AIR_MESH_OPACITY,
     );
-    setMeshEntityViewState(
-      normalizePersistedMeshEntityViewState(hydratedScene.editor.mesh_entity_view_state),
-    );
+    setMeshEntityViewState((previous) => {
+      const next = normalizePersistedMeshEntityViewState(
+        hydratedScene.editor.mesh_entity_view_state,
+      );
+      return sameMeshEntityViewStateMap(previous, next) ? previous : next;
+    });
     setSelectedEntityId(
       workspaceSelection?.selected_entity_id ?? hydratedScene.editor.selected_entity_id,
     );

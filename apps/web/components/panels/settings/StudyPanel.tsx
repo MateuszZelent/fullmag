@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/preserve-manual-memoization */
 
 import { useMemo } from "react";
-import { isFemDiscretization } from "@/src/domain/capabilities";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { fmtExp } from "@/lib/format";
 import {
   parseStudyNodeContext,
@@ -202,9 +202,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     [nodeId],
   );
   const solverPlan = ctx.solverPlan;
-  const femDiscretization = ctx.domainCapabilities
-    ? isFemDiscretization(ctx.domainCapabilities)
-    : ctx.isFemBackend;
+  const femDiscretization = resolveFemDiscretization(ctx.domainCapabilities, false);
   const workloadLabel = femDiscretization && ctx.femMesh
     ? `${ctx.femMesh.nodes.length.toLocaleString()} nodes · ${ctx.femMesh.elements.length.toLocaleString()} tets`
     : ctx.totalCells && ctx.totalCells > 0

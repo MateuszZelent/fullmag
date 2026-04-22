@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::http::header::CONTENT_TYPE;
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -129,6 +129,7 @@ pub async fn get_domain_meta(
     path = "/v1/live/current/domain/topology",
     responses(
         (status = 200, description = "Binary FEM topology (FMMT)", content_type = "application/octet-stream"),
+        (status = 304, description = "Domain topology not modified for the supplied ETag"),
         (status = 204, description = "Not applicable (FDM)"),
         (status = 404, description = "No active workspace"),
     ),
@@ -136,6 +137,7 @@ pub async fn get_domain_meta(
 )]
 pub async fn get_domain_topology(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
@@ -145,7 +147,12 @@ pub async fn get_domain_topology(
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
             let binary = serialize_fem_mesh_topology_binary_v1(mesh);
-            Ok(([(CONTENT_TYPE, "application/octet-stream")], binary).into_response())
+            let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+            let etag = super::stable_strong_etag(&format!(
+                "domain-topology:{generation_id}:{}",
+                snapshot.mesh_revision
+            ));
+            Ok(super::conditional_binary_response(&headers, &etag, binary))
         }
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  BinaryResourceResponse,
   MeshActiveBuildResource,
   MeshBuildHistoryResource,
   MeshCapabilitiesResource,
@@ -28,6 +29,8 @@ import type {
   MeshUniverseReportResource,
 } from "../../api/types";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import type { RequestOptions } from "../../api/client/LiveApiClient";
+import { ResourceCache } from "../../api/client/cache/ResourceCache";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 import { normalizeMeshWorkspace } from "@/lib/session/normalize";
 import type { MeshWorkspaceState } from "@/lib/session/types";
@@ -137,7 +140,7 @@ function useMeshJsonResource<T>(
 
 function useMeshBinaryResource(
   resourceName: string,
-  fetcher: () => Promise<ArrayBuffer>,
+  fetcher: (opts?: RequestOptions) => Promise<BinaryResourceResponse>,
   options?: MeshHookOptions,
 ): MeshBinaryResourceResult {
   const enabled = options?.enabled ?? true;
@@ -149,6 +152,8 @@ function useMeshBinaryResource(
   const mountedRef = useRef(true);
   const lastFetchKeyRef = useRef<string | null>(null);
   const fetchKey = `${sessionKey ?? "no-session"}:${resourceName}:${revision ?? "no-revision"}`;
+  const cacheKey = `mesh-binary:${fetchKey}`;
+  const cacheRevision = revision ?? 0;
 
   const refresh = useCallback(async () => {
     if (!enabled || !sessionKey) {
@@ -162,7 +167,36 @@ function useMeshBinaryResource(
 
     setLoading(true);
     try {
-      const nextData = await fetcher();
+      const client = getLiveApiClient();
+      const cached = client.getCache().get<ArrayBuffer>(cacheKey);
+      if (cached && cached.revision === cacheRevision) {
+        lastFetchKeyRef.current = fetchKey;
+        setData(cached.data);
+        setError(null);
+        setLoading(false);
+        return;
+      }
+
+      const response = await fetcher({
+        cache: "default",
+        headers:
+          cached?.eTag != null
+            ? {
+                "If-None-Match": cached.eTag,
+              }
+            : undefined,
+      });
+      const nextData =
+        response.status === 304 && cached ? cached.data : response.buffer;
+      if (response.status !== 304) {
+        client.getCache().set(
+          cacheKey,
+          nextData,
+          cacheRevision,
+          0,
+          response.headers.get("etag"),
+        );
+      }
       if (!mountedRef.current) {
         return;
       }
@@ -188,7 +222,7 @@ function useMeshBinaryResource(
       setError(apiError);
       setLoading(false);
     }
-  }, [enabled, fetchKey, fetcher, resourceName, sessionKey]);
+  }, [cacheKey, cacheRevision, enabled, fetchKey, fetcher, resourceName, sessionKey]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -385,7 +419,8 @@ export function useMeshSharedDomainManifest(options?: MeshHookOptions) {
 export function useMeshSharedDomainTopology(options?: MeshHookOptions) {
   return useMeshBinaryResource(
     "mesh-shared-domain-topology",
-    () => getLiveApiClient().mesh.getSharedDomainTopology(),
+    (requestOptions) =>
+      getLiveApiClient().mesh.getSharedDomainTopologyResponse(requestOptions),
     options,
   );
 }
@@ -453,7 +488,11 @@ export function useMeshObjectTopology(
   const enabled = (options?.enabled ?? true) && Boolean(objectId);
   return useMeshBinaryResource(
     `mesh-object-topology:${objectId ?? "none"}`,
-    () => getLiveApiClient().mesh.getObjectTopology(objectId ?? ""),
+    (requestOptions) =>
+      getLiveApiClient().mesh.getObjectTopologyResponse(
+        objectId ?? "",
+        requestOptions,
+      ),
     { ...options, enabled },
   );
 }

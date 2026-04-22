@@ -22,14 +22,20 @@ interface UseWorkspaceSelectionResult {
 export function useWorkspaceSelection(options?: {
   enabled?: boolean;
   sessionKey?: string | null;
+  revision?: number | null;
 }): UseWorkspaceSelectionResult {
   const enabled = options?.enabled ?? true;
   const sessionKey = options?.sessionKey ?? null;
+  const revision = options?.revision ?? null;
   const [selection, setSelection] = useState<WorkspaceSelectionResource | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<LiveApiError | null>(null);
   const mountedRef = useRef(true);
-  const lastFetchedSessionKeyRef = useRef<string | null>(null);
+  const lastFetchedIdentityRef = useRef<string | null>(null);
+
+  const fetchIdentity = sessionKey
+    ? `${sessionKey}:${revision == null ? "no-revision" : revision}`
+    : null;
 
   const fetchWorkspaceSelection = useCallback(async () => {
     if (!enabled || !sessionKey) {
@@ -47,7 +53,7 @@ export function useWorkspaceSelection(options?: {
       if (!mountedRef.current) {
         return;
       }
-      lastFetchedSessionKeyRef.current = sessionKey;
+      lastFetchedIdentityRef.current = `${sessionKey}:${nextSelection.revision}`;
       setSelection(nextSelection);
       setError(null);
       setLoading(false);
@@ -60,15 +66,17 @@ export function useWorkspaceSelection(options?: {
           ? err
           : LiveApiError.networkError("workspace-selection", err);
       if (apiError.status === 404) {
+        lastFetchedIdentityRef.current = fetchIdentity;
         setSelection(null);
         setError(null);
         setLoading(false);
         return;
       }
+      lastFetchedIdentityRef.current = fetchIdentity;
       setError(apiError);
       setLoading(false);
     }
-  }, [enabled, sessionKey]);
+  }, [enabled, fetchIdentity, sessionKey]);
 
   const replaceSelection = useCallback(
     async (
@@ -83,6 +91,7 @@ export function useWorkspaceSelection(options?: {
         if (!mountedRef.current) {
           return nextSelection;
         }
+        lastFetchedIdentityRef.current = `${sessionKey}:${nextSelection.revision}`;
         setSelection(nextSelection);
         setError(null);
         setLoading(false);
@@ -106,7 +115,7 @@ export function useWorkspaceSelection(options?: {
   useEffect(() => {
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
-      lastFetchedSessionKeyRef.current = null;
+      lastFetchedIdentityRef.current = null;
       setSelection(null);
       setError(null);
       setLoading(false);
@@ -115,14 +124,14 @@ export function useWorkspaceSelection(options?: {
       };
     }
 
-    if (lastFetchedSessionKeyRef.current !== sessionKey) {
+    if (lastFetchedIdentityRef.current !== fetchIdentity) {
       void fetchWorkspaceSelection();
     }
 
     return () => {
       mountedRef.current = false;
     };
-  }, [enabled, fetchWorkspaceSelection, sessionKey]);
+  }, [enabled, fetchIdentity, fetchWorkspaceSelection, sessionKey]);
 
   return {
     selection,

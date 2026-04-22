@@ -4,7 +4,7 @@ import type {
   DisplaySelection,
   PreviewState,
   QuantityDescriptor,
-} from "../../../../lib/useSessionStream";
+} from "@/lib/session/types";
 import {
   PREVIEW_EVERY_N_DEFAULT,
   PREVIEW_EVERY_N_PRESETS,

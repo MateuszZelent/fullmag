@@ -1,4 +1,4 @@
-import type { QuantityDescriptor, ScalarRow } from "@/lib/useSessionStream";
+import type { QuantityDescriptor, ScalarRow } from "@/lib/session/types";
 import type { ResultsWorkspaceState } from "@/features/analyze/model/resultsWorkspace";
 import type { StudyPipelineDocument } from "@/lib/study-builder/types";
 import type { WorkspaceMode, WorkspaceTab } from "@/lib/workspace/workspace-store";
@@ -134,4 +134,3 @@ export interface WorkspaceGraphBridgeInput {
   viewMode: "3D" | "2D" | "Mesh" | "Analyze";
   renderMode: string | null;
 }
-

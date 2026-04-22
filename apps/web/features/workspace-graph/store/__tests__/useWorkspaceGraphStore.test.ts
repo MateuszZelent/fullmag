@@ -5,7 +5,7 @@ import { useWorkspaceGraphStore } from "../useWorkspaceGraphStore";
 import type { ResultsWorkspaceState } from "@/features/analyze/model/resultsWorkspace";
 import { activeDatasetIdForResultNode, resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
 import type { StudyPipelineDocument } from "@/lib/study-builder/types";
-import type { QuantityDescriptor } from "@/lib/useSessionStream";
+import type { QuantityDescriptor } from "@/lib/session/types";
 
 const studyPipeline: StudyPipelineDocument = {
   version: "study_pipeline.v1",

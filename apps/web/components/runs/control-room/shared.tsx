@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
-import type { FemLiveMesh, FemMeshPart } from "../../../lib/useSessionStream";
+import type { FemLiveMesh, FemMeshPart } from "@/lib/session/types";
 import {
   resolveSelectedObjectIdFromModelBuilderGraph,
 } from "../../../lib/session/modelBuilderGraph";

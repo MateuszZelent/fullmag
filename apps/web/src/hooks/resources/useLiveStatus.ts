@@ -11,6 +11,12 @@ import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 import { LiveRealtimeClient } from "../../api/realtime/LiveRealtimeClient";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import type {
+  LiveRealtimeEvent,
+  RealtimeResourceBatchChangedPayload,
+  RealtimeResourceRevisionMap,
+  ResourceRevisionMap,
+} from "../../api/types";
 
 const IDLE_INTERVAL_MS = 3000;
 const ACTIVE_INTERVAL_MS = 500;
@@ -23,6 +29,122 @@ interface UseLiveStatusResult {
   loading: boolean;
   error: LiveApiError | null;
   refresh: () => Promise<void>;
+}
+
+function mergeRealtimeRevisionsIntoStatusResources(
+  current: ResourceRevisionMap,
+  incoming: Partial<RealtimeResourceRevisionMap>,
+): ResourceRevisionMap {
+  return {
+    ...current,
+    ...(incoming.fields_revision != null
+      ? { fields_revision: incoming.fields_revision }
+      : {}),
+    ...(incoming.scalars_revision != null
+      ? { scalars_revision: incoming.scalars_revision }
+      : {}),
+    ...(incoming.domain_generation_id != null
+      ? { domain_generation_id: incoming.domain_generation_id }
+      : {}),
+    ...(incoming.artifacts_revision != null
+      ? { artifacts_revision: incoming.artifacts_revision }
+      : {}),
+    ...(incoming.engine_log_revision != null
+      ? { engine_log_revision: incoming.engine_log_revision }
+      : {}),
+    ...(incoming.display_revision != null
+      ? { display_revision: incoming.display_revision }
+      : {}),
+    ...(incoming.workspace_revision != null
+      ? { workspace_revision: incoming.workspace_revision }
+      : {}),
+    ...(incoming.mesh_revision != null
+      ? { mesh_revision: incoming.mesh_revision }
+      : {}),
+    ...(incoming.mesh_build_revision != null
+      ? { mesh_build_revision: incoming.mesh_build_revision }
+      : {}),
+    ...(incoming.commands_revision != null
+      ? { commands_revision: incoming.commands_revision }
+      : {}),
+    ...(incoming.stages_revision != null
+      ? { stages_revision: incoming.stages_revision }
+      : {}),
+    ...(incoming.scene_revision !== undefined
+      ? { scene_revision: incoming.scene_revision ?? null }
+      : {}),
+  };
+}
+
+function mergeRealtimeBatchIntoStatusResources(
+  current: ResourceRevisionMap,
+  payload: RealtimeResourceBatchChangedPayload,
+): ResourceRevisionMap {
+  const patch: Partial<RealtimeResourceRevisionMap> = {};
+  for (const change of payload.changes) {
+    switch (change.resource) {
+      case "display":
+        patch.display_revision = change.revision;
+        break;
+      case "workspace":
+        patch.workspace_revision = change.revision;
+        break;
+      case "fields":
+        patch.fields_revision = change.revision;
+        if (change.domain_generation_id != null) {
+          patch.domain_generation_id = change.domain_generation_id;
+        }
+        break;
+      case "scalars":
+        patch.scalars_revision = change.revision;
+        break;
+      case "domain":
+        patch.domain_generation_id = change.domain_generation_id ?? change.revision;
+        break;
+      case "artifacts":
+        patch.artifacts_revision = change.revision;
+        break;
+      case "logs":
+        patch.engine_log_revision = change.revision;
+        break;
+      case "mesh":
+        patch.mesh_revision = change.revision;
+        if (change.domain_generation_id != null) {
+          patch.domain_generation_id = change.domain_generation_id;
+        }
+        break;
+      case "mesh_builds":
+        patch.mesh_build_revision = change.revision;
+        if (change.domain_generation_id != null) {
+          patch.domain_generation_id = change.domain_generation_id;
+        }
+        break;
+      case "commands":
+        patch.commands_revision = change.revision;
+        break;
+      case "stages":
+        patch.stages_revision = change.revision;
+        break;
+      case "scene_document":
+        patch.scene_revision = change.revision;
+        break;
+      default:
+        break;
+    }
+  }
+  return mergeRealtimeRevisionsIntoStatusResources(current, patch);
+}
+
+function realtimeEventNeedsStatusRefresh(event: LiveRealtimeEvent): boolean {
+  if (event.type === "resync.required") {
+    return true;
+  }
+  if (event.type !== "resource.batch_changed") {
+    return false;
+  }
+  return event.payload.changes.some(
+    (change) => change.resource === "display" || change.resource === "domain",
+  );
 }
 
 export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusResult {
@@ -83,6 +205,50 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
     }, 0);
   }, [poll]);
 
+  const applyRealtimeEvent = useCallback(
+    (event: LiveRealtimeEvent) => {
+      if (event.type === "heartbeat") {
+        return;
+      }
+
+      if (event.type === "hello") {
+        setStatus((previous) => {
+          if (!previous) {
+            return previous;
+          }
+          return {
+            ...previous,
+            resources: mergeRealtimeRevisionsIntoStatusResources(
+              previous.resources,
+              event.payload.resource_revisions,
+            ),
+          };
+        });
+        return;
+      }
+
+      if (event.type === "resource.batch_changed") {
+        setStatus((previous) => {
+          if (!previous) {
+            return previous;
+          }
+          return {
+            ...previous,
+            resources: mergeRealtimeBatchIntoStatusResources(
+              previous.resources,
+              event.payload,
+            ),
+          };
+        });
+      }
+
+      if (realtimeEventNeedsStatusRefresh(event)) {
+        queueRefresh();
+      }
+    },
+    [queueRefresh],
+  );
+
   useEffect(() => {
     if (!enabled) {
       setLoading(false);
@@ -111,12 +277,7 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
     }
     const client = new LiveRealtimeClient({
       baseUrl: getLiveApiClient().getBaseUrl(),
-      onEvent: (event) => {
-        if (event.type === "heartbeat") {
-          return;
-        }
-        queueRefresh();
-      },
+      onEvent: applyRealtimeEvent,
       onError: (realtimeError) => {
         if (!mountedRef.current) {
           return;
@@ -132,7 +293,7 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
         realtimeClientRef.current = null;
       }
     };
-  }, [enabled, queueRefresh, status?.session?.session_id]);
+  }, [applyRealtimeEvent, enabled, status?.session?.session_id]);
 
   return {
     status,

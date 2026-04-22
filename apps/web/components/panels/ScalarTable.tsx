@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useMemo, useCallback } from "react";
-import type { QuantityDescriptor, ScalarRow } from "../../lib/useSessionStream";
+import type { QuantityDescriptor, ScalarRow } from "@/lib/session/types";
 import { fmtSI, fmtExp, normalizeUnitLabel } from "../../lib/format";
 import { defaultScalarTableSeries } from "../../lib/quantities/scalars";
 

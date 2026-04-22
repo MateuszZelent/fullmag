@@ -36,14 +36,20 @@ interface UseStageExecutionResult {
 export function useStageExecution(options?: {
   enabled?: boolean;
   sessionKey?: string | null;
+  revision?: number | null;
 }): UseStageExecutionResult {
   const enabled = options?.enabled ?? true;
   const sessionKey = options?.sessionKey ?? null;
+  const revision = options?.revision ?? null;
   const [stageExecution, setStageExecution] = useState<StageExecutionState | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<LiveApiError | null>(null);
   const mountedRef = useRef(true);
-  const lastFetchedSessionKeyRef = useRef<string | null>(null);
+  const lastFetchedIdentityRef = useRef<string | null>(null);
+
+  const fetchIdentity = sessionKey
+    ? `${sessionKey}:${revision == null ? "no-revision" : revision}`
+    : null;
 
   const fetchStageExecution = useCallback(async () => {
     if (!enabled || !sessionKey) {
@@ -61,7 +67,7 @@ export function useStageExecution(options?: {
       if (!mountedRef.current) {
         return;
       }
-      lastFetchedSessionKeyRef.current = sessionKey;
+      lastFetchedIdentityRef.current = `${sessionKey}:${resource.revision}`;
       setStageExecution(mapStageExecutionResource(resource));
       setError(null);
       setLoading(false);
@@ -74,22 +80,22 @@ export function useStageExecution(options?: {
           ? err
           : LiveApiError.networkError("stage-execution", err);
       if (apiError.status === 404) {
-        lastFetchedSessionKeyRef.current = sessionKey;
+        lastFetchedIdentityRef.current = fetchIdentity;
         setStageExecution(null);
         setError(null);
         setLoading(false);
         return;
       }
-      lastFetchedSessionKeyRef.current = sessionKey;
+      lastFetchedIdentityRef.current = fetchIdentity;
       setError(apiError);
       setLoading(false);
     }
-  }, [enabled, sessionKey]);
+  }, [enabled, fetchIdentity, sessionKey]);
 
   useEffect(() => {
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
-      lastFetchedSessionKeyRef.current = null;
+      lastFetchedIdentityRef.current = null;
       setStageExecution(null);
       setError(null);
       setLoading(false);
@@ -98,14 +104,14 @@ export function useStageExecution(options?: {
       };
     }
 
-    if (lastFetchedSessionKeyRef.current !== sessionKey) {
+    if (lastFetchedIdentityRef.current !== fetchIdentity) {
       void fetchStageExecution();
     }
 
     return () => {
       mountedRef.current = false;
     };
-  }, [enabled, fetchStageExecution, sessionKey]);
+  }, [enabled, fetchIdentity, fetchStageExecution, sessionKey]);
 
   return {
     stageExecution,

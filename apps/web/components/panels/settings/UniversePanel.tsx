@@ -12,7 +12,7 @@ import { Button } from "../../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import MeshSettingsPanel from "../MeshSettingsPanel";
 import { MetricField, InspectorSection, StatusBadge, ToggleRow, CompactInputGrid } from "./primitives";
-import { isFemDiscretization } from "@/src/domain/capabilities";
+import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import {
   humanizeToken,
   readBuilderContract,
@@ -107,9 +107,7 @@ export default function UniversePanel() {
     scriptSyncMessage: cmd.scriptSyncMessage,
     syncScriptBuilder: cmd.syncScriptBuilder,
   };
-  const femDiscretization = ctx.domainCapabilities
-    ? isFemDiscretization(ctx.domainCapabilities)
-    : ctx.isFemBackend;
+  const femDiscretization = resolveFemDiscretization(ctx.domainCapabilities, false);
   const selectedNodeId = ctx.selectedSidebarNodeId ?? "universe";
   const builderContract = useMemo(() => readBuilderContract(ctx.metadata), [ctx.metadata]);
   const runtimeUniverse = useMemo<ScriptBuilderUniverseState | null>(() => {

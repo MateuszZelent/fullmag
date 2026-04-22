@@ -60,6 +60,8 @@ This document does not replace the target route tree.
 | `x-request-id` | request + response | yes for v1 middleware | Correlation id. Client may send it; server echoes or generates one. |
 | `x-api-contract-version` | response | yes for v1 middleware | Current contract version. Implemented value is `1.0.0`. |
 | `Idempotency-Key` | request | command mutations only | Safe retry / dedupe key for `POST /v1/live/current/commands` and `POST /v1/live/current/mesh/builds/commands`. |
+| `ETag` | response | selected heavy read resources | Strong validator emitted by binary routes and selected heavier JSON read-models such as mesh summary, mesh manifest, and engine log. |
+| `If-None-Match` | request | optional for cache revalidation | Conditional revalidation header for routes that emit `ETag`; matching validators may return `304 Not Modified`. |
 
 ### 3.3 Revision vocabulary
 
@@ -337,6 +339,11 @@ This same schema appears in `status.display`, as the response body of
 | `engine_log_revision` | `u64` | Engine-log revision | Current implementation uses engine-log entry count. |
 | `display_revision` | `u64` | Display selection revision | Bumped when display selection is updated. |
 | `workspace_revision` | `u64` | Workspace UI-family revision | Bumped when workspace selection, ribbon, or layout changes. |
+| `mesh_revision` | `u64` | Mesh-family revision | Bumped when mesh config/report/topology-family resources change. |
+| `mesh_build_revision` | `u64` | Mesh build lifecycle revision | Bumped when active/history build resources change. |
+| `commands_revision` | `u64` | Command-ledger revision | Current implementation tracks the current command ledger length. |
+| `stages_revision` | `u64` | Stage-execution revision | Current implementation follows the stage-execution snapshot via the current state version when present. |
+| `scene_revision` | `u64 \| null` | Authoring scene revision | Mirrors the committed `SceneDocument.revision` when a scene is loaded. |
 
 #### `CapabilityMap`
 
@@ -869,6 +876,11 @@ Honesty note:
 - Request body: none
 - Response body: `MeshWorkspaceResource`
 
+Cache note:
+
+- This route now emits `ETag` and supports `If-None-Match` / `304 Not Modified`
+  for HTTP cache revalidation in addition to revision-based browser caching.
+
 #### `MeshWorkspaceResource`
 
 | Field | Type | Meaning | Notes |
@@ -970,6 +982,10 @@ Honesty note:
 - Purpose: fetch the thin FEM mesh manifest used by the browser tree and 3D selection model
 - Request body: none
 - Response body: `MeshSharedDomainManifestResource`
+
+Cache note:
+
+- This route now emits `ETag` and supports `If-None-Match` / `304 Not Modified`.
 
 #### `MeshSharedDomainManifestResource`
 
@@ -1609,6 +1625,12 @@ Honesty note:
 - Purpose: fetch the current engine-log resource
 - Request body: none
 - Response body: ad hoc JSON envelope
+
+Cache note:
+
+- This route now emits `ETag` and supports `If-None-Match` / `304 Not Modified`
+  so the browser can revalidate heavy log payloads without treating them as
+  always-fresh JSON.
 
 #### Response envelope
 

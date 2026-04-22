@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { DecodedFieldVector } from "../../api/codecs/types";
+import { decodeFieldVectorOffThread } from "../../api/codecs/decodeOffThread";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { ResourceCache } from "../../api/client/cache/ResourceCache";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
@@ -43,8 +44,29 @@ export function useFieldVector(
           return;
         }
 
-        const result = await client.fields.getVector(qId);
-        client.getCache().set(resourceKey, result, rev, 0);
+        const response = await client.fields.getVectorResponse(qId, {
+          cache: "default",
+          headers:
+            cached?.eTag != null
+              ? {
+                  "If-None-Match": cached.eTag,
+                }
+              : undefined,
+        });
+        if (response.status === 304 && cached) {
+          fetchedRevRef.current = cacheKey;
+          setField(cached.data);
+          setLoading(false);
+          return;
+        }
+        const result = await decodeFieldVectorOffThread(response.buffer);
+        client.getCache().set(
+          resourceKey,
+          result,
+          rev,
+          0,
+          response.headers.get("etag"),
+        );
         fetchedRevRef.current = cacheKey;
         setField(result);
         setLoading(false);
