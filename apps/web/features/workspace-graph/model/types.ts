@@ -118,6 +118,7 @@ export interface WorkspaceGraphPatch {
 }
 
 export interface WorkspaceGraphBridgeInput {
+  enabled?: boolean;
   projectLabel: string;
   workspaceMode: WorkspaceMode;
   workspaceTabs: Record<WorkspaceMode, WorkspaceTab[]>;

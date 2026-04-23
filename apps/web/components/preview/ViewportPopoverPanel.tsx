@@ -88,7 +88,17 @@ export function ViewportPopoverPanel({
       }
       left = Math.max(MARGIN, Math.min(left, vw - pRect.width - MARGIN));
 
-      setStyle({ position: "fixed", top, left, visibility: "visible" });
+      setStyle((previous) => {
+        if (
+          previous.position === "fixed" &&
+          previous.top === top &&
+          previous.left === left &&
+          previous.visibility === "visible"
+        ) {
+          return previous;
+        }
+        return { position: "fixed", top, left, visibility: "visible" };
+      });
     }
 
     reposition();
@@ -98,7 +108,7 @@ export function ViewportPopoverPanel({
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", reposition, true);
     };
-  }, [mounted, anchorElement, anchorRef, children, preferredHorizontal, preferredVertical, title]);
+  }, [mounted, anchorElement, anchorRef, preferredHorizontal, preferredVertical]);
 
   if (!mounted) return null;
 

@@ -262,4 +262,50 @@ describe("workspace graph store", () => {
     expect(activeDatasetIdForResultNode(resultsWorkspace, "dv-1")).toBe("ds-1");
     expect(activeDatasetIdForResultNode(resultsWorkspace, null)).toBe("ds-1");
   });
+
+  it("treats applySnapshot as idempotent for identical signature", () => {
+    const firstSnapshot = createWorkspaceGraphSnapshot({
+      projectLabel: "Micromagnetic Workspace",
+      workspaceMode: "study",
+      workspaceTabs: { build: [], study: [], analyze: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      selectedNodeId: "study.root",
+      studyPipeline,
+      resultsWorkspace,
+      quantities,
+      scalarRows: [],
+      requestedPreviewQuantity: "m",
+      requestedPreviewComponent: "x",
+      plane: "xy",
+      sliceIndex: 1,
+      viewMode: "3D",
+      renderMode: "surface",
+    });
+    useWorkspaceGraphStore.getState().applySnapshot(firstSnapshot, "sig:a");
+
+    const snapshotRefAfterFirstSet = useWorkspaceGraphStore.getState().snapshot;
+    const secondSnapshot = createWorkspaceGraphSnapshot({
+      projectLabel: "Micromagnetic Workspace",
+      workspaceMode: "study",
+      workspaceTabs: { build: [], study: [], analyze: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      selectedNodeId: "study.root",
+      studyPipeline,
+      resultsWorkspace,
+      quantities,
+      scalarRows: [],
+      requestedPreviewQuantity: "m",
+      requestedPreviewComponent: "x",
+      plane: "xy",
+      sliceIndex: 1,
+      viewMode: "3D",
+      renderMode: "surface",
+    });
+    useWorkspaceGraphStore.getState().applySnapshot(secondSnapshot, "sig:a");
+
+    expect(useWorkspaceGraphStore.getState().snapshot).toBe(snapshotRefAfterFirstSet);
+
+    useWorkspaceGraphStore.getState().applySnapshot(secondSnapshot, "sig:b");
+    expect(useWorkspaceGraphStore.getState().snapshot).toBe(secondSnapshot);
+  });
 });

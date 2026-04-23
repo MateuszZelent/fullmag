@@ -99,42 +99,52 @@ function applyWorkspaceTabSelection(
   },
 ): void {
   if (tab.payload?.resultWorkspaceId) {
-    if (
-      api.currentWorkspaceMode !== "analyze" ||
-      api.model.activeResultWorkspaceId !== tab.payload.resultWorkspaceId
-    ) {
+    if (api.currentWorkspaceMode !== "analyze") {
+      api.setWorkspaceMode("analyze");
+    }
+    if (api.model.activeResultWorkspaceId !== tab.payload.resultWorkspaceId) {
       api.model.openResultWorkspaceEntry(tab.payload.resultWorkspaceId);
     }
     return;
   }
 
   if (tab.kind === "viewport-3d") {
-    api.setWorkspaceMode(stage);
+    if (api.currentWorkspaceMode !== stage) {
+      api.setWorkspaceMode(stage);
+    }
     if (api.effectiveViewMode !== "3D") {
       api.handleViewModeChange("3D");
     }
     return;
   }
   if (tab.kind === "viewport-2d") {
-    api.setWorkspaceMode(stage);
+    if (api.currentWorkspaceMode !== stage) {
+      api.setWorkspaceMode(stage);
+    }
     if (api.effectiveViewMode !== "2D") {
       api.handleViewModeChange("2D");
     }
     return;
   }
   if (tab.kind === "viewport-mesh") {
-    api.setWorkspaceMode(stage);
+    if (api.currentWorkspaceMode !== stage) {
+      api.setWorkspaceMode(stage);
+    }
     if (api.effectiveViewMode !== "Mesh") {
       api.handleViewModeChange("Mesh");
     }
     return;
   }
   if (tab.kind === "viewport-charts") {
-    api.setWorkspaceMode(stage);
+    if (api.currentWorkspaceMode !== stage) {
+      api.setWorkspaceMode(stage);
+    }
     return;
   }
   if (tab.kind === "result-quantity") {
-    api.setWorkspaceMode(stage);
+    if (api.currentWorkspaceMode !== stage) {
+      api.setWorkspaceMode(stage);
+    }
     if (tab.payload?.quantityId && tab.payload.quantityId !== api.selectedQuantity) {
       api.requestPreviewQuantity(tab.payload.quantityId);
     }
@@ -159,10 +169,13 @@ function applyWorkspaceTabSelection(
     return;
   }
 
-  api.setWorkspaceMode(stage);
+  if (api.currentWorkspaceMode !== stage) {
+    api.setWorkspaceMode(stage);
+  }
 }
 
 export default function DockCenterTabs() {
+  const dockCenterFlags = FRONTEND_DIAGNOSTIC_FLAGS.dockCenterTabs;
   const currentStage = useWorkspaceStore((state) => state.currentStage);
   const tabs = useWorkspaceStore((state) => state.workspaceTabsByStage[state.currentStage]);
   const activeTabId = useWorkspaceStore(
@@ -183,7 +196,7 @@ export default function DockCenterTabs() {
 
   // Block rendering until feature flags are resolved to avoid mounting Three.js
   // canvases that would be immediately disabled (causes WebGL context churn).
-  const flagsLoading = featureFlags === null;
+  const flagsLoading = dockCenterFlags.enableFeatureFlagsLoadingGate && featureFlags === null;
   const chartsDisabled = featureFlags?.disable_charts ?? false;
   const preview3dDisabled = featureFlags?.disable_preview_3d ?? false;
 
@@ -193,12 +206,18 @@ export default function DockCenterTabs() {
   );
 
   useEffect(() => {
+    if (!dockCenterFlags.enableInternalTree || !dockCenterFlags.enableAutoActivateEffect) {
+      return;
+    }
     if (!activeTabId && tabs.length > 0) {
       activateTab(currentStage, tabs[0]!.id);
     }
-  }, [activateTab, activeTabId, currentStage, tabs]);
+  }, [activateTab, activeTabId, currentStage, dockCenterFlags.enableAutoActivateEffect, dockCenterFlags.enableInternalTree, tabs]);
 
   useEffect(() => {
+    if (!dockCenterFlags.enableInternalTree || !dockCenterFlags.enableEnsureChartsTabEffect) {
+      return;
+    }
     if (tabs.some((tab) => tab.id === "core:charts")) {
       return;
     }
@@ -213,9 +232,12 @@ export default function DockCenterTabs() {
       lifecycle: "warm",
       payload: { viewMode: "Analyze" },
     });
-  }, [currentStage, openTab, tabs]);
+  }, [currentStage, dockCenterFlags.enableEnsureChartsTabEffect, dockCenterFlags.enableInternalTree, openTab, tabs]);
 
   useEffect(() => {
+    if (!dockCenterFlags.enableInternalTree || !dockCenterFlags.enableApplySelectionEffect) {
+      return;
+    }
     if (!activeTab) {
       return;
     }
@@ -228,10 +250,19 @@ export default function DockCenterTabs() {
       selectedQuantity,
       model,
     });
-  }, [activeTab, currentStage, currentWorkspaceMode, effectiveViewMode, selectedQuantity, model, vp.handleViewModeChange, vp.requestPreviewQuantity, vp.setWorkspaceMode]);
+  }, [activeTab, currentStage, currentWorkspaceMode, dockCenterFlags.enableApplySelectionEffect, dockCenterFlags.enableInternalTree, effectiveViewMode, selectedQuantity, model, vp.handleViewModeChange, vp.requestPreviewQuantity, vp.setWorkspaceMode]);
 
   const spatialPreview = tp.preview?.kind === "spatial" ? tp.preview : null;
-  const previewNoticesVisible = FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices;
+  const previewNoticesVisible =
+    FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices && dockCenterFlags.showPreviewNotices;
+
+  if (!dockCenterFlags.enableInternalTree) {
+    return (
+      <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
+        DockCenterTabs internal tree disabled
+      </div>
+    );
+  }
 
   if (flagsLoading) {
     return (
@@ -256,44 +287,110 @@ export default function DockCenterTabs() {
 
   const activeTabIsCharts = activeTab?.kind === "viewport-charts";
 
-  return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
-      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar && !activeTabIsCharts ? <ViewportBar /> : null}
+  const renderTabContent = (tab: WorkspaceTab) => {
+    if (!dockCenterFlags.enableTabContent) {
+      return (
+        <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
+          Tab content disabled by diagnostic flag
+        </div>
+      );
+    }
 
-      {previewNoticesVisible && (
-        <>
-          {(spatialPreview?.auto_downscaled || tp.liveState?.preview_auto_downscaled) && (
-            <div
-              className="border-b border-border/25 bg-background/40 px-2.5 py-1 text-[0.65rem] leading-tight text-muted-foreground"
-              title={
-                spatialPreview?.auto_downscale_message ??
-                tp.liveState?.preview_auto_downscale_message ??
-                undefined
-              }
-            >
-              <span className="opacity-70 uppercase tracking-wider font-semibold mr-2 text-[0.6rem]">Resolution Scale</span>
-              {spatialPreview?.auto_downscale_message ??
-                tp.liveState?.preview_auto_downscale_message ??
-                `Preview auto-fit to ${vp.previewGrid[0]}×${vp.previewGrid[1]}×${vp.previewGrid[2]}`}
-            </div>
-          )}
-          {(vp.previewMessage || vp.previewIsStale || vp.previewIsInitialSampleStale) && (
-            <div className="border-b border-border/40 bg-card/40 px-2.5 py-1.5 text-xs leading-snug text-muted-foreground">
-              {vp.previewMessage ??
-                (vp.previewIsInitialSampleStale
-                  ? "Showing bootstrap preview until first live preview sample arrives 3"
-                  : "Preview update pending")}
-            </div>
-          )}
-        </>
-      )}
+    if (tab.kind === "viewport-charts") {
+      if (!dockCenterFlags.enableChartsViewport) {
+        return (
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
+            ChartsViewport disabled by diagnostic flag
+          </div>
+        );
+      }
+      return chartsDisabled ? (
+        <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
+          Charts disabled via feature flags
+        </div>
+      ) : (
+        <ChartsViewport />
+      );
+    }
 
-      <TooltipProvider delayDuration={300}>
-        <Tabs
-          value={activeTab?.id}
-          onValueChange={(nextId) => activateTab(currentStage, nextId)}
-          className="flex min-h-0 min-w-0 flex-1 flex-col"
+    if (isAnalyzeLikeTab(tab)) {
+      if (!dockCenterFlags.enableAnalyzeViewport) {
+        return (
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
+            AnalyzeViewport disabled by diagnostic flag
+          </div>
+        );
+      }
+      return <AnalyzeViewport />;
+    }
+
+    if (preview3dDisabled) {
+      return (
+        <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
+          3D preview disabled via feature flags
+        </div>
+      );
+    }
+
+    if (!dockCenterFlags.enableViewportCanvas) {
+      return (
+        <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
+          ViewportCanvasArea disabled by diagnostic flag
+        </div>
+      );
+    }
+
+    return <ViewportCanvasArea />;
+  };
+
+  const previewNotices = previewNoticesVisible ? (
+    <>
+      {(spatialPreview?.auto_downscaled || tp.liveState?.preview_auto_downscaled) && (
+        <div
+          className="border-b border-border/25 bg-background/40 px-2.5 py-1 text-[0.65rem] leading-tight text-muted-foreground"
+          title={
+            spatialPreview?.auto_downscale_message ??
+            tp.liveState?.preview_auto_downscale_message ??
+            undefined
+          }
         >
+          <span className="opacity-70 uppercase tracking-wider font-semibold mr-2 text-[0.6rem]">Resolution Scale</span>
+          {spatialPreview?.auto_downscale_message ??
+            tp.liveState?.preview_auto_downscale_message ??
+            `Preview auto-fit to ${vp.previewGrid[0]}×${vp.previewGrid[1]}×${vp.previewGrid[2]}`}
+        </div>
+      )}
+      {(vp.previewMessage || vp.previewIsStale || vp.previewIsInitialSampleStale) && (
+        <div className="border-b border-border/40 bg-card/40 px-2.5 py-1.5 text-xs leading-snug text-muted-foreground">
+          {vp.previewMessage ??
+            (vp.previewIsInitialSampleStale
+              ? "Showing bootstrap preview until first live preview sample arrives 3"
+              : "Preview update pending")}
+        </div>
+      )}
+    </>
+  ) : null;
+
+  if (!dockCenterFlags.enableTabsShell) {
+    const tab = activeTab ?? tabs[0]!;
+    return (
+      <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
+        {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar && !activeTabIsCharts ? <ViewportBar /> : null}
+        {previewNotices}
+        <div className="min-h-0 min-w-0 flex-1">
+          {renderTabContent(tab)}
+        </div>
+      </div>
+    );
+  }
+
+  const tabsNode = (
+    <Tabs
+      value={activeTab?.id}
+      onValueChange={(nextId) => activateTab(currentStage, nextId)}
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
+    >
+      {dockCenterFlags.enableTabsHeader ? (
         <div className="shrink-0 border-b border-border bg-card/40 px-2 pt-1.5">
           <TabsList className="h-8 w-full justify-start gap-1 overflow-x-auto bg-transparent p-0 pb-0">
             {tabs.map((tab) => (
@@ -303,13 +400,13 @@ export default function DockCenterTabs() {
                 className={cn(
                   "group relative h-8 min-w-[120px] max-w-[220px] justify-start gap-1 rounded-none rounded-t-md border-b-0 border border-transparent bg-transparent px-2.5 py-0 text-[0.7rem] normal-case tracking-wide text-muted-foreground transition-colors hover:text-foreground",
                   "data-[state=active]:border-border data-[state=active]:border-t-2 data-[state=active]:border-t-primary data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-none",
-                  "after:absolute after:-bottom-[1px] after:left-0 after:right-0 after:h-[1px] data-[state=active]:after:bg-background"
+                  "after:absolute after:-bottom-[1px] after:left-0 after:right-0 after:h-[1px] data-[state=active]:after:bg-background",
                 )}
                 title={tab.title}
               >
                 <span className="truncate">{tab.title}</span>
                 {tab.pinned ? <Pin className="size-3 opacity-65" /> : null}
-                {tab.closable && !tab.pinned ? (
+                {dockCenterFlags.enableInlineCloseButton && tab.closable && !tab.pinned ? (
                   <div
                     role="button"
                     tabIndex={-1}
@@ -340,57 +437,54 @@ export default function DockCenterTabs() {
             ))}
           </TabsList>
         </div>
+      ) : null}
 
-        {tabs.map((tab) => {
-          const isActive = tab.id === activeTab?.id;
-          const shouldKeepWarm = tab.lifecycle === "warm";
-          const shouldRender = isActive || shouldKeepWarm;
-          if (!shouldRender) {
-            return null;
-          }
-          return (
-            <TabsContent
-              key={tab.id}
-              value={tab.id}
-              forceMount={shouldKeepWarm ? true : undefined}
-              className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
-            >
-              {tab.kind === "viewport-charts" ? (
-                chartsDisabled ? (
-                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
-                    Charts disabled via feature flags
-                  </div>
-                ) : (
-                  <ChartsViewport />
-                )
-              ) : isAnalyzeLikeTab(tab) ? (
-                <AnalyzeViewport />
-              ) : preview3dDisabled ? (
-                <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
-                  3D preview disabled via feature flags
-                </div>
-              ) : (
-                <ViewportCanvasArea />
-              )}
+      {tabs.map((tab) => {
+        const isActive = tab.id === activeTab?.id;
+        const shouldKeepWarm = tab.lifecycle === "warm";
+        const shouldRender = isActive || shouldKeepWarm;
+        if (!shouldRender) {
+          return null;
+        }
+        return (
+          <TabsContent
+            key={tab.id}
+            value={tab.id}
+            forceMount={shouldKeepWarm ? true : undefined}
+            className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
+          >
+            {renderTabContent(tab)}
 
-              {tab.closable && (
-                <div className="pointer-events-none absolute bottom-2 right-2 z-20 hidden md:block">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    className="pointer-events-auto h-7 text-[0.66rem]"
-                    onClick={() => pinTab(currentStage, tab.id, !tab.pinned)}
-                  >
-                    {tab.pinned ? "Unpin" : "Pin"}
-                  </Button>
-                </div>
-              )}
-            </TabsContent>
-          );
-        })}
-        </Tabs>
-      </TooltipProvider>
+            {dockCenterFlags.enablePinOverlayButton && tab.closable ? (
+              <div className="pointer-events-none absolute bottom-2 right-2 z-20 hidden md:block">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="pointer-events-auto h-7 text-[0.66rem]"
+                  onClick={() => pinTab(currentStage, tab.id, !tab.pinned)}
+                >
+                  {tab.pinned ? "Unpin" : "Pin"}
+                </Button>
+              </div>
+            ) : null}
+          </TabsContent>
+        );
+      })}
+    </Tabs>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
+      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar && !activeTabIsCharts ? <ViewportBar /> : null}
+      {previewNotices}
+      {dockCenterFlags.enableTooltipProvider ? (
+        <TooltipProvider delayDuration={300}>
+          {tabsNode}
+        </TooltipProvider>
+      ) : (
+        tabsNode
+      )}
     </div>
   );
 }

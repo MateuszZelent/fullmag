@@ -2,7 +2,6 @@ import { create } from "zustand";
 import type { DockResponsivePreset } from "@/components/workspace/docking/dockLayoutDefaults";
 import {
   type DockLayoutByPreset,
-  type DockLayoutEnvelope,
   type DockLayoutModel,
   createDefaultDockLayoutByPreset,
   buildDockLayoutEnvelopeForModel,
@@ -467,13 +466,20 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       set((state) => ({ stageLayouts: updateStageLayout(state, mode, { rightDock }) })),
     setBottomDock: (mode, bottomDock) =>
       set((state) => ({ stageLayouts: updateStageLayout(state, mode, { bottomDock }) })),
-    setSelectionId: (selectionId) => set({ selectionId }),
-    setActiveProjectId: (activeProjectId) => set({ activeProjectId }),
-    setLauncherVisible: (launcherVisible) => set({ launcherVisible }),
-    setLaunchIntent: (launchIntent) => set({ launchIntent }),
-    setRightInspectorOpen: (rightInspectorOpen) => set({ rightInspectorOpen }),
-    setRightInspectorTab: (rightInspectorTab) => set({ rightInspectorTab }),
-    setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+    setSelectionId: (selectionId) =>
+      set((state) => (Object.is(state.selectionId, selectionId) ? state : { selectionId })),
+    setActiveProjectId: (activeProjectId) =>
+      set((state) => (Object.is(state.activeProjectId, activeProjectId) ? state : { activeProjectId })),
+    setLauncherVisible: (launcherVisible) =>
+      set((state) => (Object.is(state.launcherVisible, launcherVisible) ? state : { launcherVisible })),
+    setLaunchIntent: (launchIntent) =>
+      set((state) => (Object.is(state.launchIntent, launchIntent) ? state : { launchIntent })),
+    setRightInspectorOpen: (rightInspectorOpen) =>
+      set((state) => (Object.is(state.rightInspectorOpen, rightInspectorOpen) ? state : { rightInspectorOpen })),
+    setRightInspectorTab: (rightInspectorTab) =>
+      set((state) => (Object.is(state.rightInspectorTab, rightInspectorTab) ? state : { rightInspectorTab })),
+    setSettingsOpen: (settingsOpen) =>
+      set((state) => (Object.is(state.settingsOpen, settingsOpen) ? state : { settingsOpen })),
     setPhysicsDocsOpen: (physicsDocsOpen, topic = null) =>
       set((state) => ({
         physicsDocsOpen,

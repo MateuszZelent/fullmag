@@ -50,7 +50,8 @@ export const EMPTY_WORKSPACE_GRAPH: WorkspaceGraphState = {
 
 interface WorkspaceGraphStoreState {
   snapshot: WorkspaceGraphState;
-  applySnapshot: (snapshot: WorkspaceGraphState) => void;
+  lastSnapshotSignature: string | null;
+  applySnapshot: (snapshot: WorkspaceGraphState, signature?: string | null) => void;
   applyPatch: (patch: WorkspaceGraphPatch) => void;
   upsertViewportDocument: (document: ViewportDocumentState) => void;
   setSelection: (selection: Partial<WorkspaceGraphSelectionState>) => void;
@@ -59,7 +60,17 @@ interface WorkspaceGraphStoreState {
 
 export const useWorkspaceGraphStore = create<WorkspaceGraphStoreState>((set) => ({
   snapshot: EMPTY_WORKSPACE_GRAPH,
-  applySnapshot: (snapshot) => set({ snapshot }),
+  lastSnapshotSignature: null,
+  applySnapshot: (snapshot, signature = null) =>
+    set((state) => {
+      if (signature && state.lastSnapshotSignature === signature) {
+        return state;
+      }
+      if (Object.is(state.snapshot, snapshot)) {
+        return state;
+      }
+      return { snapshot, lastSnapshotSignature: signature };
+    }),
   applyPatch: (patch) =>
     set((state) => ({
       snapshot: {
@@ -75,6 +86,7 @@ export const useWorkspaceGraphStore = create<WorkspaceGraphStoreState>((set) => 
         },
         updatedAt: patch.updatedAt ?? Date.now(),
       },
+      lastSnapshotSignature: null,
     })),
   upsertViewportDocument: (document) =>
     set((state) => ({
@@ -86,6 +98,7 @@ export const useWorkspaceGraphStore = create<WorkspaceGraphStoreState>((set) => 
         },
         updatedAt: Date.now(),
       },
+      lastSnapshotSignature: null,
     })),
   setSelection: (selection) =>
     set((state) => ({
@@ -97,8 +110,9 @@ export const useWorkspaceGraphStore = create<WorkspaceGraphStoreState>((set) => 
         },
         updatedAt: Date.now(),
       },
+      lastSnapshotSignature: null,
     })),
-  reset: () => set({ snapshot: EMPTY_WORKSPACE_GRAPH }),
+  reset: () => set({ snapshot: EMPTY_WORKSPACE_GRAPH, lastSnapshotSignature: null }),
 }));
 
 export const selectWorkspaceGraph = (state: WorkspaceGraphStoreState) => state.snapshot;

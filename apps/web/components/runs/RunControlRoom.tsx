@@ -231,7 +231,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const _viewport = useViewport();
   const _cmd = useCommand();
   const _model = useModel();
-  const ctx = { ..._transport, ..._viewport, ..._cmd, ..._model };
+  const ctx = useMemo(
+    () => ({ ..._transport, ..._viewport, ..._cmd, ..._model }),
+    [_cmd, _model, _transport, _viewport],
+  );
 
   /* Local elapsed / throughput – updated every second via setInterval so that
    * the status bar stays live without polluting transportValue with Date.now(). */
@@ -290,6 +293,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const setSidebarCollapsed = ctx.setSidebarCollapsed;
   const workspaceMode = ctx.workspaceMode;
   const setWorkspaceMode = ctx.setWorkspaceMode;
+  const effectiveViewMode = ctx.effectiveViewMode;
+  const handleViewModeChange = ctx.handleViewModeChange;
   const quickPreviewTargets = ctx.quickPreviewTargets;
   const requestPreviewQuantity = ctx.requestPreviewQuantity;
   const scriptPath = ctx.sessionFooter.scriptPath;
@@ -375,8 +380,11 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }, [initialWorkspaceMode, setWorkspaceMode, workspaceMode]);
 
   useEffect(() => {
-    setRightInspectorOpen(Boolean(activeStageLayout.rightDock));
-  }, [activeStageLayout.rightDock, setRightInspectorOpen]);
+    const next = Boolean(activeStageLayout.rightDock);
+    if (rightInspectorOpen !== next) {
+      setRightInspectorOpen(next);
+    }
+  }, [activeStageLayout.rightDock, rightInspectorOpen, setRightInspectorOpen]);
 
   useEffect(() => {
     const geometryTabActive = activeCoreTab === "Geometry";
@@ -391,16 +399,16 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     if (workspaceMode !== "build") {
       setWorkspaceMode("build");
     }
-    if (ctx.effectiveViewMode !== "3D") {
-      ctx.handleViewModeChange("3D");
+    if (effectiveViewMode !== "3D") {
+      handleViewModeChange("3D");
     }
   }, [
     activeCoreTab,
     builderModeEnabled,
-    ctx.effectiveViewMode,
-    ctx.handleViewModeChange,
     disableBuilderMode,
+    effectiveViewMode,
     enableBuilderMode,
+    handleViewModeChange,
     setWorkspaceMode,
     workspaceMode,
   ]);
@@ -428,6 +436,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     [ctx.studyPipeline, ctx.studyStages],
   );
   useWorkspaceGraphBridge({
+    enabled:
+      FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableGraphV2 &&
+      FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableWorkspaceGraphBridge,
     projectLabel: workspaceTitle,
     workspaceMode: currentStage,
     workspaceTabs: workspaceTabsByStage,

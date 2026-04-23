@@ -28,6 +28,7 @@ import { useWorkspaceGraphStore } from "@/features/workspace-graph";
 import { resultIconToken } from "@/features/analyze/registry/resultsTemplateRegistry";
 import { parseResultNodeContext } from "@/features/analyze/model/resultNodeContext";
 import { resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
@@ -302,7 +303,7 @@ export default function RunSidebar() {
   const graphResultsWorkspace = useWorkspaceGraphStore((state) => state.snapshot.resultsWorkspace);
   const graphSelection = useWorkspaceGraphStore((state) => state.snapshot.selection);
   const setGraphSelection = useWorkspaceGraphStore((state) => state.setSelection);
-  const graphEnabled = true;
+  const graphEnabled = FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableGraphV2;
   const resultWorkspaceEntriesForTree = useMemo(() => {
     const entries = [
       ...graphResultsWorkspace.solutions.map((entry) => ({

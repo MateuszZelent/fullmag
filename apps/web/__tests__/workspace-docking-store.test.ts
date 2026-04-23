@@ -39,8 +39,16 @@ function resetDockingStore() {
 describe("workspace docking store", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    (globalThis as { window?: { localStorage: MemoryStorage } }).window = {
+    (globalThis as {
+      window?: {
+        localStorage: MemoryStorage;
+        setTimeout: typeof setTimeout;
+        clearTimeout: typeof clearTimeout;
+      };
+    }).window = {
       localStorage: memoryStorage,
+      setTimeout,
+      clearTimeout,
     };
     memoryStorage.clear();
     resetDockingStore();
@@ -99,10 +107,15 @@ describe("workspace docking store", () => {
 
   it("setDockLayout persists model to localStorage", () => {
     const model = createDefaultDockLayout("desktop") as Record<string, unknown>;
+    const nextModel = structuredClone(model) as Record<string, unknown>;
+    const globalNode = nextModel.global as Record<string, unknown> | undefined;
+    if (globalNode) {
+      globalNode.splitterSize = 7;
+    }
 
-    useWorkspaceStore.getState().setDockLayout("study", "desktop", model);
+    useWorkspaceStore.getState().setDockLayout("study", "desktop", nextModel);
 
-    expect(useWorkspaceStore.getState().dockLayoutByStage.study.desktop?.model).toMatchObject(model);
+    expect(useWorkspaceStore.getState().dockLayoutByStage.study.desktop?.model).toMatchObject(nextModel);
     expect(
       useWorkspaceStore.getState().dockLayoutByStage.study.desktop?.dockingLayoutSchemaVersion,
     ).toBe(1);
@@ -164,5 +177,22 @@ describe("workspace docking store", () => {
     expect(tabs.find((tab) => tab.id === warmId)?.lifecycle).toBe("warm");
     expect(tabs.find((tab) => tab.id === coldId)?.keepAlive).toBe(false);
     expect(tabs.find((tab) => tab.id === coldId)?.lifecycle).toBe("unmount-on-hide");
+  });
+
+  it("keeps simple UI setters idempotent for unchanged values", () => {
+    const before = useWorkspaceStore.getState();
+    before.setSelectionId(before.selectionId);
+    before.setActiveProjectId(before.activeProjectId);
+    before.setLauncherVisible(before.launcherVisible);
+    before.setLaunchIntent(before.launchIntent);
+    before.setRightInspectorOpen(before.rightInspectorOpen);
+    before.setRightInspectorTab(before.rightInspectorTab);
+    before.setSettingsOpen(before.settingsOpen);
+    const afterUnchanged = useWorkspaceStore.getState();
+    expect(afterUnchanged).toBe(before);
+
+    afterUnchanged.setSelectionId("node:test");
+    const afterChanged = useWorkspaceStore.getState();
+    expect(afterChanged.selectionId).toBe("node:test");
   });
 });

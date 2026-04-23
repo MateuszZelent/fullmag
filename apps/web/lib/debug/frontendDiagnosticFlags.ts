@@ -11,12 +11,32 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableWorkspaceShell: true,
     enableRunControlRoom: true,
     enableControlRoomShell: true,
-    enableWorkspaceDockingShell: false,
-    enableDockCenterTabs: false,
+    enableWorkspaceDockingShell: true,
+    enableDockCenterTabs: true,
     enableDockingTooltipProviders: true,
-    // Escape hatch for React 19 + Radix ScrollArea ref loop.
-    useRadixScrollArea: false,
     enableGraphV2: true,
+    enableWorkspaceGraphBridge: true,
+  },
+  dockCenterTabs: {
+    // Internal master for DockCenterTabs submodules (workspace.enableDockCenterTabs stays external gate).
+    enableInternalTree: true,
+    // Effects
+    enableAutoActivateEffect: true,
+    enableEnsureChartsTabEffect: true,
+    enableApplySelectionEffect: true,
+    enableFeatureFlagsLoadingGate: true,
+    // Shell/UI
+    enableTooltipProvider: true,
+    enableTabsShell: true,
+    enableTabsHeader: true,
+    enableInlineCloseButton: true,
+    enableTabContent: true,
+    showPreviewNotices: true,
+    // Content modules
+    enableChartsViewport: true,
+    enableAnalyzeViewport: true,
+    enableViewportCanvas: true,
+    enablePinOverlayButton: true,
   },
   session: {
     enableLiveWebSocket: true,
@@ -269,23 +289,29 @@ export function getDefaultFrontendDiagnosticFlags(): FrontendDiagnosticFlags {
   return deepClone(DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS) as FrontendDiagnosticFlags;
 }
 
+function normalizeFrontendDiagnosticFlags(
+  flags: FrontendDiagnosticFlags,
+): FrontendDiagnosticFlags {
+  const normalized = deepClone(flags) as FrontendDiagnosticFlags;
+  normalized.shell.showRibbonBar = true;
+  return normalized;
+}
+
 export function loadFrontendDiagnosticFlagsFromStorage(): FrontendDiagnosticFlags {
   const defaults = getDefaultFrontendDiagnosticFlags();
   if (typeof window === "undefined") {
-    return defaults;
+    return normalizeFrontendDiagnosticFlags(defaults);
   }
   try {
     const raw = window.localStorage.getItem(FRONTEND_DIAGNOSTIC_FLAGS_STORAGE_KEY);
     if (!raw) {
-      return defaults;
+      return normalizeFrontendDiagnosticFlags(defaults);
     }
     const parsed = JSON.parse(raw) as unknown;
     const merged = mergeKnownShape(defaults, parsed);
-    const flags = merged as FrontendDiagnosticFlags;
-    flags.workspace.enableGraphV2 = true;
-    return flags;
+    return normalizeFrontendDiagnosticFlags(merged as FrontendDiagnosticFlags);
   } catch {
-    return defaults;
+    return normalizeFrontendDiagnosticFlags(defaults);
   }
 }
 
