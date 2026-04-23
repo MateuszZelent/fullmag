@@ -50,9 +50,8 @@ export interface ViewportRouterProps {
  *   context={viewCtx}
  *   renderView={(entry) => {
  *     switch (entry.componentKey) {
- *       case "VectorFieldView3D": return <VectorFieldView3D {...props} />;
- *       case "FemMeshView3D":       return <FemMeshView3D {...props} />;
- *       // …
+ *       case "UnifiedViewport3D": return <UnifiedViewport3D {...props} />;
+ *       case "UnifiedViewport2D": return <UnifiedViewport2D {...props} />;
  *     }
  *   }}
  * />

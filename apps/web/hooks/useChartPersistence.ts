@@ -8,11 +8,73 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { ChartState } from "../components/plots/chartTypes";
-import { DEFAULT_CHART_STATE, clampSeriesByUnitLimit } from "../components/plots/chartTypes";
+import type { ChartSeriesSpec, ChartState } from "../components/plots/chartTypes";
+import {
+  DEFAULT_CHART_STATE,
+  buildScalarSeriesSpecsForScope,
+  clampSeriesByUnitLimit,
+  scopeRefFromSelectedDomain,
+} from "../components/plots/chartTypes";
 
 const STORAGE_KEY = "fullmag:charts:state";
 const DEBOUNCE_MS = 500;
+
+function isChartSeriesSpec(value: unknown): value is ChartSeriesSpec {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<ChartSeriesSpec>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.quantityId === "string" &&
+    (candidate.reducer === "scalar_native" ||
+      candidate.reducer === "avg_component" ||
+      candidate.reducer === "avg_magnitude" ||
+      candidate.reducer === "max_magnitude") &&
+    (candidate.component === null ||
+      candidate.component === "x" ||
+      candidate.component === "y" ||
+      candidate.component === "z" ||
+      candidate.component === "magnitude") &&
+    (candidate.xAxis === "time" || candidate.xAxis === "step") &&
+    typeof candidate.label === "string" &&
+    typeof candidate.unit === "string" &&
+    Boolean(candidate.scope) &&
+    typeof candidate.scope === "object" &&
+    (((candidate.scope as { kind?: unknown }).kind === "universe" &&
+      (candidate.scope as { id?: unknown }).id === null) ||
+      ((candidate.scope as { kind?: unknown }).kind === "object" &&
+        typeof (candidate.scope as { id?: unknown }).id === "string"))
+  );
+}
+
+function specsMatchState(args: {
+  specs: ChartSeriesSpec[];
+  seriesKeys: string[];
+  xAxis: "time" | "step";
+  selectedDomain: string | null;
+}): boolean {
+  const { specs, seriesKeys, xAxis, selectedDomain } = args;
+  if (specs.length !== seriesKeys.length) {
+    return false;
+  }
+  const expectedScope = scopeRefFromSelectedDomain(selectedDomain);
+  for (let index = 0; index < specs.length; index += 1) {
+    const spec = specs[index];
+    const key = seriesKeys[index];
+    if (!spec || spec.quantityId !== key || spec.reducer !== "scalar_native" || spec.component !== null) {
+      return false;
+    }
+    if (spec.xAxis !== xAxis) {
+      return false;
+    }
+    if (
+      spec.scope.kind !== expectedScope.kind ||
+      spec.scope.id !== expectedScope.id
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function readFromStorage(): ChartState {
   if (typeof window === "undefined") return DEFAULT_CHART_STATE;
@@ -26,20 +88,40 @@ function readFromStorage(): ChartState {
         )
       : DEFAULT_CHART_STATE.activeSeriesKeys;
     const sanitizedSeries = clampSeriesByUnitLimit(parsedSeries);
+    const selectedDomain =
+      typeof parsed.selectedDomain === "string"
+        ? parsed.selectedDomain
+        : null;
+    const xColumn =
+      typeof parsed.xColumn === "string" ? parsed.xColumn : DEFAULT_CHART_STATE.xColumn;
+    const xAxis = xColumn === "step" ? "step" : "time";
+    const parsedSpecs = Array.isArray(parsed.activeSeriesSpecs)
+      ? parsed.activeSeriesSpecs.filter(isChartSeriesSpec)
+      : [];
+    const activeSeriesKeys = sanitizedSeries.length > 0
+      ? sanitizedSeries
+      : DEFAULT_CHART_STATE.activeSeriesKeys;
+    const activeSeriesSpecs = specsMatchState({
+      specs: parsedSpecs,
+      seriesKeys: activeSeriesKeys,
+      xAxis,
+      selectedDomain,
+    })
+      ? parsedSpecs
+      : buildScalarSeriesSpecsForScope({
+          seriesKeys: activeSeriesKeys,
+          scope: scopeRefFromSelectedDomain(selectedDomain),
+          xAxis,
+        });
     return {
-      xColumn:
-        typeof parsed.xColumn === "string" ? parsed.xColumn : DEFAULT_CHART_STATE.xColumn,
-      activeSeriesKeys: sanitizedSeries.length > 0
-        ? sanitizedSeries
-        : DEFAULT_CHART_STATE.activeSeriesKeys,
+      xColumn,
+      activeSeriesKeys,
+      activeSeriesSpecs,
       activePreset:
         typeof parsed.activePreset === "string"
           ? (parsed.activePreset as ChartState["activePreset"])
           : null,
-      selectedDomain:
-        typeof parsed.selectedDomain === "string"
-          ? parsed.selectedDomain
-          : null,
+      selectedDomain,
     };
   } catch {
     return DEFAULT_CHART_STATE;
@@ -67,11 +149,27 @@ export function useChartPersistence(): [
       setStateRaw((prev) => {
         const resolved = typeof next === "function" ? next(prev) : next;
         const clampedKeys = clampSeriesByUnitLimit(resolved.activeSeriesKeys);
+        const activeSeriesKeys = clampedKeys.length > 0
+          ? clampedKeys
+          : DEFAULT_CHART_STATE.activeSeriesKeys;
+        const xAxis = resolved.xColumn === "step" ? "step" : "time";
+        const selectedDomain = resolved.selectedDomain ?? null;
+        const activeSeriesSpecs = specsMatchState({
+          specs: resolved.activeSeriesSpecs,
+          seriesKeys: activeSeriesKeys,
+          xAxis,
+          selectedDomain,
+        })
+          ? resolved.activeSeriesSpecs
+          : buildScalarSeriesSpecsForScope({
+              seriesKeys: activeSeriesKeys,
+              scope: scopeRefFromSelectedDomain(selectedDomain),
+              xAxis,
+            });
         const sanitized: ChartState = {
           ...resolved,
-          activeSeriesKeys: clampedKeys.length > 0
-            ? clampedKeys
-            : DEFAULT_CHART_STATE.activeSeriesKeys,
+          activeSeriesKeys,
+          activeSeriesSpecs,
         };
         // Schedule debounced write
         if (timerRef.current !== null) clearTimeout(timerRef.current);

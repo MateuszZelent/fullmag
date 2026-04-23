@@ -13,6 +13,10 @@ import type { ScalarWindow } from "@/src/api/generated/openapi-types";
 import { coerceScalarRows } from "@/lib/plots/scalarRows";
 import { mergeScalarRowsDelta } from "@/lib/session/merge";
 import type { ScalarRow } from "@/lib/session/types";
+import {
+  removeFrontendResourceBucket,
+  updateFrontendResourceBucket,
+} from "@/lib/debug/frontendResourceManager";
 
 interface UseScalarChartHistoryOptions {
   enabled: boolean;
@@ -144,6 +148,21 @@ function reducer(
   }
 }
 
+function estimateScalarRowsBytes(rows: ScalarRow[]): number {
+  if (rows.length === 0) {
+    return 0;
+  }
+  const sampleSize = Math.min(rows.length, 32);
+  let keyCount = 0;
+  for (let index = 0; index < sampleSize; index += 1) {
+    keyCount += Object.keys(rows[index] ?? {}).length;
+  }
+  const avgColumns = Math.max(1, Math.round(keyCount / sampleSize));
+  // row object + numeric values (+ small overhead for key references)
+  const bytesPerRow = avgColumns * 16 + 48;
+  return rows.length * bytesPerRow;
+}
+
 export function useScalarChartHistory({
   enabled,
   sessionKey,
@@ -254,6 +273,27 @@ export function useScalarChartHistory({
       abortController.abort();
     };
   }, [enabled, liveRows.length, scalarRowsTotal, sessionKey]);
+
+  useEffect(() => {
+    if (!enabled || !sessionKey) {
+      removeFrontendResourceBucket("chart-history-cache");
+      return;
+    }
+    updateFrontendResourceBucket({
+      id: "chart-history-cache",
+      label: "Chart history cache",
+      entries: state.rows.length,
+      estimatedBytes: estimateScalarRowsBytes(state.rows),
+      capacity: scalarRowsTotal > 0 ? scalarRowsTotal : null,
+    });
+  }, [enabled, scalarRowsTotal, sessionKey, state.rows]);
+
+  useEffect(
+    () => () => {
+      removeFrontendResourceBucket("chart-history-cache");
+    },
+    [],
+  );
 
   const deferredRows = useDeferredValue(state.rows);
   const source: "live-window" | "full-history" =

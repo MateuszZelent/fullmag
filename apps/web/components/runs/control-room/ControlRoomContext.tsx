@@ -329,6 +329,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [meshClipEnabled, setMeshClipEnabled] = useState(false);
   const [meshClipAxis, setMeshClipAxis] = useState<ClipAxis>("x");
   const [meshClipPos, setMeshClipPos] = useState(50);
+  const [meshClipFlip, setMeshClipFlip] = useState(false);
   const [meshShowArrows, setMeshShowArrows] = useState(true);
   const [femArrowColorMode, setFemArrowColorMode] = useState<
     "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome"
@@ -2499,6 +2500,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       setMeshClipEnabled(result.globals.meshClipEnabled);
       setMeshClipAxis(result.globals.meshClipAxis as ClipAxis);
       setMeshClipPos(result.globals.meshClipPos);
+      setMeshClipFlip(false);
       setMeshShowArrows(result.globals.meshShowArrows);
       setAirMeshVisible(result.globals.airMeshVisible);
       setAirMeshOpacity(result.globals.airMeshOpacity);
@@ -2536,7 +2538,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         null,
     },
     material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
-    meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshShowArrows,
+    meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
     femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers,
     fdmVisualizationSettings,
@@ -2588,7 +2590,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     workspaceTabs,
     activeWorkspaceTabId,
     setSolverSettings, setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis, setMeshRenderMode, setMeshOpacity, setMeshClipEnabled, setMeshClipAxis,
-    setMeshClipPos, setMeshShowArrows, setFemArrowColorMode, setFemArrowMonoColor, setFemArrowAlpha, setFemArrowLengthScale, setFemArrowThickness, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
+    setMeshClipPos, setMeshClipFlip, setMeshShowArrows, setFemArrowColorMode, setFemArrowMonoColor, setFemArrowAlpha, setFemArrowLengthScale, setFemArrowThickness, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
     setFemVectorDomainFilter, setFemFerromagnetVisibilityMode, setFemViewportLayers,
     setSelectedSidebarNodeId, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setAirMeshVisible, setAirMeshOpacity, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
     openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
@@ -2596,7 +2598,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     resetViewportDisplayState,
   }), [
     localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
-    meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshShowArrows,
+    meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
     femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers,
     fdmVisualizationSettings, projectVisualizationPresets, localVisualizationPresets, activeVisualizationPresetRef,

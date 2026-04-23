@@ -43,7 +43,7 @@ export interface UnifiedRenderState {
   everyN: number;
 
   // Capability-gated (FEM-specific become optional)
-  meshRenderMode?: "solid" | "wireframe" | "points";
+  meshRenderMode?: "solid" | "solid+wireframe" | "wireframe" | "points";
   meshOpacity?: number;
   clipEnabled?: boolean;
   clipAxis?: "x" | "y" | "z";
@@ -77,4 +77,46 @@ export interface UnifiedViewportModel {
   renderState: UnifiedRenderState;
   domainInfo: DomainInfo;
   geometry: RenderGeometry;
+}
+
+export interface Viewport3DCapabilities {
+  preview3d: boolean;
+  structuredGrid: boolean;
+  explicitTopology: boolean;
+  authoringPrimitives: boolean;
+}
+
+export type Viewport3DInteractionMode =
+  | "camera"
+  | "select"
+  | "move"
+  | "rotate"
+  | "scale";
+
+export interface Viewport3DToolbarState {
+  quantityId: string;
+  component: UnifiedRenderState["vectorComponent"];
+  everyN: number;
+  colormap: string;
+  autoScale: boolean;
+  layers: FemViewportLayerState;
+  renderMode: NonNullable<UnifiedRenderState["meshRenderMode"]>;
+  opacity: number;
+  clipEnabled: boolean;
+  clipAxis: NonNullable<UnifiedRenderState["clipAxis"]>;
+  clipPosition: number;
+  clipFlip: boolean;
+  interactionMode: Viewport3DInteractionMode;
+  snapEnabled: boolean;
+  objectViewMode: "context" | "isolate";
+  vectorsEnabled: boolean;
+}
+
+export interface Viewport3DModel {
+  adapter: SpatialDomainAdapter;
+  domainInfo: DomainInfo;
+  geometry: RenderGeometry;
+  renderState: UnifiedRenderState;
+  toolbarState: Viewport3DToolbarState;
+  capabilities: Viewport3DCapabilities;
 }

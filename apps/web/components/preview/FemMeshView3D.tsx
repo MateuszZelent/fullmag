@@ -93,6 +93,7 @@ interface Props {
   clipEnabled?: boolean;
   clipAxis?: ClipAxis;
   clipPos?: number;
+  clipFlip?: boolean;
   showArrowsRequested?: boolean;
   arrowColorMode?: FemArrowColorMode;
   arrowMonoColor?: string;
@@ -111,6 +112,7 @@ interface Props {
   onClipEnabledChange?: (value: boolean) => void;
   onClipAxisChange?: (value: ClipAxis) => void;
   onClipPosChange?: (value: number) => void;
+  onClipFlipChange?: (value: boolean) => void;
   onShowArrowsChange?: (value: boolean) => void;
   onArrowColorModeChange?: (value: FemArrowColorMode) => void;
   onArrowMonoColorChange?: (value: string) => void;
@@ -176,6 +178,7 @@ function FemMeshView3DInner({
   clipEnabled: controlledClipEnabled,
   clipAxis: controlledClipAxis,
   clipPos: controlledClipPos,
+  clipFlip: controlledClipFlip,
   showArrowsRequested: controlledShowArrowsRequested,
   arrowColorMode: controlledArrowColorMode,
   arrowMonoColor: controlledArrowMonoColor,
@@ -195,6 +198,7 @@ function FemMeshView3DInner({
   onClipEnabledChange,
   onClipAxisChange,
   onClipPosChange,
+  onClipFlipChange,
   onShowArrowsChange,
   onArrowColorModeChange,
   onArrowMonoColorChange,
@@ -330,6 +334,7 @@ function FemMeshView3DInner({
     controlledClipEnabled,
     controlledClipAxis,
     controlledClipPos,
+    controlledClipFlip,
     controlledShowArrowsRequested,
     controlledArrowColorMode,
     controlledArrowMonoColor,
@@ -478,6 +483,7 @@ function FemMeshView3DInner({
     onClipEnabledChange,
     onClipAxisChange,
     onClipPosChange,
+    onClipFlipChange,
     onShowArrowsChange,
     onVectorDomainFilterChange,
     onFerromagnetVisibilityModeChange,

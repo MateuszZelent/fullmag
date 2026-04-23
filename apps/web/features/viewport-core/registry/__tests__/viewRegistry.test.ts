@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveActiveView, type WorkspaceViewContext } from "../viewRegistry";
+import {
+  VIEW_REGISTRY,
+  resolveActiveView,
+  type WorkspaceViewContext,
+} from "../viewRegistry";
 
 function ctx(overrides: Partial<WorkspaceViewContext>): WorkspaceViewContext {
   return {
@@ -14,6 +18,14 @@ function ctx(overrides: Partial<WorkspaceViewContext>): WorkspaceViewContext {
 }
 
 describe("viewRegistry", () => {
+  it("does not expose legacy viewport component keys", () => {
+    const keys = VIEW_REGISTRY.map((entry) => entry.componentKey);
+    expect(keys).not.toContain("VectorFieldView3D");
+    expect(keys).not.toContain("FemMeshView3D");
+    expect(keys).not.toContain("FemMeshView3D_Mesh");
+    expect(keys).not.toContain("MagnetizationSlice2D");
+  });
+
   it("routes plot groups to hosted chart view", () => {
     expect(resolveActiveView(ctx({ selectedResultNodeId: "res-plot-group-pg-1" })).componentKey).toBe(
       "ResultChartViewport",
@@ -32,6 +44,18 @@ describe("viewRegistry", () => {
     );
     expect(resolveActiveView(ctx({ selectedResultNodeId: "res-export-exp-1" })).componentKey).toBe(
       "ResultReportViewport",
+    );
+  });
+
+  it("routes Mesh workspace through unified viewport host", () => {
+    expect(resolveActiveView(ctx({ viewportMode: "Mesh" })).componentKey).toBe(
+      "UnifiedViewport3D",
+    );
+  });
+
+  it("routes 2D workspace through unified viewport host", () => {
+    expect(resolveActiveView(ctx({ viewportMode: "2D" })).componentKey).toBe(
+      "UnifiedViewport2D",
     );
   });
 });

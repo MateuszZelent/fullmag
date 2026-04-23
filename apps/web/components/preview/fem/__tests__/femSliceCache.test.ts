@@ -125,4 +125,35 @@ describe("femSliceCache", () => {
     expect(readSliceTopologyCache(`${seed}:topology:0`)).toBeNull();
     expect(readSliceFieldCache(`${seed}:field:0`)).toBeNull();
   });
+
+  it("does not recompute topology when quantity changes on the same plane", () => {
+    const seed = `qty-switch-${Date.now()}`;
+    const context = {
+      planeWorldCoord: 0.125,
+      boundsStrategy: "visible-context",
+      visiblePartIds: ["a", "b"],
+    };
+    const queryA = makeQuery({ quantityId: "m", component: "x" });
+    const queryB = makeQuery({ quantityId: "B_ext", component: "z" });
+
+    const topologyKeyA = topologyCacheKey(queryA, context);
+    const topologyKeyB = topologyCacheKey(queryB, context);
+    const fieldKeyA = fieldCacheKey(queryA, context);
+    const fieldKeyB = fieldCacheKey(queryB, context);
+
+    expect(topologyKeyA).toBe(topologyKeyB);
+    expect(fieldKeyA).not.toBe(fieldKeyB);
+
+    let topologyComputes = 0;
+    getSliceTopologyCached(`${seed}:${topologyKeyA}`, () => {
+      topologyComputes += 1;
+      return makeTopology(1);
+    });
+    getSliceTopologyCached(`${seed}:${topologyKeyB}`, () => {
+      topologyComputes += 1;
+      return makeTopology(2);
+    });
+
+    expect(topologyComputes).toBe(1);
+  });
 });

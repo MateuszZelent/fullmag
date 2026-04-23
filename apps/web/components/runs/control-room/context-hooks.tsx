@@ -310,6 +310,7 @@ export interface ModelContextValue {
   meshClipEnabled: boolean;
   meshClipAxis: ClipAxis;
   meshClipPos: number;
+  meshClipFlip: boolean;
   meshShowArrows: boolean;
   femArrowColorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
   femArrowMonoColor: string;
@@ -412,6 +413,7 @@ export interface ModelContextValue {
   setMeshClipEnabled: React.Dispatch<React.SetStateAction<boolean>>;
   setMeshClipAxis: React.Dispatch<React.SetStateAction<ClipAxis>>;
   setMeshClipPos: React.Dispatch<React.SetStateAction<number>>;
+  setMeshClipFlip: React.Dispatch<React.SetStateAction<boolean>>;
   setMeshShowArrows: React.Dispatch<React.SetStateAction<boolean>>;
   setFemArrowColorMode: React.Dispatch<
     React.SetStateAction<"orientation" | "x" | "y" | "z" | "magnitude" | "monochrome">

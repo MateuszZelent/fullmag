@@ -87,7 +87,7 @@ const VIEWPORT_2D: ViewRegistryEntry = {
   id: "viewport-2d",
   kind: "viewport-2d",
   title: "2-D Slice",
-  componentKey: "MagnetizationSlice2D",
+  componentKey: "UnifiedViewport2D",
   canOpen: (ctx) => ctx.viewportMode === "2D",
 };
 
@@ -95,7 +95,7 @@ const MESH_WORKSPACE: ViewRegistryEntry = {
   id: "mesh-workspace",
   kind: "mesh-workspace",
   title: "Mesh Workspace",
-  componentKey: "FemMeshView3D_Mesh",
+  componentKey: "UnifiedViewport3D",
   canOpen: (ctx) => ctx.viewportMode === "Mesh",
 };
 

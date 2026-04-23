@@ -1,6 +1,6 @@
 "use client";
 
-import type { QualityLevel } from "../VectorFieldView3D";
+import type { FdmViewportQualityLevel as QualityLevel } from "../fdm/fdmViewportSettingsTypes";
 
 interface FdmLightingProps {
   brightness: number;

@@ -19,8 +19,10 @@ import ChartQuantitySelector from "@/components/plots/ChartQuantitySelector";
 import { extractSamplingSummary } from "@/components/plots/chartSampling";
 import {
   DEFAULT_CHART_STATE,
+  buildScalarSeriesSpecsForScope,
   type ChartState,
   resolveSeriesEntry,
+  scopeRefFromSelectedDomain,
   seriesColor,
   buildQuantityGroups,
   extendEntryMap,
@@ -32,6 +34,7 @@ import { fmtExp, fmtSI, fmtTime } from "@/lib/format";
 import { serializeScalarRowsCsv } from "@/lib/plots/scalarRows";
 import type { ScalarRow } from "@/lib/session/types";
 import { cn } from "@/lib/utils";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
 import { useCommand, useModel, useTransport } from "./ControlRoomContext";
 
@@ -164,12 +167,15 @@ export default function ChartsViewport() {
   useEffect(() => {
     extendEntryMap(quantityGroups);
   }, [quantityGroups]);
-
-  useEffect(() => {
-    if (chartState.selectedDomain !== null) {
-      setChartState((prev) => ({ ...prev, selectedDomain: null }));
-    }
-  }, [chartState.selectedDomain, setChartState]);
+  const supportsObjectScope = FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.chartSemanticSeries;
+  const selectedScope = useMemo(
+    () =>
+      scopeRefFromSelectedDomain(
+        chartState.selectedDomain,
+        domains.map((domain) => ({ id: domain.id, label: domain.name })),
+      ),
+    [chartState.selectedDomain, domains],
+  );
 
   const yColumns = useMemo(() => {
     if (chartState.activeSeriesKeys.length === 0) {
@@ -177,6 +183,28 @@ export default function ChartsViewport() {
     }
     return chartState.activeSeriesKeys;
   }, [chartState.activeSeriesKeys]);
+  useEffect(() => {
+    const nextSpecs = buildScalarSeriesSpecsForScope({
+      seriesKeys: yColumns,
+      scope: selectedScope,
+      xAxis: chartState.xColumn === "step" ? "step" : "time",
+    });
+    setChartState((prev) => {
+      const current = prev.activeSeriesSpecs ?? [];
+      if (
+        current.length === nextSpecs.length &&
+        current.every(
+          (spec, index) =>
+            spec.id === nextSpecs[index]?.id &&
+            spec.xAxis === nextSpecs[index]?.xAxis &&
+            spec.quantityId === nextSpecs[index]?.quantityId,
+        )
+      ) {
+        return prev;
+      }
+      return { ...prev, activeSeriesSpecs: nextSpecs };
+    });
+  }, [chartState.xColumn, selectedScope, setChartState, yColumns]);
 
   const colors = useMemo(
     () => yColumns.map((_key, index) => seriesColor(index)),
@@ -304,7 +332,7 @@ export default function ChartsViewport() {
         chartState={chartState}
         onStateChange={handleStateChange}
         quantityGroups={quantityGroups}
-        supportsObjectScope={false}
+        supportsObjectScope={supportsObjectScope}
       />
 
       <div className="grid flex-1 min-h-0 min-w-0 gap-2 p-2 xl:grid-cols-[minmax(0,1fr)_18rem]">
@@ -373,6 +401,7 @@ export default function ChartsViewport() {
               alwaysShowModeBar
               uiRevisionKey={[
                 chartState.xColumn,
+                chartState.selectedDomain ?? "__all__",
                 yColumns.join(","),
                 effectiveAxisScale,
                 showMarkers ? "markers:on" : "markers:off",
@@ -450,8 +479,18 @@ export default function ChartsViewport() {
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span>Scope</span>
-                  <span className="font-mono text-foreground">Universe only</span>
+                  <span className="font-mono text-foreground">
+                    {selectedScope.kind === "universe"
+                      ? "Universe"
+                      : `Object: ${selectedScope.label}`}
+                  </span>
                 </div>
+                {selectedScope.kind === "object" && (
+                  <div className="rounded border border-amber-400/20 bg-amber-500/10 px-2 py-1 text-[0.65rem] text-amber-100">
+                    Object scope selection is persisted in chart state. Until backend
+                    `chart_history` object-scope is wired, data still comes from universe scalar rows.
+                  </div>
+                )}
               </div>
             </div>
 

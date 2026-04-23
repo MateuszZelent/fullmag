@@ -18,5 +18,7 @@ export const UNIFIED_VIEWPORT_3D: ViewRegistryEntry = {
   title: "3D Viewport",
   componentKey: "UnifiedViewport3D",
   canOpen: (ctx: WorkspaceViewContext) =>
-    ctx.viewportMode === "3D" && ctx.hasSessionData,
+    ((ctx.viewportMode === "3D") ||
+      (ctx.viewportMode === "Mesh" && ctx.discretization === "fdm")) &&
+    ctx.hasSessionData,
 };

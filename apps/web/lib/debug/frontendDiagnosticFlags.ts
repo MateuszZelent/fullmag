@@ -11,167 +11,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
   },
   shell: {
     useDockingShell: true,
-    showRibbonBar: trueinstallHook.js:1 Error: Maximum update depth exceeded. This can happen when a component repeatedly calls setState inside componentWillUpdate or componentDidUpdate. React limits the number of nested updates to prevent infinite loops.
-    at getRootForUpdatedFiber (react-dom-client.development.js:3892:11)
-    at enqueueConcurrentHookUpdate (react-dom-client.development.js:3852:14)
-    at dispatchSetStateInternal (react-dom-client.development.js:8249:18)
-    at dispatchSetState (react-dom-client.development.js:8209:7)
-    at useDockLayoutRuntime.useCallback[syncFromStore] (useDockLayoutRuntime.ts:117:7)
-    at useDockLayoutRuntime.useEffect (useDockLayoutRuntime.ts:146:5)
-    at Object.react_stack_bottom_frame (react-dom-client.development.js:23669:20)
-    at runWithFiberInDEV (react-dom-client.development.js:872:30)
-    at commitHookEffectListMount (react-dom-client.development.js:12345:29)
-    at commitHookPassiveMountEffects (react-dom-client.development.js:12466:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14387:13)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14485:17)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14458:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14485:17)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-
-The above error occurred in the <WorkspaceDockingShell> component. It was handled by the <ErrorBoundaryHandler> error boundary.
-overrideMethod @ installHook.js:1
-LiveRealtimeClient.ts:42 WebSocket connection to 'ws://localhost:3000/v1/live/current/ws' failed: WebSocket is closed before the connection is established.
-close @ LiveRealtimeClient.ts:42
-installHook.js:1 [workspace] Uncaught React error: Error: Maximum update depth exceeded. This can happen when a component repeatedly calls setState inside componentWillUpdate or componentDidUpdate. React limits the number of nested updates to prevent infinite loops.
-    at getRootForUpdatedFiber (react-dom-client.development.js:3892:11)
-    at enqueueConcurrentHookUpdate (react-dom-client.development.js:3852:14)
-    at dispatchSetStateInternal (react-dom-client.development.js:8249:18)
-    at dispatchSetState (react-dom-client.development.js:8209:7)
-    at useDockLayoutRuntime.useCallback[syncFromStore] (useDockLayoutRuntime.ts:117:7)
-    at useDockLayoutRuntime.useEffect (useDockLayoutRuntime.ts:146:5)
-    at Object.react_stack_bottom_frame (react-dom-client.development.js:23669:20)
-    at runWithFiberInDEV (react-dom-client.development.js:872:30)
-    at commitHookEffectListMount (react-dom-client.development.js:12345:29)
-    at commitHookPassiveMountEffects (react-dom-client.development.js:12466:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14387:13)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14485:17)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14458:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14485:17)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-overrideMethod @ installHook.js:1
-installHook.js:1 [workspace] Uncaught React error: Error: Maximum update depth exceeded. This can happen when a component repeatedly calls setState inside componentWillUpdate or componentDidUpdate. React limits the number of nested updates to prevent infinite loops.
-    at getRootForUpdatedFiber (react-dom-client.development.js:3892:11)
-    at enqueueConcurrentHookUpdate (react-dom-client.development.js:3852:14)
-    at dispatchSetStateInternal (react-dom-client.development.js:8249:18)
-    at dispatchSetState (react-dom-client.development.js:8209:7)
-    at useDockLayoutRuntime.useCallback[syncFromStore] (useDockLayoutRuntime.ts:117:7)
-    at useDockLayoutRuntime.useEffect (useDockLayoutRuntime.ts:146:5)
-    at Object.react_stack_bottom_frame (react-dom-client.development.js:23669:20)
-    at runWithFiberInDEV (react-dom-client.development.js:872:30)
-    at commitHookEffectListMount (react-dom-client.development.js:12345:29)
-    at commitHookPassiveMountEffects (react-dom-client.development.js:12466:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14387:13)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14514:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14485:17)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14458:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14380:11)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-    at commitPassiveMountOnFiber (react-dom-client.development.js:14485:17)
-    at recursivelyTraversePassiveMountEffects (react-dom-client.development.js:14360:11)
-overrideMethod @ installHook.js:1
-,
+    showRibbonBar: true,
     showSidebar: true,
     showViewportBar: true,
     showPreviewNotices: true,
@@ -184,6 +24,11 @@ overrideMethod @ installHook.js:1
   },
   viewportRouting: {
     useMinimalViewportSelectionPath: false,
+    enableUnifiedViewport3D: true,
+    enableUnifiedViewportToolbar: true,
+    // Deprecated compatibility flag: legacy FDM 3D route has been removed.
+    // Kept for persisted localStorage payload shape only.
+    disableLegacyFdmViewport: true,
     enableGlobalScalarCard: true,
     enableGridScalar2D: true,
     enableFemMeshWorkspace: true,
@@ -328,6 +173,8 @@ overrideMethod @ installHook.js:1
     chartSemanticSeries: false,
     /** PR-7: Worker-based chart decimation. */
     chartWorkerDecimation: false,
+    /** PR-8: Worker-based FEM 2D slice topology/field sampling. */
+    femSliceWorkerSampling: false,
     /** PR-1: Frontend diagnostics panel. */
     frontendDiagnosticsPanel: true,
   },

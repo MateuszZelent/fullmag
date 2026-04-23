@@ -48,10 +48,23 @@ export interface ViewportOverlayBridgeState {
 // ── Diagnostics Bridge ───────────────────────────────────────
 
 /** Feature‐flag snapshot relevant to viewport rendering. */
+export interface Viewport3DStageFlags {
+  viewport3d_unified_model: boolean;
+  viewport3d_unified_toolbar: boolean;
+  viewport3d_unified_render_core: boolean;
+  viewport3d_unified_fdm_modules: boolean;
+  viewport3d_unified_authoring: boolean;
+  viewport3d_unified_routing: boolean;
+  viewport3d_unified_cutover: boolean;
+}
+
+/** Feature‐flag snapshot relevant to viewport rendering. */
 export interface ViewportDiagnosticFlags {
   useMinimalViewportSelectionPath: boolean;
   enableGlobalScalarCard: boolean;
   enableGridScalar2D: boolean;
+  enableUnifiedViewport3D: boolean;
+  enableUnifiedViewportToolbar: boolean;
   enableFemMeshWorkspace: boolean;
   enableFem3D: boolean;
   enableFdm3D: boolean;
@@ -59,6 +72,7 @@ export interface ViewportDiagnosticFlags {
   femViewportShowToolbar: boolean;
   femViewportForceWireframe: boolean;
   femViewportForceDisableClip: boolean;
+  viewport3dStages?: Viewport3DStageFlags;
 }
 
 // ── Composite host props ─────────────────────────────────────

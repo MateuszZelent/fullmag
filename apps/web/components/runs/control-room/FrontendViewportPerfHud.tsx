@@ -187,6 +187,15 @@ export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
           p95: percentile95(recent),
         };
       })(),
+      quantitySwitchColorUpload: (() => {
+        const recent = recentDurations(perfSamples, "QuantitySwitch", "geometry-color-upload-done");
+        return {
+          last:
+            latestSample(perfSamples, "QuantitySwitch", "geometry-color-upload-done")?.durationMs ??
+            null,
+          p95: percentile95(recent),
+        };
+      })(),
     };
   }, [currentStage, perfSamples, resourceBuckets, stageTabs, viewportEntries]);
 
@@ -243,6 +252,8 @@ export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
           <span>{fmtPair(metrics.quantitySwitchFieldSelected.last, metrics.quantitySwitchFieldSelected.p95)}</span>
           <span className="text-muted-foreground">Q switch frame (last/p95)</span>
           <span>{fmtPair(metrics.quantitySwitchFrameRendered.last, metrics.quantitySwitchFrameRendered.p95)}</span>
+          <span className="text-muted-foreground">Q switch upload (last/p95)</span>
+          <span>{fmtPair(metrics.quantitySwitchColorUpload.last, metrics.quantitySwitchColorUpload.p95)}</span>
         </div>
         {metrics.resourceBuckets.length > 0 ? (
           <div className="mt-2 border-t border-border/30 pt-2 text-[0.6rem] text-muted-foreground">

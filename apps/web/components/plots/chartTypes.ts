@@ -66,6 +66,61 @@ export interface ChartSeriesSpec {
   unit: string;
 }
 
+export interface ChartScopeOption {
+  id: string;
+  label: string;
+}
+
+function sanitizeScopeLabel(value: string | null | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
+export function scopeRefFromSelectedDomain(
+  selectedDomain: string | null,
+  options: readonly ChartScopeOption[] = [],
+): ChartScopeRef {
+  if (!selectedDomain) {
+    return { kind: "universe", id: null, label: "Universe" };
+  }
+  const option = options.find((candidate) => candidate.id === selectedDomain);
+  return {
+    kind: "object",
+    id: selectedDomain,
+    label: sanitizeScopeLabel(option?.label ?? selectedDomain, "Object"),
+  };
+}
+
+function seriesScopeId(scope: ChartScopeRef): string {
+  return scope.kind === "universe" ? "universe" : `object:${scope.id ?? "unknown"}`;
+}
+
+export function buildScalarSeriesSpecsForScope(args: {
+  seriesKeys: readonly string[];
+  scope: ChartScopeRef;
+  xAxis: "step" | "time";
+}): ChartSeriesSpec[] {
+  const { seriesKeys, scope, xAxis } = args;
+  const specs: ChartSeriesSpec[] = [];
+  for (const key of seriesKeys) {
+    const entry = resolveSeriesEntry(key);
+    if (!entry) {
+      continue;
+    }
+    specs.push({
+        id: `${seriesScopeId(scope)}:${key}:scalar_native`,
+        scope,
+        quantityId: key,
+        reducer: "scalar_native",
+        component: null,
+        xAxis,
+        label: scope.kind === "object" ? `${scope.label} · ${entry.label}` : entry.label,
+        unit: entry.unit,
+      });
+  }
+  return specs;
+}
+
 /**
  * Build a `ChartSeriesSpec` for a scalar-native key.
  * This is the v1 bridge: flat keys → semantic specs.
@@ -430,6 +485,7 @@ export const X_AXIS_OPTIONS: readonly XAxisOption[] = [
 export interface ChartState {
   xColumn: string;
   activeSeriesKeys: string[];
+  activeSeriesSpecs: ChartSeriesSpec[];
   activePreset: ChartPresetId | null;
   selectedDomain: string | null;
 }
@@ -437,6 +493,11 @@ export interface ChartState {
 export const DEFAULT_CHART_STATE: ChartState = {
   xColumn: "time",
   activeSeriesKeys: ["e_total"],
+  activeSeriesSpecs: buildScalarSeriesSpecsForScope({
+    seriesKeys: ["e_total"],
+    scope: { kind: "universe", id: null, label: "Universe" },
+    xAxis: "time",
+  }),
   activePreset: null,
   selectedDomain: null,
 };

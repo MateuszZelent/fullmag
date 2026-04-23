@@ -25,6 +25,7 @@ interface UseFemViewportCommandsArgs {
   onClipEnabledChange?: (value: boolean) => void;
   onClipAxisChange?: (value: ClipAxis) => void;
   onClipPosChange?: (value: number) => void;
+  onClipFlipChange?: (value: boolean) => void;
   onShowArrowsChange?: (value: boolean) => void;
   onVectorDomainFilterChange?: (value: FemVectorDomainFilter) => void;
   onFerromagnetVisibilityModeChange?: (value: FemFerromagnetVisibilityMode) => void;
@@ -180,6 +181,7 @@ export function useFemViewportCommands({
   onClipEnabledChange,
   onClipAxisChange,
   onClipPosChange,
+  onClipFlipChange,
   onShowArrowsChange,
   onVectorDomainFilterChange,
   onFerromagnetVisibilityModeChange,
@@ -292,8 +294,12 @@ export function useFemViewportCommands({
   }, [onClipPosChange, setInternalClipPos]);
 
   const setClipFlip = useCallback((next: boolean) => {
+    if (onClipFlipChange) {
+      onClipFlipChange(next);
+      return;
+    }
     setInternalClipFlip(next);
-  }, [setInternalClipFlip]);
+  }, [onClipFlipChange, setInternalClipFlip]);
 
   const setArrowsVisible = useCallback((next: boolean) => {
     if (onShowArrowsChange) {

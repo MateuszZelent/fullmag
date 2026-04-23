@@ -23,6 +23,7 @@ import TextureTransformGizmo, {
 } from "./TextureTransformGizmo";
 import type { TextureTransform3D } from "@/lib/textureTransform";
 import type { VisualizationPresetFdmState } from "@/lib/session/types";
+import type { Viewport3DModel } from "@/features/viewport-unified/model/viewport3dContracts";
 import type {
   AntennaOverlayConductor,
   AntennaOverlay,
@@ -67,6 +68,14 @@ import {
   physicalScaleToScene,
   sceneDeltaToPhysical,
 } from "@/features/viewport-core/coordinates/physicalToScene";
+import {
+  useFdmViewportSettings,
+  type FdmViewportSettings as Settings,
+  type QualityLevel,
+  type VoxelColorMode,
+  type VoxelSampling,
+  type TopoComponent,
+} from "./useFdmViewportSettings";
 
 const FDM_AXIS_CONVENTION = "swapYZ" as const;
 
@@ -106,17 +115,21 @@ interface Props {
   activeTransformScope?: "object" | "texture" | null;
   onTransformScopeChange?: (scope: "object" | "texture" | null) => void;
   settings?: VisualizationPresetFdmState;
+  viewport3DModel?: Viewport3DModel | null;
   onSettingsChange?: Dispatch<SetStateAction<VisualizationPresetFdmState>>;
+  toolbarMode?: "visible" | "hidden";
   viewportVisible?: boolean;
   /** Optional extra R3F nodes rendered inside the scene (e.g. geometry builder layer). */
   authoringOverlay?: ReactNode;
 }
 
-export type QualityLevel = "low" | "high" | "ultra";
-export type RenderMode = "glyph" | "voxel";
-export type VoxelColorMode = "orientation" | "x" | "y" | "z";
-export type VoxelSampling = 1 | 2 | 4;
-export type TopoComponent = "x" | "y" | "z";
+export type {
+  QualityLevel,
+  RenderMode,
+  VoxelColorMode,
+  VoxelSampling,
+  TopoComponent,
+} from "./useFdmViewportSettings";
 
 const DEFAULT_CAMERA_DIRECTION: [number, number, number] = [0, 1, 0];
 const DEFAULT_CAMERA_UP: [number, number, number] = [0, 0, -1];
@@ -128,102 +141,6 @@ const FDM_CAMERA_STATE_CACHE = new Map<
     target: [number, number, number];
   }
 >();
-
-// ─── localStorage persistence ───────────────────────────────────────
-const STORAGE_KEYS = {
-  brightness: "preview3d_brightness",
-  quality: "preview3d_quality",
-  renderMode: "preview3d_render_mode",
-  voxelOpacity: "preview3d_voxel_opacity",
-  voxelGap: "preview3d_voxel_gap",
-  voxelThreshold: "preview3d_voxel_threshold",
-  voxelColorMode: "preview3d_voxel_color_mode",
-  voxelSampling: "preview3d_voxel_sampling",
-  topoEnabled: "preview3d_topo_enabled",
-  topoComponent: "preview3d_topo_component",
-  topoMultiplier: "preview3d_topo_multiplier",
-} as const;
-
-function loadClamped(key: string, fb: number, min: number, max: number): number {
-  if (typeof window === "undefined") return fb;
-  const raw = parseFloat(localStorage.getItem(key) || "");
-  if (!Number.isFinite(raw)) return fb;
-  return Math.max(min, Math.min(max, raw));
-}
-
-function loadEnum<T extends string>(key: string, allowed: T[], fb: T): T {
-  if (typeof window === "undefined") return fb;
-  const v = localStorage.getItem(key) as T;
-  return allowed.includes(v) ? v : fb;
-}
-
-function persist(key: string, value: string | number) {
-  if (typeof window !== "undefined") localStorage.setItem(key, String(value));
-}
-
-interface Settings {
-  quality: QualityLevel;
-  renderMode: RenderMode;
-  voxelColorMode: VoxelColorMode;
-  sampling: VoxelSampling;
-  brightness: number;
-  voxelOpacity: number;
-  voxelGap: number;
-  voxelThreshold: number;
-  topoEnabled: boolean;
-  topoComponent: TopoComponent;
-  topoMultiplier: number;
-}
-
-function settingsFromPreset(state: VisualizationPresetFdmState): Settings {
-  return {
-    quality: state.quality,
-    renderMode: state.render_mode,
-    voxelColorMode: state.voxel_color_mode,
-    sampling: state.sampling,
-    brightness: state.brightness,
-    voxelOpacity: state.voxel_opacity,
-    voxelGap: state.voxel_gap,
-    voxelThreshold: state.voxel_threshold,
-    topoEnabled: state.topo_enabled,
-    topoComponent: state.topo_component,
-    topoMultiplier: state.topo_multiplier,
-  };
-}
-
-function settingsToPreset(state: Settings): VisualizationPresetFdmState {
-  return {
-    quality: state.quality,
-    render_mode: state.renderMode,
-    voxel_color_mode: state.voxelColorMode,
-    sampling: state.sampling,
-    brightness: state.brightness,
-    voxel_opacity: state.voxelOpacity,
-    voxel_gap: state.voxelGap,
-    voxel_threshold: state.voxelThreshold,
-    topo_enabled: state.topoEnabled,
-    topo_component: state.topoComponent,
-    topo_multiplier: state.topoMultiplier,
-  };
-}
-
-function loadSettings(): Settings {
-  const rawSampling = loadEnum(STORAGE_KEYS.voxelSampling, ["1", "2", "4"], "1");
-  const sampling: VoxelSampling = rawSampling === "2" ? 2 : rawSampling === "4" ? 4 : 1;
-  return {
-    quality: loadEnum(STORAGE_KEYS.quality, ["low", "high", "ultra"], "high"),
-    renderMode: loadEnum(STORAGE_KEYS.renderMode, ["glyph", "voxel"], "glyph"),
-    voxelColorMode: loadEnum(STORAGE_KEYS.voxelColorMode, ["orientation", "x", "y", "z"], "orientation"),
-    sampling,
-    brightness: loadClamped(STORAGE_KEYS.brightness, 1.5, 0.3, 3.0),
-    voxelOpacity: loadClamped(STORAGE_KEYS.voxelOpacity, 0.5, 0.15, 0.95),
-    voxelGap: loadClamped(STORAGE_KEYS.voxelGap, 0.14, 0.02, 0.42),
-    voxelThreshold: loadClamped(STORAGE_KEYS.voxelThreshold, 0.08, 0, 0.95),
-    topoEnabled: typeof window !== "undefined" && localStorage.getItem(STORAGE_KEYS.topoEnabled) === "true",
-    topoComponent: loadEnum(STORAGE_KEYS.topoComponent, ["x", "y", "z"], "z"),
-    topoMultiplier: loadClamped(STORAGE_KEYS.topoMultiplier, 5, 0.5, 50),
-  };
-}
 
 type RotationPanelKey = "viewport" | "viewCube" | "hsl";
 type ViewportSceneMode = "grid" | "world";
@@ -314,6 +231,30 @@ function formatDebugTimestamp(timestamp: number | null | undefined): string {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function settingsFromViewport3DModel(
+  base: Settings,
+  model: Viewport3DModel | null | undefined,
+): Settings {
+  const fdm = model?.fdm;
+  if (!fdm) {
+    return base;
+  }
+  return {
+    ...base,
+    quality: fdm.quality,
+    renderMode: fdm.renderMode,
+    voxelColorMode: fdm.voxelColorMode,
+    sampling: fdm.sampling,
+    brightness: fdm.brightness,
+    voxelOpacity: fdm.voxelOpacity,
+    voxelGap: fdm.voxelGap,
+    voxelThreshold: fdm.voxelThreshold,
+    topoEnabled: fdm.topography.enabled,
+    topoComponent: fdm.topography.component,
+    topoMultiplier: fdm.topography.amplitude,
+  };
 }
 
 function RotationDebugBlock({
@@ -797,15 +738,20 @@ function VectorFieldView3DInner({
   activeTransformScope,
   onTransformScopeChange,
   settings: externalSettings,
+  viewport3DModel = null,
   onSettingsChange,
+  toolbarMode = "visible",
   viewportVisible = true,
   authoringOverlay = null,
 }: Props) {
   const { hostRef, hostNode } = useCanvasHost<HTMLDivElement>();
-  const [internalSettings, setInternalSettings] = useState<Settings>(loadSettings);
+  const { settings: legacySettings, update } = useFdmViewportSettings({
+    externalSettings,
+    onSettingsChange,
+  });
   const settings = useMemo(
-    () => (externalSettings ? settingsFromPreset(externalSettings) : internalSettings),
-    [externalSettings, internalSettings],
+    () => settingsFromViewport3DModel(legacySettings, viewport3DModel),
+    [legacySettings, viewport3DModel],
   );
   const canvasDpr = settings.quality === "ultra"
     ? Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, 2)
@@ -862,7 +808,8 @@ function VectorFieldView3DInner({
   const derivedGizmoMode: TextureGizmoMode =
     interactionMode === "rotate" ? "rotate" :
     interactionMode === "scale"  ? "scale"  : "translate";
-  const deferredVectors = useDeferredValue(vectors);
+  // Hidden viewport should not consume high-frequency vector updates.
+  const deferredVectors = useDeferredValue(viewportVisible ? vectors : null);
   const deferredSettings = useDeferredValue(settings);
   const renderedVectorSample = useMemo(
     () => buildRenderedVectorSample(deferredVectors),
@@ -1023,32 +970,6 @@ function VectorFieldView3DInner({
     };
   }, [cameraPersistenceKey, persistCameraState, syncViewportRotationSnapshot]);
 
-  // Persist settings changes
-  const update = useCallback((patch: Partial<Settings>) => {
-    const writeSettings = (previous: Settings) => {
-      const next = { ...previous, ...patch };
-      if (patch.quality !== undefined) persist(STORAGE_KEYS.quality, next.quality);
-      if (patch.renderMode !== undefined) persist(STORAGE_KEYS.renderMode, next.renderMode);
-      if (patch.voxelColorMode !== undefined) persist(STORAGE_KEYS.voxelColorMode, next.voxelColorMode);
-      if (patch.sampling !== undefined) persist(STORAGE_KEYS.voxelSampling, next.sampling);
-      if (patch.brightness !== undefined) persist(STORAGE_KEYS.brightness, next.brightness);
-      if (patch.voxelOpacity !== undefined) persist(STORAGE_KEYS.voxelOpacity, next.voxelOpacity);
-      if (patch.voxelGap !== undefined) persist(STORAGE_KEYS.voxelGap, next.voxelGap);
-      if (patch.voxelThreshold !== undefined) persist(STORAGE_KEYS.voxelThreshold, next.voxelThreshold);
-      if (patch.topoEnabled !== undefined) persist(STORAGE_KEYS.topoEnabled, String(next.topoEnabled));
-      if (patch.topoComponent !== undefined) persist(STORAGE_KEYS.topoComponent, next.topoComponent);
-      if (patch.topoMultiplier !== undefined) persist(STORAGE_KEYS.topoMultiplier, next.topoMultiplier);
-      return next;
-    };
-
-    if (externalSettings && onSettingsChange) {
-      onSettingsChange((prev) => settingsToPreset(writeSettings(settingsFromPreset(prev))));
-      return;
-    }
-
-    setInternalSettings((prev) => writeSettings(prev));
-  }, [externalSettings, onSettingsChange]);
-
   // Snap camera to a direction
   const snapCamera = useCallback((dir: [number, number, number], up: [number, number, number] = [0, 1, 0]) => {
     const bridge = viewCubeSceneRef.current;
@@ -1169,16 +1090,17 @@ function VectorFieldView3DInner({
   const toolbarOptionClassName =
     "appearance-none border border-transparent bg-transparent text-muted-foreground text-[0.65rem] font-semibold uppercase px-2 py-1 rounded cursor-pointer transition-colors hover:bg-muted/40 hover:text-foreground data-[active=true]:border-primary/45 data-[active=true]:bg-primary/18 data-[active=true]:text-primary";
   const fdmViewportFlags = FRONTEND_DIAGNOSTIC_FLAGS.fdmViewport;
+  const showInternalToolbar = toolbarMode !== "hidden";
 
   return (
     <div className="relative flex flex-col h-full">
       {/* ── Overlay Layout ────────────────────────────────────── */}
       <ViewportOverlayLayout>
         <ViewportOverlayLayout.TopLeft>
-          {fdmViewportFlags.showToolbar || fdmViewportFlags.showStatusChip ? (
+          {(showInternalToolbar && (fdmViewportFlags.showToolbar || fdmViewportFlags.showStatusChip)) ? (
           <ViewportToolbar3D>
             {/* Render mode */}
-            {fdmViewportFlags.showToolbar && !geometryMode && (
+            {showInternalToolbar && fdmViewportFlags.showToolbar && !geometryMode && (
               <ViewportToolGroup label="Render">
                 <ViewportIconAction
                   icon={<ArrowUpRight size={14} />}
@@ -1195,10 +1117,10 @@ function VectorFieldView3DInner({
               </ViewportToolGroup>
             )}
 
-            {fdmViewportFlags.showToolbar ? <ViewportToolSeparator /> : null}
+            {showInternalToolbar && fdmViewportFlags.showToolbar ? <ViewportToolSeparator /> : null}
 
             {/* Color field (only voxel) */}
-            {fdmViewportFlags.showToolbar && settings.renderMode === "voxel" && (
+            {showInternalToolbar && fdmViewportFlags.showToolbar && settings.renderMode === "voxel" && (
               <ViewportToolGroup label="Color">
                 <ViewportPopoverTrigger preferredHorizontal="left">
                   <ViewportIconAction
@@ -1224,15 +1146,15 @@ function VectorFieldView3DInner({
               </ViewportToolGroup>
             )}
 
-            {fdmViewportFlags.showToolbar && settings.renderMode === "voxel" ? <ViewportToolSeparator /> : null}
+            {showInternalToolbar && fdmViewportFlags.showToolbar && settings.renderMode === "voxel" ? <ViewportToolSeparator /> : null}
 
-            {fdmViewportFlags.showStatusChip ? (
+            {showInternalToolbar && fdmViewportFlags.showStatusChip ? (
               <ViewportStatusChip color="info">{fieldLabel ?? "M"}</ViewportStatusChip>
             ) : null}
 
-            {fdmViewportFlags.showToolbar && fdmViewportFlags.showStatusChip ? <ViewportToolSeparator /> : null}
+            {showInternalToolbar && fdmViewportFlags.showToolbar && fdmViewportFlags.showStatusChip ? <ViewportToolSeparator /> : null}
 
-            {fdmViewportFlags.showToolbar ? <ViewportToolGroup>
+            {showInternalToolbar && fdmViewportFlags.showToolbar ? <ViewportToolGroup>
               {/* Display settings Popover */}
               <ViewportPopoverTrigger preferredHorizontal="left">
                 <ViewportIconAction
@@ -1483,7 +1405,7 @@ function VectorFieldView3DInner({
         )}
 
         {/* ── 3dsmax-style interaction mode toolbar (only when texture gizmo available) ── */}
-        {fdmViewportFlags.showTextureModeToolbar && (activeTextureTransform || activeTransformScope === "texture") && (
+        {showInternalToolbar && fdmViewportFlags.showTextureModeToolbar && (activeTextureTransform || activeTransformScope === "texture") && (
           <ViewportOverlayLayout.BottomCenter>
             <div className="pointer-events-auto flex items-center gap-px rounded-lg border border-border/40 bg-background/80 backdrop-blur-md shadow-md px-1 py-1">
               {/* Scope Toggle */}

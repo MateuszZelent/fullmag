@@ -682,6 +682,22 @@ export const FemGeometry = memo(function FemGeometry({
   // ── Color update ──────────────────────────────────────────────────
   useEffect(() => {
     if (!geometry || !enableGeometryVertexColors) return;
+    const quantityUploadStart = performance.now();
+    recordFrontendPerfSample({
+      scope: "QuantitySwitch",
+      phase: "geometry-color-upload-start",
+      durationMs: 0,
+      timestampMs: quantityUploadStart,
+      meta: {
+        field,
+        fieldRevision:
+          fieldRevision == null
+            ? null
+            : typeof fieldRevision === "string"
+              ? fieldRevision
+              : String(fieldRevision),
+      },
+    });
     const perfEnabled = FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryPerfLogging;
     const totalStart = perfEnabled ? performance.now() : 0;
     const mark = (phase: string, start: number, extra?: Record<string, number | string | boolean | null>) => {
@@ -759,6 +775,23 @@ export const FemGeometry = memo(function FemGeometry({
     }
     invalidate();
     mark("colorTotal", totalStart);
+    recordFrontendPerfSample({
+      scope: "QuantitySwitch",
+      phase: "geometry-color-upload-done",
+      durationMs: performance.now() - quantityUploadStart,
+      timestampMs: performance.now(),
+      meta: {
+        field,
+        mapped: Boolean(vertexMap),
+        pointsMapped: Boolean(pointsVertexMap),
+        fieldRevision:
+          fieldRevision == null
+            ? null
+            : typeof fieldRevision === "string"
+              ? fieldRevision
+              : String(fieldRevision),
+      },
+    });
   }, [
     customBoundaryFaces,
     field,

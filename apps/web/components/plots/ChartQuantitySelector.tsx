@@ -117,7 +117,7 @@ export default function ChartQuantitySelector({
   const [unitLimitHint, setUnitLimitHint] = useState<string | null>(null);
   const [seriesFilter, setSeriesFilter] = useState("");
   const multiDomain = domains.length > 1;
-  const scopeInteractive = multiDomain && supportsObjectScope;
+  const scopeInteractive = domains.length > 0 && supportsObjectScope;
 
   // Use dynamic groups when available, otherwise fallback
   const effectiveGroups = useMemo(
@@ -253,7 +253,7 @@ export default function ChartQuantitySelector({
           title={
             !scopeInteractive
               ? supportsObjectScope
-                ? "Scope: Universe. Per-object scope is available once multiple domains are addressable."
+                ? "Scope: Universe. Selectable object scope is available once at least one domain is available."
                 : "Scope fixed to Universe. Per-object scalar history is not wired into Charts yet."
               : undefined
           }

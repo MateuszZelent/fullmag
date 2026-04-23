@@ -450,6 +450,7 @@ export default function FemMeshSlice2DPlotly({
     topologyKey,
     fieldKey,
     slice,
+    pending: sliceSamplingPending,
   } = useFemSliceSampling({
     meshData,
     sliceQuery,
@@ -1086,6 +1087,7 @@ export default function FemMeshSlice2DPlotly({
             <span>{effectivePlane.toUpperCase()}</span>
             <span>{slice.normalLabel} = {slice.planeCoord.toExponential(2)} m</span>
             {hasVectorField ? <span>vectors {arrowsVisible ? "on" : "off"}</span> : <span>scalar slice</span>}
+            {sliceSamplingPending ? <span className="text-amber-200">sampling...</span> : null}
           </div>
         </ViewportOverlayLayout.BottomCenter>
       </ViewportOverlayLayout>

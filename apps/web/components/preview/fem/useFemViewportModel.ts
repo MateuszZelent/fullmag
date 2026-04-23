@@ -25,6 +25,7 @@ interface UseFemViewportModelArgs {
   controlledClipEnabled?: boolean;
   controlledClipAxis?: ClipAxis;
   controlledClipPos?: number;
+  controlledClipFlip?: boolean;
   controlledShowArrowsRequested?: boolean;
   controlledArrowColorMode?: FemArrowColorMode;
   controlledArrowMonoColor?: string;
@@ -105,6 +106,7 @@ export function useFemViewportModel({
   controlledClipEnabled,
   controlledClipAxis,
   controlledClipPos,
+  controlledClipFlip,
   controlledShowArrowsRequested,
   controlledArrowColorMode,
   controlledArrowMonoColor,
@@ -170,7 +172,7 @@ export function useFemViewportModel({
   const clipEnabled = controlledClipEnabled ?? state.view.clip.enabled;
   const clipAxis = controlledClipAxis ?? state.view.clip.axis;
   const clipPos = controlledClipPos ?? state.view.clip.position;
-  const clipFlip = state.view.clip.flip;
+  const clipFlip = controlledClipFlip ?? state.view.clip.flip;
   const showArrowsRequested = controlledShowArrowsRequested ?? state.view.arrowsVisible;
   const arrowColorMode = controlledArrowColorMode ?? state.view.arrowColorMode;
   const arrowMonoColor = controlledArrowMonoColor ?? state.view.arrowMonoColor;
