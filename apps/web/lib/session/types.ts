@@ -292,6 +292,12 @@ export interface LatestFieldFrame {
   active_mask?: Uint8Array | null;
   location?: string | null;
   domain?: string | null;
+  /**
+   * Topology signature used to validate that the field frame matches
+   * the currently active FEM mesh topology.
+   * Typical values: "gen:<generation_id>", "hash:<topology_hash>".
+   */
+  topology_signature?: string | null;
   field_revision?: number | null;
   source_step?: number | null;
   source_time?: number | null;
@@ -1296,6 +1302,7 @@ export interface LiveQuantityFrame {
   n_comp: number;
   values: number[];
   active_mask?: boolean[] | null;
+  topology_signature?: string | null;
   field_revision?: number | null;
   source_step?: number | null;
   source_time?: number | null;

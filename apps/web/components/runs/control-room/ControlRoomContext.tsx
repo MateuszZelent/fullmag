@@ -87,6 +87,8 @@ import {
   buildScriptBuilderFromSceneDocument,
 } from "../../../lib/session/sceneDocument";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { getFrontendPerfSamples, recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
+import { updateFrontendResourceBucket } from "@/lib/debug/frontendResourceManager";
 import {
   isFemDiscretization,
   synthesizeCapabilitiesFromDiscretization,
@@ -235,6 +237,15 @@ type BinaryFieldFrame = {
   nComp: number;
   grid: [number, number, number];
 };
+
+function estimateBinaryFieldCacheBytes(cache: Map<string, BinaryFieldFrame>): number {
+  let bytes = 0;
+  for (const frame of cache.values()) {
+    bytes += frame.values.byteLength;
+    bytes += 96;
+  }
+  return bytes;
+}
 
 function femMeshTransportKey(mesh: FemLiveMesh | null): string | null {
   if (!mesh) {
@@ -1633,11 +1644,29 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   // Set of quantity IDs whose field buffers are already cached locally.
   // Used by requestPreviewQuantity and applyVisualizationPreset to skip
   // the control-plane POST when the field is already in memory.
+  const activeFemGenerationSignature = useMemo(() => {
+    if (!runtimeFemMesh?.generation_id || runtimeFemMesh.generation_id.length === 0) {
+      return null;
+    }
+    return `gen:${runtimeFemMesh.generation_id}`;
+  }, [runtimeFemMesh?.generation_id]);
   const cachedFieldQuantities = useMemo<ReadonlySet<string>>(() => {
     const frames = runtimeLatestFieldFrames;
     if (!frames) return new Set<string>();
-    return new Set(Object.keys(frames));
-  }, [runtimeLatestFieldFrames]);
+    const next = new Set<string>();
+    for (const [quantityId, frame] of Object.entries(frames)) {
+      if (
+        activeFemGenerationSignature &&
+        frame.topology_signature &&
+        frame.topology_signature.startsWith("gen:") &&
+        frame.topology_signature !== activeFemGenerationSignature
+      ) {
+        continue;
+      }
+      next.add(quantityId);
+    }
+    return next;
+  }, [activeFemGenerationSignature, runtimeLatestFieldFrames]);
 
   const {
     handleCompute,
@@ -1880,6 +1909,18 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       selectedFieldFrame.grid.join("x"),
     ].join(":");
   }, [activeQuantityId, binaryFieldTransportEnabled, selectedFieldFrame]);
+  const selectedFieldTopologyMismatch = useMemo(() => {
+    if (!isFemBackend) {
+      return false;
+    }
+    if (!activeFemGenerationSignature || !selectedFieldFrame?.topology_signature) {
+      return false;
+    }
+    if (!selectedFieldFrame.topology_signature.startsWith("gen:")) {
+      return false;
+    }
+    return selectedFieldFrame.topology_signature !== activeFemGenerationSignature;
+  }, [activeFemGenerationSignature, isFemBackend, selectedFieldFrame?.topology_signature]);
 
   useEffect(() => {
     if (
@@ -1889,15 +1930,36 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       selectedFieldFrame.values.length > 0
     ) {
       setSelectedBinaryFieldFrame(null);
+      updateFrontendResourceBucket({
+        id: "binary-field-cache",
+        label: "Binary field cache",
+        entries: binaryFieldCacheRef.current.size,
+        estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
+        capacity: 4,
+      });
       return;
     }
     if (!selectedFieldTransportKey) {
       setSelectedBinaryFieldFrame(null);
+      updateFrontendResourceBucket({
+        id: "binary-field-cache",
+        label: "Binary field cache",
+        entries: binaryFieldCacheRef.current.size,
+        estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
+        capacity: 4,
+      });
       return;
     }
     const cached = binaryFieldCacheRef.current.get(selectedFieldTransportKey) ?? null;
     if (cached) {
       setSelectedBinaryFieldFrame(cached);
+      updateFrontendResourceBucket({
+        id: "binary-field-cache",
+        label: "Binary field cache",
+        entries: binaryFieldCacheRef.current.size,
+        estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
+        capacity: 4,
+      });
       return;
     }
     setSelectedBinaryFieldFrame(null);
@@ -1924,6 +1986,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
           }
           cache.delete(firstKey);
         }
+        updateFrontendResourceBucket({
+          id: "binary-field-cache",
+          label: "Binary field cache",
+          entries: cache.size,
+          estimatedBytes: estimateBinaryFieldCacheBytes(cache),
+          capacity: 4,
+        });
         if (!controller.signal.aborted) {
           setSelectedBinaryFieldFrame(nextFrame);
         }
@@ -1943,7 +2012,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   ]);
 
   const selectedLiveField =
-    selectedBinaryFieldFrame?.key === selectedFieldTransportKey
+    selectedFieldTopologyMismatch
+      ? null
+      : selectedBinaryFieldFrame?.key === selectedFieldTransportKey
       ? selectedBinaryFieldFrame.values
       : activeQuantityId
         ? fieldMap[activeQuantityId] ?? null
@@ -2015,6 +2086,80 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     fieldDataTimestampRef.current = Date.now();
   }
   const fieldDataTimestamp = fieldDataTimestampRef.current;
+
+  const lastQuantitySwitchTraceKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeQuantityId || !fieldDataRevision) {
+      return;
+    }
+    const traceKey = `${activeQuantityId}|${fieldDataRevision}|${selectedVectorSource.source}`;
+    if (lastQuantitySwitchTraceKeyRef.current === traceKey) {
+      return;
+    }
+    lastQuantitySwitchTraceKeyRef.current = traceKey;
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const latestRequest = [...getFrontendPerfSamples()]
+      .reverse()
+      .find(
+        (sample) =>
+          sample.scope === "QuantitySwitch" &&
+          sample.phase === "request" &&
+          sample.meta?.quantity === activeQuantityId,
+      );
+    const fromRequestMs =
+      latestRequest && Number.isFinite(latestRequest.timestampMs)
+        ? Math.max(0, now - latestRequest.timestampMs)
+        : 0;
+    const cacheState =
+      selectedFieldTopologyMismatch
+        ? "topology-mismatch"
+        : selectedBinaryFieldFrame?.key === selectedFieldTransportKey
+          ? "binary-hit"
+          : selectedFieldFrame
+            ? "field-map-hit"
+            : selectedVectorSource.source === "preview"
+              ? "preview-recompute"
+              : "none";
+    recordFrontendPerfSample({
+      scope: "QuantitySwitch",
+      phase: "field-selected",
+      durationMs: fromRequestMs,
+      timestampMs: now,
+      meta: {
+        quantity: activeQuantityId,
+        source: selectedVectorSource.source,
+        cacheState,
+        vectorLength: selectedVectors?.length ?? 0,
+      },
+    });
+    const raf = window.requestAnimationFrame(() => {
+      const renderedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+      recordFrontendPerfSample({
+        scope: "QuantitySwitch",
+        phase: "frame-rendered",
+        durationMs:
+          latestRequest && Number.isFinite(latestRequest.timestampMs)
+            ? Math.max(0, renderedAt - latestRequest.timestampMs)
+            : 0,
+        timestampMs: renderedAt,
+        meta: {
+          quantity: activeQuantityId,
+          source: selectedVectorSource.source,
+          cacheState,
+        },
+      });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [
+    activeQuantityId,
+    fieldDataRevision,
+    selectedBinaryFieldFrame?.key,
+    selectedFieldFrame,
+    selectedFieldTopologyMismatch,
+    selectedFieldTransportKey,
+    selectedVectorSource.source,
+    selectedVectors,
+  ]);
 
   useEffect(() => {
     if (!ENABLE_VIEWPORT_DATA_DEBUG_LOGS) {

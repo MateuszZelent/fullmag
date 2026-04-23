@@ -2,9 +2,13 @@
 
 import { useEffect, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
 const ENABLE_VIEWPORT_DEBUG_LOGS =
-  typeof process !== "undefined" && process.env.NODE_ENV !== "production";
+  typeof process !== "undefined" &&
+  process.env.NODE_ENV !== "production" &&
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging;
+const lastViewportDebugLogAtByLabel = new Map<string, number>();
 
 export default function ViewportTelemetryProbe({
   label = "viewport",
@@ -31,7 +35,6 @@ export default function ViewportTelemetryProbe({
 }) {
   const { gl, size } = useThree();
   const lastReportedAtRef = useRef(0);
-  const lastDebugLoggedAtRef = useRef(0);
 
   useEffect(() => {
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -73,9 +76,9 @@ export default function ViewportTelemetryProbe({
     });
     if (
       ENABLE_VIEWPORT_DEBUG_LOGS &&
-      wallClockNow - lastDebugLoggedAtRef.current >= 1000
+      wallClockNow - (lastViewportDebugLogAtByLabel.get(label) ?? 0) >= 1000
     ) {
-      lastDebugLoggedAtRef.current = wallClockNow;
+      lastViewportDebugLogAtByLabel.set(label, wallClockNow);
       console.info("[fullmag-debug][viewport] frame rendered", {
         label,
         drawCalls: gl.info.render.calls,

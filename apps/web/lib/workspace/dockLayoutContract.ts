@@ -508,6 +508,69 @@ function normalizeCandidateJson(value: unknown, preset: DockResponsivePreset): I
   };
 }
 
+/**
+ * Lightweight normalizer for a live FlexLayout runtime model — called on every
+ * `FlexLayout.onModelChange` event.  Unlike `normalizeDockLayoutEnvelope`, this
+ * function intentionally does NOT check for `dockingLayoutSchemaVersion` so that
+ * a normal `Model.toJson()` output is never treated as a schema-migration target.
+ *
+ * Only genuine structural problems (missing required panels, violated min-sizes)
+ * set `changed = true`.
+ */
+export interface DockLayoutRuntimeModelResult {
+  model: DockLayoutModel;
+  changed: boolean;
+  repairReasons: string[];
+}
+
+export function normalizeDockLayoutRuntimeModel(
+  rawModel: IJsonModel,
+  preset: DockResponsivePreset,
+): DockLayoutRuntimeModelResult {
+  const fallbackTemplateId = resolveDockLayoutTemplateId(preset);
+  const templateModel = getDockLayoutTemplate(fallbackTemplateId).model;
+  const reasons: string[] = [];
+  let changed = false;
+
+  // Merge template global defaults without marking it as a change.
+  let model: IJsonModel = ensureGlobalDefaults(rawModel, templateModel);
+
+  // Check for missing required panels — structural repair only.
+  const components = collectTabComponents(model);
+  const missing = REQUIRED_DOCK_PANEL_COMPONENTS.filter((c) => !components.has(c));
+  if (missing.length > 0) {
+    for (const component of missing) {
+      reasons.push(`Missing required panel: ${component}`);
+    }
+    changed = true;
+    model = recoverFromTemplate(cloneJson(model), templateModel, reasons) as IJsonModel;
+  }
+
+  // Clamp min-size constraints.
+  const clamped = cloneJson(model) as IJsonModel;
+  if (clampNodeMinSizes(clamped.layout)) {
+    reasons.push("Clamped layout min-size constraints to safe values.");
+    changed = true;
+  }
+
+  // Clamp border sizes.
+  if (Array.isArray(clamped.borders)) {
+    let touched = false;
+    for (const border of clamped.borders) {
+      if (isPlainObject(border) && isNumber(border.size) && isNumber(border.minSize) && (border.size as number) < (border.minSize as number)) {
+        (border as Record<string, unknown>).size = border.minSize;
+        touched = true;
+      }
+    }
+    if (touched) {
+      reasons.push("Clamped border sizes to satisfy min-size guardrails.");
+      changed = true;
+    }
+  }
+
+  return { model: changed ? clamped : model, changed, repairReasons: reasons };
+}
+
 export function normalizeDockLayoutEnvelope(
   raw: unknown,
   preset: DockResponsivePreset,

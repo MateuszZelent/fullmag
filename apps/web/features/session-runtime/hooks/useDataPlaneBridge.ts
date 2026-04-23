@@ -308,6 +308,12 @@ export function useDataPlaneBridge(
           active_mask: null,
           location: envelope.location,
           domain: envelope.domain,
+          topology_signature:
+            envelope.meshGenerationId && envelope.meshGenerationId.length > 0
+              ? `gen:${envelope.meshGenerationId}`
+              : envelope.topologyHash && envelope.topologyHash.length > 0
+                ? `hash:${envelope.topologyHash}`
+                : null,
           field_revision: rev,
           source_step: envelope.sourceStep,
           source_time: envelope.sourceTime,

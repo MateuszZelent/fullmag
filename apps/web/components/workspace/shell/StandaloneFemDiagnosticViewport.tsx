@@ -40,6 +40,7 @@ function flattenFemMesh(mesh: FemLiveMesh): FemMeshData {
     boundaryFaces: Array.from(flatFaces),
     nNodes: mesh.nodes.length,
     nElements: mesh.elements.length,
+    meshGenerationId: mesh.generation_id ?? mesh.mesh_id ?? null,
     fieldData: undefined,
     activeMask: null,
     quantityDomain: "full_domain",
@@ -153,11 +154,22 @@ export default function StandaloneFemDiagnosticViewport() {
   }, []);
 
   const meshData = useMemo(() => (mesh ? flattenFemMesh(mesh) : null), [mesh]);
+  const topologyKey = useMemo(() => {
+    if (!meshData) {
+      return null;
+    }
+    const generation = mesh?.generation_id ?? mesh?.mesh_id ?? meshData.meshGenerationId ?? null;
+    if (typeof generation === "string" && generation.length > 0) {
+      return `gen:${generation}`;
+    }
+    return `diag:${meshData.nNodes}:${meshData.nElements}:${meshData.boundaryFaces.length}`;
+  }, [mesh, meshData]);
 
   return (
     <div className="relative h-full w-full min-h-0 min-w-0 overflow-hidden bg-background">
-      {meshData ? (
+      {meshData && topologyKey ? (
         <FemMeshView3D
+          topologyKey={topologyKey}
           meshData={meshData}
           toolbarMode="hidden"
           renderMode="surface"

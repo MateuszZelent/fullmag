@@ -127,6 +127,7 @@ function sameLatestFieldFrameIdentity(
     sameVec3(lhs.grid, rhs.grid) &&
     lhs.location === rhs.location &&
     lhs.domain === rhs.domain &&
+    lhs.topology_signature === rhs.topology_signature &&
     lhs.field_revision === rhs.field_revision &&
     lhs.source_step === rhs.source_step &&
     lhs.source_time === rhs.source_time &&
@@ -205,6 +206,10 @@ function syncLatestMagnetizationFrameFromLiveState(
           state.latest_fields.frames.m?.domain ??
           fallbackFrame?.domain ??
           "magnetic_only",
+        topology_signature:
+          state.latest_fields.frames.m?.topology_signature ??
+          fallbackFrame?.topology_signature ??
+          null,
         field_revision:
           state.latest_fields.frames.m?.field_revision ??
           fallbackFrame?.field_revision ??

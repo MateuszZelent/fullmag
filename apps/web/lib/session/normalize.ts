@@ -140,6 +140,25 @@ function fieldGrid(raw: any): [number, number, number] | null {
   return [Number(grid[0]), Number(grid[1]), Number(grid[2])];
 }
 
+function fieldTopologySignature(raw: any): string | null {
+  const direct =
+    typeof raw?.topology_signature === "string"
+      ? raw.topology_signature.trim()
+      : typeof raw?.topology_key === "string"
+        ? raw.topology_key.trim()
+        : "";
+  if (direct.length > 0) {
+    return direct;
+  }
+  if (typeof raw?.mesh_generation_id === "string" && raw.mesh_generation_id.trim().length > 0) {
+    return `gen:${raw.mesh_generation_id.trim()}`;
+  }
+  if (typeof raw?.topology_hash === "string" && raw.topology_hash.trim().length > 0) {
+    return `hash:${raw.topology_hash.trim()}`;
+  }
+  return null;
+}
+
 function normalizeLatestFieldFrame(
   quantityId: string,
   raw: any,
@@ -167,6 +186,7 @@ function normalizeLatestFieldFrame(
     active_mask: normalizeActiveMask(raw.active_mask),
     location: typeof raw.location === "string" ? raw.location : null,
     domain: typeof raw.domain === "string" ? raw.domain : null,
+    topology_signature: fieldTopologySignature(raw),
     field_revision:
       typeof raw.field_revision === "number" && Number.isFinite(raw.field_revision)
         ? Math.trunc(raw.field_revision)
@@ -239,6 +259,7 @@ function ensureLatestMagnetizationFrame(
         active_mask: existingFrame?.active_mask ?? null,
         location: existingFrame?.location ?? null,
         domain: existingFrame?.domain ?? "magnetic_only",
+        topology_signature: existingFrame?.topology_signature ?? null,
         field_revision:
           existingFrame?.field_revision ??
           (typeof liveState?.step === "number" ? liveState.step : null),
@@ -1900,6 +1921,7 @@ export function normalizeSessionState(
           active_mask: normalizeActiveMask(frame.active_mask),
           location: null,
           domain: null,
+          topology_signature: fieldTopologySignature(frame),
           field_revision:
             typeof frame.field_revision === "number" && Number.isFinite(frame.field_revision)
               ? Math.trunc(frame.field_revision)

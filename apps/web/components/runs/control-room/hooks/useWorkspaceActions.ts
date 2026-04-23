@@ -34,6 +34,7 @@ import {
   fileToBase64,
   sameDisplaySelection,
 } from "../helpers";
+import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 import {
   MESH_WORKSPACE_PRESETS,
   type MeshWorkspacePresetId,
@@ -51,6 +52,10 @@ import type { CapabilityMap, DisplayPatchRequest, SaveProfile } from "@/src/api/
 import { isFemDiscretization } from "@/src/domain/capabilities";
 
 type NormalizedViewportMode = ViewportMode | "charts";
+export type QuantitySwitchCacheState =
+  | "field-map-hit"
+  | "display-patch"
+  | "preview-recompute";
 
 const CHARTS_VIEW_MODE = "charts";
 
@@ -62,6 +67,33 @@ function normalizeViewportMode(mode: string): NormalizedViewportMode | null {
   if (normalized === "analyze") return "Analyze";
   if (normalized === "chart" || normalized === "charts") return CHARTS_VIEW_MODE;
   return null;
+}
+
+function perfNow(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+export function resolveQuantitySwitchCacheState(args: {
+  cachedFieldQuantities: ReadonlySet<string>;
+  nextQuantity: string;
+  previewControlsActive: boolean;
+}): QuantitySwitchCacheState {
+  const { cachedFieldQuantities, nextQuantity, previewControlsActive } = args;
+  if (cachedFieldQuantities.has(nextQuantity)) {
+    return "field-map-hit";
+  }
+  if (previewControlsActive) {
+    return "display-patch";
+  }
+  return "preview-recompute";
+}
+
+export function shouldPatchDisplayForQuantitySwitch(args: {
+  cacheState: QuantitySwitchCacheState;
+  previewControlsActive: boolean;
+}): boolean {
+  const { cacheState, previewControlsActive } = args;
+  return previewControlsActive && cacheState === "display-patch";
 }
 
 type BuilderAutoSync = ReturnType<typeof useBuilderAutoSync>;
@@ -765,19 +797,57 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
 
   /* ── requestPreviewQuantity ── */
   const requestPreviewQuantity = useCallback((nextQuantity: string) => {
+    const cacheState = resolveQuantitySwitchCacheState({
+      cachedFieldQuantities,
+      nextQuantity,
+      previewControlsActive,
+    });
+    recordFrontendPerfSample({
+      scope: "QuantitySwitch",
+      phase: "request",
+      durationMs: 0,
+      timestampMs: perfNow(),
+      meta: {
+        quantity: nextQuantity,
+        cacheState,
+        viewMode: effectiveViewMode,
+        femDiscretization,
+      },
+    });
     startTransition(() => {
       if (femDiscretization && effectiveViewMode === "Mesh") handleViewModeChange("3D");
       setSelectedQuantity(nextQuantity);
     });
-    // Data-plane fast path: if the field buffer is already cached locally,
-    // skip the control-plane POST entirely — just set local state.
-    if (cachedFieldQuantities.has(nextQuantity)) {
-      return;
-    }
-    // Fallback: update the canonical display resource so the runtime can
-    // observe the new display revision and refresh the selected quantity.
-    if (previewControlsActive) {
-      void patchDisplay({ active_quantity_id: nextQuantity });
+    if (shouldPatchDisplayForQuantitySwitch({ cacheState, previewControlsActive })) {
+      const patchStartedAt = perfNow();
+      void patchDisplay({ active_quantity_id: nextQuantity })
+        .then(() => {
+          recordFrontendPerfSample({
+            scope: "QuantitySwitch",
+            phase: "display-patch",
+            durationMs: perfNow() - patchStartedAt,
+            timestampMs: perfNow(),
+            meta: {
+              quantity: nextQuantity,
+              cacheState,
+              status: "ok",
+            },
+          });
+        })
+        .catch((error) => {
+          recordFrontendPerfSample({
+            scope: "QuantitySwitch",
+            phase: "display-patch",
+            durationMs: perfNow() - patchStartedAt,
+            timestampMs: perfNow(),
+            meta: {
+              quantity: nextQuantity,
+              cacheState,
+              status: "error",
+              reason: error instanceof Error ? error.message : String(error),
+            },
+          });
+        });
     }
   }, [
     cachedFieldQuantities,

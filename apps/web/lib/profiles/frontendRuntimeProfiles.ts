@@ -49,6 +49,6 @@ export interface ChartDecimationProfile {
 
 export const DEFAULT_CHART_DECIMATION_PROFILE: ChartDecimationProfile = {
   maxVisiblePoints: 2400,
-  decimationMode: "stride",
+  decimationMode: "min-max-bucket",
   bucketCount: 1200,
 };

@@ -116,8 +116,12 @@ function ShellControls({
     onInteractionChange?.(false);
   }, [onInteractionChange]);
   const stepLockState = useRef(createCameraStepLockState());
+  const stepLockSyncingRef = useRef(false);
   const profile = CAMERA_CONTROL_PROFILES[controlProfile];
   const handleChange = useCallback(() => {
+    if (stepLockSyncingRef.current) {
+      return;
+    }
     if (navigation !== "cad") {
       return;
     }
@@ -132,7 +136,12 @@ function ShellControls({
       state: stepLockState.current,
     });
     if (snapped) {
-      controls.update();
+      stepLockSyncingRef.current = true;
+      try {
+        controls.update();
+      } finally {
+        stepLockSyncingRef.current = false;
+      }
     }
   }, [controlsRef, navigation, profile]);
 

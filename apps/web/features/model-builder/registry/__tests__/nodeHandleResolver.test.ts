@@ -25,4 +25,28 @@ describe("nodeHandleResolver", () => {
     expect(resolveNodeHandle("phys-spin-torque").nodeKind).toBe("physics.spin_torque");
     expect(resolveNodeHandle("study-defaults-runtime").nodeKind).toBe("study.pipeline.root");
   });
+
+  it("resolves pipeline study stage nodes used by current tree ids", () => {
+    const base = resolveNodeHandle("study-stage-node:relax-1");
+    expect(base.nodeKind).toBe("study.stage.run");
+    expect(base.domain).toBe("study");
+    expect(base.entityId).toBe("relax-1");
+
+    const detail = resolveNodeHandle("study-stage-node:relax-1/solver");
+    expect(detail.nodeKind).toBe("study.stage.detail.solver");
+    expect(detail.parentId).toBe("study-stage-node:relax-1");
+    expect(detail.entityId).toBe("solver");
+  });
+
+  it("resolves flat study stage nodes used by compatibility ids", () => {
+    const base = resolveNodeHandle("study-stage-flat:3");
+    expect(base.nodeKind).toBe("study.stage.run");
+    expect(base.domain).toBe("study");
+    expect(base.entityId).toBe("3");
+
+    const detail = resolveNodeHandle("study-stage-flat:3/overview");
+    expect(detail.nodeKind).toBe("study.stage.detail.overview");
+    expect(detail.parentId).toBe("study-stage-flat:3");
+    expect(detail.entityId).toBe("overview");
+  });
 });

@@ -1,10 +1,12 @@
-/* eslint-disable react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Model } from "flexlayout-react";
 
 import type { DockResponsivePreset } from "@/components/workspace/docking/dockLayoutDefaults";
 import type { DockLayoutEnvelope, DockLayoutModel } from "@/lib/workspace/dockLayoutContract";
-import { normalizeDockLayoutEnvelope } from "@/lib/workspace/dockLayoutContract";
+import {
+  normalizeDockLayoutEnvelope,
+  normalizeDockLayoutRuntimeModel,
+} from "@/lib/workspace/dockLayoutContract";
 import type { WorkspaceMode } from "@/lib/workspace/workspace-store";
 
 export interface DockLayoutRuntimeMetrics {
@@ -87,7 +89,10 @@ export function useDockLayoutRuntime({
   clearDockingLayoutStorage,
 }: UseDockLayoutRuntimeOptions): UseDockLayoutRuntimeReturn {
   const initialNormalized = normalizeDockLayoutEnvelope(layoutEnvelope ?? null, preset);
-  const currentModelJsonRef = useRef<string | null>(JSON.stringify(initialNormalized.envelope.model));
+  const initialModelSerialized = JSON.stringify(initialNormalized.envelope.model);
+  const currentModelJsonRef = useRef<string | null>(initialModelSerialized);
+  const lastPersistedModelJsonRef = useRef<string | null>(initialModelSerialized);
+  const pendingStoreHydrationJsonRef = useRef<string | null>(null);
 
   const [model, setModel] = useState<Model>(() =>
     Model.fromJson(initialNormalized.envelope.model),
@@ -99,6 +104,7 @@ export function useDockLayoutRuntime({
 
   const persistModel = useCallback(
     (serializedModel: unknown) => {
+      lastPersistedModelJsonRef.current = JSON.stringify(serializedModel);
       setDockLayout(stage, preset, cloneModel(serializedModel));
     },
     [preset, setDockLayout, stage],
@@ -108,11 +114,15 @@ export function useDockLayoutRuntime({
     const result = normalizeDockLayoutEnvelope(layoutEnvelope ?? null, preset);
     const nextModel = result.envelope.model;
     const nextSerialized = JSON.stringify(nextModel);
+    const currentStoreSerialized = layoutEnvelope ? JSON.stringify(layoutEnvelope.model) : null;
 
     const existing = currentModelJsonRef.current;
     if (existing !== nextSerialized) {
-      setModel(Model.fromJson(cloneModel(nextModel)));
       currentModelJsonRef.current = nextSerialized;
+      if (lastPersistedModelJsonRef.current !== nextSerialized) {
+        pendingStoreHydrationJsonRef.current = nextSerialized;
+        setModel(Model.fromJson(cloneModel(nextModel)));
+      }
     }
 
     const nextMetrics: DockLayoutRuntimeMetrics = {
@@ -134,43 +144,44 @@ export function useDockLayoutRuntime({
       });
     }
 
-    if (result.changed && existing !== nextSerialized) {
+    if (result.changed && currentStoreSerialized !== nextSerialized) {
       persistModel(nextModel);
     }
   }, [layoutEnvelope, preset, persistModel]);
 
   useEffect(() => {
+    // Runtime reconciliation can push a repaired store model into FlexLayout state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     syncFromStore();
   }, [syncFromStore]);
 
   const onModelChange = useCallback(
     (nextModel: Model) => {
       const raw = nextModel.toJson();
-      const result = normalizeDockLayoutEnvelope(raw, preset);
-      const nextModelJson = result.envelope.model;
+      // Use the runtime-only normalizer so that a plain Model.toJson() is never
+      // mistaken for a schema-migration target (raw models have no
+      // dockingLayoutSchemaVersion, but that is expected and harmless here).
+      const result = normalizeDockLayoutRuntimeModel(raw, preset);
+      const nextModelJson = result.model;
       const nextSerialized = JSON.stringify(nextModelJson);
       const previousSerialized = currentModelJsonRef.current;
+      const pendingStoreHydrationSerialized = pendingStoreHydrationJsonRef.current;
+      pendingStoreHydrationJsonRef.current = null;
+
+      if (pendingStoreHydrationSerialized === nextSerialized) {
+        currentModelJsonRef.current = nextSerialized;
+        lastPersistedModelJsonRef.current = nextSerialized;
+        return;
+      }
 
       if (previousSerialized === nextSerialized) {
         return;
       }
 
-      const nextMetrics: DockLayoutRuntimeMetrics = {
-        preset,
-        templateId: result.envelope.templateId,
-        dockingLayoutSchemaVersion: result.envelope.dockingLayoutSchemaVersion,
-        wasRecovered: result.envelope.wasRecovered,
-        lastRepairReason: result.envelope.lastRepairReason,
-        lastRepairAtUnixMs: result.envelope.lastRepairAtUnixMs,
-        repairReasons: result.repairReasons,
-      };
-      setMetrics((previous) => (metricsEqual(previous, nextMetrics) ? previous : nextMetrics));
-
       if (result.changed && result.repairReasons.length > 0) {
         console.warn("[docking] repaired layout on model change", {
           preset,
-          templateId: result.envelope.templateId,
-          reasons: result.repairReasons,
+          reasons: [...result.repairReasons],
         });
       }
 

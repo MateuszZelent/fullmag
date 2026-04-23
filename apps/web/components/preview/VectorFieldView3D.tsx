@@ -62,6 +62,11 @@ import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 import { TransformGizmoLayer } from "./transform/TransformGizmoLayer";
 import { axisLabelsForConvention } from "./transform/axisConvention";
 import { useSceneCameraChange } from "./camera/useSceneCameraChange";
+import {
+  physicalPositionToScene,
+  physicalScaleToScene,
+  sceneDeltaToPhysical,
+} from "@/features/viewport-core/coordinates/physicalToScene";
 
 const FDM_AXIS_CONVENTION = "swapYZ" as const;
 
@@ -221,6 +226,7 @@ function loadSettings(): Settings {
 }
 
 type RotationPanelKey = "viewport" | "viewCube" | "hsl";
+type ViewportSceneMode = "grid" | "world";
 
 function formatVector(values: readonly number[], digits = 3): string {
   return values.map((value) => value.toFixed(digits)).join(", ");
@@ -268,6 +274,34 @@ function buildRenderedVectorSample(vectors: Float64Array | null): string[] {
     const base = rowIndex * 3;
     return `${String(rowIndex).padStart(width, "0")} | [${formatDebugScalar(vectors[base])}, ${formatDebugScalar(vectors[base + 1])}, ${formatDebugScalar(vectors[base + 2])}]`;
   });
+}
+
+function combineOverlayBounds(
+  overlays: readonly BuilderObjectOverlay[],
+): { min: [number, number, number]; max: [number, number, number] } | null {
+  if (overlays.length === 0) {
+    return null;
+  }
+  let min: [number, number, number] | null = null;
+  let max: [number, number, number] | null = null;
+  for (const overlay of overlays) {
+    if (!min || !max) {
+      min = [...overlay.boundsMin] as [number, number, number];
+      max = [...overlay.boundsMax] as [number, number, number];
+      continue;
+    }
+    min = min.map((value, axis) => Math.min(value, overlay.boundsMin[axis])) as [
+      number,
+      number,
+      number,
+    ];
+    max = max.map((value, axis) => Math.max(value, overlay.boundsMax[axis])) as [
+      number,
+      number,
+      number,
+    ];
+  }
+  return min && max ? { min, max } : null;
 }
 
 function formatDebugTimestamp(timestamp: number | null | undefined): string {
@@ -330,17 +364,15 @@ function RotationDebugBlock({
 function SyncedControls({
   controlsRefObject,
   viewCubeBridgeRef,
-  grid,
+  target,
   cameraEnabled = true,
 }: {
   controlsRefObject: React.MutableRefObject<any>;
   viewCubeBridgeRef: React.MutableRefObject<any>;
-  grid: [number, number, number];
+  target: [number, number, number];
   cameraEnabled?: boolean;
 }) {
   const { camera } = useThree();
-  const [nx, ny, nz] = grid;
-  const cx = nx / 2, cy = nz / 2, cz = ny / 2;
   const stepLockState = useRef(createCameraStepLockState());
   const controlProfile: CameraControlProfileId = "fdm";
   const profile = CAMERA_CONTROL_PROFILES[controlProfile];
@@ -390,7 +422,7 @@ function SyncedControls({
       zoomSpeed={profile.zoomSpeed}
       panSpeed={profile.panSpeed}
       dynamicDampingFactor={profile.dampingFactor}
-      target={[cx, cy, cz]}
+      target={target}
       onChange={handleChange}
       enabled={cameraEnabled}
     />
@@ -474,10 +506,20 @@ function expandOverlayBounds(
 
 function mapOverlayToFdmSceneBox(
   overlay: BuilderObjectOverlay | AntennaOverlayConductor,
+  sceneMode: ViewportSceneMode,
   grid: [number, number, number],
-  worldExtent: [number, number, number],
+  worldExtent: [number, number, number] | null,
   universeCenter?: [number, number, number] | null,
 ): { sceneMin: [number, number, number]; sceneMax: [number, number, number] } | null {
+  if (sceneMode === "world") {
+    return {
+      sceneMin: physicalPositionToScene(overlay.boundsMin),
+      sceneMax: physicalPositionToScene(overlay.boundsMax),
+    };
+  }
+  if (!worldExtent) {
+    return null;
+  }
   const [nx, ny, nz] = grid;
   const domainCenter = universeCenter ?? [0, 0, 0];
   const domainMin = [
@@ -518,6 +560,7 @@ function FdmObjectOverlayMeshes({
   overlays,
   selectedObjectId,
   objectViewMode,
+  sceneMode,
   grid,
   worldExtent,
   universeCenter,
@@ -527,16 +570,17 @@ function FdmObjectOverlayMeshes({
   overlays: BuilderObjectOverlay[];
   selectedObjectId?: string | null;
   objectViewMode: ObjectViewMode;
+  sceneMode: ViewportSceneMode;
   grid: [number, number, number];
-  worldExtent: [number, number, number];
+  worldExtent?: [number, number, number] | null;
   universeCenter?: [number, number, number] | null;
   onRequestObjectSelect?: (id: string) => void;
   onGeometryTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
 }) {
   const hasSelected = Boolean(selectedObjectId);
-  const cellX = worldExtent[0] / Math.max(grid[0], 1);
-  const cellY = worldExtent[1] / Math.max(grid[1], 1);
-  const cellZ = worldExtent[2] / Math.max(grid[2], 1);
+  const cellX = worldExtent ? worldExtent[0] / Math.max(grid[0], 1) : 1;
+  const cellY = worldExtent ? worldExtent[1] / Math.max(grid[1], 1) : 1;
+  const cellZ = worldExtent ? worldExtent[2] / Math.max(grid[2], 1) : 1;
 
   return (
     <group>
@@ -547,7 +591,7 @@ function FdmObjectOverlayMeshes({
           return null;
         }
         const displayOverlay = expandOverlayBounds(overlay, selected);
-        const mapped = mapOverlayToFdmSceneBox(displayOverlay, grid, worldExtent, universeCenter);
+        const mapped = mapOverlayToFdmSceneBox(displayOverlay, sceneMode, grid, worldExtent ?? null, universeCenter);
         if (!mapped) {
           return null;
         }
@@ -606,6 +650,11 @@ function FdmObjectOverlayMeshes({
               active
               scale={100}
               onTranslate={(dx, dy, dz) => {
+                if (sceneMode === "world") {
+                  const [physicalDx, physicalDy, physicalDz] = sceneDeltaToPhysical([dx, dy, dz]);
+                  onGeometryTranslate(overlay.id, physicalDx, physicalDy, physicalDz);
+                  return;
+                }
                 const physicalDx = dx * cellX;
                 const physicalDz = dy * cellZ;
                 const physicalDy = dz * cellY;
@@ -626,6 +675,7 @@ function FdmObjectOverlayMeshes({
 function FdmAntennaOverlayMeshes({
   overlays,
   selectedAntennaId,
+  sceneMode,
   grid,
   worldExtent,
   universeCenter,
@@ -633,21 +683,22 @@ function FdmAntennaOverlayMeshes({
 }: {
   overlays: AntennaOverlay[];
   selectedAntennaId?: string | null;
+  sceneMode: ViewportSceneMode;
   grid: [number, number, number];
-  worldExtent: [number, number, number];
+  worldExtent?: [number, number, number] | null;
   universeCenter?: [number, number, number] | null;
   onAntennaTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
 }) {
-  const cellX = worldExtent[0] / Math.max(grid[0], 1);
-  const cellY = worldExtent[1] / Math.max(grid[1], 1);
-  const cellZ = worldExtent[2] / Math.max(grid[2], 1);
+  const cellX = worldExtent ? worldExtent[0] / Math.max(grid[0], 1) : 1;
+  const cellY = worldExtent ? worldExtent[1] / Math.max(grid[1], 1) : 1;
+  const cellZ = worldExtent ? worldExtent[2] / Math.max(grid[2], 1) : 1;
 
   return (
     <group>
       {overlays.map((overlay) => {
         const selected = selectedAntennaId === overlay.id;
         const conductors = overlay.conductors.map((conductor) => {
-          const mapped = mapOverlayToFdmSceneBox(conductor, grid, worldExtent, universeCenter);
+          const mapped = mapOverlayToFdmSceneBox(conductor, sceneMode, grid, worldExtent ?? null, universeCenter);
           if (!mapped) return null;
           const { sceneMin, sceneMax } = mapped;
           const size = [
@@ -696,6 +747,11 @@ function FdmAntennaOverlayMeshes({
               active
               scale={100}
               onTranslate={(dx, dy, dz) => {
+                if (sceneMode === "world") {
+                  const [physicalDx, physicalDy, physicalDz] = sceneDeltaToPhysical([dx, dy, dz]);
+                  onAntennaTranslate(overlay.id, physicalDx, physicalDy, physicalDz);
+                  return;
+                }
                 const physicalDx = dx * cellX;
                 const physicalDz = dy * cellZ;
                 const physicalDy = dz * cellY;
@@ -825,17 +881,65 @@ function VectorFieldView3DInner({
     viewCube: null,
     hsl: null,
   });
+  const [nx, ny, nz] = grid;
+  const hasRenderableGrid = nx > 0 && ny > 0 && nz > 0;
+  const sceneMode: ViewportSceneMode = geometryMode && !hasRenderableGrid ? "world" : "grid";
+  const overlayBounds = useMemo(() => combineOverlayBounds(objectOverlays), [objectOverlays]);
+  const worldBounds = useMemo(() => {
+    if (worldExtent && worldExtent.every((value) => Number.isFinite(value) && value > 0)) {
+      const center = universeCenter ?? [0, 0, 0];
+      return {
+        min: [
+          center[0] - worldExtent[0] * 0.5,
+          center[1] - worldExtent[1] * 0.5,
+          center[2] - worldExtent[2] * 0.5,
+        ] as [number, number, number],
+        max: [
+          center[0] + worldExtent[0] * 0.5,
+          center[1] + worldExtent[1] * 0.5,
+          center[2] + worldExtent[2] * 0.5,
+        ] as [number, number, number],
+      };
+    }
+    return overlayBounds;
+  }, [overlayBounds, universeCenter, worldExtent]);
+  const sceneFrame = useMemo(() => {
+    if (sceneMode === "grid") {
+      return {
+        center: [nx / 2, nz / 2, ny / 2] as [number, number, number],
+        extent: [nx, nz, ny] as [number, number, number],
+      };
+    }
+    if (!worldBounds) {
+      return {
+        center: [0, 0, 0] as [number, number, number],
+        extent: [1, 1, 1] as [number, number, number],
+      };
+    }
+    return {
+      center: physicalPositionToScene([
+        0.5 * (worldBounds.min[0] + worldBounds.max[0]),
+        0.5 * (worldBounds.min[1] + worldBounds.max[1]),
+        0.5 * (worldBounds.min[2] + worldBounds.max[2]),
+      ]),
+      extent: physicalScaleToScene([
+        Math.max(worldBounds.max[0] - worldBounds.min[0], 1e-9),
+        Math.max(worldBounds.max[1] - worldBounds.min[1], 1e-9),
+        Math.max(worldBounds.max[2] - worldBounds.min[2], 1e-9),
+      ]),
+    };
+  }, [nx, ny, nz, sceneMode, worldBounds]);
+  const [cx, cy, cz] = sceneFrame.center;
+  const orbitDist = Math.max(...sceneFrame.extent, 1) * 1.5;
+  const sceneTarget = sceneFrame.center;
   const cameraPersistenceKey = useMemo(
-    () => `fdm:${geometryMode ? "mesh" : "3d"}:${grid.join("x")}`,
-    [geometryMode, grid],
+    () =>
+      sceneMode === "grid"
+        ? `fdm:${geometryMode ? "mesh" : "3d"}:${grid.join("x")}`
+        : `fdm:world:${sceneTarget.join("x")}:${sceneFrame.extent.join("x")}`,
+    [geometryMode, grid, sceneFrame.extent, sceneMode, sceneTarget],
   );
   const cameraRestoreReadyRef = useRef(false);
-
-  const [nx, ny, nz] = grid;
-  const { cx, cy, cz, orbitDist } = useMemo(() => ({
-    cx: nx / 2, cy: nz / 2, cz: ny / 2,
-    orbitDist: Math.max(nx, ny, nz) * 1.5,
-  }), [nx, ny, nz]);
   const updateRotationSnapshot = useCallback((key: RotationPanelKey, snapshot: OrientationDebugSnapshot) => {
     setRotationSnapshots((previous) => {
       const current = previous[key];
@@ -975,7 +1079,7 @@ function VectorFieldView3DInner({
   }, []);
 
   const focusObject = useCallback((objectId: string) => {
-    if (!worldExtent) {
+    if (sceneMode === "grid" && !worldExtent) {
       return;
     }
     const overlay = objectOverlays.find((candidate) => candidate.id === objectId);
@@ -983,7 +1087,7 @@ function VectorFieldView3DInner({
     if (!overlay || !bridge?.camera || !bridge?.controls) {
       return;
     }
-    const mapped = mapOverlayToFdmSceneBox(overlay, grid, worldExtent, universeCenter);
+    const mapped = mapOverlayToFdmSceneBox(overlay, sceneMode, grid, worldExtent, universeCenter);
     if (!mapped) {
       return;
     }
@@ -991,9 +1095,9 @@ function VectorFieldView3DInner({
       bridge.camera,
       bridge.controls,
       { min: mapped.sceneMin, max: mapped.sceneMax },
-      { fallbackMinRadius: 1.5 },
+      { fallbackMinRadius: sceneMode === "world" ? Math.max(orbitDist * 0.1, 1e-6) : 1.5 },
     );
-  }, [grid, objectOverlays, universeCenter, worldExtent]);
+  }, [grid, objectOverlays, orbitDist, sceneMode, universeCenter, worldExtent]);
 
   useEffect(() => {
     if (!focusObjectRequest) {
@@ -1021,11 +1125,13 @@ function VectorFieldView3DInner({
     ? [worldExtent[0], worldExtent[2], worldExtent[1]] as [number, number, number]
     : null;
   const axesSceneScale: [number, number, number] = axesWorldExtent
-    ? [
-        axesWorldExtent[0] > 0 ? nx / axesWorldExtent[0] : 1,
-        axesWorldExtent[1] > 0 ? nz / axesWorldExtent[1] : 1,
-        axesWorldExtent[2] > 0 ? ny / axesWorldExtent[2] : 1,
-      ]
+    ? sceneMode === "world"
+      ? [1, 1, 1]
+      : [
+          axesWorldExtent[0] > 0 ? nx / axesWorldExtent[0] : 1,
+          axesWorldExtent[1] > 0 ? nz / axesWorldExtent[1] : 1,
+          axesWorldExtent[2] > 0 ? ny / axesWorldExtent[2] : 1,
+        ]
     : [1, 1, 1];
   // In isolate mode, keep voxels at full opacity to avoid transparent instanced mesh
   // sorting artifacts. The overlay boxes already hide non-selected objects visually.
@@ -1034,6 +1140,7 @@ function VectorFieldView3DInner({
   // P0 FDM isolate: compute grid-space bounds so FdmInstances hides voxels outside
   // the selected object when in isolate mode.
   const isolateGridBounds = useMemo(() => {
+    if (sceneMode !== "grid") return null;
     if (objectViewMode !== "isolate" || !selectedObjectId || !worldExtent) return null;
     const overlay = objectOverlays.find((o) => o.id === selectedObjectId);
     if (!overlay) return null;
@@ -1057,7 +1164,7 @@ function VectorFieldView3DInner({
       minIz: Math.floor(toIz(overlay.boundsMin[2])),
       maxIz: Math.ceil(toIz(overlay.boundsMax[2])),
     };
-  }, [objectViewMode, selectedObjectId, objectOverlays, worldExtent, universeCenter, nx, ny, nz]);
+  }, [objectViewMode, sceneMode, selectedObjectId, objectOverlays, worldExtent, universeCenter, nx, ny, nz]);
 
   const toolbarOptionClassName =
     "appearance-none border border-transparent bg-transparent text-muted-foreground text-[0.65rem] font-semibold uppercase px-2 py-1 rounded cursor-pointer transition-colors hover:bg-muted/40 hover:text-foreground data-[active=true]:border-primary/45 data-[active=true]:bg-primary/18 data-[active=true]:text-primary";
@@ -1509,21 +1616,24 @@ function VectorFieldView3DInner({
 
             <FdmLighting brightness={settings.brightness} quality={settings.quality} />
 
-            <FdmInstances
-              grid={grid}
-              vectors={deferredVectors}
-              geometryMode={geometryMode}
-              activeMask={activeMask}
-              settings={deferredSettings}
-              sceneOpacityMultiplier={sceneOpacityMultiplier}
-              isolateGridBounds={isolateGridBounds}
-            />
+            {sceneMode === "grid" ? (
+              <FdmInstances
+                grid={grid}
+                vectors={deferredVectors}
+                geometryMode={geometryMode}
+                activeMask={activeMask}
+                settings={deferredSettings}
+                sceneOpacityMultiplier={sceneOpacityMultiplier}
+                isolateGridBounds={isolateGridBounds}
+              />
+            ) : null}
 
-            {worldExtent && objectOverlays.length > 0 ? (
+            {objectOverlays.length > 0 && (sceneMode === "world" || Boolean(worldExtent)) ? (
               <FdmObjectOverlayMeshes
                 overlays={objectOverlays}
                 selectedObjectId={selectedObjectId}
                 objectViewMode={objectViewMode}
+                sceneMode={sceneMode}
                 grid={grid}
                 worldExtent={worldExtent}
                 universeCenter={universeCenter}
@@ -1532,10 +1642,11 @@ function VectorFieldView3DInner({
               />
             ) : null}
 
-            {worldExtent && antennaOverlays.length > 0 && objectViewMode !== "isolate" ? (
+            {antennaOverlays.length > 0 && objectViewMode !== "isolate" && (sceneMode === "world" || Boolean(worldExtent)) ? (
               <FdmAntennaOverlayMeshes
                 overlays={antennaOverlays}
                 selectedAntennaId={selectedAntennaId}
+                sceneMode={sceneMode}
                 grid={grid}
                 worldExtent={worldExtent}
                 universeCenter={universeCenter}
@@ -1546,7 +1657,7 @@ function VectorFieldView3DInner({
             {axesWorldExtent && axesWorldExtent[0] > 0 && axesWorldExtent[1] > 0 && axesWorldExtent[2] > 0 && (
               <SceneAxes3D
                 worldExtent={axesWorldExtent}
-                center={[cx, cy, cz]}
+                center={sceneTarget}
                 sceneScale={axesSceneScale}
                 axisLabels={axisLabelsForConvention(FDM_AXIS_CONVENTION)}
               />
@@ -1555,7 +1666,7 @@ function VectorFieldView3DInner({
             <SyncedControls
               controlsRefObject={controlsRef}
               viewCubeBridgeRef={viewCubeSceneRef}
-              grid={grid}
+              target={sceneTarget}
               cameraEnabled={cameraActive && viewportVisible}
             />
 

@@ -55,6 +55,13 @@ function clamp01(value: number): number {
   return value;
 }
 
+function requireFemTopologyKey(value: string | null): string {
+  if (value && value.length > 0) {
+    return value;
+  }
+  throw new Error("[ViewportPanels] Missing required FEM topologyKey for FemMeshView3D.");
+}
+
 function deriveSliceSampling(
   grid: [number, number, number],
   plane: "xy" | "xz" | "yz",
@@ -436,6 +443,13 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const geometryAuthoringShowPrimitives = femLayerState.showPrimitives;
   const geometryAuthoringShowMesh = femLayerState.showMesh;
   const geometryAuthoringShowQuantity = femLayerState.showQuantity;
+  const geometryModeObjectOverlays = useMemo(
+    () =>
+      geometryAuthoringShowPrimitives
+        ? ctx.objectOverlays.filter((overlay) => visibleObjectIds.includes(overlay.id))
+        : [],
+    [ctx.objectOverlays, geometryAuthoringShowPrimitives, visibleObjectIds],
+  );
   const geometryAuthoringMeshStatus = useMemo(() => {
     if (!geometryAuthoringShowMesh) return "hidden";
     if (!builderGeometryRealization) return "no-geometry";
@@ -717,6 +731,17 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       },
     } as typeof ctx.femMeshData;
   }, [ctx.femMeshData, scaleFactor]);
+  const resolvedFemTopologyKey = useMemo(() => {
+    const explicitTopologyKey = ctx.femTopologyKey?.trim();
+    if (explicitTopologyKey) {
+      return explicitTopologyKey;
+    }
+    const meshGenerationId = scaledFemMeshData?.meshGenerationId?.trim();
+    if (meshGenerationId) {
+      return `gen:${meshGenerationId}`;
+    }
+    return null;
+  }, [ctx.femTopologyKey, scaledFemMeshData?.meshGenerationId]);
   const viewportFitSeed = useMemo(() => {
     const sampleKey =
       scaledFemMeshData
@@ -724,7 +749,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         : "none";
     return [
       effectiveViewMode,
-      ctx.femTopologyKey ?? "no-topology",
+      resolvedFemTopologyKey ?? "no-topology",
       sampleKey,
       ctx.focusObjectRequest?.objectId ?? "none",
       String(ctx.focusObjectRequest?.revision ?? 0),
@@ -732,7 +757,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   }, [
     scaledFemMeshData,
     effectiveViewMode,
-    ctx.femTopologyKey,
+    resolvedFemTopologyKey,
     ctx.focusObjectRequest,
   ]);
 
@@ -803,7 +828,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       conditionalContent = (
         <ViewportErrorBoundary label="Minimal FEM Wireframe Viewport">
           <FemMeshView3D
-            topologyKey={ctx.femTopologyKey ?? undefined}
+            topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
             meshData={scaledFemMeshData ?? ctx.femMeshData}
             selectedSidebarNodeId={ctx.selectedSidebarNodeId}
             viewportFitSeed={viewportFitSeed}
@@ -867,11 +892,13 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             geometryMode
             activeMask={null}
             worldExtent={ctx.worldExtent}
-            objectOverlays={[]}
-            selectedObjectId={null}
+            objectOverlays={geometryModeObjectOverlays}
+            selectedObjectId={viewportSelectedObjectId}
             universeCenter={ctx.worldCenter}
-            objectViewMode="context"
+            objectViewMode={ctx.objectViewMode}
             viewportVisible
+            onRequestObjectSelect={handleRequestObjectSelect}
+            onGeometryTranslate={ctx.applyGeometryTranslation}
             authoringOverlay={
               <BuilderViewportLayer
                 showPrimitives={geometryAuthoringShowPrimitives}
@@ -980,7 +1007,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     conditionalContent = (
       <ViewportErrorBoundary label="FEM Mesh Viewport">
       <FemMeshView3D
-        topologyKey={ctx.femTopologyKey ?? undefined}
+        topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
         meshData={scaledFemMeshData!}
         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
         viewportFitSeed={viewportFitSeed}
@@ -1045,7 +1072,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     conditionalContent = (
       <ViewportErrorBoundary label="FEM 3D Viewport">
       <FemMeshView3D
-        topologyKey={ctx.femTopologyKey ?? undefined}
+        topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
         meshData={scaledFemMeshData!}
         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
         viewportFitSeed={viewportFitSeed}
@@ -1343,7 +1370,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                     return (
                       <ViewportErrorBoundary label="Hosted Unified 3D Viewport">
                         <FemMeshView3D
-                          topologyKey={ctx.femTopologyKey ?? undefined}
+                          topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
                           meshData={scaledFemMeshData!}
                           selectedSidebarNodeId={ctx.selectedSidebarNodeId}
                           viewportFitSeed={viewportFitSeed}
@@ -1486,7 +1513,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                   return (
                     <ViewportErrorBoundary label="Hosted FEM Mesh Viewport">
                       <FemMeshView3D
-                        topologyKey={ctx.femTopologyKey ?? undefined}
+                        topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
                         meshData={scaledFemMeshData!}
                         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
                         viewportFitSeed={viewportFitSeed}
@@ -1550,7 +1577,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                   return (
                     <ViewportErrorBoundary label="Hosted FEM 3D Viewport">
                       <FemMeshView3D
-                        topologyKey={ctx.femTopologyKey ?? undefined}
+                        topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
                         meshData={scaledFemMeshData!}
                         selectedSidebarNodeId={ctx.selectedSidebarNodeId}
                         viewportFitSeed={viewportFitSeed}

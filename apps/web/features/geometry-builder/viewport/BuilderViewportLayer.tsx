@@ -387,12 +387,17 @@ export function BuilderViewportLayer({
   const builderEnabled = useGeometryBuilderStore((s) => s.builderMode.enabled);
   const viewportTool = useGeometryBuilderStore((s) => s.viewportTool);
   const snapSettings = useGeometryBuilderStore((s) => s.snapSettings);
-  const primitives = useGeometryBuilderStore((s) => s.getAllPrimitives());
+  const graphNodes = useGeometryBuilderStore((s) => s.graph.nodes);
+  const primitives = useMemo(
+    () => graphNodes.filter((node): node is PrimitiveNode => node.kind === "primitive"),
+    [graphNodes],
+  );
   const builderSelection = useGeometryBuilderStore((s) => s.builderSelection);
   const selectedId = builderSelection.type === "primitive" ? builderSelection.id : null;
   const universeSelected = builderSelection.type === "universe";
-  const selectedNode = useGeometryBuilderStore((s) =>
-    selectedId ? s.getPrimitive(selectedId) : null,
+  const selectedNode = useMemo(
+    () => (selectedId ? primitives.find((node) => node.id === selectedId) ?? null : null),
+    [primitives, selectedId],
   );
   const validateNode = useGeometryBuilderStore((s) => s.validateNode);
   const selectBuilderTarget = useGeometryBuilderStore((s) => s.selectBuilderTarget);

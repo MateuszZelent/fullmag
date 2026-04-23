@@ -11,6 +11,11 @@
  */
 
 import type { FemSliceQuery } from "./femSliceQuery";
+import type {
+  SliceCollection,
+  SliceTopologyCollection,
+} from "./femSliceGeometry";
+import { updateFrontendResourceBucket } from "@/lib/debug/frontendResourceManager";
 
 const objectIdentityMap = new WeakMap<object, number>();
 let nextObjectIdentity = 1;
@@ -49,6 +54,158 @@ function visiblePartsFingerprint(value: Iterable<string> | undefined): string {
     return "";
   }
   return Array.from(value).sort().join(",");
+}
+
+export type SliceCacheState = "hit" | "miss";
+
+const MAX_TOPOLOGY_CACHE_ENTRIES = 18;
+const MAX_FIELD_CACHE_ENTRIES = 48;
+
+function getLruValue<T>(cache: Map<string, T>, key: string): T | null {
+  const existing = cache.get(key);
+  if (!existing) {
+    return null;
+  }
+  cache.delete(key);
+  cache.set(key, existing);
+  return existing;
+}
+
+function setLruValue<T>(cache: Map<string, T>, key: string, value: T, maxEntries: number): void {
+  if (cache.has(key)) {
+    cache.delete(key);
+  }
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      break;
+    }
+    cache.delete(oldestKey);
+  }
+}
+
+const sliceTopologyCache = new Map<string, SliceTopologyCollection>();
+const sliceFieldCache = new Map<string, SliceCollection>();
+
+function estimateTopologyBytes(value: SliceTopologyCollection): number {
+  let bytes = 0;
+  bytes += 6 * 8; // bounds
+  bytes += value.segments.length * 88;
+  for (const polygon of value.polygons) {
+    bytes += polygon.points.length * 2 * 8;
+    bytes += polygon.worldPoints.length * 3 * 8;
+    bytes += polygon.sampleRefs.length * 24;
+    bytes += 32;
+  }
+  return bytes;
+}
+
+function estimateFieldBytes(value: SliceCollection): number {
+  let bytes = 0;
+  bytes += 8 * 8; // ranges + bounds
+  bytes += value.segments.length * 40;
+  bytes += value.arrows.length * 88;
+  for (const polygon of value.polygons) {
+    bytes += polygon.points.length * 2 * 8;
+    bytes += 56;
+  }
+  return bytes;
+}
+
+function totalTopologyCacheBytes(): number {
+  let bytes = 0;
+  for (const value of sliceTopologyCache.values()) {
+    bytes += estimateTopologyBytes(value);
+  }
+  return bytes;
+}
+
+function totalFieldCacheBytes(): number {
+  let bytes = 0;
+  for (const value of sliceFieldCache.values()) {
+    bytes += estimateFieldBytes(value);
+  }
+  return bytes;
+}
+
+function publishSliceCacheBuckets(): void {
+  updateFrontendResourceBucket({
+    id: "slice-topology-cache",
+    label: "Slice topology cache",
+    entries: sliceTopologyCache.size,
+    estimatedBytes: totalTopologyCacheBytes(),
+    capacity: MAX_TOPOLOGY_CACHE_ENTRIES,
+  });
+  updateFrontendResourceBucket({
+    id: "slice-field-cache",
+    label: "Slice field cache",
+    entries: sliceFieldCache.size,
+    estimatedBytes: totalFieldCacheBytes(),
+    capacity: MAX_FIELD_CACHE_ENTRIES,
+  });
+}
+
+export function readSliceTopologyCache(key: string): SliceTopologyCollection | null {
+  return getLruValue(sliceTopologyCache, key);
+}
+
+export function writeSliceTopologyCache(key: string, value: SliceTopologyCollection): void {
+  setLruValue(sliceTopologyCache, key, value, MAX_TOPOLOGY_CACHE_ENTRIES);
+  publishSliceCacheBuckets();
+}
+
+export function readSliceFieldCache(key: string): SliceCollection | null {
+  return getLruValue(sliceFieldCache, key);
+}
+
+export function writeSliceFieldCache(key: string, value: SliceCollection): void {
+  setLruValue(sliceFieldCache, key, value, MAX_FIELD_CACHE_ENTRIES);
+  publishSliceCacheBuckets();
+}
+
+export function getSliceTopologyCached(
+  key: string,
+  compute: () => SliceTopologyCollection,
+): { value: SliceTopologyCollection; cacheState: SliceCacheState } {
+  const cached = readSliceTopologyCache(key);
+  if (cached) {
+    return { value: cached, cacheState: "hit" };
+  }
+  const value = compute();
+  writeSliceTopologyCache(key, value);
+  return { value, cacheState: "miss" };
+}
+
+export function getSliceFieldCached(
+  key: string,
+  compute: () => SliceCollection,
+): { value: SliceCollection; cacheState: SliceCacheState } {
+  const cached = readSliceFieldCache(key);
+  if (cached) {
+    return { value: cached, cacheState: "hit" };
+  }
+  const value = compute();
+  writeSliceFieldCache(key, value);
+  return { value, cacheState: "miss" };
+}
+
+export function getSliceCacheSnapshot(): {
+  topologyEntries: number;
+  fieldEntries: number;
+  topologyCapacity: number;
+  fieldCapacity: number;
+  topologyEstimatedBytes: number;
+  fieldEstimatedBytes: number;
+} {
+  return {
+    topologyEntries: sliceTopologyCache.size,
+    fieldEntries: sliceFieldCache.size,
+    topologyCapacity: MAX_TOPOLOGY_CACHE_ENTRIES,
+    fieldCapacity: MAX_FIELD_CACHE_ENTRIES,
+    topologyEstimatedBytes: totalTopologyCacheBytes(),
+    fieldEstimatedBytes: totalFieldCacheBytes(),
+  };
 }
 
 // ── Cache keys ───────────────────────────────────────────────────

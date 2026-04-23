@@ -92,7 +92,7 @@ export function applyCameraStepLock({
 
   if (safeProfileValue(profile.minRotationStep)) {
     const rotationDelta = state.rotation.angleTo(camera.quaternion);
-    if (rotationDelta < profile.minRotationStep) {
+    if (rotationDelta > EPS && rotationDelta < profile.minRotationStep) {
       camera.quaternion.copy(state.rotation);
       snapped = true;
     } else {
@@ -103,7 +103,7 @@ export function applyCameraStepLock({
   if (hasTarget) {
     if (safeProfileValue(profile.minPanStep)) {
       const panDelta = target!.distanceTo(state.target);
-      if (panDelta < profile.minPanStep) {
+      if (panDelta > EPS && panDelta < profile.minPanStep) {
         target!.copy(state.target);
         camera.position.copy(state.cameraPosition);
         snapped = true;
@@ -116,7 +116,7 @@ export function applyCameraStepLock({
       const radiusNow = camera.position.distanceTo(target!);
       const radiusRef = state.cameraPosition.distanceTo(state.target);
       const zoomDelta = Math.abs(radiusNow - radiusRef);
-      if (zoomDelta < profile.minZoomStep) {
+      if (zoomDelta > EPS && zoomDelta < profile.minZoomStep) {
         const direction = state.cameraPosition.clone().sub(state.target).normalize();
         camera.position.copy(state.target).add(direction.multiplyScalar(radiusRef));
         snapped = true;

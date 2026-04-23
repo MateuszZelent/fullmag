@@ -9,6 +9,8 @@ import { scalarRowsTipFingerprint } from "@/lib/plots/scalarRows";
 import { DEFAULT_CHART_DECIMATION_PROFILE } from "@/lib/profiles/frontendRuntimeProfiles";
 
 export const MAX_VISIBLE_POINTS = DEFAULT_CHART_DECIMATION_PROFILE.maxVisiblePoints;
+const CHART_DECIMATION_MODE = DEFAULT_CHART_DECIMATION_PROFILE.decimationMode;
+const CHART_BUCKET_COUNT = DEFAULT_CHART_DECIMATION_PROFILE.bucketCount;
 
 const SERIES_COLORS = [
   "#60a5fa", "#34d399", "#f472b6", "#fbbf24",
@@ -25,6 +27,110 @@ const accessor = (row: ScalarRow, key: string): number | null => {
   const value = Reflect.get(row, key);
   return typeof value === "number" ? value : null;
 };
+
+function decimateRowsStride(rows: ScalarRow[], maxVisiblePoints: number): ScalarRow[] {
+  if (rows.length <= maxVisiblePoints) return rows;
+  const stride = Math.ceil(rows.length / maxVisiblePoints);
+  const sampled = rows.filter((_, index) => index % stride === 0);
+  const last = rows[rows.length - 1];
+  if (sampled[sampled.length - 1] !== last) sampled.push(last);
+  return sampled;
+}
+
+function enforceMaxVisibleRows(indices: number[], maxVisiblePoints: number): number[] {
+  if (indices.length <= maxVisiblePoints) {
+    return indices;
+  }
+  if (maxVisiblePoints <= 2) {
+    return [indices[0], indices[indices.length - 1]];
+  }
+  const middle = indices.slice(1, -1);
+  const stride = Math.ceil(middle.length / (maxVisiblePoints - 2));
+  const reduced = [indices[0]];
+  for (let i = 0; i < middle.length; i += stride) {
+    reduced.push(middle[i]);
+  }
+  const last = indices[indices.length - 1];
+  if (reduced[reduced.length - 1] !== last) {
+    reduced.push(last);
+  }
+  return reduced;
+}
+
+function decimateRowsMinMaxBucket(
+  rows: ScalarRow[],
+  maxVisiblePoints: number,
+  bucketCount: number,
+  yColumns: string[],
+): ScalarRow[] {
+  if (rows.length <= maxVisiblePoints) {
+    return rows;
+  }
+  if (yColumns.length === 0) {
+    return decimateRowsStride(rows, maxVisiblePoints);
+  }
+
+  const maxBucketsFromBudget = Math.max(1, Math.floor(maxVisiblePoints / 4));
+  const effectiveBucketCount = Math.max(1, Math.min(bucketCount, maxBucketsFromBudget));
+  const bucketSize = Math.max(1, Math.ceil(rows.length / effectiveBucketCount));
+  const selectedIndices = new Set<number>();
+  selectedIndices.add(0);
+  selectedIndices.add(rows.length - 1);
+
+  for (let bucketStart = 0; bucketStart < rows.length; bucketStart += bucketSize) {
+    const bucketEnd = Math.min(rows.length, bucketStart + bucketSize);
+    if (bucketStart >= bucketEnd) continue;
+    selectedIndices.add(bucketStart);
+    selectedIndices.add(bucketEnd - 1);
+
+    let minIndex = -1;
+    let maxIndex = -1;
+    let minValue = Number.POSITIVE_INFINITY;
+    let maxValue = Number.NEGATIVE_INFINITY;
+
+    for (let index = bucketStart; index < bucketEnd; index += 1) {
+      const row = rows[index];
+      for (const key of yColumns) {
+        const value = accessor(row, key);
+        if (value == null || !Number.isFinite(value)) {
+          continue;
+        }
+        if (value < minValue) {
+          minValue = value;
+          minIndex = index;
+        }
+        if (value > maxValue) {
+          maxValue = value;
+          maxIndex = index;
+        }
+      }
+    }
+
+    if (minIndex >= 0) selectedIndices.add(minIndex);
+    if (maxIndex >= 0) selectedIndices.add(maxIndex);
+  }
+
+  const ordered = [...selectedIndices].sort((a, b) => a - b);
+  const clipped = enforceMaxVisibleRows(ordered, maxVisiblePoints);
+  return clipped.map((index) => rows[index]);
+}
+
+function decimateRows(
+  rows: ScalarRow[],
+  maxVisiblePoints: number,
+  mode: "stride" | "lttb" | "min-max-bucket",
+  bucketCount: number,
+  yColumns: string[],
+): ScalarRow[] {
+  if (rows.length <= maxVisiblePoints) {
+    return rows;
+  }
+  if (mode === "min-max-bucket") {
+    return decimateRowsMinMaxBucket(rows, maxVisiblePoints, bucketCount, yColumns);
+  }
+  // "lttb" is still not implemented in this component; keep stride fallback.
+  return decimateRowsStride(rows, maxVisiblePoints);
+}
 
 /**
  * CH-001 fix: Detect whether a column has any real data in the rows.
@@ -118,13 +224,14 @@ const ScalarPlot = memo(function ScalarPlot({
   );
 
   const rowsForPlot = useMemo(() => {
-    if (rows.length <= MAX_VISIBLE_POINTS) return rows;
-    const stride = Math.ceil(rows.length / MAX_VISIBLE_POINTS);
-    const sampled = rows.filter((_, index) => index % stride === 0);
-    const last = rows[rows.length - 1];
-    if (sampled[sampled.length - 1] !== last) sampled.push(last);
-    return sampled;
-  }, [rows]);
+    return decimateRows(
+      rows,
+      MAX_VISIBLE_POINTS,
+      CHART_DECIMATION_MODE,
+      CHART_BUCKET_COUNT,
+      yColumns,
+    );
+  }, [rows, yColumns]);
 
   const isTimeColumn = xColumn === "time";
 
