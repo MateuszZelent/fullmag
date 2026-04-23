@@ -4,6 +4,18 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
   workspace: {
     // "off" -> normal WorkspaceShell (no standalone diagnostic viewport)
     standaloneDiagnosticViewportMode: "off",
+    // Top-down isolation ladder for Workspace runtime crashes.
+    // Keep false to hard-disable workspace tree, then re-enable layer-by-layer.
+    enableWorkspaceTree: true,
+    enableWorkspaceEntryPage: true,
+    enableWorkspaceShell: true,
+    enableRunControlRoom: true,
+    enableControlRoomShell: true,
+    enableWorkspaceDockingShell: false,
+    enableDockCenterTabs: false,
+    enableDockingTooltipProviders: true,
+    // Escape hatch for React 19 + Radix ScrollArea ref loop.
+    useRadixScrollArea: false,
     enableGraphV2: true,
   },
   session: {
@@ -13,7 +25,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     useDockingShell: true,
     showRibbonBar: true,
     showSidebar: true,
-    showViewportBar: true,
+    showViewportBar: false,
     showPreviewNotices: true,
     showBottomDock: true,
     showRightInspector: true,
@@ -25,11 +37,10 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
   viewportRouting: {
     useMinimalViewportSelectionPath: false,
     enableUnifiedViewport3D: true,
-    enableUnifiedViewportToolbar: true,
+    // Stage-0 safe baseline: start with renderer host only, then enable toolbar modules incrementally.
+    enableUnifiedViewportToolbar: false,
     enableGlobalScalarCard: true,
     enableGridScalar2D: true,
-    enableFemMeshWorkspace: true,
-    enableFem3D: true,
     enableFemSlice2D: true,
     enableFdmSlice2D: true,
     enableAnalyzeViewport: true,
@@ -88,7 +99,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     // true  => selection-only interaction mode (camera controls disabled, geometry picking enabled)
     enableSelectionOnlyInteractionMode: false,
     // Temporary escape hatch while we stabilize the full 3D viewport path.
-    disableSimplifiedMode: true,
+    disableSimplifiedMode: false,
     // Granular preset-reset flags: when switching render mode, reset individual
     // display concerns using the per-mode preset value.
     // The old monolithic flag is kept as a master override for backward compat.
@@ -139,12 +150,25 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     showContextMenu: true,
     showStatusBar: true,
   },
-  fdmViewport: {
-    showToolbar: true,
-    showStatusChip: true,
-    showViewCube: true,
-    showOrientationSphere: true,
-    showTextureModeToolbar: true,
+  vectorSurfaceViewport: {
+    // Master gate for the VectorSurface 3D canvas branch.
+    enableCanvas3D: false,
+    // Toolbar shell + button modules.
+    showToolbar: false,
+    showStatusChip: false,
+    enableRenderModeControls: false,
+    enableColorControls: false,
+    enableDisplayControls: false,
+    enableTopographyControls: false,
+    enableCameraControls: false,
+    enableRotationDebugControls: false,
+    enableInfoControls: false,
+    enableSnapshotControl: false,
+    // Overlay gizmos.
+    showViewCube: false,
+    showOrientationSphere: false,
+    showLiveRenderDebugPanel: false,
+    showTextureModeToolbar: false,
   },
   /**
    * Phased rollout flags for the FEM data-plane refactor (P7).

@@ -180,7 +180,7 @@ export default function WorkspaceDockingShell() {
       void action;
       runtime.onModelChange(nextModel);
     },
-    [runtime.onModelChange],
+    [runtime],
   );
 
   const factory = useCallback(
@@ -194,11 +194,26 @@ export default function WorkspaceDockingShell() {
         );
       }
       if (component === "dock-center") {
+        const centerContent = (
+          <div className="h-full min-h-0 min-w-0 overflow-hidden">
+            {FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableDockCenterTabs ? (
+              <DockCenterTabs />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
+                Dock center tabs disabled:
+                <code className="mx-1">workspace.enableDockCenterTabs = false</code>.
+              </div>
+            )}
+          </div>
+        );
+
+        if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableDockingTooltipProviders) {
+          return centerContent;
+        }
+
         return (
           <TooltipProvider delayDuration={250}>
-            <div className="h-full min-h-0 min-w-0 overflow-hidden">
-              <DockCenterTabs />
-            </div>
+            {centerContent}
           </TooltipProvider>
         );
       }
@@ -238,6 +253,15 @@ export default function WorkspaceDockingShell() {
     ? new Date(currentPresetStats.lastRepairAtUnixMs).toLocaleTimeString("pl-PL")
     : "brak";
 
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableWorkspaceDockingShell) {
+    return (
+      <div className="flex h-full w-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
+        WorkspaceDockingShell disabled by diagnostic flag:
+        <code className="mx-1">workspace.enableWorkspaceDockingShell = false</code>.
+      </div>
+    );
+  }
+
   return (
     <div className="relative h-full w-full min-h-0 min-w-0 overflow-hidden bg-background">
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showLayoutDebugHud && (
@@ -267,14 +291,23 @@ export default function WorkspaceDockingShell() {
         </button>
       </div>
       )}
-      <TooltipProvider delayDuration={250}>
+      {FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableDockingTooltipProviders ? (
+        <TooltipProvider delayDuration={250}>
+          <FlexLayout
+            model={runtime.model}
+            factory={factory}
+            classNameMapper={classNameMapper}
+            onModelChange={onModelChange}
+          />
+        </TooltipProvider>
+      ) : (
         <FlexLayout
           model={runtime.model}
           factory={factory}
           classNameMapper={classNameMapper}
           onModelChange={onModelChange}
         />
-      </TooltipProvider>
+      )}
     </div>
   );
 }

@@ -7,11 +7,11 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { applyMagnetizationHsl } from "../magnetizationColor";
 import { COMP_NEGATIVE, COMP_NEUTRAL, COMP_POSITIVE } from "./colorUtils";
 import type {
-  FdmViewportQualityLevel as QualityLevel,
-  FdmViewportRenderMode as RenderMode,
-  FdmViewportTopoComponent as TopoComponent,
-  FdmViewportVoxelColorMode as VoxelColorMode,
-  FdmViewportVoxelSampling as VoxelSampling,
+  VectorSurfaceViewportQualityLevel as QualityLevel,
+  VectorSurfaceViewportRenderMode as RenderMode,
+  VectorSurfaceViewportTopoComponent as TopoComponent,
+  VectorSurfaceViewportVoxelColorMode as VoxelColorMode,
+  VectorSurfaceViewportVoxelSampling as VoxelSampling,
 } from "../fdm/fdmViewportSettingsTypes";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 

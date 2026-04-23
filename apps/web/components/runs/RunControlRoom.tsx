@@ -1380,6 +1380,15 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     </>
   );
 
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableControlRoomShell) {
+    return (
+      <div className="flex min-h-[50vh] w-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
+        ControlRoomShell disabled by diagnostic flag:
+        <code className="mx-1">workspace.enableControlRoomShell = false</code>.
+      </div>
+    );
+  }
+
   return (
     <div className="h-full flex flex-col bg-background font-sans text-foreground text-base overflow-hidden">
       <AppBar
@@ -1478,11 +1487,16 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
           />
         </div>
       ) : null}
-      {FRONTEND_DIAGNOSTIC_FLAGS.shell.useDockingShell ? (
+      {FRONTEND_DIAGNOSTIC_FLAGS.shell.useDockingShell &&
+      FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableWorkspaceDockingShell ? (
         <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
-          <TooltipProvider delayDuration={250}>
+          {FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableDockingTooltipProviders ? (
+            <TooltipProvider delayDuration={250}>
+              <WorkspaceDockingShell />
+            </TooltipProvider>
+          ) : (
             <WorkspaceDockingShell />
-          </TooltipProvider>
+          )}
         </div>
       ) : (
         <PanelGroup
@@ -1653,6 +1667,14 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 /* ── Public export ── */
 
 export default function RunControlRoom({ initialWorkspaceMode }: { initialWorkspaceMode?: WorkspaceMode }) {
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableRunControlRoom) {
+    return (
+      <div className="flex min-h-[50vh] w-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
+        RunControlRoom disabled by diagnostic flag:
+        <code className="mx-1">workspace.enableRunControlRoom = false</code>.
+      </div>
+    );
+  }
   return (
     <ControlRoomProvider>
       <ControlRoomShell initialWorkspaceMode={initialWorkspaceMode} />

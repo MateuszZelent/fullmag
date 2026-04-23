@@ -1,15 +1,38 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import { ScrollArea as ScrollAreaPrimitive } from "radix-ui"
+import * as React from "react";
+import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
 
-import { cn } from "@/lib/utils"
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { cn } from "@/lib/utils";
+
+type NativeScrollAreaProps = React.HTMLAttributes<HTMLDivElement>;
+
+function NativeScrollArea({ className, children, ...props }: NativeScrollAreaProps) {
+  return (
+    <div
+      data-slot="scroll-area"
+      className={cn("relative size-full overflow-auto", className)}
+      {...props}
+    >
+      {children}
+    </div>
+  );
+}
 
 function ScrollArea({
   className,
   children,
   ...props
 }: React.ComponentProps<typeof ScrollAreaPrimitive.Root>) {
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.useRadixScrollArea) {
+    return (
+      <NativeScrollArea className={className} {...(props as React.HTMLAttributes<HTMLDivElement>)}>
+        {children}
+      </NativeScrollArea>
+    );
+  }
+
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
@@ -25,16 +48,20 @@ function ScrollArea({
       <ScrollBar />
       <ScrollAreaPrimitive.Corner />
     </ScrollAreaPrimitive.Root>
-  )
+  );
 }
 
 function ScrollBar({
   className,
   orientation = "vertical",
   ...props
-}: React.ComponentProps<typeof ScrollAreaPrimitive.ScrollAreaScrollbar>) {
+}: React.ComponentProps<typeof ScrollAreaPrimitive.Scrollbar>) {
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.useRadixScrollArea) {
+    return null;
+  }
+
   return (
-    <ScrollAreaPrimitive.ScrollAreaScrollbar
+    <ScrollAreaPrimitive.Scrollbar
       data-slot="scroll-area-scrollbar"
       orientation={orientation}
       className={cn(
@@ -43,16 +70,16 @@ function ScrollBar({
           "h-full w-2.5 border-l border-l-transparent",
         orientation === "horizontal" &&
           "h-2.5 flex-col border-t border-t-transparent",
-        className
+        className,
       )}
       {...props}
     >
-      <ScrollAreaPrimitive.ScrollAreaThumb
+      <ScrollAreaPrimitive.Thumb
         data-slot="scroll-area-thumb"
         className="relative flex-1 rounded-full bg-border"
       />
-    </ScrollAreaPrimitive.ScrollAreaScrollbar>
-  )
+    </ScrollAreaPrimitive.Scrollbar>
+  );
 }
 
-export { ScrollArea, ScrollBar }
+export { ScrollArea, ScrollBar };

@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   FileText, FolderOpen, Save, Download, LogOut,
   Undo2, Redo2, Settings,
@@ -114,6 +113,36 @@ function buildMenus(props: TopHeaderProps, cb: MenuCallbacks): MenuDef[] {
 export default function TopHeader(props: TopHeaderProps) {
   const setSettingsOpen = useWorkspaceStore((s) => s.setSettingsOpen);
   const setPhysicsDocsOpen = useWorkspaceStore((s) => s.setPhysicsDocsOpen);
+  const [openMenuLabel, setOpenMenuLabel] = React.useState<string | null>(null);
+  const menuContainerRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!openMenuLabel) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (!menuContainerRef.current?.contains(target)) {
+        setOpenMenuLabel(null);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenMenuLabel(null);
+      }
+    };
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("touchstart", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("touchstart", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [openMenuLabel]);
 
   const menuCallbacks: MenuCallbacks = {
     onOpenSettings: () => setSettingsOpen(true),
@@ -134,36 +163,50 @@ export default function TopHeader(props: TopHeaderProps) {
           <span className="text-[0.8rem] font-semibold tracking-tight text-foreground/90 truncate max-w-[16rem]">{props.problemName}</span>
         </span>
 
-        <div className="hidden items-center gap-0.5 border-l border-white/5 pl-3 lg:flex">
+        <div ref={menuContainerRef} className="hidden items-center gap-0.5 border-l border-white/5 pl-3 lg:flex">
           {menus.map((menu) => (
-            <DropdownMenu.Root key={menu.label}>
-              <DropdownMenu.Trigger className="px-2 py-1 text-[0.72rem] font-medium text-muted-foreground outline-none cursor-default rounded transition-colors hover:bg-muted/40 hover:text-foreground data-[state=open]:bg-muted/40 data-[state=open]:text-foreground">
+            <div key={menu.label} className="relative">
+              <button
+                type="button"
+                className={cn(
+                  "px-2 py-1 text-[0.72rem] font-medium text-muted-foreground outline-none rounded transition-colors hover:bg-muted/40 hover:text-foreground",
+                  openMenuLabel === menu.label && "bg-muted/40 text-foreground",
+                )}
+                onClick={() =>
+                  setOpenMenuLabel((previous) =>
+                    previous === menu.label ? null : menu.label,
+                  )
+                }
+              >
                 {menu.label}
-              </DropdownMenu.Trigger>
-
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content className="min-w-[220px] rounded-md border border-border/50 bg-popover/95 text-popover-foreground backdrop-blur-xl p-1 shadow-md animate-in fade-in-80 slide-in-from-top-1 z-[100]" sideOffset={8} align="start">
+              </button>
+              {openMenuLabel === menu.label ? (
+                <div className="absolute left-0 top-full z-[100] mt-2 min-w-[220px] rounded-md border border-border/50 bg-popover/95 p-1 text-popover-foreground shadow-md backdrop-blur-xl">
                   {menu.items.map((item, i) =>
                     item.separator ? (
-                      <DropdownMenu.Separator key={i} className="my-1 h-px bg-border/50" />
+                      <div key={`sep-${menu.label}-${i}`} className="my-1 h-px bg-border/50" />
                     ) : (
-                      <DropdownMenu.Item
+                      <button
                         key={item.label}
-                        className="relative flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-xs outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-muted data-[highlighted]:text-foreground"
+                        type="button"
+                        className="relative flex w-full select-none items-center rounded-sm px-2 py-1.5 text-left text-xs outline-none transition-colors disabled:pointer-events-none disabled:opacity-50 hover:bg-muted hover:text-foreground"
                         disabled={item.disabled}
-                        onSelect={() => item.action?.()}
+                        onClick={() => {
+                          item.action?.();
+                          setOpenMenuLabel(null);
+                        }}
                       >
-                        <span className="mr-2 h-3.5 w-3.5 flex items-center justify-center text-muted-foreground opacity-70">{item.icon}</span>
+                        <span className="mr-2 flex h-3.5 w-3.5 items-center justify-center text-muted-foreground opacity-70">{item.icon}</span>
                         <span className="flex-1">{item.label}</span>
                         {item.shortcut && (
                           <span className="ml-auto text-[0.65rem] tracking-widest text-muted-foreground opacity-60">{item.shortcut}</span>
                         )}
-                      </DropdownMenu.Item>
+                      </button>
                     ),
                   )}
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
+                </div>
+              ) : null}
+            </div>
           ))}
         </div>
       </div>

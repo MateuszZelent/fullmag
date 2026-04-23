@@ -4,6 +4,7 @@ import { useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import WorkspaceShell from "./WorkspaceShell";
 import type { WorkspaceMode } from "@/components/runs/control-room/context-hooks";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { resolveLaunchIntentFromSearchParams } from "@/lib/workspace/launch-intent";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import { readStagedLaunchAsset } from "@/lib/workspace/file-access";
@@ -14,6 +15,9 @@ interface WorkspaceEntryPageProps {
 }
 
 export default function WorkspaceEntryPage({ stage }: WorkspaceEntryPageProps) {
+  const workspaceTreeEnabled = FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableWorkspaceTree;
+  const workspaceEntryEnabled = FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableWorkspaceEntryPage;
+
   const searchParams = useSearchParams();
   const queryString = searchParams.toString();
   const intent = useMemo(
@@ -27,6 +31,9 @@ export default function WorkspaceEntryPage({ stage }: WorkspaceEntryPageProps) {
   const setLauncherVisible = useWorkspaceStore((state) => state.setLauncherVisible);
 
   useEffect(() => {
+    if (!workspaceTreeEnabled || !workspaceEntryEnabled) {
+      return;
+    }
     const stagedAsset = readStagedLaunchAsset(intent.launchAssetId);
     const enrichedIntent = stagedAsset
       ? {
@@ -57,7 +64,25 @@ export default function WorkspaceEntryPage({ stage }: WorkspaceEntryPageProps) {
     setLaunchIntent,
     setLauncherVisible,
     stage,
+    workspaceEntryEnabled,
+    workspaceTreeEnabled,
   ]);
+
+  if (!workspaceTreeEnabled) {
+    return (
+      <div className="flex min-h-[50vh] w-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
+        Workspace disabled by diagnostic flag: <code className="mx-1">workspace.enableWorkspaceTree = false</code>.
+      </div>
+    );
+  }
+
+  if (!workspaceEntryEnabled) {
+    return (
+      <div className="flex min-h-[50vh] w-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
+        WorkspaceEntryPage disabled by diagnostic flag: <code className="mx-1">workspace.enableWorkspaceEntryPage = false</code>.
+      </div>
+    );
+  }
 
   return <WorkspaceShell initialStage={effectiveStage} />;
 }

@@ -5,17 +5,23 @@ import type { VisualizationPresetFdmState } from "@/lib/session/types";
 import {
   settingsFromPreset,
   settingsToPreset,
-  type FdmViewportSettings,
-  type FdmViewportVoxelSampling as VoxelSampling,
+  type VectorSurfaceViewportSettings,
+  type VectorSurfaceViewportVoxelSampling as VoxelSampling,
 } from "./fdm/fdmViewportSettingsTypes";
 
 export type {
+  VectorSurfaceViewportSettings,
+  VectorSurfaceViewportQualityLevel as QualityLevel,
+  VectorSurfaceViewportRenderMode as RenderMode,
+  VectorSurfaceViewportTopoComponent as TopoComponent,
+  VectorSurfaceViewportVoxelColorMode as VoxelColorMode,
+  VectorSurfaceViewportVoxelSampling as VoxelSampling,
   FdmViewportSettings,
-  FdmViewportQualityLevel as QualityLevel,
-  FdmViewportRenderMode as RenderMode,
-  FdmViewportTopoComponent as TopoComponent,
-  FdmViewportVoxelColorMode as VoxelColorMode,
-  FdmViewportVoxelSampling as VoxelSampling,
+  FdmViewportQualityLevel,
+  FdmViewportRenderMode,
+  FdmViewportTopoComponent,
+  FdmViewportVoxelColorMode,
+  FdmViewportVoxelSampling,
 } from "./fdm/fdmViewportSettingsTypes";
 
 const STORAGE_KEYS = {
@@ -58,7 +64,7 @@ function persist(key: string, value: string | number | boolean): void {
   window.localStorage.setItem(key, String(value));
 }
 
-function loadSettings(): FdmViewportSettings {
+function loadSettings(): VectorSurfaceViewportSettings {
   const rawSampling = loadEnum(STORAGE_KEYS.voxelSampling, ["1", "2", "4"] as const, "1");
   const sampling: VoxelSampling = rawSampling === "2" ? 2 : rawSampling === "4" ? 4 : 1;
   return {
@@ -82,7 +88,10 @@ function loadSettings(): FdmViewportSettings {
   };
 }
 
-function persistPatch(next: FdmViewportSettings, patch: Partial<FdmViewportSettings>): void {
+function persistPatch(
+  next: VectorSurfaceViewportSettings,
+  patch: Partial<VectorSurfaceViewportSettings>,
+): void {
   if (patch.quality !== undefined) persist(STORAGE_KEYS.quality, next.quality);
   if (patch.renderMode !== undefined) persist(STORAGE_KEYS.renderMode, next.renderMode);
   if (patch.voxelColorMode !== undefined) persist(STORAGE_KEYS.voxelColorMode, next.voxelColorMode);
@@ -96,23 +105,25 @@ function persistPatch(next: FdmViewportSettings, patch: Partial<FdmViewportSetti
   if (patch.topoMultiplier !== undefined) persist(STORAGE_KEYS.topoMultiplier, next.topoMultiplier);
 }
 
-export function useFdmViewportSettings(args: {
+export function useVectorSurfaceViewportSettings(args: {
   externalSettings?: VisualizationPresetFdmState;
   onSettingsChange?: Dispatch<SetStateAction<VisualizationPresetFdmState>>;
 }): {
-  settings: FdmViewportSettings;
-  update: (patch: Partial<FdmViewportSettings>) => void;
+  settings: VectorSurfaceViewportSettings;
+  update: (patch: Partial<VectorSurfaceViewportSettings>) => void;
 } {
   const { externalSettings, onSettingsChange } = args;
-  const [internalSettings, setInternalSettings] = useState<FdmViewportSettings>(loadSettings);
+  const [internalSettings, setInternalSettings] = useState<VectorSurfaceViewportSettings>(loadSettings);
   const settings = useMemo(
     () => (externalSettings ? settingsFromPreset(externalSettings) : internalSettings),
     [externalSettings, internalSettings],
   );
 
   const update = useCallback(
-    (patch: Partial<FdmViewportSettings>) => {
-      const patchSettings = (previous: FdmViewportSettings): FdmViewportSettings => {
+    (patch: Partial<VectorSurfaceViewportSettings>) => {
+      const patchSettings = (
+        previous: VectorSurfaceViewportSettings,
+      ): VectorSurfaceViewportSettings => {
         const next = { ...previous, ...patch };
         persistPatch(next, patch);
         return next;
@@ -130,3 +141,5 @@ export function useFdmViewportSettings(args: {
 
   return { settings, update };
 }
+
+export const useFdmViewportSettings = useVectorSurfaceViewportSettings;

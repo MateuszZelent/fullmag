@@ -45,6 +45,10 @@ const StandaloneFemSceneDiagnosticViewport = dynamic(
 );
 
 export default function WorkspaceShell({ initialStage }: WorkspaceShellProps) {
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableWorkspaceShell) {
+    return <WorkspaceLoadingShell label="WorkspaceShell disabled (workspace.enableWorkspaceShell = false)." />;
+  }
+
   const diagnosticMode = String(
     FRONTEND_DIAGNOSTIC_FLAGS.workspace.standaloneDiagnosticViewportMode,
   );
@@ -59,6 +63,9 @@ export default function WorkspaceShell({ initialStage }: WorkspaceShellProps) {
   }
   if (diagnosticMode === "fem-scene") {
     return <StandaloneFemSceneDiagnosticViewport />;
+  }
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableRunControlRoom) {
+    return <WorkspaceLoadingShell label="RunControlRoom disabled (workspace.enableRunControlRoom = false)." />;
   }
   return <RunControlRoom initialWorkspaceMode={initialStage} />;
 }

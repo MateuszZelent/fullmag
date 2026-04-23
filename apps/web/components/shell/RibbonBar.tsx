@@ -1,7 +1,6 @@
 "use client";
 
-import React, { useMemo, useCallback, useEffect, useRef } from "react";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import React, { useMemo, useCallback, useEffect, useRef, useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { WorkspaceMode } from "../runs/control-room/context-hooks";
@@ -413,6 +412,103 @@ const RibbonActionTrigger = React.forwardRef<
 });
 RibbonActionTrigger.displayName = "RibbonActionTrigger";
 
+function RibbonActionMenu({
+  action,
+  previewPending,
+}: {
+  action: RibbonAction;
+  previewPending?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const visibleItems = (action.menuItems ?? []).filter((item) => !item.hidden);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (!rootRef.current?.contains(target)) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("touchstart", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("touchstart", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  if (visibleItems.length === 0) {
+    return (
+      <RibbonActionTrigger
+        action={action}
+        previewPending={previewPending}
+      />
+    );
+  }
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        className={ribbonActionTriggerClassName(action, previewPending)}
+        disabled={action.disabled}
+        onClick={() => setOpen((previous) => !previous)}
+      >
+        <RibbonActionTriggerContent action={action} />
+      </button>
+      {open ? (
+        <div className="absolute left-0 top-full z-[100] mt-2 min-w-[280px] rounded-md border border-border/50 bg-popover/95 p-1 text-popover-foreground shadow-md backdrop-blur-xl">
+          {visibleItems.map((item) =>
+            item.separator ? (
+              <div key={item.id} className="my-1 h-px bg-border/50" />
+            ) : (
+              <button
+                key={item.id}
+                type="button"
+                className={cn(
+                  "relative flex w-full cursor-default select-none items-start gap-2 rounded-sm px-2 py-2 text-left text-xs outline-none transition-colors disabled:pointer-events-none disabled:opacity-50 hover:bg-muted hover:text-foreground",
+                  item.active && "bg-primary/10 text-primary",
+                )}
+                disabled={item.disabled}
+                onClick={() => {
+                  item.action?.();
+                  setOpen(false);
+                }}
+              >
+                <span className="mt-0.5 flex h-4 w-4 items-center justify-center text-muted-foreground opacity-80">
+                  {item.icon}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{item.label}</span>
+                  {item.description ? (
+                    <span className="block truncate text-[0.68rem] text-muted-foreground">
+                      {item.description}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+            ),
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ribbonGroupToneClass(tone: RibbonGroup["tone"] | undefined): string {
   switch (tone) {
     case "authoring":
@@ -758,53 +854,11 @@ export default function RibbonBar(props: RibbonBarProps) {
                 <div className="flex items-center gap-1">
                   {group.actions.filter((a) => !a.hidden).map((action) =>
                     action.menuItems && action.menuItems.length > 0 ? (
-                      <DropdownMenu.Root key={action.id}>
-                        <DropdownMenu.Trigger
-                          type="button"
-                          className={ribbonActionTriggerClassName(action, props.previewPending)}
-                          disabled={action.disabled}
-                        >
-                          <RibbonActionTriggerContent action={action} />
-                        </DropdownMenu.Trigger>
-                        <DropdownMenu.Portal>
-                          <DropdownMenu.Content
-                            className="z-[100] min-w-[280px] rounded-md border border-border/50 bg-popover/95 p-1 text-popover-foreground shadow-md backdrop-blur-xl animate-in fade-in-80 slide-in-from-top-1"
-                            sideOffset={8}
-                            align="start"
-                          >
-                            {action.menuItems.filter((it) => !it.hidden).map((item) =>
-                              item.separator ? (
-                                <DropdownMenu.Separator
-                                  key={item.id}
-                                  className="my-1 h-px bg-border/50"
-                                />
-                              ) : (
-                                <DropdownMenu.Item
-                                  key={item.id}
-                                  className={cn(
-                                    "relative flex cursor-default select-none items-start gap-2 rounded-sm px-2 py-2 text-xs outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-muted data-[highlighted]:text-foreground",
-                                    item.active && "bg-primary/10 text-primary",
-                                  )}
-                                  disabled={item.disabled}
-                                  onSelect={() => item.action?.()}
-                                >
-                                  <span className="mt-0.5 flex h-4 w-4 items-center justify-center text-muted-foreground opacity-80">
-                                    {item.icon}
-                                  </span>
-                                  <span className="min-w-0 flex-1">
-                                    <span className="block truncate font-medium">{item.label}</span>
-                                    {item.description ? (
-                                      <span className="block truncate text-[0.68rem] text-muted-foreground">
-                                        {item.description}
-                                      </span>
-                                    ) : null}
-                                  </span>
-                                </DropdownMenu.Item>
-                              ),
-                            )}
-                          </DropdownMenu.Content>
-                        </DropdownMenu.Portal>
-                      </DropdownMenu.Root>
+                      <RibbonActionMenu
+                        key={action.id}
+                        action={action}
+                        previewPending={props.previewPending}
+                      />
                     ) : action.tooltip ? (
                       <RibbonActionTrigger
                         key={action.id}

@@ -69,15 +69,15 @@ import {
   sceneDeltaToPhysical,
 } from "@/features/viewport-core/coordinates/physicalToScene";
 import {
-  useFdmViewportSettings,
-  type FdmViewportSettings as Settings,
+  useVectorSurfaceViewportSettings,
+  type VectorSurfaceViewportSettings as Settings,
   type QualityLevel,
   type VoxelColorMode,
   type VoxelSampling,
   type TopoComponent,
 } from "./useFdmViewportSettings";
 
-const FDM_AXIS_CONVENTION = "swapYZ" as const;
+const VECTOR_SURFACE_AXIS_CONVENTION = "swapYZ" as const;
 
 // ─── Types ──────────────────────────────────────────────────────────
 interface Props {
@@ -133,7 +133,7 @@ export type {
 
 const DEFAULT_CAMERA_DIRECTION: [number, number, number] = [0, 1, 0];
 const DEFAULT_CAMERA_UP: [number, number, number] = [0, 0, -1];
-const FDM_CAMERA_STATE_CACHE = new Map<
+const VECTOR_SURFACE_CAMERA_STATE_CACHE = new Map<
   string,
   {
     position: [number, number, number];
@@ -745,19 +745,19 @@ function VectorFieldView3DInner({
   authoringOverlay = null,
 }: Props) {
   const { hostRef, hostNode } = useCanvasHost<HTMLDivElement>();
-  const { settings: legacySettings, update } = useFdmViewportSettings({
+  const { settings: baseViewportSettings, update } = useVectorSurfaceViewportSettings({
     externalSettings,
     onSettingsChange,
   });
   const settings = useMemo(
-    () => settingsFromViewport3DModel(legacySettings, viewport3DModel),
-    [legacySettings, viewport3DModel],
+    () => settingsFromViewport3DModel(baseViewportSettings, viewport3DModel),
+    [baseViewportSettings, viewport3DModel],
   );
   const canvasDpr = settings.quality === "ultra"
     ? Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, 2)
     : 1;
   const telemetry = useViewportTelemetryEntry({
-    label: "fdm-viewport",
+    label: "vector-surface-viewport",
     renderer: "webgl",
     frameloop: viewportVisible ? "demand" : "never",
     hidden: !viewportVisible,
@@ -914,7 +914,7 @@ function VectorFieldView3DInner({
     if (!bridge?.camera || !bridge?.controls) {
       return;
     }
-    FDM_CAMERA_STATE_CACHE.set(cameraPersistenceKey, {
+    VECTOR_SURFACE_CAMERA_STATE_CACHE.set(cameraPersistenceKey, {
       position: [
         bridge.camera.position.x,
         bridge.camera.position.y,
@@ -947,7 +947,7 @@ function VectorFieldView3DInner({
         raf = window.requestAnimationFrame(restore);
         return;
       }
-      const saved = FDM_CAMERA_STATE_CACHE.get(cameraPersistenceKey);
+      const saved = VECTOR_SURFACE_CAMERA_STATE_CACHE.get(cameraPersistenceKey);
       if (saved) {
         bridge.camera.position.set(...saved.position);
         bridge.camera.up.set(...saved.up);
@@ -1041,7 +1041,7 @@ function VectorFieldView3DInner({
     link.click();
   }, []);
 
-  // SceneAxes3D props — FDM coordinate mapping: scene-X=sim-X, scene-Y=sim-Z, scene-Z=sim-Y
+  // SceneAxes3D props — vector-surface coordinate mapping: scene-X=sim-X, scene-Y=sim-Z, scene-Z=sim-Y
   const axesWorldExtent = worldExtent
     ? [worldExtent[0], worldExtent[2], worldExtent[1]] as [number, number, number]
     : null;
@@ -1058,7 +1058,7 @@ function VectorFieldView3DInner({
   // sorting artifacts. The overlay boxes already hide non-selected objects visually.
   const sceneOpacityMultiplier = 1;
 
-  // P0 FDM isolate: compute grid-space bounds so FdmInstances hides voxels outside
+  // Compute grid-space isolate bounds so instance rendering hides voxels outside
   // the selected object when in isolate mode.
   const isolateGridBounds = useMemo(() => {
     if (sceneMode !== "grid") return null;
@@ -1089,18 +1089,64 @@ function VectorFieldView3DInner({
 
   const toolbarOptionClassName =
     "appearance-none border border-transparent bg-transparent text-muted-foreground text-[0.65rem] font-semibold uppercase px-2 py-1 rounded cursor-pointer transition-colors hover:bg-muted/40 hover:text-foreground data-[active=true]:border-primary/45 data-[active=true]:bg-primary/18 data-[active=true]:text-primary";
-  const fdmViewportFlags = FRONTEND_DIAGNOSTIC_FLAGS.fdmViewport;
-  const showInternalToolbar = toolbarMode !== "hidden";
+  const vectorSurfaceFlags = FRONTEND_DIAGNOSTIC_FLAGS.vectorSurfaceViewport;
+  const showInternalToolbar = toolbarMode !== "hidden" && vectorSurfaceFlags.showToolbar;
+  const showInternalToolbarControls = showInternalToolbar;
+  const showInternalStatusChip = vectorSurfaceFlags.showStatusChip;
+  const showTextureScopeToolbar =
+    showInternalToolbar && vectorSurfaceFlags.showTextureModeToolbar;
+  const showViewCube =
+    vectorSurfaceFlags.showViewCube && FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showViewCube;
+  const showOrientationSphere =
+    vectorSurfaceFlags.showOrientationSphere &&
+    FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showOrientationSphere;
+  const showRenderModeControls =
+    showInternalToolbarControls &&
+    vectorSurfaceFlags.enableRenderModeControls &&
+    !geometryMode;
+  const showColorControls =
+    showInternalToolbarControls &&
+    vectorSurfaceFlags.enableColorControls &&
+    settings.renderMode === "voxel";
+  const showDisplayControls =
+    showInternalToolbarControls && vectorSurfaceFlags.enableDisplayControls;
+  const showTopographyControls =
+    showInternalToolbarControls &&
+    vectorSurfaceFlags.enableTopographyControls &&
+    !geometryMode;
+  const showCameraControls =
+    showInternalToolbarControls && vectorSurfaceFlags.enableCameraControls;
+  const showRotationDebugControls =
+    showInternalToolbarControls && vectorSurfaceFlags.enableRotationDebugControls;
+  const showInfoControls =
+    showInternalToolbarControls && vectorSurfaceFlags.enableInfoControls;
+  const showSnapshotControl =
+    showInternalToolbarControls && vectorSurfaceFlags.enableSnapshotControl;
+  const showToolbarActionGroup =
+    showDisplayControls ||
+    showTopographyControls ||
+    showCameraControls ||
+    showRotationDebugControls ||
+    showInfoControls ||
+    showSnapshotControl;
+  const hasTopLeftToolbarContent =
+    showInternalStatusChip ||
+    showRenderModeControls ||
+    showColorControls ||
+    showToolbarActionGroup;
+  const showLiveRenderDebugPanel =
+    FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+    vectorSurfaceFlags.showLiveRenderDebugPanel;
 
   return (
     <div className="relative flex flex-col h-full">
       {/* ── Overlay Layout ────────────────────────────────────── */}
       <ViewportOverlayLayout>
         <ViewportOverlayLayout.TopLeft>
-          {(showInternalToolbar && (fdmViewportFlags.showToolbar || fdmViewportFlags.showStatusChip)) ? (
+          {hasTopLeftToolbarContent ? (
           <ViewportToolbar3D>
             {/* Render mode */}
-            {showInternalToolbar && fdmViewportFlags.showToolbar && !geometryMode && (
+            {showRenderModeControls && (
               <ViewportToolGroup label="Render">
                 <ViewportIconAction
                   icon={<ArrowUpRight size={14} />}
@@ -1117,10 +1163,12 @@ function VectorFieldView3DInner({
               </ViewportToolGroup>
             )}
 
-            {showInternalToolbar && fdmViewportFlags.showToolbar ? <ViewportToolSeparator /> : null}
+            {showRenderModeControls && (showColorControls || showInternalStatusChip || showToolbarActionGroup)
+              ? <ViewportToolSeparator />
+              : null}
 
             {/* Color field (only voxel) */}
-            {showInternalToolbar && fdmViewportFlags.showToolbar && settings.renderMode === "voxel" && (
+            {showColorControls && (
               <ViewportToolGroup label="Color">
                 <ViewportPopoverTrigger preferredHorizontal="left">
                   <ViewportIconAction
@@ -1146,17 +1194,21 @@ function VectorFieldView3DInner({
               </ViewportToolGroup>
             )}
 
-            {showInternalToolbar && fdmViewportFlags.showToolbar && settings.renderMode === "voxel" ? <ViewportToolSeparator /> : null}
+            {showColorControls && (showInternalStatusChip || showToolbarActionGroup)
+              ? <ViewportToolSeparator />
+              : null}
 
-            {showInternalToolbar && fdmViewportFlags.showStatusChip ? (
+            {showInternalStatusChip ? (
               <ViewportStatusChip color="info">{fieldLabel ?? "M"}</ViewportStatusChip>
             ) : null}
 
-            {showInternalToolbar && fdmViewportFlags.showToolbar && fdmViewportFlags.showStatusChip ? <ViewportToolSeparator /> : null}
+            {showInternalStatusChip && showToolbarActionGroup
+              ? <ViewportToolSeparator />
+              : null}
 
-            {showInternalToolbar && fdmViewportFlags.showToolbar ? <ViewportToolGroup>
+            {showToolbarActionGroup ? <ViewportToolGroup>
               {/* Display settings Popover */}
-              <ViewportPopoverTrigger preferredHorizontal="left">
+              {showDisplayControls ? <ViewportPopoverTrigger preferredHorizontal="left">
                 <ViewportIconAction
                   icon={<Eye size={14} />}
                   showCaret
@@ -1199,10 +1251,10 @@ function VectorFieldView3DInner({
                     )}
                   </ViewportPopoverPanel>
                 )}
-              </ViewportPopoverTrigger>
+              </ViewportPopoverTrigger> : null}
 
               {/* Topography */}
-              {!geometryMode && (
+              {showTopographyControls && (
                 <ViewportPopoverTrigger preferredHorizontal="left">
                   <ViewportIconAction
                     icon={<Mountain size={14} />}
@@ -1238,7 +1290,7 @@ function VectorFieldView3DInner({
               )}
 
               {/* Camera Info */}
-              <ViewportPopoverTrigger preferredHorizontal="left">
+              {showCameraControls ? <ViewportPopoverTrigger preferredHorizontal="left">
                 <ViewportIconAction
                   icon={<Video size={14} />}
                   showCaret
@@ -1257,9 +1309,9 @@ function VectorFieldView3DInner({
                     </div>
                   </ViewportPopoverPanel>
                 )}
-              </ViewportPopoverTrigger>
+              </ViewportPopoverTrigger> : null}
 
-              <ViewportPopoverTrigger preferredHorizontal="left">
+              {showRotationDebugControls ? <ViewportPopoverTrigger preferredHorizontal="left">
                 <ViewportIconAction
                   icon={<RotateCw size={14} />}
                   label="R"
@@ -1284,9 +1336,9 @@ function VectorFieldView3DInner({
                     </div>
                   </ViewportPopoverPanel>
                 )}
-              </ViewportPopoverTrigger>
+              </ViewportPopoverTrigger> : null}
 
-              <ViewportPopoverTrigger preferredHorizontal="left">
+              {showInfoControls ? <ViewportPopoverTrigger preferredHorizontal="left">
                 <ViewportIconAction
                   icon={<Info size={14} />}
                   showCaret
@@ -1318,45 +1370,47 @@ function VectorFieldView3DInner({
                     </div>
                   </ViewportPopoverPanel>
                 )}
-              </ViewportPopoverTrigger>
+              </ViewportPopoverTrigger> : null}
 
-              <ViewportToolSeparator />
+              {showSnapshotControl ? <ViewportToolSeparator /> : null}
 
               {/* Capture */}
-              <ViewportIconAction
-                icon={<Camera size={14} />}
-                onClick={captureSnapshot}
-                title="Snapshot"
-              />
+              {showSnapshotControl ? (
+                <ViewportIconAction
+                  icon={<Camera size={14} />}
+                  onClick={captureSnapshot}
+                  title="Snapshot"
+                />
+              ) : null}
             </ViewportToolGroup> : null}
           </ViewportToolbar3D>
           ) : null}
         </ViewportOverlayLayout.TopLeft>
 
         <ViewportOverlayLayout.TopRight>
-          {fdmViewportFlags.showViewCube && viewportVisible && (
+          {showViewCube && viewportVisible && (
             <ViewCube
               sceneRef={viewCubeSceneRef}
               onRotate={handleViewCubeRotate}
               onReset={resetCamera}
-              axisConvention={FDM_AXIS_CONVENTION}
+              axisConvention={VECTOR_SURFACE_AXIS_CONVENTION}
               onOrientationSnapshot={(snapshot) => updateRotationSnapshot("viewCube", snapshot)}
             />
           )}
         </ViewportOverlayLayout.TopRight>
 
         <ViewportOverlayLayout.BottomLeft>
-          {fdmViewportFlags.showOrientationSphere && viewportVisible && !geometryMode ? (
+          {showOrientationSphere && viewportVisible && !geometryMode ? (
             <HslSphere
               sceneRef={viewCubeSceneRef}
-              axisConvention={FDM_AXIS_CONVENTION}
+              axisConvention={VECTOR_SURFACE_AXIS_CONVENTION}
               size={156}
               onOrientationSnapshot={(snapshot) => updateRotationSnapshot("hsl", snapshot)}
             />
           ) : null}
         </ViewportOverlayLayout.BottomLeft>
 
-        {FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging && (
+        {showLiveRenderDebugPanel && (
         <ViewportOverlayLayout.BottomRight>
           <div className="pointer-events-auto w-[min(28rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-emerald-400/35 bg-slate-950/86 shadow-[0_20px_45px_rgba(0,0,0,0.42)] backdrop-blur-md">
             <div className="border-b border-emerald-400/20 px-4 py-3">
@@ -1405,7 +1459,7 @@ function VectorFieldView3DInner({
         )}
 
         {/* ── 3dsmax-style interaction mode toolbar (only when texture gizmo available) ── */}
-        {showInternalToolbar && fdmViewportFlags.showTextureModeToolbar && (activeTextureTransform || activeTransformScope === "texture") && (
+        {showTextureScopeToolbar && (activeTextureTransform || activeTransformScope === "texture") && (
           <ViewportOverlayLayout.BottomCenter>
             <div className="pointer-events-auto flex items-center gap-px rounded-lg border border-border/40 bg-background/80 backdrop-blur-md shadow-md px-1 py-1">
               {/* Scope Toggle */}
@@ -1499,7 +1553,11 @@ function VectorFieldView3DInner({
 
       {/* ── R3F Canvas ────────────────────────────────────── */}
       <div ref={hostRef} className="absolute inset-0 pointer-events-none z-0">
-        {hostNode ? (
+        {!vectorSurfaceFlags.enableCanvas3D ? (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[0.72rem] text-muted-foreground">
+            VectorSurface canvas disabled (`vectorSurfaceViewport.enableCanvas3D = false`)
+          </div>
+        ) : hostNode ? (
           <Canvas
             eventSource={hostNode}
             frameloop={viewportVisible ? "demand" : "never"}
@@ -1528,7 +1586,7 @@ function VectorFieldView3DInner({
             style={{ background: `#${BG_COLOR.toString(16).padStart(6, "0")}` }}
           >
             <ViewportTelemetryProbe
-              label="fdm-viewport"
+              label="vector-surface-viewport"
               dpr={canvasDpr}
               hidden={!viewportVisible}
               onStats={telemetry.update}
@@ -1581,7 +1639,7 @@ function VectorFieldView3DInner({
                 worldExtent={axesWorldExtent}
                 center={sceneTarget}
                 sceneScale={axesSceneScale}
-                axisLabels={axisLabelsForConvention(FDM_AXIS_CONVENTION)}
+                axisLabels={axisLabelsForConvention(VECTOR_SURFACE_AXIS_CONVENTION)}
               />
             )}
 

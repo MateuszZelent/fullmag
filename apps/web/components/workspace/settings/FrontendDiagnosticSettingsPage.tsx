@@ -33,7 +33,7 @@ const SECTION_LABELS: Record<string, string> = {
   magnetizationAuthoring: "Magnetization Authoring",
   femWrapper: "FEM Wrapper",
   femViewport: "FEM Viewport",
-  fdmViewport: "FDM Viewport",
+  vectorSurfaceViewport: "VectorSurface Viewport",
 };
 
 const DESCRIPTIONS: Record<string, string> = {
@@ -42,9 +42,22 @@ const DESCRIPTIONS: Record<string, string> = {
   "femViewport.enableGeometryHoverInteractions": "Hover raycast on mouse move (expensive on large meshes).",
   "viewportCore.frameloopMode": "Render loop mode for viewport canvas.",
   "workspace.standaloneDiagnosticViewportMode": "Standalone diagnostic viewport mode.",
+  "workspace.enableWorkspaceTree": "Master kill-switch for entire Workspace tree (Entry -> Shell -> ControlRoom -> Docking).",
+  "workspace.enableWorkspaceEntryPage": "Enable WorkspaceEntryPage mount/effects layer.",
+  "workspace.enableWorkspaceShell": "Enable WorkspaceShell routing layer.",
+  "workspace.enableRunControlRoom": "Enable dynamic RunControlRoom mount from WorkspaceShell.",
+  "workspace.enableControlRoomShell": "Enable ControlRoomShell render body inside RunControlRoom.",
+  "workspace.enableWorkspaceDockingShell": "Enable WorkspaceDockingShell branch.",
+  "workspace.enableDockCenterTabs": "Enable DockCenterTabs content in docking center panel.",
+  "workspace.enableDockingTooltipProviders": "Enable TooltipProvider wrappers in docking shell and center tab panel.",
+  "workspace.useRadixScrollArea": "Use Radix ScrollArea primitive (disable to use stable native overflow fallback).",
   "magnetizationAuthoring.enablePresetTextureBackendSync": "Immediately sync preset texture edits to backend scene state.",
   "magnetizationAuthoring.showPresetTextureBackendSyncProgress": "Show progress card for backend texture sync.",
   "magnetizationAuthoring.presetTextureBackendSyncDebounceMs": "Debounce window for texture sync requests (ms).",
+  "viewportRouting.enableUnifiedViewportToolbar": "Master switch for unified Row A/Row B toolbar shell.",
+  "vectorSurfaceViewport.enableCanvas3D": "Master kill-switch for VectorSurface 3D canvas.",
+  "vectorSurfaceViewport.showToolbar": "Enable top-left toolbar shell in VectorSurface viewport.",
+  "vectorSurfaceViewport.showTextureModeToolbar": "Enable bottom-center transform mode toolbar (Q/W/E/R).",
 };
 
 const ENUM_OPTIONS: Record<string, Array<{ label: string; value: string }>> = {

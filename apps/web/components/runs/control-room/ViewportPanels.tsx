@@ -252,11 +252,6 @@ const PreviewScalarField2D = dynamic(() => import("../../preview/PreviewScalarFi
   loading: () => <ViewportModuleLoading label="Loading scalar viewport..." />,
 });
 
-const BoundsPreview3D = dynamic(() => import("../../preview/BoundsPreview3D"), {
-  ssr: false,
-  loading: () => <ViewportModuleLoading label="Loading bounds preview..." />,
-});
-
 const AnalyzeViewport = dynamic(() => import("./AnalyzeViewport"), {
   ssr: false,
   loading: () => <ViewportModuleLoading label="Loading analyze viewport..." />,
@@ -922,34 +917,31 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
 
 
   /* ── Determine which viewport is active ── */
-  const isFdm3DActive =
+  const isVectorSurface3DActive =
     ctx.effectiveViewMode === "3D" &&
     !femDiscretization &&
     (ctx.isVectorQuantity || hasVectorData) &&
     !globalScalarPreview;
-  // Use classic FDM mesh view ONLY if no unstructured mesh data is available
-  const isFdmMeshActive = ctx.effectiveViewMode === "Mesh" && !femDiscretization && !ctx.femMeshData;
-  const showFdm3D =
+  // Use vector-surface mesh mode only when unstructured mesh topology is unavailable.
+  const isVectorSurfaceMeshActive = ctx.effectiveViewMode === "Mesh" && !femDiscretization && !ctx.femMeshData;
+  const showVectorSurface3D =
     !showGeometryAuthoringViewport &&
-    (
-      (isFdm3DActive && FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdm3D) ||
-      (isFdmMeshActive && FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdmMeshWorkspace)
-    );
-  const fdmFieldLabel =
-    isFdmMeshActive
+    (isVectorSurface3DActive || isVectorSurfaceMeshActive);
+  const vectorSurfaceFieldLabel =
+    isVectorSurfaceMeshActive
       ? "Geometry"
       : (ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity);
-  const fdmVectors = isFdm3DActive ? scaledVectors : null;
-  const handleFdmTransformScopeChange = useCallback(
+  const vectorSurfaceVectors = isVectorSurface3DActive ? scaledVectors : null;
+  const handleVectorSurfaceTransformScopeChange = useCallback(
     (scope: "object" | "texture" | null) => setActiveTransformScope(scope),
     [setActiveTransformScope],
   );
-  const fdmViewportSharedProps = useMemo(
+  const vectorSurfaceSharedProps = useMemo(
     () => ({
       grid: ctx.previewGrid,
-      fieldLabel: fdmFieldLabel,
+      fieldLabel: vectorSurfaceFieldLabel,
       liveRenderDebugData,
-      geometryMode: isFdmMeshActive,
+      geometryMode: isVectorSurfaceMeshActive,
       activeMask: ctx.activeMask,
       worldExtent: ctx.worldExtent,
       objectOverlays: ctx.objectOverlays,
@@ -968,7 +960,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       onTextureTransformChange: applyTextureTransform,
       onTextureTransformCommit: applyTextureTransform,
       activeTransformScope: ctx.activeTransformScope,
-      onTransformScopeChange: handleFdmTransformScopeChange,
+      onTransformScopeChange: handleVectorSurfaceTransformScopeChange,
     }),
     [
       activeTexturePreviewProxy,
@@ -987,11 +979,11 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       ctx.setFdmVisualizationSettings,
       ctx.worldCenter,
       ctx.worldExtent,
-      fdmFieldLabel,
-      handleFdmTransformScopeChange,
+      handleVectorSurfaceTransformScopeChange,
       handleRequestObjectSelect,
-      isFdmMeshActive,
+      isVectorSurfaceMeshActive,
       liveRenderDebugData,
+      vectorSurfaceFieldLabel,
       viewportSelectedObjectId,
     ],
   );
@@ -1272,7 +1264,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     () => createViewport3DModel("fem"),
     [createViewport3DModel],
   );
-  const hostedFdmViewportModel = useMemo(
+  const hostedVectorSurfaceViewportModel = useMemo(
     () => createViewport3DModel("fdm"),
     [createViewport3DModel],
   );
@@ -1310,8 +1302,8 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       } else {
         route = ctx.effectiveViewMode === "Mesh" ? "fem-mesh" : "fem-3d";
       }
-    } else if (showFdm3D) {
-      route = isFdmMeshActive ? "fdm-mesh" : "fdm-3d";
+    } else if (showVectorSurface3D) {
+      route = isVectorSurfaceMeshActive ? "fdm-mesh" : "fdm-3d";
     } else if (ctx.effectiveViewMode === "2D") {
       route = "slice-2d";
     } else if (ctx.effectiveViewMode === "Analyze") {
@@ -1329,9 +1321,9 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     ctx.effectiveViewMode,
     ctx.femMeshData,
     femDiscretization,
-    isFdmMeshActive,
+    isVectorSurfaceMeshActive,
     minimalViewportSelectionPath,
-    showFdm3D,
+    showVectorSurface3D,
     showFemBoundsPreview,
     showGeometryAuthoringViewport,
     viewport3dStages.viewport3d_unified_cutover,
@@ -1504,25 +1496,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableBoundsPreview &&
       femObjectOverlaysForRender.length > 0
     ) {
-      conditionalContent = (
-        <Viewport3DHost
-          model={hostedFemBoundsViewportModel}
-          mode="Mesh"
-          discretization="fem"
-          fallback={
-            <BoundsPreview3D
-              objectOverlays={femObjectOverlaysForRender}
-              selectedObjectId={selectedFemObjectId}
-              focusObjectRequest={ctx.focusObjectRequest}
-              worldExtent={ctx.worldExtent}
-              worldCenter={ctx.worldCenter}
-              enableObjectInteractions={false}
-              onRequestObjectSelect={handleRequestObjectSelect}
-              onGeometryTranslate={ctx.applyGeometryTranslation}
-            />
-          }
-        />
-      );
+      conditionalContent = renderHostedFemBoundsViewport("Mesh");
     } else {
       conditionalContent = (
         <div className="flex h-full w-full items-center justify-center opacity-70">
@@ -1613,50 +1587,6 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         }
       />
     );
-  } else if (
-    ctx.effectiveViewMode === "2D" &&
-    ctx.femMeshData &&
-    FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFemSlice2D
-  ) {
-    conditionalContent = renderUnified2DViewport({
-      preferFemMesh: true,
-      femQuantityId: ctx.requestedPreviewQuantity,
-    });
-  } else if (
-    ctx.effectiveViewMode === "2D" &&
-    ctx.isFemBackend &&
-    !ctx.femMeshData
-  ) {
-    conditionalContent = (
-      <div className="flex flex-col items-center justify-center h-full w-full opacity-80">
-        <EmptyState
-          title="Quantity requires mesh topology"
-          description="FEM slice rendering needs shared-domain mesh topology. Build mesh to continue."
-          tone="info"
-        />
-      </div>
-    );
-  } else if (
-    ctx.effectiveViewMode === "2D" &&
-    !showFdm3D &&
-    FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdmSlice2D
-  ) {
-    conditionalContent = renderUnified2DViewport({ preferFemMesh: false });
-  } else if (
-    ctx.effectiveViewMode === "Analyze" &&
-    FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableAnalyzeViewport
-  ) {
-    conditionalContent = <AnalyzeViewport />;
-  } else if (!showFdm3D) {
-    conditionalContent = (
-      <div className="flex flex-col items-center justify-center h-full w-full opacity-60">
-        <EmptyState
-          title={ctx.emptyStateMessage.title}
-          description={ctx.emptyStateMessage.description}
-          tone="info"
-        />
-      </div>
-    );
   }
 
   const renderHostedGeometryAuthoringViewport = () => (
@@ -1713,25 +1643,36 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     </Viewport3DHost>
   );
 
-  const renderHostedFemBoundsViewport = (mode: "3D" | "Mesh") => (
-    <Viewport3DHost
-      model={hostedFemBoundsViewportModel}
-      mode={mode}
-      discretization="fem"
-      fallback={
-        <BoundsPreview3D
-          objectOverlays={femObjectOverlaysForRender}
-          selectedObjectId={selectedFemObjectId}
-          focusObjectRequest={ctx.focusObjectRequest}
-          worldExtent={ctx.worldExtent}
-          worldCenter={ctx.worldCenter}
-          enableObjectInteractions={false}
-          onRequestObjectSelect={handleRequestObjectSelect}
-          onGeometryTranslate={ctx.applyGeometryTranslation}
+  function renderHostedFemBoundsViewport(mode: "3D" | "Mesh") {
+    return (
+      <Viewport3DHost
+        model={hostedFemBoundsViewportModel}
+        mode={mode}
+        discretization="fem"
+      >
+        <UnifiedViewport3DVectorSurface
+          boundaryLabel="Hosted FEM Bounds Fallback Viewport"
+          vectorFieldProps={{
+            grid: ctx.previewGrid,
+            vectors: null,
+            fieldLabel: "Bounds Preview",
+            geometryMode: true,
+            activeMask: null,
+            worldExtent: ctx.worldExtent,
+            objectOverlays: femObjectOverlaysForRender,
+            selectedObjectId: selectedFemObjectId,
+            universeCenter: ctx.worldCenter,
+            focusObjectRequest: ctx.focusObjectRequest,
+            objectViewMode: ctx.objectViewMode,
+            onRequestObjectSelect: handleRequestObjectSelect,
+            viewport3DModel: hostedFemBoundsViewportModel,
+            toolbarMode: vectorToolbarMode,
+            viewportVisible: true,
+          }}
         />
-      }
-    />
-  );
+      </Viewport3DHost>
+    );
+  }
 
   const renderHostedFemMeshViewport = () => {
     if (!ctx.femMeshData) {
@@ -1921,18 +1862,18 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     );
   };
 
-  const renderHostedFdm3DViewport = () => (
+  const renderHostedVectorSurfaceViewport = () => (
     <Viewport3DHost
-      model={hostedFdmViewportModel}
-      mode={isFdmMeshActive ? "Mesh" : "3D"}
+      model={hostedVectorSurfaceViewportModel}
+      mode={isVectorSurfaceMeshActive ? "Mesh" : "3D"}
       discretization="fdm"
     >
       <UnifiedViewport3DVectorSurface
         boundaryLabel="Hosted Unified 3D Viewport"
         vectorFieldProps={{
-          ...fdmViewportSharedProps,
-          viewport3DModel: hostedFdmViewportModel,
-          vectors: fdmVectors,
+          ...vectorSurfaceSharedProps,
+          viewport3DModel: hostedVectorSurfaceViewportModel,
+          vectors: vectorSurfaceVectors,
           toolbarMode: vectorToolbarMode,
           viewportVisible: true,
         }}
@@ -1953,10 +1894,10 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             context={{
               viewportMode: effectiveViewMode,
               hasSessionData: Boolean(
-                ctx.selectedVectors?.length ||
+                  ctx.selectedVectors?.length ||
                   ctx.preview ||
                   ctx.femMeshData ||
-                  showFdm3D ||
+                  showVectorSurface3D ||
                   showGeometryAuthoringViewport ||
                   showFemBoundsPreview ||
                   (ctx.effectiveViewMode === "3D" && Boolean(femDiscretization)),
@@ -1997,9 +1938,6 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
               enableGridScalar2D: FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableGridScalar2D,
               enableUnifiedViewport3D: FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableUnifiedViewport3D,
               enableUnifiedViewportToolbar: FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableUnifiedViewportToolbar,
-              enableFemMeshWorkspace: FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFemMeshWorkspace,
-              enableFem3D: FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFem3D,
-              enableFdm3D: FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdm3D,
               enableSlice2D:
                 FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFemSlice2D ||
                 FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdmSlice2D,
@@ -2019,7 +1957,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                       renderGeometryAuthoring={renderHostedGeometryAuthoringViewport}
                       renderFemMesh={renderHostedFemMeshViewport}
                       renderFem3D={renderHostedFem3DViewport}
-                      renderFdm={renderHostedFdm3DViewport}
+                      renderFdm={renderHostedVectorSurfaceViewport}
                     />
                   );
                 case "UnifiedViewport2D":

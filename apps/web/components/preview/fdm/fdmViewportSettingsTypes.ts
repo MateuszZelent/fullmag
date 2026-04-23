@@ -1,38 +1,40 @@
-export type FdmViewportQualityLevel = "low" | "high" | "ultra";
-export type FdmViewportRenderMode = "glyph" | "voxel";
-export type FdmViewportVoxelColorMode = "orientation" | "x" | "y" | "z";
-export type FdmViewportVoxelSampling = 1 | 2 | 4;
-export type FdmViewportTopoComponent = "x" | "y" | "z";
+export type VectorSurfaceViewportQualityLevel = "low" | "high" | "ultra";
+export type VectorSurfaceViewportRenderMode = "glyph" | "voxel";
+export type VectorSurfaceViewportVoxelColorMode = "orientation" | "x" | "y" | "z";
+export type VectorSurfaceViewportVoxelSampling = 1 | 2 | 4;
+export type VectorSurfaceViewportTopoComponent = "x" | "y" | "z";
 
-export interface FdmViewportSettings {
-  quality: FdmViewportQualityLevel;
-  renderMode: FdmViewportRenderMode;
-  voxelColorMode: FdmViewportVoxelColorMode;
-  sampling: FdmViewportVoxelSampling;
+export interface VectorSurfaceViewportSettings {
+  quality: VectorSurfaceViewportQualityLevel;
+  renderMode: VectorSurfaceViewportRenderMode;
+  voxelColorMode: VectorSurfaceViewportVoxelColorMode;
+  sampling: VectorSurfaceViewportVoxelSampling;
   brightness: number;
   voxelOpacity: number;
   voxelGap: number;
   voxelThreshold: number;
   topoEnabled: boolean;
-  topoComponent: FdmViewportTopoComponent;
+  topoComponent: VectorSurfaceViewportTopoComponent;
   topoMultiplier: number;
 }
 
-export interface FdmViewportSettingsPreset {
-  quality: FdmViewportQualityLevel;
-  render_mode: FdmViewportRenderMode;
-  voxel_color_mode: FdmViewportVoxelColorMode;
-  sampling: FdmViewportVoxelSampling;
+export interface VectorSurfaceViewportSettingsPreset {
+  quality: VectorSurfaceViewportQualityLevel;
+  render_mode: VectorSurfaceViewportRenderMode;
+  voxel_color_mode: VectorSurfaceViewportVoxelColorMode;
+  sampling: VectorSurfaceViewportVoxelSampling;
   brightness: number;
   voxel_opacity: number;
   voxel_gap: number;
   voxel_threshold: number;
   topo_enabled: boolean;
-  topo_component: FdmViewportTopoComponent;
+  topo_component: VectorSurfaceViewportTopoComponent;
   topo_multiplier: number;
 }
 
-export function settingsFromPreset(state: FdmViewportSettingsPreset): FdmViewportSettings {
+export function settingsFromPreset(
+  state: VectorSurfaceViewportSettingsPreset,
+): VectorSurfaceViewportSettings {
   return {
     quality: state.quality,
     renderMode: state.render_mode,
@@ -48,7 +50,9 @@ export function settingsFromPreset(state: FdmViewportSettingsPreset): FdmViewpor
   };
 }
 
-export function settingsToPreset(state: FdmViewportSettings): FdmViewportSettingsPreset {
+export function settingsToPreset(
+  state: VectorSurfaceViewportSettings,
+): VectorSurfaceViewportSettingsPreset {
   return {
     quality: state.quality,
     render_mode: state.renderMode,
@@ -63,3 +67,12 @@ export function settingsToPreset(state: FdmViewportSettings): FdmViewportSetting
     topo_multiplier: state.topoMultiplier,
   };
 }
+
+// Backward-compatible aliases for transitional call-sites.
+export type FdmViewportQualityLevel = VectorSurfaceViewportQualityLevel;
+export type FdmViewportRenderMode = VectorSurfaceViewportRenderMode;
+export type FdmViewportVoxelColorMode = VectorSurfaceViewportVoxelColorMode;
+export type FdmViewportVoxelSampling = VectorSurfaceViewportVoxelSampling;
+export type FdmViewportTopoComponent = VectorSurfaceViewportTopoComponent;
+export type FdmViewportSettings = VectorSurfaceViewportSettings;
+export type FdmViewportSettingsPreset = VectorSurfaceViewportSettingsPreset;

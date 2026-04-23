@@ -1,6 +1,6 @@
 "use client";
 
-import type { FdmViewportQualityLevel as QualityLevel } from "../fdm/fdmViewportSettingsTypes";
+import type { VectorSurfaceViewportQualityLevel as QualityLevel } from "../fdm/fdmViewportSettingsTypes";
 
 interface FdmLightingProps {
   brightness: number;
@@ -8,7 +8,7 @@ interface FdmLightingProps {
 }
 
 /**
- * Declarative R3F lighting rig for the FDM 3D viewport.
+ * Declarative R3F lighting rig for the vector-surface 3D viewport.
  *
  * Reproduces the exact same lighting setup as the former imperative
  * `initScene()` block: 3 directional lights, 1 ambient, 1 hemisphere

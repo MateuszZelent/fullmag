@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Save,
   Undo2,
@@ -53,6 +52,36 @@ export default function AppBar(props: AppBarProps) {
   const router = useRouter();
   const setSettingsOpen = useWorkspaceStore((s) => s.setSettingsOpen);
   const setPhysicsDocsOpen = useWorkspaceStore((s) => s.setPhysicsDocsOpen);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const menuRootRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (!menuRootRef.current?.contains(target)) {
+        setMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("touchstart", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("touchstart", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuOpen]);
 
   const appMenu: MenuItem[] = [
     {
@@ -106,31 +135,37 @@ export default function AppBar(props: AppBarProps) {
           <span className="text-[0.8rem] font-semibold tracking-tight text-foreground/90">{props.problemName}</span>
         </span>
 
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger className="flex items-center gap-1 rounded-md border border-border/40 px-2 py-1 text-[0.72rem] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground">
+        <div ref={menuRootRef} className="relative">
+          <button
+            type="button"
+            className="flex items-center gap-1 rounded-md border border-border/40 px-2 py-1 text-[0.72rem] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+            onClick={() => setMenuOpen((previous) => !previous)}
+            aria-expanded={menuOpen}
+            aria-haspopup="menu"
+          >
             Fullmag
             <ChevronDown size={12} />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              className="z-[100] min-w-[220px] rounded-md border border-border/50 bg-popover/95 p-1 text-popover-foreground shadow-md backdrop-blur-xl animate-in fade-in-80 slide-in-from-top-1"
-              sideOffset={8}
-              align="start"
-            >
+          </button>
+          {menuOpen ? (
+            <div className="absolute left-0 top-full z-[100] mt-2 min-w-[220px] rounded-md border border-border/50 bg-popover/95 p-1 text-popover-foreground shadow-md backdrop-blur-xl">
               {appMenu.map((item) => (
-                <DropdownMenu.Item
+                <button
                   key={item.label}
-                  className="relative flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-xs outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-muted data-[highlighted]:text-foreground"
+                  type="button"
+                  className="relative flex w-full select-none items-center rounded-sm px-2 py-1.5 text-left text-xs outline-none transition-colors disabled:pointer-events-none disabled:opacity-50 hover:bg-muted hover:text-foreground"
                   disabled={item.disabled}
-                  onSelect={() => item.action?.()}
+                  onClick={() => {
+                    item.action?.();
+                    setMenuOpen(false);
+                  }}
                 >
-                  <span className="mr-2 h-3.5 w-3.5 flex items-center justify-center text-muted-foreground opacity-70">{item.icon}</span>
+                  <span className="mr-2 flex h-3.5 w-3.5 items-center justify-center text-muted-foreground opacity-70">{item.icon}</span>
                   <span className="flex-1">{item.label}</span>
-                </DropdownMenu.Item>
+                </button>
               ))}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+            </div>
+          ) : null}
+        </div>
 
         <div className="hidden items-center gap-1 border-l border-border/30 pl-3 xl:flex">
           {quickActions.map((action) => (
