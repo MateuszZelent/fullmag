@@ -6,6 +6,7 @@ import type {
   MeshBuildCommandRequest,
   MeshBuildHistoryResource,
   MeshCapabilitiesResource,
+  MeshSemanticsResource,
   MeshInterfaceConfigReplaceRequest,
   MeshInterfaceConfigResource,
   MeshInterfaceQualityResource,
@@ -48,6 +49,13 @@ export class MeshModule {
   async getCapabilities(opts?: RequestOptions): Promise<MeshCapabilitiesResource> {
     return this.client.get<MeshCapabilitiesResource>(
       "/v1/live/current/mesh/capabilities",
+      opts,
+    );
+  }
+
+  async getSemantics(opts?: RequestOptions): Promise<MeshSemanticsResource> {
+    return this.client.get<MeshSemanticsResource>(
+      "/v1/live/current/mesh/semantics",
       opts,
     );
   }

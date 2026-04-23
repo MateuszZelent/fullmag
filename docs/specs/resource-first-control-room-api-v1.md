@@ -1,7 +1,7 @@
 # Resource-first Control Room API v1
 
 - Status: canonical local control-room API contract
-- Last updated: 2026-04-21
+- Last updated: 2026-04-23
 - Parent architecture: `docs/specs/fullmag-application-architecture-v2.md`
 - Concrete endpoint reference: `docs/specs/control-room-api-endpoint-reference-v1.md`
 - Related runtime model: `docs/specs/session-run-api-v1.md`
@@ -180,6 +180,9 @@ GET    /v1/live/current/quantities/catalog
 GET    /v1/live/current/fields/catalog
 GET    /v1/live/current/fields/:quantity_id/meta
 GET    /v1/live/current/fields/:quantity_id/vector
+GET    /v1/live/current/fields/:quantity_id/slice/meta
+GET    /v1/live/current/fields/:quantity_id/slice/scalar
+GET    /v1/live/current/fields/:quantity_id/slice/arrows
 GET    /v1/live/current/scalars
 ```
 
@@ -189,6 +192,8 @@ Rules:
 - already computed quantities are treated as data resources,
 - `fields/catalog` and field metadata are JSON,
 - field vectors are binary by default,
+- slice resources are the canonical 2D read path,
+- requesting `component=x|y|z|cN|magnitude` must not trigger hidden full-vector fallback,
 - scalars are windowed/incremental and keyed by revision or cursor,
 - `field_revision` and `scalars_revision` are first-class cache signals.
 
@@ -207,6 +212,7 @@ PUT    /v1/live/current/mesh/universe/config
 GET    /v1/live/current/mesh/shared-domain/config
 PUT    /v1/live/current/mesh/shared-domain/config
 GET    /v1/live/current/mesh/shared-domain/manifest
+GET    /v1/live/current/mesh/semantics
 GET    /v1/live/current/mesh/objects/:object_id/config
 PUT    /v1/live/current/mesh/objects/:object_id/config
 GET    /v1/live/current/authoring/scene
@@ -237,8 +243,12 @@ Rules:
 - `mesh/*` is the canonical family for mounted mesh summary, active build projection, universe/shared-domain/object config,
 - `mesh/shared-domain/manifest` is the thin JSON bridge for FEM tree/selection metadata such as
   `mesh_parts` and `object_segments`,
+- `mesh/semantics` is the canonical three-level semantic projection (`universe_config`,
+  `shared_domain_config`, `object_configs`, `solver_mesh`, diagnostics),
 - `POST /mesh/builds/commands` is the canonical remesh enqueue path,
 - `authoring/scene` is the canonical full-document authoring resource,
+- all active 3D consumers must gate behavior from `status.capabilities` through one shared
+  contract layer (see `docs/specs/viewport3d-contract-v1.md`),
 - the intended 3D browser pipeline is three-layered:
   canonical `authoring/scene` for primitives and transforms,
   `mesh/shared-domain/manifest` plus binary topology for realized mesh structure,
@@ -260,6 +270,8 @@ Rules:
   `mesh/builds/commands` now mounted as the canonical remesh route,
 - `POST /commands` accepts only the discriminated `kind` union body,
 - public mesh/remesh enqueue is no longer part of the generic `/commands` surface,
+- render-only controls (`visibility`, isolate, clip preview scope) must not change solver-domain
+  semantics; `mesh/semantics` surfaces that invariant explicitly,
 - scene/script synchronization must preserve canonical Python and `ProblemIR` semantics.
 
 ### 3.5 Supporting resource families
@@ -293,6 +305,9 @@ Implemented and canonical today:
 - `quantities/catalog`,
 - `fields/:quantity_id/meta`,
 - `fields/:quantity_id/vector`,
+- `fields/:quantity_id/slice/meta`,
+- `fields/:quantity_id/slice/scalar`,
+- `fields/:quantity_id/slice/arrows`,
 - `scalars`,
 - `display`,
 - `commands`,
@@ -358,16 +373,21 @@ The minimum canonical revision vocabulary is:
 
 - `domain_generation_id`
 - `topology_revision` where applicable
+- `field_catalog_revision`
 - `fields_revision`
 - `field_revision`
+- `slice_revision` where applicable
 - `scalars_revision`
 - `artifacts_revision`
+- `command_completion_revision` where command completion is exposed separately
 
 Rules:
 
 - cache invalidation is revision-driven, not time-driven,
 - a domain generation change invalidates incompatible topology, coordinates, and field caches,
+- `field_revision` changes must not be interpreted as topology changes,
 - quantity switching should reuse cached field resources when `field_revision` is unchanged,
+- requesting a component payload must not silently force a full-vector fallback path,
 - the UI must not recompute or re-request already available quantities through preview-control
   commands.
 

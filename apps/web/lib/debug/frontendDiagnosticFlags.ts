@@ -26,16 +26,11 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     useMinimalViewportSelectionPath: false,
     enableUnifiedViewport3D: true,
     enableUnifiedViewportToolbar: true,
-    // Deprecated compatibility flag: legacy FDM 3D route has been removed.
-    // Kept for persisted localStorage payload shape only.
-    disableLegacyFdmViewport: true,
     enableGlobalScalarCard: true,
     enableGridScalar2D: true,
     enableFemMeshWorkspace: true,
     enableFem3D: true,
     enableFemSlice2D: true,
-    enableFdm3D: true,
-    enableFdmMeshWorkspace: true,
     enableFdmSlice2D: true,
     enableAnalyzeViewport: true,
     enableBoundsPreview: true,

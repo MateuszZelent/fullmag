@@ -14,28 +14,32 @@ import {
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { displayPatchFromPreviewComponent } from "@/src/api/displaySelection";
+import type { FieldComponent, LiveStatus } from "@/src/api/types";
 import { useFieldSlice2D } from "@/src/hooks/resources/useFieldSlice2D";
+import { statusToViewport3DCapabilities } from "@/src/features/view3d/adapters/statusToCapabilities";
+import { resourcesToViewportModel } from "@/src/features/view3d/adapters/resourcesToViewportModel";
+import { runtimeToViewport3DToolbarState } from "@/src/features/view3d/adapters/runtimeToToolbarState";
 import { Viewport3DHost } from "@/features/viewport-unified";
 import { mapRouteFlagsToViewport3DStages } from "@/features/viewport-unified/model/viewport3dFlags";
-import { resolveViewport3DCapabilities } from "@/features/viewport-unified/model/viewport3dCapabilities";
 import {
   buildToolbarStateFromLegacy,
   buildViewport3DModelFromAdapter,
 } from "@/features/viewport-unified/model/viewport3dAdapters";
 import type {
+  Viewport3DCapabilities as UnifiedViewport3DCapabilities,
   Viewport3DDiscretization,
   Viewport3DFallbackMode,
   Viewport3DInteractionMode,
   Viewport3DModel,
 } from "@/features/viewport-unified/model/viewport3dContracts";
+import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
 import type { UnifiedRenderState } from "@/features/viewport-unified/model/unifiedViewportTypes";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import type { TextureTransform3D as PreviewTextureTransform3D } from "@/lib/textureTransform";
+import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 import type { TextureGizmoMode } from "../../preview/TextureTransformGizmo";
 import type { FemLiveRenderDebugData } from "../../preview/fem/FemLiveRenderDebugPanel";
-import MagnetizationSlice2D from "../../preview/MagnetizationSlice2D";
-import VectorFieldView3D from "../../preview/VectorFieldView3D";
 import FemMeshView3D, { type RenderMode as FemRenderMode } from "../../preview/FemMeshView3D";
 import { ViewportErrorBoundary } from "../../preview/ViewportErrorBoundary";
 import EmptyState from "../../ui/EmptyState";
@@ -45,6 +49,9 @@ import {
   resolveAntennaNodeName,
 } from "./shared";
 import { useTransport, useViewport, useCommand, useModel } from "./context-hooks";
+import UnifiedViewport2DPresenter from "./UnifiedViewport2DPresenter";
+import UnifiedViewport3DPresenter from "./UnifiedViewport3DPresenter";
+import UnifiedViewport3DVectorSurface from "./UnifiedViewport3DVectorSurface";
 import type {
   MeshEntityViewStateMap,
 } from "../../../lib/session/types";
@@ -101,6 +108,105 @@ function toViewportInteractionMode(tool: string): Viewport3DInteractionMode {
   return "camera";
 }
 
+function toViewportFieldComponent(component: string): FieldComponent | null {
+  if (
+    component === "full" ||
+    component === "magnitude" ||
+    component === "x" ||
+    component === "y" ||
+    component === "z"
+  ) {
+    return component;
+  }
+  if (component === "3D" || component === "|v|") {
+    return "magnitude";
+  }
+  return null;
+}
+
+function mapCanonicalCapabilitiesToUnified(
+  capabilities: ReturnType<typeof statusToViewport3DCapabilities>,
+  authoringEnabled: boolean,
+  diagnosticsEnabled: boolean,
+): UnifiedViewport3DCapabilities {
+  const preview3d = Boolean(capabilities.can_render_3d);
+  const structuredGrid = preview3d && Boolean(capabilities.can_show_structured_grid);
+  const explicitTopology = preview3d && Boolean(capabilities.can_show_topology);
+  const authoringPrimitives = preview3d && explicitTopology && authoringEnabled;
+  const vectorField = preview3d && Boolean(capabilities.can_show_vectors);
+  const clip = preview3d && explicitTopology;
+  const screenshot = preview3d;
+  const diagnostics = preview3d && diagnosticsEnabled;
+
+  return {
+    preview3d: preview3d
+      ? { enabled: true }
+      : { enabled: false, reason: "Requires preview_3d capability." },
+    structuredGrid: structuredGrid
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? "Requires structured_grid capability."
+            : "Requires preview_3d capability.",
+        },
+    explicitTopology: explicitTopology
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? "Requires explicit_topology capability."
+            : "Requires preview_3d capability.",
+        },
+    authoringPrimitives: authoringPrimitives
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? (explicitTopology
+                ? "Requires Geometry Authoring mode."
+                : "Requires explicit_topology capability.")
+            : "Requires preview_3d capability.",
+        },
+    vectorField: vectorField
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? "Requires binary_fields + (node_fields|cell_fields) capability."
+            : "Requires preview_3d capability.",
+        },
+    clip: clip
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? "Requires explicit_topology capability."
+            : "Requires preview_3d capability.",
+        },
+    screenshot: screenshot
+      ? { enabled: true }
+      : { enabled: false, reason: "Requires preview_3d capability." },
+    diagnostics: diagnostics
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? "Requires render diagnostics flag."
+            : "Requires preview_3d capability.",
+        },
+  };
+}
+
+function toStatusResourcesSnapshot(
+  resources: LiveStatus["resources"] | null,
+): Pick<LiveStatus, "resources"> | null {
+  if (!resources) {
+    return null;
+  }
+  return { resources };
+}
+
 function requireFemTopologyKey(value: string | null): string {
   if (value && value.length > 0) {
     return value;
@@ -140,11 +246,6 @@ function ViewportModuleLoading({ label }: { label: string }) {
     </div>
   );
 }
-
-const FemMeshSlice2D = dynamic(() => import("../../preview/FemMeshSlice2DPlotly"), {
-  ssr: false,
-  loading: () => <ViewportModuleLoading label="Loading FEM slice viewport..." />,
-});
 
 const PreviewScalarField2D = dynamic(() => import("../../preview/PreviewScalarField2D"), {
   ssr: false,
@@ -216,6 +317,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     () => ({ ..._transport, ..._viewport, ..._cmd, ..._model }),
     [_transport, _viewport, _cmd, _model],
   );
+  const runtimeResourceRevisions = useSessionRuntimeStore((s) => s.resourceRevisions);
   const builderEnabled = useGeometryBuilderStore((s) => s.builderMode.enabled);
   const builderViewportTool = useGeometryBuilderStore((s) => s.viewportTool);
   const builderSnapSettings = useGeometryBuilderStore((s) => s.snapSettings);
@@ -901,22 +1003,27 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     enableUnifiedViewport3D: unifiedViewport3DEnabled,
     enableUnifiedViewportToolbar: unifiedToolbarEnabled,
   });
-  const showGeometryAuthoringInline =
-    showGeometryAuthoringViewport && !unifiedViewport3DEnabled;
   const femToolbarMode: "visible" | "hidden" =
     unifiedToolbarEnabled
       ? "hidden"
       : (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showToolbar ? "visible" : "hidden");
   const vectorToolbarMode: "visible" | "hidden" =
     unifiedToolbarEnabled ? "hidden" : "visible";
+  const viewport3DContractCapabilities = useMemo(
+    () =>
+      statusToViewport3DCapabilities(
+        ctx.domainCapabilities ? { capabilities: ctx.domainCapabilities } : null,
+      ),
+    [ctx.domainCapabilities],
+  );
   const viewport3DCapabilities = useMemo(
     () =>
-      resolveViewport3DCapabilities({
-        capabilities: ctx.domainCapabilities,
-        authoringEnabled: builderEnabled,
-        diagnosticsEnabled: FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging,
-      }),
-    [builderEnabled, ctx.domainCapabilities],
+      mapCanonicalCapabilitiesToUnified(
+        viewport3DContractCapabilities,
+        builderEnabled,
+        FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging,
+      ),
+    [builderEnabled, viewport3DContractCapabilities],
   );
   const viewport3DInteractionMode: Viewport3DInteractionMode = showGeometryAuthoringViewport
     ? toViewportInteractionMode(builderViewportTool)
@@ -956,9 +1063,61 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       ctx.sliceIndex,
     ],
   );
-  const viewport3DToolbarState = useMemo(
+  const viewport3DContractModel = useMemo(
     () =>
-      buildToolbarStateFromLegacy({
+      resourcesToViewportModel({
+        status: toStatusResourcesSnapshot(runtimeResourceRevisions),
+        quantity_id: ctx.requestedPreviewQuantity ?? null,
+        component: toViewportFieldComponent(
+          ctx.effectiveViewMode === "3D" ? "3D" : ctx.requestedPreviewComponent,
+        ),
+        selection: {
+          object_id: viewportSelectedObjectId,
+          part_id: ctx.selectedEntityId,
+        },
+        clip: {
+          enabled: ctx.meshClipEnabled,
+          axis: ctx.meshClipAxis,
+          position: ctx.meshClipPos,
+          invert: ctx.meshClipFlip,
+        },
+      }),
+    [
+      ctx.effectiveViewMode,
+      ctx.meshClipAxis,
+      ctx.meshClipEnabled,
+      ctx.meshClipFlip,
+      ctx.meshClipPos,
+      ctx.requestedPreviewComponent,
+      ctx.requestedPreviewQuantity,
+      ctx.selectedEntityId,
+      runtimeResourceRevisions,
+      viewportSelectedObjectId,
+    ],
+  );
+  const viewport3DContractToolbarState = useMemo(
+    () =>
+      runtimeToViewport3DToolbarState({
+        capabilities: viewport3DContractCapabilities,
+        has_topology:
+          viewport3DContractModel.topology_revision != null || Boolean(resolvedFemTopologyKey),
+        has_field_data:
+          viewport3DContractModel.field_revision != null ||
+          scaledFemMeshData?.fieldRevision != null ||
+          ctx.fieldDataRevision != null,
+      }),
+    [
+      ctx.fieldDataRevision,
+      resolvedFemTopologyKey,
+      scaledFemMeshData?.fieldRevision,
+      viewport3DContractCapabilities,
+      viewport3DContractModel.field_revision,
+      viewport3DContractModel.topology_revision,
+    ],
+  );
+  const viewport3DToolbarState = useMemo(
+    () => {
+      const legacyToolbarState = buildToolbarStateFromLegacy({
         renderState: viewport3DRenderState,
         quantityId: ctx.requestedPreviewQuantity ?? null,
         clipFlip: ctx.meshClipFlip,
@@ -970,7 +1129,31 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         partExplorerVisible: selectedSubmeshesToolboxOpen,
         projection: "perspective",
         navProfile: "trackball",
-      }),
+      });
+      return {
+        ...legacyToolbarState,
+        rowA: {
+          ...legacyToolbarState.rowA,
+          clipEnabled:
+            legacyToolbarState.rowA.clipEnabled && viewport3DContractToolbarState.clip_enabled,
+        },
+        controlStates: {
+          ...legacyToolbarState.controlStates,
+          quantity: viewport3DContractToolbarState.quantity_enabled
+            ? ("inactive" as const)
+            : ("disabled" as const),
+          component: viewport3DContractToolbarState.component_enabled
+            ? ("inactive" as const)
+            : ("disabled" as const),
+          clip: viewport3DContractToolbarState.clip_enabled
+            ? ("inactive" as const)
+            : ("disabled" as const),
+          renderMode: viewport3DContractToolbarState.render_mode_enabled
+            ? ("inactive" as const)
+            : ("disabled" as const),
+        },
+      };
+    },
     [
       builderSnapSettings.enabled,
       ctx.meshClipFlip,
@@ -979,6 +1162,10 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       ctx.requestedPreviewQuantity,
       femDiscretization,
       selectedSubmeshesToolboxOpen,
+      viewport3DContractToolbarState.clip_enabled,
+      viewport3DContractToolbarState.component_enabled,
+      viewport3DContractToolbarState.quantity_enabled,
+      viewport3DContractToolbarState.render_mode_enabled,
       viewport3DInteractionMode,
       viewport3DRenderState,
     ],
@@ -995,14 +1182,19 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         capabilities: viewport3DCapabilities,
         worldExtent: ctx.worldExtent,
         worldCenter: ctx.worldCenter,
-        topologyRevision: resolvedFemTopologyKey,
+        topologyRevision:
+          viewport3DContractModel.topology_revision != null
+            ? String(viewport3DContractModel.topology_revision)
+            : resolvedFemTopologyKey,
         fieldRevision:
-          scaledFemMeshData?.fieldRevision != null
+          viewport3DContractModel.field_revision != null
+            ? String(viewport3DContractModel.field_revision)
+            : scaledFemMeshData?.fieldRevision != null
             ? String(scaledFemMeshData.fieldRevision)
             : (ctx.fieldDataRevision != null ? String(ctx.fieldDataRevision) : null),
-        quantityId: ctx.requestedPreviewQuantity,
-        selectedObjectId: viewportSelectedObjectId,
-        selectedEntityId: ctx.selectedEntityId,
+        quantityId: viewport3DContractModel.quantity_id,
+        selectedObjectId: viewport3DContractModel.selection.object_id,
+        selectedEntityId: viewport3DContractModel.selection.part_id ?? ctx.selectedEntityId,
         focusedEntityId: ctx.focusedEntityId,
         selectedSidebarNodeId: ctx.selectedSidebarNodeId,
         loading: ctx.previewBusy,
@@ -1053,7 +1245,6 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       ctx.focusedEntityId,
       ctx.previewBusy,
       ctx.previewMessage,
-      ctx.requestedPreviewQuantity,
       ctx.selectedEntityId,
       ctx.selectedSidebarNodeId,
       ctx.selectedVectorSourceKind,
@@ -1062,11 +1253,15 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       resolvedFemTopologyKey,
       scaledFemMeshData?.fieldRevision,
       showGeometryAuthoringViewport,
+      viewport3DContractModel.field_revision,
+      viewport3DContractModel.quantity_id,
+      viewport3DContractModel.selection.object_id,
+      viewport3DContractModel.selection.part_id,
+      viewport3DContractModel.topology_revision,
       viewport3DCapabilities,
       viewport3DInteractionMode,
       viewport3DRenderState,
       viewport3DToolbarState,
-      viewportSelectedObjectId,
     ],
   );
   const hostedMixedViewportModel = useMemo(
@@ -1090,6 +1285,94 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     !ctx.femMeshData &&
     (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
     displayObjectOverlays.length > 0;
+  const viewport3DRolloutRoute = useMemo(() => {
+    let route:
+      | "minimal-diagnostic"
+      | "geometry-authoring"
+      | "fem-3d"
+      | "fem-mesh"
+      | "fem-bounds-fallback"
+      | "fdm-3d"
+      | "fdm-mesh"
+      | "slice-2d"
+      | "analyze"
+      | "empty" = "empty";
+
+    let fallbackUsed = false;
+    if (minimalViewportSelectionPath) {
+      route = "minimal-diagnostic";
+    } else if (showGeometryAuthoringViewport) {
+      route = "geometry-authoring";
+    } else if (femDiscretization && (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh")) {
+      if (!ctx.femMeshData && showFemBoundsPreview) {
+        route = "fem-bounds-fallback";
+        fallbackUsed = true;
+      } else {
+        route = ctx.effectiveViewMode === "Mesh" ? "fem-mesh" : "fem-3d";
+      }
+    } else if (showFdm3D) {
+      route = isFdmMeshActive ? "fdm-mesh" : "fdm-3d";
+    } else if (ctx.effectiveViewMode === "2D") {
+      route = "slice-2d";
+    } else if (ctx.effectiveViewMode === "Analyze") {
+      route = "analyze";
+    }
+
+    return {
+      route,
+      fallbackUsed,
+      signature: `${route}|${fallbackUsed ? "fallback" : "primary"}|${
+        viewport3dStages.viewport3d_unified_cutover ? "cutover" : "staged"
+      }`,
+    };
+  }, [
+    ctx.effectiveViewMode,
+    ctx.femMeshData,
+    femDiscretization,
+    isFdmMeshActive,
+    minimalViewportSelectionPath,
+    showFdm3D,
+    showFemBoundsPreview,
+    showGeometryAuthoringViewport,
+    viewport3dStages.viewport3d_unified_cutover,
+  ]);
+  const lastViewport3DRolloutSignatureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastViewport3DRolloutSignatureRef.current === viewport3DRolloutRoute.signature) {
+      return;
+    }
+    lastViewport3DRolloutSignatureRef.current = viewport3DRolloutRoute.signature;
+    const timestampMs =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+    recordFrontendPerfSample({
+      scope: "Viewport3DRollout",
+      phase: "route-selected",
+      durationMs: 0,
+      timestampMs,
+      meta: {
+        route: viewport3DRolloutRoute.route,
+        fallbackUsed: viewport3DRolloutRoute.fallbackUsed,
+        cutover: viewport3dStages.viewport3d_unified_cutover,
+      },
+    });
+    if (viewport3DRolloutRoute.fallbackUsed) {
+      recordFrontendPerfSample({
+        scope: "Viewport3DRollout",
+        phase: "fallback-used",
+        durationMs: 0,
+        timestampMs,
+        meta: {
+          route: viewport3DRolloutRoute.route,
+          cutover: viewport3dStages.viewport3d_unified_cutover,
+        },
+      });
+    }
+  }, [
+    viewport3DRolloutRoute.fallbackUsed,
+    viewport3DRolloutRoute.route,
+    viewport3DRolloutRoute.signature,
+    viewport3dStages.viewport3d_unified_cutover,
+  ]);
   const femLiveRenderDebugData = useMemo<FemLiveRenderDebugData | null>(
     () =>
       femDiscretization
@@ -1131,6 +1414,61 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       scaledFemMeshData?.fieldRevision,
     ],
   );
+  const resolvedSliceQuantityLabel =
+    ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity;
+  const resolvedFemSliceQuantityLabel = ctx.quantityDescriptor?.label ?? ctx.selectedQuantity;
+
+  const renderUnified2DViewport = ({
+    preferFemMesh = Boolean(scaledFemMeshData),
+    femQuantityId = ctx.selectedQuantity,
+  }: {
+    preferFemMesh?: boolean;
+    femQuantityId?: string | null;
+  } = {}): React.ReactNode => {
+    return (
+      <UnifiedViewport2DPresenter
+        shouldUseSliceApi2D={shouldUseSliceApi2D}
+        hasSliceScalar={hasSliceScalar}
+        sliceLoading={slice2D.loading}
+        sliceErrorMessage={slice2D.error?.message ?? null}
+        grid={ctx.previewGrid}
+        vectors={scaledVectors}
+        sliceScalarValues={scaledSliceScalar}
+        sliceScalarShape={sliceScalarShape}
+        quantityLabel={resolvedSliceQuantityLabel}
+        quantityId={sliceQuantityId}
+        component={sliceComponent}
+        plane={ctx.plane}
+        sliceIndex={ctx.sliceIndex}
+        preferFemMesh={preferFemMesh}
+        femMeshData={scaledFemMeshData}
+        femQuantityLabel={resolvedFemSliceQuantityLabel}
+        femQuantityId={femQuantityId ?? undefined}
+        femQuantityUnit={ctx.quantityDescriptor?.unit ?? undefined}
+        femQuantityOptions={femQuantityOptions}
+        femComponent={ctx.effectiveVectorComponent}
+        meshParts={ctx.meshParts}
+        meshEntityViewState={ctx.meshEntityViewState}
+        airSegmentVisible={ctx.airMeshVisible}
+        objectViewMode={ctx.objectViewMode}
+        visibleObjectIds={visibleObjectIds}
+        vectorDomainFilter={ctx.femVectorDomainFilter}
+        clipAxis={ctx.meshClipAxis}
+        clipPos={ctx.meshClipPos}
+        antennaOverlays={ctx.antennaOverlays}
+        selectedAntennaId={selectedAntennaName}
+        showArrows={femShowArrowsForRender}
+        previewMaxPoints={ctx.requestedPreviewMaxPoints}
+        onQuantityChange={ctx.requestPreviewQuantity}
+        onComponentChange={handleFemSliceComponentChange}
+        onPlaneChange={ctx.setPlane}
+        onClipAxisChange={ctx.setMeshClipAxis}
+        onClipPosChange={ctx.setMeshClipPos}
+        onShowArrowsChange={ctx.setMeshShowArrows}
+        onPreviewMaxPointsChange={handlePreviewMaxPointsChange}
+      />
+    );
+  };
 
   /* ── Determine what goes into the conditional slot ── */
   let conditionalContent: React.ReactNode = null;
@@ -1197,54 +1535,6 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         </div>
       );
     }
-  } else if (showGeometryAuthoringInline) {
-    conditionalContent = (
-      <div className="relative h-full w-full">
-        <ViewportErrorBoundary label="Geometry Authoring Viewport">
-          <VectorFieldView3D
-            grid={ctx.previewGrid}
-            vectors={geometryAuthoringShowQuantity ? scaledVectors : null}
-            fieldLabel={
-              geometryAuthoringShowQuantity
-                ? (ctx.quantityDescriptor?.label ?? ctx.selectedQuantity)
-                : "Geometry Authoring"
-            }
-            geometryMode
-            activeMask={null}
-            worldExtent={ctx.worldExtent}
-            objectOverlays={geometryModeObjectOverlays}
-            selectedObjectId={viewportSelectedObjectId}
-            universeCenter={ctx.worldCenter}
-            objectViewMode={ctx.objectViewMode}
-            viewportVisible
-            onRequestObjectSelect={handleRequestObjectSelect}
-            onGeometryTranslate={ctx.applyGeometryTranslation}
-            viewport3DModel={hostedMixedViewportModel}
-            authoringOverlay={
-              <BuilderViewportLayer
-                showPrimitives={geometryAuthoringShowPrimitives}
-                showMeshPreview={geometryAuthoringShowMesh}
-              />
-            }
-            toolbarMode={vectorToolbarMode}
-          />
-        </ViewportErrorBoundary>
-        <div
-          className="pointer-events-none absolute left-3 top-3 z-20 rounded-md border border-border/50 bg-background/75 px-2 py-1 text-[10px] text-muted-foreground backdrop-blur"
-          style={VIEWPORT_BADGE_STYLE}
-        >
-          Geometry Mode
-          <span className="ml-2">
-            primitives:{geometryAuthoringShowPrimitives ? "on" : "off"} · mesh:
-            {geometryAuthoringMeshStatus} · quantity:
-            {geometryAuthoringShowQuantity ? "on" : "off"}
-          </span>
-        </div>
-        {!unifiedToolbarEnabled ? (
-          <GeometryToolbar className="pointer-events-auto absolute bottom-4 left-1/2 z-20 -translate-x-1/2" />
-        ) : null}
-      </div>
-    );
   } else if (
     globalScalarPreview &&
     FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableGlobalScalarCard
@@ -1324,228 +1614,14 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       />
     );
   } else if (
-    ctx.effectiveViewMode === "Mesh" &&
-    ctx.femMeshData &&
-    FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFemMeshWorkspace
-  ) {
-    conditionalContent = (
-      <ViewportErrorBoundary label="FEM Mesh Viewport">
-      <FemMeshView3D
-        topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
-        meshData={scaledFemMeshData!}
-        selectedSidebarNodeId={ctx.selectedSidebarNodeId}
-        viewportFitSeed={viewportFitSeed}
-        quantityId={ctx.requestedPreviewQuantity}
-        quantityOptions={femQuantityOptions}
-        colorField="none"
-        toolbarMode={femToolbarMode}
-        renderMode={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe ? "wireframe" : ctx.meshRenderMode}
-        opacity={femOpacityForRender}
-        clipEnabled={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip ? false : ctx.meshClipEnabled}
-        clipAxis={ctx.meshClipAxis}
-        clipPos={ctx.meshClipPos}
-        clipFlip={ctx.meshClipFlip}
-        previewMaxPoints={ctx.requestedPreviewMaxPoints}
-        onRenderModeChange={ctx.setMeshRenderMode}
-        onOpacityChange={ctx.setMeshOpacity}
-        onClipEnabledChange={ctx.setMeshClipEnabled}
-        onClipAxisChange={ctx.setMeshClipAxis}
-        onClipPosChange={ctx.setMeshClipPos}
-        onClipFlipChange={ctx.setMeshClipFlip}
-        onPreviewMaxPointsChange={handlePreviewMaxPointsChange}
-        onSelectionChange={ctx.setMeshSelection}
-        onRefine={ctx.handleLassoRefine}
-        antennaOverlays={ctx.antennaOverlays}
-        selectedAntennaId={selectedAntennaName}
-        objectOverlays={femObjectOverlaysForRender}
-        selectedObjectId={selectedFemObjectId}
-        selectedEntityId={ctx.selectedEntityId}
-        focusedEntityId={ctx.focusedEntityId}
-        objectViewMode={ctx.objectViewMode}
-        objectSegments={ctx.effectiveFemMesh?.object_segments ?? []}
-        meshParts={ctx.meshParts}
-        elementMarkers={ctx.effectiveFemMesh?.element_markers ?? null}
-        perDomainQuality={ctx.effectiveFemMesh?.per_domain_quality ?? null}
-        meshEntityViewState={ctx.meshEntityViewState}
-        onMeshPartViewStatePatch={patchMeshPartViewState}
-        visibleObjectIds={visibleObjectIds}
-        airSegmentVisible={ctx.airMeshVisible}
-        airSegmentOpacity={ctx.airMeshOpacity}
-        focusObjectRequest={ctx.focusObjectRequest}
-        onAntennaTranslate={ctx.applyAntennaTranslation}
-        worldExtent={ctx.worldExtent}
-        worldCenter={ctx.worldCenter}
-        onEntitySelect={ctx.setSelectedEntityId}
-        onEntityFocus={ctx.setFocusedEntityId}
-        onQuantityChange={ctx.requestPreviewQuantity}
-        activeTextureTransform={activeTextureTransform}
-        textureGizmoMode={activeTextureGizmoMode}
-        activeTexturePreviewProxy={activeTexturePreviewProxy}
-        activeTransformScope={ctx.activeTransformScope}
-        onTextureTransformChange={applyTextureTransform}
-        onTextureTransformCommit={applyTextureTransform}
-        partExplorerOpen={selectedSubmeshesToolboxOpen}
-        onTogglePartExplorer={openSelectedSubmeshesToolbox}
-        onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
-      />
-      </ViewportErrorBoundary>
-    );
-  } else if (
-    ctx.effectiveViewMode === "3D" &&
-    ctx.femMeshData &&
-    FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFem3D
-  ) {
-    conditionalContent = (
-      <ViewportErrorBoundary label="FEM 3D Viewport">
-      <FemMeshView3D
-        topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
-        meshData={scaledFemMeshData!}
-        selectedSidebarNodeId={ctx.selectedSidebarNodeId}
-        viewportFitSeed={viewportFitSeed}
-        fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
-        liveRenderDebugData={femLiveRenderDebugData}
-        quantityId={ctx.requestedPreviewQuantity}
-        quantityOptions={femQuantityOptions}
-        toolbarMode={femToolbarMode}
-        colorField={femColorFieldForRender}
-        showOrientationLegend={ctx.femMagnetization3DActive}
-        renderMode={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe ? "wireframe" : ctx.meshRenderMode}
-        opacity={femOpacityForRender}
-        clipEnabled={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip ? false : ctx.meshClipEnabled}
-        clipAxis={ctx.meshClipAxis}
-        clipPos={ctx.meshClipPos}
-        clipFlip={ctx.meshClipFlip}
-        showArrowsRequested={femShowArrowsForRender}
-        arrowColorMode={ctx.femArrowColorMode}
-        arrowMonoColor={ctx.femArrowMonoColor}
-        arrowAlpha={ctx.femArrowAlpha}
-        arrowLengthScale={ctx.femArrowLengthScale}
-        arrowThickness={ctx.femArrowThickness}
-        vectorDomainFilter={ctx.femVectorDomainFilter}
-        ferromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
-        previewMaxPoints={ctx.requestedPreviewMaxPoints}
-        onRenderModeChange={ctx.setMeshRenderMode}
-        onOpacityChange={ctx.setMeshOpacity}
-        onClipEnabledChange={ctx.setMeshClipEnabled}
-        onClipAxisChange={ctx.setMeshClipAxis}
-        onClipPosChange={ctx.setMeshClipPos}
-        onClipFlipChange={ctx.setMeshClipFlip}
-        onShowArrowsChange={ctx.setMeshShowArrows}
-        onArrowColorModeChange={ctx.setFemArrowColorMode}
-        onArrowMonoColorChange={ctx.setFemArrowMonoColor}
-        onArrowAlphaChange={ctx.setFemArrowAlpha}
-        onArrowLengthScaleChange={ctx.setFemArrowLengthScale}
-        onArrowThicknessChange={ctx.setFemArrowThickness}
-        onVectorDomainFilterChange={ctx.setFemVectorDomainFilter}
-        onFerromagnetVisibilityModeChange={ctx.setFemFerromagnetVisibilityMode}
-        onPreviewMaxPointsChange={handlePreviewMaxPointsChange}
-        onSelectionChange={ctx.setMeshSelection}
-        antennaOverlays={ctx.antennaOverlays}
-        selectedAntennaId={selectedAntennaName}
-        objectOverlays={femObjectOverlaysForRender}
-        selectedObjectId={selectedFemObjectId}
-        selectedEntityId={ctx.selectedEntityId}
-        focusedEntityId={ctx.focusedEntityId}
-        objectViewMode={ctx.objectViewMode}
-        objectSegments={ctx.effectiveFemMesh?.object_segments ?? []}
-        meshParts={ctx.meshParts}
-        elementMarkers={ctx.effectiveFemMesh?.element_markers ?? null}
-        perDomainQuality={ctx.effectiveFemMesh?.per_domain_quality ?? null}
-        meshEntityViewState={ctx.meshEntityViewState}
-        onMeshPartViewStatePatch={patchMeshPartViewState}
-        visibleObjectIds={visibleObjectIds}
-        airSegmentVisible={ctx.airMeshVisible}
-        airSegmentOpacity={ctx.airMeshOpacity}
-        focusObjectRequest={ctx.focusObjectRequest}
-        onAntennaTranslate={ctx.applyAntennaTranslation}
-        worldExtent={ctx.worldExtent}
-        worldCenter={ctx.worldCenter}
-        onQuantityChange={ctx.requestPreviewQuantity}
-        activeTextureTransform={activeTextureTransform}
-        textureGizmoMode={activeTextureGizmoMode}
-        activeTexturePreviewProxy={activeTexturePreviewProxy}
-        activeTransformScope={ctx.activeTransformScope}
-        onTextureTransformChange={applyTextureTransform}
-        onTextureTransformCommit={applyTextureTransform}
-        partExplorerOpen={selectedSubmeshesToolboxOpen}
-        onTogglePartExplorer={openSelectedSubmeshesToolbox}
-        onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
-      />
-      </ViewportErrorBoundary>
-    );
-  } else if (
     ctx.effectiveViewMode === "2D" &&
     ctx.femMeshData &&
     FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFemSlice2D
   ) {
-    if (shouldUseSliceApi2D) {
-      if (slice2D.loading && !hasSliceScalar) {
-        conditionalContent = (
-          <div className="flex h-full w-full items-center justify-center opacity-80">
-            <EmptyState
-              title="Loading 2D quantity slice"
-              description="Fetching scalar slice data from /slice resources."
-              tone="info"
-            />
-          </div>
-        );
-      } else if (slice2D.error && !hasSliceScalar) {
-        conditionalContent = (
-          <div className="flex h-full w-full items-center justify-center opacity-80">
-            <EmptyState
-              title="Slice request failed"
-              description={slice2D.error.message ?? "Unable to load 2D slice resource."}
-              tone="warning"
-            />
-          </div>
-        );
-      } else {
-        conditionalContent = (
-          <MagnetizationSlice2D
-            grid={ctx.previewGrid}
-            vectors={null}
-            scalarValues={scaledSliceScalar}
-            scalarShape={sliceScalarShape}
-            quantityLabel={ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity}
-            quantityId={sliceQuantityId}
-            component={sliceComponent}
-            plane={ctx.plane}
-            sliceIndex={ctx.sliceIndex}
-          />
-        );
-      }
-    } else {
-      conditionalContent = (
-        <FemMeshSlice2D
-          meshData={scaledFemMeshData!}
-          quantityLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
-          quantityId={ctx.requestedPreviewQuantity}
-          quantityUnit={ctx.quantityDescriptor?.unit ?? undefined}
-          quantityOptions={femQuantityOptions}
-          component={ctx.effectiveVectorComponent}
-          plane={ctx.plane}
-          meshParts={ctx.meshParts}
-          meshEntityViewState={ctx.meshEntityViewState}
-          airSegmentVisible={ctx.airMeshVisible}
-          objectViewMode={ctx.objectViewMode}
-          visibleObjectIds={visibleObjectIds}
-          vectorDomainFilter={ctx.femVectorDomainFilter}
-          clipAxis={ctx.meshClipAxis}
-          clipPos={ctx.meshClipPos}
-          antennaOverlays={ctx.antennaOverlays}
-          selectedAntennaId={selectedAntennaName}
-          showArrows={femShowArrowsForRender}
-          previewMaxPoints={ctx.requestedPreviewMaxPoints}
-          onQuantityChange={ctx.requestPreviewQuantity}
-          onComponentChange={handleFemSliceComponentChange}
-          onPlaneChange={ctx.setPlane}
-          onClipAxisChange={ctx.setMeshClipAxis}
-          onClipPosChange={ctx.setMeshClipPos}
-          onShowArrowsChange={ctx.setMeshShowArrows}
-          onPreviewMaxPointsChange={handlePreviewMaxPointsChange}
-        />
-      );
-    }
+    conditionalContent = renderUnified2DViewport({
+      preferFemMesh: true,
+      femQuantityId: ctx.requestedPreviewQuantity,
+    });
   } else if (
     ctx.effectiveViewMode === "2D" &&
     ctx.isFemBackend &&
@@ -1565,69 +1641,12 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     !showFdm3D &&
     FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdmSlice2D
   ) {
-    if (shouldUseSliceApi2D && slice2D.loading && !hasSliceScalar) {
-      conditionalContent = (
-        <div className="flex h-full w-full items-center justify-center opacity-80">
-          <EmptyState
-            title="Loading 2D quantity slice"
-            description="Fetching scalar slice data from /slice resources."
-            tone="info"
-          />
-        </div>
-      );
-    } else if (shouldUseSliceApi2D && slice2D.error && !hasSliceScalar) {
-      conditionalContent = (
-        <div className="flex h-full w-full items-center justify-center opacity-80">
-          <EmptyState
-            title="Slice request failed"
-            description={slice2D.error.message ?? "Unable to load 2D slice resource."}
-            tone="warning"
-          />
-        </div>
-      );
-    } else {
-      conditionalContent = (
-        <MagnetizationSlice2D
-          grid={ctx.previewGrid}
-          vectors={shouldUseSliceApi2D ? null : scaledVectors}
-          scalarValues={scaledSliceScalar}
-          scalarShape={sliceScalarShape}
-          quantityLabel={ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity}
-          quantityId={sliceQuantityId}
-          component={sliceComponent}
-          plane={ctx.plane}
-          sliceIndex={ctx.sliceIndex}
-        />
-      );
-    }
+    conditionalContent = renderUnified2DViewport({ preferFemMesh: false });
   } else if (
     ctx.effectiveViewMode === "Analyze" &&
     FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableAnalyzeViewport
   ) {
     conditionalContent = <AnalyzeViewport />;
-  } else if (
-    showFemBoundsPreview &&
-    FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableBoundsPreview
-  ) {
-    conditionalContent = (
-      <Viewport3DHost
-        model={hostedFemBoundsViewportModel}
-        mode="Mesh"
-        discretization="fem"
-        fallback={
-          <BoundsPreview3D
-            objectOverlays={femObjectOverlaysForRender}
-            selectedObjectId={selectedFemObjectId}
-            focusObjectRequest={ctx.focusObjectRequest}
-            worldExtent={ctx.worldExtent}
-            worldCenter={ctx.worldCenter}
-            enableObjectInteractions={false}
-            onRequestObjectSelect={handleRequestObjectSelect}
-            onGeometryTranslate={ctx.applyGeometryTranslation}
-          />
-        }
-      />
-    );
   } else if (!showFdm3D) {
     conditionalContent = (
       <div className="flex flex-col items-center justify-center h-full w-full opacity-60">
@@ -1640,16 +1659,295 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     );
   }
 
+  const renderHostedGeometryAuthoringViewport = () => (
+    <Viewport3DHost
+      model={hostedMixedViewportModel}
+      mode="3D"
+      discretization="mixed"
+    >
+      <div className="relative h-full w-full">
+        <UnifiedViewport3DVectorSurface
+          boundaryLabel="Hosted Geometry Authoring Viewport"
+          vectorFieldProps={{
+            grid: ctx.previewGrid,
+            vectors: geometryAuthoringShowQuantity ? scaledVectors : null,
+            fieldLabel: geometryAuthoringShowQuantity
+              ? (ctx.quantityDescriptor?.label ?? ctx.selectedQuantity)
+              : "Geometry Authoring",
+            liveRenderDebugData,
+            geometryMode: true,
+            activeMask: null,
+            worldExtent: ctx.worldExtent,
+            objectOverlays: geometryModeObjectOverlays,
+            selectedObjectId: viewportSelectedObjectId,
+            universeCenter: ctx.worldCenter,
+            objectViewMode: ctx.objectViewMode,
+            onRequestObjectSelect: handleRequestObjectSelect,
+            onGeometryTranslate: ctx.applyGeometryTranslation,
+            viewport3DModel: hostedMixedViewportModel,
+            authoringOverlay: (
+              <BuilderViewportLayer
+                showPrimitives={geometryAuthoringShowPrimitives}
+                showMeshPreview={geometryAuthoringShowMesh}
+              />
+            ),
+            toolbarMode: vectorToolbarMode,
+            viewportVisible: true,
+          }}
+        />
+        <div
+          className="pointer-events-none absolute left-3 top-3 z-20 rounded-md border border-border/50 bg-background/75 px-2 py-1 text-[10px] text-muted-foreground backdrop-blur"
+          style={VIEWPORT_BADGE_STYLE}
+        >
+          Geometry Mode
+          <span className="ml-2">
+            primitives:{geometryAuthoringShowPrimitives ? "on" : "off"} · mesh:
+            {geometryAuthoringMeshStatus} · quantity:
+            {geometryAuthoringShowQuantity ? "on" : "off"}
+          </span>
+        </div>
+        {!unifiedToolbarEnabled ? (
+          <GeometryToolbar className="pointer-events-auto absolute bottom-4 left-1/2 z-20 -translate-x-1/2" />
+        ) : null}
+      </div>
+    </Viewport3DHost>
+  );
+
+  const renderHostedFemBoundsViewport = (mode: "3D" | "Mesh") => (
+    <Viewport3DHost
+      model={hostedFemBoundsViewportModel}
+      mode={mode}
+      discretization="fem"
+      fallback={
+        <BoundsPreview3D
+          objectOverlays={femObjectOverlaysForRender}
+          selectedObjectId={selectedFemObjectId}
+          focusObjectRequest={ctx.focusObjectRequest}
+          worldExtent={ctx.worldExtent}
+          worldCenter={ctx.worldCenter}
+          enableObjectInteractions={false}
+          onRequestObjectSelect={handleRequestObjectSelect}
+          onGeometryTranslate={ctx.applyGeometryTranslation}
+        />
+      }
+    />
+  );
+
+  const renderHostedFemMeshViewport = () => {
+    if (!ctx.femMeshData) {
+      if (
+        showFemBoundsPreview &&
+        FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableBoundsPreview
+      ) {
+        return renderHostedFemBoundsViewport("Mesh");
+      }
+      return (
+        <div className="flex h-full w-full items-center justify-center opacity-80">
+          <EmptyState
+            title="Mesh topology unavailable"
+            description="Build FEM mesh to render Mesh workspace."
+            tone="info"
+          />
+        </div>
+      );
+    }
+    return (
+      <Viewport3DHost model={hostedFemViewportModel} mode="Mesh" discretization="fem">
+        <ViewportErrorBoundary label="Hosted FEM Mesh Viewport">
+          <FemMeshView3D
+            topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
+            meshData={scaledFemMeshData!}
+            selectedSidebarNodeId={ctx.selectedSidebarNodeId}
+            viewportFitSeed={viewportFitSeed}
+            quantityId={ctx.requestedPreviewQuantity}
+            quantityOptions={femQuantityOptions}
+            colorField="none"
+            toolbarMode={femToolbarMode}
+            renderMode={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe ? "wireframe" : ctx.meshRenderMode}
+            opacity={femOpacityForRender}
+            clipEnabled={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip ? false : ctx.meshClipEnabled}
+            clipAxis={ctx.meshClipAxis}
+            clipPos={ctx.meshClipPos}
+            clipFlip={ctx.meshClipFlip}
+            previewMaxPoints={ctx.requestedPreviewMaxPoints}
+            onRenderModeChange={ctx.setMeshRenderMode}
+            onOpacityChange={ctx.setMeshOpacity}
+            onClipEnabledChange={ctx.setMeshClipEnabled}
+            onClipAxisChange={ctx.setMeshClipAxis}
+            onClipPosChange={ctx.setMeshClipPos}
+            onClipFlipChange={ctx.setMeshClipFlip}
+            onPreviewMaxPointsChange={handlePreviewMaxPointsChange}
+            onSelectionChange={ctx.setMeshSelection}
+            onRefine={ctx.handleLassoRefine}
+            antennaOverlays={ctx.antennaOverlays}
+            selectedAntennaId={selectedAntennaName}
+            objectOverlays={femObjectOverlaysForRender}
+            selectedObjectId={selectedFemObjectId}
+            selectedEntityId={ctx.selectedEntityId}
+            focusedEntityId={ctx.focusedEntityId}
+            objectViewMode={ctx.objectViewMode}
+            objectSegments={ctx.effectiveFemMesh?.object_segments ?? []}
+            meshParts={ctx.meshParts}
+            elementMarkers={ctx.effectiveFemMesh?.element_markers ?? null}
+            perDomainQuality={ctx.effectiveFemMesh?.per_domain_quality ?? null}
+            meshEntityViewState={ctx.meshEntityViewState}
+            onMeshPartViewStatePatch={patchMeshPartViewState}
+            visibleObjectIds={visibleObjectIds}
+            airSegmentVisible={ctx.airMeshVisible}
+            airSegmentOpacity={ctx.airMeshOpacity}
+            focusObjectRequest={ctx.focusObjectRequest}
+            onAntennaTranslate={ctx.applyAntennaTranslation}
+            worldExtent={ctx.worldExtent}
+            worldCenter={ctx.worldCenter}
+            onEntitySelect={ctx.setSelectedEntityId}
+            onEntityFocus={ctx.setFocusedEntityId}
+            onQuantityChange={ctx.requestPreviewQuantity}
+            activeTextureTransform={activeTextureTransform}
+            textureGizmoMode={activeTextureGizmoMode}
+            activeTexturePreviewProxy={activeTexturePreviewProxy}
+            activeTransformScope={ctx.activeTransformScope}
+            onTextureTransformChange={applyTextureTransform}
+            onTextureTransformCommit={applyTextureTransform}
+            partExplorerOpen={selectedSubmeshesToolboxOpen}
+            onTogglePartExplorer={openSelectedSubmeshesToolbox}
+            onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
+          />
+        </ViewportErrorBoundary>
+      </Viewport3DHost>
+    );
+  };
+
+  const renderHostedFem3DViewport = () => {
+    if (!ctx.femMeshData) {
+      if (
+        showFemBoundsPreview &&
+        FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableBoundsPreview
+      ) {
+        return renderHostedFemBoundsViewport("3D");
+      }
+      return (
+        <div className="flex h-full w-full items-center justify-center opacity-80">
+          <EmptyState
+            title="FEM 3D preview unavailable"
+            description="Build FEM mesh topology to enable 3D field rendering."
+            tone="info"
+          />
+        </div>
+      );
+    }
+    return (
+      <Viewport3DHost
+        model={hostedFemViewportModel}
+        mode="3D"
+        discretization="fem"
+      >
+        <ViewportErrorBoundary label="Hosted Unified 3D Viewport">
+          <FemMeshView3D
+            topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
+            meshData={scaledFemMeshData!}
+            selectedSidebarNodeId={ctx.selectedSidebarNodeId}
+            viewportFitSeed={viewportFitSeed}
+            fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
+            liveRenderDebugData={femLiveRenderDebugData}
+            quantityId={ctx.requestedPreviewQuantity}
+            quantityOptions={femQuantityOptions}
+            toolbarMode={femToolbarMode}
+            colorField={femColorFieldForRender}
+            showOrientationLegend={ctx.femMagnetization3DActive}
+            renderMode={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe ? "wireframe" : ctx.meshRenderMode}
+            opacity={femOpacityForRender}
+            clipEnabled={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip ? false : ctx.meshClipEnabled}
+            clipAxis={ctx.meshClipAxis}
+            clipPos={ctx.meshClipPos}
+            clipFlip={ctx.meshClipFlip}
+            showArrowsRequested={femShowArrowsForRender}
+            arrowColorMode={ctx.femArrowColorMode}
+            arrowMonoColor={ctx.femArrowMonoColor}
+            arrowAlpha={ctx.femArrowAlpha}
+            arrowLengthScale={ctx.femArrowLengthScale}
+            arrowThickness={ctx.femArrowThickness}
+            vectorDomainFilter={ctx.femVectorDomainFilter}
+            ferromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
+            previewMaxPoints={ctx.requestedPreviewMaxPoints}
+            onRenderModeChange={ctx.setMeshRenderMode}
+            onOpacityChange={ctx.setMeshOpacity}
+            onClipEnabledChange={ctx.setMeshClipEnabled}
+            onClipAxisChange={ctx.setMeshClipAxis}
+            onClipPosChange={ctx.setMeshClipPos}
+            onClipFlipChange={ctx.setMeshClipFlip}
+            onShowArrowsChange={ctx.setMeshShowArrows}
+            onArrowColorModeChange={ctx.setFemArrowColorMode}
+            onArrowMonoColorChange={ctx.setFemArrowMonoColor}
+            onArrowAlphaChange={ctx.setFemArrowAlpha}
+            onArrowLengthScaleChange={ctx.setFemArrowLengthScale}
+            onArrowThicknessChange={ctx.setFemArrowThickness}
+            onVectorDomainFilterChange={ctx.setFemVectorDomainFilter}
+            onFerromagnetVisibilityModeChange={ctx.setFemFerromagnetVisibilityMode}
+            onPreviewMaxPointsChange={handlePreviewMaxPointsChange}
+            onSelectionChange={ctx.setMeshSelection}
+            antennaOverlays={ctx.antennaOverlays}
+            selectedAntennaId={selectedAntennaName}
+            objectOverlays={femObjectOverlaysForRender}
+            selectedObjectId={selectedFemObjectId}
+            selectedEntityId={ctx.selectedEntityId}
+            focusedEntityId={ctx.focusedEntityId}
+            objectViewMode={ctx.objectViewMode}
+            objectSegments={ctx.effectiveFemMesh?.object_segments ?? []}
+            meshParts={ctx.meshParts}
+            elementMarkers={ctx.effectiveFemMesh?.element_markers ?? null}
+            perDomainQuality={ctx.effectiveFemMesh?.per_domain_quality ?? null}
+            meshEntityViewState={ctx.meshEntityViewState}
+            onMeshPartViewStatePatch={patchMeshPartViewState}
+            visibleObjectIds={visibleObjectIds}
+            airSegmentVisible={ctx.airMeshVisible}
+            airSegmentOpacity={ctx.airMeshOpacity}
+            focusObjectRequest={ctx.focusObjectRequest}
+            onAntennaTranslate={ctx.applyAntennaTranslation}
+            worldExtent={ctx.worldExtent}
+            worldCenter={ctx.worldCenter}
+            onQuantityChange={ctx.requestPreviewQuantity}
+            activeTextureTransform={activeTextureTransform}
+            textureGizmoMode={activeTextureGizmoMode}
+            activeTexturePreviewProxy={activeTexturePreviewProxy}
+            activeTransformScope={ctx.activeTransformScope}
+            onTextureTransformChange={applyTextureTransform}
+            onTextureTransformCommit={applyTextureTransform}
+            partExplorerOpen={selectedSubmeshesToolboxOpen}
+            onTogglePartExplorer={openSelectedSubmeshesToolbox}
+            onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
+          />
+        </ViewportErrorBoundary>
+      </Viewport3DHost>
+    );
+  };
+
+  const renderHostedFdm3DViewport = () => (
+    <Viewport3DHost
+      model={hostedFdmViewportModel}
+      mode={isFdmMeshActive ? "Mesh" : "3D"}
+      discretization="fdm"
+    >
+      <UnifiedViewport3DVectorSurface
+        boundaryLabel="Hosted Unified 3D Viewport"
+        vectorFieldProps={{
+          ...fdmViewportSharedProps,
+          viewport3DModel: hostedFdmViewportModel,
+          vectors: fdmVectors,
+          toolbarMode: vectorToolbarMode,
+          viewportVisible: true,
+        }}
+      />
+    </Viewport3DHost>
+  );
+
   const graphHostedContent =
-    !showGeometryAuthoringInline &&
     !minimalViewportSelectionPath &&
     !globalScalarPreview &&
     !(spatialPreview &&
       spatialPreview.spatial_kind === "grid" &&
       spatialPreview.type === "2D" &&
       spatialPreview.scalar_field.length > 0 &&
-      FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableGridScalar2D) &&
-    !(showFemBoundsPreview && FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableBoundsPreview)
+      FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableGridScalar2D)
       ? (
           <ViewportHost
             context={{
@@ -1658,7 +1956,10 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
                 ctx.selectedVectors?.length ||
                   ctx.preview ||
                   ctx.femMeshData ||
-                  showFdm3D,
+                  showFdm3D ||
+                  showGeometryAuthoringViewport ||
+                  showFemBoundsPreview ||
+                  (ctx.effectiveViewMode === "3D" && Boolean(femDiscretization)),
               ),
               hasFemMesh: Boolean(ctx.femMeshData),
               selectedResultNodeId: graphViewportResultNodeId,
@@ -1710,330 +2011,22 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             renderComponent={(componentKey) => {
               switch (componentKey) {
                 case "UnifiedViewport3D":
-                  if (showGeometryAuthoringViewport) {
-                    return (
-                      <Viewport3DHost
-                        model={hostedMixedViewportModel}
-                        mode="3D"
-                        discretization="mixed"
-                      >
-                        <div className="relative h-full w-full">
-                          <ViewportErrorBoundary label="Hosted Geometry Authoring Viewport">
-                            <VectorFieldView3D
-                              grid={ctx.previewGrid}
-                              vectors={geometryAuthoringShowQuantity ? scaledVectors : null}
-                              fieldLabel={
-                                geometryAuthoringShowQuantity
-                                  ? (ctx.quantityDescriptor?.label ?? ctx.selectedQuantity)
-                                  : "Geometry Authoring"
-                              }
-                              liveRenderDebugData={liveRenderDebugData}
-                              geometryMode
-                              activeMask={null}
-                              worldExtent={ctx.worldExtent}
-                              objectOverlays={geometryModeObjectOverlays}
-                              selectedObjectId={viewportSelectedObjectId}
-                              universeCenter={ctx.worldCenter}
-                              objectViewMode={ctx.objectViewMode}
-                              onRequestObjectSelect={handleRequestObjectSelect}
-                              onGeometryTranslate={ctx.applyGeometryTranslation}
-                              viewport3DModel={hostedMixedViewportModel}
-                              authoringOverlay={
-                                <BuilderViewportLayer
-                                  showPrimitives={geometryAuthoringShowPrimitives}
-                                  showMeshPreview={geometryAuthoringShowMesh}
-                                />
-                              }
-                              toolbarMode={vectorToolbarMode}
-                              viewportVisible
-                            />
-                          </ViewportErrorBoundary>
-                          <div
-                            className="pointer-events-none absolute left-3 top-3 z-20 rounded-md border border-border/50 bg-background/75 px-2 py-1 text-[10px] text-muted-foreground backdrop-blur"
-                            style={VIEWPORT_BADGE_STYLE}
-                          >
-                            Geometry Mode
-                            <span className="ml-2">
-                              primitives:{geometryAuthoringShowPrimitives ? "on" : "off"} · mesh:
-                              {geometryAuthoringMeshStatus} · quantity:
-                              {geometryAuthoringShowQuantity ? "on" : "off"}
-                            </span>
-                          </div>
-                          {!unifiedToolbarEnabled ? (
-                            <GeometryToolbar className="pointer-events-auto absolute bottom-4 left-1/2 z-20 -translate-x-1/2" />
-                          ) : null}
-                        </div>
-                      </Viewport3DHost>
-                    );
-                  }
-                  if (ctx.effectiveViewMode === "Mesh" && femDiscretization) {
-                    if (!ctx.femMeshData) {
-                      return (
-                        <Viewport3DHost
-                          model={hostedFdmViewportModel}
-                          mode={isFdmMeshActive ? "Mesh" : "3D"}
-                          discretization="fdm"
-                        >
-                          <ViewportErrorBoundary label="Hosted Unified Mesh Viewport">
-                            <VectorFieldView3D
-                              {...fdmViewportSharedProps}
-                              viewport3DModel={hostedFdmViewportModel}
-                              vectors={fdmVectors}
-                              toolbarMode={vectorToolbarMode}
-                              viewportVisible
-                            />
-                          </ViewportErrorBoundary>
-                        </Viewport3DHost>
-                      );
-                    }
-                    return (
-                      <Viewport3DHost model={hostedFemViewportModel} mode="Mesh" discretization="fem">
-                        <ViewportErrorBoundary label="Hosted FEM Mesh Viewport">
-                          <FemMeshView3D
-                            topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
-                            meshData={scaledFemMeshData!}
-                            selectedSidebarNodeId={ctx.selectedSidebarNodeId}
-                            viewportFitSeed={viewportFitSeed}
-                            quantityId={ctx.requestedPreviewQuantity}
-                            quantityOptions={femQuantityOptions}
-                            colorField="none"
-                            toolbarMode={femToolbarMode}
-                            renderMode={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe ? "wireframe" : ctx.meshRenderMode}
-                            opacity={femOpacityForRender}
-                            clipEnabled={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip ? false : ctx.meshClipEnabled}
-                            clipAxis={ctx.meshClipAxis}
-                            clipPos={ctx.meshClipPos}
-                            clipFlip={ctx.meshClipFlip}
-                            previewMaxPoints={ctx.requestedPreviewMaxPoints}
-                            onRenderModeChange={ctx.setMeshRenderMode}
-                            onOpacityChange={ctx.setMeshOpacity}
-                            onClipEnabledChange={ctx.setMeshClipEnabled}
-                            onClipAxisChange={ctx.setMeshClipAxis}
-                            onClipPosChange={ctx.setMeshClipPos}
-                            onClipFlipChange={ctx.setMeshClipFlip}
-                            onPreviewMaxPointsChange={handlePreviewMaxPointsChange}
-                            onSelectionChange={ctx.setMeshSelection}
-                            onRefine={ctx.handleLassoRefine}
-                            antennaOverlays={ctx.antennaOverlays}
-                            selectedAntennaId={selectedAntennaName}
-                            objectOverlays={femObjectOverlaysForRender}
-                            selectedObjectId={selectedFemObjectId}
-                            selectedEntityId={ctx.selectedEntityId}
-                            focusedEntityId={ctx.focusedEntityId}
-                            objectViewMode={ctx.objectViewMode}
-                            objectSegments={ctx.effectiveFemMesh?.object_segments ?? []}
-                            meshParts={ctx.meshParts}
-                            elementMarkers={ctx.effectiveFemMesh?.element_markers ?? null}
-                            perDomainQuality={ctx.effectiveFemMesh?.per_domain_quality ?? null}
-                            meshEntityViewState={ctx.meshEntityViewState}
-                            onMeshPartViewStatePatch={patchMeshPartViewState}
-                            visibleObjectIds={visibleObjectIds}
-                            airSegmentVisible={ctx.airMeshVisible}
-                            airSegmentOpacity={ctx.airMeshOpacity}
-                            focusObjectRequest={ctx.focusObjectRequest}
-                            onAntennaTranslate={ctx.applyAntennaTranslation}
-                            worldExtent={ctx.worldExtent}
-                            worldCenter={ctx.worldCenter}
-                            onEntitySelect={ctx.setSelectedEntityId}
-                            onEntityFocus={ctx.setFocusedEntityId}
-                            onQuantityChange={ctx.requestPreviewQuantity}
-                            activeTextureTransform={activeTextureTransform}
-                            textureGizmoMode={activeTextureGizmoMode}
-                            activeTexturePreviewProxy={activeTexturePreviewProxy}
-                            activeTransformScope={ctx.activeTransformScope}
-                            onTextureTransformChange={applyTextureTransform}
-                            onTextureTransformCommit={applyTextureTransform}
-                            partExplorerOpen={selectedSubmeshesToolboxOpen}
-                            onTogglePartExplorer={openSelectedSubmeshesToolbox}
-                            onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
-                          />
-                        </ViewportErrorBoundary>
-                      </Viewport3DHost>
-                    );
-                  }
-                  if (femDiscretization && ctx.femMeshData) {
-                    return (
-                      <Viewport3DHost
-                        model={hostedFemViewportModel}
-                        mode="3D"
-                        discretization="fem"
-                      >
-                        <ViewportErrorBoundary label="Hosted Unified 3D Viewport">
-                          <FemMeshView3D
-                            topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
-                            meshData={scaledFemMeshData!}
-                            selectedSidebarNodeId={ctx.selectedSidebarNodeId}
-                            viewportFitSeed={viewportFitSeed}
-                            fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
-                            liveRenderDebugData={femLiveRenderDebugData}
-                            quantityId={ctx.requestedPreviewQuantity}
-                            quantityOptions={femQuantityOptions}
-                            toolbarMode={femToolbarMode}
-                            colorField={femColorFieldForRender}
-                            showOrientationLegend={ctx.femMagnetization3DActive}
-                            renderMode={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe ? "wireframe" : ctx.meshRenderMode}
-                            opacity={femOpacityForRender}
-                            clipEnabled={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip ? false : ctx.meshClipEnabled}
-                            clipAxis={ctx.meshClipAxis}
-                            clipPos={ctx.meshClipPos}
-                            clipFlip={ctx.meshClipFlip}
-                            showArrowsRequested={femShowArrowsForRender}
-                            arrowColorMode={ctx.femArrowColorMode}
-                            arrowMonoColor={ctx.femArrowMonoColor}
-                            arrowAlpha={ctx.femArrowAlpha}
-                            arrowLengthScale={ctx.femArrowLengthScale}
-                            arrowThickness={ctx.femArrowThickness}
-                            vectorDomainFilter={ctx.femVectorDomainFilter}
-                            ferromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
-                            previewMaxPoints={ctx.requestedPreviewMaxPoints}
-                            onRenderModeChange={ctx.setMeshRenderMode}
-                            onOpacityChange={ctx.setMeshOpacity}
-                            onClipEnabledChange={ctx.setMeshClipEnabled}
-                            onClipAxisChange={ctx.setMeshClipAxis}
-                            onClipPosChange={ctx.setMeshClipPos}
-                            onClipFlipChange={ctx.setMeshClipFlip}
-                            onShowArrowsChange={ctx.setMeshShowArrows}
-                            onArrowColorModeChange={ctx.setFemArrowColorMode}
-                            onArrowMonoColorChange={ctx.setFemArrowMonoColor}
-                            onArrowAlphaChange={ctx.setFemArrowAlpha}
-                            onArrowLengthScaleChange={ctx.setFemArrowLengthScale}
-                            onArrowThicknessChange={ctx.setFemArrowThickness}
-                            onVectorDomainFilterChange={ctx.setFemVectorDomainFilter}
-                            onFerromagnetVisibilityModeChange={ctx.setFemFerromagnetVisibilityMode}
-                            onPreviewMaxPointsChange={handlePreviewMaxPointsChange}
-                            onSelectionChange={ctx.setMeshSelection}
-                            antennaOverlays={ctx.antennaOverlays}
-                            selectedAntennaId={selectedAntennaName}
-                            objectOverlays={femObjectOverlaysForRender}
-                            selectedObjectId={selectedFemObjectId}
-                            selectedEntityId={ctx.selectedEntityId}
-                            focusedEntityId={ctx.focusedEntityId}
-                            objectViewMode={ctx.objectViewMode}
-                            objectSegments={ctx.effectiveFemMesh?.object_segments ?? []}
-                            meshParts={ctx.meshParts}
-                            elementMarkers={ctx.effectiveFemMesh?.element_markers ?? null}
-                            perDomainQuality={ctx.effectiveFemMesh?.per_domain_quality ?? null}
-                            meshEntityViewState={ctx.meshEntityViewState}
-                            onMeshPartViewStatePatch={patchMeshPartViewState}
-                            visibleObjectIds={visibleObjectIds}
-                            airSegmentVisible={ctx.airMeshVisible}
-                            airSegmentOpacity={ctx.airMeshOpacity}
-                            focusObjectRequest={ctx.focusObjectRequest}
-                            onAntennaTranslate={ctx.applyAntennaTranslation}
-                            worldExtent={ctx.worldExtent}
-                            worldCenter={ctx.worldCenter}
-                            onQuantityChange={ctx.requestPreviewQuantity}
-                            activeTextureTransform={activeTextureTransform}
-                            textureGizmoMode={activeTextureGizmoMode}
-                            activeTexturePreviewProxy={activeTexturePreviewProxy}
-                            activeTransformScope={ctx.activeTransformScope}
-                            onTextureTransformChange={applyTextureTransform}
-                            onTextureTransformCommit={applyTextureTransform}
-                            partExplorerOpen={selectedSubmeshesToolboxOpen}
-                            onTogglePartExplorer={openSelectedSubmeshesToolbox}
-                            onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
-                          />
-                        </ViewportErrorBoundary>
-                      </Viewport3DHost>
-                    );
-                  }
                   return (
-                    <Viewport3DHost
-                      model={hostedFdmViewportModel}
-                      mode={isFdmMeshActive ? "Mesh" : "3D"}
-                      discretization="fdm"
-                    >
-                      <ViewportErrorBoundary label="Hosted Unified 3D Viewport">
-                        <VectorFieldView3D
-                          {...fdmViewportSharedProps}
-                          viewport3DModel={hostedFdmViewportModel}
-                          vectors={fdmVectors}
-                          toolbarMode={vectorToolbarMode}
-                          viewportVisible
-                        />
-                      </ViewportErrorBoundary>
-                    </Viewport3DHost>
+                    <UnifiedViewport3DPresenter
+                      showGeometryAuthoringViewport={showGeometryAuthoringViewport}
+                      isFemMeshMode={ctx.effectiveViewMode === "Mesh" && femDiscretization}
+                      isFem3DMode={Boolean(femDiscretization && ctx.effectiveViewMode === "3D")}
+                      renderGeometryAuthoring={renderHostedGeometryAuthoringViewport}
+                      renderFemMesh={renderHostedFemMeshViewport}
+                      renderFem3D={renderHostedFem3DViewport}
+                      renderFdm={renderHostedFdm3DViewport}
+                    />
                   );
                 case "UnifiedViewport2D":
-                  if (shouldUseSliceApi2D) {
-                    if (slice2D.loading && !hasSliceScalar) {
-                      return (
-                        <div className="flex h-full w-full items-center justify-center opacity-80">
-                          <EmptyState
-                            title="Loading 2D quantity slice"
-                            description="Fetching scalar slice data from /slice resources."
-                            tone="info"
-                          />
-                        </div>
-                      );
-                    }
-                    if (slice2D.error && !hasSliceScalar) {
-                      return (
-                        <div className="flex h-full w-full items-center justify-center opacity-80">
-                          <EmptyState
-                            title="Slice request failed"
-                            description={slice2D.error.message ?? "Unable to load 2D slice resource."}
-                            tone="warning"
-                          />
-                        </div>
-                      );
-                    }
-                    return (
-                      <MagnetizationSlice2D
-                        grid={ctx.previewGrid}
-                        vectors={null}
-                        scalarValues={scaledSliceScalar}
-                        scalarShape={sliceScalarShape}
-                        quantityLabel={ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity}
-                        quantityId={sliceQuantityId}
-                        component={sliceComponent}
-                        plane={ctx.plane}
-                        sliceIndex={ctx.sliceIndex}
-                      />
-                    );
-                  }
-                  return scaledFemMeshData ? (
-                    <FemMeshSlice2D
-                      meshData={scaledFemMeshData}
-                      quantityLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
-                      quantityId={ctx.selectedQuantity}
-                      quantityUnit={ctx.quantityDescriptor?.unit ?? undefined}
-                      quantityOptions={femQuantityOptions}
-                      component={ctx.effectiveVectorComponent}
-                      plane={ctx.plane}
-                      meshParts={ctx.meshParts}
-                      meshEntityViewState={ctx.meshEntityViewState}
-                      airSegmentVisible={ctx.airMeshVisible}
-                      objectViewMode={ctx.objectViewMode}
-                      visibleObjectIds={visibleObjectIds}
-                      vectorDomainFilter={ctx.femVectorDomainFilter}
-                      clipAxis={ctx.meshClipAxis}
-                      clipPos={ctx.meshClipPos}
-                      antennaOverlays={ctx.antennaOverlays}
-                      selectedAntennaId={selectedAntennaName}
-                      showArrows={femShowArrowsForRender}
-                      previewMaxPoints={ctx.requestedPreviewMaxPoints}
-                      onQuantityChange={ctx.requestPreviewQuantity}
-                      onComponentChange={handleFemSliceComponentChange}
-                      onPlaneChange={ctx.setPlane}
-                      onClipAxisChange={ctx.setMeshClipAxis}
-                      onClipPosChange={ctx.setMeshClipPos}
-                      onShowArrowsChange={ctx.setMeshShowArrows}
-                      onPreviewMaxPointsChange={handlePreviewMaxPointsChange}
-                    />
-                  ) : (
-                    <MagnetizationSlice2D
-                      grid={ctx.previewGrid}
-                      vectors={scaledVectors}
-                      scalarValues={scaledSliceScalar}
-                      scalarShape={sliceScalarShape}
-                      quantityLabel={ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity}
-                      quantityId={sliceQuantityId}
-                      component={sliceComponent}
-                      plane={ctx.plane}
-                      sliceIndex={ctx.sliceIndex}
-                    />
-                  );
+                  return renderUnified2DViewport({
+                    preferFemMesh: Boolean(scaledFemMeshData),
+                    femQuantityId: ctx.selectedQuantity,
+                  });
                 case "AnalyzeViewport":
                   return <AnalyzeViewport />;
                 case "ResultChartViewport":

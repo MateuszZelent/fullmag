@@ -162,6 +162,20 @@ The remaining migration backlog is now mostly:
 - eventual cleanup of transitional session import/export surfaces once their
   canonical replacements are mounted.
 
+### 2.4 Canonicalization dependencies (added 2026-04-23)
+
+This rollout is now explicitly coupled to the canonicalization backbone program:
+
+- `docs/plans/active/fullmag-canonicalization-backbone-program-2026-04-23.md`
+- `docs/adr/0012-canonicalization-backbone.md`
+
+Additional mandatory requirements:
+
+- no full-vector fallback when a component-specific field request is valid,
+- 2D field slices are canonical reads through slice resources, not local ad hoc cut paths,
+- `status` remains thin and revision-driven,
+- command completion/rejection evolves as a dedicated read-model resource.
+
 ## 3. Main deliverables
 
 ### 3.1 New canonical endpoint reference

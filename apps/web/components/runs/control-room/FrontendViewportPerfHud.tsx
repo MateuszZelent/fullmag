@@ -196,6 +196,21 @@ export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
           p95: percentile95(recent),
         };
       })(),
+      viewport3DRollout: (() => {
+        const routeSample = latestSample(perfSamples, "Viewport3DRollout", "route-selected");
+        const fallbackCount = perfSamples.filter(
+          (sample) =>
+            sample.scope === "Viewport3DRollout" &&
+            sample.phase === "fallback-used",
+        ).length;
+        return {
+          route:
+            typeof routeSample?.meta?.route === "string"
+              ? routeSample.meta.route
+              : "n/a",
+          fallbackCount,
+        };
+      })(),
     };
   }, [currentStage, perfSamples, resourceBuckets, stageTabs, viewportEntries]);
 
@@ -254,6 +269,10 @@ export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
           <span>{fmtPair(metrics.quantitySwitchFrameRendered.last, metrics.quantitySwitchFrameRendered.p95)}</span>
           <span className="text-muted-foreground">Q switch upload (last/p95)</span>
           <span>{fmtPair(metrics.quantitySwitchColorUpload.last, metrics.quantitySwitchColorUpload.p95)}</span>
+          <span className="text-muted-foreground">3D route</span>
+          <span>{metrics.viewport3DRollout.route}</span>
+          <span className="text-muted-foreground">3D fallback hits</span>
+          <span>{fmtInt(metrics.viewport3DRollout.fallbackCount)}</span>
         </div>
         {metrics.resourceBuckets.length > 0 ? (
           <div className="mt-2 border-t border-border/30 pt-2 text-[0.6rem] text-muted-foreground">

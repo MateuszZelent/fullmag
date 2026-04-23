@@ -6237,6 +6237,7 @@ mod tests {
             mechanical_loads: Vec::new(),
             air_box_policy: None,
             pbc: None,
+            mesh_semantics: None,
         }
     }
 

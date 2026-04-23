@@ -63,6 +63,27 @@ Every resource carries a revision (`field_revision`, `domain_generation_id`,
 `scalars_revision`). The frontend caches by revision and only re-fetches when
 the status endpoint reports a newer revision.
 
+#### 3a. 2026-04-23 addendum: independent revision vocabulary
+
+The canonical status/realtime revision vocabulary is extended with explicit
+resource-family pointers:
+
+- `topology_revision`
+- `field_catalog_revision`
+- `field_revision`
+- `slice_revision`
+- `artifact_revision`
+- `command_completion_revision`
+
+Compatibility aliases may coexist during migration (`fields_revision`,
+`artifacts_revision`, `commands_revision`), but new work must consume the
+canonical pointers.
+
+`field_revision` updates must not imply `topology_revision` updates.
+Component-level field requests must stay component-aware and must not trigger
+hidden full-vector fallback fetches.
+Slice resources are first-class read paths and remain in the binary data lane.
+
 ### 4. Workspace and authoring are first-class resource families
 
 The resource-first split applies not only to runtime data, but also to control-room authoring.

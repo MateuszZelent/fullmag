@@ -151,6 +151,9 @@ pub struct CommandQueueStatusResource {
     pub revision: u64,
     pub pending_count: u64,
     pub dispatched_count: u64,
+    pub completed_count: u64,
+    pub rejected_count: u64,
+    pub failed_count: u64,
     pub can_accept_commands: bool,
     pub commands: Vec<CommandStatusResource>,
 }
@@ -165,6 +168,10 @@ pub struct CommandStatusResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dispatched_at_unix_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -177,6 +184,10 @@ pub struct CommandDetailResource {
     pub created_at_unix_ms: u128,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dispatched_at_unix_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

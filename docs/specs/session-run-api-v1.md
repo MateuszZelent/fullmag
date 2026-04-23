@@ -1,8 +1,10 @@
 # Session and Run API v1
 
-- Status: draft stable runtime contract
-- Last updated: 2026-04-21
+- Status: frozen for canonicalization program (boundary scope)
+- Last updated: 2026-04-23
 - Parent architecture: `docs/specs/fullmag-application-architecture-v2.md`
+- Program plan: `docs/plans/active/fullmag-canonicalization-backbone-program-2026-04-23.md`
+- Program ADR: `docs/adr/0012-canonicalization-backbone.md`
 
 ## 1. Purpose
 
@@ -133,6 +135,8 @@ Rules:
 - A session may fail before entering `running`.
 - `completed`, `failed`, and `cancelled` are terminal.
 - Validation or planning failure still produces a real session record with diagnostics.
+- Ad hoc lifecycle tokens are forbidden on frozen boundaries; new public lifecycle states
+  require a typed-contract update and owner approval.
 
 ## 6. Session resource contract
 

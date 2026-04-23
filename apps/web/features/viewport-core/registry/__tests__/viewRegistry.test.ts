@@ -53,6 +53,23 @@ describe("viewRegistry", () => {
     );
   });
 
+  it("routes every 3D/Mesh workspace variant to unified 3D component", () => {
+    const cases: Array<Partial<WorkspaceViewContext>> = [
+      { viewportMode: "3D", hasSessionData: true, discretization: "fem" },
+      { viewportMode: "3D", hasSessionData: true, discretization: "fdm" },
+      { viewportMode: "3D", hasSessionData: true, discretization: null },
+      { viewportMode: "Mesh", hasSessionData: true, discretization: "fem" },
+      { viewportMode: "Mesh", hasSessionData: true, discretization: "fdm" },
+      { viewportMode: "Mesh", hasSessionData: false, discretization: "fem" },
+      { viewportMode: "Mesh", hasSessionData: false, discretization: "fdm" },
+      { viewportMode: "Mesh", hasSessionData: false, discretization: null },
+    ];
+
+    for (const variant of cases) {
+      expect(resolveActiveView(ctx(variant)).componentKey).toBe("UnifiedViewport3D");
+    }
+  });
+
   it("routes 2D workspace through unified viewport host", () => {
     expect(resolveActiveView(ctx({ viewportMode: "2D" })).componentKey).toBe(
       "UnifiedViewport2D",

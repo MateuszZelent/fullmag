@@ -91,7 +91,6 @@ import { getFrontendPerfSamples, recordFrontendPerfSample } from "@/lib/debug/fr
 import { updateFrontendResourceBucket } from "@/lib/debug/frontendResourceManager";
 import {
   isFemDiscretization,
-  synthesizeCapabilitiesFromDiscretization,
 } from "@/src/domain/capabilities";
 import { DEFAULT_SOLVER_SETTINGS } from "../../panels/SolverSettingsPanel";
 import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
@@ -890,9 +889,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     scriptBackendHint;
   const isFemBackend =
     resolvedBackend === "fem" || femMesh != null || spatialPreview?.spatial_kind === "mesh";
-  const domainCapabilities =
-    runtimeDomainCapabilities ?? synthesizeCapabilitiesFromDiscretization(isFemBackend);
-  const effectiveIsFemBackend = isFemDiscretization(domainCapabilities);
+  const domainCapabilities = runtimeDomainCapabilities ?? null;
+  const effectiveIsFemBackend = domainCapabilities
+    ? isFemDiscretization(domainCapabilities)
+    : isFemBackend;
 
   const solverNotStartedMessage =
     workspaceStatus === "materializing_script"

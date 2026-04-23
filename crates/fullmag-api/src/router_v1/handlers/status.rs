@@ -119,6 +119,12 @@ pub(crate) fn build_live_status(
     };
 
     let resources = ResourceRevisionMap {
+        topology_revision: snapshot.mesh_revision,
+        field_catalog_revision: snapshot.state_version,
+        field_revision: snapshot.state_version,
+        slice_revision: snapshot.state_version.max(display_sel.revision),
+        artifact_revision: snapshot.artifacts.len() as u64,
+        command_completion_revision: commands_revision,
         fields_revision: snapshot.state_version,
         scalars_revision: snapshot.scalar_rows.len() as u64,
         domain_generation_id: domain.generation_id,

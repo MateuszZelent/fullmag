@@ -70,7 +70,11 @@ tmp/
 coverage/
 .fullmag/
 docs/raports/
-docs/reports/
+docs/reports/*
+!docs/reports/23.04.2026/
+docs/reports/23.04.2026/*
+!docs/reports/23.04.2026/canonicalization/
+!docs/reports/23.04.2026/canonicalization/*.md
 
 # === CUDA ===
 *.cubin

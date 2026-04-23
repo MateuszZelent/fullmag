@@ -14,13 +14,15 @@ use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::schemas::commands::CommandResponse;
 use crate::schemas::mesh::{
     MeshActiveBuildResource, MeshBuildCommandRequest, MeshBuildHistoryResource,
-    MeshCapabilitiesResource, MeshInterfaceConfigReplaceRequest, MeshInterfaceConfigResource,
-    MeshInterfaceQualityResource, MeshInterfaceReportResource, MeshLastSuccessfulBuildResource,
+    MeshBuildDiagnosticsResource, MeshCapabilitiesResource, MeshInterfaceConfigReplaceRequest,
+    MeshInterfaceConfigResource, MeshInterfaceQualityResource, MeshInterfaceReportResource,
+    MeshLastSuccessfulBuildResource, MeshObjectConfigEntryResource,
     MeshObjectConfigReplaceRequest, MeshObjectConfigResource, MeshObjectQualityResource,
     MeshObjectReportResource, MeshObjectSegmentResource, MeshObjectSizeFieldResource,
-    MeshPartResource, MeshSharedDomainConfigReplaceRequest, MeshSharedDomainConfigResource,
-    MeshSharedDomainManifestResource, MeshSharedDomainQualityResource,
-    MeshSharedDomainReportResource, MeshSummaryResource, MeshUniverseConfigReplaceRequest,
+    MeshPartResource, MeshSemanticsResource, MeshSharedDomainConfigReplaceRequest,
+    MeshSharedDomainConfigResource, MeshSharedDomainManifestResource,
+    MeshSharedDomainQualityResource, MeshSharedDomainReportResource,
+    MeshSolverMeshResource, MeshSummaryResource, MeshUniverseConfigReplaceRequest,
     MeshUniverseConfigResource, MeshUniverseQualityResource, MeshUniverseReportResource,
 };
 use crate::types::{AppState, SessionCommand, SessionStateResponse};
@@ -75,6 +77,85 @@ pub async fn get_mesh_capabilities(
         revision: snapshot.mesh_revision,
         mesh_capabilities: mesh_workspace.get("mesh_capabilities").cloned(),
         mesh_adaptivity_state: mesh_workspace.get("mesh_adaptivity_state").cloned(),
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/live/current/mesh/semantics",
+    responses(
+        (status = 200, description = "Three-level mesh semantics projection", body = MeshSemanticsResource),
+        (status = 404, description = "No active workspace or scene document"),
+    ),
+    tag = "mesh"
+)]
+pub async fn get_mesh_semantics(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<MeshSemanticsResource>, ApiError> {
+    let snapshot = current_snapshot(&state).await?;
+    let scene = current_scene_document(&snapshot)?;
+    let universe_config = current_universe_mesh_config(scene)
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "failed to serialize universe mesh semantics config: {error}"
+            ))
+        })?;
+    let shared_domain_config = serde_json::to_value(&scene.study.shared_domain_mesh).map_err(
+        |error| {
+            ApiError::internal(format!(
+                "failed to serialize shared-domain mesh semantics config: {error}"
+            ))
+        },
+    )?;
+    let object_configs = scene
+        .objects
+        .iter()
+        .map(|object| {
+            let config = current_object_mesh_config(object)
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| {
+                    ApiError::internal(format!(
+                        "failed to serialize object mesh semantics config: {error}"
+                    ))
+                })?;
+            Ok(MeshObjectConfigEntryResource {
+                object_id: object.id.clone(),
+                object_name: object.name.clone(),
+                config,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let solver_mesh = snapshot.fem_mesh.as_ref().map(|mesh| MeshSolverMeshResource {
+        mesh_name: mesh.mesh_name.clone(),
+        mesh_id: mesh.mesh_id.clone(),
+        generation_id: mesh.generation_id.clone(),
+        domain_mesh_mode: mesh.domain_mesh_mode.clone(),
+        object_segment_count: mesh.object_segments.len() as u32,
+        mesh_part_count: mesh.mesh_parts.len() as u32,
+    });
+    let mesh_build_diagnostics = snapshot
+        .mesh_workspace
+        .as_ref()
+        .map(|workspace| MeshBuildDiagnosticsResource {
+            mesh_quality_summary: workspace.get("mesh_quality_summary").cloned(),
+            last_build_summary: workspace.get("last_build_summary").cloned(),
+            mesh_pipeline_status: workspace.get("mesh_pipeline_status").cloned(),
+            last_build_error: workspace
+                .get("last_build_error")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+        });
+    Ok(Json(MeshSemanticsResource {
+        revision: snapshot.mesh_revision,
+        universe_config,
+        shared_domain_config,
+        object_configs,
+        solver_mesh,
+        mesh_build_diagnostics,
+        render_only_controls_do_not_change_solver_domain: true,
     }))
 }
 

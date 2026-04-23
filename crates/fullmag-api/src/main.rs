@@ -98,6 +98,12 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
         session_id: snapshot.session.session_id.clone(),
         run_id: snapshot.run.as_ref().map(|run| run.run_id.clone()),
         revisions: RealtimeResourceRevisionMap {
+            topology_revision: snapshot.mesh_revision,
+            field_catalog_revision: snapshot.state_version,
+            field_revision: snapshot.state_version,
+            slice_revision: snapshot.state_version.max(display_revision),
+            artifact_revision: snapshot.artifacts.len() as u64,
+            command_completion_revision: commands_revision,
             fields_revision: snapshot.state_version,
             scalars_revision: snapshot.scalar_rows.len() as u64,
             domain_generation_id: snapshot
@@ -531,6 +537,8 @@ async fn mark_command_dispatched(state: &Arc<AppState>, command: &SessionCommand
                 .map(|duration| duration.as_millis())
                 .unwrap_or(0),
         );
+        record.completed_at_unix_ms = None;
+        record.completion_status = None;
     }
 }
 

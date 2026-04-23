@@ -1001,6 +1001,31 @@ Freeze one new canonical document:
 
 and state clearly that it supersedes older conflicting plans.
 
+### Step 1a — canonicalization backbone freeze baseline (2026-04-23)
+
+Run the boundary-governance program from:
+
+- `docs/plans/active/fullmag-canonicalization-backbone-program-2026-04-23.md`
+- `docs/adr/0012-canonicalization-backbone.md`
+
+Frozen boundaries for this program are:
+
+- `ProblemIR` semantics and versioning,
+- lifecycle and command-completion contract,
+- resource-first revision vocabulary and thin-status rule,
+- mesh round-trip semantics (universe/per-object/shared-domain),
+- frontend capability/view-model contracts for unified `Viewport3D`.
+
+Changes touching frozen boundaries must include:
+
+- spec update,
+- compatibility decision,
+- owner approval,
+- contract tests.
+
+Public feature work is not complete unless canonical contracts stay aligned across
+Python, IR, runtime, API, and UI.
+
 ## Step 2 — make the public launcher Python-first
 
 Add:

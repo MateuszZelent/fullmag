@@ -34,6 +34,59 @@ pub struct MeshCapabilitiesResource {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshObjectConfigEntryResource {
+    pub object_id: String,
+    pub object_name: String,
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshSolverMeshResource {
+    pub mesh_name: String,
+    pub mesh_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_mesh_mode: Option<String>,
+    pub object_segment_count: u32,
+    pub mesh_part_count: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshBuildDiagnosticsResource {
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_quality_summary: Option<Value>,
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_build_summary: Option<Value>,
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_pipeline_status: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_build_error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshSemanticsResource {
+    pub revision: u64,
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub universe_config: Option<Value>,
+    #[schema(value_type = Object)]
+    pub shared_domain_config: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_configs: Vec<MeshObjectConfigEntryResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_mesh: Option<MeshSolverMeshResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_build_diagnostics: Option<MeshBuildDiagnosticsResource>,
+    pub render_only_controls_do_not_change_solver_domain: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshUniverseConfigResource {
     pub revision: u64,
     #[schema(value_type = Object, nullable)]

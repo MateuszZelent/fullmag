@@ -371,6 +371,7 @@ GET  /v1/live/current/mesh/universe/config
 PUT  /v1/live/current/mesh/universe/config
 GET  /v1/live/current/mesh/shared-domain/config
 PUT  /v1/live/current/mesh/shared-domain/config
+GET  /v1/live/current/mesh/semantics
 GET  /v1/live/current/mesh/objects/:object_id/config
 PUT  /v1/live/current/mesh/objects/:object_id/config
 GET  /v1/live/current/mesh/interfaces/:interface_id/config
@@ -382,6 +383,8 @@ Rules:
 
 - per-object mesh config is first-class,
 - universe/shared-domain/object/interface config must not be collapsed into one anonymous blob,
+- `mesh/semantics` is the canonical read projection for three-level mesh semantics
+  (universe, per-object, solver-derived mesh),
 - mesh-build commands and mesh-build reports are separate from runtime `commands`,
 - the model tree may surface mesh nodes under objects, but dedicated mesh mutations still belong in
   `mesh/*`.

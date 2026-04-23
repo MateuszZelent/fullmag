@@ -10,6 +10,18 @@ pub use quantities::{
 };
 
 pub const IR_VERSION: &str = "0.2.0";
+pub const CURRENT_IR_VERSION: &str = IR_VERSION;
+pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION];
+
+pub fn is_supported_ir_version_for_read(version: &str) -> bool {
+    let normalized = version.trim();
+    !normalized.is_empty() && SUPPORTED_READ_IR_VERSIONS.contains(&normalized)
+}
+
+pub fn requires_ir_migration(version: &str) -> bool {
+    let normalized = version.trim();
+    is_supported_ir_version_for_read(normalized) && normalized != CURRENT_IR_VERSION
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1756,6 +1768,164 @@ impl DeclaredUniverseIR {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct UniverseMeshConfigIR {
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airbox_hmax: Option<f64>,
+}
+
+impl From<&DeclaredUniverseIR> for UniverseMeshConfigIR {
+    fn from(value: &DeclaredUniverseIR) -> Self {
+        Self {
+            mode: value.mode.clone(),
+            size: value.size,
+            center: value.center,
+            padding: value.padding,
+            airbox_hmax: value.airbox_hmax,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PerObjectMeshConfigIR {
+    pub object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hmax: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_hmax: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_distance: Option<f64>,
+    #[serde(default)]
+    pub source: String,
+}
+
+impl PerObjectMeshConfigIR {
+    pub fn from_effective_target(object_id: impl Into<String>, target: &FemPerObjectTargetIR) -> Self {
+        Self {
+            object_id: object_id.into(),
+            marker: target.marker,
+            hmax: target.hmax,
+            interface_hmax: target.interface_hmax,
+            transition_distance: target.transition_distance,
+            source: target.source.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SolverMeshArtifactRefIR {
+    pub mesh_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_source: Option<String>,
+    pub domain_mesh_mode: FemDomainMeshModeIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_report: Option<FemSharedDomainBuildReportIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct MeshSemanticsIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub universe_mesh_config: Option<UniverseMeshConfigIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub per_object_mesh_configs: Vec<PerObjectMeshConfigIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_mesh: Option<SolverMeshArtifactRefIR>,
+}
+
+impl MeshSemanticsIR {
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if let Some(universe) = &self.universe_mesh_config {
+            if universe.mode.trim().is_empty() {
+                errors.push("universe_mesh_config.mode must not be empty".to_string());
+            }
+            if universe
+                .size
+                .is_some_and(|size| size.iter().any(|component| *component <= 0.0))
+            {
+                errors.push(
+                    "universe_mesh_config.size components must be positive when provided"
+                        .to_string(),
+                );
+            }
+            if universe.airbox_hmax.is_some_and(|value| value <= 0.0) {
+                errors.push("universe_mesh_config.airbox_hmax must be positive".to_string());
+            }
+        }
+
+        let mut seen_object_ids: BTreeSet<&str> = BTreeSet::new();
+        for object in &self.per_object_mesh_configs {
+            if object.object_id.trim().is_empty() {
+                errors.push("per_object_mesh_configs.object_id must not be empty".to_string());
+            }
+            if !seen_object_ids.insert(object.object_id.as_str()) {
+                errors.push(format!(
+                    "per_object_mesh_configs contains duplicated object_id '{}'",
+                    object.object_id
+                ));
+            }
+            if object.hmax.is_some_and(|value| value <= 0.0) {
+                errors.push(format!(
+                    "per_object_mesh_configs '{}' has non-positive hmax",
+                    object.object_id
+                ));
+            }
+            if object.interface_hmax.is_some_and(|value| value <= 0.0) {
+                errors.push(format!(
+                    "per_object_mesh_configs '{}' has non-positive interface_hmax",
+                    object.object_id
+                ));
+            }
+            if object.transition_distance.is_some_and(|value| value <= 0.0) {
+                errors.push(format!(
+                    "per_object_mesh_configs '{}' has non-positive transition_distance",
+                    object.object_id
+                ));
+            }
+        }
+
+        if let Some(solver_mesh) = &self.solver_mesh {
+            if solver_mesh.mesh_name.trim().is_empty() {
+                errors.push("solver_mesh.mesh_name must not be empty".to_string());
+            }
+            if solver_mesh
+                .mesh_source
+                .as_ref()
+                .is_some_and(|source| source.trim().is_empty())
+            {
+                errors.push("solver_mesh.mesh_source must not be empty when provided".to_string());
+            }
+            if solver_mesh
+                .generation_id
+                .as_ref()
+                .is_some_and(|generation| generation.trim().is_empty())
+            {
+                errors.push(
+                    "solver_mesh.generation_id must not be empty when provided".to_string(),
+                );
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct DomainFrameIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declared_universe: Option<DeclaredUniverseIR>,
@@ -2028,6 +2198,11 @@ pub struct ProblemIR {
     /// `None` means fully open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pbc: Option<FdmPeriodicityIR>,
+
+    /// Canonical three-level mesh semantics:
+    /// universe policy, per-object policies, and derived solver mesh provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_semantics: Option<MeshSemanticsIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2878,6 +3053,7 @@ impl ProblemIR {
             mechanical_loads: vec![],
             air_box_policy: None,
             pbc: None,
+            mesh_semantics: None,
         }
     }
 
@@ -2886,6 +3062,11 @@ impl ProblemIR {
 
         if self.ir_version.trim().is_empty() {
             errors.push("ir_version must not be empty".to_string());
+        } else if !is_supported_ir_version_for_read(self.ir_version.as_str()) {
+            errors.push(format!(
+                "ir_version '{}' is not supported for read",
+                self.ir_version
+            ));
         }
         if self.problem_meta.name.trim().is_empty() {
             errors.push("problem_meta.name must not be empty".to_string());
@@ -2908,6 +3089,15 @@ impl ProblemIR {
         if let Some(geometry_assets) = &self.geometry_assets {
             if let Err(asset_errors) = geometry_assets.validate() {
                 errors.extend(asset_errors);
+            }
+        }
+        if let Some(mesh_semantics) = &self.mesh_semantics {
+            if let Err(mesh_errors) = mesh_semantics.validate() {
+                errors.extend(
+                    mesh_errors
+                        .into_iter()
+                        .map(|error| format!("mesh_semantics.{error}")),
+                );
             }
         }
         validate_current_modules(self, &mut errors);
@@ -4072,6 +4262,24 @@ mod tests {
     }
 
     #[test]
+    fn current_ir_version_is_supported_for_read() {
+        assert!(is_supported_ir_version_for_read(CURRENT_IR_VERSION));
+        assert!(!requires_ir_migration(CURRENT_IR_VERSION));
+    }
+
+    #[test]
+    fn unsupported_ir_version_is_rejected() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.ir_version = "0.1.0".to_string();
+        let errors = ir
+            .validate()
+            .expect_err("unsupported ir_version must fail validation");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("is not supported for read")));
+    }
+
+    #[test]
     fn bootstrap_example_validates() {
         let ir = ProblemIR::bootstrap_example();
         assert!(ir.validate().is_ok());
@@ -4383,6 +4591,130 @@ mod tests {
         };
 
         assert!(mesh.validate().is_ok());
+    }
+
+    #[test]
+    fn mesh_semantics_validation_rejects_duplicate_object_ids() {
+        let semantics = MeshSemanticsIR {
+            universe_mesh_config: Some(UniverseMeshConfigIR {
+                mode: "auto".to_string(),
+                size: Some([1.0, 1.0, 1.0]),
+                center: None,
+                padding: None,
+                airbox_hmax: Some(10e-9),
+            }),
+            per_object_mesh_configs: vec![
+                PerObjectMeshConfigIR {
+                    object_id: "body".to_string(),
+                    marker: Some(1),
+                    hmax: Some(2e-9),
+                    interface_hmax: None,
+                    transition_distance: None,
+                    source: "study_default".to_string(),
+                },
+                PerObjectMeshConfigIR {
+                    object_id: "body".to_string(),
+                    marker: Some(2),
+                    hmax: Some(1e-9),
+                    interface_hmax: None,
+                    transition_distance: None,
+                    source: "local_override".to_string(),
+                },
+            ],
+            solver_mesh: Some(SolverMeshArtifactRefIR {
+                mesh_name: "solver-domain".to_string(),
+                mesh_source: None,
+                domain_mesh_mode: FemDomainMeshModeIR::SharedDomainMeshWithAir,
+                generation_id: Some("g-42".to_string()),
+                build_report: None,
+            }),
+        };
+        let errors = semantics
+            .validate()
+            .expect_err("duplicate object ids should fail mesh semantics validation");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("duplicated object_id 'body'")));
+    }
+
+    #[test]
+    fn problem_ir_validation_accepts_valid_mesh_semantics() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.mesh_semantics = Some(MeshSemanticsIR {
+            universe_mesh_config: Some(UniverseMeshConfigIR {
+                mode: "auto".to_string(),
+                size: Some([200e-9, 20e-9, 6e-9]),
+                center: None,
+                padding: Some([20e-9, 20e-9, 20e-9]),
+                airbox_hmax: Some(8e-9),
+            }),
+            per_object_mesh_configs: vec![PerObjectMeshConfigIR {
+                object_id: "strip".to_string(),
+                marker: Some(1),
+                hmax: Some(2e-9),
+                interface_hmax: Some(1e-9),
+                transition_distance: Some(5e-9),
+                source: "study_default".to_string(),
+            }],
+            solver_mesh: Some(SolverMeshArtifactRefIR {
+                mesh_name: "strip-shared-domain".to_string(),
+                mesh_source: Some("artifact://mesh/strip-shared-domain".to_string()),
+                domain_mesh_mode: FemDomainMeshModeIR::SharedDomainMeshWithAir,
+                generation_id: Some("mesh-gen-1".to_string()),
+                build_report: Some(FemSharedDomainBuildReportIR {
+                    build_mode: "shared_domain".to_string(),
+                    fallbacks_triggered: Vec::new(),
+                    effective_airbox_hmax: Some(8e-9),
+                    effective_per_object_targets: HashMap::new(),
+                    used_size_field_kinds: vec!["curvature".to_string()],
+                    degraded: false,
+                }),
+            }),
+        });
+
+        assert!(ir.validate().is_ok());
+    }
+
+    #[test]
+    fn problem_ir_validation_bubbles_mesh_semantics_errors_with_prefix() {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.mesh_semantics = Some(MeshSemanticsIR {
+            universe_mesh_config: Some(UniverseMeshConfigIR {
+                mode: String::new(),
+                size: Some([1.0, 1.0, 1.0]),
+                center: None,
+                padding: None,
+                airbox_hmax: Some(-1.0),
+            }),
+            per_object_mesh_configs: vec![PerObjectMeshConfigIR {
+                object_id: String::new(),
+                marker: None,
+                hmax: Some(0.0),
+                interface_hmax: None,
+                transition_distance: None,
+                source: "broken".to_string(),
+            }],
+            solver_mesh: Some(SolverMeshArtifactRefIR {
+                mesh_name: String::new(),
+                mesh_source: Some("   ".to_string()),
+                domain_mesh_mode: FemDomainMeshModeIR::MergedMagneticMesh,
+                generation_id: Some(" ".to_string()),
+                build_report: None,
+            }),
+        });
+
+        let errors = ir
+            .validate()
+            .expect_err("invalid mesh semantics should fail ProblemIR validation");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("mesh_semantics.universe_mesh_config.mode")));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("mesh_semantics.per_object_mesh_configs.object_id")));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("mesh_semantics.solver_mesh.mesh_name")));
     }
 
     #[test]

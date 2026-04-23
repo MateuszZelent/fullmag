@@ -1,7 +1,7 @@
 # Control-Room API Endpoint Reference v1
 
 - Status: canonical current endpoint reference for the local resource-first control-room API
-- Last updated: 2026-04-21
+- Last updated: 2026-04-23
 - Parent architecture: `docs/specs/resource-first-control-room-api-v1.md`
 - Route tree: `docs/specs/control-room-api-tree-v1.md`
 - Related runtime model: `docs/specs/session-run-api-v1.md`
@@ -32,7 +32,26 @@ This document does not replace the target route tree.
 |---|---|
 | `canonical` | Mounted now and part of the intended local browser contract |
 | `transitional` | Mounted now, but legacy compatibility only |
+| `deprecated` | Mounted now, replacement path exists, removal is planned |
 | `target-only` | Part of the target route tree, not mounted yet |
+
+## 2.1 Governance Metadata
+
+For each endpoint entry in this document, maintain:
+
+- lifecycle status (`canonical`, `transitional`, `deprecated`, `target-only`),
+- owning boundary group,
+- replacement destination when status is not `canonical`.
+
+Current owner map by family:
+
+| Family | Owner |
+|---|---|
+| `/v1/health`, `/v1/capabilities` | `api/platform` |
+| `/v1/live/current/status`, `/v1/live/current/stages/*`, `/v1/live/current/commands*` | `runtime` + `api/data` |
+| `/v1/live/current/domain/*`, `/v1/live/current/fields/*`, `/v1/live/current/scalars` | `api/data` |
+| `/v1/live/current/mesh/*` | `fem/mesh` + `api/data` |
+| `/v1/live/current/authoring/*`, `/v1/live/current/display`, workspace projections | `ui/platform` + `api/data` |
 
 ## 3. Cross-Cutting Contract Rules
 
@@ -68,10 +87,15 @@ This document does not replace the target route tree.
 | Signal | Type | Meaning |
 |---|---|---|
 | `domain_generation_id` | `u64` | Cache-invalidating identity boundary for realized domain/topology compatibility |
+| `topology_revision` | `u64` | Canonical topology-family revision pointer |
+| `field_catalog_revision` | `u64` | Canonical field-catalog revision pointer |
 | `fields_revision` | `u64` | Current field-family revision advertised by `status` |
 | `field_revision` | `u64` | Per-quantity field revision carried in field metadata |
+| `slice_revision` | `u64` | Canonical slice-family revision pointer in `status.resources` |
 | `scalars_revision` | `u64` | Scalar-history revision |
+| `artifact_revision` | `u64` | Canonical artifact-family revision pointer in `status.resources` |
 | `artifacts_revision` | `u64` | Artifact index revision |
+| `command_completion_revision` | `u64` | Canonical command-completion revision pointer in `status.resources` |
 | `engine_log_revision` | `u64` | Engine-log revision |
 | `display_revision` | `u64` | Display-selection revision |
 
@@ -332,6 +356,12 @@ This same schema appears in `status.display`, as the response body of
 
 | Field | Type | Meaning | Notes |
 |---|---|---|---|
+| `topology_revision` | `u64` | Canonical topology-family revision pointer | Mirrors `mesh_revision` in the current compatibility window. |
+| `field_catalog_revision` | `u64` | Canonical field-catalog revision pointer | Mirrors `fields_revision` in the current compatibility window. |
+| `field_revision` | `u64` | Canonical field revision pointer | Mirrors `fields_revision` in the current compatibility window. |
+| `slice_revision` | `u64` | Canonical slice-family revision pointer | Tracks field/display-driven slice invalidation at status level. |
+| `artifact_revision` | `u64` | Canonical artifact-family revision pointer | Mirrors `artifacts_revision` in the current compatibility window. |
+| `command_completion_revision` | `u64` | Canonical command-completion revision pointer | Mirrors `commands_revision` in the current compatibility window. |
 | `fields_revision` | `u64` | Field-family revision | Current implementation uses snapshot state version. |
 | `scalars_revision` | `u64` | Scalar-history revision | Current implementation uses total scalar row count. |
 | `domain_generation_id` | `u64` | Domain generation id | Same identity boundary used by domain resources. |
@@ -604,6 +634,67 @@ Notes:
 - Clients must treat the payload as opaque FMVP v2 bytes.
 - Cache compatibility depends on both `field_revision` and
   `domain_generation_id`.
+
+### 7.5.1 `GET /v1/live/current/fields/:quantity_id/slice/meta`
+
+- Status: `canonical`
+- Purpose: canonical metadata envelope for a resolved 2D slice read path
+- Path parameters:
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `quantity_id` | `string` | Quantity identifier |
+
+- Query parameters: resolved `FieldSliceQuery` (`plane`, `component`,
+  `cut_world` / `cut_norm`, `x_size`, `y_size`, optional arrow controls)
+- Response body: `FieldSliceMeta`
+
+Contract rules:
+
+- this is the canonical 2D read path descriptor,
+- `slice_revision` is component-aware and parameter-aware,
+- the descriptor exposes separate scalar and arrows binary links,
+- clients must not reconstruct slice semantics by fetching the full 3D vector.
+
+### 7.5.2 `GET /v1/live/current/fields/:quantity_id/slice/scalar`
+
+- Status: `canonical`
+- Purpose: binary scalar/component payload for a resolved 2D slice
+- Path parameters:
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `quantity_id` | `string` | Quantity identifier |
+
+- Query parameters: `FieldSliceQuery` subset that resolves to one slice
+- Response body:
+  - `200 application/octet-stream` with FMVP v2 payload,
+  - `304` when `If-None-Match` matches,
+  - `409` for FEM slice requests when required topology is unavailable.
+
+### 7.5.3 `GET /v1/live/current/fields/:quantity_id/slice/arrows`
+
+- Status: `canonical`
+- Purpose: binary in-plane arrow vectors for a resolved 2D slice
+- Path parameters:
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `quantity_id` | `string` | Quantity identifier |
+
+- Query parameters: `FieldSliceQuery` with arrow controls (`include_arrows`,
+  `arrow_every`, `max_arrows`)
+- Response body:
+  - `200 application/octet-stream` with FMVP v2 payload,
+  - `304` when `If-None-Match` matches,
+  - `409` for FEM slice requests when required topology is unavailable.
+
+Contract rules:
+
+- arrows are a dedicated binary lane; they are not inferred from implicit
+  full-vector fallbacks,
+- slice `component` requests must remain component-aware and must not silently
+  fetch full vectors as a hidden fallback path.
 
 ### 7.6 `GET /v1/live/current/scalars`
 
@@ -1051,6 +1142,30 @@ Implementation note:
 - the intended browser pipeline is `authoring/scene` for primitives, `mesh/shared-domain/manifest`
   plus binary topology for realized mesh structure, and `display` plus quantities/fields for
   shading and vector overlays.
+
+### 7.14.15b `GET /v1/live/current/mesh/semantics`
+
+- Status: `canonical`
+- Purpose: fetch the consolidated three-level mesh semantics projection
+- Request body: none
+- Response body: `MeshSemanticsResource`
+
+#### `MeshSemanticsResource`
+
+| Field | Type | Meaning | Notes |
+|---|---|---|---|
+| `revision` | `u64` | Mesh semantics revision | Backed by `status.resources.mesh_revision`. |
+| `universe_config` | `json object \| null` | Universe-level mesh authoring config | Projection from scene `study.universe_mesh` (fallback `scene.universe`). |
+| `shared_domain_config` | `json object` | Study/shared-domain mesh defaults | Projection from scene `study.shared_domain_mesh`. |
+| `object_configs` | `MeshObjectConfigEntryResource[]` | Per-object mesh authoring configs | Includes object identity (`object_id`, `object_name`) plus optional config payload. |
+| `solver_mesh` | `MeshSolverMeshResource \| null` | Realized solver-mesh identity summary | Present when a FEM mesh realization exists in runtime state. |
+| `mesh_build_diagnostics` | `MeshBuildDiagnosticsResource \| null` | Thin build diagnostics projection | Quality summary, last build summary, pipeline status, and last error. |
+| `render_only_controls_do_not_change_solver_domain` | `bool` | Render-vs-physics invariant flag | Contract guard: isolate/visibility/clip are viewport-only concerns. |
+
+Contract note:
+
+- all active 3D consumers must derive capability gating from `status.capabilities` through
+  the shared adapter contract documented in `docs/specs/viewport3d-contract-v1.md`.
 
 ### 7.14.16 `GET /v1/live/current/mesh/objects/:object_id/config`
 
@@ -1990,7 +2105,7 @@ resource-first architecture.
 | `runtime_status` | `status.solver` + `solver/status` | partially covered |
 | `capabilities` | `status.capabilities` and `/v1/capabilities` | covered in split form |
 | `metadata` | future dedicated metadata resource | contract gap remains |
-| `mesh_workspace` | `/v1/live/current/mesh/summary` + `/v1/live/current/mesh/builds/active` + `/v1/live/current/mesh/shared-domain/manifest` + remaining future `/v1/live/current/mesh/*` | partially covered |
+| `mesh_workspace` | `/v1/live/current/mesh/summary` + `/v1/live/current/mesh/builds/active` + `/v1/live/current/mesh/shared-domain/manifest` + `/v1/live/current/mesh/semantics` + remaining `/v1/live/current/mesh/*` | partially covered |
 | `stage_execution` | `GET /v1/live/current/stages/execution` | covered |
 | `scene_document` | `GET/PUT /v1/live/current/authoring/scene` | covered |
 | `script_builder` | future `/v1/live/current/authoring/*` projections | target-only |
@@ -2016,5 +2131,6 @@ When adding or changing a currently mounted local control-room endpoint:
 2. update `docs/specs/resource-first-control-room-api-v1.md`,
 3. update `docs/specs/control-room-api-tree-v1.md` if route-family placement changed,
 4. update `docs/specs/session-run-api-v1.md` if runtime semantics changed,
-5. keep legacy dependencies explicit instead of silently extending dual-stack
+5. update endpoint ownership/status metadata when contract lifecycle changes,
+6. keep legacy dependencies explicit instead of silently extending dual-stack
    behavior.

@@ -1,0 +1,6 @@
+# Signature format:
+#   <path>:<matched_fragment>
+#
+# Keep only intentional canonical fetch boundaries here.
+
+apps/web/src/api/client/LiveApiClient.ts:fetch(

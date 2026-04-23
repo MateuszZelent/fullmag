@@ -8,6 +8,7 @@ import type {
   MeshActiveBuildResource,
   MeshBuildHistoryResource,
   MeshCapabilitiesResource,
+  MeshSemanticsResource,
   MeshInterfaceConfigReplaceRequest,
   MeshInterfaceConfigResource,
   MeshInterfaceQualityResource,
@@ -351,6 +352,15 @@ export function useMeshCapabilities(options?: MeshHookOptions) {
     options,
   );
   return { capabilities: resource.data, ...resource };
+}
+
+export function useMeshSemantics(options?: MeshHookOptions) {
+  const resource = useMeshJsonResource<MeshSemanticsResource>(
+    "mesh-semantics",
+    () => getLiveApiClient().mesh.getSemantics(),
+    options,
+  );
+  return { semantics: resource.data, ...resource };
 }
 
 export function useMeshBuilds(options?: {

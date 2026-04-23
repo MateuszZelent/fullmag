@@ -89,6 +89,12 @@ pub struct DomainSummary {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ResourceRevisionMap {
+    pub topology_revision: u64,
+    pub field_catalog_revision: u64,
+    pub field_revision: u64,
+    pub slice_revision: u64,
+    pub artifact_revision: u64,
+    pub command_completion_revision: u64,
     pub fields_revision: u64,
     pub scalars_revision: u64,
     pub domain_generation_id: u64,

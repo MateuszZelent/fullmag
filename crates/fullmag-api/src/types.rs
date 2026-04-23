@@ -753,7 +753,7 @@ pub(crate) struct CurrentLiveFieldFrameRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StageExecutionRecord {
-    pub status: String,
+    pub status: StageLifecycleState,
     #[serde(default)]
     pub reason: Option<fullmag_ir::StageStopReason>,
     #[serde(default)]
@@ -764,6 +764,77 @@ pub(crate) struct StageExecutionRecord {
     pub threshold: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RuntimeLifecycleState {
+    Bootstrapping,
+    Materializing,
+    MaterializingScript,
+    WaitingForCompute,
+    #[serde(alias = "interactive", alias = "ready")]
+    AwaitingCommand,
+    Running,
+    Paused,
+    Breaking,
+    Closing,
+    Completed,
+    Failed,
+    Cancelled,
+    Pending,
+    #[serde(other)]
+    Unknown,
+}
+
+impl RuntimeLifecycleState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bootstrapping => "bootstrapping",
+            Self::Materializing => "materializing",
+            Self::MaterializingScript => "materializing_script",
+            Self::WaitingForCompute => "waiting_for_compute",
+            Self::AwaitingCommand => "awaiting_command",
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Breaking => "breaking",
+            Self::Closing => "closing",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Pending => "pending",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StageLifecycleState {
+    Pending,
+    Running,
+    Paused,
+    Completed,
+    Cancelled,
+    Stopped,
+    Failed,
+    #[serde(other)]
+    Unknown,
+}
+
+impl StageLifecycleState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StageExecutionState {
     pub total_stages: usize,
@@ -772,12 +843,12 @@ pub(crate) struct StageExecutionState {
     #[serde(default)]
     pub stages: Vec<StageExecutionRecord>,
     #[serde(default)]
-    pub stage_statuses: Vec<String>,
+    pub stage_statuses: Vec<StageLifecycleState>,
     #[serde(default)]
     pub active_stage_index: Option<usize>,
     #[serde(default)]
     pub active_stage_kind: Option<String>,
-    pub runtime_state: String,
+    pub runtime_state: RuntimeLifecycleState,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -826,11 +897,49 @@ pub(crate) struct SessionCommand {
     pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CommandLifecycleState {
     Queued,
     Dispatched,
+    Completed,
+    Rejected,
+    Failed,
+}
+
+impl CommandLifecycleState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Dispatched => "dispatched",
+            Self::Completed => "completed",
+            Self::Rejected => "rejected",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CommandCompletionState {
+    Completed,
+    Rejected,
+    Failed,
+    Cancelled,
+    #[serde(other)]
+    Unknown,
+}
+
+impl CommandCompletionState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Rejected => "rejected",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -839,6 +948,10 @@ pub(crate) struct TrackedCommandRecord {
     pub status: CommandLifecycleState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatched_at_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_status: Option<CommandCompletionState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }

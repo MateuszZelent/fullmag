@@ -87,6 +87,8 @@ pub(crate) async fn enqueue_session_command_impl(
             command: enqueued,
             status: CommandLifecycleState::Queued,
             dispatched_at_unix_ms: None,
+            completed_at_unix_ms: None,
+            completion_status: None,
             error: None,
         });
         while ledger.len() > 256 {

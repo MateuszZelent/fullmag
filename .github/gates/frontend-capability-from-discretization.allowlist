@@ -1,0 +1,7 @@
+# Signature format:
+#   <path>:<matched_fragment>
+#
+# Keep only temporary, intentional capability synthesis references here.
+
+apps/web/src/domain/capabilities/capabilityGuards.ts:synthesizeCapabilitiesFromDiscretization
+apps/web/src/domain/capabilities/index.ts:synthesizeCapabilitiesFromDiscretization

@@ -103,6 +103,10 @@ pub fn build_v1_router() -> Router<Arc<AppState>> {
             get(handlers::mesh::get_mesh_capabilities),
         )
         .route(
+            "/v1/live/current/mesh/semantics",
+            get(handlers::mesh::get_mesh_semantics),
+        )
+        .route(
             "/v1/live/current/mesh/builds/active",
             get(handlers::mesh::get_mesh_active_build),
         )

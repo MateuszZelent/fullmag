@@ -22,10 +22,13 @@ When you need to understand Fullmag quickly, read in this order:
 7. `docs/specs/hpc-cluster-execution-v1.md`
 8. `docs/1_project_scope.md`
 9. `docs/2_repo_blueprint.md`
-10. `docs/specs/problem-ir-v0.md`
-11. `docs/specs/capability-matrix-v0.md`
-12. the relevant `docs/physics/` notes
-13. the relevant `docs/plans/active/` plan
+10. `docs/specs/problem-ir-compatibility-v1.md`
+11. `docs/specs/problem-ir-v0.md`
+12. `docs/specs/capability-matrix-v0.md`
+13. `docs/specs/mesh-roundtrip-semantics-v1.md`
+14. `docs/specs/viewport3d-contract-v1.md`
+15. the relevant `docs/physics/` notes
+16. the relevant `docs/plans/active/` plan
 
 ## Document hierarchy
 
@@ -68,9 +71,12 @@ It is subordinate to the application architecture and should be read as:
 - `docs/specs/resource-first-control-room-api-v1.md`
 - `docs/specs/runtime-distribution-and-managed-backends-v1.md`
 - `docs/specs/hpc-cluster-execution-v1.md`
+- `docs/specs/problem-ir-compatibility-v1.md`
 - `docs/specs/problem-ir-v0.md`
 - `docs/specs/capability-matrix-v0.md`
 - `docs/specs/visualization-quantities-v1.md`
+- `docs/specs/mesh-roundtrip-semantics-v1.md`
+- `docs/specs/viewport3d-contract-v1.md`
 
 These define shared contracts used across multiple subsystems.
 

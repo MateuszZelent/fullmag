@@ -69,6 +69,12 @@ export interface DomainSummary {
 }
 
 export interface ResourceRevisionMap {
+  topology_revision?: number;
+  field_catalog_revision?: number;
+  field_revision?: number;
+  slice_revision?: number;
+  artifact_revision?: number;
+  command_completion_revision?: number;
   fields_revision: number;
   scalars_revision: number;
   domain_generation_id: number;
@@ -238,6 +244,12 @@ export type RealtimeResourceName =
   | "scene_document";
 
 export interface RealtimeResourceRevisionMap {
+  topology_revision?: number;
+  field_catalog_revision?: number;
+  field_revision?: number;
+  slice_revision?: number;
+  artifact_revision?: number;
+  command_completion_revision?: number;
   fields_revision: number;
   scalars_revision: number;
   domain_generation_id: number;
@@ -511,6 +523,38 @@ export interface MeshCapabilitiesResource {
   mesh_adaptivity_state?: MeshWorkspaceRecord | null;
 }
 
+export interface MeshObjectConfigEntry {
+  object_id: string;
+  object_name: string;
+  config?: MeshConfigRecord | null;
+}
+
+export interface MeshSolverMeshResource {
+  mesh_name: string;
+  mesh_id: string;
+  generation_id?: string | null;
+  domain_mesh_mode?: string | null;
+  object_segment_count: number;
+  mesh_part_count: number;
+}
+
+export interface MeshBuildDiagnosticsResource {
+  mesh_quality_summary?: MeshQualityRecord | null;
+  last_build_summary?: MeshWorkspaceRecord | null;
+  mesh_pipeline_status?: unknown;
+  last_build_error?: string | null;
+}
+
+export interface MeshSemanticsResource {
+  revision: number;
+  universe_config?: MeshConfigRecord | null;
+  shared_domain_config: MeshConfigRecord;
+  object_configs: MeshObjectConfigEntry[];
+  solver_mesh?: MeshSolverMeshResource | null;
+  mesh_build_diagnostics?: MeshBuildDiagnosticsResource | null;
+  render_only_controls_do_not_change_solver_domain: boolean;
+}
+
 export interface MeshUniverseConfigResource {
   revision: number;
   config?: MeshConfigRecord | null;
@@ -748,17 +792,24 @@ export interface CommandQueueStatus {
   revision: number;
   pending_count: number;
   dispatched_count: number;
+  completed_count: number;
+  rejected_count: number;
+  failed_count: number;
   can_accept_commands: boolean;
   commands: CommandStatus[];
 }
+
+export type CommandCompletionState = "completed" | "rejected" | "failed";
 
 export interface CommandStatus {
   command_id: string;
   seq: number;
   kind: string;
-  status: "queued" | "dispatched";
+  status: "queued" | "dispatched" | "completed" | "rejected" | "failed";
   created_at_unix_ms: number;
   dispatched_at_unix_ms?: number | null;
+  completed_at_unix_ms?: number | null;
+  completion_status?: CommandCompletionState | null;
   error?: string | null;
 }
 
@@ -766,9 +817,11 @@ export interface CommandDetail {
   command_id: string;
   seq: number;
   kind: string;
-  status: "queued" | "dispatched";
+  status: "queued" | "dispatched" | "completed" | "rejected" | "failed";
   created_at_unix_ms: number;
   dispatched_at_unix_ms?: number | null;
+  completed_at_unix_ms?: number | null;
+  completion_status?: CommandCompletionState | null;
   error?: string | null;
   until_seconds?: number | null;
   max_steps?: number | null;

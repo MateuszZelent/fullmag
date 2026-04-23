@@ -37,6 +37,24 @@ function mergeRealtimeRevisionsIntoStatusResources(
 ): ResourceRevisionMap {
   return {
     ...current,
+    ...(incoming.topology_revision != null
+      ? { topology_revision: incoming.topology_revision }
+      : {}),
+    ...(incoming.field_catalog_revision != null
+      ? { field_catalog_revision: incoming.field_catalog_revision }
+      : {}),
+    ...(incoming.field_revision != null
+      ? { field_revision: incoming.field_revision }
+      : {}),
+    ...(incoming.slice_revision != null
+      ? { slice_revision: incoming.slice_revision }
+      : {}),
+    ...(incoming.artifact_revision != null
+      ? { artifact_revision: incoming.artifact_revision }
+      : {}),
+    ...(incoming.command_completion_revision != null
+      ? { command_completion_revision: incoming.command_completion_revision }
+      : {}),
     ...(incoming.fields_revision != null
       ? { fields_revision: incoming.fields_revision }
       : {}),
@@ -91,6 +109,9 @@ function mergeRealtimeBatchIntoStatusResources(
         break;
       case "fields":
         patch.fields_revision = change.revision;
+        patch.field_catalog_revision = change.revision;
+        patch.field_revision = change.revision;
+        patch.slice_revision = change.revision;
         if (change.domain_generation_id != null) {
           patch.domain_generation_id = change.domain_generation_id;
         }
@@ -100,14 +121,17 @@ function mergeRealtimeBatchIntoStatusResources(
         break;
       case "domain":
         patch.domain_generation_id = change.domain_generation_id ?? change.revision;
+        patch.topology_revision = change.revision;
         break;
       case "artifacts":
+        patch.artifact_revision = change.revision;
         patch.artifacts_revision = change.revision;
         break;
       case "logs":
         patch.engine_log_revision = change.revision;
         break;
       case "mesh":
+        patch.topology_revision = change.revision;
         patch.mesh_revision = change.revision;
         if (change.domain_generation_id != null) {
           patch.domain_generation_id = change.domain_generation_id;
@@ -120,6 +144,7 @@ function mergeRealtimeBatchIntoStatusResources(
         }
         break;
       case "commands":
+        patch.command_completion_revision = change.revision;
         patch.commands_revision = change.revision;
         break;
       case "stages":

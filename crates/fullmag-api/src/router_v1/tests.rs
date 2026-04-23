@@ -22,10 +22,11 @@ use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
 use crate::types::{
-    AppState, CommandLifecycleState, CurrentDisplaySelection, CurrentWorkspaceLayout,
-    CurrentWorkspaceRibbon, CurrentWorkspaceSelection, DisplayPresentationState, LatestFields,
-    LiveState, RunManifest, RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest,
-    SessionStateResponse, StageExecutionRecord, StageExecutionState, StepUpdateView,
+    AppState, CommandCompletionState, CommandLifecycleState, CurrentDisplaySelection,
+    CurrentWorkspaceLayout, CurrentWorkspaceRibbon, CurrentWorkspaceSelection,
+    DisplayPresentationState, LatestFields, LiveState, RunManifest, RuntimeLifecycleState,
+    RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest, SessionStateResponse,
+    StageExecutionRecord, StageExecutionState, StageLifecycleState, StepUpdateView,
     TrackedCommandRecord,
 };
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, RuntimeStatus};
@@ -435,24 +436,28 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             completed_stage_indexes: vec![0],
             stages: vec![
                 StageExecutionRecord {
-                    status: "completed".into(),
+                    status: StageLifecycleState::Completed,
                     reason: None,
                     metric_name: None,
                     metric_value: None,
                     threshold: None,
                 },
                 StageExecutionRecord {
-                    status: "running".into(),
+                    status: StageLifecycleState::Running,
                     reason: None,
                     metric_name: Some("max_torque_T".into()),
                     metric_value: Some(14.0),
                     threshold: Some(1.0e-4),
                 },
             ],
-            stage_statuses: vec!["completed".into(), "running".into(), "pending".into()],
+            stage_statuses: vec![
+                StageLifecycleState::Completed,
+                StageLifecycleState::Running,
+                StageLifecycleState::Pending,
+            ],
             active_stage_index: Some(1),
             active_stage_kind: Some("relax".into()),
-            runtime_state: "running".into(),
+            runtime_state: RuntimeLifecycleState::Running,
         });
         snapshot.metadata = Some(serde_json::json!({
             "execution_plan": {
@@ -507,6 +512,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             },
             status: CommandLifecycleState::Queued,
             dispatched_at_unix_ms: None,
+            completed_at_unix_ms: None,
+            completion_status: None,
             error: None,
         });
         ledger.push_back(TrackedCommandRecord {
@@ -537,6 +544,40 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             },
             status: CommandLifecycleState::Dispatched,
             dispatched_at_unix_ms: Some(1_700_000_000_800),
+            completed_at_unix_ms: None,
+            completion_status: None,
+            error: None,
+        });
+        ledger.push_back(TrackedCommandRecord {
+            command: SessionCommand {
+                seq: 3,
+                command_id: "cmd-3".into(),
+                kind: "stop".into(),
+                created_at_unix_ms: 1_700_000_000_900,
+                until_seconds: None,
+                max_steps: None,
+                torque_tolerance: None,
+                energy_tolerance: None,
+                integrator: None,
+                fixed_timestep: None,
+                max_error: None,
+                relax_algorithm: None,
+                relax_alpha: None,
+                mesh_options: None,
+                mesh_target: None,
+                mesh_reason: None,
+                state_path: None,
+                state_format: None,
+                state_dataset: None,
+                state_sample_index: None,
+                display_selection: None,
+                preview_config: None,
+                stages: None,
+            },
+            status: CommandLifecycleState::Completed,
+            dispatched_at_unix_ms: Some(1_700_000_000_950),
+            completed_at_unix_ms: Some(1_700_000_001_000),
+            completion_status: Some(CommandCompletionState::Completed),
             error: None,
         });
     }
@@ -944,6 +985,26 @@ async fn status_returns_200_with_live_session() {
     assert!(json["display"]["y_chosen_size"].is_number());
     assert!(json["domain"].is_object());
     assert!(json["resources"].is_object());
+    assert_eq!(
+        json["resources"]["topology_revision"],
+        json["resources"]["mesh_revision"]
+    );
+    assert_eq!(
+        json["resources"]["field_catalog_revision"],
+        json["resources"]["fields_revision"]
+    );
+    assert_eq!(
+        json["resources"]["field_revision"],
+        json["resources"]["fields_revision"]
+    );
+    assert_eq!(
+        json["resources"]["artifact_revision"],
+        json["resources"]["artifacts_revision"]
+    );
+    assert_eq!(
+        json["resources"]["command_completion_revision"],
+        json["resources"]["commands_revision"]
+    );
     assert_eq!(json["resources"]["workspace_revision"], 0);
     assert_eq!(json["resources"]["mesh_revision"], 0);
     assert_eq!(json["resources"]["mesh_build_revision"], 0);
@@ -1111,6 +1172,229 @@ async fn field_vector_returns_304_when_etag_matches() {
     assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
     let body = body_bytes(second).await;
     assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn field_vector_component_projection_does_not_fallback_to_full_vector() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 23;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 10.0, 100.0],
+                    [2.0, 20.0, 200.0]
+                ],
+                "layout": {
+                    "grid_cells": [2, 1, 1]
+                }
+            }
+        }))
+        .expect("latest_fields payload should deserialize");
+    }
+    let app = build_v1_router().with_state(state);
+
+    let full_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?component=full")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(full_response.status(), StatusCode::OK);
+    let full_len = body_bytes(full_response).await.len();
+
+    let x_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/vector?component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(x_response.status(), StatusCode::OK);
+    assert_eq!(
+        x_response
+            .headers()
+            .get("x-fullmag-component")
+            .and_then(|value| value.to_str().ok()),
+        Some("c0")
+    );
+    assert_eq!(
+        x_response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("1")
+    );
+
+    let x_len = body_bytes(x_response).await.len();
+    assert!(
+        x_len < full_len,
+        "component projection unexpectedly matched full-vector payload size: component={x_len}, full={full_len}"
+    );
+}
+
+#[tokio::test]
+async fn slice_meta_revision_changes_with_component() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 9;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 0.0]
+                ],
+                "layout": {
+                    "grid_cells": [2, 2, 1]
+                }
+            }
+        }))
+        .expect("latest_fields payload should deserialize");
+    }
+    let app = build_v1_router().with_state(state);
+
+    let x_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/meta?plane=xy&component=x&x_size=2&y_size=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(x_response.status(), StatusCode::OK);
+    let x_json = body_json(x_response).await;
+
+    let y_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/fields/m/slice/meta?plane=xy&component=y&x_size=2&y_size=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(y_response.status(), StatusCode::OK);
+    let y_json = body_json(y_response).await;
+
+    assert_ne!(x_json["slice_revision"], y_json["slice_revision"]);
+    assert_eq!(x_json["field_revision"], y_json["field_revision"]);
+    assert_eq!(x_json["domain_generation_id"], y_json["domain_generation_id"]);
+}
+
+#[tokio::test]
+async fn status_payload_remains_thin_even_with_large_field_buffers() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut values = Vec::with_capacity(4096);
+        for i in 0..4096 {
+            values.push(serde_json::json!([i as f64, 0.0, 0.0]));
+        }
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": values,
+                "layout": {
+                    "grid_cells": [4096, 1, 1]
+                }
+            }
+        }))
+        .expect("latest_fields payload should deserialize");
+        snapshot.state_version = 41;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let payload = body_bytes(response).await;
+    assert!(
+        payload.len() < 12_000,
+        "status payload unexpectedly large: {} bytes",
+        payload.len()
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&payload).expect("status payload should decode as JSON");
+    assert!(json.get("latest_fields").is_none());
+    assert!(json.get("preview_cache").is_none());
+}
+
+#[tokio::test]
+async fn status_topology_revision_is_stable_across_quantity_switch() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 77;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let first_status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_status.status(), StatusCode::OK);
+    let first_json = body_json(first_status).await;
+    let first_topology_revision = first_json["resources"]["topology_revision"]
+        .as_u64()
+        .expect("topology revision should be present");
+
+    let patch_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/live/current/display")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "active_quantity_id": "h_eff"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch_response.status(), StatusCode::OK);
+
+    let second_status = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_status.status(), StatusCode::OK);
+    let second_json = body_json(second_status).await;
+    let second_topology_revision = second_json["resources"]["topology_revision"]
+        .as_u64()
+        .expect("topology revision should be present");
+
+    assert_eq!(first_topology_revision, second_topology_revision);
 }
 
 // ─── quantities endpoints ───────────────────────────────────────────────────
@@ -1725,6 +2009,83 @@ async fn mesh_summary_returns_304_when_etag_matches() {
     assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
     let body = body_bytes(second).await;
     assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn mesh_semantics_returns_three_level_projection() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene_value = serde_json::to_value(sample_scene_document())
+            .expect("sample scene should serialize");
+        scene_value["study"]["universe_mesh"] = serde_json::json!({
+            "mode": "box",
+            "size": [4.0, 5.0, 6.0],
+            "padding": [1.0, 1.5, 2.0],
+            "airbox_hmax": 8.0e-9
+        });
+        scene_value["objects"][0]["object_mesh"] = serde_json::json!({
+            "mode": "override",
+            "size_mode": "manual",
+            "hmax": "2e-9",
+            "hmin": "5e-10"
+        });
+        let scene = serde_json::from_value(scene_value)
+            .expect("scene payload should deserialize after mesh semantics overrides");
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_quality_summary": { "min_quality": 0.82 },
+            "last_build_summary": { "elements": 24 },
+            "mesh_pipeline_status": [{ "id": "meshing", "status": "active" }],
+            "last_build_error": "quality threshold not met"
+        }));
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        snapshot.mesh_revision = 73;
+    }
+    let app = build_v1_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/semantics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 73);
+    assert_eq!(json["universe_config"]["mode"], "box");
+    assert_eq!(json["shared_domain_config"]["algorithm_2d"], 6);
+    assert_eq!(json["object_configs"][0]["object_id"], "body");
+    assert_eq!(json["object_configs"][0]["config"]["mode"], "override");
+    assert_eq!(json["solver_mesh"]["mesh_name"], "test-mesh");
+    assert_eq!(json["solver_mesh"]["object_segment_count"], 1);
+    assert_eq!(
+        json["mesh_build_diagnostics"]["last_build_error"],
+        "quality threshold not met"
+    );
+    assert_eq!(
+        json["render_only_controls_do_not_change_solver_domain"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn mesh_semantics_returns_404_without_scene_document() {
+    let app = test_router_with_session().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/live/current/mesh/semantics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -3185,7 +3546,10 @@ async fn command_status_endpoint_returns_queue_and_dispatch_ledger() {
     let json = body_json(response).await;
     assert_eq!(json["pending_count"], 1);
     assert_eq!(json["dispatched_count"], 1);
-    assert_eq!(json["commands"].as_array().map(Vec::len), Some(2));
+    assert_eq!(json["completed_count"], 1);
+    assert_eq!(json["rejected_count"], 0);
+    assert_eq!(json["failed_count"], 0);
+    assert_eq!(json["commands"].as_array().map(Vec::len), Some(3));
 }
 
 #[tokio::test]
@@ -3207,6 +3571,28 @@ async fn command_detail_endpoint_returns_command_payload() {
     assert_eq!(json["kind"], "run");
     assert_eq!(json["status"], "queued");
     assert_eq!(json["integrator"], "rk45");
+}
+
+#[tokio::test]
+async fn command_detail_endpoint_exposes_completion_fields_for_terminal_commands() {
+    let app = test_router_with_runtime_read_models().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/live/current/commands/cmd-3")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["kind"], "stop");
+    assert_eq!(json["status"], "completed");
+    assert_eq!(json["completion_status"], "completed");
+    assert_eq!(json["completed_at_unix_ms"], 1_700_000_001_000u64);
 }
 
 #[tokio::test]

@@ -22,7 +22,6 @@ import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
 import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
 import { decodeFieldVectorOffThread, decodeTopologyOffThread } from "@/src/api/codecs/decodeOffThread";
-import { synthesizeCapabilitiesFromDiscretization } from "@/src/domain/capabilities";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { normalizeMeshWorkspace } from "@/lib/session/normalize";
 import type {
@@ -459,7 +458,6 @@ export function useDataPlaneBridge(
         });
 
         const isFem = meta.discretization === "fem";
-        const domainCapabilities = synthesizeCapabilitiesFromDiscretization(isFem);
         const current = useSessionRuntimeStore.getState();
         const topologyCacheKey = `data-plane:domain-topology:${runtimeScopeKey ?? "no-scope"}:${meta.generation_id}`;
         const femMesh = isFem
@@ -526,7 +524,7 @@ export function useDataPlaneBridge(
           stepUpdateV2: current.stepUpdateV2,
           workspaceStatus: current.workspaceStatus,
           isFemBackend: isFem,
-          domainCapabilities,
+          domainCapabilities: current.domainCapabilities,
           resourceRevisions: current.resourceRevisions,
           displaySelection: current.displaySelection,
           previewConfig: current.previewConfig,

@@ -11,7 +11,10 @@ import { memo, useCallback } from "react";
 import type { CapabilityMap } from "../../../src/api/types";
 import type { UnifiedRenderState, FemViewportLayerState } from "../model/unifiedViewportTypes";
 import { DEFAULT_FEM_VIEWPORT_LAYER_STATE } from "../model/unifiedViewportTypes";
-import type { Viewport3DCapabilities as UnifiedCapabilityReasons } from "../model/viewport3dContracts";
+import type {
+  Viewport3DCapabilities as UnifiedCapabilityReasons,
+  Viewport3DControlState,
+} from "../model/viewport3dContracts";
 
 const VECTOR_COMPONENTS = ["3D", "x", "y", "z", "|v|"] as const;
 const COLOR_SCALES = ["viridis", "coolwarm", "jet", "magma", "inferno"] as const;
@@ -44,6 +47,8 @@ interface UnifiedViewportBarProps {
   onQuantityChange?: (quantityId: string) => void;
   clipFlip?: boolean;
   onClipFlipChange?: (next: boolean) => void;
+  controlStates?: Partial<Record<string, Viewport3DControlState>>;
+  controlReasons?: Partial<Record<string, string | null>>;
 }
 
 function labelClass() {
@@ -68,6 +73,64 @@ function disabledReason(
   return reason ?? "Capability unavailable";
 }
 
+interface ControlMeta {
+  disabled: boolean;
+  title?: string;
+  state: Viewport3DControlState;
+}
+
+function resolveControlMeta(args: {
+  key: string;
+  fallbackDisabled: boolean;
+  fallbackReason?: string;
+  controlStates?: Partial<Record<string, Viewport3DControlState>>;
+  controlReasons?: Partial<Record<string, string | null>>;
+}): ControlMeta {
+  const state = args.controlStates?.[args.key];
+  const explicitReason = args.controlReasons?.[args.key] ?? undefined;
+  const mixedReason =
+    explicitReason ??
+    "Mixed value across selected entities. Selecting a value will set an explicit state.";
+  if (state === "loading") {
+    return {
+      disabled: true,
+      title: explicitReason ?? "Control is loading",
+      state,
+    };
+  }
+  if (state === "disabled") {
+    return {
+      disabled: true,
+      title: explicitReason ?? args.fallbackReason,
+      state,
+    };
+  }
+  if (state === "mixed") {
+    return {
+      disabled: args.fallbackDisabled,
+      title: args.fallbackDisabled ? args.fallbackReason : mixedReason,
+      state,
+    };
+  }
+  return {
+    disabled: args.fallbackDisabled,
+    title: explicitReason ?? args.fallbackReason,
+    state:
+      state ??
+      (args.fallbackDisabled ? "disabled" : "inactive"),
+  };
+}
+
+function controlStateClass(state: Viewport3DControlState): string {
+  if (state === "mixed") {
+    return "ring-1 ring-amber-400/60";
+  }
+  if (state === "loading") {
+    return "opacity-80";
+  }
+  return "";
+}
+
 function isReasonedCapabilityMap(
   value: CapabilityMap | UnifiedCapabilityReasons | null,
 ): value is UnifiedCapabilityReasons {
@@ -88,6 +151,8 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
   onQuantityChange,
   clipFlip = false,
   onClipFlipChange,
+  controlStates,
+  controlReasons,
 }: UnifiedViewportBarProps) {
   const patch = useCallback(
     (delta: Partial<UnifiedRenderState>) =>
@@ -126,16 +191,45 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
     explicitTopologyReason,
   );
   const baseReason = disabled ? "Preview update in progress" : undefined;
+  const quantityControl = resolveControlMeta({
+    key: "quantity",
+    fallbackDisabled: disabled || !supports3D || !onQuantityChange || quantityOptions.length === 0,
+    fallbackReason: threeDReason,
+    controlStates,
+    controlReasons,
+  });
+  const componentControl = resolveControlMeta({
+    key: "component",
+    fallbackDisabled: disabled || !supports3D,
+    fallbackReason: threeDReason,
+    controlStates,
+    controlReasons,
+  });
+  const renderModeControl = resolveControlMeta({
+    key: "renderMode",
+    fallbackDisabled: disabled || !supportsTopology,
+    fallbackReason: topologyReason,
+    controlStates,
+    controlReasons,
+  });
+  const clipControl = resolveControlMeta({
+    key: "clip",
+    fallbackDisabled: disabled || !supportsTopology,
+    fallbackReason: topologyReason,
+    controlStates,
+    controlReasons,
+  });
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-border/20 bg-card/10 px-3 py-2 shrink-0">
       <span className={labelClass()}>Quantity</span>
       <select
-        className={controlClass()}
+        className={`${controlClass()} ${controlStateClass(quantityControl.state)}`.trim()}
         value={quantityId ?? ""}
         onChange={(event) => onQuantityChange?.(event.target.value)}
-        disabled={disabled || !supports3D || !onQuantityChange || quantityOptions.length === 0}
-        title={threeDReason}
+        disabled={quantityControl.disabled}
+        title={quantityControl.title}
+        data-control-state={quantityControl.state}
       >
         {quantityOptions.map((option) => (
           <option key={option.id} value={option.id} disabled={!option.available}>
@@ -146,15 +240,16 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
 
       <span className={labelClass()}>Component</span>
       <select
-        className={controlClass()}
+        className={`${controlClass()} ${controlStateClass(componentControl.state)}`.trim()}
         value={renderState.vectorComponent}
         onChange={(event) =>
           patch({
             vectorComponent: event.target.value as UnifiedRenderState["vectorComponent"],
           })
         }
-        disabled={disabled || !supports3D}
-        title={threeDReason}
+        disabled={componentControl.disabled}
+        title={componentControl.title}
+        data-control-state={componentControl.state}
       >
         {VECTOR_COMPONENTS.map((component) => (
           <option key={component} value={component}>
@@ -236,15 +331,16 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
 
       <span className={labelClass()}>Render</span>
       <select
-        className={controlClass()}
+        className={`${controlClass()} ${controlStateClass(renderModeControl.state)}`.trim()}
         value={renderState.meshRenderMode ?? "solid"}
         onChange={(event) =>
           patch({
             meshRenderMode: event.target.value as UnifiedRenderState["meshRenderMode"],
           })
         }
-        disabled={disabled || !supportsTopology}
-        title={topologyReason}
+        disabled={renderModeControl.disabled}
+        title={renderModeControl.title}
+        data-control-state={renderModeControl.state}
       >
         {MESH_RENDER_MODES.map((mode) => (
           <option key={mode.value} value={mode.value}>
@@ -271,8 +367,9 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
           type="checkbox"
           checked={renderState.clipEnabled ?? false}
           onChange={(event) => patch({ clipEnabled: event.target.checked })}
-          disabled={disabled || !supportsTopology}
-          title={topologyReason}
+          disabled={clipControl.disabled}
+          title={clipControl.title}
+          data-control-state={clipControl.state}
         />
         <span>Clip</span>
       </label>
@@ -285,8 +382,9 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
             clipAxis: event.target.value as "x" | "y" | "z",
           })
         }
-        disabled={disabled || !supportsTopology || !renderState.clipEnabled}
-        title={topologyReason}
+        disabled={clipControl.disabled || !renderState.clipEnabled}
+        title={clipControl.title}
+        data-control-state={clipControl.state}
       >
         <option value="x">X</option>
         <option value="y">Y</option>
@@ -301,20 +399,22 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
         value={renderState.clipPosition ?? 50}
         onChange={(event) => patch({ clipPosition: Number(event.target.value) })}
         className="w-24 accent-primary"
-        disabled={disabled || !supportsTopology || !renderState.clipEnabled}
-        title={topologyReason}
+        disabled={clipControl.disabled || !renderState.clipEnabled}
+        title={clipControl.title}
+        data-control-state={clipControl.state}
       />
 
       <button
         type="button"
         className="h-7 rounded border border-border/35 bg-background/45 px-2 text-[0.68rem] text-foreground disabled:opacity-50"
         onClick={() => onClipFlipChange?.(!clipFlip)}
-        disabled={disabled || !supportsTopology || !renderState.clipEnabled || !onClipFlipChange}
+        disabled={clipControl.disabled || !renderState.clipEnabled || !onClipFlipChange}
         title={
           onClipFlipChange
-            ? topologyReason
+            ? clipControl.title
             : (baseReason ?? "Clip flip is not exposed by current runtime API")
         }
+        data-control-state={clipControl.state}
       >
         {clipFlip ? "-axis" : "+axis"}
       </button>

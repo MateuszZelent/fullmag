@@ -12,7 +12,8 @@ use crate::schemas::runtime::{
     SolverStatusResource, StageExecutionRecordResource, StageExecutionResource,
 };
 use crate::types::{
-    AppState, CommandLifecycleState, ScalarRow, SessionStateResponse, TrackedCommandRecord,
+    AppState, CommandCompletionState, CommandLifecycleState, ScalarRow, SessionStateResponse,
+    TrackedCommandRecord,
 };
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -101,21 +102,25 @@ pub async fn get_stage_execution(
 
     Ok(Json(StageExecutionResource {
         revision: snapshot.state_version,
-        runtime_state: stage.runtime_state.clone(),
+        runtime_state: stage.runtime_state.as_str().to_string(),
         total_stages: stage.total_stages as u32,
         completed_stage_indexes: stage
             .completed_stage_indexes
             .iter()
             .map(|value| *value as u32)
             .collect(),
-        stage_statuses: stage.stage_statuses.clone(),
+        stage_statuses: stage
+            .stage_statuses
+            .iter()
+            .map(|status| status.as_str().to_string())
+            .collect(),
         active_stage_index: stage.active_stage_index.map(|value| value as u32),
         active_stage_kind: stage.active_stage_kind.clone(),
         stages: stage
             .stages
             .iter()
             .map(|record| StageExecutionRecordResource {
-                status: record.status.clone(),
+                status: record.status.as_str().to_string(),
                 reason: record.reason.as_ref().map(stage_stop_reason_string),
                 metric_name: record.metric_name.clone(),
                 metric_value: record.metric_value,
@@ -295,6 +300,18 @@ pub async fn get_command_status(
         .iter()
         .filter(|record| record.status == CommandLifecycleState::Dispatched)
         .count() as u64;
+    let completed_count = ledger
+        .iter()
+        .filter(|record| record.status == CommandLifecycleState::Completed)
+        .count() as u64;
+    let rejected_count = ledger
+        .iter()
+        .filter(|record| record.status == CommandLifecycleState::Rejected)
+        .count() as u64;
+    let failed_count = ledger
+        .iter()
+        .filter(|record| record.status == CommandLifecycleState::Failed)
+        .count() as u64;
     let revision = ledger.back().map(|record| record.command.seq).unwrap_or(0);
     let can_accept_commands = {
         let guard = state.current_live_state.read().await;
@@ -308,6 +325,9 @@ pub async fn get_command_status(
         revision,
         pending_count,
         dispatched_count,
+        completed_count,
+        rejected_count,
+        failed_count,
         can_accept_commands,
         commands: ledger.iter().map(command_status_resource).collect(),
     }))
@@ -340,9 +360,11 @@ pub async fn get_command_detail(
         command_id: record.command.command_id.clone(),
         seq: record.command.seq,
         kind: record.command.kind.clone(),
-        status: command_status_string(&record.status).to_string(),
+        status: record.status.as_str().to_string(),
         created_at_unix_ms: record.command.created_at_unix_ms,
         dispatched_at_unix_ms: record.dispatched_at_unix_ms,
+        completed_at_unix_ms: record.completed_at_unix_ms,
+        completion_status: record.completion_status.map(command_completion_state_string),
         error: record.error.clone(),
         until_seconds: record.command.until_seconds,
         max_steps: record.command.max_steps,
@@ -413,18 +435,17 @@ fn command_status_resource(record: &TrackedCommandRecord) -> CommandStatusResour
         command_id: record.command.command_id.clone(),
         seq: record.command.seq,
         kind: record.command.kind.clone(),
-        status: command_status_string(&record.status).to_string(),
+        status: record.status.as_str().to_string(),
         created_at_unix_ms: record.command.created_at_unix_ms,
         dispatched_at_unix_ms: record.dispatched_at_unix_ms,
+        completed_at_unix_ms: record.completed_at_unix_ms,
+        completion_status: record.completion_status.map(command_completion_state_string),
         error: record.error.clone(),
     }
 }
 
-fn command_status_string(status: &CommandLifecycleState) -> &'static str {
-    match status {
-        CommandLifecycleState::Queued => "queued",
-        CommandLifecycleState::Dispatched => "dispatched",
-    }
+fn command_completion_state_string(state: CommandCompletionState) -> String {
+    state.as_str().to_string()
 }
 
 async fn ensure_workspace(state: &Arc<AppState>) -> Result<(), ApiError> {

@@ -67,7 +67,6 @@ export interface ViewportDiagnosticFlags {
   enableUnifiedViewportToolbar: boolean;
   enableFemMeshWorkspace: boolean;
   enableFem3D: boolean;
-  enableFdm3D: boolean;
   enableSlice2D: boolean;
   femViewportShowToolbar: boolean;
   femViewportForceWireframe: boolean;

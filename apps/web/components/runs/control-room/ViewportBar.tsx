@@ -6,11 +6,12 @@ import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import { useLiveStatus } from "@/src/hooks/resources/useLiveStatus";
-import type { DisplayPatchRequest } from "@/src/api/types";
-import { synthesizeCapabilitiesFromDiscretization } from "@/src/domain/capabilities";
+import type { DisplayPatchRequest, FieldComponent, LiveStatus } from "@/src/api/types";
+import { statusToViewport3DCapabilities } from "@/src/features/view3d/adapters/statusToCapabilities";
+import { resourcesToViewportModel } from "@/src/features/view3d/adapters/resourcesToViewportModel";
+import { runtimeToViewport3DToolbarState } from "@/src/features/view3d/adapters/runtimeToToolbarState";
 import { UnifiedViewportBar } from "@/features/viewport-unified";
 import { useUnifiedDisplayControls } from "@/features/viewport-unified/hooks/useUnifiedDisplayControls";
-import { resolveViewport3DCapabilities } from "@/features/viewport-unified/model/viewport3dCapabilities";
 import {
   buildToolbarStateFromLegacy,
   buildViewport3DModelFromAdapter,
@@ -24,7 +25,10 @@ import {
   createViewport3DToolbarState,
   viewport3dToolbarReducer,
 } from "@/features/viewport-unified/model/viewport3dToolbarReducer";
-import type { Viewport3DFdmModulePatch } from "@/features/viewport-unified/model/viewport3dContracts";
+import type {
+  Viewport3DCapabilities as UnifiedViewport3DCapabilities,
+  Viewport3DFdmModulePatch,
+} from "@/features/viewport-unified/model/viewport3dContracts";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 
 import type { RenderMode } from "../../preview/FemMeshView3D";
@@ -74,6 +78,105 @@ function fromUnifiedMeshRenderMode(
     return "surface+edges";
   }
   return "surface";
+}
+
+function toViewportFieldComponent(component: string): FieldComponent | null {
+  if (
+    component === "full" ||
+    component === "magnitude" ||
+    component === "x" ||
+    component === "y" ||
+    component === "z"
+  ) {
+    return component;
+  }
+  if (component === "3D" || component === "|v|") {
+    return "magnitude";
+  }
+  return null;
+}
+
+function mapCanonicalCapabilitiesToUnified(
+  capabilities: ReturnType<typeof statusToViewport3DCapabilities>,
+  authoringEnabled: boolean,
+  diagnosticsEnabled: boolean,
+): UnifiedViewport3DCapabilities {
+  const preview3d = Boolean(capabilities.can_render_3d);
+  const structuredGrid = preview3d && Boolean(capabilities.can_show_structured_grid);
+  const explicitTopology = preview3d && Boolean(capabilities.can_show_topology);
+  const authoringPrimitives = preview3d && explicitTopology && authoringEnabled;
+  const vectorField = preview3d && Boolean(capabilities.can_show_vectors);
+  const clip = preview3d && explicitTopology;
+  const screenshot = preview3d;
+  const diagnostics = preview3d && diagnosticsEnabled;
+
+  return {
+    preview3d: preview3d
+      ? { enabled: true }
+      : { enabled: false, reason: "Requires preview_3d capability." },
+    structuredGrid: structuredGrid
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? "Requires structured_grid capability."
+            : "Requires preview_3d capability.",
+        },
+    explicitTopology: explicitTopology
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? "Requires explicit_topology capability."
+            : "Requires preview_3d capability.",
+        },
+    authoringPrimitives: authoringPrimitives
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? (explicitTopology
+                ? "Requires Geometry Authoring mode."
+                : "Requires explicit_topology capability.")
+            : "Requires preview_3d capability.",
+        },
+    vectorField: vectorField
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? "Requires binary_fields + (node_fields|cell_fields) capability."
+            : "Requires preview_3d capability.",
+        },
+    clip: clip
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? "Requires explicit_topology capability."
+            : "Requires preview_3d capability.",
+        },
+    screenshot: screenshot
+      ? { enabled: true }
+      : { enabled: false, reason: "Requires preview_3d capability." },
+    diagnostics: diagnostics
+      ? { enabled: true }
+      : {
+          enabled: false,
+          reason: preview3d
+            ? "Requires render diagnostics flag."
+            : "Requires preview_3d capability.",
+        },
+  };
+}
+
+function toStatusResourcesSnapshot(
+  resources: LiveStatus["resources"] | null | undefined,
+): Pick<LiveStatus, "resources"> | null {
+  if (!resources) {
+    return null;
+  }
+  return { resources };
 }
 
 type GeometryTool = "camera" | "select" | "move" | "rotate" | "scale";
@@ -138,18 +241,21 @@ export const ViewportBar = memo(function ViewportBar() {
 
   const displayControls = useUnifiedDisplayControls(patchDisplay);
 
-  const rawCapabilities =
-    status?.capabilities ??
-    command.domainCapabilities ??
-    synthesizeCapabilitiesFromDiscretization(command.isFemBackend);
+  const viewport3DContractCapabilities = useMemo(
+    () =>
+      statusToViewport3DCapabilities(
+        status?.capabilities ? { capabilities: status.capabilities } : null,
+      ),
+    [status],
+  );
   const capabilities = useMemo(
     () =>
-      resolveViewport3DCapabilities({
-        capabilities: rawCapabilities,
-        authoringEnabled: builderEnabled,
-        diagnosticsEnabled: FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging,
-      }),
-    [builderEnabled, rawCapabilities],
+      mapCanonicalCapabilitiesToUnified(
+        viewport3DContractCapabilities,
+        builderEnabled,
+        FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging,
+      ),
+    [builderEnabled, viewport3DContractCapabilities],
   );
 
   const renderState = useMemo<UnifiedRenderState>(() => ({
@@ -260,9 +366,70 @@ export const ViewportBar = memo(function ViewportBar() {
   );
 
   const legacyFdmVectorsEnabled = status?.display.vector_glyphs ?? true;
-  const viewportToolbarState = useMemo(
+  const viewport3DContractModel = useMemo(
     () =>
-      buildToolbarStateFromLegacy({
+      resourcesToViewportModel({
+        status: toStatusResourcesSnapshot(status?.resources),
+        quantity_id: viewport.requestedPreviewQuantity ?? null,
+        component: toViewportFieldComponent(renderState.vectorComponent),
+        selection: {
+          object_id: model.viewportSelectedObjectId,
+          part_id: model.selectedEntityId,
+        },
+        clip: {
+          enabled: Boolean(renderState.clipEnabled),
+          axis: renderState.clipAxis ?? "z",
+          position:
+            typeof renderState.clipPosition === "number"
+              ? renderState.clipPosition
+              : 50,
+          invert: model.meshClipFlip,
+        },
+      }),
+    [
+      model.meshClipFlip,
+      model.selectedEntityId,
+      model.viewportSelectedObjectId,
+      renderState.clipAxis,
+      renderState.clipEnabled,
+      renderState.clipPosition,
+      renderState.vectorComponent,
+      status?.resources,
+      viewport.requestedPreviewQuantity,
+    ],
+  );
+  const viewport3DContractToolbarState = useMemo(
+    () =>
+      runtimeToViewport3DToolbarState({
+        capabilities: viewport3DContractCapabilities,
+        has_topology:
+          viewport3DContractModel.topology_revision != null || Boolean(model.femTopologyKey),
+        has_field_data: viewport3DContractModel.field_revision != null,
+      }),
+    [
+      model.femTopologyKey,
+      viewport3DContractCapabilities,
+      viewport3DContractModel.field_revision,
+      viewport3DContractModel.topology_revision,
+    ],
+  );
+  const viewport3DControlReasons = useMemo(
+    () => ({
+      quantity: viewport3DContractToolbarState.reasons.quantity,
+      component: viewport3DContractToolbarState.reasons.component,
+      clip: viewport3DContractToolbarState.reasons.clip,
+      renderMode: viewport3DContractToolbarState.reasons.render_mode,
+    }),
+    [
+      viewport3DContractToolbarState.reasons.clip,
+      viewport3DContractToolbarState.reasons.component,
+      viewport3DContractToolbarState.reasons.quantity,
+      viewport3DContractToolbarState.reasons.render_mode,
+    ],
+  );
+  const viewportToolbarState = useMemo(
+    () => {
+      const legacyToolbarState = buildToolbarStateFromLegacy({
         renderState,
         quantityId: viewport.requestedPreviewQuantity ?? null,
         clipFlip: model.meshClipFlip,
@@ -275,7 +442,31 @@ export const ViewportBar = memo(function ViewportBar() {
         projection: toolbarState.rowB.projection,
         navProfile: toolbarState.rowB.navProfile,
         popovers: toolbarState.popovers,
-      }),
+      });
+      return {
+        ...legacyToolbarState,
+        rowA: {
+          ...legacyToolbarState.rowA,
+          clipEnabled:
+            legacyToolbarState.rowA.clipEnabled && viewport3DContractToolbarState.clip_enabled,
+        },
+        controlStates: {
+          ...legacyToolbarState.controlStates,
+          quantity: viewport3DContractToolbarState.quantity_enabled
+            ? ("inactive" as const)
+            : ("disabled" as const),
+          component: viewport3DContractToolbarState.component_enabled
+            ? ("inactive" as const)
+            : ("disabled" as const),
+          clip: viewport3DContractToolbarState.clip_enabled
+            ? ("inactive" as const)
+            : ("disabled" as const),
+          renderMode: viewport3DContractToolbarState.render_mode_enabled
+            ? ("inactive" as const)
+            : ("disabled" as const),
+        },
+      };
+    },
     [
       legacyFdmVectorsEnabled,
       model.meshClipFlip,
@@ -288,6 +479,10 @@ export const ViewportBar = memo(function ViewportBar() {
       toolbarState.rowB.partExplorerVisible,
       toolbarState.rowB.projection,
       toolbarState.rowB.snapEnabled,
+      viewport3DContractToolbarState.clip_enabled,
+      viewport3DContractToolbarState.component_enabled,
+      viewport3DContractToolbarState.quantity_enabled,
+      viewport3DContractToolbarState.render_mode_enabled,
       viewport.requestedPreviewQuantity,
     ],
   );
@@ -300,10 +495,17 @@ export const ViewportBar = memo(function ViewportBar() {
         capabilities,
         worldExtent: model.worldExtent,
         worldCenter: model.worldCenter,
-        topologyRevision: model.femTopologyKey,
-        quantityId: viewport.requestedPreviewQuantity,
-        selectedObjectId: model.viewportSelectedObjectId,
-        selectedEntityId: model.selectedEntityId,
+        topologyRevision:
+          viewport3DContractModel.topology_revision != null
+            ? String(viewport3DContractModel.topology_revision)
+            : model.femTopologyKey,
+        fieldRevision:
+          viewport3DContractModel.field_revision != null
+            ? String(viewport3DContractModel.field_revision)
+            : null,
+        quantityId: viewport3DContractModel.quantity_id,
+        selectedObjectId: viewport3DContractModel.selection.object_id,
+        selectedEntityId: viewport3DContractModel.selection.part_id ?? model.selectedEntityId,
         focusedEntityId: model.focusedEntityId,
         selectedSidebarNodeId: model.selectedSidebarNodeId,
         loading: viewport.previewBusy,
@@ -325,14 +527,17 @@ export const ViewportBar = memo(function ViewportBar() {
       model.meshConfigDirty,
       model.selectedEntityId,
       model.selectedSidebarNodeId,
-      model.viewportSelectedObjectId,
       model.worldCenter,
       model.worldExtent,
       renderState,
       status,
+      viewport3DContractModel.field_revision,
+      viewport3DContractModel.quantity_id,
+      viewport3DContractModel.selection.object_id,
+      viewport3DContractModel.selection.part_id,
+      viewport3DContractModel.topology_revision,
       viewport.previewBusy,
       viewport.previewMessage,
-      viewport.requestedPreviewQuantity,
       viewportToolbarState,
     ],
   );
@@ -451,10 +656,15 @@ export const ViewportBar = memo(function ViewportBar() {
   }, [partExplorerOpen, setRightInspectorOpen, setRightInspectorTab]);
 
   const vectorsSettingsOpen = toolbarState.popovers.vectors;
+  const colorSettingsOpen = toolbarState.popovers.color;
+  const displaySettingsOpen = toolbarState.popovers.display;
+  const topographySettingsOpen = toolbarState.popovers.topography;
   const snapSettingsOpen = toolbarState.popovers.snapSettings;
   const cameraSettingsOpen = toolbarState.popovers.camera;
   const panelsOpen = toolbarState.popovers.panels;
   const infoOpen = toolbarState.popovers.info;
+  const rotationDebugOpen = toolbarState.popovers.rotationDebug;
+  const liveRenderDebugOpen = toolbarState.popovers.liveRenderDebug;
   const cameraProjection = toolbarState.rowB.projection === "orthographic" ? "ortho" : "persp";
   const cameraNavigation = toolbarState.rowB.navProfile;
 
@@ -527,6 +737,8 @@ export const ViewportBar = memo(function ViewportBar() {
         onRenderStateChange={onRenderStateChange}
         gridDepth={viewport.solverGrid[2] > 0 ? viewport.solverGrid[2] : undefined}
         disabled={viewport.previewBusy}
+        controlStates={viewportToolbarState.controlStates}
+        controlReasons={viewport3DControlReasons}
       />
     );
   }
@@ -544,6 +756,8 @@ export const ViewportBar = memo(function ViewportBar() {
         onQuantityChange={viewport.requestPreviewQuantity}
         clipFlip={model.meshClipFlip}
         onClipFlipChange={model.setMeshClipFlip}
+        controlStates={viewportToolbarState.controlStates}
+        controlReasons={viewport3DControlReasons}
       />
 
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-t border-border/20">
@@ -659,6 +873,36 @@ export const ViewportBar = memo(function ViewportBar() {
 
         <button
           type="button"
+          className={colorSettingsOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
+          onClick={() => dispatchToolbar({ type: "togglePopover", key: "color" })}
+          disabled={!supports3D}
+          title={supports3D ? "Color popover: surface/arrow/voxel color modes." : "Requires preview_3d capability."}
+        >
+          Color
+        </button>
+
+        <button
+          type="button"
+          className={displaySettingsOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
+          onClick={() => dispatchToolbar({ type: "togglePopover", key: "display" })}
+          disabled={!supports3D}
+          title={supports3D ? "Display popover: quality and visual profile controls." : "Requires preview_3d capability."}
+        >
+          Display
+        </button>
+
+        <button
+          type="button"
+          className={topographySettingsOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
+          onClick={() => dispatchToolbar({ type: "togglePopover", key: "topography" })}
+          disabled={!supportsStructuredGrid}
+          title={supportsStructuredGrid ? "Topography popover for structured-grid views." : "Requires structured_grid capability."}
+        >
+          Topography
+        </button>
+
+        <button
+          type="button"
           className={cameraSettingsOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
           onClick={() => dispatchToolbar({ type: "togglePopover", key: "camera" })}
           disabled={!supports3D}
@@ -697,7 +941,8 @@ export const ViewportBar = memo(function ViewportBar() {
 
         <button
           type="button"
-          className={ROW_B_BUTTON_CLASS}
+          className={rotationDebugOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
+          onClick={() => dispatchToolbar({ type: "togglePopover", key: "rotationDebug" })}
           disabled={!capabilities.diagnostics.enabled}
           title={capabilities.diagnostics.enabled
             ? "Rotation debug popover"
@@ -708,7 +953,8 @@ export const ViewportBar = memo(function ViewportBar() {
 
         <button
           type="button"
-          className={ROW_B_BUTTON_CLASS}
+          className={liveRenderDebugOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
+          onClick={() => dispatchToolbar({ type: "togglePopover", key: "liveRenderDebug" })}
           disabled={!capabilities.diagnostics.enabled}
           title={capabilities.diagnostics.enabled
             ? "Live render debug popover"
@@ -844,6 +1090,110 @@ export const ViewportBar = memo(function ViewportBar() {
                   <option value={4}>4x</option>
                 </select>
               </label>
+              <span className={ROW_B_HINT_CLASS}>
+                Display/voxel/topography controls are available in dedicated popovers.
+              </span>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {colorSettingsOpen ? (
+        <div className="px-3 pb-2 flex flex-wrap items-center gap-2 border-t border-border/20">
+          <span className={ROW_B_GROUP_TITLE_CLASS}>Color</span>
+          {supportsTopology ? (
+            <>
+              <label className={ROW_B_HINT_CLASS}>
+                Surface
+                <select
+                  className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
+                  value={model.femColorField}
+                  disabled
+                  title="Per-part FEM surface color mapping is currently driven by mesh part state and can be mixed."
+                >
+                  <option value={model.femColorField}>{model.femColorField}</option>
+                </select>
+              </label>
+              <label className={ROW_B_HINT_CLASS}>
+                Arrows
+                <select
+                  className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
+                  value={model.femArrowColorMode}
+                  onChange={(event) =>
+                    model.setFemArrowColorMode(
+                      event.target.value as "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome",
+                    )
+                  }
+                >
+                  <option value="orientation">orientation</option>
+                  <option value="x">x</option>
+                  <option value="y">y</option>
+                  <option value="z">z</option>
+                  <option value="magnitude">magnitude</option>
+                  <option value="monochrome">monochrome</option>
+                </select>
+              </label>
+              {model.femArrowColorMode === "monochrome" ? (
+                <label className={ROW_B_HINT_CLASS}>
+                  Monochrome
+                  <input
+                    type="color"
+                    className="ml-1 h-7 w-10 rounded border border-border/35 bg-background/45 p-0.5 align-middle"
+                    value={model.femArrowMonoColor}
+                    onChange={(event) => model.setFemArrowMonoColor(event.target.value)}
+                  />
+                </label>
+              ) : null}
+            </>
+          ) : (
+            <label className={ROW_B_HINT_CLASS}>
+              Voxel color mode
+              <select
+                className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
+                value={fdmModule?.voxelColorMode ?? model.fdmVisualizationSettings.voxel_color_mode}
+                onChange={(event) =>
+                  patchFdmSettings({
+                    voxelColorMode: event.target.value as "orientation" | "x" | "y" | "z",
+                  })
+                }
+                disabled={!supportsStructuredGrid}
+                title={
+                  supportsStructuredGrid
+                    ? "FDM voxel color mapping."
+                    : "Requires structured_grid capability."
+                }
+              >
+                <option value="orientation">orientation</option>
+                <option value="x">x</option>
+                <option value="y">y</option>
+                <option value="z">z</option>
+              </select>
+            </label>
+          )}
+        </div>
+      ) : null}
+
+      {displaySettingsOpen ? (
+        <div className="px-3 pb-2 flex flex-wrap items-center gap-2 border-t border-border/20">
+          <span className={ROW_B_GROUP_TITLE_CLASS}>Display</span>
+          {!supportsTopology ? (
+            <>
+              <label className={ROW_B_HINT_CLASS}>
+                Quality
+                <select
+                  className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
+                  value={fdmModule?.quality ?? model.fdmVisualizationSettings.quality}
+                  onChange={(event) =>
+                    patchFdmSettings({
+                      quality: event.target.value as "low" | "high" | "ultra",
+                    })
+                  }
+                >
+                  <option value="low">low</option>
+                  <option value="high">high</option>
+                  <option value="ultra">ultra</option>
+                </select>
+              </label>
               <label className={ROW_B_HINT_CLASS}>
                 Brightness
                 <input
@@ -900,48 +1250,67 @@ export const ViewportBar = memo(function ViewportBar() {
                   }
                 />
               </label>
-              <label className={ROW_B_HINT_CLASS}>
-                Topography
-                <input
-                  type="checkbox"
-                  className="ml-1 align-middle"
-                  checked={fdmTopographyEnabled}
-                  onChange={(event) =>
-                    patchFdmSettings({ topography: { enabled: event.target.checked } })
-                  }
-                />
-              </label>
-              <label className={ROW_B_HINT_CLASS}>
-                Topo Axis
-                <select
-                  className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
-                  value={fdmTopographyAxis}
-                  onChange={(event) =>
-                    patchFdmSettings({
-                      topography: { component: event.target.value as "x" | "y" | "z" },
-                    })
-                  }
-                >
-                  <option value="x">x</option>
-                  <option value="y">y</option>
-                  <option value="z">z</option>
-                </select>
-              </label>
-              <label className={ROW_B_HINT_CLASS}>
-                Topo Amplitude
-                <input
-                  type="range"
-                  className="ml-1 w-20 accent-primary align-middle"
-                  min={0.5}
-                  max={50}
-                  step={0.5}
-                  value={fdmTopographyAmplitude}
-                  onChange={(event) =>
-                    patchFdmSettings({ topography: { amplitude: Number(event.target.value) } })
-                  }
-                />
-              </label>
             </>
+          ) : (
+            <span className={ROW_B_HINT_CLASS}>
+              FEM display profile is controlled by render mode and layer toggles.
+            </span>
+          )}
+        </div>
+      ) : null}
+
+      {topographySettingsOpen ? (
+        <div className="px-3 pb-2 flex flex-wrap items-center gap-2 border-t border-border/20">
+          <span className={ROW_B_GROUP_TITLE_CLASS}>Topography</span>
+          <label className={ROW_B_HINT_CLASS}>
+            Enabled
+            <input
+              type="checkbox"
+              className="ml-1 align-middle"
+              checked={fdmTopographyEnabled}
+              onChange={(event) =>
+                patchFdmSettings({ topography: { enabled: event.target.checked } })
+              }
+              disabled={!supportsStructuredGrid}
+              title={supportsStructuredGrid ? "Toggle topography layer." : "Requires structured_grid capability."}
+            />
+          </label>
+          <label className={ROW_B_HINT_CLASS}>
+            Axis
+            <select
+              className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
+              value={fdmTopographyAxis}
+              onChange={(event) =>
+                patchFdmSettings({
+                  topography: { component: event.target.value as "x" | "y" | "z" },
+                })
+              }
+              disabled={!supportsStructuredGrid}
+              title={supportsStructuredGrid ? "Topography axis." : "Requires structured_grid capability."}
+            >
+              <option value="x">x</option>
+              <option value="y">y</option>
+              <option value="z">z</option>
+            </select>
+          </label>
+          <label className={ROW_B_HINT_CLASS}>
+            Amplitude
+            <input
+              type="range"
+              className="ml-1 w-20 accent-primary align-middle"
+              min={0.5}
+              max={50}
+              step={0.5}
+              value={fdmTopographyAmplitude}
+              onChange={(event) =>
+                patchFdmSettings({ topography: { amplitude: Number(event.target.value) } })
+              }
+              disabled={!supportsStructuredGrid}
+              title={supportsStructuredGrid ? "Topography amplitude." : "Requires structured_grid capability."}
+            />
+          </label>
+          {supportsStructuredGrid ? null : (
+            <span className={ROW_B_HINT_CLASS}>Topography is available only for structured-grid runtime.</span>
           )}
         </div>
       ) : null}
@@ -1104,6 +1473,36 @@ export const ViewportBar = memo(function ViewportBar() {
           </div>
           <div>Objects visible: {model.objectOverlays.length}</div>
           <div>Builder active: {builderEnabled ? "yes" : "no"}</div>
+        </div>
+      ) : null}
+
+      {rotationDebugOpen ? (
+        <div className="px-3 pb-2 border-t border-border/20 text-[0.7rem] text-muted-foreground">
+          <div className="font-semibold text-foreground/90">Rotation Debug</div>
+          <div>Projection: {viewport3DModel.camera.projection}</div>
+          <div>Navigation: {viewport3DModel.camera.navigation}</div>
+          <div>Object view: {viewport3DModel.selection.objectViewMode}</div>
+          <div>Last preset: {viewport3DModel.camera.lastPreset ?? "n/a"}</div>
+        </div>
+      ) : null}
+
+      {liveRenderDebugOpen ? (
+        <div className="px-3 pb-2 border-t border-border/20 text-[0.7rem] text-muted-foreground">
+          <div className="font-semibold text-foreground/90">Live Render Debug</div>
+          <div>Source: {viewport3DModel.debug.sourceKind}</div>
+          <div>Field revision: {viewport3DModel.debug.fieldDataRevision ?? "n/a"}</div>
+          <div>
+            Field timestamp:{" "}
+            {viewport3DModel.debug.fieldDataTimestamp != null
+              ? new Date(viewport3DModel.debug.fieldDataTimestamp).toLocaleTimeString("pl-PL", {
+                  hour12: false,
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                })
+              : "n/a"}
+          </div>
+          <div>Effective step: {viewport3DModel.debug.effectiveStep ?? "n/a"}</div>
         </div>
       ) : null}
     </div>
