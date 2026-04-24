@@ -223,7 +223,7 @@ export default function FrontendDiagnosticSettingsPage() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => router.push("/workspace?stage=study")}
+                onClick={() => router.push("/workspace")}
                 className="rounded border border-border/60 px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted/40 hover:text-foreground"
               >
                 Back to Workspace

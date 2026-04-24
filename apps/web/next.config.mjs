@@ -1,4 +1,7 @@
 import path from "path";
+import { fileURLToPath } from "url";
+
+const configDir = path.dirname(fileURLToPath(import.meta.url));
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -15,6 +18,17 @@ const nextConfig = {
   // a function` at runtime. Listing them here forces Next.js's SWC pipeline to
   // transpile them to CJS-compatible modules that webpack handles reliably.
   transpilePackages: ["echarts", "zrender"],
+  webpack(config) {
+    config.resolve = config.resolve ?? {};
+    config.resolve.alias = {
+      ...(config.resolve.alias ?? {}),
+      "@radix-ui/react-compose-refs": path.join(
+        configDir,
+        "lib/radix/react-compose-refs-shim.ts",
+      ),
+    };
+    return config;
+  },
 };
 
 export default nextConfig;

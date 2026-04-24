@@ -5,7 +5,7 @@ export type LaunchSource =
   | "file_handle"
   | "script_path"
   | "project_path"
-  | "electron_cli"
+  | "local_live"
   | "web_query";
 
 export type LaunchEntryKind = "script" | "project" | "example" | null;
@@ -35,13 +35,6 @@ export function emptyLaunchIntent(): LaunchIntent {
   };
 }
 
-function stageFromString(value: string | null): WorkspaceStage | null {
-  if (value === "build" || value === "study" || value === "analyze") {
-    return value;
-  }
-  return null;
-}
-
 function kindFromString(value: string | null): LaunchEntryKind {
   if (value === "script" || value === "project" || value === "example") {
     return value;
@@ -55,7 +48,6 @@ export function resolveLaunchIntentFromSearchParams(
   const source = params.get("source");
   const entryPath = params.get("path");
   const entryKind = kindFromString(params.get("kind"));
-  const targetStage = stageFromString(params.get("stage"));
   const resumeProjectId = params.get("projectId");
   const displayName = params.get("name");
   const launchAssetId = params.get("asset");
@@ -63,7 +55,6 @@ export function resolveLaunchIntentFromSearchParams(
     Boolean(source) ||
     Boolean(entryPath) ||
     Boolean(entryKind) ||
-    Boolean(targetStage) ||
     Boolean(resumeProjectId) ||
     Boolean(displayName) ||
     Boolean(launchAssetId);
@@ -79,13 +70,15 @@ export function resolveLaunchIntentFromSearchParams(
       source === "file_handle" ||
       source === "script_path" ||
       source === "project_path" ||
-      source === "electron_cli" ||
+      source === "local_live" ||
       source === "web_query"
         ? source
+        : source === "electron_cli"
+          ? "local_live"
         : "web_query",
     entryPath,
     entryKind,
-    targetStage,
+    targetStage: null,
     resumeProjectId,
     displayName,
     launchAssetId,
@@ -96,4 +89,24 @@ export function resolveLaunchIntentFromSearchParams(
 export function targetPathForLaunchIntent(intent: LaunchIntent): string {
   void intent;
   return "/workspace";
+}
+
+function isLiveStatusIntent(intent: LaunchIntent): boolean {
+  return intent.source === "local_live" || intent.metadata?.detectedBy === "live_status";
+}
+
+export function searchParamsForLaunchIntent(intent: LaunchIntent): URLSearchParams {
+  const params = new URLSearchParams();
+
+  if (isLiveStatusIntent(intent)) {
+    return params;
+  }
+
+  if (intent.source && intent.source !== "none") params.set("source", intent.source);
+  if (intent.entryPath) params.set("path", intent.entryPath);
+  if (intent.entryKind) params.set("kind", intent.entryKind);
+  if (intent.resumeProjectId) params.set("projectId", intent.resumeProjectId);
+  if (intent.displayName) params.set("name", intent.displayName);
+  if (intent.launchAssetId) params.set("asset", intent.launchAssetId);
+  return params;
 }

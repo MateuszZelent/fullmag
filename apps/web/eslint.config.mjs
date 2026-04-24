@@ -23,6 +23,21 @@ export default tseslint.config(
       "@typescript-eslint/no-unused-vars": "warn",
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-empty-object-type": "off",
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@radix-ui/react-scroll-area",
+              message: "Use components/ui/scroll-area.tsx native ScrollArea wrapper.",
+            },
+            {
+              name: "@radix-ui/react-compose-refs",
+              message: "Use the Next webpack alias to lib/radix/react-compose-refs-shim.ts.",
+            },
+          ],
+        },
+      ],
       "prefer-const": "error",
     },
   }

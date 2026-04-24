@@ -52,7 +52,7 @@ export default function PhysicsDocsPage() {
             </p>
           </div>
           <Link
-            href="/workspace?stage=analyze"
+            href="/workspace"
             className="rounded-md border border-border/50 bg-card/40 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
           >
             Open Analyze Workspace

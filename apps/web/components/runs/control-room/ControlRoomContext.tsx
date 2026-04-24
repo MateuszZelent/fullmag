@@ -264,6 +264,21 @@ function femMeshTransportKey(mesh: FemLiveMesh | null): string | null {
   ].join(":");
 }
 
+function analyzeSelectionEquals(
+  a: AnalyzeSelectionState,
+  b: AnalyzeSelectionState,
+): boolean {
+  return (
+    a.domain === b.domain &&
+    a.tab === b.tab &&
+    a.selectedModeIndex === b.selectedModeIndex &&
+    a.sampleIndex === b.sampleIndex &&
+    a.branchId === b.branchId &&
+    a.selectedChannel === b.selectedChannel &&
+    a.refreshNonce === b.refreshNonce
+  );
+}
+
 /* ── Provider ── */
 export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const liveApi = useMemo(() => createControlRoomApi(), []);
@@ -487,23 +502,26 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     startTransition(() => {
       setViewMode("Analyze");
     });
-    setAnalyzeSelection((prev) => ({
-      ...prev,
-      ...next,
-    }));
+    setAnalyzeSelection((prev) => {
+      const resolved = { ...prev, ...next };
+      return analyzeSelectionEquals(prev, resolved) ? prev : resolved;
+    });
   }, []);
   const selectAnalyzeTab = useCallback((tab: AnalyzeTab) => {
-    setAnalyzeSelection((prev) => ({
-      ...prev,
-      tab,
-    }));
+    setAnalyzeSelection((prev) => {
+      if (prev.tab === tab) {
+        return prev;
+      }
+      return { ...prev, tab };
+    });
   }, []);
   const selectAnalyzeMode = useCallback((index: number | null) => {
-    setAnalyzeSelection((prev) => ({
-      ...prev,
-      tab: "modes",
-      selectedModeIndex: index,
-    }));
+    setAnalyzeSelection((prev) => {
+      if (prev.tab === "modes" && prev.selectedModeIndex === index) {
+        return prev;
+      }
+      return { ...prev, tab: "modes", selectedModeIndex: index };
+    });
   }, []);
   const refreshAnalyze = useCallback(() => {
     setAnalyzeSelection((prev) => nextAnalyzeRefresh(prev));

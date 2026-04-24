@@ -98,7 +98,7 @@ import type {
 import { extractFemCpuThreadSummary } from "./control-room/helpers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-const ANALYZE_WORKSPACE_HREF = "/workspace?stage=analyze";
+const WORKSPACE_HREF = "/workspace";
 
 function launchDisplayName(intent: ReturnType<typeof useWorkspaceStore.getState>["launchIntent"]): string | null {
   if (!intent) return null;
@@ -477,7 +477,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
           nodeId,
           source: "analyze_target",
         });
-        router.push(ANALYZE_WORKSPACE_HREF);
+        router.push(WORKSPACE_HREF);
       }
       return;
     }
@@ -492,7 +492,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
           nodeId,
           source: "result_workspace",
         });
-        router.push(ANALYZE_WORKSPACE_HREF);
+        router.push(WORKSPACE_HREF);
       }
       return;
     }
@@ -514,7 +514,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
           nodeId,
           source: "results_node",
         });
-        router.push(ANALYZE_WORKSPACE_HREF);
+        router.push(WORKSPACE_HREF);
       }
       return;
     }
@@ -1196,7 +1196,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       setActiveCoreTab("Results");
       setActiveContextualTab(null);
       if (pathname !== "/workspace") {
-        router.push(ANALYZE_WORKSPACE_HREF);
+        router.push(WORKSPACE_HREF);
       }
     },
     [ctx, pathname, router, setActiveContextualTab, setActiveCoreTab],
@@ -1322,7 +1322,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         hasEigenArtifacts,
         currentResultsEntryKey,
       });
-      router.push(ANALYZE_WORKSPACE_HREF);
+      router.push(WORKSPACE_HREF);
     }
   }, [
     ctx,

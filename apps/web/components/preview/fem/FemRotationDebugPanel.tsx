@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { OrientationDebugSnapshot } from "../camera/cameraOrientation";
 import type { FemViewportNavigation, FemViewportProjection } from "./FemViewportTypes";
 import type { RenderMode } from "./femMeshTypes";
@@ -56,15 +56,48 @@ export function FemRotationDebugPanel({
   onApplyRotationEuler?: (nextEulerDeg: [number, number, number]) => void;
   actionClassName: string;
 }) {
-  const [rotationDraft, setRotationDraft] = useState<[string, string, string]>(["0.0", "0.0", "0.0"]);
+  const rotationSource =
+    rotationSnapshots?.viewport ?? rotationSnapshots?.viewCube ?? rotationSnapshots?.hsl ?? null;
+  const rotationSourceSignature = rotationSource?.signature ?? "none";
+  const sourceRotationDraft = useMemo<[string, string, string]>(
+    () =>
+      rotationSource
+        ? (rotationSource.eulerDeg.map((value) => value.toFixed(1)) as [string, string, string])
+        : ["0.0", "0.0", "0.0"],
+    [rotationSource],
+  );
+  const [rotationDraftOverride, setRotationDraftOverride] = useState<{
+    sourceSignature: string;
+    values: [string, string, string];
+  } | null>(null);
+  const rotationDraft =
+    rotationDraftOverride?.sourceSignature === rotationSourceSignature
+      ? rotationDraftOverride.values
+      : sourceRotationDraft;
 
-  useEffect(() => {
-    const source = rotationSnapshots?.viewport ?? rotationSnapshots?.viewCube ?? rotationSnapshots?.hsl ?? null;
-    if (!source) {
-      return;
-    }
-    setRotationDraft(source.eulerDeg.map((value) => value.toFixed(1)) as [string, string, string]);
-  }, [rotationSnapshots]);
+  const setRotationDraft = useCallback(
+    (
+      update:
+        | [string, string, string]
+        | ((previous: [string, string, string]) => [string, string, string]),
+    ) => {
+      setRotationDraftOverride((previousOverride) => {
+        const previous =
+          previousOverride?.sourceSignature === rotationSourceSignature
+            ? previousOverride.values
+            : sourceRotationDraft;
+        const next = typeof update === "function" ? update(previous) : update;
+        if (previous[0] === next[0] && previous[1] === next[1] && previous[2] === next[2]) {
+          return previousOverride;
+        }
+        return {
+          sourceSignature: rotationSourceSignature,
+          values: next,
+        };
+      });
+    },
+    [rotationSourceSignature, sourceRotationDraft],
+  );
 
   return (
     <div className="space-y-3 text-[0.66rem] text-muted-foreground">

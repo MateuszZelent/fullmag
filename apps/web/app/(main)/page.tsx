@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import StartHubPage from "@/components/start-hub/StartHubPage";
 import {
   resolveLaunchIntentFromSearchParams,
+  searchParamsForLaunchIntent,
   targetPathForLaunchIntent,
 } from "@/lib/workspace/launch-intent";
 import { detectLiveSessionIntent } from "@/lib/workspace/launch-intent-live";
@@ -37,7 +38,7 @@ function RootPageInner() {
       if (intent.source !== "none") {
         navigationIssuedRef.current = true;
         const target = targetPathForLaunchIntent(intent);
-        const params = new URLSearchParams(queryString);
+        const params = searchParamsForLaunchIntent(intent);
         const route = params.toString().length > 0 ? `${target}?${params}` : target;
         recordFrontendDebugEvent(
           "root-route",
@@ -65,12 +66,7 @@ function RootPageInner() {
       if (detected) {
         navigationIssuedRef.current = true;
         const target = targetPathForLaunchIntent(detected.intent);
-        const params = new URLSearchParams();
-        params.set("source", detected.intent.source);
-        if (detected.intent.entryPath) params.set("path", detected.intent.entryPath);
-        if (detected.intent.entryKind) params.set("kind", detected.intent.entryKind);
-        if (detected.intent.targetStage) params.set("stage", detected.intent.targetStage);
-        if (detected.intent.resumeProjectId) params.set("projectId", detected.intent.resumeProjectId);
+        const params = searchParamsForLaunchIntent(detected.intent);
         const route = params.toString().length > 0 ? `${target}?${params}` : target;
         recordFrontendDebugEvent(
           "root-route",

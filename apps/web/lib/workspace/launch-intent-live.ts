@@ -80,7 +80,7 @@ export async function detectLiveSessionIntent(): Promise<DetectedLiveSession | n
 
   const result: DetectedLiveSession = {
     intent: {
-      source: "electron_cli",
+      source: "local_live",
       entryPath: scriptPath,
       entryKind,
       targetStage,

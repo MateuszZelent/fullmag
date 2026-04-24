@@ -1,178 +1,21 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { Pin, X } from "lucide-react";
 
-import AnalyzeViewport from "@/components/runs/control-room/AnalyzeViewport";
-import ChartsViewport from "@/components/runs/control-room/ChartsViewport";
-import { ViewportBar, ViewportCanvasArea } from "@/components/runs/control-room/ViewportPanels";
+import { ViewportBar } from "@/components/runs/control-room/ViewportPanels";
 import { useModel, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
 import EmptyState from "@/components/ui/EmptyState";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useRuntimeFeatureFlags } from "@/lib/hooks/useRuntimeFeatureFlags";
-import { cn } from "@/lib/utils";
-import { type AnalyzeTab } from "@/components/runs/control-room/analyzeSelection";
-import {
-  type WorkspaceMode,
-  type WorkspaceTab,
-  useWorkspaceStore,
-} from "@/lib/workspace/workspace-store";
+import { type WorkspaceTab, useWorkspaceStore } from "@/lib/workspace/workspace-store";
 
-function isAnalyzeTab(value: string | undefined): value is AnalyzeTab {
-  return (
-    value === "summary" ||
-    value === "spectrum" ||
-    value === "modes" ||
-    value === "dispersion" ||
-    value === "time-traces" ||
-    value === "vortex-trajectory" ||
-    value === "vortex-frequency" ||
-    value === "vortex-orbit"
-  );
-}
-
-function asAnalyzeTab(value: string | undefined): AnalyzeTab {
-  return isAnalyzeTab(value) ? value : "spectrum";
-}
-
-function isAnalyzeLikeTab(tab: WorkspaceTab): boolean {
-  if (tab.kind === "analyze") return true;
-  if (tab.kind === "result-quantity") return false;
-  return tab.kind.startsWith("result-");
-}
-
-function analyzeSelectionForTab(tab: WorkspaceTab):
-  | { domain: "eigenmodes" | "vortex"; tab: AnalyzeTab; selectedModeIndex?: number | null }
-  | null {
-  switch (tab.kind) {
-    case "analyze":
-      return {
-        domain: (tab.payload?.analyzeDomain ?? "eigenmodes") as "eigenmodes" | "vortex",
-        tab: asAnalyzeTab(tab.payload?.analyzeTab),
-      };
-    case "result-spectrum":
-      return { domain: "eigenmodes", tab: "spectrum", selectedModeIndex: null };
-    case "result-dispersion":
-      return { domain: "eigenmodes", tab: "dispersion", selectedModeIndex: null };
-    case "result-modes":
-      return { domain: "eigenmodes", tab: "modes" };
-    case "result-time-traces":
-      return { domain: "vortex", tab: "time-traces" };
-    case "result-vortex-frequency":
-      return { domain: "vortex", tab: "vortex-frequency" };
-    case "result-vortex-trajectory":
-      return { domain: "vortex", tab: "vortex-trajectory" };
-    case "result-vortex-orbit":
-      return { domain: "vortex", tab: "vortex-orbit" };
-    case "result-table":
-      return { domain: "eigenmodes", tab: "spectrum" };
-    default:
-      return null;
-  }
-}
-
-function sameAnalyzeSelection(
-  current: { domain: "eigenmodes" | "vortex"; tab: AnalyzeTab; selectedModeIndex: number | null },
-  next: { domain: "eigenmodes" | "vortex"; tab: AnalyzeTab; selectedModeIndex?: number | null },
-): boolean {
-  return (
-    current.domain === next.domain &&
-    current.tab === next.tab &&
-    (current.selectedModeIndex ?? null) === (next.selectedModeIndex ?? null)
-  );
-}
-
-function applyWorkspaceTabSelection(
-  stage: WorkspaceMode,
-  tab: WorkspaceTab,
-  api: {
-    currentWorkspaceMode: WorkspaceMode;
-    setWorkspaceMode: (next: WorkspaceMode | ((prev: WorkspaceMode) => WorkspaceMode)) => void;
-    handleViewModeChange: (mode: string) => void;
-    effectiveViewMode: "3D" | "2D" | "Mesh" | "Analyze";
-    requestPreviewQuantity: (quantity: string) => void;
-    selectedQuantity: string;
-    model: ReturnType<typeof useModel>;
-  },
-): void {
-  if (tab.payload?.resultWorkspaceId) {
-    if (api.currentWorkspaceMode !== "analyze") {
-      api.setWorkspaceMode("analyze");
-    }
-    if (api.model.activeResultWorkspaceId !== tab.payload.resultWorkspaceId) {
-      api.model.openResultWorkspaceEntry(tab.payload.resultWorkspaceId);
-    }
-    return;
-  }
-
-  if (tab.kind === "viewport-3d") {
-    if (api.currentWorkspaceMode !== stage) {
-      api.setWorkspaceMode(stage);
-    }
-    if (api.effectiveViewMode !== "3D") {
-      api.handleViewModeChange("3D");
-    }
-    return;
-  }
-  if (tab.kind === "viewport-2d") {
-    if (api.currentWorkspaceMode !== stage) {
-      api.setWorkspaceMode(stage);
-    }
-    if (api.effectiveViewMode !== "2D") {
-      api.handleViewModeChange("2D");
-    }
-    return;
-  }
-  if (tab.kind === "viewport-mesh") {
-    if (api.currentWorkspaceMode !== stage) {
-      api.setWorkspaceMode(stage);
-    }
-    if (api.effectiveViewMode !== "Mesh") {
-      api.handleViewModeChange("Mesh");
-    }
-    return;
-  }
-  if (tab.kind === "viewport-charts") {
-    if (api.currentWorkspaceMode !== stage) {
-      api.setWorkspaceMode(stage);
-    }
-    return;
-  }
-  if (tab.kind === "result-quantity") {
-    if (api.currentWorkspaceMode !== stage) {
-      api.setWorkspaceMode(stage);
-    }
-    if (tab.payload?.quantityId && tab.payload.quantityId !== api.selectedQuantity) {
-      api.requestPreviewQuantity(tab.payload.quantityId);
-    }
-    if (api.effectiveViewMode !== "3D") {
-      api.handleViewModeChange("3D");
-    }
-    return;
-  }
-
-  const analyzeSelection = analyzeSelectionForTab(tab);
-  if (analyzeSelection) {
-    if (api.currentWorkspaceMode !== "analyze") {
-      api.setWorkspaceMode("analyze");
-    }
-    if (!sameAnalyzeSelection(api.model.analyzeSelection, analyzeSelection)) {
-      api.model.openAnalyze({
-        domain: analyzeSelection.domain,
-        tab: analyzeSelection.tab,
-        selectedModeIndex: analyzeSelection.selectedModeIndex ?? null,
-      });
-    }
-    return;
-  }
-
-  if (api.currentWorkspaceMode !== stage) {
-    api.setWorkspaceMode(stage);
-  }
-}
+import { DockCenterPreviewNotices } from "./center-tabs/DockCenterPreviewNotices";
+import { DockCenterTabContent } from "./center-tabs/DockCenterTabContent";
+import { DockCenterTabHeader } from "./center-tabs/DockCenterTabHeader";
+import { useDockCenterTabSelection } from "./center-tabs/useDockCenterTabSelection";
 
 export default function DockCenterTabs() {
   const dockCenterFlags = FRONTEND_DIAGNOSTIC_FLAGS.dockCenterTabs;
@@ -190,9 +33,17 @@ export default function DockCenterTabs() {
   const model = useModel();
   const tp = useTransport();
   const featureFlags = useRuntimeFeatureFlags();
+
   const currentWorkspaceMode = vp.workspaceMode;
   const effectiveViewMode = vp.effectiveViewMode;
   const selectedQuantity = vp.selectedQuantity;
+  const setWorkspaceMode = vp.setWorkspaceMode;
+  const handleViewModeChange = vp.handleViewModeChange;
+  const requestPreviewQuantity = vp.requestPreviewQuantity;
+  const activeResultWorkspaceId = model.activeResultWorkspaceId;
+  const analyzeSelection = model.analyzeSelection;
+  const openResultWorkspaceEntry = model.openResultWorkspaceEntry;
+  const openAnalyze = model.openAnalyze;
 
   // Block rendering until feature flags are resolved to avoid mounting Three.js
   // canvases that would be immediately disabled (causes WebGL context churn).
@@ -212,7 +63,14 @@ export default function DockCenterTabs() {
     if (!activeTabId && tabs.length > 0) {
       activateTab(currentStage, tabs[0]!.id);
     }
-  }, [activateTab, activeTabId, currentStage, dockCenterFlags.enableAutoActivateEffect, dockCenterFlags.enableInternalTree, tabs]);
+  }, [
+    activateTab,
+    activeTabId,
+    currentStage,
+    dockCenterFlags.enableAutoActivateEffect,
+    dockCenterFlags.enableInternalTree,
+    tabs,
+  ]);
 
   useEffect(() => {
     if (!dockCenterFlags.enableInternalTree || !dockCenterFlags.enableEnsureChartsTabEffect) {
@@ -228,33 +86,79 @@ export default function DockCenterTabs() {
       title: "Charts",
       closable: false,
       pinned: true,
-      keepAlive: true,
-      lifecycle: "warm",
+      keepAlive: false,
+      lifecycle: "unmount-on-hide",
       payload: { viewMode: "Analyze" },
     });
-  }, [currentStage, dockCenterFlags.enableEnsureChartsTabEffect, dockCenterFlags.enableInternalTree, openTab, tabs]);
+  }, [
+    currentStage,
+    dockCenterFlags.enableEnsureChartsTabEffect,
+    dockCenterFlags.enableInternalTree,
+    openTab,
+    tabs,
+  ]);
 
-  useEffect(() => {
-    if (!dockCenterFlags.enableInternalTree || !dockCenterFlags.enableApplySelectionEffect) {
-      return;
-    }
-    if (!activeTab) {
-      return;
-    }
-    applyWorkspaceTabSelection(currentStage, activeTab, {
+  const selectionApi = useMemo(
+    () => ({
       currentWorkspaceMode,
-      setWorkspaceMode: vp.setWorkspaceMode,
-      handleViewModeChange: vp.handleViewModeChange,
+      setWorkspaceMode,
+      handleViewModeChange,
       effectiveViewMode,
-      requestPreviewQuantity: vp.requestPreviewQuantity,
+      requestPreviewQuantity,
       selectedQuantity,
-      model,
-    });
-  }, [activeTab, currentStage, currentWorkspaceMode, dockCenterFlags.enableApplySelectionEffect, dockCenterFlags.enableInternalTree, effectiveViewMode, selectedQuantity, model, vp.handleViewModeChange, vp.requestPreviewQuantity, vp.setWorkspaceMode]);
+      activeResultWorkspaceId,
+      analyzeSelection,
+      openResultWorkspaceEntry,
+      openAnalyze,
+    }),
+    [
+      activeResultWorkspaceId,
+      analyzeSelection,
+      currentWorkspaceMode,
+      effectiveViewMode,
+      handleViewModeChange,
+      openAnalyze,
+      openResultWorkspaceEntry,
+      requestPreviewQuantity,
+      selectedQuantity,
+      setWorkspaceMode,
+    ],
+  );
+
+  useDockCenterTabSelection({
+    enabled: dockCenterFlags.enableInternalTree && dockCenterFlags.enableApplySelectionEffect,
+    stage: currentStage,
+    activeTab,
+    api: selectionApi,
+  });
 
   const spatialPreview = tp.preview?.kind === "spatial" ? tp.preview : null;
   const previewNoticesVisible =
     FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices && dockCenterFlags.showPreviewNotices;
+  const activeTabIsCharts = activeTab?.kind === "viewport-charts";
+
+  const renderTabContent = (tab: WorkspaceTab) => (
+    <DockCenterTabContent
+      tab={tab}
+      flags={dockCenterFlags}
+      chartsDisabled={chartsDisabled}
+      preview3dDisabled={preview3dDisabled}
+    />
+  );
+
+  const previewNotices = previewNoticesVisible ? (
+    <DockCenterPreviewNotices
+      autoDownscaled={Boolean(
+        spatialPreview?.auto_downscaled || tp.liveState?.preview_auto_downscaled,
+      )}
+      autoDownscaleMessage={spatialPreview?.auto_downscale_message}
+      fallbackAutoDownscaleMessage={tp.liveState?.preview_auto_downscale_message}
+      previewGrid={vp.previewGrid}
+      previewMessage={vp.previewMessage}
+      previewIsStale={vp.previewIsStale}
+      previewIsInitialSampleStale={vp.previewIsInitialSampleStale}
+    />
+  ) : null;
 
   if (!dockCenterFlags.enableInternalTree) {
     return (
@@ -267,7 +171,7 @@ export default function DockCenterTabs() {
   if (flagsLoading) {
     return (
       <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
-        Loading…
+        Loading...
       </div>
     );
   }
@@ -285,101 +189,15 @@ export default function DockCenterTabs() {
     );
   }
 
-  const activeTabIsCharts = activeTab?.kind === "viewport-charts";
-
-  const renderTabContent = (tab: WorkspaceTab) => {
-    if (!dockCenterFlags.enableTabContent) {
-      return (
-        <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
-          Tab content disabled by diagnostic flag
-        </div>
-      );
-    }
-
-    if (tab.kind === "viewport-charts") {
-      if (!dockCenterFlags.enableChartsViewport) {
-        return (
-          <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
-            ChartsViewport disabled by diagnostic flag
-          </div>
-        );
-      }
-      return chartsDisabled ? (
-        <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
-          Charts disabled via feature flags
-        </div>
-      ) : (
-        <ChartsViewport />
-      );
-    }
-
-    if (isAnalyzeLikeTab(tab)) {
-      if (!dockCenterFlags.enableAnalyzeViewport) {
-        return (
-          <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
-            AnalyzeViewport disabled by diagnostic flag
-          </div>
-        );
-      }
-      return <AnalyzeViewport />;
-    }
-
-    if (preview3dDisabled) {
-      return (
-        <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
-          3D preview disabled via feature flags
-        </div>
-      );
-    }
-
-    if (!dockCenterFlags.enableViewportCanvas) {
-      return (
-        <div className="flex h-full items-center justify-center text-xs text-muted-foreground/50">
-          ViewportCanvasArea disabled by diagnostic flag
-        </div>
-      );
-    }
-
-    return <ViewportCanvasArea />;
-  };
-
-  const previewNotices = previewNoticesVisible ? (
-    <>
-      {(spatialPreview?.auto_downscaled || tp.liveState?.preview_auto_downscaled) && (
-        <div
-          className="border-b border-border/25 bg-background/40 px-2.5 py-1 text-[0.65rem] leading-tight text-muted-foreground"
-          title={
-            spatialPreview?.auto_downscale_message ??
-            tp.liveState?.preview_auto_downscale_message ??
-            undefined
-          }
-        >
-          <span className="opacity-70 uppercase tracking-wider font-semibold mr-2 text-[0.6rem]">Resolution Scale</span>
-          {spatialPreview?.auto_downscale_message ??
-            tp.liveState?.preview_auto_downscale_message ??
-            `Preview auto-fit to ${vp.previewGrid[0]}×${vp.previewGrid[1]}×${vp.previewGrid[2]}`}
-        </div>
-      )}
-      {(vp.previewMessage || vp.previewIsStale || vp.previewIsInitialSampleStale) && (
-        <div className="border-b border-border/40 bg-card/40 px-2.5 py-1.5 text-xs leading-snug text-muted-foreground">
-          {vp.previewMessage ??
-            (vp.previewIsInitialSampleStale
-              ? "Showing bootstrap preview until first live preview sample arrives 3"
-              : "Preview update pending")}
-        </div>
-      )}
-    </>
-  ) : null;
-
   if (!dockCenterFlags.enableTabsShell) {
     const tab = activeTab ?? tabs[0]!;
     return (
       <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
-        {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar && !activeTabIsCharts ? <ViewportBar /> : null}
+        {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar && !activeTabIsCharts ? (
+          <ViewportBar />
+        ) : null}
         {previewNotices}
-        <div className="min-h-0 min-w-0 flex-1">
-          {renderTabContent(tab)}
-        </div>
+        <div className="min-h-0 min-w-0 flex-1">{renderTabContent(tab)}</div>
       </div>
     );
   }
@@ -390,54 +208,12 @@ export default function DockCenterTabs() {
       onValueChange={(nextId) => activateTab(currentStage, nextId)}
       className="flex min-h-0 min-w-0 flex-1 flex-col"
     >
-      {dockCenterFlags.enableTabsHeader ? (
-        <div className="shrink-0 border-b border-border bg-card/40 px-2 pt-1.5">
-          <TabsList className="h-8 w-full justify-start gap-1 overflow-x-auto bg-transparent p-0 pb-0">
-            {tabs.map((tab) => (
-              <TabsTrigger
-                key={tab.id}
-                value={tab.id}
-                className={cn(
-                  "group relative h-8 min-w-[120px] max-w-[220px] justify-start gap-1 rounded-none rounded-t-md border-b-0 border border-transparent bg-transparent px-2.5 py-0 text-[0.7rem] normal-case tracking-wide text-muted-foreground transition-colors hover:text-foreground",
-                  "data-[state=active]:border-border data-[state=active]:border-t-2 data-[state=active]:border-t-primary data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-none",
-                  "after:absolute after:-bottom-[1px] after:left-0 after:right-0 after:h-[1px] data-[state=active]:after:bg-background",
-                )}
-                title={tab.title}
-              >
-                <span className="truncate">{tab.title}</span>
-                {tab.pinned ? <Pin className="size-3 opacity-65" /> : null}
-                {dockCenterFlags.enableInlineCloseButton && tab.closable && !tab.pinned ? (
-                  <div
-                    role="button"
-                    tabIndex={-1}
-                    className="ml-auto inline-flex size-4 items-center justify-center rounded-sm p-0 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-accent hover:text-accent-foreground"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      closeTab(currentStage, tab.id);
-                    }}
-                    onDoubleClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        closeTab(currentStage, tab.id);
-                      }
-                    }}
-                    title="Close tab"
-                    aria-label={`Close ${tab.title}`}
-                  >
-                    <X className="size-3" />
-                  </div>
-                ) : null}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </div>
-      ) : null}
+      <DockCenterTabHeader
+        stage={currentStage}
+        tabs={tabs}
+        flags={dockCenterFlags}
+        onCloseTab={closeTab}
+      />
 
       {tabs.map((tab) => {
         const isActive = tab.id === activeTab?.id;
@@ -451,7 +227,7 @@ export default function DockCenterTabs() {
             key={tab.id}
             value={tab.id}
             forceMount={shouldKeepWarm ? true : undefined}
-            className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
+            className="relative mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
           >
             {renderTabContent(tab)}
 
@@ -476,12 +252,12 @@ export default function DockCenterTabs() {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
-      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar && !activeTabIsCharts ? <ViewportBar /> : null}
+      {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar && !activeTabIsCharts ? (
+        <ViewportBar />
+      ) : null}
       {previewNotices}
       {dockCenterFlags.enableTooltipProvider ? (
-        <TooltipProvider delayDuration={300}>
-          {tabsNode}
-        </TooltipProvider>
+        <TooltipProvider delayDuration={300}>{tabsNode}</TooltipProvider>
       ) : (
         tabsNode
       )}

@@ -103,7 +103,11 @@ export function ViewportOverlayManager({
       if (!next) {
         return;
       }
-      setSize({ width: next.width, height: next.height });
+      setSize((previous) =>
+        previous.width === next.width && previous.height === next.height
+          ? previous
+          : { width: next.width, height: next.height },
+      );
     });
     observer.observe(element);
     return () => observer.disconnect();

@@ -14,6 +14,7 @@ import {
   upsertRecentSimulation,
 } from "@/lib/workspace/recent-simulations";
 import {
+  searchParamsForLaunchIntent,
   targetPathForLaunchIntent,
   type LaunchIntent,
 } from "@/lib/workspace/launch-intent";
@@ -78,14 +79,7 @@ export default function StartHubPage() {
 
   const openIntent = (intent: LaunchIntent) => {
     const target = targetPathForLaunchIntent(intent);
-    const params = new URLSearchParams();
-    if (intent.source) params.set("source", intent.source);
-    if (intent.entryPath) params.set("path", intent.entryPath);
-    if (intent.entryKind) params.set("kind", intent.entryKind);
-    if (intent.targetStage) params.set("stage", intent.targetStage);
-    if (intent.resumeProjectId) params.set("projectId", intent.resumeProjectId);
-    if (intent.displayName) params.set("name", intent.displayName);
-    if (intent.launchAssetId) params.set("asset", intent.launchAssetId);
+    const params = searchParamsForLaunchIntent(intent);
     recordFrontendDebugEvent(
       "start-hub",
       "router_push_launch_intent",
