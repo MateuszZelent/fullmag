@@ -37,7 +37,16 @@ function findTabSetByComponent(model: IJsonModel, component: string): IJsonTabSe
     if (found) return;
     if (!node || typeof node !== "object") return;
     const record = node as Partial<IJsonTabSetNode> & { children?: unknown[] };
-    if (record.type === "tabset" && record.component === component) {
+    if (
+      record.type === "tabset" &&
+      record.children?.some(
+        (child) =>
+          Boolean(child) &&
+          typeof child === "object" &&
+          (child as { type?: unknown; component?: unknown }).type === "tab" &&
+          (child as { component?: unknown }).component === component,
+      )
+    ) {
       found = node as IJsonTabSetNode;
       return;
     }
@@ -56,6 +65,39 @@ function findBottomBorder(model: IJsonModel): IJsonBorderNode | null {
   return (model.borders ?? []).find(
     (border) => (border as IJsonBorderNode).location === "bottom",
   ) as IJsonBorderNode | null;
+}
+
+function findNestedCenterBottomTabsets(model: IJsonModel): {
+  center: IJsonTabSetNode | null;
+  bottom: IJsonTabSetNode | null;
+} {
+  let center: IJsonTabSetNode | null = null;
+  let bottom: IJsonTabSetNode | null = null;
+
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    const record = node as Partial<IJsonTabSetNode> & { children?: unknown[] };
+    if (record.type === "tabset") {
+      const hasComponent = (component: string) =>
+        record.children?.some(
+          (child) =>
+            Boolean(child) &&
+            typeof child === "object" &&
+            (child as { type?: unknown; component?: unknown }).type === "tab" &&
+            (child as { component?: unknown }).component === component,
+        ) ?? false;
+      if (hasComponent("dock-center")) center = node as IJsonTabSetNode;
+      if (hasComponent("dock-bottom")) bottom = node as IJsonTabSetNode;
+    }
+    if (Array.isArray(record.children)) {
+      for (const child of record.children) {
+        visit(child);
+      }
+    }
+  };
+
+  visit(model.layout);
+  return { center, bottom };
 }
 
 describe("dock layout contract", () => {
@@ -216,5 +258,37 @@ describe("dock layout contract", () => {
 
     expect(repairedLeft?.minWidth ?? 0).toBeGreaterThanOrEqual(DOCKING_MIN_WIDTH_LEFT);
     expect(repairedBottom?.size ?? 0).toBeGreaterThanOrEqual(DOCKING_MIN_HEIGHT_BOTTOM);
+  });
+
+  it("normalizes persisted center and bottom weights so the viewport gets the available height", () => {
+    const desktopDefault = createDefaultDockLayout("desktop");
+    const persisted = JSON.parse(JSON.stringify(desktopDefault)) as IJsonModel;
+    const mainColumn = (persisted.layout.children?.[1] ?? null) as
+      | { children?: IJsonTabSetNode[] }
+      | null;
+    const center = mainColumn?.children?.[0];
+    const bottom = mainColumn?.children?.[1];
+    if (!center || !bottom) {
+      throw new Error("default desktop layout shape changed");
+    }
+    center.weight = 42;
+    bottom.weight = 58;
+
+    const repaired = parseDockLayoutRecordForPreset(
+      {
+        dockingLayoutSchemaVersion: 1,
+        templateId: "default-desktop",
+        model: persisted,
+      },
+      "desktop",
+    );
+    const normalized = findNestedCenterBottomTabsets(repaired.model);
+
+    expect(normalized.center?.weight).toBe(100);
+    expect(normalized.bottom?.weight).toBe(12);
+    expect(repaired.wasRecovered).toBe(true);
+    expect(repaired.lastRepairReason).toBe(
+      "Normalized center/bottom dock weights for full-height viewport.",
+    );
   });
 });

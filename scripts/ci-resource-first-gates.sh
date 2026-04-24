@@ -61,7 +61,7 @@ collect_signatures() {
     # rg exits 1 when no matches; treat as empty.
     : > "$rg_out"
   fi
-  sed -e 's/[[:space:]]\+$//' "$rg_out" | sort -u > "$dst"
+  sed -e "s#^${REPO_ROOT}/##" -e 's/[[:space:]]\+$//' "$rg_out" | sort -u > "$dst"
 }
 
 run_gate() {
@@ -122,6 +122,29 @@ run_gate \
   'session\.current\(|/v1/live/current/state|useCurrentLiveSnapshot|lib/useSessionStream' \
   "$ALLOWLIST_DIR/frontend-snapshot-state.allowlist" \
   "$REPO_ROOT/apps/web"
+
+run_gate \
+  "frontend-direct-api-client" \
+  "Frontend Direct API Client Gate" \
+  'getLiveApiClient|@/src/api/client/LiveApiClient|(?:\.\./)+src/api/client/LiveApiClient' \
+  "$ALLOWLIST_DIR/frontend-direct-api-client.allowlist" \
+  "$REPO_ROOT/apps/web/components" \
+  "$REPO_ROOT/apps/web/app" \
+  "$REPO_ROOT/apps/web/features" \
+  "$REPO_ROOT/apps/web/src/features" \
+  "$REPO_ROOT/apps/web/hooks" \
+  "$REPO_ROOT/apps/web/lib"
+
+run_gate \
+  "frontend-relative-src-imports" \
+  "Frontend Relative src/ Import Gate" \
+  'from[[:space:]]+["'\''](?:\.\./)+src/[^"'\'']+["'\'']' \
+  "$ALLOWLIST_DIR/frontend-relative-src-imports.allowlist" \
+  "$REPO_ROOT/apps/web/components" \
+  "$REPO_ROOT/apps/web/app" \
+  "$REPO_ROOT/apps/web/features" \
+  "$REPO_ROOT/apps/web/hooks" \
+  "$REPO_ROOT/apps/web/lib"
 
 run_gate \
   "backend-main-public-legacy-routes" \

@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 import type { WorkspaceMode } from "@/components/runs/control-room/context-hooks";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
@@ -45,13 +46,20 @@ const StandaloneFemSceneDiagnosticViewport = dynamic(
 );
 
 export default function WorkspaceShell({ initialStage }: WorkspaceShellProps) {
+  const searchParams = useSearchParams();
+
   if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableWorkspaceShell) {
     return <WorkspaceLoadingShell label="WorkspaceShell disabled (workspace.enableWorkspaceShell = false)." />;
   }
 
-  const diagnosticMode = String(
-    FRONTEND_DIAGNOSTIC_FLAGS.workspace.standaloneDiagnosticViewportMode,
-  );
+  const requestedDiagnosticMode = searchParams.get("diagnosticViewport");
+  const diagnosticMode =
+    requestedDiagnosticMode === "three" ||
+    requestedDiagnosticMode === "r3f" ||
+    requestedDiagnosticMode === "fem" ||
+    requestedDiagnosticMode === "fem-scene"
+      ? requestedDiagnosticMode
+      : String(FRONTEND_DIAGNOSTIC_FLAGS.workspace.standaloneDiagnosticViewportMode);
   if (diagnosticMode === "three") {
     return <StandaloneThreeDiagnosticViewport />;
   }

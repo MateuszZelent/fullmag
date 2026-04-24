@@ -52,9 +52,9 @@ const UnifiedViewport3D = memo(function UnifiedViewport3D({
       data-discretization={discretization}
       data-fallback-mode={fallbackMode}
       data-scene-loading={model?.status.loading ? "true" : "false"}
-      data-layer-primitives={layerVisibility?.showPrimitives ? "on" : "off"}
-      data-layer-mesh={layerVisibility?.showMesh ? "on" : "off"}
-      data-layer-quantity={layerVisibility?.showQuantity ? "on" : "off"}
+      data-layer-authoring-primitives={layerVisibility?.showPrimitives ? "on" : "off"}
+      data-layer-explicit-topology={layerVisibility?.showMesh ? "on" : "off"}
+      data-layer-vector-field={layerVisibility?.showQuantity ? "on" : "off"}
     >
       {showBoundsLayer ? (
         <BoundsLayer visible>{content}</BoundsLayer>

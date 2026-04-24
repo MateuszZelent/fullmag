@@ -27,7 +27,7 @@ export const REQUIRED_DOCK_PANEL_COMPONENTS: DockPanelComponent[] = [
 export const DOCKING_MIN_WIDTH_LEFT = 220;
 export const DOCKING_MIN_WIDTH_RIGHT = 220;
 export const DOCKING_MIN_WIDTH_CENTER = 360;
-export const DOCKING_MIN_HEIGHT_BOTTOM = 180;
+export const DOCKING_MIN_HEIGHT_BOTTOM = 140;
 
 export interface DockPanelDefaults {
   component: DockPanelComponent;
@@ -203,7 +203,7 @@ function makeDesktopRootLayout(params: {
     borders: params.rightBottomInBorder
       ? [
           createRightPanelTabBorder(360, "dock-right", "dock-right"),
-          createBottomPanelTabBorder(300, "dock-bottom", "dock-bottom"),
+          createBottomPanelTabBorder(220, "dock-bottom", "dock-bottom"),
         ]
       : [],
     layout: mainRow,
@@ -247,7 +247,7 @@ function makeTabletLayout(): IJsonModel {
     },
     borders: [
       createRightPanelTabBorder(360, "dock-right", "dock-right"),
-      createBottomPanelTabBorder(300, "dock-bottom", "dock-bottom"),
+      createBottomPanelTabBorder(220, "dock-bottom", "dock-bottom"),
     ],
     layout: {
       type: "row",
@@ -287,7 +287,7 @@ function makeMobileLayout(): IJsonModel {
     borders: [
       createLeftPanelTabBorder(260, "dock-left", "dock-left"),
       createRightPanelTabBorder(280, "dock-right", "dock-right"),
-      createBottomPanelTabBorder(260, "dock-bottom", "dock-bottom"),
+      createBottomPanelTabBorder(220, "dock-bottom", "dock-bottom"),
     ],
     layout: {
       type: "row",
@@ -305,10 +305,10 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
     preset: "desktop",
     model: makeDesktopRootLayout({
       leftWeight: 18,
-      centerColumnWeight: 62,
+      centerColumnWeight: 64,
       rightWeight: 20,
       centerWeight: 100,
-      bottomWeight: 18,
+      bottomWeight: 12,
       rightBottomInBorder: false,
     }),
     panels: {
@@ -330,7 +330,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       "dock-bottom": {
         component: "dock-bottom",
         label: "Pasek narzędzi",
-        preferredHeightPx: 250,
+        preferredHeightPx: 156,
       },
     },
   },
@@ -341,10 +341,10 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
     preset: "desktop",
     model: makeDesktopRootLayout({
       leftWeight: 16,
-      centerColumnWeight: 56,
+      centerColumnWeight: 58,
       rightWeight: 18,
       centerWeight: 100,
-      bottomWeight: 26,
+      bottomWeight: 16,
       rightBottomInBorder: false,
     }),
     panels: {
@@ -366,7 +366,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       "dock-bottom": {
         component: "dock-bottom",
         label: "Pasek analityczny",
-        preferredHeightPx: 340,
+        preferredHeightPx: 220,
       },
     },
   },
@@ -380,7 +380,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       centerColumnWeight: 58,
       rightWeight: 18,
       centerWeight: 100,
-      bottomWeight: 20,
+      bottomWeight: 14,
       rightBottomInBorder: false,
     }),
     panels: {
@@ -402,7 +402,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       "dock-bottom": {
         component: "dock-bottom",
         label: "Pasek telemetry",
-        preferredHeightPx: 260,
+        preferredHeightPx: 176,
       },
     },
   },
@@ -416,7 +416,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       centerColumnWeight: 68,
       rightWeight: 12,
       centerWeight: 100,
-      bottomWeight: 18,
+      bottomWeight: 12,
       rightBottomInBorder: false,
     }),
     panels: {
@@ -438,7 +438,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       "dock-bottom": {
         component: "dock-bottom",
         label: "Pasek telemetry",
-        preferredHeightPx: 220,
+        preferredHeightPx: 156,
       },
     },
   },
@@ -464,7 +464,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       "dock-bottom": {
         component: "dock-bottom",
         label: "Pasek telemetry",
-        preferredHeightPx: 300,
+        preferredHeightPx: 220,
       },
     },
   },

@@ -1,42 +1,44 @@
 ---
 name: physics-publication
-description: "Use when adding or modifying any Fullmag physics or numerics feature. Create or update a publication-style note in docs/physics before writing code."
+description: "Use when adding or modifying any Fullmag physics or numerics feature. Create or update a publication-style docs/physics note before code, then propagate semantics through Python DSL, ProblemIR, planner, runtime, OpenAPI, and unified workspace surfaces."
 ---
 
-# Physics publication skill
+# Fullmag Physics Publication
 
 ## Goal
 
-Enforce the project rule: physics first, implementation second.
+Enforce Fullmag's rule: physics first, implementation second. A solver patch without a canonical physical model, units, validation plan, and provenance impact is not implementation-ready.
 
 ## When to trigger
 
-- adding a new energy term, dynamics model, or numerical method,
-- changing equations, assumptions, or units,
-- changing backend interpretation, execution-selection semantics, or validation scope,
-- changing shared problem semantics for physics-facing features.
+- adding or changing an energy term, dynamics model, boundary condition, coupling, mesh interpretation, solver stage, observable, or numerical method,
+- changing equations, units, assumptions, tolerances, stop criteria, or validation scope,
+- changing backend interpretation, execution-selection semantics, capability coverage, or provenance,
+- changing physics-facing UI authoring, script export, runtime resources, live quantities, or artifacts.
 
 ## Required outputs
 
-1. A `docs/physics/<topic>.md` note based on `docs/physics/TEMPLATE.md`
-2. Governing equations, symbols, SI units, assumptions, and approximations
-3. Explicit FDM, FEM, CPU, GPU, and hybrid interpretation where relevant
-4. Python API, UI authoring, and script-export impact
-5. `ProblemIR` impact
-6. Planner, capability-matrix, and runtime-selection impact
-7. Control-room resource/API impact when live quantities, stage state, or runtime metadata changes
-8. Validation strategy, observables, tolerances, and provenance expectations
-9. Completeness checklist and deferred work
+1. A `docs/physics/<topic>.md` note based on `docs/physics/TEMPLATE.md`.
+2. Physical problem statement, governing equations, symbols, SI units, assumptions, validity limits, and observables.
+3. Explicit FDM and FEM interpretation, including CPU/GPU and precision implications where relevant.
+4. Public Python DSL impact and UI script-export/round-trip impact.
+5. `ProblemIR` lowering, validation, normalization, and migration impact.
+6. Planner, capability matrix, execution selection, runtime stage lifecycle, and provenance impact.
+7. OpenAPI/resource impact when domain, mesh, fields, quantities, scalars, commands, stages, artifacts, realtime events, or diagnostics change.
+8. Unified workspace impact: ribbon commands, resource hooks, domain adapters, viewport layers, docks, and inspector panels.
+9. Validation strategy, reference oracle, tolerances, artifacts, and regression tests.
+10. Completeness checklist and deferred work.
 
 ## Blocker policy
 
-If the note is missing or incomplete, implementation is blocked.
+If the physics note is missing, incomplete, or vague about units/validity/backend interpretation, implementation is blocked. Do not hide this as "follow-up docs."
 
 ## Cascade
 
-After this skill completes, run:
+After the physics note is complete, apply the relevant skills in this order:
 
 1. `problem-ir-design`
 2. `python-api-class`
 3. `capability-matrix-check`
-4. `resource-first-api-check` when browser/API/runtime resources are affected
+4. `resource-first-api-check` when browser/API/runtime resources, OpenAPI, generated types, realtime events, commands, codecs, or viewport data are affected
+5. `adr-check` when the decision changes architecture or long-lived migration policy

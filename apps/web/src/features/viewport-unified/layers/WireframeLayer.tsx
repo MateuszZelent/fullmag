@@ -11,5 +11,9 @@ export function WireframeLayer({ visible = true, children = null }: WireframeLay
   if (!visible) {
     return <>{children}</>;
   }
-  return <div data-viewport-layer="wireframe">{children}</div>;
+  return (
+    <div className="h-full min-h-0 w-full" data-viewport-layer="wireframe">
+      {children}
+    </div>
+  );
 }

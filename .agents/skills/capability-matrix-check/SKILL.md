@@ -1,31 +1,33 @@
 ---
 name: capability-matrix-check
-description: "Use when changing backend legality, execution modes, or capability coverage in Fullmag."
+description: "Use when changing Fullmag backend legality, execution modes, planner resolution, capability vocabulary, or UI/runtime capability exposure across OpenAPI and the unified workspace."
 ---
 
-# Capability matrix check skill
+# Fullmag Capability Matrix Check
 
 ## Preconditions
 
 - The relevant `docs/physics/` note exists.
-- `ProblemIR`, Python API, and UI authoring implications are already understood.
+- Python DSL, `ProblemIR`, planner, runtime, provenance, OpenAPI, and UI implications are understood.
+- The change is framed as a physical capability first, not a backend switch hidden in UI state.
 
-## Checklist
+## Required Checks
 
-1. Is the feature legal in `strict`?
-2. What is only legal in `extended`, and why?
-3. What does hybrid execution require?
-4. Which requested execution choices (`fdm` / `fem` / `cpu` / `gpu` / `auto` / precision) are legal?
-5. What may the planner resolve automatically, and what must stay explicit to the user?
-6. Do the Python API and UI expose the feature without leaking backend internals?
-7. Do capability maps and domain adapters let the UI stay unified across FDM/FEM without backend
-   tree branching?
-8. Do session/run/provenance views distinguish requested vs resolved execution clearly enough?
-9. What tests or smoke checks are required?
+1. Classify legality for `strict`, `extended`, and future `hybrid`.
+2. Classify requested execution choices: discretization (`fdm`, `fem`, `auto`), device (`cpu`, `gpu`, `auto`), precision (`single`, `double`), execution mode, and UI mode.
+3. State what the planner may resolve automatically and what must remain visible as requested user intent.
+4. State failure, degradation, and diagnostic behavior for unsupported paths. Hidden fallback is not allowed.
+5. Keep Python DSL and UI authoring vocabulary aligned with `ProblemIR`; do not expose CUDA image names, MFEM internals, raw buffers, or implementation-only toggles as common semantics.
+6. Update capability maps so the unified workspace can guard commands, panels, and viewport layers without branching into separate FDM/FEM app trees.
+7. Ensure OpenAPI schemas, generated frontend types, API modules, and resource hooks expose the capability vocabulary consistently.
+8. Ensure session/run/provenance surfaces preserve requested intent, resolved backend/runtime, precision, degraded mode, and stage stop reasons where relevant.
+9. Add tests covering planner capability decisions, OpenAPI/type generation impact, UI command gating, and unavailable-path diagnostics.
 
 ## Outputs
 
-- Update `docs/specs/capability-matrix-v0.md`
-- Update `docs/specs/resource-first-control-room-api-v1.md` when capability vocabulary changes
+- Update `docs/specs/capability-matrix-v0.md`.
+- Update OpenAPI source/specs and generated frontend types when capability vocabulary appears in browser contracts.
+- Update `docs/specs/resource-first-control-room-api-v1.md` only when resource semantics change; OpenAPI is the executable browser contract.
 - Record explicit go/no-go status for FDM, FEM, CPU, GPU, and hybrid where relevant
 - Record fallback and diagnostic behavior for unavailable execution paths
+- Update domain adapters, command registry/ribbon gating, and unified viewport capabilities when the browser can see or act on the capability.

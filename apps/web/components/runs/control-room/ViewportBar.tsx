@@ -1,6 +1,27 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useReducer } from "react";
+import type { LucideIcon } from "lucide-react";
+import {
+  Activity,
+  Bug,
+  Camera,
+  Eye,
+  Focus,
+  Hand,
+  Info,
+  Layers3,
+  Magnet,
+  Maximize2,
+  Monitor,
+  Move,
+  Palette,
+  RotateCw,
+  ScanLine,
+  Settings2,
+  Sparkles,
+  Zap,
+} from "lucide-react";
 
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
@@ -181,12 +202,55 @@ function toStatusResourcesSnapshot(
 type GeometryTool = "camera" | "select" | "move" | "rotate" | "scale";
 
 const ROW_B_BUTTON_CLASS =
-  "h-7 rounded border border-border/35 bg-background/45 px-2 text-[0.68rem] text-foreground transition-colors hover:bg-muted/70 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex h-7 items-center gap-1.5 rounded-md border border-transparent bg-transparent px-2 text-[0.68rem] font-medium text-muted-foreground transition-colors hover:border-border/45 hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35";
 const ROW_B_BUTTON_ACTIVE_CLASS =
-  "h-7 rounded border border-primary/45 bg-primary/20 px-2 text-[0.68rem] text-primary transition-colors disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex h-7 items-center gap-1.5 rounded-md border border-primary/35 bg-primary/12 px-2 text-[0.68rem] font-semibold text-primary transition-colors disabled:cursor-not-allowed disabled:opacity-35";
 const ROW_B_GROUP_TITLE_CLASS =
-  "text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground";
+  "mr-1 text-[0.58rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70";
 const ROW_B_HINT_CLASS = "text-[0.66rem] text-muted-foreground";
+const ROW_B_GROUP_CLASS =
+  "flex min-h-8 flex-wrap items-center gap-0.5 border-r border-border/25 pr-2 last:border-r-0";
+const ROW_B_SHORTCUT_CLASS =
+  "rounded border border-border/35 bg-background/55 px-1 py-0.5 text-[0.55rem] font-semibold uppercase leading-none text-muted-foreground/80";
+const ROW_B_ICON_CLASS = "h-3.5 w-3.5 shrink-0 opacity-85";
+
+interface ToolbarActionButtonProps {
+  label: string;
+  icon: LucideIcon;
+  shortcut?: string;
+  active?: boolean;
+  disabled?: boolean;
+  title?: string;
+  pressed?: boolean;
+  onClick: () => void;
+}
+
+function ToolbarActionButton({
+  label,
+  icon: Icon,
+  shortcut,
+  active = false,
+  disabled = false,
+  title,
+  pressed,
+  onClick,
+}: ToolbarActionButtonProps) {
+  return (
+    <button
+      type="button"
+      className={active ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={label}
+      aria-pressed={pressed}
+    >
+      <Icon className={ROW_B_ICON_CLASS} />
+      <span>{label}</span>
+      {shortcut ? <span className={ROW_B_SHORTCUT_CLASS}>{shortcut}</span> : null}
+    </button>
+  );
+}
 
 function isEditableTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
@@ -755,212 +819,245 @@ export const ViewportBar = memo(function ViewportBar() {
         controlReasons={viewport3DControlReasons}
       />
 
-      <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-t border-border/20">
-        <span className={ROW_B_GROUP_TITLE_CLASS}>Tools</span>
-        {(
-          [
-            { tool: "camera", label: "Q Camera", disabled: !supports3D, title: "Camera navigation mode (Q)" },
-            { tool: "select", label: "S Select", disabled: !supportsAuthoring, title: supportsAuthoring ? "Selection mode (S)." : authoringUnavailableReason },
-            { tool: "move", label: "W Move", disabled: !supportsAuthoring, title: supportsAuthoring ? "Move tool (W)." : authoringUnavailableReason },
-            { tool: "rotate", label: "E Rotate", disabled: !supportsAuthoring, title: supportsAuthoring ? "Rotate tool (E)." : authoringUnavailableReason },
-            { tool: "scale", label: "R Scale", disabled: !supportsAuthoring, title: supportsAuthoring ? "Scale tool (R)." : authoringUnavailableReason },
-          ] as Array<{ tool: GeometryTool; label: string; disabled: boolean; title: string }>
-        ).map((entry) => (
-          <button
-            key={entry.tool}
-            type="button"
-            className={activeTool === entry.tool ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-            onClick={() => setTool(entry.tool)}
-            disabled={entry.disabled}
-            title={entry.title}
-          >
-            {entry.label}
-          </button>
-        ))}
+      <div
+        className="border-t border-border/20 bg-background/70 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]"
+        role="toolbar"
+        aria-label="Viewport tools"
+      >
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <div className={ROW_B_GROUP_CLASS}>
+            <span className={ROW_B_GROUP_TITLE_CLASS}>Tools</span>
+            {(
+              [
+                {
+                  tool: "camera",
+                  label: "Camera",
+                  shortcut: "Q",
+                  icon: Camera,
+                  disabled: !supports3D,
+                  title: "Camera navigation mode (Q)",
+                },
+                {
+                  tool: "select",
+                  label: "Select",
+                  shortcut: "S",
+                  icon: Hand,
+                  disabled: !supportsAuthoring,
+                  title: supportsAuthoring ? "Selection mode (S)." : authoringUnavailableReason,
+                },
+                {
+                  tool: "move",
+                  label: "Move",
+                  shortcut: "W",
+                  icon: Move,
+                  disabled: !supportsAuthoring,
+                  title: supportsAuthoring ? "Move tool (W)." : authoringUnavailableReason,
+                },
+                {
+                  tool: "rotate",
+                  label: "Rotate",
+                  shortcut: "E",
+                  icon: RotateCw,
+                  disabled: !supportsAuthoring,
+                  title: supportsAuthoring ? "Rotate tool (E)." : authoringUnavailableReason,
+                },
+                {
+                  tool: "scale",
+                  label: "Scale",
+                  shortcut: "R",
+                  icon: Maximize2,
+                  disabled: !supportsAuthoring,
+                  title: supportsAuthoring ? "Scale tool (R)." : authoringUnavailableReason,
+                },
+              ] as Array<{
+                tool: GeometryTool;
+                label: string;
+                shortcut: string;
+                icon: LucideIcon;
+                disabled: boolean;
+                title: string;
+              }>
+            ).map((entry) => (
+              <ToolbarActionButton
+                key={entry.tool}
+                label={entry.label}
+                shortcut={entry.shortcut}
+                icon={entry.icon}
+                active={activeTool === entry.tool}
+                disabled={entry.disabled}
+                title={entry.title}
+                pressed={activeTool === entry.tool}
+                onClick={() => setTool(entry.tool)}
+              />
+            ))}
+            <ToolbarActionButton
+              label="Snap"
+              shortcut="G"
+              icon={Magnet}
+              active={builderSnapSettings.enabled}
+              disabled={!supportsAuthoring}
+              title={supportsAuthoring ? "Toggle transform snap (G)." : authoringUnavailableReason}
+              pressed={builderSnapSettings.enabled}
+              onClick={() => {
+                const next = !builderSnapSettings.enabled;
+                toggleBuilderSnap();
+                dispatchToolbar({ type: "setSnapEnabled", value: next });
+              }}
+            />
+            <ToolbarActionButton
+              label="Snap Settings"
+              icon={Settings2}
+              active={snapSettingsOpen}
+              disabled={!supportsAuthoring}
+              title={supportsAuthoring ? "Open snap settings." : authoringUnavailableReason}
+              pressed={snapSettingsOpen}
+              onClick={() => dispatchToolbar({ type: "togglePopover", key: "snapSettings" })}
+            />
+            <ToolbarActionButton
+              label="Focus"
+              shortcut="F"
+              icon={Focus}
+              disabled={!canFocusSelected}
+              title={canFocusSelected ? "Focus selected (F)" : "Requires selected object or authoring_primitives."}
+              onClick={() => focusSelected()}
+            />
+            <ToolbarActionButton
+              label="Frame All"
+              shortcut="Shift+F"
+              icon={ScanLine}
+              disabled={!canFrameAll}
+              title={canFrameAll ? "Frame all (Shift+F)." : authoringUnavailableReason}
+              onClick={() => frameAll()}
+            />
+          </div>
 
-        <button
-          type="button"
-          className={builderSnapSettings.enabled ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => {
-            const next = !builderSnapSettings.enabled;
-            toggleBuilderSnap();
-            dispatchToolbar({ type: "setSnapEnabled", value: next });
-          }}
-          disabled={!supportsAuthoring}
-          title={supportsAuthoring ? "Toggle transform snap (G)." : authoringUnavailableReason}
-        >
-          G Snap
-        </button>
+          <div className={ROW_B_GROUP_CLASS}>
+            <span className={ROW_B_GROUP_TITLE_CLASS}>View</span>
+            <ToolbarActionButton
+              label="Context"
+              icon={Layers3}
+              active={model.objectViewMode === "context"}
+              title="Show context objects"
+              pressed={model.objectViewMode === "context"}
+              onClick={() => {
+                model.setObjectViewMode("context");
+                dispatchToolbar({ type: "setObjectView", value: "context" });
+              }}
+            />
+            <ToolbarActionButton
+              label="Isolate"
+              icon={Eye}
+              active={model.objectViewMode === "isolate"}
+              title="Isolate selected object"
+              pressed={model.objectViewMode === "isolate"}
+              onClick={() => {
+                model.setObjectViewMode("isolate");
+                dispatchToolbar({ type: "setObjectView", value: "isolate" });
+              }}
+            />
+            <ToolbarActionButton
+              label={vectorsEnabled ? "Vectors On" : "Vectors Off"}
+              icon={Zap}
+              active={vectorsEnabled}
+              disabled={!supports3D}
+              title={supports3D ? "Toggle vectors/glyph layer" : "Requires preview_3d capability."}
+              pressed={vectorsEnabled}
+              onClick={() => toggleVectors()}
+            />
+            <ToolbarActionButton
+              label="Vector Settings"
+              icon={Settings2}
+              active={vectorsSettingsOpen}
+              disabled={!supports3D}
+              title={supports3D ? "Open vectors settings" : "Requires preview_3d capability."}
+              pressed={vectorsSettingsOpen}
+              onClick={() => dispatchToolbar({ type: "togglePopover", key: "vectors" })}
+            />
+            <ToolbarActionButton
+              label="Color"
+              icon={Palette}
+              active={colorSettingsOpen}
+              disabled={!supports3D}
+              title={supports3D ? "Color popover: surface/arrow/voxel color modes." : "Requires preview_3d capability."}
+              pressed={colorSettingsOpen}
+              onClick={() => dispatchToolbar({ type: "togglePopover", key: "color" })}
+            />
+            <ToolbarActionButton
+              label="Display"
+              icon={Monitor}
+              active={displaySettingsOpen}
+              disabled={!supports3D}
+              title={supports3D ? "Display popover: quality and visual profile controls." : "Requires preview_3d capability."}
+              pressed={displaySettingsOpen}
+              onClick={() => dispatchToolbar({ type: "togglePopover", key: "display" })}
+            />
+            <ToolbarActionButton
+              label="Topography"
+              icon={Sparkles}
+              active={topographySettingsOpen}
+              disabled={!supportsStructuredGrid}
+              title={supportsStructuredGrid ? "Topography popover for structured-grid views." : "Requires structured_grid capability."}
+              pressed={topographySettingsOpen}
+              onClick={() => dispatchToolbar({ type: "togglePopover", key: "topography" })}
+            />
+            <ToolbarActionButton
+              label="Camera"
+              icon={Camera}
+              active={cameraSettingsOpen}
+              disabled={!supports3D}
+              title={supports3D ? "Camera popover: projection, navigation, presets." : "Requires preview_3d capability."}
+              pressed={cameraSettingsOpen}
+              onClick={() => dispatchToolbar({ type: "togglePopover", key: "camera" })}
+            />
+            <ToolbarActionButton
+              label="Capture"
+              icon={ScanLine}
+              disabled={!supports3D}
+              title={supports3D ? "Screenshot" : "Requires preview_3d capability."}
+              onClick={() => viewport.handleCapture()}
+            />
+          </div>
 
-        <button
-          type="button"
-          className={snapSettingsOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => dispatchToolbar({ type: "togglePopover", key: "snapSettings" })}
-          disabled={!supportsAuthoring}
-          title={supportsAuthoring ? "Open snap settings." : authoringUnavailableReason}
-        >
-          Snap Settings
-        </button>
-
-        <button
-          type="button"
-          className={ROW_B_BUTTON_CLASS}
-          onClick={() => focusSelected()}
-          disabled={!canFocusSelected}
-          title={canFocusSelected ? "Focus selected (F)" : "Requires selected object or authoring_primitives."}
-        >
-          F Focus
-        </button>
-
-        <button
-          type="button"
-          className={ROW_B_BUTTON_CLASS}
-          onClick={() => frameAll()}
-          disabled={!canFrameAll}
-          title={canFrameAll ? "Frame all (Shift+F)." : authoringUnavailableReason}
-        >
-          Shift+F Frame All
-        </button>
-
-        <span className={ROW_B_GROUP_TITLE_CLASS}>Object View</span>
-        <button
-          type="button"
-          className={model.objectViewMode === "context" ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => {
-            model.setObjectViewMode("context");
-            dispatchToolbar({ type: "setObjectView", value: "context" });
-          }}
-          title="Show context objects"
-        >
-          Context
-        </button>
-        <button
-          type="button"
-          className={model.objectViewMode === "isolate" ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => {
-            model.setObjectViewMode("isolate");
-            dispatchToolbar({ type: "setObjectView", value: "isolate" });
-          }}
-          title="Isolate selected object"
-        >
-          Isolate
-        </button>
-
-        <button
-          type="button"
-          className={vectorsEnabled ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => toggleVectors()}
-          disabled={!supports3D}
-          title={supports3D ? "Toggle vectors/glyph layer" : "Requires preview_3d capability."}
-        >
-          Vectors {vectorsEnabled ? "ON" : "OFF"}
-        </button>
-
-        <button
-          type="button"
-          className={vectorsSettingsOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => dispatchToolbar({ type: "togglePopover", key: "vectors" })}
-          disabled={!supports3D}
-          title={supports3D ? "Open vectors settings" : "Requires preview_3d capability."}
-        >
-          Vectors Settings
-        </button>
-
-        <button
-          type="button"
-          className={colorSettingsOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => dispatchToolbar({ type: "togglePopover", key: "color" })}
-          disabled={!supports3D}
-          title={supports3D ? "Color popover: surface/arrow/voxel color modes." : "Requires preview_3d capability."}
-        >
-          Color
-        </button>
-
-        <button
-          type="button"
-          className={displaySettingsOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => dispatchToolbar({ type: "togglePopover", key: "display" })}
-          disabled={!supports3D}
-          title={supports3D ? "Display popover: quality and visual profile controls." : "Requires preview_3d capability."}
-        >
-          Display
-        </button>
-
-        <button
-          type="button"
-          className={topographySettingsOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => dispatchToolbar({ type: "togglePopover", key: "topography" })}
-          disabled={!supportsStructuredGrid}
-          title={supportsStructuredGrid ? "Topography popover for structured-grid views." : "Requires structured_grid capability."}
-        >
-          Topography
-        </button>
-
-        <button
-          type="button"
-          className={cameraSettingsOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => dispatchToolbar({ type: "togglePopover", key: "camera" })}
-          disabled={!supports3D}
-          title={supports3D ? "Camera popover: projection, navigation, presets." : "Requires preview_3d capability."}
-        >
-          Camera
-        </button>
-
-        <button
-          type="button"
-          className={ROW_B_BUTTON_CLASS}
-          onClick={() => viewport.handleCapture()}
-          disabled={!supports3D}
-          title={supports3D ? "Screenshot" : "Requires preview_3d capability."}
-        >
-          Screenshot
-        </button>
-
-        <button
-          type="button"
-          className={panelsOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => dispatchToolbar({ type: "togglePopover", key: "panels" })}
-          title="Panels popover: legend and part explorer."
-        >
-          Panels
-        </button>
-
-        <button
-          type="button"
-          className={infoOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => dispatchToolbar({ type: "togglePopover", key: "info" })}
-          title="Scene and renderer info"
-        >
-          Info
-        </button>
-
-        <button
-          type="button"
-          className={rotationDebugOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => dispatchToolbar({ type: "togglePopover", key: "rotationDebug" })}
-          disabled={!capabilities.diagnostics.enabled}
-          title={capabilities.diagnostics.enabled
-            ? "Rotation debug popover"
-            : (capabilities.diagnostics.reason ?? "Diagnostics unavailable")}
-        >
-          Rotation Debug
-        </button>
-
-        <button
-          type="button"
-          className={liveRenderDebugOpen ? ROW_B_BUTTON_ACTIVE_CLASS : ROW_B_BUTTON_CLASS}
-          onClick={() => dispatchToolbar({ type: "togglePopover", key: "liveRenderDebug" })}
-          disabled={!capabilities.diagnostics.enabled}
-          title={capabilities.diagnostics.enabled
-            ? "Live render debug popover"
-            : (capabilities.diagnostics.reason ?? "Diagnostics unavailable")}
-        >
-          Live Render Debug
-        </button>
-
-        <span className={ROW_B_HINT_CLASS}>
-          Capabilities: preview_3d={supports3D ? "yes" : "no"} · explicit_topology={supportsTopology ? "yes" : "no"} · structured_grid={supportsStructuredGrid ? "yes" : "no"} · authoring_tools={supportsAuthoring ? "active" : "inactive"}
-        </span>
+          <div className={ROW_B_GROUP_CLASS}>
+            <span className={ROW_B_GROUP_TITLE_CLASS}>Panels</span>
+            <ToolbarActionButton
+              label="Panels"
+              icon={Layers3}
+              active={panelsOpen}
+              title="Panels popover: legend and part explorer."
+              pressed={panelsOpen}
+              onClick={() => dispatchToolbar({ type: "togglePopover", key: "panels" })}
+            />
+            <ToolbarActionButton
+              label="Info"
+              icon={Info}
+              active={infoOpen}
+              title="Scene and renderer info"
+              pressed={infoOpen}
+              onClick={() => dispatchToolbar({ type: "togglePopover", key: "info" })}
+            />
+            {capabilities.diagnostics.enabled ? (
+              <>
+                <ToolbarActionButton
+                  label="Rotation Debug"
+                  icon={Bug}
+                  active={rotationDebugOpen}
+                  title="Rotation debug popover"
+                  pressed={rotationDebugOpen}
+                  onClick={() => dispatchToolbar({ type: "togglePopover", key: "rotationDebug" })}
+                />
+                <ToolbarActionButton
+                  label="Render Debug"
+                  icon={Activity}
+                  active={liveRenderDebugOpen}
+                  title="Live render debug popover"
+                  pressed={liveRenderDebugOpen}
+                  onClick={() => dispatchToolbar({ type: "togglePopover", key: "liveRenderDebug" })}
+                />
+              </>
+            ) : null}
+          </div>
+        </div>
       </div>
 
       {vectorsSettingsOpen ? (

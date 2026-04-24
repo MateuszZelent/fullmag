@@ -45,7 +45,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     useDockingShell: true,
     showRibbonBar: true,
     showSidebar: true,
-    showViewportBar: false,
+    showViewportBar: true,
     showPreviewNotices: true,
     showBottomDock: true,
     showRightInspector: true,
@@ -58,7 +58,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     useMinimalViewportSelectionPath: false,
     enableUnifiedViewport3D: true,
     // Stage-0 safe baseline: start with renderer host only, then enable toolbar modules incrementally.
-    enableUnifiedViewportToolbar: false,
+    enableUnifiedViewportToolbar: true,
     enableGlobalScalarCard: true,
     enableGridScalar2D: true,
     enableFemSlice2D: true,
@@ -293,7 +293,14 @@ function normalizeFrontendDiagnosticFlags(
   flags: FrontendDiagnosticFlags,
 ): FrontendDiagnosticFlags {
   const normalized = deepClone(flags) as FrontendDiagnosticFlags;
+  normalized.workspace.standaloneDiagnosticViewportMode = "off";
+  normalized.workspace.enableWorkspaceTree = true;
+  normalized.workspace.enableWorkspaceEntryPage = true;
+  normalized.workspace.enableWorkspaceShell = true;
+  normalized.workspace.enableRunControlRoom = true;
   normalized.shell.showRibbonBar = true;
+  normalized.shell.showViewportBar = true;
+  normalized.viewportRouting.enableUnifiedViewportToolbar = true;
   return normalized;
 }
 

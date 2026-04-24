@@ -1,0 +1,37 @@
+# Signature format:
+#   <path>:<matched_fragment>
+#
+# Temporary baseline for direct LiveApiClient access outside the resource/API boundary.
+# Components and feature UI should move through resource hooks/provider-backed adapters.
+# CI fails on any new finding outside this allowlist.
+
+apps/web/components/panels/settings/MaterialPanel.tsx:@/src/api/client/LiveApiClient
+apps/web/components/panels/settings/MaterialPanel.tsx:getLiveApiClient
+apps/web/components/runs/control-room/ControlRoomContext.tsx:../../../src/api/client/LiveApiClient
+apps/web/components/runs/control-room/ControlRoomContext.tsx:getLiveApiClient
+apps/web/components/runs/control-room/controlRoomApi.ts:@/src/api/client/LiveApiClient
+apps/web/components/runs/control-room/controlRoomApi.ts:getLiveApiClient
+apps/web/components/runs/control-room/hooks/useModelBuilderActions.ts:@/src/api/client/LiveApiClient
+apps/web/components/runs/control-room/hooks/useModelBuilderActions.ts:getLiveApiClient
+apps/web/components/runs/control-room/useCurrentAnalyzeArtifacts.ts:@/src/api/client/LiveApiClient
+apps/web/components/runs/control-room/useCurrentAnalyzeArtifacts.ts:getLiveApiClient
+apps/web/components/workspace/shell/StandaloneFemDiagnosticViewport.tsx:@/src/api/client/LiveApiClient
+apps/web/components/workspace/shell/StandaloneFemDiagnosticViewport.tsx:getLiveApiClient
+apps/web/components/workspace/shell/StandaloneFemSceneDiagnosticViewport.tsx:@/src/api/client/LiveApiClient
+apps/web/components/workspace/shell/StandaloneFemSceneDiagnosticViewport.tsx:getLiveApiClient
+apps/web/features/session-runtime/hooks/dataPlaneCache.ts:@/src/api/client/LiveApiClient
+apps/web/features/session-runtime/hooks/useDataPlaneBridge.ts:@/src/api/client/LiveApiClient
+apps/web/features/session-runtime/hooks/useDataPlaneBridge.ts:getLiveApiClient
+apps/web/hooks/useScalarChartHistory.ts:@/src/api/client/LiveApiClient
+apps/web/hooks/useScalarChartHistory.ts:getLiveApiClient
+apps/web/src/features/diagnostics/DiagnosticStore.ts:getLiveApiClient
+apps/web/lib/hooks/useRuntimeFeatureFlags.ts:@/src/api/client/LiveApiClient
+apps/web/lib/hooks/useRuntimeFeatureFlags.ts:getLiveApiClient
+apps/web/lib/hooks/useSessionPersistence.ts:@/src/api/client/LiveApiClient
+apps/web/lib/hooks/useSessionPersistence.ts:getLiveApiClient
+apps/web/lib/quantities/catalog.ts:@/src/api/client/LiveApiClient
+apps/web/lib/quantities/catalog.ts:getLiveApiClient
+apps/web/lib/useRuntimeCapabilities.ts:@/src/api/client/LiveApiClient
+apps/web/lib/useRuntimeCapabilities.ts:getLiveApiClient
+apps/web/lib/workspace/launch-intent-live.ts:@/src/api/client/LiveApiClient
+apps/web/lib/workspace/launch-intent-live.ts:getLiveApiClient

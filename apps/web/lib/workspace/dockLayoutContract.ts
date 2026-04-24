@@ -210,6 +210,89 @@ function clampNodeMinSizes(node: DockLayoutTreeNode): boolean {
   return changed;
 }
 
+function tabSetComponent(node: IJsonTabSetNode): DockPanelComponent | null {
+  const firstChild = node.children[0];
+  if (!firstChild || !isTabNode(firstChild) || !isString(firstChild.component)) {
+    return null;
+  }
+  return REQUIRED_DOCK_PANEL_COMPONENTS.includes(firstChild.component as DockPanelComponent)
+    ? (firstChild.component as DockPanelComponent)
+    : null;
+}
+
+function clampCenterBottomWeights(node: DockLayoutTreeNode): boolean {
+  let changed = false;
+
+  if (node.type === "row" && Array.isArray(node.children)) {
+    let center: IJsonTabSetNode | null = null;
+    let bottom: IJsonTabSetNode | null = null;
+
+    for (const child of node.children) {
+      if (!isTreeNode(child) || !isTabSetNode(child)) {
+        continue;
+      }
+      const component = tabSetComponent(child);
+      if (component === "dock-center") {
+        center = child;
+      } else if (component === "dock-bottom") {
+        bottom = child;
+      }
+    }
+
+    if (center && bottom) {
+      if (!isNumber(center.weight) || center.weight < 100) {
+        center.weight = 100;
+        changed = true;
+      }
+      if (!isNumber(bottom.weight) || bottom.weight > 12) {
+        bottom.weight = 12;
+        changed = true;
+      }
+    }
+  }
+
+  if ("children" in node && Array.isArray(node.children)) {
+    for (const child of node.children) {
+      if (isTreeNode(child) && clampCenterBottomWeights(child)) {
+        changed = true;
+      }
+    }
+  }
+
+  return changed;
+}
+
+function clampBorderPanelSizes(model: IJsonModel): boolean {
+  if (!Array.isArray(model.borders)) {
+    return false;
+  }
+
+  let changed = false;
+  for (const border of model.borders) {
+    if (!isPlainObject(border)) {
+      continue;
+    }
+
+    const firstChild = Array.isArray(border.children) ? border.children[0] : null;
+    const component =
+      isPlainObject(firstChild) && firstChild.type === "tab" && isString(firstChild.component)
+        ? firstChild.component
+        : null;
+    const requiredMinSize = component === "dock-bottom" ? DOCKING_MIN_HEIGHT_BOTTOM : null;
+
+    if (isNumber(requiredMinSize) && (!isNumber(border.minSize) || border.minSize < requiredMinSize)) {
+      border.minSize = requiredMinSize;
+      changed = true;
+    }
+    if (isNumber(border.size) && isNumber(border.minSize) && border.size < border.minSize) {
+      border.size = border.minSize;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
 function ensureGlobalDefaults(model: IJsonModel, templateModel: IJsonModel): IJsonModel {
   const next = cloneJson(model);
   next.global = {
@@ -471,22 +554,14 @@ function normalizeCandidateJson(value: unknown, preset: DockResponsivePreset): I
     reasons.push("Clamped layout min-size constraints to safe values.");
     changed = true;
   }
+  if (clampCenterBottomWeights(clamped.layout)) {
+    reasons.push("Normalized center/bottom dock weights for full-height viewport.");
+    changed = true;
+  }
 
-  if (Array.isArray(clamped.borders) && clamped.borders.some((border) => border.location === "bottom")) {
-    let touched = false;
-    for (const border of clamped.borders) {
-      if (!isPlainObject(border)) {
-        continue;
-      }
-      if (isNumber(border.size) && isNumber(border.minSize) && border.size < border.minSize) {
-        border.size = border.minSize;
-        touched = true;
-      }
-    }
-    if (touched) {
-      reasons.push("Clamped border sizes to satisfy min-size guardrails.");
-      changed = true;
-    }
+  if (clampBorderPanelSizes(clamped)) {
+    reasons.push("Clamped border sizes to satisfy min-size guardrails.");
+    changed = true;
   }
 
   if (!isNumber(candidateVersion) || candidateVersion < DOCKING_LAYOUT_SCHEMA_VERSION) {
@@ -552,20 +627,14 @@ export function normalizeDockLayoutRuntimeModel(
     reasons.push("Clamped layout min-size constraints to safe values.");
     changed = true;
   }
+  if (clampCenterBottomWeights(clamped.layout)) {
+    reasons.push("Normalized center/bottom dock weights for full-height viewport.");
+    changed = true;
+  }
 
-  // Clamp border sizes.
-  if (Array.isArray(clamped.borders)) {
-    let touched = false;
-    for (const border of clamped.borders) {
-      if (isPlainObject(border) && isNumber(border.size) && isNumber(border.minSize) && (border.size as number) < (border.minSize as number)) {
-        (border as Record<string, unknown>).size = border.minSize;
-        touched = true;
-      }
-    }
-    if (touched) {
-      reasons.push("Clamped border sizes to satisfy min-size guardrails.");
-      changed = true;
-    }
+  if (clampBorderPanelSizes(clamped)) {
+    reasons.push("Clamped border sizes to satisfy min-size guardrails.");
+    changed = true;
   }
 
   return { model: changed ? clamped : model, changed, repairReasons: reasons };

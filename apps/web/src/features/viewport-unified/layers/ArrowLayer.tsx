@@ -11,5 +11,9 @@ export function ArrowLayer({ visible = true, children = null }: ArrowLayerProps)
   if (!visible) {
     return <>{children}</>;
   }
-  return <div data-viewport-layer="arrows">{children}</div>;
+  return (
+    <div className="h-full min-h-0 w-full" data-viewport-layer="vector-field">
+      {children}
+    </div>
+  );
 }

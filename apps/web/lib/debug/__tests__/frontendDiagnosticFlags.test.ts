@@ -47,14 +47,32 @@ describe("frontendDiagnosticFlags loader", () => {
     memoryStorage.setItem(
       "fullmag.frontend_diagnostic_flags.v1",
       JSON.stringify({
+        workspace: {
+          standaloneDiagnosticViewportMode: "fem",
+          enableWorkspaceTree: false,
+          enableWorkspaceEntryPage: false,
+          enableWorkspaceShell: false,
+          enableRunControlRoom: false,
+        },
         shell: {
           showRibbonBar: false,
+          showViewportBar: false,
+        },
+        viewportRouting: {
+          enableUnifiedViewportToolbar: false,
         },
       }),
     );
 
     const loaded = loadFrontendDiagnosticFlagsFromStorage();
+    expect(loaded.workspace.standaloneDiagnosticViewportMode).toBe("off");
+    expect(loaded.workspace.enableWorkspaceTree).toBe(true);
+    expect(loaded.workspace.enableWorkspaceEntryPage).toBe(true);
+    expect(loaded.workspace.enableWorkspaceShell).toBe(true);
+    expect(loaded.workspace.enableRunControlRoom).toBe(true);
     expect(loaded.shell.showRibbonBar).toBe(true);
+    expect(loaded.shell.showViewportBar).toBe(true);
+    expect(loaded.viewportRouting.enableUnifiedViewportToolbar).toBe(true);
   });
 
   it("contains workspace graph bridge flag in defaults", () => {

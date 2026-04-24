@@ -11,5 +11,9 @@ export function SliceLayer({ visible = true, children = null }: SliceLayerProps)
   if (!visible) {
     return <>{children}</>;
   }
-  return <div data-viewport-layer="slice">{children}</div>;
+  return (
+    <div className="h-full min-h-0 w-full" data-viewport-layer="slice">
+      {children}
+    </div>
+  );
 }
