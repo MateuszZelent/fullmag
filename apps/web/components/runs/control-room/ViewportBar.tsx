@@ -4,9 +4,8 @@ import { memo, useCallback, useEffect, useMemo, useReducer } from "react";
 
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import { useLiveStatus } from "@/src/hooks/resources/useLiveStatus";
-import type { DisplayPatchRequest, FieldComponent, LiveStatus } from "@/src/api/types";
+import type { FieldComponent, LiveStatus } from "@/src/api/types";
 import { statusToViewport3DCapabilities } from "@/src/features/view3d/adapters/statusToCapabilities";
 import { resourcesToViewportModel } from "@/src/features/view3d/adapters/resourcesToViewportModel";
 import { runtimeToViewport3DToolbarState } from "@/src/features/view3d/adapters/runtimeToToolbarState";
@@ -235,11 +234,7 @@ export const ViewportBar = memo(function ViewportBar() {
       }),
   );
 
-  const patchDisplay = useCallback(async (patch: DisplayPatchRequest): Promise<void> => {
-    await getLiveApiClient().display.patch(patch);
-  }, []);
-
-  const displayControls = useUnifiedDisplayControls(patchDisplay);
+  const displayControls = useUnifiedDisplayControls(viewport.patchDisplay);
 
   const viewport3DContractCapabilities = useMemo(
     () =>

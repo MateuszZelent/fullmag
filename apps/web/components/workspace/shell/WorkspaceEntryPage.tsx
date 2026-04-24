@@ -7,14 +7,19 @@ import type { WorkspaceMode } from "@/components/runs/control-room/context-hooks
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { resolveLaunchIntentFromSearchParams } from "@/lib/workspace/launch-intent";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
+import {
+  coreTabIdForWorkspaceRouteSlug,
+  type WorkspaceRouteTabSlug,
+} from "@/lib/workspace/workspace-route";
 import { readStagedLaunchAsset } from "@/lib/workspace/file-access";
 import { recordFrontendDebugEvent } from "@/lib/workspace/navigation-debug";
 
 interface WorkspaceEntryPageProps {
   stage: WorkspaceMode;
+  initialTabSlug?: WorkspaceRouteTabSlug | null;
 }
 
-export default function WorkspaceEntryPage({ stage }: WorkspaceEntryPageProps) {
+export default function WorkspaceEntryPage({ stage, initialTabSlug = null }: WorkspaceEntryPageProps) {
   const workspaceTreeEnabled = FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableWorkspaceTree;
   const workspaceEntryEnabled = FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableWorkspaceEntryPage;
 
@@ -29,6 +34,7 @@ export default function WorkspaceEntryPage({ stage }: WorkspaceEntryPageProps) {
   const setActiveProjectId = useWorkspaceStore((state) => state.setActiveProjectId);
   const setCurrentStage = useWorkspaceStore((state) => state.setCurrentStage);
   const setLauncherVisible = useWorkspaceStore((state) => state.setLauncherVisible);
+  const activateTab = useWorkspaceStore((state) => state.activateTab);
 
   useEffect(() => {
     if (!workspaceTreeEnabled || !workspaceEntryEnabled) {
@@ -55,9 +61,14 @@ export default function WorkspaceEntryPage({ stage }: WorkspaceEntryPageProps) {
     setLaunchIntent(enrichedIntent);
     setActiveProjectId(enrichedIntent.resumeProjectId ?? enrichedIntent.entryPath ?? null);
     setCurrentStage(effectiveStage);
+    if (initialTabSlug) {
+      activateTab(effectiveStage, coreTabIdForWorkspaceRouteSlug(initialTabSlug));
+    }
     setLauncherVisible(false);
   }, [
+    activateTab,
     effectiveStage,
+    initialTabSlug,
     intent,
     setActiveProjectId,
     setCurrentStage,

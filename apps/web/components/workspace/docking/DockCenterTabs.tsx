@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import { usePathname, useRouter } from "next/navigation";
 
 import { ViewportBar } from "@/components/runs/control-room/ViewportPanels";
 import { useModel, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
@@ -11,13 +12,20 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useRuntimeFeatureFlags } from "@/lib/hooks/useRuntimeFeatureFlags";
 import { type WorkspaceTab, useWorkspaceStore } from "@/lib/workspace/workspace-store";
+import {
+  workspaceHrefForTabSlug,
+  workspaceRouteSlugForTab,
+} from "@/lib/workspace/workspace-route";
 
 import { DockCenterPreviewNotices } from "./center-tabs/DockCenterPreviewNotices";
 import { DockCenterTabContent } from "./center-tabs/DockCenterTabContent";
 import { DockCenterTabHeader } from "./center-tabs/DockCenterTabHeader";
+import { shouldRenderWorkspaceTabPanel } from "./center-tabs/tabRenderPolicy";
 import { useDockCenterTabSelection } from "./center-tabs/useDockCenterTabSelection";
 
 export default function DockCenterTabs() {
+  const pathname = usePathname();
+  const router = useRouter();
   const dockCenterFlags = FRONTEND_DIAGNOSTIC_FLAGS.dockCenterTabs;
   const currentStage = useWorkspaceStore((state) => state.currentStage);
   const tabs = useWorkspaceStore((state) => state.workspaceTabsByStage[state.currentStage]);
@@ -42,8 +50,7 @@ export default function DockCenterTabs() {
   const requestPreviewQuantity = vp.requestPreviewQuantity;
   const activeResultWorkspaceId = model.activeResultWorkspaceId;
   const analyzeSelection = model.analyzeSelection;
-  const openResultWorkspaceEntry = model.openResultWorkspaceEntry;
-  const openAnalyze = model.openAnalyze;
+  const openAnalyzeSurface = model.openAnalyzeSurface;
 
   // Block rendering until feature flags are resolved to avoid mounting Three.js
   // canvases that would be immediately disabled (causes WebGL context churn).
@@ -108,8 +115,7 @@ export default function DockCenterTabs() {
       selectedQuantity,
       activeResultWorkspaceId,
       analyzeSelection,
-      openResultWorkspaceEntry,
-      openAnalyze,
+      openAnalyzeSurface,
     }),
     [
       activeResultWorkspaceId,
@@ -117,8 +123,7 @@ export default function DockCenterTabs() {
       currentWorkspaceMode,
       effectiveViewMode,
       handleViewModeChange,
-      openAnalyze,
-      openResultWorkspaceEntry,
+      openAnalyzeSurface,
       requestPreviewQuantity,
       selectedQuantity,
       setWorkspaceMode,
@@ -159,6 +164,22 @@ export default function DockCenterTabs() {
       previewIsInitialSampleStale={vp.previewIsInitialSampleStale}
     />
   ) : null;
+
+  const handleTabValueChange = useCallback(
+    (nextId: string) => {
+      activateTab(currentStage, nextId);
+      const nextTab = tabs.find((tab) => tab.id === nextId) ?? null;
+      const slug = workspaceRouteSlugForTab(nextTab);
+      if (!slug) {
+        return;
+      }
+      const nextHref = workspaceHrefForTabSlug(slug);
+      if (pathname !== nextHref) {
+        router.replace(nextHref, { scroll: false });
+      }
+    },
+    [activateTab, currentStage, pathname, router, tabs],
+  );
 
   if (!dockCenterFlags.enableInternalTree) {
     return (
@@ -205,7 +226,7 @@ export default function DockCenterTabs() {
   const tabsNode = (
     <Tabs
       value={activeTab?.id}
-      onValueChange={(nextId) => activateTab(currentStage, nextId)}
+      onValueChange={handleTabValueChange}
       className="flex min-h-0 min-w-0 flex-1 flex-col"
     >
       <DockCenterTabHeader
@@ -216,17 +237,13 @@ export default function DockCenterTabs() {
       />
 
       {tabs.map((tab) => {
-        const isActive = tab.id === activeTab?.id;
-        const shouldKeepWarm = tab.lifecycle === "warm";
-        const shouldRender = isActive || shouldKeepWarm;
-        if (!shouldRender) {
+        if (!shouldRenderWorkspaceTabPanel(tab, activeTab?.id)) {
           return null;
         }
         return (
           <TabsContent
             key={tab.id}
             value={tab.id}
-            forceMount={shouldKeepWarm ? true : undefined}
             className="relative mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
           >
             {renderTabContent(tab)}

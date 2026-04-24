@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  normalizeWorkspaceStage,
   resolveLaunchIntentFromSearchParams,
   searchParamsForLaunchIntent,
   type LaunchIntent,
@@ -44,5 +45,12 @@ describe("launch intent URL contract", () => {
     };
 
     expect(searchParamsForLaunchIntent(intent).toString()).toBe("");
+  });
+
+  it("normalizes legacy analyze launch stage to study", () => {
+    expect(normalizeWorkspaceStage("analyze")).toBe("study");
+    expect(normalizeWorkspaceStage("build")).toBe("build");
+    expect(normalizeWorkspaceStage("study")).toBe("study");
+    expect(normalizeWorkspaceStage("invalid")).toBeNull();
   });
 });

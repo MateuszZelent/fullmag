@@ -317,6 +317,13 @@ function defaultTabForMode(mode: WorkspaceMode | undefined): RibbonTab {
   }
 }
 
+function isRibbonTabVisibleForMode(
+  mode: WorkspaceMode | undefined,
+  tab: string | null | undefined,
+): tab is RibbonTab {
+  return Boolean(tab) && tabsForMode(mode).includes(tab as RibbonTab);
+}
+
 /* ── Render helpers ──────────────────────────────── */
 
 function ribbonActionTriggerClassName(
@@ -588,6 +595,16 @@ export default function RibbonBar(props: RibbonBarProps) {
     if (lastHydratedWorkspaceRibbonRevisionRef.current === workspaceRibbon.revision) {
       return;
     }
+    if (workspaceRibbon.workspace_mode !== workspaceStage) {
+      lastHydratedWorkspaceRibbonRevisionRef.current = workspaceRibbon.revision;
+      return;
+    }
+    const nextActiveCoreTab = isRibbonTabVisibleForMode(
+      workspaceStage,
+      workspaceRibbon.active_core_tab,
+    )
+      ? workspaceRibbon.active_core_tab
+      : defaultTabForMode(workspaceStage);
     const nextIdentity = workspaceRibbonIdentity(workspaceRibbon);
     lastPersistedWorkspaceRibbonRef.current = nextIdentity;
     const currentIdentity = workspaceRibbonTabIdentity({
@@ -597,13 +614,19 @@ export default function RibbonBar(props: RibbonBarProps) {
     // Workspace mode is owned by the workspace shell/router path. Ribbon resource
     // hydration may restore tab state, but it must not push stage changes back
     // into the broader workspace store from inside the ribbon component.
-    if (currentIdentity === workspaceRibbonTabIdentity(workspaceRibbon)) {
+    if (
+      currentIdentity ===
+      workspaceRibbonTabIdentity({
+        active_core_tab: nextActiveCoreTab,
+        active_contextual_tab: workspaceRibbon.active_contextual_tab,
+      })
+    ) {
       lastHydratedWorkspaceRibbonRevisionRef.current = workspaceRibbon.revision;
       return;
     }
     lastHydratedWorkspaceRibbonRevisionRef.current = workspaceRibbon.revision;
     workspaceRibbonHydratingRef.current = true;
-    setActiveCoreTab(workspaceRibbon.active_core_tab);
+    setActiveCoreTab(nextActiveCoreTab);
     setActiveContextualTab(workspaceRibbon.active_contextual_tab ?? null);
     queueMicrotask(() => {
       workspaceRibbonHydratingRef.current = false;
@@ -615,6 +638,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     setActiveContextualTab,
     setActiveCoreTab,
     workspaceRibbon,
+    workspaceStage,
   ]);
 
   useEffect(() => {

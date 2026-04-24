@@ -9,7 +9,7 @@ export type LaunchSource =
   | "web_query";
 
 export type LaunchEntryKind = "script" | "project" | "example" | null;
-export type WorkspaceStage = "build" | "study" | "analyze";
+export type WorkspaceStage = "build" | "study";
 
 export interface LaunchIntent {
   source: LaunchSource;
@@ -33,6 +33,17 @@ export function emptyLaunchIntent(): LaunchIntent {
     launchAssetId: null,
     metadata: null,
   };
+}
+
+export function normalizeWorkspaceStage(value: unknown): WorkspaceStage | null {
+  if (value === "build" || value === "study") {
+    return value;
+  }
+  // Legacy: analyze is a center surface/tab, not a launch/workspace stage.
+  if (value === "analyze") {
+    return "study";
+  }
+  return null;
 }
 
 function kindFromString(value: string | null): LaunchEntryKind {

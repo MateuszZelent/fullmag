@@ -80,11 +80,14 @@ export interface WorkspaceTabSelectionApi {
     tab: AnalyzeTab;
     selectedModeIndex: number | null;
   };
-  openResultWorkspaceEntry: (entryId: string) => void;
-  openAnalyze: (selection: {
-    domain?: "eigenmodes" | "vortex";
-    tab?: AnalyzeTab;
-    selectedModeIndex?: number | null;
+  openAnalyzeSurface: (options?: {
+    selection?: {
+      domain?: "eigenmodes" | "vortex";
+      tab?: AnalyzeTab;
+      selectedModeIndex?: number | null;
+    };
+    resultWorkspaceId?: string | null;
+    source?: string;
   }) => void;
 }
 
@@ -93,12 +96,23 @@ export function applyWorkspaceTabSelection(
   tab: WorkspaceTab,
   api: WorkspaceTabSelectionApi,
 ): void {
-  if (tab.payload?.resultWorkspaceId) {
-    if (api.currentWorkspaceMode !== "analyze") {
-      api.setWorkspaceMode("analyze");
+  if (tab.kind === "result-quantity") {
+    if (tab.payload?.quantityId && tab.payload.quantityId !== api.selectedQuantity) {
+      api.requestPreviewQuantity(tab.payload.quantityId);
     }
-    if (api.activeResultWorkspaceId !== tab.payload.resultWorkspaceId) {
-      api.openResultWorkspaceEntry(tab.payload.resultWorkspaceId);
+    if (api.effectiveViewMode !== "3D") api.handleViewModeChange("3D");
+    return;
+  }
+
+  if (tab.payload?.resultWorkspaceId) {
+    if (
+      api.effectiveViewMode !== "Analyze" ||
+      api.activeResultWorkspaceId !== tab.payload.resultWorkspaceId
+    ) {
+      api.openAnalyzeSurface({
+        resultWorkspaceId: tab.payload.resultWorkspaceId,
+        source: "dock-tab",
+      });
     }
     return;
   }
@@ -122,25 +136,19 @@ export function applyWorkspaceTabSelection(
     if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
     return;
   }
-  if (tab.kind === "result-quantity") {
-    if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
-    if (tab.payload?.quantityId && tab.payload.quantityId !== api.selectedQuantity) {
-      api.requestPreviewQuantity(tab.payload.quantityId);
-    }
-    if (api.effectiveViewMode !== "3D") api.handleViewModeChange("3D");
-    return;
-  }
-
   const analyzeSelection = analyzeSelectionForTab(tab);
   if (analyzeSelection) {
-    if (api.currentWorkspaceMode !== "analyze") {
-      api.setWorkspaceMode("analyze");
-    }
-    if (!sameAnalyzeSelection(api.analyzeSelection, analyzeSelection)) {
-      api.openAnalyze({
-        domain: analyzeSelection.domain,
-        tab: analyzeSelection.tab,
-        selectedModeIndex: analyzeSelection.selectedModeIndex ?? null,
+    if (
+      api.effectiveViewMode !== "Analyze" ||
+      !sameAnalyzeSelection(api.analyzeSelection, analyzeSelection)
+    ) {
+      api.openAnalyzeSurface({
+        selection: {
+          domain: analyzeSelection.domain,
+          tab: analyzeSelection.tab,
+          selectedModeIndex: analyzeSelection.selectedModeIndex ?? null,
+        },
+        source: "dock-tab",
       });
     }
     return;

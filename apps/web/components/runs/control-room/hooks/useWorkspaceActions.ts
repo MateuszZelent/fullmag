@@ -41,7 +41,11 @@ import {
 } from "../meshWorkspace";
 import type { useBuilderAutoSync } from "./useBuilderAutoSync";
 import type { AnalyzeSelectionState } from "../analyzeSelection";
-import type { ResultWorkspaceEntry, ResultWorkspaceKind, WorkspaceMode } from "../context-hooks";
+import type {
+  OpenAnalyzeSurfaceOptions,
+  ResultWorkspaceEntry,
+  ResultWorkspaceKind,
+} from "../context-hooks";
 import {
   coreTabIdForViewMode,
   useWorkspaceStore,
@@ -177,7 +181,6 @@ export interface UseWorkspaceActionsParams {
   setFocusObjectRequest: Dispatch<SetStateAction<FocusObjectRequest | null>>;
   setScriptBuilderCurrentModules: Dispatch<SetStateAction<ScriptBuilderCurrentModuleEntry[]>>;
   setSceneDocument: Dispatch<SetStateAction<SceneDocument | null>>;
-  setWorkspaceMode: (v: WorkspaceMode | ((prev: WorkspaceMode) => WorkspaceMode)) => void;
   setActiveResultWorkspaceId: Dispatch<SetStateAction<string | null>>;
   setResultWorkspaceEntries: Dispatch<SetStateAction<ResultWorkspaceEntry[]>>;
   setCommandErrorMessage: Dispatch<SetStateAction<string | null>>;
@@ -233,6 +236,7 @@ export interface UseWorkspaceActionsReturn {
   primaryRunAction: string;
   primaryRunLabel: string;
   requestPreviewQuantity: (nextQuantity: string) => void;
+  openAnalyzeSurface: (options?: OpenAnalyzeSurfaceOptions) => void;
   openResultWorkspaceEntry: (id: string) => void;
   renameResultWorkspaceEntry: (id: string, label: string) => void;
   removeResultWorkspaceEntry: (id: string) => void;
@@ -281,7 +285,6 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     setFocusObjectRequest,
     setScriptBuilderCurrentModules,
     setSceneDocument,
-    setWorkspaceMode,
     setActiveResultWorkspaceId,
     setResultWorkspaceEntries,
     setCommandErrorMessage,
@@ -473,6 +476,12 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     setComponent,
     transitionToViewMode,
   ]);
+
+  const ensureAnalyzeViewMode = useCallback(() => {
+    if (effectiveViewMode !== "Analyze") {
+      setViewMode("Analyze");
+    }
+  }, [effectiveViewMode, setViewMode]);
 
   /* ── handleSimulationAction ── */
   const handleSimulationAction = useCallback((action: string) => {
@@ -884,7 +893,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
                       : entry.kind === "table"
                         ? "result-table"
                         : "result-quantity";
-      const openedTabId = openWorkspaceTab("analyze", {
+      const openedTabId = openWorkspaceTab(currentStage, {
         key: `result:${entry.id}`,
         id: `result-tab:${entry.id}`,
         kind: tabKind,
@@ -897,45 +906,45 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
           quantityId: entry.quantityId ?? undefined,
         },
       });
-      activateWorkspaceTab("analyze", openedTabId);
+      activateWorkspaceTab(currentStage, openedTabId);
       if (entry.kind === "spectrum") {
-        setWorkspaceMode("analyze");
+        ensureAnalyzeViewMode();
         openAnalyze({ tab: "spectrum", selectedModeIndex: null });
         return;
       }
       if (entry.kind === "dispersion") {
-        setWorkspaceMode("analyze");
+        ensureAnalyzeViewMode();
         openAnalyze({ tab: "dispersion", selectedModeIndex: null });
         return;
       }
       if (entry.kind === "modes") {
-        setWorkspaceMode("analyze");
+        ensureAnalyzeViewMode();
         openAnalyze({ tab: "modes" });
         return;
       }
       if (entry.kind === "time-traces") {
-        setWorkspaceMode("analyze");
+        ensureAnalyzeViewMode();
         openAnalyze({ domain: "vortex", tab: "time-traces" });
         return;
       }
       if (entry.kind === "vortex-frequency") {
-        setWorkspaceMode("analyze");
+        ensureAnalyzeViewMode();
         openAnalyze({ domain: "vortex", tab: "vortex-frequency" });
         return;
       }
       if (entry.kind === "vortex-trajectory") {
-        setWorkspaceMode("analyze");
+        ensureAnalyzeViewMode();
         openAnalyze({ domain: "vortex", tab: "vortex-trajectory" });
         return;
       }
       if (entry.kind === "vortex-orbit") {
-        setWorkspaceMode("analyze");
+        ensureAnalyzeViewMode();
         openAnalyze({ domain: "vortex", tab: "vortex-orbit" });
         return;
       }
       if (entry.kind === "table") {
-        setWorkspaceMode("analyze");
-        handleViewModeChange("Analyze");
+        ensureAnalyzeViewMode();
+        openAnalyze({ tab: "spectrum", selectedModeIndex: null });
         return;
       }
       if (entry.quantityId) {
@@ -947,14 +956,36 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     },
     [
       activateWorkspaceTab,
+      currentStage,
       effectiveViewMode,
+      ensureAnalyzeViewMode,
       femDiscretization,
       openAnalyze,
       openWorkspaceTab,
       requestPreviewQuantity,
       resultWorkspaceEntries,
-      setWorkspaceMode,
       handleViewModeChange,
+    ],
+  );
+
+  const openAnalyzeSurface = useCallback(
+    (options: OpenAnalyzeSurfaceOptions = {}) => {
+      if (options.resultWorkspaceId) {
+        openResultWorkspaceEntry(options.resultWorkspaceId);
+        return;
+      }
+      activateWorkspaceTab(currentStage, "core:analyze");
+      ensureAnalyzeViewMode();
+      if (options.selection) {
+        openAnalyze(options.selection);
+      }
+    },
+    [
+      activateWorkspaceTab,
+      currentStage,
+      ensureAnalyzeViewMode,
+      openAnalyze,
+      openResultWorkspaceEntry,
     ],
   );
 
@@ -1027,6 +1058,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     primaryRunAction,
     primaryRunLabel,
     requestPreviewQuantity,
+    openAnalyzeSurface,
     openResultWorkspaceEntry,
     renameResultWorkspaceEntry,
     removeResultWorkspaceEntry,

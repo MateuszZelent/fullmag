@@ -33,7 +33,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableTabContent: true,
     showPreviewNotices: true,
     // Content modules
-    enableChartsViewport: false,
+    enableChartsViewport: true,
     enableAnalyzeViewport: true,
     enableViewportCanvas: true,
     enablePinOverlayButton: true,

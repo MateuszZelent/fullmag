@@ -155,6 +155,12 @@ export interface ResultWorkspaceEntry {
   createdAtUnixMs: number;
 }
 
+export interface OpenAnalyzeSurfaceOptions {
+  selection?: Partial<AnalyzeSelectionState>;
+  resultWorkspaceId?: string | null;
+  source?: string;
+}
+
 export interface ViewportContextValue {
   workspaceMode: WorkspaceMode;
   setWorkspaceMode: (v: WorkspaceMode | ((prev: WorkspaceMode) => WorkspaceMode)) => void;
@@ -461,6 +467,7 @@ export interface ModelContextValue {
     pinned?: boolean;
     openAfterCreate?: boolean;
   }) => string;
+  openAnalyzeSurface: (options?: OpenAnalyzeSurfaceOptions) => void;
   openResultWorkspaceEntry: (id: string) => void;
   renameResultWorkspaceEntry: (id: string, label: string) => void;
   removeResultWorkspaceEntry: (id: string) => void;

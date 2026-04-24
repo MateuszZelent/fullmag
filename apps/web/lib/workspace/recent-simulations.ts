@@ -1,4 +1,4 @@
-import type { LaunchEntryKind, WorkspaceStage } from "./launch-intent";
+import { normalizeWorkspaceStage, type LaunchEntryKind, type WorkspaceStage } from "./launch-intent";
 
 export interface RecentSimulationEntry {
   id: string;
@@ -20,7 +20,15 @@ export function readRecentSimulations(): RecentSimulationEntry[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item) => item && typeof item === "object");
+    return parsed
+      .filter((item) => item && typeof item === "object")
+      .map((item) => {
+        const raw = item as RecentSimulationEntry & { lastStage?: unknown };
+        return {
+          ...raw,
+          lastStage: normalizeWorkspaceStage(raw.lastStage),
+        };
+      });
   } catch {
     return [];
   }
@@ -37,4 +45,3 @@ export function upsertRecentSimulation(entry: RecentSimulationEntry): RecentSimu
   writeRecentSimulations(next);
   return next;
 }
-

@@ -122,8 +122,8 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "Charts",
       closable: false,
       pinned: true,
-      keepAlive: true,
-      lifecycle: "warm",
+      keepAlive: false,
+      lifecycle: "unmount-on-hide",
       payload: { viewMode: "Analyze" },
     },
   ];
@@ -138,15 +138,10 @@ function cloneTabsByStage(input: Record<WorkspaceMode, WorkspaceTab[]>): Record<
 }
 
 function normalizeWorkspaceTab(tab: WorkspaceTab): WorkspaceTab {
-  const lifecycle: WorkspaceTabLifecycle =
-    tab.lifecycle === "warm" || tab.lifecycle === "unmount-on-hide"
-      ? tab.lifecycle
-      : tab.keepAlive
-        ? "warm"
-        : "unmount-on-hide";
+  const lifecycle: WorkspaceTabLifecycle = "unmount-on-hide";
   return {
     ...tab,
-    keepAlive: lifecycle === "warm",
+    keepAlive: false,
     lifecycle,
     payload: tab.payload ? { ...tab.payload } : undefined,
   };
@@ -508,17 +503,17 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
           return nextState;
         }
 
-        const created: WorkspaceTab = {
+        const created: WorkspaceTab = normalizeWorkspaceTab({
           id: activeId,
           key: tabInput.key,
           kind: tabInput.kind,
           title: tabInput.title,
           closable: tabInput.closable ?? true,
           pinned: tabInput.pinned ?? false,
-          keepAlive: (tabInput.lifecycle ?? (tabInput.keepAlive ? "warm" : "unmount-on-hide")) === "warm",
+          keepAlive: tabInput.keepAlive ?? false,
           lifecycle: tabInput.lifecycle ?? (tabInput.keepAlive ? "warm" : "unmount-on-hide"),
           payload: tabInput.payload,
-        };
+        });
 
         const nextState = {
           workspaceTabsByStage: {
@@ -660,7 +655,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         const nextTabs = [...tabs];
         for (const candidate of candidates) {
           if (!nextTabs.some((tab) => tab.key === candidate.key)) {
-            nextTabs.push({
+            nextTabs.push(normalizeWorkspaceTab({
               id: `auto-tab:${candidate.key}`,
               key: candidate.key,
               kind: candidate.kind,
@@ -670,7 +665,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
               keepAlive: candidate.keepAlive ?? false,
               lifecycle: candidate.lifecycle ?? (candidate.keepAlive ? "warm" : "unmount-on-hide"),
               payload: candidate.payload,
-            });
+            }));
           }
         }
 
@@ -794,7 +789,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
         return false;
       }
       const currentStage: WorkspaceMode =
-        currentStageRaw === "build" || currentStageRaw === "study" || currentStageRaw === "analyze"
+        currentStageRaw === "build" || currentStageRaw === "study"
           ? currentStageRaw
           : "study";
       const rightInspectorOpen =
@@ -810,7 +805,11 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
       set((state) => {
         const nextState = {
           dockLayoutByStage: cloneDockingStateByPresetMapByStage(persistedDockingState.dockLayoutByStage),
-          workspaceTabsByStage: cloneTabsByStage(persistedDockingState.workspaceTabsByStage),
+          workspaceTabsByStage: {
+            build: ensureCoreTabsForStage(persistedDockingState.workspaceTabsByStage.build),
+            study: ensureCoreTabsForStage(persistedDockingState.workspaceTabsByStage.study),
+            analyze: ensureCoreTabsForStage(persistedDockingState.workspaceTabsByStage.analyze),
+          },
           activeWorkspaceTabByStage: { ...persistedDockingState.activeWorkspaceTabByStage },
           currentStage,
           rightInspectorOpen,

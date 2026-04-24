@@ -66,6 +66,11 @@ import {
   StudyRightInspector,
   AnalyzeRightInspector,
 } from "../workspace/modes/WorkspaceModeInspectors";
+import {
+  isGeometryAuthoringWorkspace,
+  resetSceneEditorToCameraFirst,
+  shouldForceCameraFirstViewport,
+} from "./control-room/workspaceViewportGuards";
 import { useAnalyzeStore } from "@/features/analyze";
 import { useWorkspaceGraphBridge } from "@/features/workspace-graph";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
@@ -98,7 +103,7 @@ import type {
 import { extractFemCpuThreadSummary } from "./control-room/helpers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-const WORKSPACE_HREF = "/workspace";
+const WORKSPACE_ANALYZE_HREF = "/workspace/analyze";
 
 function launchDisplayName(intent: ReturnType<typeof useWorkspaceStore.getState>["launchIntent"]): string | null {
   if (!intent) return null;
@@ -315,6 +320,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const currentStage = useWorkspaceStore((state) => state.currentStage);
   const analyzeResultsWorkspace = useAnalyzeStore((state) => state.resultsWorkspace);
   const builderModeEnabled = useGeometryBuilderStore((state) => state.builderMode.enabled);
+  const builderViewportTool = useGeometryBuilderStore((state) => state.viewportTool);
   const builderRunBlocked = useGeometryBuilderStore((state) =>
     state.builderMode.enabled ? state.isRunBlocked() : false,
   );
@@ -387,7 +393,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }, [activeStageLayout.rightDock, rightInspectorOpen, setRightInspectorOpen]);
 
   useEffect(() => {
-    const geometryTabActive = activeCoreTab === "Geometry";
+    const geometryTabActive = isGeometryAuthoringWorkspace(workspaceMode, activeCoreTab);
     if (geometryTabActive && !builderModeEnabled) {
       enableBuilderMode();
     } else if (!geometryTabActive && builderModeEnabled) {
@@ -410,6 +416,32 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     enableBuilderMode,
     handleViewModeChange,
     setWorkspaceMode,
+    workspaceMode,
+  ]);
+
+  useEffect(() => {
+    if (!shouldForceCameraFirstViewport({
+      workspaceMode,
+      activeCoreTab,
+      effectiveViewMode,
+    })) {
+      return;
+    }
+    if (ctx.activeTransformScope !== null) {
+      ctx.setActiveTransformScope(null);
+    }
+    if (ctx.sceneDocument?.editor.active_transform_scope != null || ctx.sceneDocument?.editor.gizmo_mode != null) {
+      ctx.setSceneDocument((previous) => resetSceneEditorToCameraFirst(previous));
+    }
+    if (builderViewportTool !== "camera") {
+      setBuilderViewportTool("camera");
+    }
+  }, [
+    activeCoreTab,
+    builderViewportTool,
+    ctx,
+    effectiveViewMode,
+    setBuilderViewportTool,
     workspaceMode,
   ]);
 
@@ -463,37 +495,41 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     }
   }, [quickPreviewTargets, requestPreviewQuantity]);
 
+  const openAnalyzeCenterTab = useCallback(
+    (
+      selection?: Parameters<typeof ctx.openAnalyze>[0],
+      debug?: { nodeId?: string; resultWorkspaceId?: string; source?: string },
+    ) => {
+      setActiveCoreTab("Results");
+      setActiveContextualTab(null);
+      ctx.openAnalyzeSurface({
+        selection,
+        resultWorkspaceId: debug?.resultWorkspaceId,
+        source: debug?.source ?? "run-control-room",
+      });
+      if (pathname !== WORKSPACE_ANALYZE_HREF) {
+        recordFrontendDebugEvent("run-control-room", "router_replace_analyze_tab", debug ?? {});
+        router.replace(WORKSPACE_ANALYZE_HREF);
+      }
+    },
+    [ctx, pathname, router, setActiveContextualTab, setActiveCoreTab],
+  );
+
   const handleSelectModelNode = useCallback((nodeId: string) => {
     ctx.setSelectedSidebarNodeId(nodeId);
     ctx.setSelectedObjectId(resolveSelectedObjectId(nodeId, ctx.modelBuilderGraph));
     const analyzeTarget = parseAnalyzeTreeNode(nodeId);
     if (analyzeTarget) {
-      ctx.setWorkspaceMode("analyze");
-      setActiveCoreTab("Results");
-      setActiveContextualTab(null);
-      ctx.openAnalyze(analyzeTarget);
-      if (pathname !== "/workspace") {
-        recordFrontendDebugEvent("run-control-room", "router_push_analyze_from_tree", {
-          nodeId,
-          source: "analyze_target",
-        });
-        router.push(WORKSPACE_HREF);
-      }
+      openAnalyzeCenterTab(analyzeTarget, { nodeId, source: "analyze_target" });
       return;
     }
     const resultContext = parseResultNodeContext(nodeId);
     if (nodeId.startsWith("res-analysis-")) {
-      ctx.setWorkspaceMode("analyze");
-      setActiveCoreTab("Results");
-      setActiveContextualTab(null);
-      ctx.openResultWorkspaceEntry(nodeId.replace("res-analysis-", ""));
-      if (pathname !== "/workspace") {
-        recordFrontendDebugEvent("run-control-room", "router_push_analyze_from_tree", {
-          nodeId,
-          source: "result_workspace",
-        });
-        router.push(WORKSPACE_HREF);
-      }
+      openAnalyzeCenterTab(undefined, {
+        nodeId,
+        resultWorkspaceId: nodeId.replace("res-analysis-", ""),
+        source: "result_workspace",
+      });
       return;
     }
     if (
@@ -506,16 +542,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       resultContext?.kind === "results-export-node" ||
       resultContext?.kind === "results-report"
     ) {
-      ctx.setWorkspaceMode("analyze");
-      setActiveCoreTab("Results");
-      setActiveContextualTab(null);
-      if (pathname !== "/workspace") {
-        recordFrontendDebugEvent("run-control-room", "router_push_analyze_from_tree", {
-          nodeId,
-          source: "results_node",
-        });
-        router.push(WORKSPACE_HREF);
-      }
+      openAnalyzeCenterTab(undefined, { nodeId, source: "results_node" });
       return;
     }
     if (ctx.sidebarCollapsed) {
@@ -527,10 +554,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }, [
     ctx,
     maybePreviewAntennaField,
-    pathname,
-    router,
-    setActiveContextualTab,
-    setActiveCoreTab,
+    openAnalyzeCenterTab,
   ]);
 
   const handleAddAntenna = useCallback((kind: "MicrostripAntenna" | "CPWAntenna") => {
@@ -1190,16 +1214,12 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
                   badge: quantityBadge,
                   openAfterCreate: true,
                 });
-      ctx.openResultWorkspaceEntry(id);
-      ctx.setSelectedSidebarNodeId(`res-analysis-${id}`);
-      ctx.setWorkspaceMode("analyze");
-      setActiveCoreTab("Results");
-      setActiveContextualTab(null);
-      if (pathname !== "/workspace") {
-        router.push(WORKSPACE_HREF);
-      }
+      openAnalyzeCenterTab(undefined, {
+        resultWorkspaceId: id,
+        source: "create_result_entry",
+      });
     },
-    [ctx, pathname, router, setActiveContextualTab, setActiveCoreTab],
+    [ctx, openAnalyzeCenterTab],
   );
 
   const handleBackgroundMeshBuild = useCallback(() => {
@@ -1308,31 +1328,19 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       return;
     }
     autoResultsEntryKeyRef.current = currentResultsEntryKey;
-    ctx.setWorkspaceMode("analyze");
-    setActiveCoreTab("Results");
-    setActiveContextualTab(null);
     if (!ctx.selectedSidebarNodeId || !ctx.selectedSidebarNodeId.startsWith("res-")) {
       ctx.setSelectedSidebarNodeId(hasEigenArtifacts ? "res-eigenmodes" : "results");
     }
-    if (hasEigenArtifacts) {
-      ctx.openAnalyze({ tab: "spectrum", selectedModeIndex: null });
-    }
-    if (pathname !== "/workspace") {
-      recordFrontendDebugEvent("run-control-room", "router_push_auto_results", {
-        hasEigenArtifacts,
-        currentResultsEntryKey,
-      });
-      router.push(WORKSPACE_HREF);
-    }
+    openAnalyzeCenterTab(
+      hasEigenArtifacts ? { tab: "spectrum", selectedModeIndex: null } : undefined,
+      { source: "auto_results" },
+    );
   }, [
     ctx,
     currentResultsEntryKey,
     hasEigenArtifacts,
     hasResultsAvailable,
-    pathname,
-    router,
-    setActiveContextualTab,
-    setActiveCoreTab,
+    openAnalyzeCenterTab,
   ]);
 
   /* ── Loading state ── */
@@ -1565,9 +1573,13 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
                 className="h-full min-h-0 overflow-y-auto overflow-x-hidden"
               >
                 <div className="h-full min-h-0">
-                  {ctx.workspaceMode === "build" && <BuildRightInspector />}
-                  {ctx.workspaceMode === "study" && <StudyRightInspector />}
-                  {ctx.workspaceMode === "analyze" && <AnalyzeRightInspector />}
+                  {ctx.effectiveViewMode === "Analyze" ? (
+                    <AnalyzeRightInspector />
+                  ) : ctx.workspaceMode === "build" ? (
+                    <BuildRightInspector />
+                  ) : (
+                    <StudyRightInspector />
+                  )}
                 </div>
               </Panel>
             </>

@@ -150,16 +150,45 @@ describe("workspace docking store", () => {
     expect(useWorkspaceStore.getState().currentStage).toBe("study");
   });
 
-  it("uses explicit lifecycle defaults for heavy viewports and keeps charts warm", () => {
+  it("uses explicit cold lifecycle defaults for heavy viewport panels", () => {
     const defaults = getDefaultWorkspaceTabsByStage();
     const studyTabs = defaults.study;
     expect(studyTabs.find((tab) => tab.id === "core:3d")?.lifecycle).toBe("unmount-on-hide");
     expect(studyTabs.find((tab) => tab.id === "core:2d")?.lifecycle).toBe("unmount-on-hide");
     expect(studyTabs.find((tab) => tab.id === "core:mesh")?.lifecycle).toBe("unmount-on-hide");
-    expect(studyTabs.find((tab) => tab.id === "core:charts")?.lifecycle).toBe("warm");
+    expect(studyTabs.find((tab) => tab.id === "core:charts")?.lifecycle).toBe("unmount-on-hide");
+    expect(studyTabs.find((tab) => tab.id === "core:charts")?.keepAlive).toBe(false);
   });
 
-  it("normalizes explicit lifecycle when opening tabs", () => {
+  it("normalizes persisted core charts tabs back to cold lifecycle", () => {
+    const tabs = getDefaultWorkspaceTabsByStage();
+    for (const stage of ["build", "study", "analyze"] as const) {
+      tabs[stage] = tabs[stage].map((tab) =>
+        tab.id === "core:charts" ? { ...tab, keepAlive: true, lifecycle: "warm" } : tab,
+      );
+    }
+
+    const imported = useWorkspaceStore.getState().importUiStateSnapshot({
+      version: 1,
+      docking: {
+        workspaceTabsByStage: tabs,
+        activeWorkspaceTabByStage: getDefaultActiveWorkspaceTabByStage(),
+        dockLayoutByStage: getDefaultDockingLayoutByPreset(),
+      },
+      currentStage: "study",
+      rightInspectorOpen: true,
+      rightInspectorTab: "properties",
+    });
+
+    expect(imported).toBe(true);
+    const chartsTab = useWorkspaceStore
+      .getState()
+      .workspaceTabsByStage.study.find((tab) => tab.id === "core:charts");
+    expect(chartsTab?.lifecycle).toBe("unmount-on-hide");
+    expect(chartsTab?.keepAlive).toBe(false);
+  });
+
+  it("normalizes explicit warm lifecycle inputs back to cold tabs", () => {
     const warmId = useWorkspaceStore.getState().openTab("study", {
       key: "manual:charts-clone",
       kind: "viewport-charts",
@@ -173,8 +202,8 @@ describe("workspace docking store", () => {
     });
 
     const tabs = useWorkspaceStore.getState().workspaceTabsByStage.study;
-    expect(tabs.find((tab) => tab.id === warmId)?.keepAlive).toBe(true);
-    expect(tabs.find((tab) => tab.id === warmId)?.lifecycle).toBe("warm");
+    expect(tabs.find((tab) => tab.id === warmId)?.keepAlive).toBe(false);
+    expect(tabs.find((tab) => tab.id === warmId)?.lifecycle).toBe("unmount-on-hide");
     expect(tabs.find((tab) => tab.id === coldId)?.keepAlive).toBe(false);
     expect(tabs.find((tab) => tab.id === coldId)?.lifecycle).toBe("unmount-on-hide");
   });

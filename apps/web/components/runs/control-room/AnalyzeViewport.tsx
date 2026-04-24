@@ -59,6 +59,16 @@ export default function AnalyzeViewport() {
   const model = useModel();
   const cmd = useCommand();
   const tp = useTransport();
+  const {
+    analyzeSelection,
+    openAnalyze,
+    setAnalyzeSelection,
+    selectAnalyzeTab,
+    refreshAnalyze,
+    magneticParts,
+    airPart,
+    interfaceParts,
+  } = model;
   const graphSelection = useWorkspaceGraphStore((state) => state.snapshot.selection);
   const graphResultsWorkspace = useWorkspaceGraphStore((state) => state.snapshot.resultsWorkspace);
   const graphActiveViewportDocument = useWorkspaceGraphStore((state) => {
@@ -78,7 +88,7 @@ export default function AnalyzeViewport() {
   }, [tp.scalarRows]);
 
   const hasVortexData = vortexSamples.length > 4;
-  const analyzeDomain = model.analyzeSelection.domain ?? "eigenmodes";
+  const analyzeDomain = analyzeSelection.domain ?? "eigenmodes";
   const activeDatasetLabel = useMemo(() => {
     const datasetId = graphActiveViewportDocument?.selectedDatasetId;
     if (!datasetId) {
@@ -93,15 +103,15 @@ export default function AnalyzeViewport() {
   useEffect(() => {
     const treeSelection = parseAnalyzeTreeNode(graphSelection.activeNodeId ?? "");
     if (treeSelection) {
-      const nextDomain = treeSelection.domain ?? model.analyzeSelection.domain;
-      const nextTab = treeSelection.tab ?? model.analyzeSelection.tab;
+      const nextDomain = treeSelection.domain ?? analyzeSelection.domain;
+      const nextTab = treeSelection.tab ?? analyzeSelection.tab;
       if (
-        nextDomain !== model.analyzeSelection.domain
-        || nextTab !== model.analyzeSelection.tab
-        || (treeSelection.selectedModeIndex ?? null) !== model.analyzeSelection.selectedModeIndex
-        || (treeSelection.selectedChannel ?? null) !== model.analyzeSelection.selectedChannel
+        nextDomain !== analyzeSelection.domain
+        || nextTab !== analyzeSelection.tab
+        || (treeSelection.selectedModeIndex ?? null) !== analyzeSelection.selectedModeIndex
+        || (treeSelection.selectedChannel ?? null) !== analyzeSelection.selectedChannel
       ) {
-        model.openAnalyze(treeSelection);
+        openAnalyze(treeSelection);
       }
       return;
     }
@@ -120,40 +130,40 @@ export default function AnalyzeViewport() {
             : "spectrum",
       } as const;
       if (
-        next.domain !== model.analyzeSelection.domain
-        || next.tab !== model.analyzeSelection.tab
+        next.domain !== analyzeSelection.domain
+        || next.tab !== analyzeSelection.tab
       ) {
-        model.openAnalyze(next);
+        openAnalyze(next);
       }
       return;
     }
     if (activeResultNode.nodeKind === "plot_group" || activeResultNode.nodeKind === "table") {
       if (
-        model.analyzeSelection.domain !== "eigenmodes"
-        || model.analyzeSelection.tab !== "spectrum"
+        analyzeSelection.domain !== "eigenmodes"
+        || analyzeSelection.tab !== "spectrum"
       ) {
-        model.openAnalyze({ domain: "eigenmodes", tab: "spectrum" });
+        openAnalyze({ domain: "eigenmodes", tab: "spectrum" });
       }
     }
   }, [
+    analyzeSelection.domain,
+    analyzeSelection.selectedChannel,
+    analyzeSelection.selectedModeIndex,
+    analyzeSelection.tab,
     graphResultsWorkspace,
     graphSelection.activeNodeId,
     graphSelection.activeResultNodeId,
-    model.analyzeSelection.domain,
-    model.analyzeSelection.selectedChannel,
-    model.analyzeSelection.selectedModeIndex,
-    model.analyzeSelection.tab,
-    model,
+    openAnalyze,
   ]);
 
   const setSelectedModeIndex = useCallback(
     (index: number | null) =>
-      model.setAnalyzeSelection((prev) => ({ ...prev, selectedModeIndex: index })),
-    [model],
+      setAnalyzeSelection((prev) => ({ ...prev, selectedModeIndex: index })),
+    [setAnalyzeSelection],
   );
   const setAnalyzeTab = useCallback(
-    (tab: Parameters<typeof model.selectAnalyzeTab>[0]) => model.selectAnalyzeTab(tab),
-    [model],
+    (tab: Parameters<typeof selectAnalyzeTab>[0]) => selectAnalyzeTab(tab),
+    [selectAnalyzeTab],
   );
 
   const {
@@ -172,7 +182,7 @@ export default function AnalyzeViewport() {
     selectedModeSummary,
     selectMode,
   } = useAnalyzeWorkspaceState({
-    analyzeSelection: model.analyzeSelection,
+    analyzeSelection,
     setSelectedModeIndex,
     setTab: setAnalyzeTab,
   });
@@ -181,9 +191,9 @@ export default function AnalyzeViewport() {
     runtimeEngineLabel: cmd.runtimeEngineLabel,
     latestBackendError: cmd.latestBackendError,
     engineLog: cmd.engineLog,
-    magneticParts: model.magneticParts,
-    airPart: model.airPart,
-    interfaceParts: model.interfaceParts,
+    magneticParts,
+    airPart,
+    interfaceParts,
     metadata: cmd.metadata,
   });
 
@@ -196,7 +206,7 @@ export default function AnalyzeViewport() {
       // Don't steal focus when user is typing in an input
       const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
-      const currentIndex = model.analyzeSelection.selectedModeIndex ?? sortedModes[0].index;
+      const currentIndex = analyzeSelection.selectedModeIndex ?? sortedModes[0].index;
       const pos = sortedModes.findIndex((m) => m.index === currentIndex);
       if (pos === -1) return;
       const next =
@@ -210,7 +220,7 @@ export default function AnalyzeViewport() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [model.analyzeSelection.selectedModeIndex, selectMode, spectrum]);
+  }, [analyzeSelection.selectedModeIndex, selectMode, spectrum]);
 
   /* ── Vortex domain ── */
   if (analyzeDomain === "vortex") {
@@ -229,10 +239,10 @@ export default function AnalyzeViewport() {
     return (
       <VortexAnalyzeWorkbench
         samples={vortexSamples}
-        activeTab={model.analyzeSelection.tab}
-        onTabChange={(tab) => model.selectAnalyzeTab(tab)}
+        activeTab={analyzeSelection.tab}
+        onTabChange={(tab) => selectAnalyzeTab(tab)}
         selectedChannel={
-          (model.analyzeSelection.selectedChannel as "mx" | "my" | "mz") ?? undefined
+          (analyzeSelection.selectedChannel as "mx" | "my" | "mz") ?? undefined
         }
       />
     );
@@ -271,10 +281,10 @@ export default function AnalyzeViewport() {
       return (
         <VortexAnalyzeWorkbench
           samples={vortexSamples}
-          activeTab={model.analyzeSelection.tab}
-          onTabChange={(tab) => model.selectAnalyzeTab(tab)}
+          activeTab={analyzeSelection.tab}
+          onTabChange={(tab) => selectAnalyzeTab(tab)}
           selectedChannel={
-            (model.analyzeSelection.selectedChannel as "mx" | "my" | "mz") ?? undefined
+            (analyzeSelection.selectedChannel as "mx" | "my" | "mz") ?? undefined
           }
         />
       );
@@ -324,7 +334,7 @@ export default function AnalyzeViewport() {
             type="button"
             title="Refresh analyze data"
             onClick={() => {
-              model.refreshAnalyze();
+              refreshAnalyze();
               refresh();
             }}
             className="flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-[0.68rem] text-muted-foreground transition-colors hover:border-border/40 hover:bg-muted/60 hover:text-foreground"
@@ -372,8 +382,10 @@ export default function AnalyzeViewport() {
             />
           ) : (
           <Tabs
-            value={model.analyzeSelection.tab}
-            onValueChange={(value) => model.selectAnalyzeTab(value as "summary" | "spectrum" | "modes" | "dispersion")}
+            value={analyzeSelection.tab}
+            onValueChange={(value) =>
+              selectAnalyzeTab(value as "summary" | "spectrum" | "modes" | "dispersion")
+            }
             className="flex h-full flex-col"
           >
             <div className="shrink-0 border-b border-border/20 px-3 pt-2">
@@ -405,7 +417,7 @@ export default function AnalyzeViewport() {
                 selectedMode={selectedMode}
                 onSelectMode={(modeIndex) => {
                   selectMode(modeIndex);
-                  model.selectAnalyzeTab("modes");
+                  selectAnalyzeTab("modes");
                 }}
               />
             </TabsContent>

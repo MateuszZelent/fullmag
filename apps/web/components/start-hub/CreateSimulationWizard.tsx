@@ -31,7 +31,6 @@ export default function CreateSimulationWizard({ onCreate }: CreateSimulationWiz
         <select value={stage} onChange={(e) => setStage(e.target.value as WorkspaceStage)} className="rounded-md border border-border/40 bg-background/70 px-2 py-1.5 text-xs">
           <option value="build">Model Builder</option>
           <option value="study">Study</option>
-          <option value="analyze">Analyze</option>
         </select>
       </div>
       <button
@@ -44,4 +43,3 @@ export default function CreateSimulationWizard({ onCreate }: CreateSimulationWiz
     </section>
   );
 }
-

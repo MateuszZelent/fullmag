@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import ModelTree, { buildFullmagModelTree } from "../../panels/ModelTree";
 import { useCommand, useModel, useTransport, useViewport } from "./ControlRoomContext";
 import { parseAnalyzeTreeNode } from "./analyzeSelection";
@@ -30,9 +30,8 @@ import { parseResultNodeContext } from "@/features/analyze/model/resultNodeConte
 import { resultNodeToTreeNodeId } from "@/features/analyze/model/resultTreeNodeId";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
-import type { EigenModeSummary } from "@/components/analyze/eigenTypes";
+import { useEigenSpectrumSummary } from "@/src/hooks/resources/useEigenSpectrumSummary";
 import type { StudyPipelineDocumentState } from "@/lib/session/types";
 import { buildGeometryBuilderTreeNodes } from "@/features/geometry-builder";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
@@ -212,29 +211,11 @@ export default function RunSidebar() {
     return null;
   }, [savedEigenModeIndices.length]);
 
-  // Fetch spectrum summary for richer tree labels (frequency & polarization)
-  const [spectrumModes, setSpectrumModes] = useState<EigenModeSummary[] | null>(null);
-  useEffect(() => {
-    if (!hasEigenSpectrumArtifact) {
-      queueMicrotask(() => setSpectrumModes(null));
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = (await getLiveApiClient().eigen.getSpectrum()) as {
-          modes?: EigenModeSummary[];
-        };
-        if (cancelled) return;
-        if (!cancelled && Array.isArray(data.modes)) {
-          setSpectrumModes(data.modes);
-        }
-      } catch {
-        // Noncritical — tree will fall back to "Mode N" labels
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [hasEigenSpectrumArtifact]);
+  // Fetch spectrum summary for richer tree labels (frequency & polarization).
+  const spectrumModes = useEigenSpectrumSummary({
+    enabled: hasEigenSpectrumArtifact,
+    cacheKey: artifactPaths.join("|"),
+  });
 
   const eigenModeSummaries = useMemo(() => {
     const fmtGHz = (hz: number) => `${(hz / 1e9).toFixed(2)} GHz`;
@@ -689,8 +670,7 @@ export default function RunSidebar() {
     const analyzeTarget = parseAnalyzeTreeNode(id);
     if (analyzeTarget) {
       model.setSelectedSidebarNodeId(id);
-      vp.setWorkspaceMode("analyze");
-      model.openAnalyze(analyzeTarget);
+      model.openAnalyzeSurface({ selection: analyzeTarget, source: "run-sidebar" });
       return;
     }
     const resultContext = parseResultNodeContext(id);
@@ -711,7 +691,7 @@ export default function RunSidebar() {
       model.setSelectedObjectId(null);
       model.setSelectedEntityId(null);
       model.setFocusedEntityId(null);
-      vp.setWorkspaceMode("analyze");
+      model.openAnalyzeSurface({ source: "run-sidebar" });
       return;
     }
     const objectId = resolveSelectedObjectId(id, model.sceneDocument ?? model.modelBuilderGraph);
@@ -745,7 +725,6 @@ export default function RunSidebar() {
     model,
     selectBuilderTarget,
     setGraphSelection,
-    vp,
   ]);
 
   /* ── Tree click handler ── */
@@ -755,8 +734,10 @@ export default function RunSidebar() {
       return;
     }
     if (id.startsWith("res-analysis-")) {
-      model.openResultWorkspaceEntry(id.replace("res-analysis-", ""));
-      vp.setWorkspaceMode("analyze");
+      model.openAnalyzeSurface({
+        resultWorkspaceId: id.replace("res-analysis-", ""),
+        source: "run-sidebar",
+      });
       return;
     }
     const resultContext = parseResultNodeContext(id);
@@ -770,15 +751,21 @@ export default function RunSidebar() {
       resultContext?.kind === "results-export-node" ||
       resultContext?.kind === "results-report"
     ) {
-      vp.setWorkspaceMode("analyze");
+      model.openAnalyzeSurface({ source: "run-sidebar" });
       return;
     }
     if (id === "res-dataset-eigen-spectrum") {
-      model.openAnalyze({ tab: "spectrum", selectedModeIndex: null });
+      model.openAnalyzeSurface({
+        selection: { tab: "spectrum", selectedModeIndex: null },
+        source: "run-sidebar",
+      });
       return;
     }
     if (id === "res-dataset-eigen-dispersion") {
-      model.openAnalyze({ tab: "dispersion", selectedModeIndex: null });
+      model.openAnalyzeSurface({
+        selection: { tab: "dispersion", selectedModeIndex: null },
+        source: "run-sidebar",
+      });
       return;
     }
     if (id === "res-dataset-time-series" || id === "res-dataset-final-state") {
@@ -926,7 +913,10 @@ export default function RunSidebar() {
         const duplicateId = model.duplicateResultWorkspaceEntry(id);
         if (duplicateId) {
           model.setSelectedSidebarNodeId(`res-analysis-${duplicateId}`);
-          model.openResultWorkspaceEntry(duplicateId);
+          model.openAnalyzeSurface({
+            resultWorkspaceId: duplicateId,
+            source: "run-sidebar-context-menu",
+          });
         }
         return;
       }

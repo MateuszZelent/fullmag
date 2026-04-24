@@ -49,6 +49,7 @@ function resolveFiniteMax(values: number[]): number | null {
 
 function RightInspectorPanel() {
   const vp = useViewport();
+  if (vp.effectiveViewMode === "Analyze") return <AnalyzeRightInspector />;
   if (vp.workspaceMode === "build") return <BuildRightInspector />;
   if (vp.workspaceMode === "study") return <StudyRightInspector />;
   return <AnalyzeRightInspector />;

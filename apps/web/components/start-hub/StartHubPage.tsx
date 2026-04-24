@@ -14,9 +14,11 @@ import {
   upsertRecentSimulation,
 } from "@/lib/workspace/recent-simulations";
 import {
+  normalizeWorkspaceStage,
   searchParamsForLaunchIntent,
   targetPathForLaunchIntent,
   type LaunchIntent,
+  type WorkspaceStage,
 } from "@/lib/workspace/launch-intent";
 import { detectLiveSessionIntent, type DetectedLiveSession } from "@/lib/workspace/launch-intent-live";
 import { pickTextFile, stageLaunchTextFile } from "@/lib/workspace/file-access";
@@ -27,7 +29,7 @@ function toIntentFromRecent(entry: RecentSimulationEntry): LaunchIntent {
     source: "recent",
     entryPath: entry.path,
     entryKind: entry.kind,
-    targetStage: entry.lastStage ?? "build",
+    targetStage: normalizeWorkspaceStage(entry.lastStage) ?? "build",
     resumeProjectId: entry.id,
     displayName: entry.name,
     launchAssetId: null,
@@ -182,7 +184,7 @@ export default function StartHubPage() {
     name: string;
     location: string;
     backend: string;
-    stage: "build" | "study" | "analyze";
+    stage: WorkspaceStage;
   }) => {
     const entry: RecentSimulationEntry = {
       id: `${payload.name}:${payload.location}`,

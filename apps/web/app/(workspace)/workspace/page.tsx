@@ -5,7 +5,7 @@ import WorkspaceEntryPage from '@/components/workspace/shell/WorkspaceEntryPage'
 export default function WorkspacePage() {
   return (
     <Suspense fallback={null}>
-      <WorkspaceEntryPage stage="build" />
+      <WorkspaceEntryPage stage="study" />
     </Suspense>
   );
 }
