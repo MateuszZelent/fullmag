@@ -8,6 +8,7 @@ import { IntegratorSettingsPanel, RelaxationSettingsPanel } from "../SolverSetti
 import { Button } from "../../ui/button";
 import SelectField from "../../ui/SelectField";
 import TextField from "../../ui/TextField";
+import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
 import { SidebarSection, InfoRow, StatusBadge } from "./primitives";
 import {
   buildPhysicsCapabilityView,
@@ -250,6 +251,7 @@ function solverPolicyFieldNumber(
 export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
   const cmd = useCommand();
   const model = useModel();
+  const sceneAuthoring = useSceneAuthoringActions();
   const solverPlan = model.solverPlan;
   const context = useMemo(() => parsePhysicsNodeContext(nodeId), [nodeId]);
   const femDiscretization = resolveFemDiscretization(
@@ -394,6 +396,28 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
         : previous,
     );
   };
+  const patchTargetObjectInteraction = (
+    kind: ScriptBuilderMagneticInteractionKind,
+    request: {
+      present?: boolean;
+      enabled?: boolean;
+      params?: Record<string, unknown>;
+    },
+  ) => {
+    if (!targetObject) return;
+    void sceneAuthoring
+      .patchObjectInteraction(targetObject.id, kind, request)
+      .catch((error) => {
+        console.error("failed to patch authoring object interaction", error);
+      });
+  };
+  const patchStudyScene = (studyPatch: Record<string, unknown>) => {
+    void sceneAuthoring
+      .updateSceneMergePatch({ study: studyPatch })
+      .catch((error) => {
+        console.error("failed to patch authoring study scene", error);
+      });
+  };
 
   const femDemagSolverPolicy = asRecord(
     model.sceneDocument?.study.fem_demag_solver_policy
@@ -404,29 +428,39 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
     femDemagSolverPolicy ?? defaultFemSolverPolicyFromPlan(solverPlan);
 
   const setFemDemagSolverPolicy = (patch: Record<string, unknown>) => {
+    let nextPolicy: Record<string, unknown> | null = null;
     model.setSceneDocument((previous) =>
-      previous
-        ? {
+      {
+        if (!previous) return previous;
+        nextPolicy = {
+          ...defaultFemSolverPolicyFromPlan(solverPlan),
+          ...(asRecord(previous.study.fem_demag_solver_policy) ?? {}),
+          ...patch,
+        };
+        return {
             ...previous,
             study: {
               ...previous.study,
-              fem_demag_solver_policy: {
-                ...defaultFemSolverPolicyFromPlan(solverPlan),
-                ...(asRecord(previous.study.fem_demag_solver_policy) ?? {}),
-                ...patch,
-              },
+              fem_demag_solver_policy: nextPolicy,
             },
-          }
-        : previous,
+          };
+      },
     );
+    const fallbackPolicy = {
+      ...defaultFemSolverPolicyFromPlan(solverPlan),
+      ...(asRecord(model.sceneDocument?.study.fem_demag_solver_policy) ?? {}),
+      ...patch,
+    };
+    patchStudyScene({ fem_demag_solver_policy: nextPolicy ?? fallbackPolicy });
   };
 
   const setExternalFieldComponent = (axis: 0 | 1 | 2, rawValue: string) => {
     const parsed = parseOptionalNumber(rawValue);
+    let nextField: [number, number, number] | null = null;
     model.setSceneDocument((previous) => {
       if (!previous) return previous;
       const baseline = previous.study.external_field ?? [0, 0, 0];
-      const nextField: [number, number, number] = [...baseline] as [number, number, number];
+      nextField = [...baseline] as [number, number, number];
       nextField[axis] = parsed ?? 0;
       return {
         ...previous,
@@ -436,6 +470,11 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
         },
       };
     });
+    const fallbackField = [
+      ...(model.sceneDocument?.study.external_field ?? [0, 0, 0]),
+    ] as [number, number, number];
+    fallbackField[axis] = parsed ?? 0;
+    patchStudyScene({ external_field: nextField ?? fallbackField });
   };
 
   const clearExternalField = () => {
@@ -450,6 +489,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
           }
         : previous,
     );
+    patchStudyScene({ external_field: null });
   };
 
   const demagRealization = model.scriptBuilderDemagRealization ?? "auto";
@@ -606,7 +646,22 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
             <SelectField
               label="Boundary policy"
               value={demagRealization}
-              onchange={(value) => model.setScriptBuilderDemagRealization(value === "auto" ? null : value)}
+              onchange={(value) => {
+                const nextValue = value === "auto" ? null : value;
+                model.setScriptBuilderDemagRealization(nextValue);
+                model.setSceneDocument((previous) =>
+                  previous
+                    ? {
+                        ...previous,
+                        study: {
+                          ...previous.study,
+                          demag_realization: nextValue,
+                        },
+                      }
+                    : previous,
+                );
+                patchStudyScene({ demag_realization: nextValue });
+              }}
               options={demagBoundaryOptions.map((option) => ({
                 value: option.value,
                 label: option.label,
@@ -784,6 +839,10 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                 setTargetObjectPhysicsStack((stack) =>
                   upsertObjectInteraction(stack, interactionKind, { enabled: true }),
                 );
+                patchTargetObjectInteraction(interactionKind, {
+                  present: true,
+                  enabled: true,
+                });
               }}
             >
               Activate On Object
@@ -798,6 +857,10 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                   setTargetObjectPhysicsStack((stack) =>
                     upsertObjectInteraction(stack, interactionKind, { enabled: !moduleEnabled }),
                   );
+                  patchTargetObjectInteraction(interactionKind, {
+                    present: true,
+                    enabled: !moduleEnabled,
+                  });
                 }}
               >
                 {moduleEnabled ? "Disable" : "Enable"}
@@ -810,6 +873,9 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                   setTargetObjectPhysicsStack((stack) =>
                     removeOptionalInteraction(stack, interactionKind),
                   );
+                  patchTargetObjectInteraction(interactionKind, {
+                    present: false,
+                  });
                 }}
               >
                 Remove
@@ -841,6 +907,13 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                     },
                   }),
                 );
+                patchTargetObjectInteraction("interfacial_dmi", {
+                  present: true,
+                  params: {
+                    ...(moduleEntry.params ?? {}),
+                    dind: next,
+                  },
+                });
               }}
               mono
             />
@@ -863,6 +936,13 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                         },
                       }),
                     );
+                    patchTargetObjectInteraction("interfacial_dmi", {
+                      present: true,
+                      params: {
+                        ...(moduleEntry.params ?? {}),
+                        axis: nextAxis,
+                      },
+                    });
                   }}
                   mono
                 />
@@ -886,6 +966,13 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                     },
                   }),
                 );
+                patchTargetObjectInteraction("uniaxial_anisotropy", {
+                  present: true,
+                  params: {
+                    ...(moduleEntry.params ?? {}),
+                    ku1: next,
+                  },
+                });
               }}
               mono
             />
@@ -908,6 +995,13 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                         },
                       }),
                     );
+                    patchTargetObjectInteraction("uniaxial_anisotropy", {
+                      present: true,
+                      params: {
+                        ...(moduleEntry.params ?? {}),
+                        axis: nextAxis,
+                      },
+                    });
                   }}
                   mono
                 />

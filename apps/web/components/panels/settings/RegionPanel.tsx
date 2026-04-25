@@ -3,12 +3,14 @@
 import { useMemo } from "react";
 
 import { useModel } from "../../runs/control-room/ControlRoomContext";
+import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
 import { TextField } from "../../ui/TextField";
 import { findSceneObjectByNodeId } from "./objectSelection";
 import { SidebarSection } from "./primitives";
 
 export default function RegionPanel({ nodeId }: { nodeId?: string }) {
   const model = useModel();
+  const sceneAuthoring = useSceneAuthoringActions();
 
   const { object: sceneObject } = useMemo(
     () => findSceneObjectByNodeId(nodeId, model.sceneDocument),
@@ -16,21 +18,24 @@ export default function RegionPanel({ nodeId }: { nodeId?: string }) {
   );
 
   const updateObject = (updater: (regionName: string | null) => string | null) => {
-    if (!sceneObject) return;
-    model.setSceneDocument((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        objects: prev.objects.map((object) =>
-          object.id === sceneObject.id
-            ? {
-                ...object,
-                region_name: updater(object.region_name ?? null),
-              }
-            : object,
-        ),
-      };
+    if (!sceneObject || !model.sceneDocument) return;
+    const nextObjects = model.sceneDocument.objects.map((object) =>
+      object.id === sceneObject.id
+        ? {
+            ...object,
+            region_name: updater(object.region_name ?? null),
+          }
+        : object,
+    );
+    model.setSceneDocument({
+      ...model.sceneDocument,
+      objects: nextObjects,
     });
+    void sceneAuthoring
+      .updateSceneMergePatch({ objects: nextObjects })
+      .catch((error) => {
+        console.error("failed to patch authoring region object", error);
+      });
   };
 
   if (!sceneObject) {

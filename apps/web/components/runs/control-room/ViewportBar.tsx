@@ -266,7 +266,6 @@ export const ViewportBar = memo(function ViewportBar() {
       void displayControls.setComponent(nextComponent);
       if (model.meshParts.length > 0) {
         const nextColorField = colorFieldFromUnifiedVectorComponent(next.vectorComponent);
-        model.setFemColorField(nextColorField);
         model.setMeshEntityViewState((previous) => {
           let changed = false;
           const updated = { ...previous };

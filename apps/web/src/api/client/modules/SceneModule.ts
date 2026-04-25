@@ -47,12 +47,19 @@ export class SceneModule {
     document: Pick<SceneDocument, "magnetization_assets">,
     opts?: RequestOptions,
   ): Promise<SceneDocument> {
+    return this.updateSceneMergePatch({
+      magnetization_assets: document.magnetization_assets as unknown,
+    }, opts);
+  }
+
+  async updateSceneMergePatch(
+    mergePatch: Record<string, unknown>,
+    opts?: RequestOptions,
+  ): Promise<SceneDocument> {
     return this.transact(
       {
         kind: "merge_patch",
-        merge_patch: {
-          magnetization_assets: document.magnetization_assets as unknown,
-        } as Record<string, unknown>,
+        merge_patch: mergePatch,
       },
       opts,
     ).then(

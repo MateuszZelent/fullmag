@@ -4,6 +4,7 @@ import { startTransition, useCallback, useMemo, useState } from "react";
 
 import { useModel } from "../../runs/control-room/ControlRoomContext";
 import { extractGeometryBoundsFromParams, fmtSI } from "../../runs/control-room/shared";
+import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
 import { TextField } from "../../ui/TextField";
 import SelectField from "../../ui/SelectField";
 import { Button } from "../../ui/button";
@@ -239,6 +240,7 @@ function describeGeometryDescriptor(raw: unknown): string {
 
 export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
   const model = useModel();
+  const sceneAuthoring = useSceneAuthoringActions();
 
   const { object: sceneObject, index: objectIndex, material, magnetization } = useMemo(
     () => findSceneObjectByNodeId(nodeId, model.sceneDocument),
@@ -262,21 +264,22 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
 
   const updateObject = useCallback(
     (updater: (object: SceneObject) => SceneObject) => {
-      if (objectIndex < 0) return;
-      model.setSceneDocument((prev) => {
-        if (!prev) return prev;
-        const nextObjects = [...prev.objects];
-        const target = nextObjects[objectIndex];
-        if (target) {
-          nextObjects[objectIndex] = updater(target);
-        }
-        return {
-          ...prev,
-          objects: nextObjects,
-        };
+      if (objectIndex < 0 || !model.sceneDocument) return;
+      const nextObjects = [...model.sceneDocument.objects];
+      const target = nextObjects[objectIndex];
+      if (!target) return;
+      nextObjects[objectIndex] = updater(target);
+      model.setSceneDocument({
+        ...model.sceneDocument,
+        objects: nextObjects,
       });
+      void sceneAuthoring
+        .updateSceneMergePatch({ objects: nextObjects })
+        .catch((error) => {
+          console.error("failed to patch authoring geometry object", error);
+        });
     },
-    [model, objectIndex],
+    [model, objectIndex, sceneAuthoring],
   );
 
   const handleBoxSize = (idx: number, valStr: string) => {
@@ -473,6 +476,7 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
               className="flex-1"
               onClick={() => {
                 let duplicateName: string | null = null;
+                let mergePatch: Record<string, unknown> | null = null;
                 model.setSceneDocument((prev) => {
                   if (!prev) return prev;
                   const source = prev.objects[objectIndex];
@@ -488,28 +492,42 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
                     ) ?? defaultSceneMagnetizationAsset(source.name);
                   const nextObjects = [...prev.objects];
                   nextObjects.splice(objectIndex + 1, 0, cloneSceneObject(source, nextDuplicateName));
+                  const nextMaterials = [
+                    ...prev.materials,
+                    {
+                      ...sourceMaterial,
+                      id: defaultSceneMaterialId(nextDuplicateName),
+                      name: `${nextDuplicateName} material`,
+                    },
+                  ];
+                  const nextMagnetizationAssets = [
+                    ...prev.magnetization_assets,
+                    {
+                      ...sourceMagnetization,
+                      id: defaultSceneMagnetizationId(nextDuplicateName),
+                      name: `${nextDuplicateName} magnetization`,
+                    },
+                  ];
+                  mergePatch = {
+                    objects: nextObjects,
+                    materials: nextMaterials,
+                    magnetization_assets: nextMagnetizationAssets,
+                  };
                   return {
                     ...prev,
                     objects: nextObjects,
-                    materials: [
-                      ...prev.materials,
-                      {
-                        ...sourceMaterial,
-                        id: defaultSceneMaterialId(nextDuplicateName),
-                        name: `${nextDuplicateName} material`,
-                      },
-                    ],
-                    magnetization_assets: [
-                      ...prev.magnetization_assets,
-                      {
-                        ...sourceMagnetization,
-                        id: defaultSceneMagnetizationId(nextDuplicateName),
-                        name: `${nextDuplicateName} magnetization`,
-                      },
-                    ],
+                    materials: nextMaterials,
+                    magnetization_assets: nextMagnetizationAssets,
                   };
                 });
                 if (!duplicateName) return;
+                if (mergePatch) {
+                  void sceneAuthoring
+                    .updateSceneMergePatch(mergePatch)
+                    .catch((error) => {
+                      console.error("failed to patch duplicated authoring object", error);
+                    });
+                }
                 startTransition(() => {
                   model.setSelectedObjectId(duplicateName);
                   model.setSelectedSidebarNodeId(`obj-${duplicateName}`);
@@ -524,6 +542,7 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
               size="sm"
               className="flex-1 opacity-90 hover:opacity-100"
               onClick={() => {
+                let mergePatch: Record<string, unknown> | null = null;
                 model.setSceneDocument((prev) => {
                   if (!prev) return prev;
                   const target = prev.objects[objectIndex];
@@ -535,19 +554,33 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
                   const magnetizationStillReferenced = remainingObjects.some(
                     (object) => object.magnetization_ref === target.magnetization_ref,
                   );
+                  const nextMaterials = materialStillReferenced
+                    ? prev.materials
+                    : prev.materials.filter((entry) => entry.id !== target.material_ref);
+                  const nextMagnetizationAssets = magnetizationStillReferenced
+                    ? prev.magnetization_assets
+                    : prev.magnetization_assets.filter(
+                        (entry) => entry.id !== target.magnetization_ref,
+                      );
+                  mergePatch = {
+                    objects: remainingObjects,
+                    materials: nextMaterials,
+                    magnetization_assets: nextMagnetizationAssets,
+                  };
                   return {
                     ...prev,
                     objects: remainingObjects,
-                    materials: materialStillReferenced
-                      ? prev.materials
-                      : prev.materials.filter((entry) => entry.id !== target.material_ref),
-                    magnetization_assets: magnetizationStillReferenced
-                      ? prev.magnetization_assets
-                      : prev.magnetization_assets.filter(
-                          (entry) => entry.id !== target.magnetization_ref,
-                        ),
+                    materials: nextMaterials,
+                    magnetization_assets: nextMagnetizationAssets,
                   };
                 });
+                if (mergePatch) {
+                  void sceneAuthoring
+                    .updateSceneMergePatch(mergePatch)
+                    .catch((error) => {
+                      console.error("failed to patch deleted authoring object", error);
+                    });
+                }
               }}
             >
               Delete

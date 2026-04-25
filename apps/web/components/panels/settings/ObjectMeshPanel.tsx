@@ -33,6 +33,7 @@ import MeshSequenceEditor from "./MeshSequenceEditor";
 import { useViewport, useCommand, useModel } from "../../runs/control-room/context-hooks";
 import { type ViewportMode } from "../../runs/control-room/shared";
 import { fmtExp, fmtSI } from "@/lib/format";
+import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
 import {
   MESH_RENDER_MODE_OPTIONS,
   MESH_WORKSPACE_PRESETS,
@@ -327,6 +328,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
   const viewport = useViewport();
   const cmd = useCommand();
   const model = useModel();
+  const sceneAuthoring = useSceneAuthoringActions();
   /* Backward-compatible ctx composed from granular hooks */
   const ctx = { ...model, effectiveViewMode: viewport.effectiveViewMode, handleViewModeChange: viewport.handleViewModeChange, workspaceStatus: cmd.workspaceStatus, engineLog: cmd.engineLog, isWaitingForCompute: cmd.isWaitingForCompute, scriptSyncBusy: cmd.scriptSyncBusy, scriptSyncMessage: cmd.scriptSyncMessage };
 
@@ -350,28 +352,29 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
 
   const updateGeo = useCallback(
     (updater: (mesh: ScriptBuilderPerGeometryMeshEntry | null) => ScriptBuilderPerGeometryMeshEntry | null) => {
-      if (geoIndex < 0) {
+      if (geoIndex < 0 || !model.sceneDocument) {
         return;
       }
-      model.setSceneDocument((prev) => {
-        if (!prev) {
-          return prev;
-        }
-        const nextObjects = [...prev.objects];
-        const target = nextObjects[geoIndex];
-        if (target) {
-          nextObjects[geoIndex] = {
-            ...target,
-            mesh_override: updater(target.mesh_override ?? null),
-          };
-        }
-        return {
-          ...prev,
-          objects: nextObjects,
-        };
+      const nextObjects = [...model.sceneDocument.objects];
+      const target = nextObjects[geoIndex];
+      if (!target) {
+        return;
+      }
+      nextObjects[geoIndex] = {
+        ...target,
+        mesh_override: updater(target.mesh_override ?? null),
+      };
+      model.setSceneDocument({
+        ...model.sceneDocument,
+        objects: nextObjects,
       });
+      void sceneAuthoring
+        .updateSceneMergePatch({ objects: nextObjects })
+        .catch((error) => {
+          console.error("failed to patch authoring object mesh", error);
+        });
     },
-    [geoIndex, model],
+    [geoIndex, model, sceneAuthoring],
   );
 
   const mesh = useMemo(() => coerceObjectMeshState(geo?.mesh), [geo?.mesh]);
