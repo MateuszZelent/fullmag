@@ -46,7 +46,7 @@ import type {
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
 
-import type { RenderMode } from "../../preview/FemMeshView3D";
+import type { FemColorField, RenderMode } from "../../preview/FemMeshView3D";
 import type { VectorComponent } from "./shared";
 import { useCommand, useModel, useTransport, useViewport } from "./context-hooks";
 
@@ -69,6 +69,15 @@ function fromUnifiedVectorComponent(
     return component;
   }
   return "magnitude";
+}
+
+function colorFieldFromUnifiedVectorComponent(
+  component: UnifiedRenderState["vectorComponent"],
+): FemColorField {
+  if (component === "x" || component === "y" || component === "z") {
+    return component;
+  }
+  return component === "|v|" ? "magnitude" : "orientation";
 }
 
 function toUnifiedMeshRenderMode(
@@ -255,6 +264,26 @@ export const ViewportBar = memo(function ViewportBar() {
       const nextComponent = fromUnifiedVectorComponent(next.vectorComponent);
       viewport.setComponent(nextComponent === "3D" ? "magnitude" : nextComponent);
       void displayControls.setComponent(nextComponent);
+      if (model.meshParts.length > 0) {
+        const nextColorField = colorFieldFromUnifiedVectorComponent(next.vectorComponent);
+        model.setFemColorField(nextColorField);
+        model.setMeshEntityViewState((previous) => {
+          let changed = false;
+          const updated = { ...previous };
+          for (const part of model.meshParts) {
+            if (part.role !== "magnetic_object") {
+              continue;
+            }
+            const current = updated[part.id] ?? defaultMeshEntityViewState(part);
+            if (current.colorField === nextColorField) {
+              continue;
+            }
+            updated[part.id] = { ...current, colorField: nextColorField };
+            changed = true;
+          }
+          return changed ? updated : previous;
+        });
+      }
     }
 
     if (next.selectedLayer !== renderState.selectedLayer) {

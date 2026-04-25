@@ -21,9 +21,9 @@ export const CAMERA_CONTROL_PROFILES: Record<CameraControlProfileId, CameraContr
     zoomSpeed: 0.82,
     panSpeed: 0.65,
     dampingFactor: 0.12,
-    minRotationStep: 0.0030,
-    minPanStep: 0.0010,
-    minZoomStep: 0.0014,
+    minRotationStep: 0,
+    minPanStep: 0,
+    minZoomStep: 0,
   },
   fdm: {
     // Preciser navigation profile for FDM scenes (slightly slower pan/rotate).
@@ -31,9 +31,9 @@ export const CAMERA_CONTROL_PROFILES: Record<CameraControlProfileId, CameraContr
     zoomSpeed: 0.74,
     panSpeed: 0.58,
     dampingFactor: 0.10,
-    minRotationStep: 0.0034,
-    minPanStep: 0.0012,
-    minZoomStep: 0.0018,
+    minRotationStep: 0,
+    minPanStep: 0,
+    minZoomStep: 0,
   },
 };
 

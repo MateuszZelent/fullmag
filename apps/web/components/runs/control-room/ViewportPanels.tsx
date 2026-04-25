@@ -767,13 +767,12 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         opacity: ctx.meshOpacity,
         colorField:
           femLayerState.showQuantity && part.role === "magnetic_object"
-            ? ctx.femColorField
+            ? current.colorField
             : "none",
       };
     }
     return next;
   }, [
-    ctx.femColorField,
     ctx.meshEntityViewState,
     ctx.meshOpacity,
     ctx.meshParts,

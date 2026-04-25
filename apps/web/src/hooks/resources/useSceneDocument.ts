@@ -113,6 +113,9 @@ export function useSceneAuthoringActions() {
     updateSceneDocument(document: SceneDocument): Promise<SceneDocument> {
       return getLiveSessionClient().scene.update(document);
     },
+    updateMagnetizationAssets(document: Pick<SceneDocument, "magnetization_assets">): Promise<SceneDocument> {
+      return getLiveSessionClient().scene.updateMagnetizationAssets(document);
+    },
     patchMaterial(
       materialId: string,
       request: AuthoringMaterialPatchRequest,

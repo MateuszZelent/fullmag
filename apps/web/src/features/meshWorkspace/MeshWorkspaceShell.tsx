@@ -135,23 +135,9 @@ export function MeshWorkspaceShell({
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(12rem,16rem)_1fr_minmax(14rem,20rem)]">
-        <aside className="min-h-0 overflow-auto border-r border-border/30 p-3">
-          <h2 className="text-xs font-semibold uppercase text-muted-foreground">Realized Domain</h2>
-          <ul className="mt-3 space-y-1 text-sm">
-            {model.sharedDomainManifest ? (
-              <>
-                <li>{model.sharedDomainManifest.meshName}</li>
-                <li>{model.sharedDomainManifest.meshPartCount} parts</li>
-                <li>{model.sharedDomainManifest.objectSegmentCount} object segments</li>
-              </>
-            ) : (
-              <li className="text-muted-foreground">No manifest available</li>
-            )}
-          </ul>
-        </aside>
-        <main className="min-h-0 p-3" data-toolbar-slots={TOOLBAR_SLOTS.join(",")}>
-          <div className="relative h-full overflow-hidden rounded border border-border/30 bg-card/20">
+      <div className="min-h-0 flex-1">
+        <main className="h-full min-h-0 p-0" data-toolbar-slots={TOOLBAR_SLOTS.join(",")}>
+          <div className="relative h-full overflow-hidden bg-card/20">
             <div className="absolute left-3 top-3 z-10 flex flex-wrap gap-2 text-xs text-muted-foreground">
               {model.dirty.isDirty && <span className="rounded bg-background/80 px-2 py-1">mesh dirty</span>}
               {model.activeBuild && <span className="rounded bg-background/80 px-2 py-1">active build</span>}
@@ -166,19 +152,6 @@ export function MeshWorkspaceShell({
             )}
           </div>
         </main>
-        <aside className="min-h-0 overflow-auto border-l border-border/30 p-3">
-          <h2 className="text-xs font-semibold uppercase text-muted-foreground">Inspector</h2>
-          <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <dt className="text-muted-foreground">Status</dt>
-            <dd>{model.diagnostics.status}</dd>
-            <dt className="text-muted-foreground">Mesh rev</dt>
-            <dd>{model.revisions.meshRevision ?? "n/a"}</dd>
-            <dt className="text-muted-foreground">Build rev</dt>
-            <dd>{model.revisions.meshBuildRevision ?? "n/a"}</dd>
-            <dt className="text-muted-foreground">Selection</dt>
-            <dd>{selection?.primary.id ?? selection?.primary.kind ?? "none"}</dd>
-          </dl>
-        </aside>
       </div>
     </section>
   );

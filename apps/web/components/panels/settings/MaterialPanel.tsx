@@ -500,14 +500,19 @@ export default function MaterialPanel({
       },
     }));
     if (key === "Dind" && hasObjectInteraction(physicsStack, "interfacial_dmi")) {
+      const nextDmiParams = {
+        ...(physicsStack.find((entry) => entry.kind === "interfacial_dmi")?.params ?? {}),
+        dind: parsed ?? 0,
+      };
       updateObjectPhysicsStack((stack) => {
         const current = ensureObjectPhysicsStack(stack, parsed);
         return upsertObjectInteraction(current, "interfacial_dmi", {
-          params: {
-            ...(current.find((entry) => entry.kind === "interfacial_dmi")?.params ?? {}),
-            dind: parsed ?? 0,
-          },
+          params: nextDmiParams,
         });
+      });
+      patchObjectInteraction("interfacial_dmi", {
+        present: true,
+        params: nextDmiParams,
       });
     }
     if (sceneObject?.material_ref) {
@@ -833,6 +838,10 @@ export default function MaterialPanel({
     const isPresetTexture = magnetizationAsset?.kind === "preset_texture";
     const totalSpins = isPresetTexture ? targetSpinCount : null;
     const scenePayload = model.sceneDocument;
+    const commitMagnetizationAssets =
+      showMagneticTexturePanel
+        ? sceneAuthoring.updateMagnetizationAssets(scenePayload)
+        : sceneAuthoring.updateSceneDocument(scenePayload);
     const generation = presetTextureSyncGenerationRef.current + 1;
     presetTextureSyncGenerationRef.current = generation;
     pendingViewportRefreshRef.current = null;
@@ -875,8 +884,7 @@ export default function MaterialPanel({
       }, 70);
     }
 
-    void sceneAuthoring
-      .updateSceneDocument(scenePayload)
+    void commitMagnetizationAssets
       .then((committedScene) => {
         if (presetTextureSyncGenerationRef.current !== generation) {
           return;
@@ -921,6 +929,7 @@ export default function MaterialPanel({
     model.sceneDocument,
     setPresetTextureModalOpen,
     setPresetTextureSync,
+    showMagneticTexturePanel,
     targetSpinCount,
   ]);
   const lastAutoAppliedMagnetizationHashRef = useRef<string | null>(null);
@@ -939,8 +948,11 @@ export default function MaterialPanel({
     }
     lastAutoAppliedMagnetizationHashRef.current = magnetizationAssetHash;
     const scenePayload = model.sceneDocument;
-    void sceneAuthoring
-      .updateSceneDocument(scenePayload)
+    const commitMagnetizationAssets =
+      showMagneticTexturePanel
+        ? sceneAuthoring.updateMagnetizationAssets(scenePayload)
+        : sceneAuthoring.updateSceneDocument(scenePayload);
+    void commitMagnetizationAssets
       .then(async (committedScene) => {
         model.setSceneDocument(committedScene);
         await model.refreshLiveState();
