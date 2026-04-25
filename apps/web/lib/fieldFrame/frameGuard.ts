@@ -96,6 +96,5 @@ export function logFrameDecision(
     ? `prev(rev=${prev.fieldRevision}, step=${prev.sourceStep}, q=${prev.quantityId})`
     : "prev(none)";
   const nextInfo = `next(rev=${next.fieldRevision}, step=${next.sourceStep}, q=${next.quantityId}, mesh=${next.meshGenerationId ?? "n/a"})`;
-  // eslint-disable-next-line no-console
   console.debug(`[FieldFrame] ${tag}: ${prevInfo} → ${nextInfo}`);
 }

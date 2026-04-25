@@ -10,7 +10,7 @@ import type {
   SpatialDomainAdapter,
   DomainInfo,
   RenderGeometry,
-} from "../../../src/domain/adapters/SpatialDomainAdapter";
+} from "@/src/domain/adapters/SpatialDomainAdapter";
 
 /**
  * Top-level FEM layer visibility toggles (P3).

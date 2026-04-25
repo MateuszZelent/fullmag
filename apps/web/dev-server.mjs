@@ -35,11 +35,14 @@ function parseArgs(argv) {
 }
 
 function shouldProxyHttp(pathname) {
-  return pathname === "/healthz" || pathname.startsWith("/v1/");
+  return pathname === "/healthz" || pathname.startsWith("/v1/") || pathname.startsWith("/v2/");
 }
 
 function shouldProxyWs(pathname) {
-  return pathname.startsWith("/v1/live/") && pathname.endsWith("/ws");
+  return (
+    (pathname.startsWith("/v1/live/") || pathname.startsWith("/v2/sessions/")) &&
+    pathname.endsWith("/ws")
+  );
 }
 
 function requestPathname(req) {

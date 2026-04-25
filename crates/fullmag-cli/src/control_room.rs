@@ -192,7 +192,7 @@ pub(crate) fn bootstrap_control_plane(
             })
             .unwrap_or(false);
 
-    let api_child = if api_port() != 0 && api_is_ready(api_port()) {
+    let api_child = if api_port() != 0 && api_bridge_is_ready(api_port()) {
         eprintln!("  reusing fullmag-api on :{} ...", api_port());
         None
     } else {
@@ -573,6 +573,42 @@ pub(crate) fn api_is_ready(port: u16) -> bool {
     response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")
 }
 
+fn api_bridge_is_ready(port: u16) -> bool {
+    if !api_is_ready(port) {
+        return false;
+    }
+
+    let addr = std::net::SocketAddr::from((LOOPBACK_V4_OCTETS, port));
+    let mut stream = match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
+        Ok(stream) => stream,
+        Err(_) => return false,
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(750)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(750)));
+    let request = concat!(
+        "POST /v1/internal/live/current/snapshot HTTP/1.1\r\n",
+        "Host: localhost\r\n",
+        "Content-Type: application/json\r\n",
+        "Content-Length: 2\r\n",
+        "Connection: close\r\n",
+        "\r\n",
+        "{}",
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    response.starts_with("HTTP/1.1 200")
+        || response.starts_with("HTTP/1.0 200")
+        || response.starts_with("HTTP/1.1 400")
+        || response.starts_with("HTTP/1.0 400")
+        || response.starts_with("HTTP/1.1 422")
+        || response.starts_with("HTTP/1.0 422")
+}
+
 pub(crate) fn current_live_api_client() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -903,7 +939,7 @@ fn configure_repo_local_library_env(
 fn wait_for_api_ready(port: u16, child: &mut std::process::Child, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        if api_is_ready(port) {
+        if api_bridge_is_ready(port) {
             return Ok(());
         }
         if let Some(status) = child

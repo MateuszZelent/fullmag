@@ -533,6 +533,5 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
       });
     }
     return items;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [args]);
 }

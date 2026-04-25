@@ -5,6 +5,9 @@
  * shared model for FEM, FDM, and primitives authoring.
  */
 
+import type { DecodedFieldVector } from "@/src/api/codecs/types";
+import type { FieldComponent } from "@/src/api/types";
+
 export type Viewport3DDiscretization = "fem" | "fdm" | "mixed";
 
 export type Viewport3DComponent = "3D" | "x" | "y" | "z" | "|v|";
@@ -143,6 +146,57 @@ export type Viewport3DFdmModulePatch = Partial<
   topography?: Partial<Viewport3DFdmModuleState["topography"]>;
 };
 
+// ── Vector field model ────────────────────────────────────────────────────────
+
+export type Viewport3DVectorStatus =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "error"
+  | "unsupported"
+  | "mismatch";
+
+export interface Viewport3DVectorScope {
+  kind: "full" | "object" | "part" | "airbox" | "selection";
+  id?: string | null;
+}
+
+export interface Viewport3DVectorFieldModel {
+  status: Viewport3DVectorStatus;
+  visible: boolean;
+  data: DecodedFieldVector | null;
+  positions: Float32Array | Float64Array | null;
+  quantityId: string | null;
+  fieldRevision: number | null;
+  domainGenerationId: number | null;
+  directionComponent: FieldComponent;
+  colorComponent: Viewport3DComponent;
+  pointCount: number;
+  adapterPointCount: number;
+  sampledCount: number;
+  scope: Viewport3DVectorScope;
+  error: string | null;
+}
+
+export const EMPTY_VIEWPORT3D_VECTOR_FIELD: Viewport3DVectorFieldModel = {
+  status: "idle",
+  visible: false,
+  data: null,
+  positions: null,
+  quantityId: null,
+  fieldRevision: null,
+  domainGenerationId: null,
+  directionComponent: "full",
+  colorComponent: "3D",
+  pointCount: 0,
+  adapterPointCount: 0,
+  sampledCount: 0,
+  scope: { kind: "full" },
+  error: null,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export interface Viewport3DModel {
   scene: Viewport3DSceneModel;
   quantity: Viewport3DQuantityModel;
@@ -154,6 +208,7 @@ export interface Viewport3DModel {
   debug: Viewport3DDebugState;
   authoring: Viewport3DAuthoringModel | null;
   fdm: Viewport3DFdmModuleState | null;
+  vectorField: Viewport3DVectorFieldModel;
 }
 
 export interface Viewport3DToolbarState {

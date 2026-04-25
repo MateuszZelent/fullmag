@@ -325,8 +325,11 @@ mod tests {
         let mut state = problem
             .new_state(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
             .expect("state should build");
+        let mut ws = problem.create_workspace();
 
-        let _report = problem.step(&mut state, 1e-3).expect("step should succeed");
+        let _report = problem
+            .step_with_workspace(&mut state, 1e-3, &mut ws)
+            .expect("step should succeed");
 
         for magnetization in state.magnetization() {
             assert!(
@@ -343,12 +346,15 @@ mod tests {
         let mut state = problem
             .new_state(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
             .expect("state should build");
+        let mut ws = problem.create_workspace();
 
         let initial_energy = problem
             .exchange_energy(&state)
             .expect("energy should evaluate");
         for _ in 0..10 {
-            problem.step(&mut state, 1e-3).expect("step should succeed");
+            problem
+                .step_with_workspace(&mut state, 1e-3, &mut ws)
+                .expect("step should succeed");
         }
         let final_energy = problem
             .observe(&state)
@@ -367,13 +373,16 @@ mod tests {
         let mut state = problem
             .new_state(vec![[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
             .expect("state should build");
+        let mut ws = problem.create_workspace();
 
         let initial_energy = problem
             .observe(&state)
             .expect("observables")
             .external_energy_joules;
         for _ in 0..100 {
-            problem.step(&mut state, 5e-3).expect("step should succeed");
+            problem
+                .step_with_workspace(&mut state, 5e-3, &mut ws)
+                .expect("step should succeed");
         }
         let final_observables = problem.observe(&state).expect("observables");
 
@@ -394,8 +403,11 @@ mod tests {
         let mut state = problem
             .new_state(vec![[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
             .expect("state should build");
+        let mut ws = problem.create_workspace();
 
-        problem.step(&mut state, 1e-3).expect("step should succeed");
+        problem
+            .step_with_workspace(&mut state, 1e-3, &mut ws)
+            .expect("step should succeed");
 
         assert!(
             state.magnetization()[0][1].abs() <= 1e-12,

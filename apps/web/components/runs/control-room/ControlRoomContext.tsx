@@ -9,14 +9,14 @@ import {
   useState,
 } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import type { GpuTelemetryResponse } from "../../../src/api/types";
+import type { GpuTelemetryResponse } from "@/src/api/types";
 import { createControlRoomApi } from "./controlRoomApi";
-import { decodeFieldVector } from "../../../src/api/codecs/fieldVectorCodec";
-import { decodeTopology } from "../../../src/api/codecs/topologyCodec";
-import { useSceneDocument } from "../../../src/hooks/resources/useSceneDocument";
-import { useStageExecution } from "../../../src/hooks/resources/useStageExecution";
-import { useMeshWorkspaceResourceState } from "../../../src/hooks/resources/useMeshResources";
-import { useWorkspaceSelection } from "../../../src/hooks/resources/useWorkspaceSelection";
+import { decodeFieldVector } from "@/src/api/codecs/fieldVectorCodec";
+import { decodeTopology } from "@/src/api/codecs/topologyCodec";
+import { useSceneDocument } from "@/src/hooks/resources/useSceneDocument";
+import { useStageExecution } from "@/src/hooks/resources/useStageExecution";
+import { useMeshWorkspaceResourceState } from "@/src/hooks/resources/useMeshResources";
+import { useWorkspaceSelection } from "@/src/hooks/resources/useWorkspaceSelection";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
 import { useSessionRuntimeStore } from "../../../features/session-runtime/store/useSessionRuntimeStore";
 import {

@@ -10,78 +10,71 @@ const EXAMPLES = [
     id: "nanoflower_fem", 
     label: "Nanoflower FEM",
     description: "Multi-element tetrahedral mesh study",
-    icon: <Box className="h-5 w-5 text-sky" />,
+    icon: <Box className="h-5 w-5 text-viewport-cyan" />,
     stats: "480k nodes | 3D",
-    gradient: "from-sky/20 via-sky/5 to-transparent",
+    tint: "bg-viewport-cyan/10 text-viewport-cyan",
   },
   { 
     id: "relax_run", 
     label: "Relax + Run",
     description: "Ground state discovery with high-alpha damping",
-    icon: <Zap className="h-5 w-5 text-peach" />,
+    icon: <Zap className="h-5 w-5 text-viewport-amber" />,
     stats: "Relax alpha 1.0",
-    gradient: "from-peach/20 via-peach/5 to-transparent",
+    tint: "bg-viewport-amber/10 text-viewport-amber",
   },
   { 
     id: "eigenmodes", 
     label: "Eigenmode Solver",
     description: "Frequency domain magnetization dynamics",
-    icon: <Boxes className="h-5 w-5 text-mauve" />,
+    icon: <Boxes className="h-5 w-5 text-viewport-violet" />,
     stats: "LANCZOS | GPU",
-    gradient: "from-mauve/20 via-mauve/5 to-transparent",
+    tint: "bg-viewport-violet/10 text-viewport-violet",
   },
   { 
     id: "external_field_sweep", 
     label: "Hysteresis Loop",
     description: "Automated field sweep and coercivity calculation",
-    icon: <Binary className="h-5 w-5 text-emerald-400" />,
+    icon: <Binary className="h-5 w-5 text-success" />,
     stats: "100 Field steps",
-    gradient: "from-emerald-500/20 via-emerald-500/5 to-transparent",
+    tint: "bg-success/10 text-success",
   },
 ];
 
 export default function ExamplesSection({ onOpenExample }: ExamplesSectionProps) {
   return (
-    <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
       {EXAMPLES.map((example) => (
         <button
           key={example.id}
           type="button"
           onClick={() => onOpenExample(example.id)}
-          className="group relative flex flex-col overflow-hidden rounded-3xl border border-white/5 bg-white/[0.03] p-1.5 transition-all hover:bg-white/[0.05] hover:ring-1 hover:ring-primary/20"
+          className="group flex min-h-44 flex-col rounded-md border border-border/60 bg-card/70 p-4 text-left shadow-sm transition-colors hover:border-primary/35 hover:bg-secondary/40"
         >
-          {/* Preview Thumbnail Area */}
-          <div className={cn(
-            "relative h-32 w-full overflow-hidden rounded-[20px] bg-gradient-to-br p-4",
-            example.gradient
-          )}>
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_30%,rgba(255,255,255,0.03)_0%,transparent_70%)]" />
-            <div className="flex h-full w-full items-center justify-center opacity-80 transition-transform duration-500 group-hover:scale-110 group-hover:opacity-100">
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div className={cn("flex h-10 w-10 items-center justify-center rounded-md", example.tint)}>
               {example.icon}
             </div>
-            
-            <div className="absolute bottom-2.5 right-2.5 rounded-md bg-black/40 px-2 py-0.5 text-[0.55rem] font-bold uppercase tracking-widest text-white/50 backdrop-blur-sm ring-1 ring-white/5">
+            <div className="rounded-md border border-border/60 bg-background/50 px-2 py-1 text-xs font-medium text-muted-foreground">
               Ref Bundle
             </div>
           </div>
 
-          {/* Content Area */}
-          <div className="flex flex-col p-4 pt-4">
+          <div className="flex flex-1 flex-col">
             <div className="flex items-center justify-between">
-              <span className="text-[0.78rem] font-bold tracking-tight text-white/90 group-hover:text-primary transition-colors">
+              <span className="text-base font-semibold tracking-tight text-foreground transition-colors group-hover:text-primary">
                 {example.label}
               </span>
-              <Microscope className="h-3 w-3 text-muted-foreground/30" />
+              <Microscope className="h-4 w-4 text-muted-foreground/50" />
             </div>
-            <p className="mt-1 line-clamp-2 text-[0.68rem] leading-relaxed text-muted-foreground/60 font-medium">
+            <p className="mt-2 line-clamp-2 text-sm leading-5 text-muted-foreground">
               {example.description}
             </p>
             
-            <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-3">
-              <span className="font-mono text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground/40">
+            <div className="mt-auto flex items-center justify-between border-t border-border/60 pt-3">
+              <span className="font-mono text-xs font-medium uppercase text-muted-foreground">
                 {example.stats}
               </span>
-              <div className="h-1.5 w-1.5 rounded-full bg-primary/20 group-hover:bg-primary transition-colors" />
+              <div className="h-1.5 w-1.5 rounded-full bg-primary/45 transition-colors group-hover:bg-primary" />
             </div>
           </div>
         </button>

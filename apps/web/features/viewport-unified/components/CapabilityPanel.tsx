@@ -7,7 +7,7 @@
  */
 
 import type { ReactNode } from "react";
-import type { CapabilityMap } from "../../../src/api/types";
+import type { CapabilityMap } from "@/src/api/types";
 
 interface CapabilityPanelProps {
   capabilities: CapabilityMap | null;

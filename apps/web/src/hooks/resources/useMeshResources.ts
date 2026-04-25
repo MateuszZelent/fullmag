@@ -169,7 +169,6 @@ function useMeshJsonResource<T>(
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
       lastFetchKeyRef.current = null;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- resource hooks clear stale data when the scoped resource is disabled.
       setData(null);
       setError(null);
       setLoading(false);
@@ -280,7 +279,6 @@ function useMeshBinaryResource(
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
       lastFetchKeyRef.current = null;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- resource hooks clear stale data when the scoped resource is disabled.
       setData(null);
       setError(null);
       setLoading(false);
@@ -313,7 +311,6 @@ function useMeshMutableJsonResource<T, R>(
   const [data, setData] = useState<T | null>(null);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mutable resources keep a local optimistic copy after replace().
     setData(resource.data);
   }, [resource.data]);
 

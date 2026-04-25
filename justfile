@@ -61,10 +61,14 @@ package target="fullmag":
     else echo "unknown package target: {{target}}" >&2; echo "supported targets: fullmag, fullmag-host, fullmag-portable" >&2; exit 1; fi
 
 check:
-    cargo +nightly check --workspace
+    cargo +nightly check --workspace --exclude fullmag-desktop
 
 test:
-    cargo +nightly test --workspace
+    cargo +nightly test --workspace --exclude fullmag-desktop
+
+test-desktop:
+    just check-desktop-linux-deps
+    cargo +nightly test -p fullmag-desktop
 
 repo-check:
     python3 scripts/check_repo_consistency.py

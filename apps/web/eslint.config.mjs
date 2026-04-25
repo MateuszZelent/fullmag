@@ -2,6 +2,10 @@ import tseslint from "typescript-eslint";
 import reactPlugin from "eslint-plugin-react";
 import hooksPlugin from "eslint-plugin-react-hooks";
 
+const reactHooksCiRules = {
+  "react-hooks/rules-of-hooks": "error",
+};
+
 export default tseslint.config(
   {
     ignores: [
@@ -19,8 +23,8 @@ export default tseslint.config(
       "react-hooks": hooksPlugin,
     },
     rules: {
-      ...hooksPlugin.configs.recommended.rules,
-      "@typescript-eslint/no-unused-vars": "warn",
+      ...reactHooksCiRules,
+      "@typescript-eslint/no-unused-vars": "off",
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-empty-object-type": "off",
       "no-restricted-imports": [

@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 const generatedDir = join(process.cwd(), "src/api/generated");
 const clientOut = join(generatedDir, "openapi-v2-client.ts");

@@ -57,5 +57,20 @@ describe("viewport3dToolbarReducer", () => {
     expect(withPopover.popovers.vectors).toBe(true);
     expect(flipped.rowA.clipFlip).toBe(-1);
   });
-});
 
+  it("updates vector glyph visibility independently from quantity visibility", () => {
+    const initial = createViewport3DToolbarState();
+    const hidden = viewport3dToolbarReducer(initial, {
+      type: "setVectorsVisible",
+      value: false,
+    });
+    const visible = viewport3dToolbarReducer(hidden, {
+      type: "setVectorsVisible",
+      value: true,
+    });
+
+    expect(hidden.rowB.vectorsVisible).toBe(false);
+    expect(hidden.rowA.showQuantity).toBe(true);
+    expect(visible.rowB.vectorsVisible).toBe(true);
+  });
+});

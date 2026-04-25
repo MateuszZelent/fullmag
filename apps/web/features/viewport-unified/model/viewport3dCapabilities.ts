@@ -1,4 +1,4 @@
-import type { CapabilityMap } from "../../../src/api/types";
+import type { CapabilityMap } from "@/src/api/types";
 import type {
   Viewport3DCapabilities,
   Viewport3DCapability,
@@ -93,4 +93,3 @@ export function controlStateFromCapability(
 ): Viewport3DControlState {
   return capability.enabled ? "inactive" : "disabled";
 }
-

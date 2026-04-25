@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::control_room::{api_is_ready, api_port, sync_current_live_delta};
+use crate::control_room::{
+    api_is_ready, api_port, sync_current_live_delta, sync_current_live_snapshot,
+};
 use crate::feature_flags::FeatureFlags;
 use crate::formatting::{push_engine_log, unix_time_millis};
 use crate::types::*;
@@ -425,9 +427,26 @@ fn current_live_publisher_loop(
                 }
             }
             if let Err(error) = publish_result {
-                pending.store(true, Ordering::Release);
                 if api_is_ready(api_port()) {
-                    eprintln!("fullmag live snapshot sync warning: {}", error);
+                    let fallback_result = sync_current_live_snapshot(&session_id, &snapshot);
+                    match fallback_result {
+                        Ok(()) => {
+                            eprintln!(
+                                "fullmag live snapshot sync warning: {:#}; recovered with full snapshot",
+                                error
+                            );
+                        }
+                        Err(fallback_error) => {
+                            pending.store(true, Ordering::Release);
+                            eprintln!(
+                                "fullmag live snapshot sync warning: {:#}; full snapshot fallback failed: {:#}",
+                                error,
+                                fallback_error
+                            );
+                        }
+                    }
+                } else {
+                    pending.store(true, Ordering::Release);
                 }
             }
             last_publish_at = Some(Instant::now());
@@ -441,7 +460,7 @@ fn current_live_publisher_loop(
         sending.store(false, Ordering::Release);
         if let Err(error) = publish_result {
             if api_is_ready(api_port()) {
-                eprintln!("fullmag live snapshot sync warning: {}", error);
+                eprintln!("fullmag live snapshot sync warning: {:#}", error);
             }
         }
     }

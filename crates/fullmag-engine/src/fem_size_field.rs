@@ -535,7 +535,7 @@ mod tests {
 
     #[test]
     fn gradation_limiter_enforces_ratio() {
-        let (topo, faces) = two_tet_mesh();
+        let (_topo, faces) = two_tet_mesh();
         // Extreme mismatch: element 0 tiny, element 1 huge.
         let mut h = vec![0.01, 100.0];
 

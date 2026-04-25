@@ -7,8 +7,8 @@
  */
 
 import { useMemo, useState } from "react";
-import type { SpatialDomainAdapter } from "../../../src/domain/adapters/SpatialDomainAdapter";
-import type { CapabilityMap } from "../../../src/api/types";
+import type { SpatialDomainAdapter } from "@/src/domain/adapters/SpatialDomainAdapter";
+import type { CapabilityMap } from "@/src/api/types";
 import {
   DEFAULT_UNIFIED_RENDER_STATE,
   type UnifiedRenderState,

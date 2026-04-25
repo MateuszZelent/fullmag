@@ -111,6 +111,7 @@ impl BinaryCache {
     ///
     /// Call this after a field revision or domain generation id changes to ensure stale
     /// projections are not served.
+    #[cfg(test)]
     pub fn invalidate_prefix(&mut self, prefix: &str) {
         let to_remove: Vec<String> = self
             .entries
@@ -126,11 +127,13 @@ impl BinaryCache {
     }
 
     /// Total resident bytes across all entries.
+    #[cfg(test)]
     pub fn total_bytes(&self) -> usize {
         self.total_bytes
     }
 
     /// Number of cached entries.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }

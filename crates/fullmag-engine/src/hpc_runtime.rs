@@ -65,6 +65,7 @@ impl HpcRuntimeConfig {
 }
 
 /// Detect the number of online CPUs.
+#[cfg(feature = "parallel")]
 fn num_cpus() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())

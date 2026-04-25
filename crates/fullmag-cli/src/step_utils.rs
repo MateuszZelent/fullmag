@@ -345,12 +345,17 @@ pub(crate) fn resolve_script_until_seconds(
 }
 
 fn resolve_relaxation_until_seconds(
-    _dynamics: &fullmag_ir::DynamicsIR,
+    dynamics: &fullmag_ir::DynamicsIR,
     stop: &fullmag_ir::RelaxStopIR,
 ) -> f64 {
-    stop.max_physical_time_s
-        .or(stop.max_pseudotime_s)
-        .unwrap_or(f64::INFINITY)
+    if let Some(until_seconds) = stop.max_physical_time_s.or(stop.max_pseudotime_s) {
+        return until_seconds;
+    }
+    let fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } = dynamics;
+    match (stop.max_steps, fixed_timestep) {
+        (Some(max_steps), Some(dt)) => max_steps as f64 * dt,
+        _ => f64::INFINITY,
+    }
 }
 
 pub(crate) fn materialize_script_stages(

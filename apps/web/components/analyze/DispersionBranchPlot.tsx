@@ -184,7 +184,6 @@ export default function DispersionBranchPlot({
       },
       annotations,
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [hasGammaPoint],
   );
 

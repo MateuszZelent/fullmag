@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { DecodedFieldVector } from "../../api/codecs/types";
-import type { FieldComponent } from "../../api/types";
+import type { FieldComponent, FieldSampleScopeKind } from "../../api/types";
 import { decodeFieldVectorOffThread } from "../../api/codecs/decodeOffThread";
 import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { ResourceCache } from "../../api/client/cache/ResourceCache";
@@ -17,6 +17,9 @@ interface UseFieldVectorOptions {
   component?: FieldComponent;
   /** Domain generation ID for cache disambiguation. */
   domainGenerationId?: number;
+  /** Optional server-side scope for sampled vector payloads. */
+  scopeKind?: FieldSampleScopeKind;
+  scopeId?: string | null;
 }
 
 interface UseFieldVectorResult {
@@ -32,6 +35,8 @@ export function useFieldVector(
 ): UseFieldVectorResult {
   const component = options?.component ?? "full";
   const domainGenerationId = options?.domainGenerationId ?? 0;
+  const scopeKind = options?.scopeKind ?? "full";
+  const scopeId = options?.scopeId ?? null;
 
   const [field, setField] = useState<DecodedFieldVector | null>(null);
   const [loading, setLoading] = useState(false);
@@ -39,15 +44,23 @@ export function useFieldVector(
   const fetchedRevRef = useRef<string | null>(null);
 
   const fetchField = useCallback(
-    async (qId: string, rev: number, comp: FieldComponent, domainGenId: number) => {
-      const cacheKey = `field-vector:${qId}:${rev}:${domainGenId}:${comp}`;
+    async (
+      qId: string,
+      rev: number,
+      comp: FieldComponent,
+      domainGenId: number,
+      scopedKind: FieldSampleScopeKind,
+      scopedId: string | null,
+    ) => {
+      const scopeToken = `${scopedKind}:${scopedId ?? "none"}`;
+      const cacheKey = `field-vector:${qId}:${rev}:${domainGenId}:${comp}:${scopeToken}`;
       if (fetchedRevRef.current === cacheKey) return;
       setLoading(true);
       setError(null);
 
       try {
         const client = getLiveSessionClient();
-        const resourceKey = ResourceCache.fieldKey(qId, rev, domainGenId, comp);
+        const resourceKey = `${ResourceCache.fieldKey(qId, rev, domainGenId, comp)}:${scopeToken}`;
         const cached = client.getCache().get<DecodedFieldVector>(resourceKey);
         if (cached && cached.revision === rev) {
           fetchedRevRef.current = cacheKey;
@@ -58,7 +71,12 @@ export function useFieldVector(
 
         const response = await client.fields.getVectorResponse(
           qId,
-          { component: comp, etag: cached?.eTag ?? undefined },
+          {
+            component: comp,
+            scope_kind: scopedKind,
+            scope_id: scopedId ?? undefined,
+            etag: cached?.eTag ?? undefined,
+          },
           { cache: "default" },
         );
 
@@ -98,9 +116,14 @@ export function useFieldVector(
 
   useEffect(() => {
     if (quantityId && fieldRevision != null) {
-      fetchField(quantityId, fieldRevision, component, domainGenerationId);
+      fetchField(quantityId, fieldRevision, component, domainGenerationId, scopeKind, scopeId);
+      return;
     }
-  }, [quantityId, fieldRevision, component, domainGenerationId, fetchField]);
+    fetchedRevRef.current = null;
+    setField(null);
+    setLoading(false);
+    setError(null);
+  }, [quantityId, fieldRevision, component, domainGenerationId, scopeKind, scopeId, fetchField]);
 
   return { field, loading, error };
 }

@@ -151,7 +151,6 @@ export function useDockLayoutRuntime({
 
   useEffect(() => {
     // Runtime reconciliation can push a repaired store model into FlexLayout state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     syncFromStore();
   }, [syncFromStore]);
 

@@ -1,5 +1,4 @@
 "use client";
-/* eslint-disable react-hooks/preserve-manual-memoization */
 
 import { useMemo } from "react";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";

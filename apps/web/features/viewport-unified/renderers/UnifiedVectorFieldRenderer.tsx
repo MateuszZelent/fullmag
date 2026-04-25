@@ -5,22 +5,22 @@ import * as THREE from "three";
 import { Canvas, useThree } from "@react-three/fiber";
 import { TrackballControls } from "@react-three/drei";
 import { cn } from "@/lib/utils";
-import ViewCube from "./ViewCube";
-import HslSphere from "./HslSphere";
-import FdmInstances from "./r3f/FdmInstances";
-import { rotateCameraAroundTarget, focusCameraOnBounds } from "./camera/cameraHelpers";
+import ViewCube from "@/components/preview/ViewCube";
+import HslSphere from "@/components/preview/HslSphere";
+import FdmInstances from "@/components/preview/r3f/FdmInstances";
+import { rotateCameraAroundTarget, focusCameraOnBounds } from "@/components/preview/camera/cameraHelpers";
 import {
   captureOrientationDebugSnapshot,
   type OrientationDebugSnapshot,
-} from "./camera/cameraOrientation";
-import FdmLighting from "./r3f/FdmLighting";
-import SceneAxes3D from "./r3f/SceneAxes3D";
-import { useCanvasHost } from "./shared/useCanvasHost";
-import ViewportTelemetryProbe from "./shared/ViewportTelemetryProbe";
+} from "@/components/preview/camera/cameraOrientation";
+import FdmLighting from "@/components/preview/r3f/FdmLighting";
+import SceneAxes3D from "@/components/preview/r3f/SceneAxes3D";
+import { useCanvasHost } from "@/components/preview/shared/useCanvasHost";
+import ViewportTelemetryProbe from "@/components/preview/shared/ViewportTelemetryProbe";
 import TextureTransformGizmo, {
   type TextureGizmoMode,
   type TexturePreviewProxy,
-} from "./TextureTransformGizmo";
+} from "@/components/preview/TextureTransformGizmo";
 import type { TextureTransform3D } from "@/lib/textureTransform";
 import type { VisualizationPresetFdmState } from "@/lib/session/types";
 import type { Viewport3DModel } from "@/features/viewport-unified/model/viewport3dContracts";
@@ -30,7 +30,7 @@ import type {
   BuilderObjectOverlay,
   FocusObjectRequest,
   ObjectViewMode,
-} from "../runs/control-room/shared";
+} from "@/components/runs/control-room/shared";
 import {
   Box,
   Palette,
@@ -46,23 +46,23 @@ import {
   MousePointer2,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { ViewportToolbar3D } from "./ViewportToolbar3D";
-import { ViewportToolGroup, ViewportToolSeparator } from "./ViewportToolGroup";
-import { ViewportIconAction } from "./ViewportIconAction";
-import { ViewportPopoverPanel, ViewportPopoverRow, ViewportPopoverTrigger } from "./ViewportPopoverPanel";
-import { ViewportOverlayLayout } from "./ViewportOverlayLayout";
-import { ViewportStatusChip } from "./ViewportStatusChips";
+import { ViewportToolbar3D } from "@/components/preview/ViewportToolbar3D";
+import { ViewportToolGroup, ViewportToolSeparator } from "@/components/preview/ViewportToolGroup";
+import { ViewportIconAction } from "@/components/preview/ViewportIconAction";
+import { ViewportPopoverPanel, ViewportPopoverRow, ViewportPopoverTrigger } from "@/components/preview/ViewportPopoverPanel";
+import { ViewportOverlayLayout } from "@/components/preview/ViewportOverlayLayout";
+import { ViewportStatusChip } from "@/components/preview/ViewportStatusChips";
 import {
   CAMERA_CONTROL_PROFILES,
   type CameraControlProfileId,
   createCameraStepLockState,
   applyCameraStepLock,
-} from "./camera/cameraProfiles";
+} from "@/components/preview/camera/cameraProfiles";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
-import { TransformGizmoLayer } from "./transform/TransformGizmoLayer";
-import { axisLabelsForConvention } from "./transform/axisConvention";
-import { useSceneCameraChange } from "./camera/useSceneCameraChange";
+import { TransformGizmoLayer } from "@/components/preview/transform/TransformGizmoLayer";
+import { axisLabelsForConvention } from "@/components/preview/transform/axisConvention";
+import { useSceneCameraChange } from "@/components/preview/camera/useSceneCameraChange";
 import {
   physicalPositionToScene,
   physicalScaleToScene,
@@ -75,7 +75,7 @@ import {
   type VoxelColorMode,
   type VoxelSampling,
   type TopoComponent,
-} from "./useFdmViewportSettings";
+} from "@/components/preview/useFdmViewportSettings";
 
 const VECTOR_SURFACE_AXIS_CONVENTION = "swapYZ" as const;
 
@@ -129,7 +129,7 @@ export type {
   VoxelColorMode,
   VoxelSampling,
   TopoComponent,
-} from "./useFdmViewportSettings";
+} from "@/components/preview/useFdmViewportSettings";
 
 const DEFAULT_CAMERA_DIRECTION: [number, number, number] = [0, 1, 0];
 const DEFAULT_CAMERA_UP: [number, number, number] = [0, 0, -1];
@@ -781,7 +781,7 @@ function UnifiedVectorFieldRendererInner({
 
   // Switch back to camera when activeTextureTransform disappears
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+     
     if (!activeTextureTransform) setInteractionMode("camera");
   }, [activeTextureTransform]);
 
@@ -789,7 +789,7 @@ function UnifiedVectorFieldRendererInner({
     if (!activeTextureTransform) {
       return;
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+     
     setInteractionMode(
       textureGizmoMode === "rotate"
         ? "rotate"
@@ -821,6 +821,8 @@ function UnifiedVectorFieldRendererInner({
   // Hidden viewport should not consume high-frequency vector updates.
   const deferredVectors = useDeferredValue(viewportVisible ? vectors : null);
   const deferredSettings = useDeferredValue(settings);
+  // Vectors-visible flag from toolbar (glyph mode toggle).
+  const vectorsVisible = viewport3DModel?.fdm?.vectorsVisible ?? true;
   const renderedVectorSample = useMemo(
     () => buildRenderedVectorSample(deferredVectors),
     [deferredVectors],
@@ -1645,6 +1647,7 @@ function UnifiedVectorFieldRendererInner({
                 settings={deferredSettings}
                 sceneOpacityMultiplier={sceneOpacityMultiplier}
                 isolateGridBounds={isolateGridBounds}
+                vectorsVisible={vectorsVisible}
               />
             ) : null}
 

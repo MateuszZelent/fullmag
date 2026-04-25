@@ -19,44 +19,40 @@ export default function OpenActionsSection({
     {
       title: "New Simulation",
       subtitle: "From physics template",
-      icon: <PlusCircle className="h-6 w-6 text-mauve" />,
+      icon: <PlusCircle className="h-5 w-5 text-primary" />,
       onClick: onOpenSimulation, // Assuming for now, might need separate "New" vs "Open"
-      color: "border-mauve/20 hover:border-mauve/40 shadow-mauve/5",
-      glow: "bg-mauve/5",
+      color: "hover:border-primary/40",
       badge: "Fast Launch",
     },
     {
       title: "Open Script",
       subtitle: ".py micromagnetic DSL",
-      icon: <Code2 className="h-6 w-6 text-sky" />,
+      icon: <Code2 className="h-5 w-5 text-viewport-cyan" />,
       onClick: onOpenScript,
-      color: "border-sky/20 hover:border-sky/40 shadow-sky/5",
-      glow: "bg-sky/5",
+      color: "hover:border-viewport-cyan/40",
     },
     {
       title: "Open Project",
       subtitle: "Fullmag session bundle",
-      icon: <FolderOpen className="h-6 w-6 text-peach" />,
+      icon: <FolderOpen className="h-5 w-5 text-viewport-amber" />,
       onClick: onOpenSimulation,
-      color: "border-peach/20 hover:border-peach/40 shadow-peach/5",
-      glow: "bg-peach/5",
+      color: "hover:border-viewport-amber/40",
     },
     {
       title: "Resume Session",
       subtitle: "Live control room",
-      icon: <PlayCircle className={cn("h-6 w-6", canResumeCurrentSession ? "text-emerald-400" : "text-muted-foreground/40")} />,
+      icon: <PlayCircle className={cn("h-5 w-5", canResumeCurrentSession ? "text-success" : "text-muted-foreground/60")} />,
       onClick: onResumeCurrentSession,
       disabled: !canResumeCurrentSession,
       color: canResumeCurrentSession 
-        ? "border-emerald-500/20 hover:border-emerald-500/40 shadow-emerald-500/5" 
-        : "border-white/5 opacity-50 grayscale cursor-not-allowed",
-      glow: "bg-emerald-500/5",
+        ? "hover:border-success/40" 
+        : "opacity-55 cursor-not-allowed",
       badge: canResumeCurrentSession ? "Active" : "None",
     },
   ];
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {actions.map((action) => (
         <button
           key={action.title}
@@ -64,37 +60,34 @@ export default function OpenActionsSection({
           onClick={action.onClick}
           disabled={action.disabled}
           className={cn(
-            "group relative flex flex-col items-start gap-4 overflow-hidden rounded-[24px] border bg-white/[0.03] p-6 text-left backdrop-blur-xl transition-all hover:bg-white/[0.06] hover:scale-[1.02] active:scale-95",
+            "group flex min-h-36 flex-col items-start gap-4 rounded-md border border-border/60 bg-card/70 p-5 text-left shadow-sm transition-colors hover:bg-secondary/45 active:bg-secondary/60",
             action.color
           )}
         >
-          {/* Background Glow */}
-          <div className={cn("pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full blur-[40px] transition-opacity group-hover:opacity-100 opacity-60", action.glow)} />
-          
           <div className="flex w-full items-center justify-between">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-background/40 ring-1 ring-white/10 shadow-lg">
+            <div className="flex h-10 w-10 items-center justify-center rounded-md border border-border/70 bg-background/70">
               {action.icon}
             </div>
             {action.badge && (
               <span className={cn(
-                "rounded-full px-2 py-0.5 text-[0.55rem] font-bold uppercase tracking-widest ring-1",
-                action.title === "Resume Session" ? "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20" : "bg-primary/10 text-primary/80 ring-primary/20"
+                "rounded-md border px-2 py-1 text-xs font-medium",
+                action.title === "Resume Session" ? "border-success/20 bg-success/10 text-success" : "border-primary/20 bg-primary/10 text-primary"
               )}>
                 {action.badge}
               </span>
             )}
           </div>
 
-          <div className="mt-2 flex flex-col">
-            <span className="text-sm font-bold tracking-tight text-white/90 group-hover:text-white transition-colors">
+          <div className="flex flex-col">
+            <span className="text-base font-semibold tracking-tight text-foreground">
               {action.title}
             </span>
-            <span className="text-[0.68rem] font-medium text-muted-foreground/60 tracking-wide uppercase">
+            <span className="mt-1 text-sm text-muted-foreground">
               {action.subtitle}
             </span>
           </div>
 
-          <div className="mt-4 flex items-center gap-2 text-[0.62rem] font-bold uppercase tracking-widest text-primary/40 group-hover:text-primary transition-colors">
+          <div className="mt-auto flex items-center gap-2 text-xs font-medium text-primary/75 transition-colors group-hover:text-primary">
             <span>Launch Action</span>
             <Sparkles className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
           </div>

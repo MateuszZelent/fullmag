@@ -9,7 +9,7 @@
 
 import type { ReactNode } from "react";
 import { resolveApiBase } from "@/lib/apiBase";
-import { ResourceApiProvider } from "../src/providers/ResourceApiProvider";
+import { ResourceApiProvider } from "@/src/providers/ResourceApiProvider";
 
 export function ClientProviders({ children }: { children: ReactNode }) {
   const baseUrl = resolveApiBase();

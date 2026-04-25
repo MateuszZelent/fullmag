@@ -113,12 +113,12 @@ pub(crate) fn run_post_materialization_dev_smoke_tests(
 
 fn run_mesh_api_smoke_test() -> Result<String> {
     let scene = wait_for_json_resource::<AuthoringSceneResource, _>(
-        "/v1/live/current/authoring/scene",
+        "/v2/sessions/current/model/scene",
         "authoring scene",
         |scene| !scene.objects.is_empty(),
     )?;
     let summary = wait_for_json_resource::<MeshSummaryResource, _>(
-        "/v1/live/current/mesh/summary",
+        "/v2/sessions/current/meshing/summary",
         "mesh summary",
         |summary| {
             summary.mesh_summary.as_ref().is_some_and(|mesh_summary| {
@@ -127,7 +127,7 @@ fn run_mesh_api_smoke_test() -> Result<String> {
         },
     )?;
     let active_build = wait_for_json_resource::<MeshActiveBuildResource, _>(
-        "/v1/live/current/mesh/builds/active",
+        "/v2/sessions/current/meshing/builds/current",
         "mesh active build",
         |active_build| {
             active_build
@@ -137,12 +137,12 @@ fn run_mesh_api_smoke_test() -> Result<String> {
         },
     )?;
     let manifest = wait_for_json_resource::<MeshSharedDomainManifestResource, _>(
-        "/v1/live/current/mesh/shared-domain/manifest",
+        "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
         "mesh shared-domain manifest",
         |manifest| !manifest.object_segments.is_empty(),
     )?;
     let shared_topology = wait_for_binary_resource(
-        "/v1/live/current/mesh/shared-domain/topology",
+        "/v2/sessions/current/meshing/meshes/shared-domain/topology",
         "mesh shared-domain topology",
     )?;
 
@@ -154,7 +154,7 @@ fn run_mesh_api_smoke_test() -> Result<String> {
     let object_id = resolve_smoke_object_id(&scene_object_ids, &manifest)?;
 
     let object_topology = wait_for_binary_resource(
-        &format!("/v1/live/current/mesh/objects/{object_id}/topology"),
+        &format!("/v2/sessions/current/meshing/meshes/objects/{object_id}/topology"),
         "mesh object topology",
     )?;
 

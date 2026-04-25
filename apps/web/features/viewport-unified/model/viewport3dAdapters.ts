@@ -8,6 +8,10 @@ import type {
   Viewport3DRenderMode,
   Viewport3DDiscretization,
   Viewport3DObjectViewMode,
+  Viewport3DVectorFieldModel,
+} from "./viewport3dContracts";
+import {
+  EMPTY_VIEWPORT3D_VECTOR_FIELD,
 } from "./viewport3dContracts";
 import {
   createViewport3DToolbarState,
@@ -255,6 +259,7 @@ export interface Viewport3DModelAdapterInput {
   authoring?: Viewport3DAuthoringModel | null;
   fdmSettings?: Viewport3DFdmSettingsInput | null;
   fdmVectorsVisible?: boolean;
+  vectorField?: Viewport3DVectorFieldModel | null;
 }
 
 export function buildViewport3DModelFromAdapter({
@@ -282,6 +287,7 @@ export function buildViewport3DModelFromAdapter({
   authoring = null,
   fdmSettings = null,
   fdmVectorsVisible = toolbarState.rowB.vectorsVisible,
+  vectorField = null,
 }: Viewport3DModelAdapterInput): Viewport3DModel {
   const resolvedFdmSettings =
     fdmSettings ?? (discretization !== "fem" ? DEFAULT_FDM_SETTINGS : null);
@@ -356,5 +362,6 @@ export function buildViewport3DModelFromAdapter({
     fdm: resolvedFdmSettings
       ? mapFdmSettingsToViewport3DState(resolvedFdmSettings, fdmVectorsVisible)
       : null,
+    vectorField: vectorField ?? EMPTY_VIEWPORT3D_VECTOR_FIELD,
   };
 }

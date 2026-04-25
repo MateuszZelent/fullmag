@@ -240,6 +240,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     () => ({ ..._transport, ..._viewport, ..._cmd, ..._model }),
     [_cmd, _model, _transport, _viewport],
   );
+  const hasNoActiveWorkspace = ctx.error?.includes("no active local live workspace") ?? false;
 
   /* Local elapsed / throughput – updated every second via setInterval so that
    * the status bar stays live without polluting transportValue with Date.now(). */
@@ -1346,6 +1347,33 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 
   /* ── Loading state ── */
   if (!ctx.session) {
+    if (hasNoActiveWorkspace) {
+      return (
+        <div className="relative flex h-full min-h-screen flex-col items-center justify-center overflow-hidden bg-background p-8 text-center text-sm text-muted-foreground">
+          <div className="pointer-events-none absolute left-1/2 top-1/2 h-[40vw] max-h-[500px] w-[40vw] max-w-[500px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/5 blur-[100px]" />
+
+          <div className="relative z-10 flex w-full max-w-md flex-col items-center gap-6 rounded-md border border-border/60 bg-card/70 p-8 shadow-sm">
+            <div className="flex h-16 w-16 items-center justify-center rounded-md border border-border/70 bg-background/70">
+              <FullmagLogo size={52} className="drop-shadow-[0_0_16px_rgba(137,180,250,0.35)]" />
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <h1 className="text-lg font-semibold text-foreground">No active workspace</h1>
+              <p className="max-w-sm leading-6 text-muted-foreground">
+                Start or open a simulation from the launcher before entering the control room.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+            >
+              Open launcher
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="flex flex-col items-center justify-center p-8 text-sm text-muted-foreground h-full bg-background relative overflow-hidden">
         {/* Subtle background glow */}

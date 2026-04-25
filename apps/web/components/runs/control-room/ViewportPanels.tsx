@@ -33,6 +33,7 @@ import {
   UnifiedViewport3DRenderer,
   Viewport3DHost,
   useViewport3DController,
+  useViewport3DVectorFieldModel,
 } from "@/features/viewport-unified";
 import { mapRouteFlagsToViewport3DStages } from "@/features/viewport-unified/model/viewport3dFlags";
 import type {
@@ -154,6 +155,15 @@ function planeFromSliceAxis(axis: "x" | "y" | "z"): "xy" | "xz" | "yz" {
   if (axis === "x") return "yz";
   if (axis === "y") return "xz";
   return "xy";
+}
+
+function numericRevision(value: number | string | null | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 function requireFemTopologyKey(value: string | null): string {
@@ -388,7 +398,50 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const setSceneDocument = ctx.setSceneDocument;
   const spatialPreview = ctx.preview?.kind === "spatial" ? ctx.preview : null;
   const globalScalarPreview = ctx.preview?.kind === "global_scalar" ? ctx.preview : null;
-  const hasVectorData = Boolean(ctx.selectedVectors && ctx.selectedVectors.length > 0);
+
+  const vectorFieldRevision =
+    runtimeResourceRevisions?.fields_revision ??
+    runtimeResourceRevisions?.field_revision ??
+    numericRevision(ctx.fieldDataRevision) ??
+    ctx.liveFieldSourceStep ??
+    ctx.effectiveStep ??
+    null;
+  const vectorDomainGenerationId =
+    runtimeResourceRevisions?.domain_generation_id ??
+    0;
+  const vectorAdapterPointCount = femDiscretization
+    ? ctx.quantityDescriptor?.location === "cell"
+      ? ctx.femMeshData?.nElements ?? null
+      : ctx.femMeshData?.nNodes ?? null
+    : Math.max(0, ctx.previewGrid[0] * ctx.previewGrid[1] * ctx.previewGrid[2]);
+  const vectorCapabilityEnabled = Boolean(
+    !femDiscretization &&
+      ctx.domainCapabilities?.preview_3d &&
+      ctx.domainCapabilities.binary_fields &&
+      (ctx.domainCapabilities.structured_grid || ctx.domainCapabilities.explicit_topology),
+  );
+  const viewport3DVectorField = useViewport3DVectorFieldModel({
+    quantityId: ctx.selectedQuantity ?? null,
+    fieldRevision: vectorFieldRevision,
+    domainGenerationId: vectorDomainGenerationId,
+    adapterPointCount: vectorAdapterPointCount,
+    colorComponent: ctx.effectiveVectorComponent === "magnitude"
+      ? "|v|"
+      : ctx.effectiveVectorComponent,
+    vectorsVisible: ctx.effectiveViewMode === "3D" && ctx.meshShowArrows,
+    vectorCapabilityEnabled,
+    unsupportedReason: femDiscretization
+      ? "FEM 3D glyph renderer is not implemented yet; FEM fields remain available as mesh/surface overlays."
+      : null,
+    quantityComponentCount: ctx.quantityDescriptor?.n_comp ?? null,
+    everyN: ctx.requestedPreviewEveryN,
+    maxGlyphs: ctx.requestedPreviewMaxPoints,
+  });
+
+  const hasVectorData = Boolean(
+    (ctx.selectedVectors && ctx.selectedVectors.length > 0) ||
+    (viewport3DVectorField.data && viewport3DVectorField.data.values.length > 0),
+  );
   const viewportSelectedObjectId = ctx.viewportSelectedObjectId;
   const selectedMagnetizationAsset = useMemo(() => {
     if (!ctx.sceneDocument || !viewportSelectedObjectId) {
@@ -864,6 +917,17 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     }
     return arr;
   }, [ctx.selectedVectors, scaleFactor]);
+
+  // Scale resource-first fetched 3D vectors (same unit conversion).
+  const scaledFetched3DVectors = useMemo(() => {
+    if (viewport3DVectorField.status !== "ready") return null;
+    const values = viewport3DVectorField.data?.values ?? null;
+    if (!values) return null;
+    if (scaleFactor === 1.0) return values;
+    const arr = new Float64Array(values.length);
+    for (let i = 0; i < arr.length; i++) arr[i] = values[i] * scaleFactor;
+    return arr;
+  }, [scaleFactor, viewport3DVectorField.data, viewport3DVectorField.status]);
   const sliceApiFeatureEnabled =
     ctx.isFemBackend
       ? FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFemSlice2D
@@ -1077,7 +1141,10 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     isVectorSurfaceMeshActive
       ? "Geometry"
       : (ctx.quantityDescriptor?.label ?? scaledSpatialPreview?.quantity ?? ctx.selectedQuantity);
-  const vectorSurfaceVectors = isVectorSurface3DActive ? scaledVectors : null;
+  // Prefer resource-first fetched data; fall back to legacy preview blob.
+  const vectorSurfaceVectors = isVectorSurface3DActive
+    ? (scaledFetched3DVectors ?? scaledVectors)
+    : null;
   const handleVectorSurfaceTransformScopeChange = useCallback(
     (scope: "object" | "texture" | null) => setActiveTransformScope(scope),
     [setActiveTransformScope],
@@ -1207,14 +1274,17 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       topologyFallbackRevision: resolvedFemTopologyKey,
       femMeshFieldRevision: scaledFemMeshData?.fieldRevision,
       dataPlaneFieldRevision: ctx.fieldDataRevision,
-      selectedVectorCount: ctx.selectedVectors?.length ?? 0,
+      selectedVectorCount:
+        ctx.selectedVectors?.length ??
+        viewport3DVectorField.data?.values.length ??
+        0,
     },
     toolbar: {
       clipFlip: ctx.meshClipFlip,
       interactionMode: viewport3DInteractionMode,
       snapEnabled: Boolean(builderSnapSettings.enabled),
       objectViewMode: ctx.objectViewMode,
-      vectorsVisible: femDiscretization ? ctx.meshShowArrows : true,
+      vectorsVisible: ctx.meshShowArrows,
       legendVisible: ctx.viewportLegendVisible,
       partExplorerVisible: selectedSubmeshesToolboxOpen,
       projection: "perspective",
@@ -1234,6 +1304,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       sourceKind: ctx.selectedVectorSourceKind,
       fieldDataTimestamp: ctx.fieldDataTimestamp,
       effectiveStep: ctx.effectiveStep,
+      vectorField: viewport3DVectorField,
       authoring: showGeometryAuthoringViewport
         ? {
             enabled: true,

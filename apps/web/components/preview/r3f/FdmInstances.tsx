@@ -44,6 +44,8 @@ interface FdmInstancesProps {
   sceneOpacityMultiplier?: number;
   /** When set, only voxels within these grid-index bounds are rendered. */
   isolateGridBounds?: IsolateGridBounds | null;
+  /** When false, clears all instances without re-uploading geometry (toolbar toggle). */
+  vectorsVisible?: boolean;
   onVisibleCount?: (count: number) => void;
 }
 
@@ -186,6 +188,7 @@ function FdmInstances({
   settings,
   sceneOpacityMultiplier = 1,
   isolateGridBounds,
+  vectorsVisible = true,
   onVisibleCount,
 }: FdmInstancesProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
@@ -267,6 +270,17 @@ function FdmInstances({
     if (!mesh) return;
     const instanceColor = mesh.instanceColor;
     if (!instanceColor) return;
+
+    // Toolbar "vectors off" — clear instances without rebuilding geometry.
+    if (!vectorsVisible) {
+      mesh.count = 0;
+      mesh.instanceMatrix.needsUpdate = true;
+      instanceColor.needsUpdate = true;
+      onVisibleCount?.(0);
+      invalidate();
+      return;
+    }
+
     const colors = instanceColor.array as Float32Array;
     const matrices = mesh.instanceMatrix.array as Float32Array;
 
@@ -520,7 +534,7 @@ function FdmInstances({
         quality: settings.quality,
       },
     });
-  }, [vectors, grid, settings, geometryMode, activeMask, mode, count, nx, ny, nz, onVisibleCount, sceneOpacityMultiplier, isolateGridBounds, invalidate]);
+  }, [vectors, grid, settings, geometryMode, activeMask, mode, count, nx, ny, nz, onVisibleCount, sceneOpacityMultiplier, isolateGridBounds, vectorsVisible, invalidate]);
 
   if (count === 0) {
     if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {

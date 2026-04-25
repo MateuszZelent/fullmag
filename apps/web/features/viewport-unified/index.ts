@@ -39,7 +39,11 @@ export type {
   Viewport3DFdmVoxelColorMode,
   Viewport3DFdmSampling,
   Viewport3DFdmTopoComponent,
+  Viewport3DVectorFieldModel,
+  Viewport3DVectorScope,
+  Viewport3DVectorStatus,
 } from "./model/viewport3dContracts";
+export { EMPTY_VIEWPORT3D_VECTOR_FIELD } from "./model/viewport3dContracts";
 export {
   resolveViewport3DCapabilities,
   toLegacyBooleanCapabilities,
@@ -71,6 +75,7 @@ export {
 export { useUnifiedViewport } from "./hooks/useUnifiedViewport";
 export { useUnifiedDisplayControls } from "./hooks/useUnifiedDisplayControls";
 export { useViewport3DController } from "./hooks/useViewport3DController";
+export { useViewport3DVectorFieldModel } from "./hooks/useViewport3DVectorFieldModel";
 export type {
   UseViewport3DControllerArgs,
   Viewport3DController,

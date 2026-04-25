@@ -1,24 +1,5 @@
 # Signature format:
 #   <path>:<matched_fragment>
 #
-# Temporary baseline for relative imports into apps/web/src.
-# New code should use the configured @/ alias or a narrower public barrel.
-# CI fails on any new finding outside this allowlist.
-
-apps/web/app/ClientProviders.tsx:from "../src/providers/ResourceApiProvider"
-apps/web/components/runs/control-room/ControlRoomContext.tsx:from "../../../src/api/codecs/fieldVectorCodec"
-apps/web/components/runs/control-room/ControlRoomContext.tsx:from "../../../src/api/codecs/topologyCodec"
-apps/web/components/runs/control-room/ControlRoomContext.tsx:from "../../../src/api/types"
-apps/web/components/runs/control-room/ControlRoomContext.tsx:from "../../../src/hooks/resources/useMeshResources"
-apps/web/components/runs/control-room/ControlRoomContext.tsx:from "../../../src/hooks/resources/useSceneDocument"
-apps/web/components/runs/control-room/ControlRoomContext.tsx:from "../../../src/hooks/resources/useStageExecution"
-apps/web/components/runs/control-room/ControlRoomContext.tsx:from "../../../src/hooks/resources/useWorkspaceSelection"
-apps/web/components/runs/control-room/hooks/useDomainLayout.ts:from "../../../../src/api/types"
-apps/web/features/viewport-unified/components/CapabilityPanel.tsx:from "../../../src/api/types"
-apps/web/features/viewport-unified/components/UnifiedViewportBar.tsx:from "../../../src/api/types"
-apps/web/features/viewport-unified/hooks/useUnifiedDisplayControls.ts:from "../../../src/api/displaySelection"
-apps/web/features/viewport-unified/hooks/useUnifiedDisplayControls.ts:from "../../../src/api/types"
-apps/web/features/viewport-unified/hooks/useUnifiedViewport.ts:from "../../../src/api/types"
-apps/web/features/viewport-unified/hooks/useUnifiedViewport.ts:from "../../../src/domain/adapters/SpatialDomainAdapter"
-apps/web/features/viewport-unified/model/unifiedViewportTypes.ts:from "../../../src/domain/adapters/SpatialDomainAdapter"
-apps/web/features/viewport-unified/model/viewport3dCapabilities.ts:from "../../../src/api/types"
+# Relative imports into apps/web/src are not allowed.
+# Use the configured @/ alias or a narrower public barrel.

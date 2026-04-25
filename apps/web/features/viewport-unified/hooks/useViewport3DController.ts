@@ -24,6 +24,7 @@ import type {
   Viewport3DObjectViewMode,
   Viewport3DProjectionMode,
   Viewport3DToolbarState,
+  Viewport3DVectorFieldModel,
 } from "../model/viewport3dContracts";
 import { resolveViewport3DCapabilities } from "../model/viewport3dCapabilities";
 
@@ -79,6 +80,7 @@ export interface Viewport3DControllerModelInput {
   authoring?: Viewport3DAuthoringModel | null;
   fdmSettings?: Viewport3DFdmSettingsInput | null;
   fdmVectorsVisible?: boolean;
+  vectorField?: Viewport3DVectorFieldModel | null;
 }
 
 export interface UseViewport3DControllerArgs {
@@ -293,6 +295,7 @@ export function useViewport3DController({
         authoring: model.authoring ?? null,
         fdmSettings: model.fdmSettings ?? null,
         fdmVectorsVisible: model.fdmVectorsVisible,
+        vectorField: model.vectorField ?? null,
       });
 
       if (!fallbackMode || nextModel.scene.fallbackMode === fallbackMode) {
@@ -324,6 +327,7 @@ export function useViewport3DController({
       model.selectedEntityFallbackId,
       model.selectedSidebarNodeId,
       model.sourceKind,
+      model.vectorField,
       model.worldCenter,
       model.worldExtent,
       renderState,

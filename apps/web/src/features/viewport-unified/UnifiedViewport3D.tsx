@@ -41,7 +41,15 @@ const UnifiedViewport3D = memo(function UnifiedViewport3D({
   const showMeshLayer = layerVisibility
     ? layerVisibility.showPrimitives || layerVisibility.showMesh
     : true;
-  const showArrowLayer = layerVisibility ? layerVisibility.showQuantity : true;
+  const quantityLayerVisible = layerVisibility ? layerVisibility.showQuantity : true;
+  const vectorField = model?.vectorField ?? null;
+  const showArrowLayer = Boolean(
+    quantityLayerVisible &&
+      (vectorField?.visible ?? model?.fdm?.vectorsVisible ?? true) &&
+      vectorField?.status !== "unsupported" &&
+      vectorField?.status !== "mismatch" &&
+      vectorField?.status !== "error",
+  );
   const content = children ?? fallback;
 
   return (
@@ -54,14 +62,21 @@ const UnifiedViewport3D = memo(function UnifiedViewport3D({
       data-scene-loading={model?.status.loading ? "true" : "false"}
       data-layer-authoring-primitives={layerVisibility?.showPrimitives ? "on" : "off"}
       data-layer-explicit-topology={layerVisibility?.showMesh ? "on" : "off"}
-      data-layer-vector-field={layerVisibility?.showQuantity ? "on" : "off"}
+      data-layer-vector-field={showArrowLayer ? "on" : "off"}
+      data-vector-status={vectorField?.status ?? "idle"}
     >
       {showBoundsLayer ? (
         <BoundsLayer visible>{content}</BoundsLayer>
       ) : (
         <MeshLayer visible={showMeshLayer}>
           <WireframeLayer visible={showWireframeLayer}>
-            <ArrowLayer visible={showArrowLayer}>{content}</ArrowLayer>
+            <ArrowLayer
+              visible={showArrowLayer}
+              vectorField={vectorField}
+              statusChipsVisible={model?.overlays.statusChipsVisible ?? true}
+            >
+              {content}
+            </ArrowLayer>
           </WireframeLayer>
         </MeshLayer>
       )}

@@ -8,7 +8,7 @@
 "use client";
 
 import { memo, useCallback } from "react";
-import type { CapabilityMap } from "../../../src/api/types";
+import type { CapabilityMap } from "@/src/api/types";
 import type { UnifiedRenderState, FemViewportLayerState } from "../model/unifiedViewportTypes";
 import { DEFAULT_FEM_VIEWPORT_LAYER_STATE } from "../model/unifiedViewportTypes";
 import type {

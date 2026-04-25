@@ -683,7 +683,6 @@ export default function RibbonBar(props: RibbonBarProps) {
   const contextualTabs = useMemo(
     () => contextualTabsForSelection(props),
     // Only the fields contextualTabsForSelection actually reads:
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [props.selectedNodeId, props.viewMode],
   );
   const activeTab = activeCoreTab && visibleTabs.includes(activeCoreTab as RibbonTab)
@@ -729,7 +728,6 @@ export default function RibbonBar(props: RibbonBarProps) {
       }
     }
     return deduped;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     activeTab,
     activeContextualTabId,

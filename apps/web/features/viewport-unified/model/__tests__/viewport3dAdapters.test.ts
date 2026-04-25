@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EMPTY_VIEWPORT3D_VECTOR_FIELD,
   applyToolbarStateToLegacyRenderState,
   buildToolbarStateFromLegacy,
   buildViewport3DModelFromAdapter,
@@ -181,6 +182,60 @@ describe("viewport3d adapters", () => {
     expect(model.fdm?.quality).toBe("high");
     expect(model.fdm?.renderMode).toBe("glyph");
     expect(model.fdm?.vectorsVisible).toBe(false);
+  });
+
+  it("carries the resource-first vector field state through the model adapter", () => {
+    const toolbar = buildToolbarStateFromLegacy({
+      renderState: BASE_RENDER_STATE,
+      quantityId: "m",
+      clipFlip: false,
+      interactionMode: "camera",
+      snapEnabled: false,
+      objectViewMode: "context",
+      vectorsVisible: true,
+      legendVisible: true,
+      partExplorerVisible: false,
+      projection: "perspective",
+      navProfile: "trackball",
+    });
+    const capabilities = resolveViewport3DCapabilities({
+      capabilities: {
+        preview_2d: true,
+        preview_3d: true,
+        structured_grid: true,
+        explicit_topology: false,
+        binary_fields: true,
+        cell_fields: true,
+        node_fields: true,
+        scalar_history: false,
+        eigen_modes: false,
+        gpu_telemetry: false,
+        algorithms_available: [],
+      },
+    });
+    const vectorField = {
+      ...EMPTY_VIEWPORT3D_VECTOR_FIELD,
+      status: "ready" as const,
+      visible: true,
+      quantityId: "m",
+      fieldRevision: 42,
+      domainGenerationId: 9,
+      pointCount: 16,
+      adapterPointCount: 16,
+      sampledCount: 8,
+    };
+
+    const model = buildViewport3DModelFromAdapter({
+      discretization: "fdm",
+      renderState: BASE_RENDER_STATE,
+      toolbarState: toolbar,
+      capabilities,
+      vectorField,
+    });
+
+    expect(model.vectorField).toBe(vectorField);
+    expect(model.vectorField.status).toBe("ready");
+    expect(model.vectorField.sampledCount).toBe(8);
   });
 
   it("maps canonical FDM patch into legacy visualization patch", () => {

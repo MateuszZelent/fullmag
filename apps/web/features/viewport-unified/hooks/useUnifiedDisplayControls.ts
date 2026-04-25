@@ -5,8 +5,8 @@
  */
 
 import { useCallback } from "react";
-import { displayPatchFromPreviewComponent } from "../../../src/api/displaySelection";
-import type { DisplayPatchRequest } from "../../../src/api/types";
+import { displayPatchFromPreviewComponent } from "@/src/api/displaySelection";
+import type { DisplayPatchRequest } from "@/src/api/types";
 
 export function useUnifiedDisplayControls(
   updateDisplay: (update: DisplayPatchRequest) => Promise<void>,

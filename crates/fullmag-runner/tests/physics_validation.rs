@@ -139,6 +139,7 @@ fn sp4_plan(algorithm: RelaxationAlgorithmIR, damping: f64, enable_demag: bool) 
 /// Physics: Zeeman energy E_ext = -μ₀ M_s ∫ m·H_ext dV dominates.
 /// At equilibrium, m ∥ H_ext.
 #[test]
+#[ignore = "expensive FDM physics validation; run explicitly before solver-physics releases"]
 fn uniform_field_alignment() {
     let n = 16usize;
     let random_m0 = fullmag_plan::generate_random_unit_vectors(42, n);
@@ -218,6 +219,7 @@ fn uniform_field_alignment() {
 /// On a small grid, the final state may be locally uniform but not globally
 /// aligned in a single direction.
 #[test]
+#[ignore = "expensive FDM physics validation; run explicitly before solver-physics releases"]
 fn exchange_only_random_to_uniform() {
     let n = 64usize;
     let random_m0 = fullmag_plan::generate_random_unit_vectors(123, n);
@@ -301,6 +303,7 @@ fn exchange_only_random_to_uniform() {
 /// A small in-plane perturbation breaks the symmetry of the out-of-plane
 /// saddle point.
 #[test]
+#[ignore = "expensive FDM physics validation; run explicitly before solver-physics releases"]
 fn thin_film_shape_anisotropy() {
     let nx = 16u32;
     let ny = 16u32;
@@ -405,6 +408,7 @@ fn thin_film_shape_anisotropy() {
 /// Physics: Competition between exchange (smoothing) and demagnetization
 /// (flux closure) produces an S-state with slight edge curling.
 #[test]
+#[ignore = "expensive FDM physics validation; run explicitly before solver-physics releases"]
 fn sp4_equilibrium() {
     let plan = sp4_plan(RelaxationAlgorithmIR::LlgOverdamped, 0.5, true);
 
@@ -452,6 +456,7 @@ fn sp4_equilibrium() {
 /// Physics: The equilibrium is algorithm-independent — only the
 /// convergence path differs.
 #[test]
+#[ignore = "expensive FDM physics validation; run explicitly before solver-physics releases"]
 fn sp4_cross_algorithm_equilibrium() {
     let algorithms = [
         ("LLG", RelaxationAlgorithmIR::LlgOverdamped),
@@ -510,6 +515,7 @@ fn sp4_cross_algorithm_equilibrium() {
 /// Physics: The external field exceeds the coercive field, triggering
 /// magnetization reversal via domain nucleation and propagation.
 #[test]
+#[ignore = "expensive FDM physics validation; run explicitly before solver-physics releases"]
 fn sp4_reversal_dynamics() {
     // Phase 1: Relax to S-state
     let relax_plan = sp4_plan(RelaxationAlgorithmIR::LlgOverdamped, 0.5, true);

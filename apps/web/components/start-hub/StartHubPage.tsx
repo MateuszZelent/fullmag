@@ -201,46 +201,56 @@ export default function StartHubPage() {
 
   return (
     <StartHubShell>
-      {/* Sidebar: Recent Projects - High Density HUD */}
-      <aside className="flex w-80 shrink-0 flex-col gap-6 overflow-hidden">
-        <div className="flex items-end justify-between px-1">
-          <h2 className="text-[0.7rem] font-bold uppercase tracking-[0.2em] text-muted-foreground/80">Recent Projects</h2>
-          <span className="text-[0.62rem] font-semibold text-primary/60 hover:text-primary cursor-pointer uppercase transition-colors tracking-widest">Voir Tout</span>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/5 scrollbar-track-transparent">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
+        <aside className="min-w-0 rounded-md border border-border/60 bg-card/45 p-4">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-foreground">Recent Projects</h2>
+            <button
+              type="button"
+              className="text-xs font-medium text-primary/80 transition-colors hover:text-primary"
+            >
+              View all
+            </button>
+          </div>
           <RecentSimulationsSection entries={recents} onOpenRecent={handleOpenRecent} />
-        </div>
-      </aside>
+        </aside>
 
-      {/* Main Area: Actions & Examples */}
-      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/5 scrollbar-track-transparent">
-        <section>
-          <div className="mb-5 flex items-end justify-between px-1">
-            <h2 className="text-[0.7rem] font-bold uppercase tracking-[0.2em] text-muted-foreground/80">Launch Center</h2>
-            <span className="flex items-center gap-1.5 text-[0.62rem] font-bold uppercase tracking-widest text-primary/40">
-              <span className="h-1 w-1 rounded-full bg-primary/40 animate-pulse" />
-              New session ready
-            </span>
-          </div>
-          <OpenActionsSection
-            canResumeCurrentSession={canResumeCurrentSession}
-            onResumeCurrentSession={handleResumeCurrentSession}
-            onOpenSimulation={handleOpenSimulation}
-            onOpenScript={handleOpenScript}
-            onOpenExample={() => handleOpenExample("nanoflower_fem")}
-          />
-        </section>
+        <main className="flex min-w-0 flex-col gap-6">
+          <section className="min-w-0">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h1 className="text-2xl font-semibold tracking-tight text-foreground">Launch Center</h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Start from a template, open a script, or resume an active workspace.
+                </p>
+              </div>
+              <span className="inline-flex items-center gap-2 rounded-md border border-primary/20 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary">
+                <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                New session ready
+              </span>
+            </div>
+            <OpenActionsSection
+              canResumeCurrentSession={canResumeCurrentSession}
+              onResumeCurrentSession={handleResumeCurrentSession}
+              onOpenSimulation={handleOpenSimulation}
+              onOpenScript={handleOpenScript}
+              onOpenExample={() => handleOpenExample("nanoflower_fem")}
+            />
+          </section>
 
-        <section className="flex-1 pb-10">
-          <div className="mb-6 flex items-end justify-between px-1">
-            <h2 className="text-[0.7rem] font-bold uppercase tracking-[0.2em] text-muted-foreground/80">Reference Examples</h2>
-            <div className="h-px flex-1 mx-4 bg-white/5" />
+          <section className="min-w-0">
+            <div className="mb-4 flex items-center gap-4">
+              <h2 className="text-sm font-semibold text-foreground">Reference Examples</h2>
+              <div className="h-px flex-1 bg-border/60" />
+            </div>
+            <ExamplesSection onOpenExample={handleOpenExample} />
+          </section>
+
+          <div className="min-w-0 pb-8">
+            <CreateSimulationWizard onCreate={handleCreate} />
           </div>
-          <ExamplesSection onOpenExample={handleOpenExample} />
-        </section>
+        </main>
       </div>
-
-      <CreateSimulationWizard onCreate={handleCreate} />
     </StartHubShell>
   );
 }

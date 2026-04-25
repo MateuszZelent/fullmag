@@ -93,7 +93,6 @@ export function DraggableViewportBlock({
       className={cn("pointer-events-auto will-change-transform", className)}
       style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0)` }}
     >
-      {/* eslint-disable-next-line react-hooks/refs */}
       {children({ dragHandleProps })}
     </div>
   );
