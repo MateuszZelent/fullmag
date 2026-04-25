@@ -55,6 +55,7 @@ import {
   fmtSI,
   resolveAntennaNodeName,
 } from "./shared";
+import { buildDenseFemVectorField, deriveFemVectorScopes } from "./femVectorScopes";
 import { useTransport, useViewport, useCommand, useModel } from "./context-hooks";
 import UnifiedViewport2DPresenter from "./UnifiedViewport2DPresenter";
 import UnifiedViewport3DVectorSurface from "./UnifiedViewport3DVectorSurface";
@@ -409,16 +410,32 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const vectorDomainGenerationId =
     runtimeResourceRevisions?.domain_generation_id ??
     0;
+  const femVectorScopes = useMemo(
+    () =>
+      deriveFemVectorScopes({
+        meshParts: ctx.meshParts,
+        meshEntityViewState: ctx.meshEntityViewState,
+        airMeshVisible: ctx.airMeshVisible,
+      }),
+    [ctx.airMeshVisible, ctx.meshEntityViewState, ctx.meshParts],
+  );
+  const vectorFetchScope =
+    femDiscretization && femVectorScopes.length === 1
+      ? femVectorScopes[0]
+      : { kind: "full" as const };
   const vectorAdapterPointCount = femDiscretization
-    ? ctx.quantityDescriptor?.location === "cell"
+    ? vectorFetchScope.kind !== "full"
+      ? null
+      : ctx.quantityDescriptor?.location === "cell"
       ? ctx.femMeshData?.nElements ?? null
       : ctx.femMeshData?.nNodes ?? null
     : Math.max(0, ctx.previewGrid[0] * ctx.previewGrid[1] * ctx.previewGrid[2]);
   const vectorCapabilityEnabled = Boolean(
-    !femDiscretization &&
-      ctx.domainCapabilities?.preview_3d &&
+    ctx.domainCapabilities?.preview_3d &&
       ctx.domainCapabilities.binary_fields &&
-      (ctx.domainCapabilities.structured_grid || ctx.domainCapabilities.explicit_topology),
+      (femDiscretization
+        ? ctx.domainCapabilities.explicit_topology && ctx.domainCapabilities.node_fields
+        : ctx.domainCapabilities.structured_grid || ctx.domainCapabilities.explicit_topology),
   );
   const viewport3DVectorField = useViewport3DVectorFieldModel({
     quantityId: ctx.selectedQuantity ?? null,
@@ -430,12 +447,11 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       : ctx.effectiveVectorComponent,
     vectorsVisible: ctx.effectiveViewMode === "3D" && ctx.meshShowArrows,
     vectorCapabilityEnabled,
-    unsupportedReason: femDiscretization
-      ? "FEM 3D glyph renderer is not implemented yet; FEM fields remain available as mesh/surface overlays."
-      : null,
+    unsupportedReason: null,
     quantityComponentCount: ctx.quantityDescriptor?.n_comp ?? null,
     everyN: ctx.requestedPreviewEveryN,
     maxGlyphs: ctx.requestedPreviewMaxPoints,
+    scope: vectorFetchScope,
   });
 
   const hasVectorData = Boolean(
@@ -732,6 +748,39 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const femOpacityForRender = femLayerRenderState.meshOpacity;
   const femColorFieldForRender = femLayerRenderState.colorField;
   const femShowArrowsForRender = femLayerRenderState.showArrows;
+  const effectiveFemMeshEntityViewState = useMemo(() => {
+    if (!femDiscretization || ctx.meshParts.length === 0) {
+      return ctx.meshEntityViewState;
+    }
+    const next: MeshEntityViewStateMap = { ...ctx.meshEntityViewState };
+    for (const part of ctx.meshParts) {
+      const current = next[part.id] ?? defaultMeshEntityViewState(part);
+      const renderMode =
+        femLayerState.showMesh && current.renderMode === "surface"
+          ? "surface+edges"
+          : !femLayerState.showMesh && current.renderMode === "surface+edges"
+            ? "surface"
+            : current.renderMode;
+      next[part.id] = {
+        ...current,
+        renderMode,
+        opacity: ctx.meshOpacity,
+        colorField:
+          femLayerState.showQuantity && part.role === "magnetic_object"
+            ? ctx.femColorField
+            : "none",
+      };
+    }
+    return next;
+  }, [
+    ctx.femColorField,
+    ctx.meshEntityViewState,
+    ctx.meshOpacity,
+    ctx.meshParts,
+    femDiscretization,
+    femLayerState.showMesh,
+    femLayerState.showQuantity,
+  ]);
   const patchMeshPartViewState = useCallback(
     (partIds: string[], patch: Partial<MeshEntityViewStateMap[string]>) => {
       if (partIds.length === 0) {
@@ -1095,6 +1144,53 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       },
     } as typeof femMeshData;
   }, [femMeshData, scaleFactor]);
+  const scopedFetchedFemMeshData = useMemo(() => {
+    if (
+      !scaledFemMeshData ||
+      !femDiscretization ||
+      vectorFetchScope.kind === "full" ||
+      viewport3DVectorField.status !== "ready" ||
+      !viewport3DVectorField.data
+    ) {
+      return scaledFemMeshData;
+    }
+    const dense = buildDenseFemVectorField({
+      nNodes: scaledFemMeshData.nNodes,
+      meshParts: ctx.meshParts,
+      frames: [{ scope: vectorFetchScope, field: viewport3DVectorField.data }],
+    });
+    if (!dense) {
+      return scaledFemMeshData;
+    }
+    const values =
+      scaleFactor === 1.0
+        ? dense.values
+        : Float64Array.from(dense.values, (value) => value * scaleFactor);
+    const x = new Float64Array(scaledFemMeshData.nNodes);
+    const y = new Float64Array(scaledFemMeshData.nNodes);
+    const z = new Float64Array(scaledFemMeshData.nNodes);
+    for (let nodeIndex = 0; nodeIndex < scaledFemMeshData.nNodes; nodeIndex += 1) {
+      x[nodeIndex] = values[nodeIndex * 3] ?? 0;
+      y[nodeIndex] = values[nodeIndex * 3 + 1] ?? 0;
+      z[nodeIndex] = values[nodeIndex * 3 + 2] ?? 0;
+    }
+    return {
+      ...scaledFemMeshData,
+      fieldData: { x, y, z },
+      fieldNComp: dense.nComp,
+      activeMask: dense.activeMask,
+      fieldRevision: viewport3DVectorField.fieldRevision ?? scaledFemMeshData.fieldRevision,
+    };
+  }, [
+    ctx.meshParts,
+    femDiscretization,
+    scaleFactor,
+    scaledFemMeshData,
+    vectorFetchScope,
+    viewport3DVectorField.data,
+    viewport3DVectorField.fieldRevision,
+    viewport3DVectorField.status,
+  ]);
   const resolvedFemTopologyKey = useMemo(() => {
     const explicitTopologyKey = ctx.femTopologyKey?.trim();
     if (explicitTopologyKey) {
@@ -1769,7 +1865,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         <ViewportErrorBoundary label="Hosted FEM Mesh Viewport">
           <FemMeshView3D
             topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
-            meshData={scaledFemMeshData!}
+            meshData={scopedFetchedFemMeshData!}
             selectedSidebarNodeId={ctx.selectedSidebarNodeId}
             viewportFitSeed={viewportFitSeed}
             quantityId={ctx.requestedPreviewQuantity}
@@ -1803,7 +1899,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             meshParts={ctx.meshParts}
             elementMarkers={ctx.effectiveFemMesh?.element_markers ?? null}
             perDomainQuality={ctx.effectiveFemMesh?.per_domain_quality ?? null}
-            meshEntityViewState={ctx.meshEntityViewState}
+            meshEntityViewState={effectiveFemMeshEntityViewState}
             onMeshPartViewStatePatch={patchMeshPartViewState}
             visibleObjectIds={visibleObjectIds}
             airSegmentVisible={ctx.airMeshVisible}
@@ -1859,7 +1955,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         <ViewportErrorBoundary label="Hosted Unified 3D Viewport">
           <FemMeshView3D
             topologyKey={requireFemTopologyKey(resolvedFemTopologyKey)}
-            meshData={scaledFemMeshData!}
+            meshData={scopedFetchedFemMeshData!}
             selectedSidebarNodeId={ctx.selectedSidebarNodeId}
             viewportFitSeed={viewportFitSeed}
             fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
@@ -1911,7 +2007,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             meshParts={ctx.meshParts}
             elementMarkers={ctx.effectiveFemMesh?.element_markers ?? null}
             perDomainQuality={ctx.effectiveFemMesh?.per_domain_quality ?? null}
-            meshEntityViewState={ctx.meshEntityViewState}
+            meshEntityViewState={effectiveFemMeshEntityViewState}
             onMeshPartViewStatePatch={patchMeshPartViewState}
             visibleObjectIds={visibleObjectIds}
             airSegmentVisible={ctx.airMeshVisible}

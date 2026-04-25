@@ -44,6 +44,7 @@ import type {
   Viewport3DFdmModulePatch,
 } from "@/features/viewport-unified/model/viewport3dContracts";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
+import { defaultMeshEntityViewState } from "@/lib/session/types";
 
 import type { RenderMode } from "../../preview/FemMeshView3D";
 import type { VectorComponent } from "./shared";
@@ -213,18 +214,16 @@ export const ViewportBar = memo(function ViewportBar() {
   const displayControls = useUnifiedDisplayControls(viewport.patchDisplay);
 
   const renderState = useMemo<UnifiedRenderState>(() => ({
-    selectedLayer: status?.display.slice_layer ?? viewport.requestedPreviewLayer ?? viewport.sliceIndex,
-    allLayersVisible:
-      (status?.display.slice_mode ?? (viewport.requestedPreviewAllLayers ? "all" : "single")) === "all",
-    vectorComponent: toUnifiedVectorComponent(
-      status
-        ? (status.display.view_mode === "3d" ? "3D" : status.display.field_component)
-        : (viewport.previewControlsActive ? viewport.requestedPreviewComponent : viewport.component),
-    ),
-    colorScale: status?.display.colormap ?? "viridis",
-    autoScale: status?.display.auto_contrast ?? viewport.requestedPreviewAutoScale,
-    maxPoints: status?.display.max_points ?? viewport.requestedPreviewMaxPoints,
-    everyN: status?.display.vector_density ?? viewport.requestedPreviewEveryN,
+    selectedLayer: viewport.requestedPreviewLayer ?? viewport.sliceIndex,
+    allLayersVisible: viewport.requestedPreviewAllLayers,
+    vectorComponent:
+      viewport.effectiveViewMode === "3D" && viewport.component === "magnitude"
+        ? "3D"
+        : toUnifiedVectorComponent(viewport.component),
+    colorScale: "viridis",
+    autoScale: viewport.requestedPreviewAutoScale,
+    maxPoints: viewport.requestedPreviewMaxPoints,
+    everyN: viewport.requestedPreviewEveryN,
     meshRenderMode: toUnifiedMeshRenderMode(model.meshRenderMode),
     meshOpacity: model.meshOpacity,
     clipEnabled: model.meshClipEnabled,
@@ -240,6 +239,7 @@ export const ViewportBar = memo(function ViewportBar() {
     model.femViewportLayers,
     status,
     viewport.component,
+    viewport.effectiveViewMode,
     viewport.previewControlsActive,
     viewport.requestedPreviewAllLayers,
     viewport.requestedPreviewAutoScale,
@@ -279,7 +279,23 @@ export const ViewportBar = memo(function ViewportBar() {
     }
 
     if (next.meshRenderMode !== renderState.meshRenderMode) {
-      model.setMeshRenderMode(fromUnifiedMeshRenderMode(next.meshRenderMode));
+      const nextRenderMode = fromUnifiedMeshRenderMode(next.meshRenderMode);
+      model.setMeshRenderMode(nextRenderMode);
+      if (model.meshParts.length > 0) {
+        model.setMeshEntityViewState((previous) => {
+          let changed = false;
+          const updated = { ...previous };
+          for (const part of model.meshParts) {
+            const current = updated[part.id] ?? defaultMeshEntityViewState(part);
+            if (current.renderMode === nextRenderMode) {
+              continue;
+            }
+            updated[part.id] = { ...current, renderMode: nextRenderMode };
+            changed = true;
+          }
+          return changed ? updated : previous;
+        });
+      }
     }
 
     if (next.meshOpacity !== renderState.meshOpacity && typeof next.meshOpacity === "number") {

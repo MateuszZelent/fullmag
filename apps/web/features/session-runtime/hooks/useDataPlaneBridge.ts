@@ -144,8 +144,15 @@ export interface FieldVectorFetchDecision {
 export function decideFieldVectorFetch(args: {
   viewMode: string | null;
   component: FieldFrameEnvelope["component"];
+  isFemBackend?: boolean;
 }): FieldVectorFetchDecision {
   if (args.viewMode === "2d") {
+    return {
+      shouldFetch: false,
+      component: "full",
+    };
+  }
+  if (args.isFemBackend && args.viewMode === "3d") {
     return {
       shouldFetch: false,
       component: "full",
@@ -236,6 +243,7 @@ export function useDataPlaneBridge(
       const fetchDecision = decideFieldVectorFetch({
         viewMode: currentViewMode,
         component: envelope.component,
+        isFemBackend,
       });
       if (!fetchDecision.shouldFetch) {
         return;
@@ -377,7 +385,7 @@ export function useDataPlaneBridge(
         console.warn("[fullmag][data-plane] field fetch failed", err);
       }
     },
-    [applyNormalizedState, currentViewMode, enabled, runtimeScopeKey],
+    [applyNormalizedState, currentViewMode, enabled, isFemBackend, runtimeScopeKey],
   );
 
   // ── Scalar history fetching ─────────────────────────────────────

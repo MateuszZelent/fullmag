@@ -133,6 +133,12 @@ import {
   resolveViewportSelectionScope,
 } from "../../../features/viewport-fem/model/femViewportSelection";
 import {
+  buildDenseFemVectorField,
+  deriveFemVectorScopes,
+  type FemVectorScope,
+  type ScopedFemVectorFrame,
+} from "./femVectorScopes";
+import {
   buildViewportDisplayReset,
   type ViewportDisplayDefaults,
 } from "../../../features/viewport-fem/model/femResetCommand";
@@ -254,6 +260,16 @@ type BinaryFieldFrame = {
   grid: [number, number, number];
 };
 
+type ScopedBinaryFieldFrame = {
+  key: string;
+  quantityId: string;
+  values: Float64Array;
+  nComp: number;
+  grid: [number, number, number];
+  activeMask: boolean[] | null;
+  scopes: FemVectorScope[];
+};
+
 function estimateBinaryFieldCacheBytes(cache: Map<string, BinaryFieldFrame>): number {
   let bytes = 0;
   for (const frame of cache.values()) {
@@ -261,6 +277,12 @@ function estimateBinaryFieldCacheBytes(cache: Map<string, BinaryFieldFrame>): nu
     bytes += 96;
   }
   return bytes;
+}
+
+function femVectorScopeKey(scopes: FemVectorScope[]): string {
+  return scopes
+    .map((scope) => `${scope.kind}:${scope.id ?? "none"}`)
+    .join(",");
 }
 
 function femMeshTransportKey(mesh: FemLiveMesh | null): string | null {
@@ -2014,8 +2036,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const binaryFieldTransportEnabled =
     FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFieldTransport;
   const binaryFieldCacheRef = useRef<Map<string, BinaryFieldFrame>>(new Map());
+  const scopedBinaryFieldCacheRef = useRef<Map<string, ScopedBinaryFieldFrame>>(new Map());
   const [selectedBinaryFieldFrame, setSelectedBinaryFieldFrame] =
     useState<BinaryFieldFrame | null>(null);
+  const [selectedScopedBinaryFieldFrame, setSelectedScopedBinaryFieldFrame] =
+    useState<ScopedBinaryFieldFrame | null>(null);
   const fieldMap = useMemo<Record<string, Float64Array | null>>(
     () =>
       Object.fromEntries(
@@ -2054,6 +2079,53 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       selectedFieldFrame.grid.join("x"),
     ].join(":");
   }, [activeQuantityId, binaryFieldTransportEnabled, selectedFieldFrame]);
+  const scopedFemVectorScopes = useMemo(
+    () =>
+      deriveFemVectorScopes({
+        meshParts: femMesh?.mesh_parts ?? [],
+        meshEntityViewState,
+        airMeshVisible,
+      }),
+    [airMeshVisible, femMesh?.mesh_parts, meshEntityViewState],
+  );
+  const scopedFieldTransportKey = useMemo(() => {
+    if (
+      !binaryFieldTransportEnabled ||
+      !isFemBackend ||
+      effectiveViewMode !== "3D" ||
+      !meshShowArrows ||
+      !activeQuantityId ||
+      !selectedFieldFrame ||
+      scopedFemVectorScopes.length === 0 ||
+      scopedFemVectorScopes.some((scope) => scope.kind === "full")
+    ) {
+      return null;
+    }
+    const revision =
+      selectedFieldFrame.field_revision ??
+      selectedFieldFrame.source_step ??
+      selectedFieldFrame.source_time ??
+      "none";
+    return [
+      activeQuantityId,
+      revision,
+      selectedFieldFrame.n_comp,
+      femMesh?.generation_id ?? femMesh?.mesh_id ?? "no-mesh",
+      femMesh?.node_count ?? 0,
+      femVectorScopeKey(scopedFemVectorScopes),
+    ].join(":");
+  }, [
+    activeQuantityId,
+    binaryFieldTransportEnabled,
+    effectiveViewMode,
+    femMesh?.generation_id,
+    femMesh?.mesh_id,
+    femMesh?.node_count,
+    isFemBackend,
+    meshShowArrows,
+    scopedFemVectorScopes,
+    selectedFieldFrame,
+  ]);
   const selectedFieldTopologyMismatch = useMemo(() => {
     if (!isFemBackend) {
       return false;
@@ -2072,6 +2144,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       !binaryFieldTransportEnabled ||
       !activeQuantityId ||
       !selectedFieldFrame ||
+      scopedFieldTransportKey != null ||
       selectedFieldFrame.values.length > 0
     ) {
       setSelectedBinaryFieldFrame(null);
@@ -2152,12 +2225,106 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     activeQuantityId,
     binaryFieldTransportEnabled,
     liveApi,
+    scopedFieldTransportKey,
     selectedFieldFrame,
     selectedFieldTransportKey,
   ]);
 
+  useEffect(() => {
+    if (
+      !scopedFieldTransportKey ||
+      !activeQuantityId ||
+      !femMesh ||
+      !selectedFieldFrame
+    ) {
+      setSelectedScopedBinaryFieldFrame(null);
+      return;
+    }
+    const meshParts = femMesh.mesh_parts ?? [];
+    const nNodes = femMesh.node_count ?? 0;
+    if (meshParts.length === 0 || nNodes <= 0) {
+      setSelectedScopedBinaryFieldFrame(null);
+      return;
+    }
+    const cached = scopedBinaryFieldCacheRef.current.get(scopedFieldTransportKey) ?? null;
+    if (cached) {
+      setSelectedScopedBinaryFieldFrame(cached);
+      return;
+    }
+    setSelectedScopedBinaryFieldFrame(null);
+    const controller = new AbortController();
+    void Promise.all(
+      scopedFemVectorScopes.map(async (scope): Promise<ScopedFemVectorFrame> => {
+        const buffer = await liveApi.getScopedFieldVectorBinary(activeQuantityId, scope, {
+          signal: controller.signal,
+        });
+        return {
+          scope,
+          field: decodeFieldVector(buffer),
+        };
+      }),
+    )
+      .then((frames) => {
+        const dense = buildDenseFemVectorField({
+          nNodes,
+          meshParts,
+          frames,
+        });
+        if (!dense) {
+          return null;
+        }
+        const nextFrame: ScopedBinaryFieldFrame = {
+          key: scopedFieldTransportKey,
+          quantityId: activeQuantityId,
+          values: dense.values,
+          nComp: dense.nComp,
+          grid: dense.grid,
+          activeMask: dense.activeMask,
+          scopes: scopedFemVectorScopes,
+        };
+        const cache = scopedBinaryFieldCacheRef.current;
+        cache.set(scopedFieldTransportKey, nextFrame);
+        while (cache.size > 4) {
+          const firstKey = cache.keys().next().value;
+          if (!firstKey) break;
+          cache.delete(firstKey);
+        }
+        updateFrontendResourceBucket({
+          id: "scoped-binary-field-cache",
+          label: "Scoped binary field cache",
+          entries: cache.size,
+          estimatedBytes: Array.from(cache.values()).reduce(
+            (sum, frame) => sum + frame.values.byteLength + 128,
+            0,
+          ),
+          capacity: 4,
+        });
+        return nextFrame;
+      })
+      .then((nextFrame) => {
+        if (!controller.signal.aborted) {
+          setSelectedScopedBinaryFieldFrame(nextFrame);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setSelectedScopedBinaryFieldFrame(null);
+        }
+      });
+    return () => controller.abort();
+  }, [
+    activeQuantityId,
+    femMesh,
+    liveApi,
+    scopedFemVectorScopes,
+    scopedFieldTransportKey,
+    selectedFieldFrame,
+  ]);
+
   const selectedLiveField =
-    selectedFieldTopologyMismatch
+    selectedScopedBinaryFieldFrame?.key === scopedFieldTransportKey
+      ? selectedScopedBinaryFieldFrame.values
+      : selectedFieldTopologyMismatch
       ? null
       : selectedBinaryFieldFrame?.key === selectedFieldTransportKey
       ? selectedBinaryFieldFrame.values
@@ -2475,7 +2642,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     selectedFieldNComp,
     selectedFieldDomain,
     fieldDataRevision,
-    activeMask,
+    activeMask: selectedScopedBinaryFieldFrame?.activeMask ?? activeMask,
     spatialPreview,
     meshShowArrows,
     effectiveViewMode,

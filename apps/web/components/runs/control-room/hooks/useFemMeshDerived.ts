@@ -763,10 +763,10 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
 
   const femColorField = useMemo<FemColorField>(() => {
     const qId = activeQuantityId;
-    if (qId === "m" && effectiveViewMode === "3D" && femHasFieldData) return "orientation";
     if (effectiveVectorComponent === "x") return "x";
     if (effectiveVectorComponent === "y") return "y";
     if (effectiveVectorComponent === "z") return "z";
+    if (qId === "m" && effectiveViewMode === "3D" && femHasFieldData) return "orientation";
     return "magnitude";
   }, [activeQuantityId, effectiveVectorComponent, effectiveViewMode, femHasFieldData]);
 

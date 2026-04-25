@@ -38,6 +38,18 @@ describe("decideFieldVectorFetch", () => {
       component: "full",
     });
   });
+
+  it("skips legacy full vector fetch for FEM 3D scoped rendering", () => {
+    const decision = decideFieldVectorFetch({
+      viewMode: "3d",
+      component: "3D",
+      isFemBackend: true,
+    });
+    expect(decision).toEqual({
+      shouldFetch: false,
+      component: "full",
+    });
+  });
 });
 
 describe("mapResourceQuantities", () => {

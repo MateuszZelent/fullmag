@@ -7,7 +7,7 @@
 
 "use client";
 
-import { memo, useCallback } from "react";
+import { memo, useCallback, useMemo } from "react";
 import type { CapabilityMap } from "@/src/api/types";
 import type { UnifiedRenderState, FemViewportLayerState } from "../model/unifiedViewportTypes";
 import { DEFAULT_FEM_VIEWPORT_LAYER_STATE } from "../model/unifiedViewportTypes";
@@ -176,6 +176,16 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
       onRenderStateChange({ ...renderState, ...delta }),
     [renderState, onRenderStateChange],
   );
+  const everyNOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...EVERY_N_OPTIONS,
+          Math.max(1, Math.trunc(renderState.everyN) || 1),
+        ]),
+      ).sort((left, right) => left - right),
+    [renderState.everyN],
+  );
 
   const supports3D = isReasonedCapabilityMap(capabilities)
     ? capabilities.preview3d.enabled
@@ -208,6 +218,10 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
     explicitTopologyReason,
   );
   const baseReason = disabled ? "Preview update in progress" : undefined;
+  const scalarColorControlsAvailable = supportsStructuredGrid;
+  const scalarColorReason = scalarColorControlsAvailable
+    ? threeDReason
+    : "FEM 3D uses orientation/component coloring; scalar colormap controls are not available.";
   const quantityControl = resolveControlMeta({
     key: "quantity",
     fallbackDisabled: disabled || !supports3D || !onQuantityChange || quantityOptions.length === 0,
@@ -294,10 +308,11 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
         className={controlClass()}
         value={renderState.everyN}
         onChange={(event) => patch({ everyN: Number(event.target.value) })}
+        onInput={(event) => patch({ everyN: Number(event.currentTarget.value) })}
         disabled={disabled || !supports3D}
         title={threeDReason}
       >
-        {EVERY_N_OPTIONS.map((n) => (
+        {everyNOptions.map((n) => (
           <option key={n} value={n}>
             {n}
           </option>
@@ -309,8 +324,8 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
         className={controlClass()}
         value={renderState.colorScale}
         onChange={(event) => patch({ colorScale: event.target.value })}
-        disabled={disabled || !supports3D}
-        title={threeDReason}
+        disabled={disabled || !supports3D || !scalarColorControlsAvailable}
+        title={scalarColorReason}
       >
         {COLOR_SCALES.map((scale) => (
           <option key={scale} value={scale}>
@@ -324,8 +339,8 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
           type="checkbox"
           checked={renderState.autoScale}
           onChange={(event) => patch({ autoScale: event.target.checked })}
-          disabled={disabled || !supports3D}
-          title={threeDReason}
+          disabled={disabled || !supports3D || !scalarColorControlsAvailable}
+          title={scalarColorReason}
         />
         <span>Auto-scale</span>
       </label>

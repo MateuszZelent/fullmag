@@ -103,7 +103,7 @@ export function computeArrowRenderState(input: {
     };
   }
 
-  if (missingMagneticMask || !hasFieldData) {
+  if (!hasFieldData) {
     return {
       requested,
       layerEnabled,

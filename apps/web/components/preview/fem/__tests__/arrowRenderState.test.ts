@@ -41,4 +41,17 @@ describe("computeArrowRenderState", () => {
     expect(result.visible).toBe(false);
     expect(result.reason).toBe("missing_field");
   });
+
+  it("does not treat a missing magnetic mask as missing field data", () => {
+    const result = computeArrowRenderState({
+      requested: true,
+      layerEnabled: true,
+      missingMagneticMask: true,
+      visibleNodeCount: 128,
+      hasFieldData: true,
+    });
+
+    expect(result.visible).toBe(true);
+    expect(result.reason).toBeNull();
+  });
 });

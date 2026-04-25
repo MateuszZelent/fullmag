@@ -15,7 +15,6 @@ import type { OrientationDebugSnapshot } from "../camera/cameraOrientation";
 import { glyphBudgetToMaxPoints } from "./vectorDensityBudget";
 import { colorLegendLabel, colorLegendGradient } from "./femColorUtils";
 import { FemViewportToolbar } from "./FemViewportToolbar";
-import { FemViewportStatusBar } from "./FemViewportStatusBar";
 import { FemRefineToolbar } from "./FemSelectionHUD";
 import { FieldLegend } from "../field/FieldLegend";
 import HslSphere from "../HslSphere";
@@ -188,20 +187,6 @@ export interface UseFemOverlayItemsArgs {
     snapshot: OrientationDebugSnapshot,
   ) => void;
   applyRotationEuler: (nextEulerDeg: [number, number, number]) => void;
-}
-
-/** Derive a short label for a color field / arrow color mode. */
-function colorModeLabel(mode: string, qSym: string): string {
-  if (mode === "orientation") return "Ori";
-  if (mode === "x") return `${qSym}_x`;
-  if (mode === "y") return `${qSym}_y`;
-  if (mode === "z") return `${qSym}_z`;
-  if (mode === "magnitude") return `|${qSym}|`;
-  if (mode === "quality") return "Qual";
-  if (mode === "sicn") return "SICN";
-  if (mode === "monochrome") return "Mono";
-  if (mode === "none") return "—";
-  return "—";
 }
 
 export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverlayDescriptor[] {
@@ -418,10 +403,10 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
     if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showViewCube) {
       items.push({
         id: "gizmo-stack",
-        anchor: "top-right",
+        anchor: "bottom-left",
         priority: 3,
         render: () => (
-          <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-col items-start gap-2">
             <ViewCube
               sceneRef={args.viewCubeSceneRef}
               onRotate={args.handleViewCubeRotate}
@@ -472,36 +457,6 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
             compact={variant !== "full"}
             onOrientationSnapshot={(snapshot) => args.updateRotationSnapshot("hsl", snapshot)}
             embedded
-          />
-        ),
-      });
-    }
-    {
-      const qSym =
-        (args.prominentQuantityOptions.find((o) => o.id === args.quantityId) ?? null)
-          ?.shortLabel ?? "m";
-      items.push({
-        id: "status-bar",
-        anchor: "bottom-center",
-        priority: 2,
-        render: () => (
-          <FemViewportStatusBar
-            surfaceLabel={colorModeLabel(args.toolbarColorField, qSym)}
-            arrowLabel={colorModeLabel(args.arrowColorMode, qSym)}
-            arrowDensity={args.baseArrowDensity}
-            effectiveDensity={args.effectiveArrowDensity}
-            renderModeMixed={args.toolbarRenderModeMixed}
-            opacityMixed={args.toolbarOpacityMixed}
-            colorFieldMixed={args.toolbarColorFieldMixed}
-            toolbarScopeLabel={args.toolbarScopeLabel}
-            arrowsRequested={args.showArrows}
-            arrowsVisible={args.effectiveShowArrows}
-            arrowsBlockReason={args.arrowsBlockReason}
-            interactionSimplified={args.interactionActive}
-            hasField={!args.missingMagneticMask}
-            fieldLabel={args.fieldLabel}
-            visiblePartsCount={args.hasMeshParts ? args.visibleLayersCount : undefined}
-            totalPartsCount={args.hasMeshParts ? args.meshParts.length : undefined}
           />
         ),
       });
