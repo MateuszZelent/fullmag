@@ -56,6 +56,15 @@ pub struct FieldVectorQuery {
     /// - `magnitude` → per-point L2 norm (nComp=1)
     /// - `x`/`y`/`z`/`cN` → single component by index (nComp=1)
     pub component: Option<String>,
+    /// Optional FEM scope for large-domain samples.
+    ///
+    /// Accepted values: `full`, `object`, `part`, `airbox`, `selection`.
+    /// `object` and `part` require `scope_id`; `airbox` may omit it and resolves
+    /// to the first mesh part with role `air`; `selection` resolves from the
+    /// current workspace selection.
+    pub scope_kind: Option<String>,
+    /// Scope identifier for `object` and `part` scopes.
+    pub scope_id: Option<String>,
 }
 
 // ── P2: 2D slice JSON types ───────────────────────────────────────────────────

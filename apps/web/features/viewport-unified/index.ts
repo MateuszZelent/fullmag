@@ -46,6 +46,15 @@ export {
   controlStateFromCapability,
 } from "./model/viewport3dCapabilities";
 export {
+  getViewport3DStateOwnership,
+  VIEWPORT_3D_STATE_OWNERSHIP,
+} from "./model/viewport3dStateOwnership";
+export type {
+  Viewport3DStateOwner,
+  Viewport3DStateOwnershipEntry,
+  Viewport3DStatePersistence,
+} from "./model/viewport3dStateOwnership";
+export {
   createViewport3DToolbarState,
   viewport3dToolbarReducer,
 } from "./model/viewport3dToolbarReducer";
@@ -61,6 +70,15 @@ export {
 // Hooks
 export { useUnifiedViewport } from "./hooks/useUnifiedViewport";
 export { useUnifiedDisplayControls } from "./hooks/useUnifiedDisplayControls";
+export { useViewport3DController } from "./hooks/useViewport3DController";
+export type {
+  UseViewport3DControllerArgs,
+  Viewport3DController,
+  Viewport3DControllerModelInput,
+  Viewport3DControllerResourcesInput,
+  Viewport3DControllerToolbarInput,
+  Viewport3DControlReasons,
+} from "./hooks/useViewport3DController";
 
 // Components
 export { CapabilityPanel } from "./components/CapabilityPanel";
@@ -69,3 +87,18 @@ export { Viewport3DHost } from "./components/Viewport3DHost";
 
 // Registry
 export { UNIFIED_VIEWPORT_3D } from "./registry/unifiedViewEntry";
+export {
+  renderViewport3DRoute,
+  resolveViewport3DRenderRoute,
+  resolveViewportInternalToolbarModes,
+  UnifiedViewport3DRenderer,
+} from "./registry/viewport3dRenderRegistry";
+export type {
+  ViewportInternalToolbarMode,
+  ViewportInternalToolbarModeInput,
+  ViewportInternalToolbarModes,
+  Viewport3DRenderRoute,
+  Viewport3DRenderRouteInput,
+  Viewport3DRouteRenderers,
+  UnifiedViewport3DRendererProps,
+} from "./registry/viewport3dRenderRegistry";

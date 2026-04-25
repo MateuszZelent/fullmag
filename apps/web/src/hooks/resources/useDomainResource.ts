@@ -7,7 +7,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { SpatialDomainAdapter } from "../../domain/adapters/SpatialDomainAdapter";
 import { createDomainAdapter } from "../../domain/adapters/createDomainAdapter";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { ResourceCache } from "../../api/client/cache/ResourceCache";
 import { decodeTopologyOffThread } from "../../api/codecs/decodeOffThread";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
@@ -32,7 +32,7 @@ export function useDomainResource(
     setError(null);
 
     try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
         const adapterCacheKey = ResourceCache.domainKey(genId, "adapter");
         const topologyCacheKey = ResourceCache.domainKey(genId, "topology");
         const cachedAdapter = client.getCache().get<SpatialDomainAdapter>(adapterCacheKey);

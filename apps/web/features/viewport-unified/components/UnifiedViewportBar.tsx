@@ -35,6 +35,8 @@ interface QuantityOption {
   available: boolean;
 }
 
+type QuantityStatus = "ready" | "preview" | "pending" | "unsupported";
+
 interface UnifiedViewportBarProps {
   capabilities: CapabilityMap | UnifiedCapabilityReasons | null;
   renderState: UnifiedRenderState;
@@ -44,6 +46,7 @@ interface UnifiedViewportBarProps {
   disabled?: boolean;
   quantityId?: string;
   quantityOptions?: QuantityOption[];
+  quantityStatus?: QuantityStatus;
   onQuantityChange?: (quantityId: string) => void;
   clipFlip?: boolean;
   onClipFlipChange?: (next: boolean) => void;
@@ -57,6 +60,19 @@ function labelClass() {
 
 function controlClass() {
   return "h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]";
+}
+
+function quantityStatusClass(status: QuantityStatus): string {
+  if (status === "ready") {
+    return "border-emerald-400/35 bg-emerald-400/10 text-emerald-200";
+  }
+  if (status === "preview") {
+    return "border-sky-400/35 bg-sky-400/10 text-sky-200";
+  }
+  if (status === "unsupported") {
+    return "border-border/30 bg-muted/20 text-muted-foreground";
+  }
+  return "border-amber-400/35 bg-amber-400/10 text-amber-200";
 }
 
 function disabledReason(
@@ -148,6 +164,7 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
   disabled = false,
   quantityId,
   quantityOptions = [],
+  quantityStatus = "pending",
   onQuantityChange,
   clipFlip = false,
   onClipFlipChange,
@@ -237,6 +254,20 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
           </option>
         ))}
       </select>
+      <span
+        className={`rounded border px-1.5 py-0.5 text-[0.58rem] font-semibold uppercase tracking-wide ${quantityStatusClass(quantityStatus)}`}
+        title={
+          quantityStatus === "ready"
+            ? "Field resource is available."
+            : quantityStatus === "preview"
+              ? "Using current preview data."
+              : quantityStatus === "unsupported"
+                ? "Quantity is not supported by this viewport."
+                : "Waiting for field data."
+        }
+      >
+        {quantityStatus}
+      </span>
 
       <span className={labelClass()}>Component</span>
       <select

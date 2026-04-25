@@ -6,7 +6,7 @@
  *  applyAntennaTranslation, applyGeometryTranslation,
  *  applyMeshWorkspacePreset, handleViewModeChange, handleSimulationAction,
  *  handleCapture, handleExport, handleStateExport, handleStateImport,
- *  syncScriptBuilder, command derived values, requestPreviewQuantity,
+ *  syncScriptBuilder, command derived values, requestDisplayQuantity,
  *  openResultWorkspaceEntry, result workspace CRUD, keyboard shortcuts.
  */
 import { startTransition, useCallback, useEffect, useMemo } from "react";
@@ -235,6 +235,7 @@ export interface UseWorkspaceActionsReturn {
   canSkipCommand: boolean;
   primaryRunAction: string;
   primaryRunLabel: string;
+  requestDisplayQuantity: (nextQuantity: string) => void;
   requestPreviewQuantity: (nextQuantity: string) => void;
   openAnalyzeSurface: (options?: OpenAnalyzeSurfaceOptions) => void;
   openResultWorkspaceEntry: (id: string) => void;
@@ -804,8 +805,8 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
   const primaryRunLabel =
     isWaitingForCompute ? "Compute" : workspaceStatus === "paused" ? "Resume" : "Run";
 
-  /* ── requestPreviewQuantity ── */
-  const requestPreviewQuantity = useCallback((nextQuantity: string) => {
+  /* ── requestDisplayQuantity ── */
+  const requestDisplayQuantity = useCallback((nextQuantity: string) => {
     const cacheState = resolveQuantitySwitchCacheState({
       cachedFieldQuantities,
       nextQuantity,
@@ -948,7 +949,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
         return;
       }
       if (entry.quantityId) {
-        requestPreviewQuantity(entry.quantityId);
+        requestDisplayQuantity(entry.quantityId);
       }
       if (femDiscretization && effectiveViewMode === "Mesh") {
         handleViewModeChange("3D");
@@ -962,7 +963,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       femDiscretization,
       openAnalyze,
       openWorkspaceTab,
-      requestPreviewQuantity,
+      requestDisplayQuantity,
       resultWorkspaceEntries,
       handleViewModeChange,
     ],
@@ -1057,7 +1058,8 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     canSkipCommand,
     primaryRunAction,
     primaryRunLabel,
-    requestPreviewQuantity,
+    requestDisplayQuantity,
+    requestPreviewQuantity: requestDisplayQuantity,
     openAnalyzeSurface,
     openResultWorkspaceEntry,
     renameResultWorkspaceEntry,

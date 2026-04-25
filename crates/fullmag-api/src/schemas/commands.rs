@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use utoipa::ToSchema;
+
+use crate::types::MeshCommandTarget;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -38,6 +41,15 @@ pub enum StructuredCommandRequest {
     SaveVtk,
     Solve,
     Close,
+    MeshBuild {
+        #[schema(value_type = Object, nullable)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mesh_options: Option<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mesh_target: Option<MeshCommandTarget>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mesh_reason: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

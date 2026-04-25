@@ -35,8 +35,10 @@ interface UseFemViewportModelArgs {
   controlledVectorDomainFilter?: FemVectorDomainFilter;
   controlledFerromagnetVisibilityMode?: FemFerromagnetVisibilityMode;
   controlledShrinkFactor?: number;
+  controlledLegendOpen?: boolean;
   previewMaxPoints?: number;
   onPreviewMaxPointsChange?: (maxPoints: number) => void;
+  onLegendOpenChange?: (value: boolean) => void;
 }
 
 export interface FemViewportModel {
@@ -116,8 +118,10 @@ export function useFemViewportModel({
   controlledVectorDomainFilter,
   controlledFerromagnetVisibilityMode,
   controlledShrinkFactor,
+  controlledLegendOpen,
   previewMaxPoints,
   onPreviewMaxPointsChange,
+  onLegendOpenChange,
 }: UseFemViewportModelArgs): FemViewportModel {
   const initialArrowColorMode =
     SUPPORTED_ARROW_COLOR_FIELDS.has(colorField as FemArrowColorMode)
@@ -187,7 +191,7 @@ export function useFemViewportModel({
   const shrinkFactor = controlledShrinkFactor ?? state.view.shrinkFactor;
   const cameraProjection = state.view.projection;
   const navigationMode = state.view.navigation;
-  const legendOpen = state.view.legendOpen;
+  const legendOpen = controlledLegendOpen ?? state.view.legendOpen;
   const labeledMode = state.view.labeledMode;
   const openPopover = state.view.openPopover;
   const qualityProfile = state.view.qualityProfile;
@@ -303,11 +307,15 @@ export function useFemViewportModel({
     (value) => dispatch({ type: "setNavigation", value }),
     () => state.view.navigation,
   );
-  const setLegendOpen = makeSetter<boolean>(
-    (prev, next) => (typeof next === "function" ? next(prev) : next),
-    (value) => dispatch({ type: "setLegendOpen", value }),
-    () => state.view.legendOpen,
-  );
+  const setLegendOpen = useCallback<React.Dispatch<React.SetStateAction<boolean>>>((next) => {
+    const previous = controlledLegendOpen ?? state.view.legendOpen;
+    const value = typeof next === "function" ? next(previous) : next;
+    if (controlledLegendOpen !== undefined && onLegendOpenChange) {
+      onLegendOpenChange(value);
+      return;
+    }
+    dispatch({ type: "setLegendOpen", value });
+  }, [controlledLegendOpen, dispatch, onLegendOpenChange, state.view.legendOpen]);
   const setLabeledMode = makeSetter<boolean>(
     (prev, next) => (typeof next === "function" ? next(prev) : next),
     (value) => dispatch({ type: "setLabeledMode", value }),

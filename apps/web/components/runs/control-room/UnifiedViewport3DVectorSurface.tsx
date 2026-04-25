@@ -1,10 +1,10 @@
 "use client";
 
 import { memo, type ComponentProps } from "react";
-import VectorFieldView3D from "../../preview/VectorFieldView3D";
+import UnifiedVectorFieldRenderer from "../../preview/UnifiedVectorFieldRenderer";
 import { ViewportErrorBoundary } from "../../preview/ViewportErrorBoundary";
 
-type VectorFieldProps = ComponentProps<typeof VectorFieldView3D>;
+type VectorFieldProps = ComponentProps<typeof UnifiedVectorFieldRenderer>;
 
 interface UnifiedViewport3DVectorSurfaceProps {
   boundaryLabel: string;
@@ -23,7 +23,7 @@ const UnifiedViewport3DVectorSurface = memo(function UnifiedViewport3DVectorSurf
 }: UnifiedViewport3DVectorSurfaceProps) {
   return (
     <ViewportErrorBoundary label={boundaryLabel}>
-      <VectorFieldView3D {...vectorFieldProps} />
+      <UnifiedVectorFieldRenderer {...vectorFieldProps} />
     </ViewportErrorBoundary>
   );
 });

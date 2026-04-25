@@ -7,7 +7,7 @@ import type {
   CommandQueueStatus,
   CommandStatus,
 } from "../../api/types";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 const TERMINAL_STATES = new Set(["completed", "rejected", "failed"]);
@@ -49,7 +49,7 @@ export function useCommandCompletion(
 
     setLoading(true);
     try {
-      const client = getLiveApiClient();
+      const client = getLiveSessionClient();
       const queueStatus = await client.commands.status();
       if (!mountedRef.current) {
         return;

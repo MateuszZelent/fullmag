@@ -4,7 +4,7 @@ export { useFieldVector } from "./useFieldVector";
 export { useFieldValues } from "./useFieldValues";
 export { useFieldCatalog } from "./useFieldCatalog";
 export { useFieldSlice2D } from "./useFieldSlice2D";
-export { useSliceResource } from "./useSliceResource";
+export { useSliceResource, useSlice2DModel } from "./useSliceResource";
 export type { SliceScalarData, SliceArrowData, UseFieldSlice2DResult } from "./useFieldSlice2D";
 export { useScalarHistory } from "./useScalarHistory";
 export { useDisplayControl } from "./useDisplayControl";
@@ -39,4 +39,6 @@ export {
   useMeshInterfaceReport,
   useMeshInterfaceQuality,
   useMeshWorkspaceResourceState,
+  useMeshWorkspaceModel,
+  useSubmitMeshBuildCommand,
 } from "./useMeshResources";

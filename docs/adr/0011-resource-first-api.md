@@ -115,14 +115,34 @@ The 10+ legacy preview POST endpoints are replaced by a single
 
 ### 7. OpenAPI documentation
 
-The new API is documented via utoipa-generated OpenAPI 3.1 spec, accessible
-at `/v1/openapi.json` and rendered at `/v1/docs/swagger`.
+The former v1 API was documented via utoipa-generated OpenAPI 3.1 spec at
+`/v1/openapi.json` and rendered at `/v1/docs/swagger`. Those public v1 browser
+surfaces are now superseded by v2.
+
+#### 7a. 2026-04-25 addendum: v2 session-scoped API tree
+
+The canonical target API for new control-room work is now v2:
+
+- `GET /v2/platform/openapi.json`
+- `GET /v2/platform/docs/swagger/`
+- `/v2/sessions/current/...`
+
+V2 organizes the API by platform concepts rather than by frontend screens:
+`platform`, `sessions`, `model`, `meshing`, `simulation`, `data`, `visualization`,
+`workspace`, `analysis`, `persistence`, and `diagnostics`.
+
+Public `/v1/live/current/...` has been removed from the browser contract.
+Only `/v1/internal/live/current/...` may remain as a backend-only runtime bridge.
+
+OpenAPI v2 and generated TypeScript types are the transport contract. The frontend still keeps a
+manual domain facade (`LiveSessionClient`, resource hooks, binary codecs, and adapters) for UI
+semantics, caching, and FDM/FEM interpretation.
 
 ### 8. AsyncAPI-documented realtime websocket
 
 The canonical realtime channel is:
 
-- `GET /v1/live/current/ws`
+- `GET /v2/sessions/current/events/ws`
 
 It is explicitly notification-first:
 
@@ -167,13 +187,14 @@ the legacy whole-state snapshot compatibility route.
 
 ### Neutral
 - Binary protocols (FMVP v2, FMMT v1) are unchanged.
-- The canonical realtime path is `GET /v1/live/current/ws`; no legacy websocket compatibility layer remains in the public server.
+- The canonical realtime path is `GET /v2/sessions/current/events/ws`; no legacy websocket compatibility layer remains in the public server.
 
 ## Follow-up rule
 
 When the local browser API, cache semantics, OpenAPI contract, or FDM/FEM
 adapter boundary changes, update:
 
+- `docs/specs/resource-first-control-room-api-v2.md`
 - `docs/specs/resource-first-control-room-api-v1.md`
 - `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/control-room-api-tree-v1.md`

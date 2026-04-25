@@ -2,7 +2,7 @@
  * Stable named aliases for frontend API contract types.
  *
  * The generated OpenAPI file is the source for typed request paths used by
- * LiveApiClient. This file is the application boundary: it exposes the
+ * LiveSessionClient. This file is the application boundary: it exposes the
  * normalized contracts that resource hooks, adapters, and components consume.
  */
 

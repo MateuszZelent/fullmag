@@ -14,7 +14,7 @@
     }
   },
   "channels": {
-    "/v1/live/current/ws": {
+    "/v2/sessions/current/events/ws": {
       "description": "Canonical realtime websocket for the current live workspace. Clients reconnect with `after_seq` and must offer `Sec-WebSocket-Protocol: fullmag.live.v1`.",
       "subscribe": {
         "operationId": "subscribeCurrentLiveRealtime",

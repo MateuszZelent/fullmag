@@ -4,7 +4,6 @@ import {
   canShowWireframe,
   canShowGridDimensions,
   getAvailableAlgorithms,
-  synthesizeCapabilitiesFromDiscretization,
   isFemDiscretization,
   isFdmDiscretization,
   resolveFemDiscretization,
@@ -76,24 +75,6 @@ describe("capabilityGuards", () => {
     expect(
       getAvailableAlgorithms(makeCaps({ algorithms_available: [] })),
     ).toEqual([]);
-  });
-
-  it("synthesizeCapabilitiesFromDiscretization returns FEM-shaped capabilities", () => {
-    expect(synthesizeCapabilitiesFromDiscretization(true)).toMatchObject({
-      explicit_topology: true,
-      structured_grid: false,
-      node_fields: true,
-      cell_fields: false,
-    });
-  });
-
-  it("synthesizeCapabilitiesFromDiscretization returns FDM-shaped capabilities", () => {
-    expect(synthesizeCapabilitiesFromDiscretization(false)).toMatchObject({
-      explicit_topology: false,
-      structured_grid: true,
-      node_fields: false,
-      cell_fields: true,
-    });
   });
 
   it("isFemDiscretization and isFdmDiscretization follow canonical capabilities", () => {

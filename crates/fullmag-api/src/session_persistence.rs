@@ -267,7 +267,7 @@ async fn collect_project_documents(
 
 // ── Handlers ───────────────────────────────────────────────────────────
 
-/// `POST /v1/live/current/session/export`
+/// `POST /v2/sessions/current/persistence/exports`
 pub(crate) async fn export_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SessionExportRequest>,
@@ -371,7 +371,7 @@ pub(crate) async fn export_session(
     }))
 }
 
-/// `POST /v1/live/current/session/import/inspect`
+/// `POST /v2/sessions/current/persistence/imports/inspections`
 pub(crate) async fn import_session_inspect(
     Json(req): Json<SessionImportInspectRequest>,
 ) -> Result<Json<SessionImportInspectResponse>, ApiError> {
@@ -384,7 +384,7 @@ pub(crate) async fn import_session_inspect(
     Ok(Json(SessionImportInspectResponse { inspection }))
 }
 
-/// `POST /v1/live/current/session/import/commit`
+/// `POST /v2/sessions/current/persistence/imports`
 pub(crate) async fn import_session_commit(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SessionImportCommitRequest>,
@@ -442,7 +442,7 @@ pub(crate) async fn import_session_commit(
     }))
 }
 
-/// `GET /v1/live/current/session/checkpoints`
+/// `GET /v2/sessions/current/persistence/checkpoints`
 pub(crate) async fn list_checkpoints(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CheckpointListResponse>, ApiError> {
@@ -472,7 +472,7 @@ pub(crate) async fn list_checkpoints(
     Ok(Json(CheckpointListResponse { checkpoints }))
 }
 
-/// `GET /v1/live/current/session/recovery`
+/// `GET /v2/sessions/current/persistence/recovery`
 pub(crate) async fn list_recovery(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RecoveryListResponse>, ApiError> {
@@ -493,7 +493,7 @@ pub(crate) async fn list_recovery(
     Ok(Json(RecoveryListResponse { snapshots }))
 }
 
-/// `POST /v1/live/current/session/recovery/clear`
+/// `DELETE /v2/sessions/current/persistence/recovery`
 pub(crate) async fn clear_recovery(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RecoveryClearResponse>, ApiError> {

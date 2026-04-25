@@ -1,10 +1,11 @@
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class EigenModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async getSpectrum(opts?: RequestOptions): Promise<unknown> {
-    return this.client.get("/v1/live/current/eigen/spectrum", opts);
+    return this.client.get(sessionApiPaths.analysis.eigenSpectrum, opts);
   }
 
   async getMode(
@@ -12,23 +13,29 @@ export class EigenModule {
     opts?: RequestOptions,
   ): Promise<unknown> {
     const searchParams = new URLSearchParams();
+    const modeId = String(params.mode_id ?? params.modeId ?? params.index ?? "0");
     for (const [key, value] of Object.entries(params)) {
-      if (value != null) {
+      if (
+        value != null &&
+        key !== "mode_id" &&
+        key !== "modeId" &&
+        key !== "index"
+      ) {
         searchParams.set(key, String(value));
       }
     }
     const qs = searchParams.toString();
     return this.client.get(
-      `/v1/live/current/eigen/mode${qs ? `?${qs}` : ""}`,
+      `${sessionApiPaths.analysis.eigenMode(modeId)}${qs ? `?${qs}` : ""}`,
       opts,
     );
   }
 
   async getDispersion(opts?: RequestOptions): Promise<unknown> {
-    return this.client.get("/v1/live/current/eigen/dispersion", opts);
+    return this.client.get(sessionApiPaths.analysis.eigenDispersion, opts);
   }
 
   async getBranches(opts?: RequestOptions): Promise<unknown> {
-    return this.client.get("/v1/live/current/eigen/branches", opts);
+    return this.client.get(sessionApiPaths.analysis.eigenBranches, opts);
   }
 }

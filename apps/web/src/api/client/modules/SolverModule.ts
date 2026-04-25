@@ -3,18 +3,22 @@ import type {
   SolverEnergyHistoryResource,
   SolverStatusResource,
 } from "../../types";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class SolverModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async status(opts?: RequestOptions): Promise<SolverStatusResource> {
-    return this.client.get<SolverStatusResource>("/v1/live/current/solver/status", opts);
+    return this.client.get<SolverStatusResource>(
+      sessionApiPaths.simulation.solverStatus,
+      opts,
+    );
   }
 
   async currentEnergies(opts?: RequestOptions): Promise<SolverEnergyCurrentResource> {
     return this.client.get<SolverEnergyCurrentResource>(
-      "/v1/live/current/solver/energies/current",
+      sessionApiPaths.simulation.solverEnergiesCurrent,
       opts,
     );
   }
@@ -29,7 +33,7 @@ export class SolverModule {
     }
     const suffix = search.size > 0 ? `?${search.toString()}` : "";
     return this.client.get<SolverEnergyHistoryResource>(
-      `/v1/live/current/solver/energies/history${suffix}`,
+      `${sessionApiPaths.simulation.solverEnergiesHistory}${suffix}`,
       opts,
     );
   }

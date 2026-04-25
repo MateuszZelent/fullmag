@@ -1,8 +1,9 @@
 # Resource-first Control Room API v1
 
-- Status: canonical local control-room API contract
-- Last updated: 2026-04-23
+- Status: archived/superseded v1 control-room API contract
+- Last updated: 2026-04-25
 - Parent architecture: `docs/specs/fullmag-application-architecture-v2.md`
+- Canonical target architecture: `docs/specs/resource-first-control-room-api-v2.md`
 - Concrete endpoint reference: `docs/specs/control-room-api-endpoint-reference-v1.md`
 - Related runtime model: `docs/specs/session-run-api-v1.md`
 - Route tree: `docs/specs/control-room-api-tree-v1.md`
@@ -10,17 +11,19 @@
 
 ## 1. Purpose
 
-This spec defines the canonical local browser contract for Fullmag's control room.
+This spec records the former v1 local browser contract for Fullmag's control
+room. The canonical API for current and future browser work is
+`docs/specs/resource-first-control-room-api-v2.md`.
 
 It replaces the older monolithic `bootstrap` / `poll` / `preview/*` mental model with a
 **resource-first, revision-driven API** that keeps physics semantics stable while making the
 frontend professional, modular, and performant.
 
-This spec is the source of truth for:
+This spec is historical context for:
 
-- the current `/v1/live/current/*` contract,
-- the canonical split between current mounted endpoints and target-only families,
-- the canonical route-family split and tree,
+- the removed public `/v1/live/current/*` contract,
+- the v1 split between current mounted endpoints and target-only families,
+- the v1 route-family split and tree,
 - the split between workspace state and authoring state,
 - the split between control plane and data plane,
 - frontend API-client and resource-hook rules,

@@ -781,7 +781,7 @@ export default function RunSidebar() {
         vp.quickPreviewTargets.find((target) => target.available)?.id ??
         null;
       if (defaultFieldQuantity) {
-        vp.requestPreviewQuantity(defaultFieldQuantity);
+        vp.requestDisplayQuantity(defaultFieldQuantity);
       }
       if (femDiscretization && vp.effectiveViewMode === "Mesh") {
         vp.handleViewModeChange("3D");
@@ -859,7 +859,7 @@ export default function RunSidebar() {
         if (isAntennaNode) {
           // Try to preview antenna field when clicking on a specific antenna
           if (vp.quickPreviewTargets.some((t) => t.id === "H_ant" && t.available)) {
-            vp.requestPreviewQuantity("H_ant");
+            vp.requestDisplayQuantity("H_ant");
           }
           vp.handleViewModeChange("3D");
           return;
@@ -896,7 +896,7 @@ export default function RunSidebar() {
         }
         const previewTarget = previewQuantityForTreeNode(id);
         if (previewTarget && vp.quickPreviewTargets.some((t) => t.id === previewTarget && t.available)) {
-          vp.requestPreviewQuantity(previewTarget);
+          vp.requestDisplayQuantity(previewTarget);
         }
       }
     }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { EigenModeSummary } from "@/components/analyze/eigenTypes";
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 
 interface UseEigenSpectrumSummaryOptions {
   enabled: boolean;
@@ -25,7 +25,7 @@ export function useEigenSpectrumSummary({
     const controller = new AbortController();
     let cancelled = false;
 
-    void getLiveApiClient()
+    void getLiveSessionClient()
       .eigen
       .getSpectrum({ signal: controller.signal })
       .then((data) => {

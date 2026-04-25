@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { FieldSliceMeta, FieldSliceQuery } from "../../api/types";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 /** Decoded scalar raster from a 2-D slice. Row-major, shape [y_pixels × x_pixels]. */
@@ -86,7 +86,7 @@ export function useFieldSlice2D(
       setError(null);
 
       try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
 
         // 1. Fetch lightweight metadata first.
         const newMeta = await client.fields.getSliceMeta(qId, q);

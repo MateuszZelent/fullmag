@@ -6,7 +6,7 @@ import type {
   WorkspaceLayoutReplaceRequest,
   WorkspaceLayoutResource,
 } from "../../api/types";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 interface UseWorkspaceLayoutResult {
@@ -49,7 +49,7 @@ export function useWorkspaceLayout(options?: {
 
     setLoading(true);
     try {
-      const nextLayout = await getLiveApiClient().workspace.getLayout();
+      const nextLayout = await getLiveSessionClient().workspace.getLayout();
       if (!mountedRef.current) {
         return;
       }
@@ -87,7 +87,7 @@ export function useWorkspaceLayout(options?: {
       }
       setLoading(true);
       try {
-        const nextLayout = await getLiveApiClient().workspace.replaceLayout(request);
+        const nextLayout = await getLiveSessionClient().workspace.replaceLayout(request);
         if (!mountedRef.current) {
           return nextLayout;
         }

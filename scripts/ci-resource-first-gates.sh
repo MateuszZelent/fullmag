@@ -125,8 +125,8 @@ run_gate \
 
 run_gate \
   "frontend-direct-api-client" \
-  "Frontend Direct API Client Gate" \
-  'getLiveApiClient|@/src/api/client/LiveApiClient|(?:\.\./)+src/api/client/LiveApiClient' \
+  "Frontend Removed LiveApiClient Name Gate" \
+  'getLiveApiClient|initLiveApiClient|LiveApiClient|@/src/api/client/LiveApiClient|(?:\.\./)+src/api/client/LiveApiClient' \
   "$ALLOWLIST_DIR/frontend-direct-api-client.allowlist" \
   "$REPO_ROOT/apps/web/components" \
   "$REPO_ROOT/apps/web/app" \
@@ -149,9 +149,27 @@ run_gate \
 run_gate \
   "backend-main-public-legacy-routes" \
   "Backend main.rs Public Legacy-Route Gate" \
-  '"/v1/live/current/(bootstrap|poll|state|events|publish|commands/next|control/wait|state/export|state/import|script/sync|scene|artifacts/file)"' \
+  '"/v1/live/current|"/v1/health|"/v1/capabilities|"/v1/openapi.json|"/v1/docs/swagger' \
   "$ALLOWLIST_DIR/backend-main-public-legacy-routes.allowlist" \
   "$REPO_ROOT/crates/fullmag-api/src/main.rs"
+
+run_gate \
+  "backend-v1-implementation" \
+  "Backend Removed V1 Implementation Gate" \
+  'router_v1|build_v1_router|crate::openapi::ApiDoc' \
+  "$ALLOWLIST_DIR/backend-v1-implementation.allowlist" \
+  "$REPO_ROOT/crates/fullmag-api/src"
+
+run_gate \
+  "frontend-public-v1-paths" \
+  "Frontend Public V1 Path Gate" \
+  '/v1/live/current|/v1/health|/v1/capabilities' \
+  "$ALLOWLIST_DIR/frontend-public-v1-paths.allowlist" \
+  "$REPO_ROOT/apps/web/app" \
+  "$REPO_ROOT/apps/web/components" \
+  "$REPO_ROOT/apps/web/features" \
+  "$REPO_ROOT/apps/web/lib" \
+  "$REPO_ROOT/apps/web/src"
 
 run_gate \
   "frontend-direct-fetch" \
@@ -161,14 +179,55 @@ run_gate \
   "$REPO_ROOT/apps/web"
 
 echo
-echo "=== Generated OpenAPI Types Gate ==="
-if rg -n --color never 'export \* from "\.\./types"' "$REPO_ROOT/apps/web/src/api/generated/openapi-types.ts"; then
-  echo "Generated OpenAPI types still re-export manual api/types.ts."
+echo "=== Generated OpenAPI V2 Transport Gate ==="
+if [[ ! -f "$REPO_ROOT/apps/web/src/api/generated/openapi-v2-types.ts" ]]; then
+  echo "Missing generated OpenAPI v2 types."
+  if [[ "$MODE" == "strict" ]]; then
+    GATE_FAILED=1
+  fi
+elif rg -n --color never 'export \* from "\.\./types"' "$REPO_ROOT/apps/web/src/api/generated/openapi-v2-types.ts"; then
+  echo "Generated OpenAPI v2 types still re-export manual api/types.ts."
   if [[ "$MODE" == "strict" ]]; then
     GATE_FAILED=1
   fi
 else
-  echo "openapi-types.ts is not a manual re-export."
+  echo "openapi-v2-types.ts is generated directly from OpenAPI v2."
+fi
+
+if [[ ! -f "$REPO_ROOT/apps/web/src/api/generated/openapi-v2-client.ts" ]]; then
+  echo "Missing generated OpenAPI v2 transport wrapper."
+  if [[ "$MODE" == "strict" ]]; then
+    GATE_FAILED=1
+  fi
+else
+  echo "openapi-v2-client.ts transport wrapper is present."
+fi
+
+if [[ ! -f "$REPO_ROOT/apps/web/src/api/generated/openapi-v2-paths.ts" ]]; then
+  echo "Missing generated OpenAPI v2 path literals."
+  if [[ "$MODE" == "strict" ]]; then
+    GATE_FAILED=1
+  fi
+else
+  echo "openapi-v2-paths.ts path literal wrapper is present."
+fi
+
+if [[ -f "$REPO_ROOT/apps/web/src/api/generated/openapi.json" || -f "$REPO_ROOT/apps/web/src/api/generated/openapi-types.ts" ]]; then
+  echo "Legacy generated OpenAPI v1 files are present."
+  if [[ "$MODE" == "strict" ]]; then
+    GATE_FAILED=1
+  fi
+else
+  echo "Legacy generated OpenAPI v1 files are absent."
+fi
+
+if node -e 'const spec=require(process.argv[1]); const bad=Object.keys(spec.paths||{}).filter((p)=>p.startsWith("/v1")); if (bad.length) { console.error(bad.join("\n")); process.exit(1); }' "$REPO_ROOT/apps/web/src/api/generated/openapi-v2.json"; then
+  echo "Generated OpenAPI v2 has no /v1 paths."
+else
+  echo "Generated OpenAPI v2 contains /v1 paths."
+  if [[ "$MODE" == "strict" ]]; then
+    GATE_FAILED=1
+  fi
 fi
 
 echo

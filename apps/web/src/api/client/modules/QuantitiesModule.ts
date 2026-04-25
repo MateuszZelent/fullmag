@@ -1,4 +1,5 @@
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export interface QuantityCatalogEntry {
   id: string;
@@ -25,9 +26,9 @@ export interface QuantityCatalogResponse {
 }
 
 export class QuantitiesModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async getCatalog(opts?: RequestOptions): Promise<QuantityCatalogResponse> {
-    return this.client.get<QuantityCatalogResponse>("/v1/live/current/quantities/catalog", opts);
+    return this.client.get<QuantityCatalogResponse>(sessionApiPaths.data.quantities, opts);
   }
 }

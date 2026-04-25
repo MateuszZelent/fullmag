@@ -350,7 +350,7 @@ const WorkspaceControlStrip = memo(function WorkspaceControlStrip() {
                       pending && "animate-pulse",
                     )}
                     disabled={!target.available || ctx.previewBusy}
-                    onClick={() => ctx.requestPreviewQuantity(target.id)}
+                    onClick={() => ctx.requestDisplayQuantity(target.id)}
                     title={`Switch to ${target.shortLabel}`}
                   >
                     <span className={cn(active ? "text-primary" : quantityTone(target.id, target.shortLabel))}>

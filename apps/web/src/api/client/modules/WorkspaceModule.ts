@@ -8,14 +8,15 @@ import type {
   WorkspaceSelectionReplaceRequest,
   WorkspaceSelectionResource,
 } from "../../types";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class WorkspaceModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async getSelection(opts?: RequestOptions): Promise<WorkspaceSelectionResource> {
     return this.client.get<WorkspaceSelectionResource>(
-      "/v1/live/current/workspace/selection",
+      sessionApiPaths.workspace.selection,
       opts,
     );
   }
@@ -25,7 +26,7 @@ export class WorkspaceModule {
     opts?: RequestOptions,
   ): Promise<WorkspaceSelectionResource> {
     return this.client.put<WorkspaceSelectionResource>(
-      "/v1/live/current/workspace/selection",
+      sessionApiPaths.workspace.selection,
       request,
       opts,
     );
@@ -33,7 +34,7 @@ export class WorkspaceModule {
 
   async getActiveNode(opts?: RequestOptions): Promise<WorkspaceActiveNodeResource> {
     return this.client.get<WorkspaceActiveNodeResource>(
-      "/v1/live/current/workspace/tree/active-node",
+      sessionApiPaths.workspace.activeNode,
       opts,
     );
   }
@@ -43,7 +44,7 @@ export class WorkspaceModule {
     opts?: RequestOptions,
   ): Promise<WorkspaceActiveNodeResource> {
     return this.client.put<WorkspaceActiveNodeResource>(
-      "/v1/live/current/workspace/tree/active-node",
+      sessionApiPaths.workspace.activeNode,
       request,
       opts,
     );
@@ -51,7 +52,7 @@ export class WorkspaceModule {
 
   async getRibbon(opts?: RequestOptions): Promise<WorkspaceRibbonResource> {
     return this.client.get<WorkspaceRibbonResource>(
-      "/v1/live/current/workspace/ribbon",
+      sessionApiPaths.workspace.ribbon,
       opts,
     );
   }
@@ -61,7 +62,7 @@ export class WorkspaceModule {
     opts?: RequestOptions,
   ): Promise<WorkspaceRibbonResource> {
     return this.client.put<WorkspaceRibbonResource>(
-      "/v1/live/current/workspace/ribbon",
+      sessionApiPaths.workspace.ribbon,
       request,
       opts,
     );
@@ -69,7 +70,7 @@ export class WorkspaceModule {
 
   async getLayout(opts?: RequestOptions): Promise<WorkspaceLayoutResource> {
     return this.client.get<WorkspaceLayoutResource>(
-      "/v1/live/current/workspace/layout",
+      sessionApiPaths.workspace.layout,
       opts,
     );
   }
@@ -79,7 +80,7 @@ export class WorkspaceModule {
     opts?: RequestOptions,
   ): Promise<WorkspaceLayoutResource> {
     return this.client.put<WorkspaceLayoutResource>(
-      "/v1/live/current/workspace/layout",
+      sessionApiPaths.workspace.layout,
       request,
       opts,
     );

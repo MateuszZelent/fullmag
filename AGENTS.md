@@ -242,18 +242,20 @@ flowchart TD
 
 ### 9.1 Control-room API invariant
 
-The current local browser contract is the resource-first API documented in:
+The canonical local browser contract is the v2 session-scoped resource-first API documented in:
 
-- `docs/specs/resource-first-control-room-api-v1.md`
-- `docs/specs/control-room-api-endpoint-reference-v1.md`
-- `docs/specs/session-run-api-v1.md`
+- `docs/specs/resource-first-control-room-api-v2.md`
 - `docs/adr/0011-resource-first-api.md`
 
 Rules:
 
-- `GET /v1/live/current/status` stays thin and revision-driven,
-- domain, field, scalar, artifact, and session data are fetched as named resources,
+- frontend work targets `/v2/platform/...` and `/v2/sessions/current/...`; public `/v1/live/current/...` has been removed,
+- v2 route families are `platform`, `sessions`, `model`, `meshing`, `simulation`, `data`, `visualization`, `workspace`, `analysis`, `persistence`, and `diagnostics`,
+- `GET /v2/sessions/current/status` stays thin and revision-driven,
+- domain, field, scalar, artifact, mesh, workspace, and session data are fetched as named resources,
 - heavy fields and topology belong on the binary data plane, not inside status,
+- mesh/topology and field samples must support scoped access for selected objects, mesh parts, airbox, and workspace selection,
+- frontend code must use the central typed client/facade and must not hand-roll endpoint strings outside the API client layer,
 - JSON contract changes must be reflected in OpenAPI and shared frontend types.
 
 ### 9.2 Frontend architecture invariant

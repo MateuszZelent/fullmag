@@ -1,12 +1,13 @@
 import type { BinaryResourceResponse } from "../../types";
 import type { DomainMeta } from "../../contracts";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class DomainModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async getMeta(opts?: RequestOptions): Promise<DomainMeta> {
-    return this.client.get<DomainMeta>("/v1/live/current/domain/meta", opts);
+    return this.client.get<DomainMeta>(sessionApiPaths.data.domainMeta, opts);
   }
 
   async getTopology(opts?: RequestOptions): Promise<ArrayBuffer> {
@@ -15,6 +16,6 @@ export class DomainModule {
   }
 
   async getTopologyResponse(opts?: RequestOptions): Promise<BinaryResourceResponse> {
-    return this.client.getBinaryResponse("/v1/live/current/domain/topology", opts);
+    return this.client.getBinaryResponse(sessionApiPaths.data.domainTopology, opts);
   }
 }

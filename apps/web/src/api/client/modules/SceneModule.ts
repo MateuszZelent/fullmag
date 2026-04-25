@@ -13,16 +13,17 @@ import type {
   ScriptSyncResponse,
 } from "../../types";
 import type { SceneDocument } from "@/lib/session/types";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class SceneModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async get(
     opts?: RequestOptions,
   ): Promise<SceneDocument> {
     return this.client.get<SceneDocument>(
-      "/v1/live/current/authoring/scene",
+      sessionApiPaths.model.scene,
       opts,
     );
   }
@@ -47,7 +48,7 @@ export class SceneModule {
     opts?: RequestOptions,
   ): Promise<SceneDocument> {
     return this.client.patch<SceneDocument>(
-      "/v1/live/current/authoring/scene",
+      sessionApiPaths.model.scene,
       request,
       opts,
     );
@@ -58,7 +59,7 @@ export class SceneModule {
     opts?: RequestOptions,
   ): Promise<AuthoringTransactionResponse> {
     return this.client.post<AuthoringTransactionResponse>(
-      "/v1/live/current/authoring/transactions",
+      sessionApiPaths.model.transactions,
       request,
       opts,
     );
@@ -68,7 +69,7 @@ export class SceneModule {
     opts?: RequestOptions,
   ): Promise<AuthoringStudyRuntimeResource> {
     return this.client.get<AuthoringStudyRuntimeResource>(
-      "/v1/live/current/authoring/study/runtime",
+      sessionApiPaths.model.study,
       opts,
     );
   }
@@ -78,7 +79,7 @@ export class SceneModule {
     opts?: RequestOptions,
   ): Promise<AuthoringStudyRuntimeResource> {
     return this.client.patch<AuthoringStudyRuntimeResource>(
-      "/v1/live/current/authoring/study/runtime",
+      sessionApiPaths.model.study,
       request,
       opts,
     );
@@ -89,7 +90,7 @@ export class SceneModule {
     opts?: RequestOptions,
   ): Promise<AuthoringMaterialResource> {
     return this.client.get<AuthoringMaterialResource>(
-      `/v1/live/current/authoring/model/materials/${encodeURIComponent(materialId)}`,
+      sessionApiPaths.model.material(materialId),
       opts,
     );
   }
@@ -100,7 +101,7 @@ export class SceneModule {
     opts?: RequestOptions,
   ): Promise<AuthoringMaterialResource> {
     return this.client.patch<AuthoringMaterialResource>(
-      `/v1/live/current/authoring/model/materials/${encodeURIComponent(materialId)}`,
+      sessionApiPaths.model.material(materialId),
       request,
       opts,
     );
@@ -112,7 +113,7 @@ export class SceneModule {
     opts?: RequestOptions,
   ): Promise<AuthoringObjectInteractionResource> {
     return this.client.get<AuthoringObjectInteractionResource>(
-      `/v1/live/current/authoring/physics/objects/${encodeURIComponent(objectId)}/interactions/${encodeURIComponent(interactionKind)}`,
+      sessionApiPaths.model.objectInteraction(objectId, interactionKind),
       opts,
     );
   }
@@ -124,7 +125,7 @@ export class SceneModule {
     opts?: RequestOptions,
   ): Promise<AuthoringObjectInteractionResource> {
     return this.client.patch<AuthoringObjectInteractionResource>(
-      `/v1/live/current/authoring/physics/objects/${encodeURIComponent(objectId)}/interactions/${encodeURIComponent(interactionKind)}`,
+      sessionApiPaths.model.objectInteraction(objectId, interactionKind),
       request,
       opts,
     );
@@ -135,7 +136,7 @@ export class SceneModule {
     opts?: RequestOptions,
   ): Promise<ScriptSyncResponse> {
     return this.client.post<ScriptSyncResponse>(
-      "/v1/live/current/authoring/script/sync",
+      sessionApiPaths.model.syncs,
       request,
       opts,
     );
@@ -143,7 +144,7 @@ export class SceneModule {
 
   async getScriptSource(opts?: RequestOptions): Promise<ScriptSourceResponse> {
     return this.client.get<ScriptSourceResponse>(
-      "/v1/live/current/authoring/script/source",
+      sessionApiPaths.model.script,
       opts,
     );
   }

@@ -7,7 +7,7 @@
 import { useState, useCallback } from "react";
 import type { DisplaySelection } from "../../api/contracts";
 import type { DisplayPatchRequest } from "../../api/types";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 interface UseDisplayControlResult {
@@ -29,7 +29,7 @@ export function useDisplayControl(): UseDisplayControlResult {
       setLoading(true);
       setError(null);
       try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
         const result = await client.display.patch(update);
         setSelection(result);
         setLoading(false);

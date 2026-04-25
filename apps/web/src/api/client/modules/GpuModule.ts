@@ -1,9 +1,10 @@
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class GpuModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async getTelemetry(opts?: RequestOptions): Promise<unknown> {
-    return this.client.get("/v1/live/current/gpu/telemetry", opts);
+    return this.client.get(sessionApiPaths.diagnostics.gpu, opts);
   }
 }

@@ -14,22 +14,24 @@ If the UI creates or edits a simulation, it must remain exportable as canonical 
 
 ## Control-room API rule
 
-The canonical local browser contract is the resource-first API described in:
+The canonical local browser contract is the v2 session-scoped resource-first API described in:
 
-- `docs/specs/resource-first-control-room-api-v1.md`
-- `docs/specs/control-room-api-endpoint-reference-v1.md`
-- `docs/specs/session-run-api-v1.md`
+- `docs/specs/resource-first-control-room-api-v2.md`
 - `docs/adr/0011-resource-first-api.md`
 
 Rules:
 
+- frontend work targets `/v2/platform/...` and `/v2/sessions/current/...`; public `/v1/live/current/...` has been removed,
+- v2 route families are `platform`, `sessions`, `model`, `meshing`, `simulation`, `data`, `visualization`, `workspace`, `analysis`, `persistence`, and `diagnostics`,
 - `status` stays thin and revision-driven,
 - `workspace/*` carries selection/ribbon/layout state and must not mutate physics semantics,
-- `authoring/*` carries model-builder, inspector, interaction, and study edits against one
+- `model/*` carries model-builder, inspector, interaction, and study edits against one
   canonical `scene_revision`,
-- `POST /v1/live/current/commands` accepts only the structured discriminated `kind` union body,
+- all runtime control operations go through `POST /v2/sessions/current/simulation/commands`,
 - heavy numerical payloads use binary data-plane transports,
+- mesh/topology and field samples must support scoped access for selected objects, mesh parts, airbox, and workspace selection,
 - React components do not call `fetch()` directly,
+- React/UI code must not hand-roll endpoint strings outside the central typed client/facade,
 - FDM/FEM differences stay in capability guards and domain adapters,
 - old `bootstrap` / `poll` / `preview/*` flows are legacy, not target architecture.
 

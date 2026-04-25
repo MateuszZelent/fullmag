@@ -6,7 +6,7 @@ import type {
   WorkspaceSelectionReplaceRequest,
   WorkspaceSelectionResource,
 } from "../../api/types";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 interface UseWorkspaceSelectionResult {
@@ -49,7 +49,7 @@ export function useWorkspaceSelection(options?: {
 
     setLoading(true);
     try {
-      const nextSelection = await getLiveApiClient().workspace.getSelection();
+      const nextSelection = await getLiveSessionClient().workspace.getSelection();
       if (!mountedRef.current) {
         return;
       }
@@ -87,7 +87,7 @@ export function useWorkspaceSelection(options?: {
       }
       setLoading(true);
       try {
-        const nextSelection = await getLiveApiClient().workspace.replaceSelection(request);
+        const nextSelection = await getLiveSessionClient().workspace.replaceSelection(request);
         if (!mountedRef.current) {
           return nextSelection;
         }

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { StageExecutionState } from "@/lib/session/types";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 function mapStageExecutionResource(
@@ -63,7 +63,7 @@ export function useStageExecution(options?: {
 
     setLoading(true);
     try {
-      const resource = await getLiveApiClient().stages.execution();
+      const resource = await getLiveSessionClient().stages.execution();
       if (!mountedRef.current) {
         return;
       }

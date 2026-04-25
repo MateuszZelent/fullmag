@@ -93,6 +93,8 @@ import type { VisibleSubmeshSnapshot } from "./submeshSnapshot";
 import type { ArrowVisibilityStatus } from "../../../features/viewport-fem/model/femArrowVisibility";
 import type { WorkspaceTab, WorkspaceTabInput, WorkspaceMode as WorkspaceStageMode } from "@/lib/workspace/workspace-store";
 
+export type QuantityDataStatus = "ready" | "preview" | "pending" | "unsupported";
+
 /* ── Transport: high-frequency telemetry ── */
 export interface TransportContextValue {
   effectiveStep: number;
@@ -207,6 +209,7 @@ export interface ViewportContextValue {
   requestedPreviewYChosenSize: number;
   requestedPreviewAutoScale: boolean;
   requestedPreviewMaxPoints: number;
+  requestedPreviewQuantityDataStatus: QuantityDataStatus;
   previewEveryNOptions: number[];
   previewMaxPointOptions: number[];
   previewIsStale: boolean;
@@ -224,6 +227,7 @@ export interface ViewportContextValue {
   handleViewModeChange: (mode: string) => void;
   handleCapture: () => void;
   handleExport: () => void;
+  requestDisplayQuantity: (nextQuantity: string) => void;
   requestPreviewQuantity: (nextQuantity: string) => void;
 }
 
@@ -331,6 +335,7 @@ export interface ModelContextValue {
   femVectorDomainFilter: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
   femFerromagnetVisibilityMode: "hide" | "ghost";
   femViewportLayers: FemViewportLayerState;
+  viewportLegendVisible: boolean;
   fdmVisualizationSettings: VisualizationPresetFdmState;
   visualizationProjectPresets: VisualizationPreset[];
   visualizationLocalPresets: VisualizationPreset[];
@@ -438,6 +443,7 @@ export interface ModelContextValue {
   >;
   setFemFerromagnetVisibilityMode: React.Dispatch<React.SetStateAction<"hide" | "ghost">>;
   setFemViewportLayers: React.Dispatch<React.SetStateAction<FemViewportLayerState>>;
+  setViewportLegendVisible: React.Dispatch<React.SetStateAction<boolean>>;
   setFdmVisualizationSettings: React.Dispatch<
     React.SetStateAction<VisualizationPresetFdmState>
   >;

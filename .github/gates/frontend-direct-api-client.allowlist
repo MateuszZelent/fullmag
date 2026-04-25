@@ -1,17 +1,5 @@
 # Signature format:
 #   <path>:<matched_fragment>
 #
-# Temporary baseline for direct LiveApiClient access outside the resource/API boundary.
-# Components and feature UI should move through resource hooks/provider-backed adapters.
+# No active frontend code may use the removed LiveApiClient/getLiveApiClient names.
 # CI fails on any new finding outside this allowlist.
-
-apps/web/components/runs/control-room/controlRoomApi.ts:@/src/api/client/LiveApiClient
-apps/web/components/runs/control-room/controlRoomApi.ts:getLiveApiClient
-apps/web/components/workspace/shell/StandaloneFemDiagnosticViewport.tsx:@/src/api/client/LiveApiClient
-apps/web/components/workspace/shell/StandaloneFemDiagnosticViewport.tsx:getLiveApiClient
-apps/web/components/workspace/shell/StandaloneFemSceneDiagnosticViewport.tsx:@/src/api/client/LiveApiClient
-apps/web/components/workspace/shell/StandaloneFemSceneDiagnosticViewport.tsx:getLiveApiClient
-apps/web/features/session-runtime/hooks/dataPlaneCache.ts:@/src/api/client/LiveApiClient
-apps/web/features/session-runtime/hooks/useDataPlaneBridge.ts:@/src/api/client/LiveApiClient
-apps/web/features/session-runtime/hooks/useDataPlaneBridge.ts:getLiveApiClient
-apps/web/src/features/diagnostics/DiagnosticStore.ts:getLiveApiClient

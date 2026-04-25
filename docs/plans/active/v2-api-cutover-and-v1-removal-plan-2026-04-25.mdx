@@ -1,0 +1,209 @@
+# V2 API Cutover And V1 Removal Plan
+
+- Status: active
+- Last updated: 2026-04-25
+- Scope: backend router/API, frontend API transport, generated client automation, contract gates
+- Parent specs:
+  - `docs/specs/resource-first-control-room-api-v2.md`
+  - `docs/specs/session-run-api-v1.md`
+  - `docs/specs/command-lifecycle-v1.md`
+  - `docs/adr/0011-resource-first-api.md`
+
+## 1. Goal
+
+Move Fullmag to one canonical browser API:
+
+```text
+/v2/sessions/current/...
+```
+
+The final state is:
+
+- public frontend/backend traffic uses v2 only,
+- `/v1/live/current/...` is removed from the public browser API,
+- frontend source has no direct `/v1/live/current` call sites outside explicit migration tests,
+- OpenAPI v2 is the source of truth for transport request/response typing,
+- hand-written frontend domain facades remain responsible for UI semantics.
+
+For the frontend, the final public data-source model is:
+
+- HTTP resources under `/v2/sessions/current/...` are the source of truth for snapshots, commands,
+  resources, binary data-plane fetches, and resource refreshes,
+- `GET /v2/sessions/current/events/ws` is the realtime notification channel for lifecycle events,
+  command completion, resource revision changes, and cache invalidation,
+- websocket frames do not replace HTTP resources as the authoritative source for heavy fields,
+  topology, mesh payloads, artifacts, or full session state,
+- no frontend runtime path may fall back from v2 to `/v1/live/current/...`.
+
+V1 removal means public browser API removal. Internal runtime bridge routes may remain only under an
+explicit internal namespace if the runner still requires them.
+
+## 2. Verified Current State
+
+Implemented now:
+
+- backend has `router_v2`, `openapi_v2.rs`, `/v2/platform/openapi.json`, and `/v2/platform/docs/swagger/`,
+- v2 currently delegates many routes to v1 read-model handlers,
+- frontend has `apps/web/src/api/generated/openapi-v2.json`,
+  `apps/web/src/api/generated/openapi-v2-types.ts`, `sessionApiPaths`, and `LiveSessionClient`,
+- `apps/web/package.json` already runs v1 and v2 OpenAPI/type generation through `generate:api`,
+- `openapi-fetch` and `openapi-typescript` are already available in `apps/web`.
+
+Known migration gaps:
+
+- v2 OpenAPI is still derived from v1 OpenAPI mappings instead of v2-native handler annotations,
+- frontend modules and hooks still import `getLiveApiClient` in several places,
+- some frontend modules still hand-build endpoint strings,
+- v1-generated `openapi-types.ts` has been removed from the frontend transport path; `generate:api` now targets v2,
+- contract allowlists still tolerate direct API-client entries during migration.
+
+## 3. Backend Refactor Phases
+
+### B1. Split v2-native handler modules
+
+Create v2-native handler boundaries by API family:
+
+- `sessions`
+- `model`
+- `meshing`
+- `simulation`
+- `data`
+- `visualization`
+- `workspace`
+- `analysis`
+- `persistence`
+- `diagnostics`
+
+Rules:
+
+- v2 route ownership moves out of direct `router_v1::handlers` delegation,
+- shared read-model helpers may remain shared internally,
+- public handler names, route docs, tags, and operation IDs must be v2-native,
+- status stays thin and revision-driven,
+- all runtime control operations go through `POST /v2/sessions/current/simulation/commands`,
+- mesh/topology and field samples keep scoped access for object, part, airbox, and workspace selection.
+
+### B2. Make OpenAPI v2 authoritative
+
+Replace the current v1-to-v2 OpenAPI rewrite with direct v2 OpenAPI generation.
+
+Required backend checks:
+
+- every OpenAPI v2 path is mounted,
+- every mounted public v2 route is documented,
+- operation IDs are stable and grouped by v2 family,
+- OpenAPI v1 is removed from the public browser contract.
+
+### B3. Remove public v1
+
+- Completed cutover requirements:
+
+- public `/v1/live/current/...` remains unmounted,
+- public v1 Swagger remains removed,
+- v1 public route tests are deleted or converted into archived compatibility references,
+- keep only internal runtime bridge routes that are still required by the runner,
+- update contract guards so new public v1 mounts fail CI.
+
+## 4. Frontend Refactor Phases
+
+### F1. Generate typed v2 transport
+
+Use OpenAPI for the low-level transport contract:
+
+```text
+OpenAPI v2
+  -> generated paths/types/client
+    -> typed transport
+      -> LiveSessionClient domain facade
+        -> ControlRoomApi / hooks / viewport adapters
+```
+
+Implementation requirements:
+
+- keep `openapi-v2-types.ts` generated from `/v2/platform/openapi.json`,
+- add a generated v2 transport wrapper based on `openapi-fetch`,
+- add `generate:api-v2-client` or equivalent script,
+- make `pnpm --dir apps/web generate:api` regenerate v2 OpenAPI, v2 types, and the v2 transport,
+- generated output must be deterministic and checked by CI.
+
+The generated layer owns request/response typing. It must not contain UI decisions, endpoint
+fallbacks, renderer state, or domain normalization policy.
+
+### F2. Keep hand-written domain facades
+
+Preserve these hand-written layers:
+
+- `LiveSessionClient`,
+- `ControlRoomApi`,
+- resource hooks,
+- binary codecs,
+- mesh/fields/visualization/commands adapters.
+
+Rules:
+
+- facades call generated v2 transport, not raw endpoint strings,
+- binary endpoints remain wrapped manually for FMVP/FMMT decoding, ETag handling, and scoped fetches,
+- no runtime fallback from v2 to v1 is allowed,
+- if a v2 endpoint is removed or its contract changes, typecheck/tests must fail.
+
+### F3. Remove v1 and hand-built strings
+
+Finish frontend cutover by removing:
+
+- direct `/v1/live/current` frontend call sites,
+- v1 transport usage in frontend modules,
+- v1 generated type dependency after public v1 deletion,
+- `sessionApiPaths` as a hand-written source of truth, unless it is reduced to typed constants derived from generated paths,
+- direct API allowlist entries outside the central transport layer.
+
+## 5. Automation And Gates
+
+Add or tighten CI gates for:
+
+- generated v2 OpenAPI is up to date,
+- generated v2 TypeScript types/client are up to date,
+- no frontend source file contains `/v1/live/current`,
+- React components do not import low-level transport directly,
+- no v2 OpenAPI path is unmounted,
+- no public v1 route is mounted after cutover.
+
+Strict contract guard is v2-only for public browser API; archived v1 compatibility checks are allowed
+only for historical documentation or explicitly internal bridge behavior.
+
+## 6. Test Plan
+
+Backend:
+
+- `cargo test -p fullmag-api router_v2`
+- route/OpenAPI parity tests for all v2 families
+- command lifecycle tests through `/v2/sessions/current/simulation/commands`
+- scoped mesh and field tests through v2 `meshing` and `data` routes
+
+Frontend:
+
+- generated transport type tests,
+- `LiveSessionClient` facade tests,
+- `ControlRoomApi` tests for commands, display, fields, and mesh topology,
+- resource-hook tests for status, quantities, fields, workspace selection, and command completion,
+- no-v1-call-site grep/lint gate.
+
+Integration:
+
+- `pnpm --dir apps/web generate:api`
+- `pnpm --dir apps/web typecheck`
+- targeted vitests for API modules and resource hooks
+- `./scripts/ci/contract_guard.sh --strict`
+- manual Swagger check at `/v2/platform/docs/swagger/`
+- manual workspace check: command polling, quantity switching, scoped airbox/object mesh fetch,
+  and no `/v1/live/current` network calls.
+
+## 7. Done Criteria
+
+The cutover is complete when:
+
+- frontend runtime network traffic for the control room uses v2 only,
+- public backend no longer mounts `/v1/live/current/...`,
+- v2 OpenAPI is generated directly from v2 handlers,
+- generated v2 transport is the only low-level frontend API transport,
+- hand-written frontend facades contain domain semantics but no untyped endpoint strings,
+- contract gates fail on new public v1 routes or frontend v1 call sites.

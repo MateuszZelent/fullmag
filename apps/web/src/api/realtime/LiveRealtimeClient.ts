@@ -1,6 +1,7 @@
 "use client";
 
 import type { LiveRealtimeEvent } from "../types";
+import { sessionApiPaths } from "../client/sessionPaths";
 
 export const FULLMAG_LIVE_SUBPROTOCOL = "fullmag.live.v1";
 
@@ -99,7 +100,7 @@ export class LiveRealtimeClient {
 
 function buildRealtimeWebSocketUrl(baseUrl: string, afterSeq: number): string {
   const normalizedBase = baseUrl.replace(/\/+$/, "");
-  const httpUrl = new URL(`${normalizedBase}/v1/live/current/ws`);
+  const httpUrl = new URL(`${normalizedBase}${sessionApiPaths.events.ws}`);
   httpUrl.protocol = httpUrl.protocol === "https:" ? "wss:" : "ws:";
   if (afterSeq > 0) {
     httpUrl.searchParams.set("after_seq", String(afterSeq));

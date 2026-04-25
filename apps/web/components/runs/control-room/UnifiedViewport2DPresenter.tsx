@@ -1,7 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import type { ReactNode } from "react";
 
+import { Slice2DShell } from "@/src/features/slice2d";
+import type { Slice2DModel } from "@/src/features/slice2d";
+import type {
+  CrossSurfaceSelectionState,
+  WorkspaceSyncState,
+} from "@/src/features/workspaceSync";
 import type { FemMeshData, FemVectorDomainFilter } from "../../preview/FemMeshView3D";
 import MagnetizationSlice2D from "../../preview/MagnetizationSlice2D";
 import EmptyState from "../../ui/EmptyState";
@@ -32,6 +39,10 @@ const FemMeshSlice2D = dynamic(() => import("../../preview/FemMeshSlice2DPlotly"
 });
 
 export interface UnifiedViewport2DPresenterProps {
+  slice2DModel?: Slice2DModel | null;
+  workspaceSelection?: CrossSurfaceSelectionState | null;
+  workspaceSync?: WorkspaceSyncState;
+  onSlice2DToolbarChange?: (patch: Partial<Slice2DModel["toolbar"]>) => void;
   shouldUseSliceApi2D: boolean;
   hasSliceScalar: boolean;
   sliceLoading: boolean;
@@ -74,6 +85,10 @@ export interface UnifiedViewport2DPresenterProps {
 }
 
 export default function UnifiedViewport2DPresenter({
+  slice2DModel,
+  workspaceSelection,
+  workspaceSync,
+  onSlice2DToolbarChange,
   shouldUseSliceApi2D,
   hasSliceScalar,
   sliceLoading,
@@ -114,30 +129,42 @@ export default function UnifiedViewport2DPresenter({
   onShowArrowsChange,
   onPreviewMaxPointsChange,
 }: UnifiedViewport2DPresenterProps) {
+  const wrap = (content: ReactNode) =>
+    slice2DModel ? (
+      <Slice2DShell
+        model={slice2DModel}
+        selection={workspaceSelection}
+        sync={workspaceSync}
+        onToolbarChange={onSlice2DToolbarChange}
+      >
+        {content}
+      </Slice2DShell>
+    ) : content;
+
   if (shouldUseSliceApi2D) {
     if (sliceLoading && !hasSliceScalar) {
-      return (
+      return wrap(
         <div className="flex h-full w-full items-center justify-center opacity-80">
           <EmptyState
             title="Loading 2D quantity slice"
             description="Fetching scalar slice data from /slice resources."
             tone="info"
           />
-        </div>
+        </div>,
       );
     }
     if (sliceErrorMessage && !hasSliceScalar) {
-      return (
+      return wrap(
         <div className="flex h-full w-full items-center justify-center opacity-80">
           <EmptyState
             title="Slice request failed"
             description={sliceErrorMessage}
             tone="warning"
           />
-        </div>
+        </div>,
       );
     }
-    return (
+    return wrap(
       <MagnetizationSlice2D
         grid={grid}
         vectors={null}
@@ -148,12 +175,12 @@ export default function UnifiedViewport2DPresenter({
         component={component}
         plane={plane}
         sliceIndex={sliceIndex}
-      />
+      />,
     );
   }
 
   if (preferFemMesh && femMeshData) {
-    return (
+    return wrap(
       <FemMeshSlice2D
         meshData={femMeshData}
         quantityLabel={femQuantityLabel}
@@ -181,11 +208,11 @@ export default function UnifiedViewport2DPresenter({
         onClipPosChange={onClipPosChange}
         onShowArrowsChange={onShowArrowsChange}
         onPreviewMaxPointsChange={onPreviewMaxPointsChange}
-      />
+      />,
     );
   }
 
-  return (
+  return wrap(
     <MagnetizationSlice2D
       grid={grid}
       vectors={vectors}
@@ -196,6 +223,6 @@ export default function UnifiedViewport2DPresenter({
       component={component}
       plane={plane}
       sliceIndex={sliceIndex}
-    />
+    />,
   );
 }

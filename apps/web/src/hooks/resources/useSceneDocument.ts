@@ -11,7 +11,7 @@ import type {
   AuthoringStudyRuntimePatchRequest,
   AuthoringStudyRuntimeResource,
 } from "../../api/types";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 interface UseSceneDocumentResult {
@@ -51,7 +51,7 @@ export function useSceneDocument(options?: {
 
     setLoading(true);
     try {
-      const nextDocument = await getLiveApiClient().scene.get();
+      const nextDocument = await getLiveSessionClient().scene.get();
       if (!mountedRef.current) {
         return;
       }
@@ -111,20 +111,20 @@ export function useSceneDocument(options?: {
 export function useSceneAuthoringActions() {
   return useMemo(() => ({
     updateSceneDocument(document: SceneDocument): Promise<SceneDocument> {
-      return getLiveApiClient().scene.update(document);
+      return getLiveSessionClient().scene.update(document);
     },
     patchMaterial(
       materialId: string,
       request: AuthoringMaterialPatchRequest,
     ): Promise<AuthoringMaterialResource> {
-      return getLiveApiClient().scene.patchMaterial(materialId, request);
+      return getLiveSessionClient().scene.patchMaterial(materialId, request);
     },
     patchObjectInteraction(
       objectId: string,
       interactionKind: string,
       request: AuthoringObjectInteractionPatchRequest,
     ): Promise<AuthoringObjectInteractionResource> {
-      return getLiveApiClient().scene.patchObjectInteraction(
+      return getLiveSessionClient().scene.patchObjectInteraction(
         objectId,
         interactionKind,
         request,
@@ -133,7 +133,7 @@ export function useSceneAuthoringActions() {
     patchStudyRuntime(
       request: AuthoringStudyRuntimePatchRequest,
     ): Promise<AuthoringStudyRuntimeResource> {
-      return getLiveApiClient().scene.patchStudyRuntime(request);
+      return getLiveSessionClient().scene.patchStudyRuntime(request);
     },
   }), []);
 }

@@ -8,19 +8,19 @@ import type {
 import type { FieldCatalog, FieldMeta } from "../../contracts";
 import type { DecodedFieldVector } from "../../codecs/types";
 import { decodeFieldVectorOffThread } from "../../codecs/decodeOffThread";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class FieldsModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async getCatalog(opts?: RequestOptions): Promise<FieldCatalog> {
-    return this.client.get<FieldCatalog>("/v1/live/current/fields/catalog", opts);
+    return this.client.get<FieldCatalog>(sessionApiPaths.data.fields, opts);
   }
 
   async getMeta(quantityId: string, opts?: RequestOptions): Promise<FieldMeta> {
-    const encoded = encodeURIComponent(quantityId);
     return this.client.get<FieldMeta>(
-      `/v1/live/current/fields/${encoded}/meta`,
+      sessionApiPaths.data.fieldMeta(quantityId),
       opts,
     );
   }
@@ -41,9 +41,8 @@ export class FieldsModule {
     quantityId: string,
     opts?: RequestOptions,
   ): Promise<BinaryResourceResponse> {
-    const encoded = encodeURIComponent(quantityId);
     return this.client.getBinaryResponse(
-      `/v1/live/current/fields/${encoded}/vector?format=bin`,
+      `${sessionApiPaths.data.fieldVector(quantityId)}?format=bin`,
       opts,
     );
   }
@@ -59,12 +58,17 @@ export class FieldsModule {
     vectorOptions?: FieldVectorOptions,
     opts?: RequestOptions,
   ): Promise<FieldBinaryResponse> {
-    const encoded = encodeURIComponent(quantityId);
     const params = new URLSearchParams({ format: "bin" });
     if (vectorOptions?.component && vectorOptions.component !== "full") {
       params.set("component", vectorOptions.component);
     }
-    const path = `/v1/live/current/fields/${encoded}/vector?${params.toString()}`;
+    if (vectorOptions?.scope_kind && vectorOptions.scope_kind !== "full") {
+      params.set("scope_kind", vectorOptions.scope_kind);
+    }
+    if (vectorOptions?.scope_id) {
+      params.set("scope_id", vectorOptions.scope_id);
+    }
+    const path = `${sessionApiPaths.data.fieldVector(quantityId)}?${params.toString()}`;
 
     const headers: Record<string, string> = {};
     if (vectorOptions?.etag) {
@@ -93,10 +97,9 @@ export class FieldsModule {
     query: FieldSliceQuery,
     opts?: RequestOptions,
   ): Promise<FieldSliceMeta> {
-    const encoded = encodeURIComponent(quantityId);
     const params = buildSliceParams(query);
     return this.client.get<FieldSliceMeta>(
-      `/v1/live/current/fields/${encoded}/slice/meta?${params}`,
+      `${sessionApiPaths.data.fieldSliceMeta(quantityId)}?${params}`,
       opts,
     );
   }
@@ -111,9 +114,8 @@ export class FieldsModule {
     etag?: string,
     opts?: RequestOptions,
   ): Promise<FieldBinaryResponse> {
-    const encoded = encodeURIComponent(quantityId);
     const params = buildSliceParams(query);
-    const path = `/v1/live/current/fields/${encoded}/slice/scalar?${params}`;
+    const path = `${sessionApiPaths.data.fieldSliceScalar(quantityId)}?${params}`;
     return this._binaryWithEtag(path, etag, opts);
   }
 
@@ -127,9 +129,8 @@ export class FieldsModule {
     etag?: string,
     opts?: RequestOptions,
   ): Promise<FieldBinaryResponse> {
-    const encoded = encodeURIComponent(quantityId);
     const params = buildSliceParams(query, { arrows: true });
-    const path = `/v1/live/current/fields/${encoded}/slice/arrows?${params}`;
+    const path = `${sessionApiPaths.data.fieldSliceArrows(quantityId)}?${params}`;
     return this._binaryWithEtag(path, etag, opts);
   }
 

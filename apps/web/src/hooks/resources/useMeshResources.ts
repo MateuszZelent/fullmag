@@ -4,8 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   BinaryResourceResponse,
+  CommandResponse,
+  CapabilityMap,
   JsonResourceResponse,
   MeshActiveBuildResource,
+  MeshBuildCommandRequest,
   MeshBuildHistoryResource,
   MeshCapabilitiesResource,
   MeshSemanticsResource,
@@ -29,13 +32,17 @@ import type {
   MeshUniverseConfigResource,
   MeshUniverseQualityResource,
   MeshUniverseReportResource,
+  ResourceRevisionMap,
 } from "../../api/types";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
-import type { RequestOptions } from "../../api/client/LiveApiClient";
-import { ResourceCache } from "../../api/client/cache/ResourceCache";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
+import type { RequestOptions } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 import { normalizeMeshWorkspace } from "@/lib/session/normalize";
 import type { MeshWorkspaceState } from "@/lib/session/types";
+import {
+  buildMeshWorkspaceModel,
+} from "../../features/meshWorkspace/meshAdapters";
+import type { MeshWorkspaceModel } from "../../features/meshWorkspace/types";
 
 interface MeshHookOptions {
   enabled?: boolean;
@@ -91,7 +98,7 @@ function useMeshJsonResource<T>(
 
     setLoading(true);
     try {
-      const client = getLiveApiClient();
+      const client = getLiveSessionClient();
       const cached = client.getCache().get<T>(cacheKey);
       if (cached && cached.revision === cacheRevision) {
         lastFetchKeyRef.current = fetchKey;
@@ -162,6 +169,7 @@ function useMeshJsonResource<T>(
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
       lastFetchKeyRef.current = null;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resource hooks clear stale data when the scoped resource is disabled.
       setData(null);
       setError(null);
       setLoading(false);
@@ -211,7 +219,7 @@ function useMeshBinaryResource(
 
     setLoading(true);
     try {
-      const client = getLiveApiClient();
+      const client = getLiveSessionClient();
       const cached = client.getCache().get<ArrayBuffer>(cacheKey);
       if (cached && cached.revision === cacheRevision) {
         lastFetchKeyRef.current = fetchKey;
@@ -272,6 +280,7 @@ function useMeshBinaryResource(
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
       lastFetchKeyRef.current = null;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resource hooks clear stale data when the scoped resource is disabled.
       setData(null);
       setError(null);
       setLoading(false);
@@ -304,6 +313,7 @@ function useMeshMutableJsonResource<T, R>(
   const [data, setData] = useState<T | null>(null);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mutable resources keep a local optimistic copy after replace().
     setData(resource.data);
   }, [resource.data]);
 
@@ -339,8 +349,9 @@ function useMeshMutableJsonResource<T, R>(
 export function useMeshSummary(options?: MeshHookOptions) {
   const resource = useMeshJsonResource<MeshSummaryResource>(
     "mesh-summary",
-    () => getLiveApiClient().mesh.getSummary(),
+    () => getLiveSessionClient().mesh.getSummary(),
     options,
+    (opts) => getLiveSessionClient().mesh.getSummaryResponse(opts),
   );
   return { summary: resource.data, ...resource };
 }
@@ -348,7 +359,7 @@ export function useMeshSummary(options?: MeshHookOptions) {
 export function useMeshCapabilities(options?: MeshHookOptions) {
   const resource = useMeshJsonResource<MeshCapabilitiesResource>(
     "mesh-capabilities",
-    () => getLiveApiClient().mesh.getCapabilities(),
+    () => getLiveSessionClient().mesh.getCapabilities(),
     options,
   );
   return { capabilities: resource.data, ...resource };
@@ -357,7 +368,7 @@ export function useMeshCapabilities(options?: MeshHookOptions) {
 export function useMeshSemantics(options?: MeshHookOptions) {
   const resource = useMeshJsonResource<MeshSemanticsResource>(
     "mesh-semantics",
-    () => getLiveApiClient().mesh.getSemantics(),
+    () => getLiveSessionClient().mesh.getSemantics(),
     options,
   );
   return { semantics: resource.data, ...resource };
@@ -370,21 +381,21 @@ export function useMeshBuilds(options?: {
 }) {
   const active = useMeshJsonResource<MeshActiveBuildResource>(
     "mesh-builds-active",
-    () => getLiveApiClient().mesh.getActiveBuild(),
+    () => getLiveSessionClient().mesh.getActiveBuild(),
     options,
-    (opts) => getLiveApiClient().mesh.getActiveBuildResponse(opts),
+    (opts) => getLiveSessionClient().mesh.getActiveBuildResponse(opts),
   );
   const history = useMeshJsonResource<MeshBuildHistoryResource>(
     "mesh-builds-history",
-    () => getLiveApiClient().mesh.getBuildHistory(),
+    () => getLiveSessionClient().mesh.getBuildHistory(),
     options,
-    (opts) => getLiveApiClient().mesh.getBuildHistoryResponse(opts),
+    (opts) => getLiveSessionClient().mesh.getBuildHistoryResponse(opts),
   );
   const lastSuccess = useMeshJsonResource<MeshLastSuccessfulBuildResource>(
     "mesh-builds-last-success",
-    () => getLiveApiClient().mesh.getLastSuccessfulBuild(),
+    () => getLiveSessionClient().mesh.getLastSuccessfulBuild(),
     options,
-    (opts) => getLiveApiClient().mesh.getLastSuccessfulBuildResponse(opts),
+    (opts) => getLiveSessionClient().mesh.getLastSuccessfulBuildResponse(opts),
   );
 
   const refresh = useCallback(async () => {
@@ -407,8 +418,8 @@ export function useMeshUniverseConfig(options?: MeshHookOptions) {
     MeshUniverseConfigReplaceRequest
   >(
     "mesh-universe-config",
-    () => getLiveApiClient().mesh.getUniverseConfig(),
-    (request) => getLiveApiClient().mesh.replaceUniverseConfig(request),
+    () => getLiveSessionClient().mesh.getUniverseConfig(),
+    (request) => getLiveSessionClient().mesh.replaceUniverseConfig(request),
     options,
   );
   return { config: resource.data, ...resource };
@@ -417,7 +428,7 @@ export function useMeshUniverseConfig(options?: MeshHookOptions) {
 export function useMeshUniverseReport(options?: MeshHookOptions) {
   const resource = useMeshJsonResource<MeshUniverseReportResource>(
     "mesh-universe-report",
-    () => getLiveApiClient().mesh.getUniverseReport(),
+    () => getLiveSessionClient().mesh.getUniverseReport(),
     options,
   );
   return { report: resource.data, ...resource };
@@ -426,7 +437,7 @@ export function useMeshUniverseReport(options?: MeshHookOptions) {
 export function useMeshUniverseQuality(options?: MeshHookOptions) {
   const resource = useMeshJsonResource<MeshUniverseQualityResource>(
     "mesh-universe-quality",
-    () => getLiveApiClient().mesh.getUniverseQuality(),
+    () => getLiveSessionClient().mesh.getUniverseQuality(),
     options,
   );
   return { quality: resource.data, ...resource };
@@ -438,8 +449,8 @@ export function useMeshSharedDomainConfig(options?: MeshHookOptions) {
     MeshSharedDomainConfigReplaceRequest
   >(
     "mesh-shared-domain-config",
-    () => getLiveApiClient().mesh.getSharedDomainConfig(),
-    (request) => getLiveApiClient().mesh.replaceSharedDomainConfig(request),
+    () => getLiveSessionClient().mesh.getSharedDomainConfig(),
+    (request) => getLiveSessionClient().mesh.replaceSharedDomainConfig(request),
     options,
   );
   return { config: resource.data, ...resource };
@@ -448,7 +459,7 @@ export function useMeshSharedDomainConfig(options?: MeshHookOptions) {
 export function useMeshSharedDomainReport(options?: MeshHookOptions) {
   const resource = useMeshJsonResource<MeshSharedDomainReportResource>(
     "mesh-shared-domain-report",
-    () => getLiveApiClient().mesh.getSharedDomainReport(),
+    () => getLiveSessionClient().mesh.getSharedDomainReport(),
     options,
   );
   return { report: resource.data, ...resource };
@@ -457,7 +468,7 @@ export function useMeshSharedDomainReport(options?: MeshHookOptions) {
 export function useMeshSharedDomainQuality(options?: MeshHookOptions) {
   const resource = useMeshJsonResource<MeshSharedDomainQualityResource>(
     "mesh-shared-domain-quality",
-    () => getLiveApiClient().mesh.getSharedDomainQuality(),
+    () => getLiveSessionClient().mesh.getSharedDomainQuality(),
     options,
   );
   return { quality: resource.data, ...resource };
@@ -466,17 +477,70 @@ export function useMeshSharedDomainQuality(options?: MeshHookOptions) {
 export function useMeshSharedDomainManifest(options?: MeshHookOptions) {
   const resource = useMeshJsonResource<MeshSharedDomainManifestResource>(
     "mesh-shared-domain-manifest",
-    () => getLiveApiClient().mesh.getSharedDomainManifest(),
+    () => getLiveSessionClient().mesh.getSharedDomainManifest(),
     options,
+    (opts) => getLiveSessionClient().mesh.getSharedDomainManifestResponse(opts),
   );
   return { manifest: resource.data, ...resource };
+}
+
+export function useSubmitMeshBuildCommand(options?: {
+  enabled?: boolean;
+  sessionKey?: string | null;
+  onAccepted?: (response: CommandResponse) => void;
+}) {
+  const enabled = options?.enabled ?? true;
+  const sessionKey = options?.sessionKey ?? null;
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<LiveApiError | null>(null);
+  const [lastResponse, setLastResponse] = useState<CommandResponse | null>(null);
+
+  const submit = useCallback(
+    async (
+      request: MeshBuildCommandRequest,
+      idempotencyKey = createMeshCommandIdempotencyKey(),
+    ): Promise<CommandResponse | null> => {
+      if (!enabled || !sessionKey) {
+        return null;
+      }
+      setSubmitting(true);
+      setError(null);
+      try {
+        const response = await getLiveSessionClient().mesh.submitBuildCommand(request, {
+          headers: {
+            "Idempotency-Key": idempotencyKey,
+          },
+        });
+        setLastResponse(response);
+        options?.onAccepted?.(response);
+        return response;
+      } catch (err) {
+        const apiError =
+          err instanceof LiveApiError
+            ? err
+            : LiveApiError.networkError("mesh-build-command", err);
+        setError(apiError);
+        throw apiError;
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [enabled, options, sessionKey],
+  );
+
+  return {
+    submit,
+    submitting,
+    error,
+    lastResponse,
+  };
 }
 
 export function useMeshSharedDomainTopology(options?: MeshHookOptions) {
   return useMeshBinaryResource(
     "mesh-shared-domain-topology",
     (requestOptions) =>
-      getLiveApiClient().mesh.getSharedDomainTopologyResponse(requestOptions),
+      getLiveSessionClient().mesh.getSharedDomainTopologyResponse(requestOptions),
     options,
   );
 }
@@ -491,8 +555,8 @@ export function useMeshObjectConfig(
     MeshObjectConfigReplaceRequest
   >(
     `mesh-object-config:${objectId ?? "none"}`,
-    () => getLiveApiClient().mesh.getObjectConfig(objectId ?? ""),
-    (request) => getLiveApiClient().mesh.replaceObjectConfig(objectId ?? "", request),
+    () => getLiveSessionClient().mesh.getObjectConfig(objectId ?? ""),
+    (request) => getLiveSessionClient().mesh.replaceObjectConfig(objectId ?? "", request),
     { ...options, enabled },
   );
   return { config: resource.data, ...resource };
@@ -505,7 +569,7 @@ export function useMeshObjectReport(
   const enabled = (options?.enabled ?? true) && Boolean(objectId);
   const resource = useMeshJsonResource<MeshObjectReportResource>(
     `mesh-object-report:${objectId ?? "none"}`,
-    () => getLiveApiClient().mesh.getObjectReport(objectId ?? ""),
+    () => getLiveSessionClient().mesh.getObjectReport(objectId ?? ""),
     { ...options, enabled },
   );
   return { report: resource.data, ...resource };
@@ -518,7 +582,7 @@ export function useMeshObjectQuality(
   const enabled = (options?.enabled ?? true) && Boolean(objectId);
   const resource = useMeshJsonResource<MeshObjectQualityResource>(
     `mesh-object-quality:${objectId ?? "none"}`,
-    () => getLiveApiClient().mesh.getObjectQuality(objectId ?? ""),
+    () => getLiveSessionClient().mesh.getObjectQuality(objectId ?? ""),
     { ...options, enabled },
   );
   return { quality: resource.data, ...resource };
@@ -531,7 +595,7 @@ export function useMeshObjectSizeField(
   const enabled = (options?.enabled ?? true) && Boolean(objectId);
   const resource = useMeshJsonResource<MeshObjectSizeFieldResource>(
     `mesh-object-size-field:${objectId ?? "none"}`,
-    () => getLiveApiClient().mesh.getObjectSizeField(objectId ?? ""),
+    () => getLiveSessionClient().mesh.getObjectSizeField(objectId ?? ""),
     { ...options, enabled },
   );
   return { sizeField: resource.data, ...resource };
@@ -545,7 +609,7 @@ export function useMeshObjectTopology(
   return useMeshBinaryResource(
     `mesh-object-topology:${objectId ?? "none"}`,
     (requestOptions) =>
-      getLiveApiClient().mesh.getObjectTopologyResponse(
+      getLiveSessionClient().mesh.getObjectTopologyResponse(
         objectId ?? "",
         requestOptions,
       ),
@@ -563,8 +627,8 @@ export function useMeshInterfaceConfig(
     MeshInterfaceConfigReplaceRequest
   >(
     `mesh-interface-config:${interfaceId ?? "none"}`,
-    () => getLiveApiClient().mesh.getInterfaceConfig(interfaceId ?? ""),
-    (request) => getLiveApiClient().mesh.replaceInterfaceConfig(interfaceId ?? "", request),
+    () => getLiveSessionClient().mesh.getInterfaceConfig(interfaceId ?? ""),
+    (request) => getLiveSessionClient().mesh.replaceInterfaceConfig(interfaceId ?? "", request),
     { ...options, enabled },
   );
   return { config: resource.data, ...resource };
@@ -577,7 +641,7 @@ export function useMeshInterfaceReport(
   const enabled = (options?.enabled ?? true) && Boolean(interfaceId);
   const resource = useMeshJsonResource<MeshInterfaceReportResource>(
     `mesh-interface-report:${interfaceId ?? "none"}`,
-    () => getLiveApiClient().mesh.getInterfaceReport(interfaceId ?? ""),
+    () => getLiveSessionClient().mesh.getInterfaceReport(interfaceId ?? ""),
     { ...options, enabled },
   );
   return { report: resource.data, ...resource };
@@ -590,7 +654,7 @@ export function useMeshInterfaceQuality(
   const enabled = (options?.enabled ?? true) && Boolean(interfaceId);
   const resource = useMeshJsonResource<MeshInterfaceQualityResource>(
     `mesh-interface-quality:${interfaceId ?? "none"}`,
-    () => getLiveApiClient().mesh.getInterfaceQuality(interfaceId ?? ""),
+    () => getLiveSessionClient().mesh.getInterfaceQuality(interfaceId ?? ""),
     { ...options, enabled },
   );
   return { quality: resource.data, ...resource };
@@ -683,4 +747,101 @@ export function useMeshWorkspaceResourceState(options?: {
     error: summary.error ?? capabilities.error ?? builds.error,
     refresh,
   };
+}
+
+export function useMeshWorkspaceModel(options?: {
+  enabled?: boolean;
+  sessionKey?: string | null;
+  resources?: Partial<ResourceRevisionMap> | null;
+  liveCapabilities?: CapabilityMap | null;
+}): {
+  model: MeshWorkspaceModel | null;
+  loading: boolean;
+  error: LiveApiError | null;
+  refresh: () => Promise<void>;
+} {
+  const resourceOptions = {
+    enabled: options?.enabled,
+    sessionKey: options?.sessionKey,
+    revision: options?.resources?.mesh_revision ?? null,
+  };
+  const buildOptions = {
+    enabled: options?.enabled,
+    sessionKey: options?.sessionKey,
+    revision: options?.resources?.mesh_build_revision ?? null,
+  };
+  const summary = useMeshSummary(resourceOptions);
+  const capabilities = useMeshCapabilities(resourceOptions);
+  const semantics = useMeshSemantics(resourceOptions);
+  const manifest = useMeshSharedDomainManifest(resourceOptions);
+  const builds = useMeshBuilds(buildOptions);
+
+  const model = useMemo<MeshWorkspaceModel | null>(() => {
+    if (
+      !summary.summary &&
+      !capabilities.capabilities &&
+      !semantics.semantics &&
+      !manifest.manifest &&
+      !builds.activeBuild &&
+      !builds.history &&
+      !builds.lastSuccess
+    ) {
+      return null;
+    }
+    return buildMeshWorkspaceModel({
+      resources: options?.resources,
+      liveCapabilities: options?.liveCapabilities,
+      summary: summary.summary,
+      meshCapabilities: capabilities.capabilities,
+      semantics: semantics.semantics,
+      activeBuild: builds.activeBuild,
+      buildHistory: builds.history,
+      lastSuccessfulBuild: builds.lastSuccess,
+      manifest: manifest.manifest,
+    });
+  }, [
+    builds.activeBuild,
+    builds.history,
+    builds.lastSuccess,
+    capabilities.capabilities,
+    manifest.manifest,
+    options?.liveCapabilities,
+    options?.resources,
+    semantics.semantics,
+    summary.summary,
+  ]);
+
+  const refresh = useCallback(async () => {
+    await Promise.all([
+      summary.refresh(),
+      capabilities.refresh(),
+      semantics.refresh(),
+      manifest.refresh(),
+      builds.refresh(),
+    ]);
+  }, [builds, capabilities, manifest, semantics, summary]);
+
+  return {
+    model,
+    loading:
+      summary.loading ||
+      capabilities.loading ||
+      semantics.loading ||
+      manifest.loading ||
+      builds.loading,
+    error:
+      summary.error ??
+      capabilities.error ??
+      semantics.error ??
+      manifest.error ??
+      builds.error,
+    refresh,
+  };
+}
+
+function createMeshCommandIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `mesh-build-${crypto.randomUUID()}`;
+  }
+  return `mesh-build-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }

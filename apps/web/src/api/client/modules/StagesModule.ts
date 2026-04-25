@@ -1,10 +1,14 @@
 import type { StageExecutionResource } from "../../types";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class StagesModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async execution(opts?: RequestOptions): Promise<StageExecutionResource> {
-    return this.client.get<StageExecutionResource>("/v1/live/current/stages/execution", opts);
+    return this.client.get<StageExecutionResource>(
+      sessionApiPaths.simulation.stagesExecution,
+      opts,
+    );
   }
 }

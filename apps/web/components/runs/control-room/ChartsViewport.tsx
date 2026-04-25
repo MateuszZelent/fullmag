@@ -5,7 +5,7 @@
  *
  * Data source today:
  * - live window: `scalar_rows` streamed via the current workspace transport
- * - full history: lazy fetch from `GET /v1/live/current/scalars`
+ * - full history: lazy fetch from `GET /v2/sessions/current/data/scalars`
  * - on-disk artifact: `scalars.csv`
  *
  * Zarr is used for spatial field snapshots, not for scalar chart traces.
@@ -410,7 +410,7 @@ export default function ChartsViewport() {
             {chartHistory.error && (
               <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-[min(32rem,calc(100%-1.5rem))] rounded-lg border border-amber-400/30 bg-[#20130e]/90 px-3 py-2 text-[0.72rem] text-amber-100 shadow-lg backdrop-blur">
                 Could not hydrate full history. Plot stays on the live window until
-                `/v1/live/current/scalars` responds again.
+                `/v2/sessions/current/data/scalars` responds again.
               </div>
             )}
             {chartRows.length < 1 && (

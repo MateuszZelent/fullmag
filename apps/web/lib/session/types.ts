@@ -254,6 +254,7 @@ export interface QuantityDescriptor {
   unit: string;
   location: string;
   available: boolean;
+  data_available: boolean;
   interactive_preview: boolean;
   quick_access_label: string | null;
   scalar_metric_key: string | null;

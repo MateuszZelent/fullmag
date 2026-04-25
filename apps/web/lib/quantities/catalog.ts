@@ -5,7 +5,7 @@
  * `crates/fullmag-runner/src/quantities.rs`.
  *
  * This is a **transitional** static catalog.  When the canonical
- * `GET /v1/live/current/quantities/catalog` endpoint is fully adopted
+ * `GET /v2/sessions/current/data/quantities` endpoint is fully adopted
  * everywhere, this file will be replaced
  * by a runtime fetch + cache.  Until then it is the single frontend
  * source of truth (ZP-01), kept 1:1 with the Rust table.
@@ -617,7 +617,7 @@ export function quantityColumnLabel(id: QuantityId): string {
 
 // ── Remote catalog retrieval (QB-13 integration) ─────────────────
 
-/** Wire shape of a single quantity from GET /v1/live/current/quantities/catalog */
+/** Wire shape of a single quantity from GET /v2/sessions/current/data/quantities */
 interface WireQuantityDescriptor {
   id: string;
   label: string;

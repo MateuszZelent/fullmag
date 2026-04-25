@@ -19,7 +19,7 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
 import { decodeFieldVectorOffThread, decodeTopologyOffThread } from "@/src/api/codecs/decodeOffThread";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
@@ -67,7 +67,7 @@ function adaptScalarRow(
   };
 }
 
-function mapResourceQuantities(
+export function mapResourceQuantities(
   quantityCatalog: {
     quantities: Array<{
       id: string;
@@ -105,13 +105,19 @@ function mapResourceQuantities(
 
   return quantityCatalog.quantities.map((quantity) => {
     const field = fieldById.get(quantity.id);
+    const selectable = Boolean(
+      quantity.interactive_preview &&
+        (quantity.supports_preview_2d || quantity.supports_preview_3d),
+    );
+    const dataAvailable = field?.available ?? false;
     return {
       id: quantity.id,
       label: field?.label ?? quantity.label,
       kind: field?.kind ?? quantity.shape,
       unit: field?.unit ?? quantity.unit,
       location: field?.location ?? quantity.location,
-      available: field?.available ?? false,
+      available: selectable,
+      data_available: dataAvailable,
       interactive_preview: quantity.interactive_preview,
       quick_access_label: quantity.quick_access_label ?? null,
       scalar_metric_key: quantity.scalar_metric_key ?? null,
@@ -244,7 +250,7 @@ export function useDataPlaneBridge(
       if (fetchedFieldRevRef.current === cacheKey) return;
 
       try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
         const resourceKey = `data-plane:field:${runtimeScopeKey ?? "no-scope"}:${envelope.quantityId}:${requestedComponent}`;
         const cached = client.getCache().get<DecodedFieldVector>(resourceKey);
         let result: DecodedFieldVector;
@@ -382,7 +388,7 @@ export function useDataPlaneBridge(
       if (fetchedScalarRevRef.current === revision) return;
 
       try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
         const window = await client.scalars.getWindow({
           sinceRevision: fetchedScalarRevRef.current ?? 0,
         });
@@ -447,7 +453,7 @@ export function useDataPlaneBridge(
       if (fetchedDomainGenRef.current === genId) return;
 
       try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
         const numericGenerationId = Number.parseInt(genId, 10);
         const meta = await getCachedJsonResource({
           client,
@@ -556,7 +562,7 @@ export function useDataPlaneBridge(
       if (fetchedMeshRevRef.current === revision) return;
 
       try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
         const topologyCacheKey = `data-plane:mesh-shared-domain-topology:${runtimeScopeKey ?? "no-scope"}`;
         const [summaryResource, manifestResource, topologyBuffer] = await Promise.all([
           getCachedJsonResource({
@@ -733,7 +739,7 @@ export function useDataPlaneBridge(
       if (fetchedCatalogKeyRef.current === cacheKey) return;
 
       try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
         const [quantityCatalog, fieldCatalog] = await Promise.all([
           getCachedJsonResource({
             client,
@@ -799,7 +805,7 @@ export function useDataPlaneBridge(
       if (fetchedArtifactsKeyRef.current === cacheKey) return;
 
       try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
         const artifacts = await getCachedJsonResource({
           client,
           cacheKey: `data-plane:artifacts:${cacheKey}`,
@@ -857,7 +863,7 @@ export function useDataPlaneBridge(
       if (fetchedEngineLogKeyRef.current === cacheKey) return;
 
       try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
         const engineLog = await getCachedJsonResource({
           client,
           cacheKey: `data-plane:engine-log:${cacheKey}`,

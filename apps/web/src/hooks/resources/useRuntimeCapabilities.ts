@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import type { RuntimeCapabilityMatrix } from "../../api/types";
 
 export interface UseRuntimeCapabilitiesResult {
@@ -11,7 +11,7 @@ export interface UseRuntimeCapabilitiesResult {
 }
 
 export function fetchRuntimeCapabilities(): Promise<RuntimeCapabilityMatrix> {
-  return getLiveApiClient().system.getCapabilities();
+  return getLiveSessionClient().system.getCapabilities();
 }
 
 export function useRuntimeCapabilities(): UseRuntimeCapabilitiesResult {

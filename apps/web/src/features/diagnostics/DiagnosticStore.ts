@@ -1,5 +1,5 @@
 import { getDiagnostics, clearDiagnostics } from "../../api/client/interceptors/diagnostics";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 
 export function readDiagnosticEntries() {
   return getDiagnostics();
@@ -10,5 +10,5 @@ export function clearDiagnosticEntries() {
 }
 
 export function readCacheStats() {
-  return getLiveApiClient().getCache().getCacheStats();
+  return getLiveSessionClient().getCache().getCacheStats();
 }

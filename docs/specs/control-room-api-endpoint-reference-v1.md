@@ -1,16 +1,17 @@
 # Control-Room API Endpoint Reference v1
 
-- Status: canonical current endpoint reference for the local resource-first control-room API
-- Last updated: 2026-04-23
+- Status: archived/superseded v1 endpoint reference; public v1 browser API has been removed
+- Last updated: 2026-04-25
 - Parent architecture: `docs/specs/resource-first-control-room-api-v1.md`
+- Canonical target architecture: `docs/specs/resource-first-control-room-api-v2.md`
 - Route tree: `docs/specs/control-room-api-tree-v1.md`
 - Related runtime model: `docs/specs/session-run-api-v1.md`
 - Governing ADR: `docs/adr/0011-resource-first-api.md`
 
 ## 1. Purpose
 
-This document is the field-complete reference for the currently mounted local
-resource-first control-room API.
+This document is a historical field-complete reference for the former local
+v1 resource-first control-room API. It is not the target for new browser work.
 
 Use it when you need:
 
@@ -20,11 +21,16 @@ Use it when you need:
 - binary payload notes,
 - honest separation between canonical, transitional, and target-only routes.
 
-This document does not replace the target route tree.
+This document does not replace the target v2 route tree.
 
-- `docs/specs/control-room-api-tree-v1.md` remains the target route tree.
-- This file describes the concrete current endpoints and the current migration
+- `docs/specs/resource-first-control-room-api-v2.md` is the canonical target API architecture.
+- `docs/specs/control-room-api-tree-v1.md` remains a historical/transition route-tree reference.
+- This file describes the concrete v1 endpoints and the current migration
   boundary.
+
+New frontend work must target `/v2/platform/...` and `/v2/sessions/current/...`.
+Public `/v1/live/current/...` is removed; only `/v1/internal/live/current/...`
+may remain as a backend-only runtime bridge.
 
 ## 2. Status Legend
 
@@ -52,6 +58,19 @@ Current owner map by family:
 | `/v1/live/current/domain/*`, `/v1/live/current/fields/*`, `/v1/live/current/scalars` | `api/data` |
 | `/v1/live/current/mesh/*` | `fem/mesh` + `api/data` |
 | `/v1/live/current/authoring/*`, `/v1/live/current/display`, workspace projections | `ui/platform` + `api/data` |
+
+Current v2 family equivalents:
+
+| v1 family | v2 family |
+|---|---|
+| `/v1/health`, `/v1/capabilities` | `/v2/platform/*` |
+| `/v1/live/current/status`, websocket | `/v2/sessions/current/*` |
+| `/v1/live/current/authoring/*` | `/v2/sessions/current/model/*` |
+| `/v1/live/current/mesh/*` | `/v2/sessions/current/meshing/*` |
+| `/v1/live/current/commands*`, runs, stages, solver | `/v2/sessions/current/simulation/*` |
+| `/v1/live/current/quantities/*`, fields, scalars, artifacts | `/v2/sessions/current/data/*` |
+| `/v1/live/current/display` | `/v2/sessions/current/visualization/display` |
+| `/v1/live/current/workspace/*` | `/v2/sessions/current/workspace/*` |
 
 ## 3. Cross-Cutting Contract Rules
 
@@ -361,7 +380,7 @@ This same schema appears in `status.display`, as the response body of
 | `field_revision` | `u64` | Canonical field revision pointer | Mirrors `fields_revision` in the current compatibility window. |
 | `slice_revision` | `u64` | Canonical slice-family revision pointer | Tracks field/display-driven slice invalidation at status level. |
 | `artifact_revision` | `u64` | Canonical artifact-family revision pointer | Mirrors `artifacts_revision` in the current compatibility window. |
-| `command_completion_revision` | `u64` | Canonical command-completion revision pointer | Mirrors `commands_revision` in the current compatibility window. |
+| `command_completion_revision` | `u64` | Canonical command-completion revision pointer | Advances from the command ledger sequence and is distinct from `commands_revision`. |
 | `fields_revision` | `u64` | Field-family revision | Current implementation uses snapshot state version. |
 | `scalars_revision` | `u64` | Scalar-history revision | Current implementation uses total scalar row count. |
 | `domain_generation_id` | `u64` | Domain generation id | Same identity boundary used by domain resources. |

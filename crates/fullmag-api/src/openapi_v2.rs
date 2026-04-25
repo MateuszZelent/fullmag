@@ -1,0 +1,364 @@
+//! Native OpenAPI v2 spec assembly.
+
+use serde_json::{json, Value};
+use utoipa::OpenApi;
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::router_v2::handlers::platform::realtime::get_asyncapi_document,
+        crate::router_v2::handlers::platform::realtime::get_asyncapi_docs,
+        crate::router_v2::handlers::platform::realtime::ws_current_live,
+        crate::router_v2::handlers::sessions::status::get_status,
+        crate::router_v2::handlers::data::domain::get_domain_meta,
+        crate::router_v2::handlers::data::domain::get_domain_topology,
+        crate::router_v2::handlers::data::quantities::get_quantities_catalog,
+        crate::router_v2::handlers::data::fields::get_field_catalog,
+        crate::router_v2::handlers::data::fields::get_field_meta,
+        crate::router_v2::handlers::data::fields::get_field_vector,
+        crate::router_v2::handlers::data::fields::get_field_slice_meta,
+        crate::router_v2::handlers::data::fields::get_field_slice_scalar,
+        crate::router_v2::handlers::data::fields::get_field_slice_arrows,
+        crate::router_v2::handlers::data::scalars::get_scalars,
+        crate::router_v2::handlers::visualization::display::get_display,
+        crate::router_v2::handlers::visualization::display::replace_display,
+        crate::router_v2::handlers::visualization::display::patch_display,
+        crate::router_v2::handlers::workspace::workspace::get_workspace_selection,
+        crate::router_v2::handlers::workspace::workspace::replace_workspace_selection,
+        crate::router_v2::handlers::workspace::workspace::get_workspace_active_node,
+        crate::router_v2::handlers::workspace::workspace::replace_workspace_active_node,
+        crate::router_v2::handlers::workspace::workspace::get_workspace_ribbon,
+        crate::router_v2::handlers::workspace::workspace::replace_workspace_ribbon,
+        crate::router_v2::handlers::workspace::workspace::get_workspace_layout,
+        crate::router_v2::handlers::workspace::workspace::replace_workspace_layout,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_summary,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_capabilities,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_semantics,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_active_build,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_build_history,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_last_successful_build,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_universe_config,
+        crate::router_v2::handlers::meshing::mesh::replace_mesh_universe_config,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_universe_report,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_universe_quality,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_config,
+        crate::router_v2::handlers::meshing::mesh::replace_mesh_shared_domain_config,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_report,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_quality,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_manifest,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_topology,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_object_config,
+        crate::router_v2::handlers::meshing::mesh::replace_mesh_object_config,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_object_report,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_object_quality,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_object_size_field,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_object_topology,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_part_topology,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_interface_config,
+        crate::router_v2::handlers::meshing::mesh::replace_mesh_interface_config,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_interface_report,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_interface_quality,
+        crate::router_v2::handlers::model::authoring::get_authoring_scene,
+        crate::router_v2::handlers::model::authoring::replace_authoring_scene,
+        crate::router_v2::handlers::model::authoring::patch_authoring_scene,
+        crate::router_v2::handlers::model::authoring::commit_authoring_transaction,
+        crate::router_v2::handlers::model::authoring::get_authoring_study_runtime,
+        crate::router_v2::handlers::model::authoring::patch_authoring_study_runtime,
+        crate::router_v2::handlers::model::authoring::get_authoring_material,
+        crate::router_v2::handlers::model::authoring::patch_authoring_material,
+        crate::router_v2::handlers::model::authoring::get_authoring_object_interaction,
+        crate::router_v2::handlers::model::authoring::patch_authoring_object_interaction,
+        crate::router_v2::handlers::model::authoring::get_authoring_script_source,
+        crate::router_v2::handlers::model::authoring::sync_authoring_script,
+        crate::router_v2::handlers::simulation::commands::submit_command,
+        crate::router_v2::handlers::simulation::runtime::get_command_status,
+        crate::router_v2::handlers::simulation::runtime::get_command_detail,
+        crate::router_v2::handlers::persistence::assets::import_asset,
+        crate::router_v2::handlers::simulation::runtime::get_current_run,
+        crate::router_v2::handlers::simulation::runtime::get_run_by_id,
+        crate::router_v2::handlers::simulation::runtime::get_stage_execution,
+        crate::router_v2::handlers::simulation::runtime::get_solver_status,
+        crate::router_v2::handlers::simulation::runtime::get_solver_energies_current,
+        crate::router_v2::handlers::simulation::runtime::get_solver_energies_history,
+        crate::router_v2::handlers::data::artifacts::list_artifacts,
+        crate::router_v2::handlers::data::artifacts::get_artifact,
+        crate::router_v2::handlers::analysis::eigen::get_spectrum,
+        crate::router_v2::handlers::analysis::eigen::get_mode,
+        crate::router_v2::handlers::analysis::eigen::get_dispersion,
+        crate::router_v2::handlers::analysis::eigen::get_branches,
+        crate::router_v2::handlers::platform::system::get_engine_log,
+        crate::router_v2::handlers::platform::system::get_gpu_telemetry,
+        crate::router_v2::handlers::persistence::session::export_session,
+        crate::router_v2::handlers::persistence::session::inspect_session,
+        crate::router_v2::handlers::persistence::session::commit_session,
+        crate::router_v2::handlers::persistence::session::list_checkpoints,
+        crate::router_v2::handlers::persistence::session::list_recovery,
+        crate::router_v2::handlers::persistence::session::clear_recovery,
+        crate::router_v2::handlers::platform::system::get_capabilities,
+        crate::router_v2::handlers::platform::system::get_health,
+    ),
+    components(schemas(
+        crate::schemas::status::LiveStatus,
+        crate::schemas::status::SessionSummary,
+        crate::schemas::status::RunSummary,
+        crate::schemas::status::SolverSummary,
+        crate::schemas::status::DisplaySelection,
+        crate::schemas::status::DomainSummary,
+        crate::schemas::status::ResourceRevisionMap,
+        crate::schemas::status::CapabilityMap,
+        crate::schemas::status::EnergySummary,
+        crate::schemas::status::MetricsSummary,
+        crate::schemas::domain::DomainMeta,
+        crate::schemas::domain::Bounds3,
+        crate::schemas::domain::DomainCounts,
+        crate::schemas::domain::StructuredGridDescriptor,
+        crate::schemas::quantities::QuantityCatalogResponse,
+        crate::schemas::quantities::QuantityCatalogEntry,
+        crate::schemas::fields::FieldCatalog,
+        crate::schemas::fields::FieldDescriptor,
+        crate::schemas::fields::FieldMeta,
+        crate::schemas::fields::FieldStats,
+        crate::schemas::fields::FieldVectorQuery,
+        crate::schemas::fields::FieldSliceMeta,
+        crate::schemas::fields::FieldSliceGrid,
+        crate::schemas::fields::FieldSliceBounds,
+        crate::schemas::fields::FieldSliceBinaryDescriptor,
+        crate::schemas::logs::EngineLogResource,
+        crate::schemas::scalars::ScalarWindow,
+        crate::schemas::display::DisplayPatch,
+        crate::schemas::workspace::WorkspaceSelectionResource,
+        crate::schemas::workspace::WorkspaceSelectionReplaceRequest,
+        crate::schemas::workspace::WorkspaceActiveNodeResource,
+        crate::schemas::workspace::WorkspaceActiveNodeReplaceRequest,
+        crate::schemas::workspace::WorkspaceRibbonResource,
+        crate::schemas::workspace::WorkspaceRibbonReplaceRequest,
+        crate::schemas::workspace::WorkspaceStageLayout,
+        crate::schemas::workspace::WorkspaceLayoutResource,
+        crate::schemas::workspace::WorkspaceLayoutReplaceRequest,
+        crate::schemas::mesh::MeshSummaryResource,
+        crate::schemas::mesh::MeshCapabilitiesResource,
+        crate::schemas::mesh::MeshSemanticsResource,
+        crate::schemas::mesh::MeshUniverseConfigResource,
+        crate::schemas::mesh::MeshUniverseConfigReplaceRequest,
+        crate::schemas::mesh::MeshUniverseReportResource,
+        crate::schemas::mesh::MeshUniverseQualityResource,
+        crate::schemas::mesh::MeshSharedDomainConfigResource,
+        crate::schemas::mesh::MeshSharedDomainConfigReplaceRequest,
+        crate::schemas::mesh::MeshSharedDomainReportResource,
+        crate::schemas::mesh::MeshSharedDomainQualityResource,
+        crate::schemas::mesh::MeshObjectSegmentResource,
+        crate::schemas::mesh::MeshPartResource,
+        crate::schemas::mesh::MeshSharedDomainManifestResource,
+        crate::schemas::mesh::MeshObjectConfigResource,
+        crate::schemas::mesh::MeshObjectConfigReplaceRequest,
+        crate::schemas::mesh::MeshObjectReportResource,
+        crate::schemas::mesh::MeshObjectQualityResource,
+        crate::schemas::mesh::MeshObjectSizeFieldResource,
+        crate::schemas::mesh::MeshInterfaceConfigResource,
+        crate::schemas::mesh::MeshInterfaceConfigReplaceRequest,
+        crate::schemas::mesh::MeshInterfaceReportResource,
+        crate::schemas::mesh::MeshInterfaceQualityResource,
+        crate::schemas::mesh::MeshActiveBuildResource,
+        crate::schemas::mesh::MeshBuildHistoryResource,
+        crate::schemas::mesh::MeshLastSuccessfulBuildResource,
+        crate::schemas::mesh::MeshBuildCommandRequest,
+        crate::schemas::commands::StructuredCommandRequest,
+        crate::schemas::commands::CommandResponse,
+        crate::schemas::authoring::ScenePatchRequest,
+        crate::schemas::authoring::AuthoringTransactionRequest,
+        crate::schemas::authoring::AuthoringTransactionResponse,
+        crate::schemas::authoring::StudyRuntimeResource,
+        crate::schemas::authoring::StudyRuntimePatchRequest,
+        crate::schemas::authoring::NullableU32PatchValue,
+        crate::schemas::authoring::NullableF64PatchValue,
+        crate::schemas::authoring::MaterialPropertiesResource,
+        crate::schemas::authoring::MaterialResource,
+        crate::schemas::authoring::MaterialPropertiesPatchRequest,
+        crate::schemas::authoring::MaterialPatchRequest,
+        crate::schemas::authoring::ObjectInteractionResource,
+        crate::schemas::authoring::ObjectInteractionPatchRequest,
+        crate::schemas::runtime::CurrentRunResource,
+        crate::schemas::runtime::StageExecutionResource,
+        crate::schemas::runtime::StageExecutionRecordResource,
+        crate::schemas::runtime::SolverStatusResource,
+        crate::schemas::runtime::SolverEnergyCurrentResource,
+        crate::schemas::runtime::SolverEnergyHistoryResource,
+        crate::schemas::runtime::SolverEnergyRow,
+        crate::schemas::runtime::CommandQueueStatusResource,
+        crate::schemas::runtime::CommandStatusResource,
+        crate::schemas::runtime::CommandDetailResource,
+        crate::schemas::common::ApiErrorResponse,
+        crate::schemas::common::HealthResponse,
+        crate::schemas::common::HostEngineEntry,
+        crate::schemas::common::RuntimeCapabilityMatrix,
+        crate::types::ArtifactEntry,
+        crate::field_slice::SlicePlane,
+        crate::types::ImportSessionAssetRequest,
+        crate::types::SessionAssetImportResponse,
+        crate::types::ImportedAssetSummary,
+        crate::types::BoundsSummary,
+        crate::types::ScriptSyncRequest,
+        crate::types::ScriptSyncResponse,
+        crate::types::ScriptSourceResponse,
+        crate::types::EngineLogEntry,
+        crate::types::GpuTelemetryDevice,
+        crate::types::GpuTelemetryResponse,
+        crate::session_persistence::SessionExportRequest,
+        crate::session_persistence::SessionExportResponse,
+        crate::session_persistence::SessionImportInspectRequest,
+        crate::session_persistence::SessionImportInspectResponse,
+        crate::session_persistence::SessionImportCommitRequest,
+        crate::session_persistence::SessionImportCommitResponse,
+        crate::session_persistence::CheckpointListResponse,
+        crate::session_persistence::CheckpointEntry,
+        crate::session_persistence::RecoveryListResponse,
+        crate::session_persistence::RecoveryEntry,
+        crate::session_persistence::RecoveryClearResponse,
+        fullmag_session::SaveProfile,
+        fullmag_session::RestoreClass,
+        fullmag_session::CompressionProfile,
+        fullmag_session::SessionInspection,
+        fullmag_session::CheckpointSummary,
+    )),
+    tags(
+        (name = "platform", description = "Server-level health, capabilities, and API documents"),
+        (name = "sessions", description = "Session discovery, current session summary, status, and realtime events"),
+        (name = "model", description = "Canonical simulation model, authoring scene, study, script, and transactions"),
+        (name = "meshing", description = "Meshing policies, builds, solver meshes, topology, quality, and reports"),
+        (name = "simulation", description = "Commands, runs, stages, solver status, and energy read-models"),
+        (name = "data", description = "Quantities, fields, scalar histories, domain data, and artifacts"),
+        (name = "visualization", description = "Renderer display selection and presentation state"),
+        (name = "workspace", description = "Workspace shell state owned by the frontend"),
+        (name = "analysis", description = "Analysis products such as eigenmodes and dispersion"),
+        (name = "persistence", description = "Session checkpoints, exports, imports, assets, and recovery"),
+        (name = "diagnostics", description = "Runtime diagnostics, GPU telemetry, and engine logs"),
+    ),
+    info(
+        title = "Fullmag API v2",
+        version = "2.0.0",
+        description = "Professional session-scoped API for Fullmag platform, simulation control, data, visualization, and diagnostics.",
+    )
+)]
+pub struct ApiDoc;
+
+pub fn openapi_json() -> Value {
+    let mut doc = serde_json::to_value(ApiDoc::openapi()).expect("OpenAPI v2 should serialize");
+    add_platform_document_paths(&mut doc);
+    add_session_collection_paths(&mut doc);
+    normalize_operation_ids(&mut doc);
+    doc
+}
+
+fn add_platform_document_paths(doc: &mut Value) {
+    let Some(paths) = doc.get_mut("paths").and_then(Value::as_object_mut) else {
+        return;
+    };
+    paths.insert(
+        "/v2/".to_string(),
+        json!({
+            "get": {
+                "tags": ["platform"],
+                "operationId": "platform_get_v2_index",
+                "responses": {"200": {"description": "V2 API discovery index"}}
+            }
+        }),
+    );
+    paths.insert(
+        "/v2/platform/openapi.json".to_string(),
+        json!({
+            "get": {
+                "tags": ["platform"],
+                "operationId": "platform_get_openapi_json",
+                "responses": {"200": {"description": "OpenAPI v2 document"}}
+            }
+        }),
+    );
+}
+
+fn add_session_collection_paths(doc: &mut Value) {
+    let Some(paths) = doc.get_mut("paths").and_then(Value::as_object_mut) else {
+        return;
+    };
+    paths.insert(
+        "/v2/sessions".to_string(),
+        json!({
+            "get": {
+                "tags": ["sessions"],
+                "operationId": "sessions_list_sessions",
+                "responses": {"200": {"description": "Available sessions"}}
+            },
+            "post": {
+                "tags": ["sessions"],
+                "operationId": "sessions_create_session",
+                "responses": {
+                    "200": {"description": "Current session returned"},
+                    "400": {"description": "The local runtime only exposes the current session"}
+                }
+            }
+        }),
+    );
+    paths.insert(
+        "/v2/sessions/current".to_string(),
+        json!({
+            "get": {
+                "tags": ["sessions"],
+                "operationId": "sessions_get_current_session",
+                "responses": {"200": {"description": "Current session summary"}}
+            },
+            "patch": {
+                "tags": ["sessions"],
+                "operationId": "sessions_patch_current_session",
+                "responses": {
+                    "200": {"description": "Current session summary"},
+                    "400": {"description": "Session mutation is not yet supported"}
+                }
+            }
+        }),
+    );
+}
+
+fn normalize_operation_ids(doc: &mut Value) {
+    let Some(paths) = doc.get_mut("paths").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (path, path_item) in paths {
+        let Some(path_item) = path_item.as_object_mut() else {
+            continue;
+        };
+        for method in ["get", "post", "put", "patch", "delete"] {
+            let Some(operation) = path_item.get_mut(method).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let tag = operation
+                .get("tags")
+                .and_then(Value::as_array)
+                .and_then(|tags| tags.first())
+                .and_then(Value::as_str)
+                .unwrap_or("v2");
+            operation.insert(
+                "operationId".to_string(),
+                Value::String(format!(
+                    "{}_{}_{}",
+                    sanitize_operation_token(tag),
+                    method,
+                    sanitize_operation_token(path.trim_start_matches("/v2/"))
+                )),
+            );
+        }
+    }
+}
+
+fn sanitize_operation_token(value: &str) -> String {
+    let mut out = String::new();
+    let mut previous_was_separator = false;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            out.push('_');
+            previous_was_separator = true;
+        }
+    }
+    out.trim_matches('_').to_string()
+}

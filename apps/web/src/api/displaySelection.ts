@@ -2,6 +2,12 @@ import type {
   DisplayPatchRequest,
   DisplaySelection,
 } from "./types";
+import {
+  quantitySelectionFromDisplay,
+  slicePlaneFromDisplay,
+  type QuantitySelectionState,
+  type SlicePlaneState,
+} from "../features/workspaceSync/contracts";
 
 export type DisplayPreviewComponent =
   | "3D"
@@ -39,4 +45,26 @@ export function previewComponentFromDisplaySelection(
   selection: Pick<DisplaySelection, "view_mode" | "field_component">,
 ): DisplayPreviewComponent {
   return selection.view_mode === "3d" ? "3D" : selection.field_component;
+}
+
+export function quantitySelectionStateFromDisplaySelection(
+  selection: Pick<
+    DisplaySelection,
+    | "active_quantity_id"
+    | "view_mode"
+    | "field_component"
+    | "colormap"
+    | "auto_contrast"
+    | "contrast_min"
+    | "contrast_max"
+  >,
+): QuantitySelectionState {
+  return quantitySelectionFromDisplay(selection);
+}
+
+export function slicePlaneStateFromDisplaySelection(
+  selection: Pick<DisplaySelection, "slice_mode" | "slice_layer">,
+  options?: Parameters<typeof slicePlaneFromDisplay>[1],
+): SlicePlaneState {
+  return slicePlaneFromDisplay(selection, options);
 }

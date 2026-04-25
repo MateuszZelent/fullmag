@@ -1,18 +1,22 @@
 import type { EngineLogResource, JsonResourceResponse } from "../../types";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class LogsModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async getEngine(opts?: RequestOptions): Promise<EngineLogResource> {
-    return this.client.get<EngineLogResource>("/v1/live/current/logs/engine", opts);
+    return this.client.get<EngineLogResource>(
+      sessionApiPaths.diagnostics.engineLog,
+      opts,
+    );
   }
 
   async getEngineResponse(
     opts?: RequestOptions,
   ): Promise<JsonResourceResponse<EngineLogResource>> {
     return this.client.getJsonResponse<EngineLogResource>(
-      "/v1/live/current/logs/engine",
+      sessionApiPaths.diagnostics.engineLog,
       opts,
     );
   }

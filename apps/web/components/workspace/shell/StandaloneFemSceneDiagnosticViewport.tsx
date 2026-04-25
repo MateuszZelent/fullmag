@@ -7,7 +7,7 @@ import type { FemMeshData } from "@/components/preview/FemMeshView3D";
 import { FemViewportScene } from "@/components/preview/fem/FemViewportScene";
 import ScientificViewportShell from "@/components/preview/shared/ScientificViewportShell";
 import { fitCameraToBounds } from "@/components/preview/camera/cameraHelpers";
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import { useResourceApi } from "@/src/providers/ResourceApiProvider";
 import { decodeTopology } from "@/src/api/codecs/topologyCodec";
 import type { FemLiveMesh } from "@/lib/session/types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
@@ -117,6 +117,8 @@ function FpsProbe({ onSample }: { onSample: (fps: number) => void }) {
 }
 
 export default function StandaloneFemSceneDiagnosticViewport() {
+  const client = useResourceApi();
+
   if (FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging) {
     recordFrontendRender("StandaloneFemSceneDiagnosticViewport");
   }
@@ -128,8 +130,8 @@ export default function StandaloneFemSceneDiagnosticViewport() {
 
   useEffect(() => {
     let cancelled = false;
-    void getLiveApiClient()
-      .getBinary("/v1/live/current/domain/topology")
+    void client
+      .domain.getTopology()
       .then((buffer) => {
         if (cancelled) return;
         const topology = decodeTopology(buffer);
@@ -191,7 +193,7 @@ export default function StandaloneFemSceneDiagnosticViewport() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [client]);
 
   const meshData = useMemo(() => (mesh ? flattenFemMesh(mesh) : null), [mesh]);
   const meshFrame = useMemo(

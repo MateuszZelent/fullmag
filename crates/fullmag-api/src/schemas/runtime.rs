@@ -150,7 +150,9 @@ pub struct SolverEnergyRow {
 pub struct CommandQueueStatusResource {
     pub revision: u64,
     pub pending_count: u64,
+    pub accepted_count: u64,
     pub dispatched_count: u64,
+    pub running_count: u64,
     pub completed_count: u64,
     pub rejected_count: u64,
     pub failed_count: u64,

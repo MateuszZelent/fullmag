@@ -58,7 +58,7 @@ pub(crate) struct AppState {
     pub current_workspace_root: PathBuf,
     /// Sessionless local-live workspace snapshot used by the root `/` GUI.
     pub current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,
-    /// Resource-first realtime events for `/v1/live/current/ws`.
+    /// Resource-first realtime events for `/v2/sessions/current/events/ws`.
     pub current_live_realtime_events: broadcast::Sender<CurrentLiveRealtimeEvent>,
     /// Bounded replay buffer for the resource-first realtime stream.
     pub current_live_realtime_replay: Arc<Mutex<VecDeque<CurrentLiveRealtimeEvent>>>,
@@ -901,7 +901,9 @@ pub(crate) struct SessionCommand {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CommandLifecycleState {
     Queued,
+    Accepted,
     Dispatched,
+    Running,
     Completed,
     Rejected,
     Failed,
@@ -911,7 +913,9 @@ impl CommandLifecycleState {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "queued",
+            Self::Accepted => "accepted",
             Self::Dispatched => "dispatched",
+            Self::Running => "running",
             Self::Completed => "completed",
             Self::Rejected => "rejected",
             Self::Failed => "failed",
@@ -922,10 +926,11 @@ impl CommandLifecycleState {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CommandCompletionState {
+    Succeeded,
     Completed,
+    Cancelled,
     Rejected,
     Failed,
-    Cancelled,
     #[serde(other)]
     Unknown,
 }
@@ -933,10 +938,11 @@ pub(crate) enum CommandCompletionState {
 impl CommandCompletionState {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Succeeded => "succeeded",
             Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
             Self::Rejected => "rejected",
             Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
             Self::Unknown => "unknown",
         }
     }

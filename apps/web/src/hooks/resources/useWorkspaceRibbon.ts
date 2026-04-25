@@ -6,7 +6,7 @@ import type {
   WorkspaceRibbonReplaceRequest,
   WorkspaceRibbonResource,
 } from "../../api/types";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 interface UseWorkspaceRibbonResult {
@@ -49,7 +49,7 @@ export function useWorkspaceRibbon(options?: {
 
     setLoading(true);
     try {
-      const nextRibbon = await getLiveApiClient().workspace.getRibbon();
+      const nextRibbon = await getLiveSessionClient().workspace.getRibbon();
       if (!mountedRef.current) {
         return;
       }
@@ -87,7 +87,7 @@ export function useWorkspaceRibbon(options?: {
       }
       setLoading(true);
       try {
-        const nextRibbon = await getLiveApiClient().workspace.replaceRibbon(request);
+        const nextRibbon = await getLiveSessionClient().workspace.replaceRibbon(request);
         if (!mountedRef.current) {
           return nextRibbon;
         }

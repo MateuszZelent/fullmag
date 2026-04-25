@@ -1,10 +1,21 @@
 import type { CurrentRunResource } from "../../types";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class RunsModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async current(opts?: RequestOptions): Promise<CurrentRunResource> {
-    return this.client.get<CurrentRunResource>("/v1/live/current/runs/current", opts);
+    return this.client.get<CurrentRunResource>(
+      sessionApiPaths.simulation.runsCurrent,
+      opts,
+    );
+  }
+
+  async get(runId: string, opts?: RequestOptions): Promise<CurrentRunResource> {
+    return this.client.get<CurrentRunResource>(
+      sessionApiPaths.simulation.run(runId),
+      opts,
+    );
   }
 }

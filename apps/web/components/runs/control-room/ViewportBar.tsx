@@ -26,15 +26,10 @@ import {
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import { useLiveStatus } from "@/src/hooks/resources/useLiveStatus";
-import type { FieldComponent, LiveStatus } from "@/src/api/types";
-import { statusToViewport3DCapabilities } from "@/src/features/view3d/adapters/statusToCapabilities";
-import { resourcesToViewportModel } from "@/src/features/view3d/adapters/resourcesToViewportModel";
-import { runtimeToViewport3DToolbarState } from "@/src/features/view3d/adapters/runtimeToToolbarState";
-import { UnifiedViewportBar } from "@/features/viewport-unified";
+import type { FieldComponent } from "@/src/api/types";
+import { UnifiedViewportBar, useViewport3DController } from "@/features/viewport-unified";
 import { useUnifiedDisplayControls } from "@/features/viewport-unified/hooks/useUnifiedDisplayControls";
 import {
-  buildToolbarStateFromLegacy,
-  buildViewport3DModelFromAdapter,
   mapViewport3DFdmPatchToLegacySettingsPatch,
 } from "@/features/viewport-unified/model/viewport3dAdapters";
 import {
@@ -46,14 +41,13 @@ import {
   viewport3dToolbarReducer,
 } from "@/features/viewport-unified/model/viewport3dToolbarReducer";
 import type {
-  Viewport3DCapabilities as UnifiedViewport3DCapabilities,
   Viewport3DFdmModulePatch,
 } from "@/features/viewport-unified/model/viewport3dContracts";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 
 import type { RenderMode } from "../../preview/FemMeshView3D";
 import type { VectorComponent } from "./shared";
-import { useCommand, useModel, useViewport } from "./context-hooks";
+import { useCommand, useModel, useTransport, useViewport } from "./context-hooks";
 
 function toUnifiedVectorComponent(
   component: string,
@@ -114,89 +108,6 @@ function toViewportFieldComponent(component: string): FieldComponent | null {
     return "magnitude";
   }
   return null;
-}
-
-function mapCanonicalCapabilitiesToUnified(
-  capabilities: ReturnType<typeof statusToViewport3DCapabilities>,
-  authoringEnabled: boolean,
-  diagnosticsEnabled: boolean,
-): UnifiedViewport3DCapabilities {
-  const preview3d = Boolean(capabilities.can_render_3d);
-  const structuredGrid = preview3d && Boolean(capabilities.can_show_structured_grid);
-  const explicitTopology = preview3d && Boolean(capabilities.can_show_topology);
-  const authoringPrimitives = preview3d && explicitTopology && authoringEnabled;
-  const vectorField = preview3d && Boolean(capabilities.can_show_vectors);
-  const clip = preview3d && explicitTopology;
-  const screenshot = preview3d;
-  const diagnostics = preview3d && diagnosticsEnabled;
-
-  return {
-    preview3d: preview3d
-      ? { enabled: true }
-      : { enabled: false, reason: "Requires preview_3d capability." },
-    structuredGrid: structuredGrid
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? "Requires structured_grid capability."
-            : "Requires preview_3d capability.",
-        },
-    explicitTopology: explicitTopology
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? "Requires explicit_topology capability."
-            : "Requires preview_3d capability.",
-        },
-    authoringPrimitives: authoringPrimitives
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? (explicitTopology
-                ? "Requires Geometry Authoring mode."
-                : "Requires explicit_topology capability.")
-            : "Requires preview_3d capability.",
-        },
-    vectorField: vectorField
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? "Requires binary_fields + (node_fields|cell_fields) capability."
-            : "Requires preview_3d capability.",
-        },
-    clip: clip
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? "Requires explicit_topology capability."
-            : "Requires preview_3d capability.",
-        },
-    screenshot: screenshot
-      ? { enabled: true }
-      : { enabled: false, reason: "Requires preview_3d capability." },
-    diagnostics: diagnostics
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? "Requires render diagnostics flag."
-            : "Requires preview_3d capability.",
-        },
-  };
-}
-
-function toStatusResourcesSnapshot(
-  resources: LiveStatus["resources"] | null | undefined,
-): Pick<LiveStatus, "resources"> | null {
-  if (!resources) {
-    return null;
-  }
-  return { resources };
 }
 
 type GeometryTool = "camera" | "select" | "move" | "rotate" | "scale";
@@ -269,6 +180,7 @@ export const ViewportBar = memo(function ViewportBar() {
   const command = useCommand();
   const viewport = useViewport();
   const model = useModel();
+  const transport = useTransport();
   const { status } = useLiveStatus({
     enabled: FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar,
   });
@@ -299,23 +211,6 @@ export const ViewportBar = memo(function ViewportBar() {
   );
 
   const displayControls = useUnifiedDisplayControls(viewport.patchDisplay);
-
-  const viewport3DContractCapabilities = useMemo(
-    () =>
-      statusToViewport3DCapabilities(
-        status?.capabilities ? { capabilities: status.capabilities } : null,
-      ),
-    [status],
-  );
-  const capabilities = useMemo(
-    () =>
-      mapCanonicalCapabilitiesToUnified(
-        viewport3DContractCapabilities,
-        builderEnabled,
-        FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging,
-      ),
-    [builderEnabled, viewport3DContractCapabilities],
-  );
 
   const renderState = useMemo<UnifiedRenderState>(() => ({
     selectedLayer: status?.display.slice_layer ?? viewport.requestedPreviewLayer ?? viewport.sliceIndex,
@@ -425,181 +320,66 @@ export const ViewportBar = memo(function ViewportBar() {
   );
 
   const legacyFdmVectorsEnabled = status?.display.vector_glyphs ?? true;
-  const viewport3DContractModel = useMemo(
-    () =>
-      resourcesToViewportModel({
-        status: toStatusResourcesSnapshot(status?.resources),
-        quantity_id: viewport.requestedPreviewQuantity ?? null,
-        component: toViewportFieldComponent(renderState.vectorComponent),
-        selection: {
-          object_id: model.viewportSelectedObjectId,
-          part_id: model.selectedEntityId,
-        },
-        clip: {
-          enabled: Boolean(renderState.clipEnabled),
-          axis: renderState.clipAxis ?? "z",
-          position:
-            typeof renderState.clipPosition === "number"
-              ? renderState.clipPosition
-              : 50,
-          invert: model.meshClipFlip,
-        },
-      }),
-    [
-      model.meshClipFlip,
-      model.selectedEntityId,
-      model.viewportSelectedObjectId,
-      renderState.clipAxis,
-      renderState.clipEnabled,
-      renderState.clipPosition,
-      renderState.vectorComponent,
-      status?.resources,
-      viewport.requestedPreviewQuantity,
-    ],
-  );
-  const viewport3DContractToolbarState = useMemo(
-    () =>
-      runtimeToViewport3DToolbarState({
-        capabilities: viewport3DContractCapabilities,
-        has_topology:
-          viewport3DContractModel.topology_revision != null || Boolean(model.femTopologyKey),
-        has_field_data: viewport3DContractModel.field_revision != null,
-      }),
-    [
-      model.femTopologyKey,
-      viewport3DContractCapabilities,
-      viewport3DContractModel.field_revision,
-      viewport3DContractModel.topology_revision,
-    ],
-  );
-  const viewport3DControlReasons = useMemo(
-    () => ({
-      quantity: viewport3DContractToolbarState.reasons.quantity,
-      component: viewport3DContractToolbarState.reasons.component,
-      clip: viewport3DContractToolbarState.reasons.clip,
-      renderMode: viewport3DContractToolbarState.reasons.render_mode,
-    }),
-    [
-      viewport3DContractToolbarState.reasons.clip,
-      viewport3DContractToolbarState.reasons.component,
-      viewport3DContractToolbarState.reasons.quantity,
-      viewport3DContractToolbarState.reasons.render_mode,
-    ],
-  );
-  const viewportToolbarState = useMemo(
-    () => {
-      const legacyToolbarState = buildToolbarStateFromLegacy({
-        renderState,
-        quantityId: viewport.requestedPreviewQuantity ?? null,
-        clipFlip: model.meshClipFlip,
-        interactionMode: toolbarState.rowB.interactionMode,
-        snapEnabled: toolbarState.rowB.snapEnabled,
-        objectViewMode: toolbarState.rowB.objectView,
-        vectorsVisible: legacyFdmVectorsEnabled,
-        legendVisible: toolbarState.rowB.legendVisible,
-        partExplorerVisible: toolbarState.rowB.partExplorerVisible,
-        projection: toolbarState.rowB.projection,
-        navProfile: toolbarState.rowB.navProfile,
-        popovers: toolbarState.popovers,
-      });
-      return {
-        ...legacyToolbarState,
-        rowA: {
-          ...legacyToolbarState.rowA,
-          clipEnabled:
-            legacyToolbarState.rowA.clipEnabled && viewport3DContractToolbarState.clip_enabled,
-        },
-        controlStates: {
-          ...legacyToolbarState.controlStates,
-          quantity: viewport3DContractToolbarState.quantity_enabled
-            ? ("inactive" as const)
-            : ("disabled" as const),
-          component: viewport3DContractToolbarState.component_enabled
-            ? ("inactive" as const)
-            : ("disabled" as const),
-          clip: viewport3DContractToolbarState.clip_enabled
-            ? ("inactive" as const)
-            : ("disabled" as const),
-          renderMode: viewport3DContractToolbarState.render_mode_enabled
-            ? ("inactive" as const)
-            : ("disabled" as const),
-        },
-      };
+  const viewport3DController = useViewport3DController({
+    capabilities: status?.capabilities ?? null,
+    authoringEnabled: builderEnabled,
+    diagnosticsEnabled: FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging,
+    renderState,
+    resources: {
+      statusResources: status?.resources ?? null,
+      quantityId: viewport.requestedPreviewQuantity ?? null,
+      component: toViewportFieldComponent(renderState.vectorComponent),
+      selection: {
+        objectId: model.viewportSelectedObjectId,
+        partId: model.selectedEntityId,
+      },
+      clip: {
+        enabled: Boolean(renderState.clipEnabled),
+        axis: renderState.clipAxis ?? "z",
+        position:
+          typeof renderState.clipPosition === "number" ? renderState.clipPosition : 50,
+        invert: model.meshClipFlip,
+      },
+      topologyFallbackRevision: model.femTopologyKey,
+      femMeshFieldRevision: model.femMeshData?.fieldRevision,
+      dataPlaneFieldRevision: transport.fieldDataRevision,
+      selectedVectorCount: transport.selectedVectors?.length ?? 0,
     },
-    [
-      legacyFdmVectorsEnabled,
-      model.meshClipFlip,
-      renderState,
-      toolbarState.popovers,
-      toolbarState.rowB.interactionMode,
-      toolbarState.rowB.legendVisible,
-      toolbarState.rowB.navProfile,
-      toolbarState.rowB.objectView,
-      toolbarState.rowB.partExplorerVisible,
-      toolbarState.rowB.projection,
-      toolbarState.rowB.snapEnabled,
-      viewport3DContractToolbarState.clip_enabled,
-      viewport3DContractToolbarState.component_enabled,
-      viewport3DContractToolbarState.quantity_enabled,
-      viewport3DContractToolbarState.render_mode_enabled,
-      viewport.requestedPreviewQuantity,
-    ],
+    toolbar: {
+      clipFlip: model.meshClipFlip,
+      interactionMode: toolbarState.rowB.interactionMode,
+      snapEnabled: toolbarState.rowB.snapEnabled,
+      objectViewMode: toolbarState.rowB.objectView,
+      vectorsVisible: legacyFdmVectorsEnabled,
+      legendVisible: model.viewportLegendVisible,
+      partExplorerVisible: toolbarState.rowB.partExplorerVisible,
+      projection: toolbarState.rowB.projection,
+      navProfile: toolbarState.rowB.navProfile,
+      popovers: toolbarState.popovers,
+    },
+    model: {
+      discretization: command.isFemBackend ? "fem" : "fdm",
+      worldExtent: model.worldExtent,
+      worldCenter: model.worldCenter,
+      selectedEntityFallbackId: model.selectedEntityId,
+      focusedEntityId: model.focusedEntityId,
+      selectedSidebarNodeId: model.selectedSidebarNodeId,
+      loading: viewport.previewBusy,
+      message: viewport.previewMessage,
+      error: command.error,
+      pendingMeshBuild: model.meshConfigDirty,
+      sourceKind: status ? "live" : "none",
+      fdmSettings: model.fdmVisualizationSettings,
+      fdmVectorsVisible: legacyFdmVectorsEnabled,
+    },
+  });
+  const capabilities = viewport3DController.capabilities;
+  const viewportToolbarState = viewport3DController.toolbarState;
+  const viewport3DControlReasons = useMemo<Partial<Record<string, string | null>>>(
+    () => ({ ...viewport3DController.controlReasons }),
+    [viewport3DController.controlReasons],
   );
-  const viewport3DModel = useMemo(
-    () =>
-      buildViewport3DModelFromAdapter({
-        discretization: command.isFemBackend ? "fem" : "fdm",
-        renderState,
-        toolbarState: viewportToolbarState,
-        capabilities,
-        worldExtent: model.worldExtent,
-        worldCenter: model.worldCenter,
-        topologyRevision:
-          viewport3DContractModel.topology_revision != null
-            ? String(viewport3DContractModel.topology_revision)
-            : model.femTopologyKey,
-        fieldRevision:
-          viewport3DContractModel.field_revision != null
-            ? String(viewport3DContractModel.field_revision)
-            : null,
-        quantityId: viewport3DContractModel.quantity_id,
-        selectedObjectId: viewport3DContractModel.selection.object_id,
-        selectedEntityId: viewport3DContractModel.selection.part_id ?? model.selectedEntityId,
-        focusedEntityId: model.focusedEntityId,
-        selectedSidebarNodeId: model.selectedSidebarNodeId,
-        loading: viewport.previewBusy,
-        message: viewport.previewMessage,
-        error: command.error,
-        pendingMeshBuild: model.meshConfigDirty,
-        sourceKind: status ? "live" : "none",
-        fdmSettings: model.fdmVisualizationSettings,
-        fdmVectorsVisible: legacyFdmVectorsEnabled,
-      }),
-    [
-      capabilities,
-      command.error,
-      command.isFemBackend,
-      legacyFdmVectorsEnabled,
-      model.fdmVisualizationSettings,
-      model.femTopologyKey,
-      model.focusedEntityId,
-      model.meshConfigDirty,
-      model.selectedEntityId,
-      model.selectedSidebarNodeId,
-      model.worldCenter,
-      model.worldExtent,
-      renderState,
-      status,
-      viewport3DContractModel.field_revision,
-      viewport3DContractModel.quantity_id,
-      viewport3DContractModel.selection.object_id,
-      viewport3DContractModel.selection.part_id,
-      viewport3DContractModel.topology_revision,
-      viewport.previewBusy,
-      viewport.previewMessage,
-      viewportToolbarState,
-    ],
-  );
+  const viewport3DModel = viewport3DController.model;
   const fdmModule = viewport3DModel.fdm;
 
   const supports3D = capabilities.preview3d.enabled;
@@ -724,9 +504,6 @@ export const ViewportBar = memo(function ViewportBar() {
   const infoOpen = toolbarState.popovers.info;
   const rotationDebugOpen = toolbarState.popovers.rotationDebug;
   const liveRenderDebugOpen = toolbarState.popovers.liveRenderDebug;
-  const cameraProjection = toolbarState.rowB.projection === "orthographic" ? "ortho" : "persp";
-  const cameraNavigation = toolbarState.rowB.navProfile;
-
   const applyCameraPreset = useCallback((preset: "reset" | "front" | "top" | "right" | "iso") => {
     if (preset === "reset") {
       frameAll();
@@ -812,7 +589,8 @@ export const ViewportBar = memo(function ViewportBar() {
         disabled={viewport.previewBusy}
         quantityId={viewport.requestedPreviewQuantity}
         quantityOptions={quantityOptions}
-        onQuantityChange={viewport.requestPreviewQuantity}
+        quantityStatus={viewport.requestedPreviewQuantityDataStatus}
+        onQuantityChange={viewport.requestDisplayQuantity}
         clipFlip={model.meshClipFlip}
         onClipFlipChange={model.setMeshClipFlip}
         controlStates={viewportToolbarState.controlStates}
@@ -826,17 +604,39 @@ export const ViewportBar = memo(function ViewportBar() {
       >
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <div className={ROW_B_GROUP_CLASS}>
-            <span className={ROW_B_GROUP_TITLE_CLASS}>Tools</span>
+            <span className={ROW_B_GROUP_TITLE_CLASS}>Camera</span>
+            <ToolbarActionButton
+              label="Camera"
+              shortcut="Q"
+              icon={Camera}
+              active={activeTool === "camera"}
+              disabled={!supports3D}
+              title="Camera navigation mode (Q)"
+              pressed={activeTool === "camera"}
+              onClick={() => setTool("camera")}
+            />
+            <ToolbarActionButton
+              label="Focus"
+              shortcut="F"
+              icon={Focus}
+              disabled={!canFocusSelected}
+              title={canFocusSelected ? "Focus selected (F)" : "Requires selected object or authoring_primitives."}
+              onClick={() => focusSelected()}
+            />
+            <ToolbarActionButton
+              label="Frame All"
+              shortcut="Shift+F"
+              icon={ScanLine}
+              disabled={!canFrameAll}
+              title={canFrameAll ? "Frame all (Shift+F)." : authoringUnavailableReason}
+              onClick={() => frameAll()}
+            />
+          </div>
+
+          <div className={ROW_B_GROUP_CLASS}>
+            <span className={ROW_B_GROUP_TITLE_CLASS}>Transform</span>
             {(
               [
-                {
-                  tool: "camera",
-                  label: "Camera",
-                  shortcut: "Q",
-                  icon: Camera,
-                  disabled: !supports3D,
-                  title: "Camera navigation mode (Q)",
-                },
                 {
                   tool: "select",
                   label: "Select",
@@ -913,22 +713,6 @@ export const ViewportBar = memo(function ViewportBar() {
               pressed={snapSettingsOpen}
               onClick={() => dispatchToolbar({ type: "togglePopover", key: "snapSettings" })}
             />
-            <ToolbarActionButton
-              label="Focus"
-              shortcut="F"
-              icon={Focus}
-              disabled={!canFocusSelected}
-              title={canFocusSelected ? "Focus selected (F)" : "Requires selected object or authoring_primitives."}
-              onClick={() => focusSelected()}
-            />
-            <ToolbarActionButton
-              label="Frame All"
-              shortcut="Shift+F"
-              icon={ScanLine}
-              disabled={!canFrameAll}
-              title={canFrameAll ? "Frame all (Shift+F)." : authoringUnavailableReason}
-              onClick={() => frameAll()}
-            />
           </div>
 
           <div className={ROW_B_GROUP_CLASS}>
@@ -1004,8 +788,8 @@ export const ViewportBar = memo(function ViewportBar() {
               label="Camera"
               icon={Camera}
               active={cameraSettingsOpen}
-              disabled={!supports3D}
-              title={supports3D ? "Camera popover: projection, navigation, presets." : "Requires preview_3d capability."}
+              disabled={!canFrameAll}
+              title={canFrameAll ? "Camera reset and framing controls." : authoringUnavailableReason}
               pressed={cameraSettingsOpen}
               onClick={() => dispatchToolbar({ type: "togglePopover", key: "camera" })}
             />
@@ -1410,43 +1194,6 @@ export const ViewportBar = memo(function ViewportBar() {
       {cameraSettingsOpen ? (
         <div className="px-3 pb-2 flex flex-wrap items-center gap-2 border-t border-border/20">
           <span className={ROW_B_GROUP_TITLE_CLASS}>Camera</span>
-          <label className={ROW_B_HINT_CLASS}>
-            Projection
-            <select
-              className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
-              value={cameraProjection}
-              onChange={(event) =>
-                dispatchToolbar({
-                  type: "setProjection",
-                  value: event.target.value === "ortho" ? "orthographic" : "perspective",
-                })
-              }
-              disabled
-              title="Projection switching will be wired into shared camera adapter."
-            >
-              <option value="persp">persp</option>
-              <option value="ortho">ortho</option>
-            </select>
-          </label>
-          <label className={ROW_B_HINT_CLASS}>
-            Navigation
-            <select
-              className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
-              value={cameraNavigation}
-              onChange={(event) =>
-                dispatchToolbar({
-                  type: "setNavigationProfile",
-                  value: event.target.value as "trackball" | "cad",
-                })
-              }
-              disabled
-              title="Navigation profile switching will be wired into shared camera adapter."
-            >
-              <option value="trackball">trackball</option>
-              <option value="cad">cad</option>
-            </select>
-          </label>
-          <span className={ROW_B_GROUP_TITLE_CLASS}>Presets</span>
           <button
             type="button"
             className={ROW_B_BUTTON_CLASS}
@@ -1456,18 +1203,6 @@ export const ViewportBar = memo(function ViewportBar() {
           >
             Reset
           </button>
-          {(["front", "top", "right", "iso"] as const).map((preset) => (
-            <button
-              key={preset}
-              type="button"
-              className={ROW_B_BUTTON_CLASS}
-              onClick={() => applyCameraPreset(preset)}
-              disabled
-              title="Preset camera orientation will be available via shared camera adapter."
-            >
-              {preset[0].toUpperCase() + preset.slice(1)}
-            </button>
-          ))}
         </div>
       ) : null}
 
@@ -1479,10 +1214,14 @@ export const ViewportBar = memo(function ViewportBar() {
             <input
               type="checkbox"
               className="ml-1 align-middle"
-              checked={false}
-              disabled
-              title="Legend visibility toggle is being moved into shared overlay state."
-              readOnly
+              checked={model.viewportLegendVisible}
+              onChange={(event) => {
+                const next = event.target.checked;
+                model.setViewportLegendVisible(next);
+                dispatchToolbar({ type: "setLegendVisible", value: next });
+              }}
+              disabled={!supportsTopology}
+              title={supportsTopology ? "Toggle field legend." : "Requires explicit_topology capability."}
             />
           </label>
           <label className={ROW_B_HINT_CLASS}>

@@ -1,0 +1,102 @@
+{
+  "ir_version": "0.1.0",
+  "problem_meta": {
+    "name": "exchange_relax",
+    "description": "Exchange-only relaxation bootstrap example.",
+    "script_language": "python",
+    "script_source": "",
+    "script_api_version": "0.1.0",
+    "serializer_version": "0.1.0",
+    "entrypoint_kind": "build",
+    "source_hash": null,
+    "runtime_metadata": {},
+    "backend_revision": null,
+    "seeds": []
+  },
+  "geometry": {
+    "entries": [
+      {
+        "kind": "box",
+        "name": "strip",
+        "size": [2e-7, 2e-8, 6e-9]
+      }
+    ]
+  },
+  "regions": [
+    {
+      "name": "strip",
+      "geometry": "strip"
+    }
+  ],
+  "materials": [
+    {
+      "name": "Py",
+      "saturation_magnetisation": 800000.0,
+      "exchange_stiffness": 1.3e-11,
+      "damping": 0.02,
+      "uniaxial_anisotropy": null,
+      "anisotropy_axis": null
+    }
+  ],
+  "magnets": [
+    {
+      "name": "strip",
+      "region": "strip",
+      "material": "Py",
+      "initial_magnetization": {
+        "kind": "random_seeded",
+        "seed": 42
+      }
+    }
+  ],
+  "energy_terms": [
+    {
+      "kind": "exchange"
+    }
+  ],
+  "study": {
+    "kind": "time_evolution",
+    "dynamics": {
+      "kind": "llg",
+      "gyromagnetic_ratio": 221100.0,
+      "integrator": "heun",
+      "fixed_timestep": 1e-13
+    },
+    "sampling": {
+      "outputs": [
+        {
+          "kind": "field",
+          "name": "m",
+          "every_seconds": 1e-12
+        },
+        {
+          "kind": "field",
+          "name": "H_ex",
+          "every_seconds": 1e-12
+        },
+        {
+          "kind": "scalar",
+          "name": "E_ex",
+          "every_seconds": 1e-12
+        }
+      ]
+    }
+  },
+  "backend_policy": {
+    "requested_backend": "fdm",
+    "execution_precision": "double",
+    "discretization_hints": {
+      "fdm": {
+        "cell": [2e-9, 2e-9, 2e-9]
+      },
+      "fem": {
+        "order": 1,
+        "hmax": 2e-9
+      },
+      "hybrid": null
+    }
+  },
+  "validation_profile": {
+    "execution_mode": "strict"
+  }
+}

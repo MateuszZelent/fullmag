@@ -1,8 +1,9 @@
 import type { ScalarWindow } from "../../contracts";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class ScalarsModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async getWindow(opts?: {
     sinceRevision?: number;
@@ -16,7 +17,7 @@ export class ScalarsModule {
       params.set("limit", String(opts.limit));
     }
     const qs = params.toString();
-    const path = `/v1/live/current/scalars${qs ? `?${qs}` : ""}`;
+    const path = `${sessionApiPaths.data.scalars}${qs ? `?${qs}` : ""}`;
     return this.client.get<ScalarWindow>(path, requestOptions);
   }
 }

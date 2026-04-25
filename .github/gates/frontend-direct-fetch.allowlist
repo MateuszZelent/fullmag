@@ -3,4 +3,4 @@
 #
 # Keep only intentional canonical fetch boundaries here.
 
-apps/web/src/api/client/LiveApiClient.ts:fetch(
+apps/web/src/api/client/LiveSessionClient.ts:fetch(

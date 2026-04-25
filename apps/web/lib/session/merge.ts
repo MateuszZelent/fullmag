@@ -233,7 +233,7 @@ function syncLatestMagnetizationFrameFromLiveState(
 /**
  * Maximum number of scalar rows retained in the in-memory live window.
  * Rows beyond this limit are trimmed from the front (oldest first).
- * The full history is available from `GET /v1/live/current/scalars`.
+ * The full history is available from `GET /v2/sessions/current/data/scalars`.
  */
 const MAX_LIVE_SCALAR_ROWS = 10_000;
 

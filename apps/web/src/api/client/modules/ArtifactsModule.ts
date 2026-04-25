@@ -1,25 +1,25 @@
 import type { JsonResourceResponse } from "../../types";
 import type { ArtifactEntry } from "../../contracts";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class ArtifactsModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async list(opts?: RequestOptions): Promise<ArtifactEntry[]> {
-    return this.client.get<ArtifactEntry[]>("/v1/live/current/artifacts", opts);
+    return this.client.get<ArtifactEntry[]>(sessionApiPaths.data.artifacts, opts);
   }
 
   async listResponse(
     opts?: RequestOptions,
   ): Promise<JsonResourceResponse<ArtifactEntry[]>> {
     return this.client.getJsonResponse<ArtifactEntry[]>(
-      "/v1/live/current/artifacts",
+      sessionApiPaths.data.artifacts,
       opts,
     );
   }
 
   async get(artifactId: string, opts?: RequestOptions): Promise<ArrayBuffer> {
-    const encoded = encodeURIComponent(artifactId);
-    return this.client.getBinary(`/v1/live/current/artifacts/${encoded}`, opts);
+    return this.client.getBinary(sessionApiPaths.data.artifact(artifactId), opts);
   }
 }

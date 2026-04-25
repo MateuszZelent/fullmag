@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { LiveStatus } from "../../api/contracts";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 import { LiveRealtimeClient } from "../../api/realtime/LiveRealtimeClient";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
@@ -184,7 +184,7 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
 
   const poll = useCallback(async function pollStatus(): Promise<void> {
     try {
-      const client = getLiveApiClient();
+      const client = getLiveSessionClient();
       const result = await client.status.get();
       if (!mountedRef.current) return;
       setStatus(result);
@@ -301,7 +301,7 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
       return;
     }
     const client = new LiveRealtimeClient({
-      baseUrl: getLiveApiClient().getBaseUrl(),
+      baseUrl: getLiveSessionClient().getBaseUrl(),
       onEvent: applyRealtimeEvent,
       onError: (realtimeError) => {
         if (!mountedRef.current) {

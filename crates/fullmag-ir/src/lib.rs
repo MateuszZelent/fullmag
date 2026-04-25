@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -11,7 +11,8 @@ pub use quantities::{
 
 pub const IR_VERSION: &str = "0.2.0";
 pub const CURRENT_IR_VERSION: &str = IR_VERSION;
-pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION];
+pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.1.0";
+pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION, PREVIOUS_PUBLIC_IR_VERSION];
 
 pub fn is_supported_ir_version_for_read(version: &str) -> bool {
     let normalized = version.trim();
@@ -21,6 +22,49 @@ pub fn is_supported_ir_version_for_read(version: &str) -> bool {
 pub fn requires_ir_migration(version: &str) -> bool {
     let normalized = version.trim();
     is_supported_ir_version_for_read(normalized) && normalized != CURRENT_IR_VERSION
+}
+
+pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "ProblemIR payload must be a JSON object".to_string())?;
+    let version = object
+        .get("ir_version")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .ok_or_else(|| "ProblemIR.ir_version must be a string".to_string())?;
+
+    if version == CURRENT_IR_VERSION {
+        return Ok(false);
+    }
+    if version != PREVIOUS_PUBLIC_IR_VERSION {
+        return Err(format!("ir_version '{version}' is not supported for read"));
+    }
+
+    object.insert(
+        "ir_version".to_string(),
+        Value::String(CURRENT_IR_VERSION.to_string()),
+    );
+
+    if let Some(meta) = object
+        .get_mut("problem_meta")
+        .and_then(Value::as_object_mut)
+    {
+        for key in ["script_api_version", "serializer_version"] {
+            if meta
+                .get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.trim() == PREVIOUS_PUBLIC_IR_VERSION)
+            {
+                meta.insert(
+                    key.to_string(),
+                    Value::String(CURRENT_IR_VERSION.to_string()),
+                );
+            }
+        }
+    }
+
+    Ok(true)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1808,7 +1852,10 @@ pub struct PerObjectMeshConfigIR {
 }
 
 impl PerObjectMeshConfigIR {
-    pub fn from_effective_target(object_id: impl Into<String>, target: &FemPerObjectTargetIR) -> Self {
+    pub fn from_effective_target(
+        object_id: impl Into<String>,
+        target: &FemPerObjectTargetIR,
+    ) -> Self {
         Self {
             object_id: object_id.into(),
             marker: target.marker,
@@ -1911,9 +1958,8 @@ impl MeshSemanticsIR {
                 .as_ref()
                 .is_some_and(|generation| generation.trim().is_empty())
             {
-                errors.push(
-                    "solver_mesh.generation_id must not be empty when provided".to_string(),
-                );
+                errors
+                    .push("solver_mesh.generation_id must not be empty when provided".to_string());
             }
         }
 
@@ -2128,7 +2174,7 @@ pub enum MechanicsIR {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ProblemIR {
     pub ir_version: String,
     pub problem_meta: ProblemMeta,
@@ -2203,6 +2249,101 @@ pub struct ProblemIR {
     /// universe policy, per-object policies, and derived solver mesh provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_semantics: Option<MeshSemanticsIR>,
+}
+
+impl<'de> Deserialize<'de> for ProblemIR {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut value = Value::deserialize(deserializer)?;
+        migrate_problem_ir_json_value(&mut value).map_err(D::Error::custom)?;
+
+        #[derive(Deserialize)]
+        struct ProblemIRWire {
+            ir_version: String,
+            problem_meta: ProblemMeta,
+            geometry: GeometryIR,
+            #[serde(default)]
+            geometry_assets: Option<GeometryAssetsIR>,
+            regions: Vec<RegionIR>,
+            materials: Vec<MaterialIR>,
+            magnets: Vec<MagnetIR>,
+            energy_terms: Vec<EnergyTermIR>,
+            study: StudyIR,
+            backend_policy: BackendPolicyIR,
+            validation_profile: ValidationProfileIR,
+            #[serde(default)]
+            current_modules: Vec<CurrentModuleIR>,
+            #[serde(default)]
+            excitation_analysis: Option<ExcitationAnalysisIR>,
+            #[serde(default)]
+            spin_torque_modules: Vec<SpinTorqueModuleIR>,
+            #[serde(default)]
+            current_density: Option<[f64; 3]>,
+            #[serde(default)]
+            stt_degree: Option<f64>,
+            #[serde(default)]
+            stt_beta: Option<f64>,
+            #[serde(default)]
+            stt_spin_polarization: Option<[f64; 3]>,
+            #[serde(default)]
+            stt_lambda: Option<f64>,
+            #[serde(default)]
+            stt_epsilon_prime: Option<f64>,
+            #[serde(default)]
+            temperature: Option<f64>,
+            #[serde(default)]
+            elastic_materials: Vec<ElasticMaterialIR>,
+            #[serde(default)]
+            elastic_bodies: Vec<ElasticBodyIR>,
+            #[serde(default)]
+            magnetostriction_laws: Vec<MagnetostrictionLawIR>,
+            #[serde(default)]
+            mechanical_bcs: Vec<MechanicalBoundaryConditionIR>,
+            #[serde(default)]
+            mechanical_loads: Vec<MechanicalLoadIR>,
+            #[serde(default)]
+            air_box_policy: Option<AirBoxPolicyIR>,
+            #[serde(default)]
+            pbc: Option<FdmPeriodicityIR>,
+            #[serde(default)]
+            mesh_semantics: Option<MeshSemanticsIR>,
+        }
+
+        let wire = ProblemIRWire::deserialize(value).map_err(D::Error::custom)?;
+        Ok(Self {
+            ir_version: wire.ir_version,
+            problem_meta: wire.problem_meta,
+            geometry: wire.geometry,
+            geometry_assets: wire.geometry_assets,
+            regions: wire.regions,
+            materials: wire.materials,
+            magnets: wire.magnets,
+            energy_terms: wire.energy_terms,
+            study: wire.study,
+            backend_policy: wire.backend_policy,
+            validation_profile: wire.validation_profile,
+            current_modules: wire.current_modules,
+            excitation_analysis: wire.excitation_analysis,
+            spin_torque_modules: wire.spin_torque_modules,
+            current_density: wire.current_density,
+            stt_degree: wire.stt_degree,
+            stt_beta: wire.stt_beta,
+            stt_spin_polarization: wire.stt_spin_polarization,
+            stt_lambda: wire.stt_lambda,
+            stt_epsilon_prime: wire.stt_epsilon_prime,
+            temperature: wire.temperature,
+            elastic_materials: wire.elastic_materials,
+            elastic_bodies: wire.elastic_bodies,
+            magnetostriction_laws: wire.magnetostriction_laws,
+            mechanical_bcs: wire.mechanical_bcs,
+            mechanical_loads: wire.mechanical_loads,
+            air_box_policy: wire.air_box_policy,
+            pbc: wire.pbc,
+            mesh_semantics: wire.mesh_semantics,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4268,9 +4409,45 @@ mod tests {
     }
 
     #[test]
+    fn previous_public_ir_version_is_supported_for_read_and_requires_migration() {
+        assert!(is_supported_ir_version_for_read(PREVIOUS_PUBLIC_IR_VERSION));
+        assert!(requires_ir_migration(PREVIOUS_PUBLIC_IR_VERSION));
+    }
+
+    #[test]
+    fn problem_ir_deserialize_migrates_previous_public_version() {
+        let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
+            .expect("bootstrap ProblemIR should serialize");
+        value["ir_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+        value["problem_meta"]["script_api_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+        value["problem_meta"]["serializer_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+
+        let decoded: ProblemIR =
+            serde_json::from_value(value).expect("previous public IR should deserialize");
+
+        assert_eq!(decoded.ir_version, CURRENT_IR_VERSION);
+        assert_eq!(decoded.problem_meta.script_api_version, CURRENT_IR_VERSION);
+        assert_eq!(decoded.problem_meta.serializer_version, CURRENT_IR_VERSION);
+        assert!(decoded.validate().is_ok());
+    }
+
+    #[test]
+    fn previous_public_ir_golden_fixture_migrates_to_current() {
+        let fixture =
+            include_str!("../../../tests/golden/problem_ir/bootstrap_v0_1_read_compat.json");
+        let decoded: ProblemIR =
+            serde_json::from_str(fixture).expect("golden v0.1.0 fixture should migrate");
+
+        assert_eq!(decoded.ir_version, CURRENT_IR_VERSION);
+        assert_eq!(decoded.problem_meta.script_api_version, CURRENT_IR_VERSION);
+        assert_eq!(decoded.problem_meta.serializer_version, CURRENT_IR_VERSION);
+        assert!(decoded.validate().is_ok());
+    }
+
+    #[test]
     fn unsupported_ir_version_is_rejected() {
         let mut ir = ProblemIR::bootstrap_example();
-        ir.ir_version = "0.1.0".to_string();
+        ir.ir_version = "0.0.1".to_string();
         let errors = ir
             .validate()
             .expect_err("unsupported ir_version must fail validation");

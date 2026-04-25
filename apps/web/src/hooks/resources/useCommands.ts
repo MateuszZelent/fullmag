@@ -6,7 +6,7 @@
 
 import { useState, useCallback } from "react";
 import type { CommandRequest, CommandResponse } from "../../api/types";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 interface UseCommandsResult {
@@ -28,7 +28,7 @@ export function useCommands(): UseCommandsResult {
       setLoading(true);
       setError(null);
       try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
         const result = await client.commands.submit(request);
         setLastResponse(result);
         setLoading(false);

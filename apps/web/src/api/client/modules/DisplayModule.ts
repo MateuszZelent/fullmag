@@ -1,13 +1,14 @@
 import type { DisplaySelection } from "../../contracts";
 import type { DisplayPatchRequest, DisplayReplaceRequest } from "../../types";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class DisplayModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async get(opts?: RequestOptions): Promise<DisplaySelection> {
     return this.client.get<DisplaySelection>(
-      "/v1/live/current/display",
+      sessionApiPaths.visualization.display,
       opts,
     );
   }
@@ -17,7 +18,7 @@ export class DisplayModule {
     opts?: RequestOptions,
   ): Promise<DisplaySelection> {
     return this.client.put<DisplaySelection>(
-      "/v1/live/current/display",
+      sessionApiPaths.visualization.display,
       selection,
       opts,
     );
@@ -28,7 +29,7 @@ export class DisplayModule {
     opts?: RequestOptions,
   ): Promise<DisplaySelection> {
     return this.client.patch<DisplaySelection>(
-      "/v1/live/current/display",
+      sessionApiPaths.visualization.display,
       update,
       opts,
     );

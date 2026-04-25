@@ -106,6 +106,7 @@ interface Props {
   showOrientationLegend?: boolean;
   qualityPerFace?: number[] | null;
   shrinkFactor?: number;
+  legendOpen?: boolean;
   viewportFitSeed?: string | number;
   onRenderModeChange?: (value: RenderMode) => void;
   onOpacityChange?: (value: number) => void;
@@ -123,6 +124,7 @@ interface Props {
   onFerromagnetVisibilityModeChange?: (value: FemFerromagnetVisibilityMode) => void;
   onPreviewMaxPointsChange?: (maxPoints: number) => void;
   onShrinkFactorChange?: (value: number) => void;
+  onLegendOpenChange?: (value: boolean) => void;
   onSelectionChange?: (selection: MeshSelectionSnapshot) => void;
   onRefine?: (faceIndices: number[], factor: number) => void;
   antennaOverlays?: AntennaOverlay[];
@@ -193,6 +195,7 @@ function FemMeshView3DInner({
   topologyKey,
   viewportFitSeed,
   shrinkFactor: controlledShrinkFactor,
+  legendOpen: controlledLegendOpen,
   onRenderModeChange,
   onOpacityChange,
   onClipEnabledChange,
@@ -209,6 +212,7 @@ function FemMeshView3DInner({
   onFerromagnetVisibilityModeChange,
   onPreviewMaxPointsChange,
   onShrinkFactorChange,
+  onLegendOpenChange,
   onSelectionChange,
   onRefine,
   antennaOverlays = [],
@@ -344,8 +348,10 @@ function FemMeshView3DInner({
     controlledVectorDomainFilter,
     controlledFerromagnetVisibilityMode,
     controlledShrinkFactor,
+    controlledLegendOpen,
     previewMaxPoints,
     onPreviewMaxPointsChange,
+    onLegendOpenChange,
   });
   const wrapperFlags = FRONTEND_DIAGNOSTIC_FLAGS.femWrapper;
   const selectionOnlyInteractionMode =

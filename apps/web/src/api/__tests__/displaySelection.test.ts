@@ -4,6 +4,8 @@ import {
   displayPatchFromPreviewComponent,
   displaySelectionFromPreviewComponent,
   previewComponentFromDisplaySelection,
+  quantitySelectionStateFromDisplaySelection,
+  slicePlaneStateFromDisplaySelection,
 } from "../displaySelection";
 
 describe("displaySelection helpers", () => {
@@ -44,5 +46,31 @@ describe("displaySelection helpers", () => {
       field_component: "y",
     })).toBe("y");
   });
-});
 
+  it("normalizes display selection to shared quantity and slice contracts", () => {
+    const selection = {
+      active_quantity_id: "m",
+      view_mode: "2d" as const,
+      field_component: "z" as const,
+      colormap: "magma",
+      auto_contrast: false,
+      contrast_min: -1,
+      contrast_max: 1,
+      slice_mode: "slab",
+      slice_layer: 5,
+    };
+    expect(quantitySelectionStateFromDisplaySelection(selection)).toEqual({
+      activeQuantityId: "m",
+      component: "z",
+      colormap: "magma",
+      autoContrast: false,
+      contrastMin: -1,
+      contrastMax: 1,
+    });
+    expect(slicePlaneStateFromDisplaySelection(selection, { axis: "y" })).toMatchObject({
+      axis: "y",
+      mode: "slab",
+      layerIndex: 5,
+    });
+  });
+});

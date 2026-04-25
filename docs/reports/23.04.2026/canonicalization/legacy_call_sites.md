@@ -1,15 +1,14 @@
-# Legacy/Transitional Call Sites (2026-04-23 snapshot)
+# Legacy/Transitional Call Sites (2026-04-25 snapshot)
 
 ## Legacy viewport paths
 
-- `apps/web/components/runs/control-room/ViewportPanels.tsx` (`VectorFieldView3D` call path)
-- `apps/web/components/preview/VectorFieldView3D.tsx` (legacy renderer component)
+- `apps/web/components/runs/control-room/UnifiedViewport3DVectorSurface.tsx` is the only transitional renderer adapter.
+- `apps/web/components/preview/VectorFieldView3D.tsx` remains as the renderer module path, but no active code references the legacy component symbol.
 
 ## Capability synthesis from discretization
 
-- `apps/web/components/runs/control-room/ControlRoomContext.tsx`
-- `apps/web/components/runs/control-room/ViewportBar.tsx`
-- `apps/web/features/session-runtime/hooks/useDataPlaneBridge.ts`
+- Dedicated `synthesizeCapabilitiesFromDiscretization` fallback has been removed.
+- Remaining `resolveFemDiscretization` call sites must pass canonical `status.capabilities` when available and may use the boolean fallback only for transitional null-capability paths.
 
 ## Direct fetch usage in React/app code
 
@@ -17,4 +16,4 @@
 
 ## Legacy transport signals
 
-- legacy bootstrap/poll/state frontend usage: no active findings in current scan (`2026-04-23`)
+- legacy bootstrap/poll/state frontend usage: no active findings in current scan (`2026-04-25`)

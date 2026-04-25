@@ -5,8 +5,8 @@ This directory contains **canonical, long-lived specifications** for Fullmag.
 If you are looking for the main architecture document for the whole application, start here:
 
 - **Primary application architecture:** `docs/specs/fullmag-application-architecture-v2.md`
-- **Primary control-room API architecture:** `docs/specs/resource-first-control-room-api-v1.md`
-- **Primary control-room endpoint reference:** `docs/specs/control-room-api-endpoint-reference-v1.md`
+- **Primary control-room API architecture:** `docs/specs/resource-first-control-room-api-v2.md`
+- **Compatibility endpoint reference:** `docs/specs/control-room-api-endpoint-reference-v1.md`
 - **Primary control-room API tree:** `docs/specs/control-room-api-tree-v1.md`
 
 ## Reading order
@@ -14,27 +14,30 @@ If you are looking for the main architecture document for the whole application,
 When you need to understand Fullmag quickly, read in this order:
 
 1. `docs/specs/fullmag-application-architecture-v2.md`
-2. `docs/specs/resource-first-control-room-api-v1.md`
-3. `docs/specs/control-room-api-endpoint-reference-v1.md`
-4. `docs/specs/control-room-api-tree-v1.md`
-5. `docs/specs/session-run-api-v1.md`
-6. `docs/specs/runtime-distribution-and-managed-backends-v1.md`
-7. `docs/specs/hpc-cluster-execution-v1.md`
-8. `docs/1_project_scope.md`
-9. `docs/2_repo_blueprint.md`
-10. `docs/specs/problem-ir-compatibility-v1.md`
-11. `docs/specs/problem-ir-v0.md`
-12. `docs/specs/capability-matrix-v0.md`
-13. `docs/specs/mesh-roundtrip-semantics-v1.md`
-14. `docs/specs/viewport3d-contract-v1.md`
-15. the relevant `docs/physics/` notes
-16. the relevant `docs/plans/active/` plan
+2. `docs/specs/resource-first-control-room-api-v2.md`
+3. `docs/specs/resource-first-control-room-api-v1.md`
+4. `docs/specs/control-room-api-endpoint-reference-v1.md`
+5. `docs/specs/control-room-api-tree-v1.md`
+6. `docs/specs/session-run-api-v1.md`
+7. `docs/specs/command-lifecycle-v1.md`
+8. `docs/specs/runtime-distribution-and-managed-backends-v1.md`
+9. `docs/specs/hpc-cluster-execution-v1.md`
+10. `docs/1_project_scope.md`
+11. `docs/2_repo_blueprint.md`
+12. `docs/specs/problem-ir-compatibility-v1.md`
+13. `docs/specs/problem-ir-v0.md`
+14. `docs/specs/capability-matrix-v0.md`
+15. `docs/specs/mesh-roundtrip-semantics-v1.md`
+16. `docs/specs/viewport3d-contract-v1.md`
+17. the relevant `docs/physics/` notes
+18. the relevant `docs/plans/active/` plan
 
 ## Document hierarchy
 
 ### 1. Canonical application architecture
 
 - `docs/specs/fullmag-application-architecture-v2.md`
+- `docs/specs/resource-first-control-room-api-v2.md`
 - `docs/specs/resource-first-control-room-api-v1.md`
 - `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/control-room-api-tree-v1.md`
@@ -65,10 +68,12 @@ It is subordinate to the application architecture and should be read as:
 
 ### 3. Stable cross-cutting specs
 
+- `docs/specs/resource-first-control-room-api-v2.md`
 - `docs/specs/session-run-api-v1.md`
 - `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/control-room-api-tree-v1.md`
 - `docs/specs/resource-first-control-room-api-v1.md`
+- `docs/specs/command-lifecycle-v1.md`
 - `docs/specs/runtime-distribution-and-managed-backends-v1.md`
 - `docs/specs/hpc-cluster-execution-v1.md`
 - `docs/specs/problem-ir-compatibility-v1.md`
@@ -79,6 +84,10 @@ It is subordinate to the application architecture and should be read as:
 - `docs/specs/viewport3d-contract-v1.md`
 
 These define shared contracts used across multiple subsystems.
+
+New control-room API work starts from `resource-first-control-room-api-v2.md` and the generated
+OpenAPI v2 document. The v1 specs are archived historical references; public v1 browser routes have
+been removed.
 
 ### 4. Policy specs
 

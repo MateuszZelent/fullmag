@@ -44,7 +44,11 @@ pub(crate) fn shared_domain_mesh_requested(
     }
 
     // Phase-1A: use the `requires_airbox()` method for the canonical check.
-    if requested_demag_realization.requires_airbox() {
+    if !matches!(
+        requested_demag_realization,
+        fullmag_ir::RequestedFemDemagIR::Auto
+    ) && requested_demag_realization.requires_airbox()
+    {
         return true;
     }
 

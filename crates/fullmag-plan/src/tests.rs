@@ -601,15 +601,15 @@ fn fem_backend_with_mesh_asset_plans_successfully() {
         BackendPlanIR::Fem(fem) => {
             assert_eq!(fem.mesh.mesh_name, "strip");
             assert_eq!(fem.material.name, "Py");
-            assert_eq!(fem.initial_magnetization.len(), 4);
+            assert_eq!(fem.initial_magnetization.len(), 8);
             assert!(fem.enable_exchange);
             assert!(!fem.enable_demag);
-            assert_eq!(fem.mesh_parts.len(), 1);
-            assert_eq!(
-                fem.mesh_parts[0].role,
-                fullmag_ir::FemMeshPartRole::MagneticObject
-            );
-            assert_eq!(fem.mesh_parts[0].material_id.as_deref(), Some("Py"));
+            let magnetic_part = fem
+                .mesh_parts
+                .iter()
+                .find(|part| part.role == fullmag_ir::FemMeshPartRole::MagneticObject)
+                .expect("shared-domain mesh should include the magnetic object part");
+            assert_eq!(magnetic_part.material_id.as_deref(), Some("Py"));
             assert_eq!(fem.interfacial_dmi, Some(3.0e-3));
             let normal = fem
                 .dmi_interface_normal

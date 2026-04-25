@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { FieldCatalog } from "../../api/contracts";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 interface UseFieldCatalogResult {
@@ -22,7 +22,7 @@ export function useFieldCatalog(): UseFieldCatalogResult {
   const fetchCatalog = useCallback(async () => {
     setLoading(true);
     try {
-      const nextCatalog = await getLiveApiClient().fields.getCatalog();
+      const nextCatalog = await getLiveSessionClient().fields.getCatalog();
       if (!mountedRef.current) {
         return;
       }

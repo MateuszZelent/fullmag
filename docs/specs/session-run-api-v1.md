@@ -5,6 +5,8 @@
 - Parent architecture: `docs/specs/fullmag-application-architecture-v2.md`
 - Program plan: `docs/plans/active/fullmag-canonicalization-backbone-program-2026-04-23.md`
 - Program ADR: `docs/adr/0012-canonicalization-backbone.md`
+- Browser API note: public `/v1/live/current/*` has been removed; current
+  browser resources live under `/v2/platform/...` and `/v2/sessions/current/...`.
 
 ## 1. Purpose
 
@@ -24,7 +26,7 @@ This spec covers:
 - session identity and lifecycle,
 - run identity and relationship to sessions,
 - session and run endpoints,
-- the relationship between session/run semantics and the local `/v1/live/current/*` control-room API,
+- the relationship between session/run semantics and the local v2 control-room API,
 - event stream semantics,
 - browser/runtime ownership boundaries.
 
@@ -293,7 +295,8 @@ GET    /v1/docs/swagger
 
 Rules:
 
-- it is the canonical current local browser contract,
+- it is the v1 compatibility local browser contract,
+- new control-room API work targets `docs/specs/resource-first-control-room-api-v2.md`,
 - it is resource-first and revision-driven,
 - it is subordinate to the broader session/run model, not contradictory to it,
 - the field-complete current endpoint inventory lives in

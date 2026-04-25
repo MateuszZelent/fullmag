@@ -859,7 +859,7 @@ export default function FemMeshSlice2DPlotly({
                                   }}
                                   label={option.shortLabel}
                                   className={`justify-start px-2 py-1.5${!option.available ? " opacity-40 cursor-not-allowed" : ""}`}
-                                  title={!option.available ? `${option.label ?? option.shortLabel} — waiting for data` : (option.label ?? option.shortLabel)}
+                                  title={!option.available ? `${option.label ?? option.shortLabel} unavailable in this viewport` : (option.label ?? option.shortLabel)}
                                 />
                               ))}
                           </div>

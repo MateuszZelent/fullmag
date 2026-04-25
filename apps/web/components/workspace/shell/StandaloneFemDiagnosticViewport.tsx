@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import FemMeshView3D, { type FemMeshData } from "@/components/preview/FemMeshView3D";
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import { useResourceApi } from "@/src/providers/ResourceApiProvider";
 import { decodeTopology } from "@/src/api/codecs/topologyCodec";
 import type { FemLiveMesh } from "@/lib/session/types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
@@ -48,6 +48,8 @@ function flattenFemMesh(mesh: FemLiveMesh): FemMeshData {
 }
 
 export default function StandaloneFemDiagnosticViewport() {
+  const client = useResourceApi();
+
   if (FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging) {
     recordFrontendRender("StandaloneFemDiagnosticViewport");
   }
@@ -60,8 +62,8 @@ export default function StandaloneFemDiagnosticViewport() {
   useEffect(() => {
     let cancelled = false;
 
-    void getLiveApiClient()
-      .getBinary("/v1/live/current/domain/topology")
+    void client
+      .domain.getTopology()
       .then((buffer) => {
         if (cancelled) return;
         const topology = decodeTopology(buffer);
@@ -123,7 +125,7 @@ export default function StandaloneFemDiagnosticViewport() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [client]);
 
   useEffect(() => {
     let frameId = 0;

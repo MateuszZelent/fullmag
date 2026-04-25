@@ -172,7 +172,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
   },
   vectorSurfaceViewport: {
     // Master gate for the VectorSurface 3D canvas branch.
-    enableCanvas3D: false,
+    enableCanvas3D: true,
     // Toolbar shell + button modules.
     showToolbar: false,
     showStatusChip: false,

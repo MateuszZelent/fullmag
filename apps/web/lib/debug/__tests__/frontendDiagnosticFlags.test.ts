@@ -79,4 +79,9 @@ describe("frontendDiagnosticFlags loader", () => {
     const defaults = getDefaultFrontendDiagnosticFlags();
     expect(defaults.workspace.enableWorkspaceGraphBridge).toBe(true);
   });
+
+  it("keeps the VectorSurface 3D canvas enabled in the normal defaults", () => {
+    const defaults = getDefaultFrontendDiagnosticFlags();
+    expect(defaults.vectorSurfaceViewport.enableCanvas3D).toBe(true);
+  });
 });

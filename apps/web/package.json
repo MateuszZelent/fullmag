@@ -4,9 +4,10 @@
   "scripts": {
     "clean": "node -e \"const fs=require('fs'); for (const dir of ['.next','out']) { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 }); }\"",
     "dev": "node dev-server.mjs --hostname 0.0.0.0 --port 3001",
-    "generate:api": "npm run generate:openapi && npm run generate:api-types",
-    "generate:openapi": "cargo run -p fullmag-api -- --print-openapi > src/api/generated/openapi.json",
-    "generate:api-types": "openapi-typescript src/api/generated/openapi.json --output src/api/generated/openapi-types.ts",
+    "generate:api": "npm run generate:openapi-v2 && npm run generate:api-v2-types && npm run generate:api-v2-client",
+    "generate:openapi-v2": "cargo run -p fullmag-api -- --print-openapi-v2 > src/api/generated/openapi-v2.json",
+    "generate:api-v2-types": "openapi-typescript src/api/generated/openapi-v2.json --output src/api/generated/openapi-v2-types.ts",
+    "generate:api-v2-client": "node scripts/generate-v2-client.mjs",
     "typegen": "next typegen .",
     "build": "npm run clean && next build",
     "start": "node dev-server.mjs --hostname 0.0.0.0 --port 3001 --static-root out",
@@ -58,8 +59,11 @@
     "@types/three": "^0.183.1",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.1",
+    "eslint-plugin-react": "7.37.5",
+    "eslint-plugin-react-hooks": "7.1.1",
     "openapi-typescript": "^7.13.0",
     "typescript": "5.8.3",
+    "typescript-eslint": "8.59.0",
     "vitest": "^4.1.5"
   }
 }

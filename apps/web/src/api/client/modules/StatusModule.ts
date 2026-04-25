@@ -1,10 +1,11 @@
 import type { LiveStatus } from "../../contracts";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class StatusModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async get(opts?: RequestOptions): Promise<LiveStatus> {
-    return this.client.get<LiveStatus>("/v1/live/current/status", opts);
+    return this.client.get<LiveStatus>(sessionApiPaths.status, opts);
   }
 }

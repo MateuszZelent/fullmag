@@ -141,9 +141,13 @@ export type FieldComponent =
   | "z"
   | `c${number}`;
 
+export type FieldSampleScopeKind = "full" | "object" | "part" | "airbox" | "selection";
+
 /** Query options when requesting a field vector binary buffer. */
 export interface FieldVectorOptions {
   component?: FieldComponent;
+  scope_kind?: FieldSampleScopeKind;
+  scope_id?: string;
   /** ETag from a previous response; triggers If-None-Match/304 caching. */
   etag?: string;
 }
@@ -769,6 +773,10 @@ export interface CloseCommandRequest {
   kind: "close";
 }
 
+export interface MeshBuildStructuredCommandRequest extends MeshBuildCommandRequest {
+  kind: "mesh_build";
+}
+
 export type StructuredCommandRequest =
   | RunCommandRequest
   | RelaxCommandRequest
@@ -778,7 +786,8 @@ export type StructuredCommandRequest =
   | SkipCommandRequest
   | SaveVtkCommandRequest
   | SolveCommandRequest
-  | CloseCommandRequest;
+  | CloseCommandRequest
+  | MeshBuildStructuredCommandRequest;
 
 export type CommandRequest = StructuredCommandRequest;
 
@@ -791,7 +800,9 @@ export interface CommandResponse {
 export interface CommandQueueStatus {
   revision: number;
   pending_count: number;
+  accepted_count: number;
   dispatched_count: number;
+  running_count: number;
   completed_count: number;
   rejected_count: number;
   failed_count: number;
@@ -799,17 +810,25 @@ export interface CommandQueueStatus {
   commands: CommandStatus[];
 }
 
-export type CommandCompletionState = "completed" | "rejected" | "failed";
+export type CommandCompletionOutcome =
+  | "succeeded"
+  | "completed"
+  | "cancelled"
+  | "rejected"
+  | "failed"
+  | "unknown";
+
+export type CommandCompletionState = CommandCompletionOutcome;
 
 export interface CommandStatus {
   command_id: string;
   seq: number;
   kind: string;
-  status: "queued" | "dispatched" | "completed" | "rejected" | "failed";
+  status: "queued" | "accepted" | "dispatched" | "running" | "completed" | "rejected" | "failed";
   created_at_unix_ms: number;
   dispatched_at_unix_ms?: number | null;
   completed_at_unix_ms?: number | null;
-  completion_status?: CommandCompletionState | null;
+  completion_status?: CommandCompletionOutcome | null;
   error?: string | null;
 }
 
@@ -817,11 +836,11 @@ export interface CommandDetail {
   command_id: string;
   seq: number;
   kind: string;
-  status: "queued" | "dispatched" | "completed" | "rejected" | "failed";
+  status: "queued" | "accepted" | "dispatched" | "running" | "completed" | "rejected" | "failed";
   created_at_unix_ms: number;
   dispatched_at_unix_ms?: number | null;
   completed_at_unix_ms?: number | null;
-  completion_status?: CommandCompletionState | null;
+  completion_status?: CommandCompletionOutcome | null;
   error?: string | null;
   until_seconds?: number | null;
   max_steps?: number | null;

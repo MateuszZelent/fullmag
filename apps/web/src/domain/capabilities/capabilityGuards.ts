@@ -17,28 +17,6 @@ export function getAvailableAlgorithms(caps: CapabilityMap): string[] {
 }
 
 /**
- * Transitional fallback for paths that only expose
- * discretization semantics, not a canonical resource-first capability map.
- */
-export function synthesizeCapabilitiesFromDiscretization(
-  femDiscretization: boolean,
-): CapabilityMap {
-  return {
-    structured_grid: !femDiscretization,
-    explicit_topology: femDiscretization,
-    binary_fields: true,
-    cell_fields: !femDiscretization,
-    node_fields: femDiscretization,
-    scalar_history: true,
-    eigen_modes: false,
-    gpu_telemetry: false,
-    preview_2d: true,
-    preview_3d: true,
-    algorithms_available: [],
-  };
-}
-
-/**
  * Semantic replacement for a raw FEM/FDM discretization boolean.
  * Returns true when the domain uses explicit (unstructured) topology,
  * which is the defining characteristic of a FEM discretization.

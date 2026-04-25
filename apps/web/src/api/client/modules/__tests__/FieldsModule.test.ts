@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { FieldsModule } from "../FieldsModule";
-import type { LiveApiClient } from "../../LiveApiClient";
+import type { LiveSessionClient } from "../../LiveSessionClient";
 
 function createClient() {
   const get = vi.fn();
@@ -9,7 +9,7 @@ function createClient() {
   const client = {
     get,
     getBinaryResponse,
-  } as unknown as LiveApiClient;
+  } as unknown as LiveSessionClient;
   return { client, get, getBinaryResponse };
 }
 
@@ -30,7 +30,7 @@ describe("FieldsModule", () => {
     expect(response.etag).toBe("\"v1\"");
     expect(getBinaryResponse).toHaveBeenCalledTimes(1);
     const [path, opts] = getBinaryResponse.mock.calls[0];
-    expect(path).toContain("/v1/live/current/fields/m/vector?");
+    expect(path).toContain("/v2/sessions/current/data/fields/m/samples/vector?");
     expect(path).toContain("format=bin");
     expect(path).toContain("component=x");
     expect(opts.headers["If-None-Match"]).toBe("\"old\"");
@@ -49,6 +49,28 @@ describe("FieldsModule", () => {
 
     const [path] = getBinaryResponse.mock.calls[0];
     expect(path).toContain("format=bin");
+    expect(path).not.toContain("component=");
+  });
+
+  it("adds scope query when requesting a scoped vector sample", async () => {
+    const { client, getBinaryResponse } = createClient();
+    getBinaryResponse.mockResolvedValue({
+      status: 200,
+      buffer: new ArrayBuffer(8),
+      headers: new Headers({ ETag: "\"scoped\"" }),
+    });
+
+    const module = new FieldsModule(client);
+    await module.getVectorResponse("m", {
+      component: "full",
+      scope_kind: "airbox",
+      scope_id: "airbox",
+    });
+
+    const [path] = getBinaryResponse.mock.calls[0];
+    expect(path).toContain("format=bin");
+    expect(path).toContain("scope_kind=airbox");
+    expect(path).toContain("scope_id=airbox");
     expect(path).not.toContain("component=");
   });
 
@@ -97,10 +119,9 @@ describe("FieldsModule", () => {
     });
 
     const [path] = getBinaryResponse.mock.calls[0];
-    expect(path).toContain("/v1/live/current/fields/m/slice/arrows?");
+    expect(path).toContain("/v2/sessions/current/data/fields/m/samples/slice/arrows?");
     expect(path).toContain("include_arrows=true");
     expect(path).toContain("arrow_every=4");
     expect(path).toContain("max_arrows=2000");
   });
 });
-

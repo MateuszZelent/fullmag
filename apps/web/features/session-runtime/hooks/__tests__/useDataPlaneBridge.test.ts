@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { decideFieldVectorFetch } from "../useDataPlaneBridge";
+import {
+  decideFieldVectorFetch,
+  mapResourceQuantities,
+} from "../useDataPlaneBridge";
 
 describe("decideFieldVectorFetch", () => {
   it("skips 3D vector fetch in 2D mode (slice API path)", () => {
@@ -37,3 +40,82 @@ describe("decideFieldVectorFetch", () => {
   });
 });
 
+describe("mapResourceQuantities", () => {
+  it("keeps preview quantities selectable when the field catalog is empty", () => {
+    const [magnetization] = mapResourceQuantities(
+      {
+        quantities: [
+          {
+            id: "m",
+            label: "Magnetization",
+            unit: "dimensionless",
+            location: "node",
+            domain: "magnetic_only",
+            n_comp: 3,
+            normalization_hint: "unit_vector",
+            interactive_preview: true,
+            supports_preview_2d: true,
+            supports_preview_3d: true,
+            supports_history: false,
+            supports_export: true,
+            quick_access_label: "M",
+            scalar_metric_key: null,
+            shape: "vector_field",
+          },
+        ],
+      },
+      { quantities: [] },
+    );
+
+    expect(magnetization).toMatchObject({
+      id: "m",
+      available: true,
+      data_available: false,
+    });
+  });
+
+  it("tracks materialized field availability separately from selectability", () => {
+    const [exchange] = mapResourceQuantities(
+      {
+        quantities: [
+          {
+            id: "H_ex",
+            label: "Exchange Field",
+            unit: "A/m",
+            location: "node",
+            domain: "magnetic_only",
+            n_comp: 3,
+            normalization_hint: "max_abs",
+            interactive_preview: true,
+            supports_preview_2d: true,
+            supports_preview_3d: true,
+            supports_history: false,
+            supports_export: true,
+            quick_access_label: "H_ex",
+            scalar_metric_key: null,
+            shape: "vector_field",
+          },
+        ],
+      },
+      {
+        quantities: [
+          {
+            quantity_id: "H_ex",
+            label: "Exchange Field",
+            kind: "vector_field",
+            components: 3,
+            location: "node",
+            unit: "A/m",
+            available: true,
+          },
+        ],
+      },
+    );
+
+    expect(exchange).toMatchObject({
+      id: "H_ex",
+      available: true,
+      data_available: true,
+    });
+  });
+});

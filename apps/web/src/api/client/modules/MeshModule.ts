@@ -28,41 +28,42 @@ import type {
   MeshUniverseQualityResource,
   MeshUniverseReportResource,
 } from "../../types";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 export class MeshModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async getSummary(opts?: RequestOptions): Promise<MeshSummaryResource> {
-    return this.client.get<MeshSummaryResource>("/v1/live/current/mesh/summary", opts);
+    return this.client.get<MeshSummaryResource>(sessionApiPaths.meshing.summary, opts);
   }
 
   async getSummaryResponse(
     opts?: RequestOptions,
   ): Promise<JsonResourceResponse<MeshSummaryResource>> {
     return this.client.getJsonResponse<MeshSummaryResource>(
-      "/v1/live/current/mesh/summary",
+      sessionApiPaths.meshing.summary,
       opts,
     );
   }
 
   async getCapabilities(opts?: RequestOptions): Promise<MeshCapabilitiesResource> {
     return this.client.get<MeshCapabilitiesResource>(
-      "/v1/live/current/mesh/capabilities",
+      sessionApiPaths.meshing.capabilities,
       opts,
     );
   }
 
   async getSemantics(opts?: RequestOptions): Promise<MeshSemanticsResource> {
     return this.client.get<MeshSemanticsResource>(
-      "/v1/live/current/mesh/semantics",
+      sessionApiPaths.meshing.semantics,
       opts,
     );
   }
 
   async getActiveBuild(opts?: RequestOptions): Promise<MeshActiveBuildResource> {
     return this.client.get<MeshActiveBuildResource>(
-      "/v1/live/current/mesh/builds/active",
+      sessionApiPaths.meshing.currentBuild,
       opts,
     );
   }
@@ -71,14 +72,14 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<JsonResourceResponse<MeshActiveBuildResource>> {
     return this.client.getJsonResponse<MeshActiveBuildResource>(
-      "/v1/live/current/mesh/builds/active",
+      sessionApiPaths.meshing.currentBuild,
       opts,
     );
   }
 
   async getBuildHistory(opts?: RequestOptions): Promise<MeshBuildHistoryResource> {
     return this.client.get<MeshBuildHistoryResource>(
-      "/v1/live/current/mesh/builds/history",
+      sessionApiPaths.meshing.builds,
       opts,
     );
   }
@@ -87,7 +88,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<JsonResourceResponse<MeshBuildHistoryResource>> {
     return this.client.getJsonResponse<MeshBuildHistoryResource>(
-      "/v1/live/current/mesh/builds/history",
+      sessionApiPaths.meshing.builds,
       opts,
     );
   }
@@ -96,7 +97,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshLastSuccessfulBuildResource> {
     return this.client.get<MeshLastSuccessfulBuildResource>(
-      "/v1/live/current/mesh/builds/last-success",
+      sessionApiPaths.meshing.latestSuccessfulBuild,
       opts,
     );
   }
@@ -105,7 +106,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<JsonResourceResponse<MeshLastSuccessfulBuildResource>> {
     return this.client.getJsonResponse<MeshLastSuccessfulBuildResource>(
-      "/v1/live/current/mesh/builds/last-success",
+      sessionApiPaths.meshing.latestSuccessfulBuild,
       opts,
     );
   }
@@ -115,15 +116,15 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<CommandResponse> {
     return this.client.post<CommandResponse>(
-      "/v1/live/current/mesh/builds/commands",
-      request,
+      sessionApiPaths.simulation.commands,
+      { kind: "mesh_build", ...request },
       opts,
     );
   }
 
   async getUniverseConfig(opts?: RequestOptions): Promise<MeshUniverseConfigResource> {
     return this.client.get<MeshUniverseConfigResource>(
-      "/v1/live/current/mesh/universe/config",
+      sessionApiPaths.meshing.policyUniverse,
       opts,
     );
   }
@@ -133,7 +134,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshUniverseConfigResource> {
     return this.client.put<MeshUniverseConfigResource>(
-      "/v1/live/current/mesh/universe/config",
+      sessionApiPaths.meshing.policyUniverse,
       request,
       opts,
     );
@@ -141,14 +142,14 @@ export class MeshModule {
 
   async getUniverseReport(opts?: RequestOptions): Promise<MeshUniverseReportResource> {
     return this.client.get<MeshUniverseReportResource>(
-      "/v1/live/current/mesh/universe/report",
+      sessionApiPaths.meshing.universeReport,
       opts,
     );
   }
 
   async getUniverseQuality(opts?: RequestOptions): Promise<MeshUniverseQualityResource> {
     return this.client.get<MeshUniverseQualityResource>(
-      "/v1/live/current/mesh/universe/quality",
+      sessionApiPaths.meshing.universeQuality,
       opts,
     );
   }
@@ -157,7 +158,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshSharedDomainConfigResource> {
     return this.client.get<MeshSharedDomainConfigResource>(
-      "/v1/live/current/mesh/shared-domain/config",
+      sessionApiPaths.meshing.policySharedDomain,
       opts,
     );
   }
@@ -167,7 +168,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshSharedDomainConfigResource> {
     return this.client.put<MeshSharedDomainConfigResource>(
-      "/v1/live/current/mesh/shared-domain/config",
+      sessionApiPaths.meshing.policySharedDomain,
       request,
       opts,
     );
@@ -177,7 +178,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshSharedDomainReportResource> {
     return this.client.get<MeshSharedDomainReportResource>(
-      "/v1/live/current/mesh/shared-domain/report",
+      sessionApiPaths.meshing.sharedDomainReport,
       opts,
     );
   }
@@ -186,7 +187,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshSharedDomainQualityResource> {
     return this.client.get<MeshSharedDomainQualityResource>(
-      "/v1/live/current/mesh/shared-domain/quality",
+      sessionApiPaths.meshing.sharedDomainQuality,
       opts,
     );
   }
@@ -195,7 +196,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshSharedDomainManifestResource> {
     return this.client.get<MeshSharedDomainManifestResource>(
-      "/v1/live/current/mesh/shared-domain/manifest",
+      sessionApiPaths.meshing.sharedDomainManifest,
       opts,
     );
   }
@@ -204,7 +205,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<JsonResourceResponse<MeshSharedDomainManifestResource>> {
     return this.client.getJsonResponse<MeshSharedDomainManifestResource>(
-      "/v1/live/current/mesh/shared-domain/manifest",
+      sessionApiPaths.meshing.sharedDomainManifest,
       opts,
     );
   }
@@ -218,7 +219,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<BinaryResourceResponse> {
     return this.client.getBinaryResponse(
-      "/v1/live/current/mesh/shared-domain/topology",
+      sessionApiPaths.meshing.sharedDomainTopology,
       opts,
     );
   }
@@ -228,7 +229,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshObjectConfigResource> {
     return this.client.get<MeshObjectConfigResource>(
-      `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/config`,
+      sessionApiPaths.meshing.policyObject(objectId),
       opts,
     );
   }
@@ -239,7 +240,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshObjectConfigResource> {
     return this.client.put<MeshObjectConfigResource>(
-      `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/config`,
+      sessionApiPaths.meshing.policyObject(objectId),
       request,
       opts,
     );
@@ -250,7 +251,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshObjectReportResource> {
     return this.client.get<MeshObjectReportResource>(
-      `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/report`,
+      sessionApiPaths.meshing.objectReport(objectId),
       opts,
     );
   }
@@ -260,7 +261,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshObjectQualityResource> {
     return this.client.get<MeshObjectQualityResource>(
-      `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/quality`,
+      sessionApiPaths.meshing.objectQuality(objectId),
       opts,
     );
   }
@@ -270,7 +271,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshObjectSizeFieldResource> {
     return this.client.get<MeshObjectSizeFieldResource>(
-      `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/size-field`,
+      sessionApiPaths.meshing.objectSizeField(objectId),
       opts,
     );
   }
@@ -288,7 +289,25 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<BinaryResourceResponse> {
     return this.client.getBinaryResponse(
-      `/v1/live/current/mesh/objects/${encodeURIComponent(objectId)}/topology`,
+      sessionApiPaths.meshing.objectTopology(objectId),
+      opts,
+    );
+  }
+
+  async getPartTopology(
+    partId: string,
+    opts?: RequestOptions,
+  ): Promise<ArrayBuffer> {
+    const response = await this.getPartTopologyResponse(partId, opts);
+    return response.buffer;
+  }
+
+  async getPartTopologyResponse(
+    partId: string,
+    opts?: RequestOptions,
+  ): Promise<BinaryResourceResponse> {
+    return this.client.getBinaryResponse(
+      sessionApiPaths.meshing.partTopology(partId),
       opts,
     );
   }
@@ -298,7 +317,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshInterfaceConfigResource> {
     return this.client.get<MeshInterfaceConfigResource>(
-      `/v1/live/current/mesh/interfaces/${encodeURIComponent(interfaceId)}/config`,
+      sessionApiPaths.meshing.policyInterface(interfaceId),
       opts,
     );
   }
@@ -309,7 +328,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshInterfaceConfigResource> {
     return this.client.put<MeshInterfaceConfigResource>(
-      `/v1/live/current/mesh/interfaces/${encodeURIComponent(interfaceId)}/config`,
+      sessionApiPaths.meshing.policyInterface(interfaceId),
       request,
       opts,
     );
@@ -320,7 +339,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshInterfaceReportResource> {
     return this.client.get<MeshInterfaceReportResource>(
-      `/v1/live/current/mesh/interfaces/${encodeURIComponent(interfaceId)}/report`,
+      sessionApiPaths.meshing.interfaceReport(interfaceId),
       opts,
     );
   }
@@ -330,7 +349,7 @@ export class MeshModule {
     opts?: RequestOptions,
   ): Promise<MeshInterfaceQualityResource> {
     return this.client.get<MeshInterfaceQualityResource>(
-      `/v1/live/current/mesh/interfaces/${encodeURIComponent(interfaceId)}/quality`,
+      sessionApiPaths.meshing.interfaceQuality(interfaceId),
       opts,
     );
   }

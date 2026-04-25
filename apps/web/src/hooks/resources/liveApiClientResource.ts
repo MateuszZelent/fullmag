@@ -1,13 +1,13 @@
 import {
-  getLiveApiClient,
-  initLiveApiClient,
-} from "../../api/client/LiveApiClient";
+  getLiveSessionClient,
+  initLiveSessionClient,
+} from "../../api/client/LiveSessionClient";
 import { resolveApiBase } from "@/lib/apiBase";
 
 export function ensureLiveApiResourceClient() {
   try {
-    return getLiveApiClient();
+    return getLiveSessionClient();
   } catch {
-    return initLiveApiClient({ baseUrl: resolveApiBase() });
+    return initLiveSessionClient({ baseUrl: resolveApiBase() });
   }
 }

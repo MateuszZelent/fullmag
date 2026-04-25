@@ -22,7 +22,6 @@ use tokio::sync::{broadcast, watch, Mutex, RwLock};
 use tokio::time::{interval, Duration};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
-use utoipa::OpenApi;
 
 use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
 use fullmag_runner::LivePreviewField;
@@ -34,11 +33,11 @@ mod feature_flags;
 mod field_projection;
 mod field_slice;
 mod field_store;
-mod openapi;
+mod openapi_v2;
 mod preview;
 mod quantities;
 mod quantity_data_plane;
-mod router_v1;
+mod router_v2;
 mod schemas;
 mod script;
 mod session;
@@ -93,26 +92,42 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
     snapshot: &SessionStateResponse,
     display_revision: u64,
 ) -> CurrentLiveRealtimeState {
-    let commands_revision = state.current_command_ledger.lock().await.len() as u64;
+    let (commands_revision, command_completion_revision) = {
+        let ledger = state.current_command_ledger.lock().await;
+        (
+            ledger.len() as u64,
+            ledger.back().map(|record| record.command.seq).unwrap_or(0),
+        )
+    };
     let workspace_revision = current_live_workspace_revision(state).await;
+    let domain_generation_id = snapshot
+        .fem_mesh
+        .as_ref()
+        .and_then(|mesh| mesh.generation_id.as_deref())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let field_catalog_revision =
+        router_v2::handlers::sessions::status::field_catalog_revision(snapshot);
+    let field_revision = router_v2::handlers::sessions::status::field_revision(snapshot);
+    let slice_revision =
+        router_v2::handlers::sessions::status::slice_revision(field_revision, display_revision);
+    let artifact_revision = router_v2::handlers::sessions::status::artifact_revision(snapshot);
     CurrentLiveRealtimeState {
         session_id: snapshot.session.session_id.clone(),
         run_id: snapshot.run.as_ref().map(|run| run.run_id.clone()),
         revisions: RealtimeResourceRevisionMap {
-            topology_revision: snapshot.mesh_revision,
-            field_catalog_revision: snapshot.state_version,
-            field_revision: snapshot.state_version,
-            slice_revision: snapshot.state_version.max(display_revision),
-            artifact_revision: snapshot.artifacts.len() as u64,
-            command_completion_revision: commands_revision,
+            topology_revision: router_v2::handlers::sessions::status::topology_revision(
+                snapshot,
+                domain_generation_id,
+            ),
+            field_catalog_revision,
+            field_revision,
+            slice_revision,
+            artifact_revision,
+            command_completion_revision,
             fields_revision: snapshot.state_version,
             scalars_revision: snapshot.scalar_rows.len() as u64,
-            domain_generation_id: snapshot
-                .fem_mesh
-                .as_ref()
-                .and_then(|mesh| mesh.generation_id.as_deref())
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(0),
+            domain_generation_id,
             artifacts_revision: snapshot.artifacts.len() as u64,
             engine_log_revision: snapshot.engine_log.len() as u64,
             display_revision,
@@ -146,49 +161,49 @@ fn current_live_realtime_changes(
             revision: realtime_state.revisions.display_revision,
             resource_id: None,
             domain_generation_id: None,
-            recommended_fetch: Some("/v1/live/current/display".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/visualization/display".to_string()),
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Workspace,
             revision: realtime_state.revisions.workspace_revision,
             resource_id: None,
             domain_generation_id: None,
-            recommended_fetch: Some("/v1/live/current/workspace/selection".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/workspace/selection".to_string()),
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Fields,
             revision: realtime_state.revisions.fields_revision,
             resource_id: None,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
-            recommended_fetch: Some("/v1/live/current/fields/catalog".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/data/fields".to_string()),
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Scalars,
             revision: realtime_state.revisions.scalars_revision,
             resource_id: None,
             domain_generation_id: None,
-            recommended_fetch: Some("/v1/live/current/scalars".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/data/scalars".to_string()),
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Domain,
             revision: realtime_state.revisions.domain_generation_id,
             resource_id: None,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
-            recommended_fetch: Some("/v1/live/current/domain/meta".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/data/domain/meta".to_string()),
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Artifacts,
             revision: realtime_state.revisions.artifacts_revision,
             resource_id: None,
             domain_generation_id: None,
-            recommended_fetch: Some("/v1/live/current/artifacts".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/data/artifacts".to_string()),
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Logs,
             revision: realtime_state.revisions.engine_log_revision,
             resource_id: None,
             domain_generation_id: None,
-            recommended_fetch: Some("/v1/live/current/logs/engine".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/diagnostics/engine-log".to_string()),
         },
     ];
     if realtime_state.revisions.mesh_revision > 0 {
@@ -197,7 +212,7 @@ fn current_live_realtime_changes(
             revision: realtime_state.revisions.mesh_revision,
             resource_id: None,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
-            recommended_fetch: Some("/v1/live/current/mesh/summary".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/meshing/summary".to_string()),
         });
     }
     if realtime_state.revisions.mesh_build_revision > 0 {
@@ -206,7 +221,7 @@ fn current_live_realtime_changes(
             revision: realtime_state.revisions.mesh_build_revision,
             resource_id: None,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
-            recommended_fetch: Some("/v1/live/current/mesh/builds/active".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/meshing/builds/current".to_string()),
         });
     }
     if realtime_state.revisions.commands_revision > 0 {
@@ -215,7 +230,7 @@ fn current_live_realtime_changes(
             revision: realtime_state.revisions.commands_revision,
             resource_id: None,
             domain_generation_id: None,
-            recommended_fetch: Some("/v1/live/current/commands/status".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/simulation/commands".to_string()),
         });
     }
     if realtime_state.revisions.stages_revision > 0 {
@@ -224,7 +239,7 @@ fn current_live_realtime_changes(
             revision: realtime_state.revisions.stages_revision,
             resource_id: None,
             domain_generation_id: None,
-            recommended_fetch: Some("/v1/live/current/stages/execution".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/simulation/stages/execution".to_string()),
         });
     }
     if let Some(scene_revision) = realtime_state.revisions.scene_revision {
@@ -233,7 +248,7 @@ fn current_live_realtime_changes(
             revision: scene_revision,
             resource_id: None,
             domain_generation_id: None,
-            recommended_fetch: Some("/v1/live/current/authoring/scene".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/model/scene".to_string()),
         });
     }
     changes
@@ -307,12 +322,11 @@ fn parse_texture_projection_mode(value: &str) -> TextureProjectionMode {
 
 #[tokio::main]
 async fn main() {
-    if std::env::args().any(|arg| arg == "--print-openapi") {
-        let openapi = <openapi::ApiDoc as OpenApi>::openapi();
+    if std::env::args().any(|arg| arg == "--print-openapi-v2") {
         println!(
             "{}",
-            serde_json::to_string_pretty(&openapi)
-                .expect("OpenAPI document should serialize to JSON")
+            serde_json::to_string_pretty(&openapi_v2::openapi_json())
+                .expect("OpenAPI v2 document should serialize to JSON")
         );
         return;
     }
@@ -355,11 +369,11 @@ async fn main() {
         quantity_data_plane: Arc::new(crate::quantity_data_plane::QuantityDataPlaneStore::new()),
     });
 
-    let cors = router_v1::middleware::cors::cors_layer();
+    let cors = router_v2::middleware::cors::cors_layer();
 
     let app = Router::new()
         .route("/healthz", get(healthz))
-        .route("/v1/meta/vision", get(vision))
+        .route("/v2/platform/vision", get(vision))
         // ── Internal runner bridge (not part of the public browser contract) ──
         .route(
             "/v1/internal/live/current/snapshot",
@@ -387,14 +401,14 @@ async fn main() {
         )
         // ── Diagnostics / feature flags ───────────────────────────────
         // ── Feature flags (diagnostics) ──────────────────────────────
-        .route("/v1/docs/physics", get(list_physics_docs))
-        // ── New resource-first API (v1) ────────────────────────────────
-        .merge(router_v1::build_v1_router())
+        .route("/v2/platform/docs/physics", get(list_physics_docs))
+        // ── Professional session-scoped API (v2) ───────────────────────
+        .merge(router_v2::build_v2_router())
         // ── OpenAPI / Swagger ──────────────────────────────────────────
-        .merge(utoipa_swagger_ui::SwaggerUi::new("/v1/docs/swagger").url(
-            "/v1/openapi.json",
-            <openapi::ApiDoc as utoipa::OpenApi>::openapi(),
-        ))
+        .merge(
+            utoipa_swagger_ui::SwaggerUi::new("/v2/platform/docs/swagger")
+                .external_url_unchecked("/v2/platform/openapi.json", openapi_v2::openapi_json()),
+        )
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(cors)
         .with_state(state);

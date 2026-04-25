@@ -8,15 +8,19 @@ use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload};
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshSummaryResource {
     pub revision: u64,
+    /// Lightweight dashboard mesh counts/shape summary. Detailed topology lives in mesh topology resources.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_summary: Option<Value>,
+    /// Transitional dashboard quality summary. Detailed quality diagnostics are owned by `meshing/meshes/*/quality`.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_quality_summary: Option<Value>,
+    /// Transitional dashboard target summary. Build-specific target resolution is owned by `meshing/builds/current`.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_airbox_target: Option<Value>,
+    /// Transitional dashboard target summary. Build-specific target resolution is owned by `meshing/builds/current`.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_per_object_targets: Option<Value>,
@@ -25,9 +29,11 @@ pub struct MeshSummaryResource {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshCapabilitiesResource {
     pub revision: u64,
+    /// Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_capabilities: Option<Value>,
+    /// Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_adaptivity_state: Option<Value>,
@@ -56,12 +62,15 @@ pub struct MeshSolverMeshResource {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshBuildDiagnosticsResource {
+    /// Detailed mesh-build quality diagnostics. Dashboard quality summaries are transitional projections only.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_quality_summary: Option<Value>,
+    /// Detailed latest build summary for diagnostics and inspectors.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_build_summary: Option<Value>,
+    /// Detailed build pipeline state for diagnostics and build panels.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_pipeline_status: Option<Value>,
@@ -72,15 +81,18 @@ pub struct MeshBuildDiagnosticsResource {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshSemanticsResource {
     pub revision: u64,
+    /// Solver-domain universe mesh policy. This endpoint owns mesh semantics, not build diagnostics.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub universe_config: Option<Value>,
+    /// Solver-domain shared mesh policy.
     #[schema(value_type = Object)]
     pub shared_domain_config: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub object_configs: Vec<MeshObjectConfigEntryResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solver_mesh: Option<MeshSolverMeshResource>,
+    /// Transitional diagnostics projection retained for current frontend adapters. New consumers should use build/quality/report resources.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_build_diagnostics: Option<MeshBuildDiagnosticsResource>,
     pub render_only_controls_do_not_change_solver_domain: bool,
@@ -229,6 +241,7 @@ impl From<&FemMeshPartPayload> for MeshPartResource {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshSharedDomainManifestResource {
     pub revision: u64,
+    /// Mesh identity for tree/selection metadata.
     pub mesh_name: String,
     pub mesh_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -237,6 +250,7 @@ pub struct MeshSharedDomainManifestResource {
     pub domain_mesh_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub object_segments: Vec<MeshObjectSegmentResource>,
+    /// Scoped mesh parts for object/airbox/selection fetches. Heavy topology remains in binary topology endpoints.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_parts: Vec<MeshPartResource>,
 }
@@ -325,18 +339,23 @@ pub struct MeshInterfaceQualityResource {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshActiveBuildResource {
     pub revision: u64,
+    /// Current active build descriptor and progress metadata.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_build: Option<Value>,
+    /// Build/pipeline state for build panels.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_pipeline_status: Option<Value>,
+    /// Resolved target for the current build. Summary-level copies are transitional dashboard projections.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_airbox_target: Option<Value>,
+    /// Resolved per-object targets for the current build. Summary-level copies are transitional dashboard projections.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_per_object_targets: Option<Value>,
+    /// Current/last build summary for build panels. Latest-success endpoint owns stable successful build references.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_build_summary: Option<Value>,
@@ -354,12 +373,15 @@ pub struct MeshBuildHistoryResource {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshLastSuccessfulBuildResource {
     pub revision: u64,
+    /// Last successful build artifact/reference summary. It must not become a copy of the active build resource.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_success: Option<Value>,
+    /// Transitional target projection retained for current frontend adapters.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_airbox_target: Option<Value>,
+    /// Transitional target projection retained for current frontend adapters.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_per_object_targets: Option<Value>,

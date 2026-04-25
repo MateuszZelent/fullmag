@@ -175,6 +175,7 @@ export type {
   WorkspaceMode,
   ResultWorkspaceEntry,
   ResultWorkspaceKind,
+  QuantityDataStatus,
 } from "./context-hooks";
 import { useModelBuilderActions } from "./hooks/useModelBuilderActions";
 import {
@@ -186,6 +187,7 @@ import {
   ViewportCtx,
   CommandCtx,
   ModelCtx,
+  type QuantityDataStatus,
 } from "./context-hooks";
 import type {
   TransportContextValue,
@@ -204,6 +206,26 @@ const ENABLE_VIEWPORT_DATA_DEBUG_LOGS =
   FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
   typeof process !== "undefined" &&
   process.env.NODE_ENV !== "production";
+
+function formatQuantityOptionLabel(quantity: {
+  label: string;
+  unit: string | null | undefined;
+}): string {
+  return quantity.unit && quantity.unit !== "dimensionless"
+    ? `${quantity.label} (${quantity.unit})`
+    : quantity.label;
+}
+
+function isQuantitySelectable(quantity: {
+  interactive_preview: boolean;
+  supports_preview_2d: boolean;
+  supports_preview_3d: boolean;
+}): boolean {
+  return Boolean(
+    quantity.interactive_preview &&
+      (quantity.supports_preview_2d || quantity.supports_preview_3d),
+  );
+}
 
 function fieldFrameIdentity(value: object | null | undefined): string {
   if (!value) {
@@ -363,6 +385,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [femViewportLayers, setFemViewportLayers] = useState<FemViewportLayerState>(
     DEFAULT_FEM_VIEWPORT_LAYER_STATE,
   );
+  const [viewportLegendVisible, setViewportLegendVisible] = useState(false);
   const [fdmVisualizationSettings, setFdmVisualizationSettings] =
     useState<VisualizationPresetFdmState>(DEFAULT_FDM_VISUALIZATION_SETTINGS);
   const [runUntilInput, setRunUntilInput] = useState("1e-12");
@@ -1730,7 +1753,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   });
 
   // Set of quantity IDs whose field buffers are already cached locally.
-  // Used by requestPreviewQuantity and applyVisualizationPreset to skip
+  // Used by requestDisplayQuantity and applyVisualizationPreset to skip
   // the control-plane POST when the field is already in memory.
   const activeFemGenerationSignature = useMemo(() => {
     if (!runtimeFemMesh?.generation_id || runtimeFemMesh.generation_id.length === 0) {
@@ -1781,6 +1804,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     canSkipCommand,
     primaryRunAction,
     primaryRunLabel,
+    requestDisplayQuantity,
     requestPreviewQuantity,
     openAnalyzeSurface,
     openResultWorkspaceEntry,
@@ -1923,19 +1947,52 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const dtSpark = useMemo(() => scalarRows.slice(-40).map((r) => r.solver_dt ?? 0), [scalarRows]);
 
   /* Quantity options */
+  const quantityDataStatusById = useMemo(() => {
+    const previewHasData = Boolean(
+      renderPreview?.vector_field_values && renderPreview.vector_field_values.length > 0,
+    );
+    const previewQuantity =
+      previewHasData && renderPreview?.quantity && renderPreview.quantity.length > 0
+        ? renderPreview.quantity
+        : previewHasData
+          ? requestedPreviewQuantity
+          : null;
+
+    return new Map(
+      quantities.map((quantity) => {
+        let status: QuantityDataStatus = "pending";
+        if (!isQuantitySelectable(quantity)) {
+          status = "unsupported";
+        } else if (quantity.data_available || cachedFieldQuantities.has(quantity.id)) {
+          status = "ready";
+        } else if (previewQuantity === quantity.id) {
+          status = "preview";
+        }
+        return [quantity.id, status] as const;
+      }),
+    );
+  }, [
+    cachedFieldQuantities,
+    quantities,
+    renderPreview?.quantity,
+    renderPreview?.vector_field_values,
+    requestedPreviewQuantity,
+  ]);
+  const requestedPreviewQuantityDataStatus =
+    quantityDataStatusById.get(requestedPreviewQuantity) ?? "pending";
   const quantityOptions = useMemo(
     () => (quantities).map((q) => ({
       value: q.id,
-      label: q.available ? `${q.label} (${q.unit})` : `${q.label} (${q.unit}) — waiting for data`,
-      disabled: !q.available,
+      label: formatQuantityOptionLabel(q),
+      disabled: !isQuantitySelectable(q),
     })),
     [quantities],
   );
   const previewQuantityOptions = useMemo(
-    () => (quantities).filter((q) => q.interactive_preview).map((q) => ({
+    () => (quantities).filter((q) => q.interactive_preview && q.supports_preview_3d).map((q) => ({
       value: q.id,
-      label: q.available ? `${q.label} (${q.unit})` : `${q.label} (${q.unit}) — waiting for data`,
-      disabled: !q.available,
+      label: formatQuantityOptionLabel(q),
+      disabled: !isQuantitySelectable(q),
     })),
     [quantities],
   );
@@ -2294,7 +2351,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       .map((quantity) => ({
         id: quantity.id,
         shortLabel: quantity.quick_access_label ?? quantity.label,
-        available: quantity.available,
+        available: isQuantitySelectable(quantity),
       })),
     [quantities],
   );
@@ -2516,12 +2573,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     requestedPreviewQuantity, requestedPreviewComponent, requestedPreviewLayer,
     requestedPreviewAllLayers, requestedPreviewEveryN,
     requestedPreviewXChosenSize, requestedPreviewYChosenSize, requestedPreviewAutoScale,
-    requestedPreviewMaxPoints, previewEveryNOptions, previewMaxPointOptions,
+    requestedPreviewMaxPoints, requestedPreviewQuantityDataStatus,
+    previewEveryNOptions, previewMaxPointOptions,
     previewIsStale, previewIsInitialSampleStale,
     setViewMode, setComponent, setPlane, setSliceIndex, setSelectedQuantity,
     setConsoleCollapsed, setSidebarCollapsed,
     patchDisplay,
-    updatePreview, handleViewModeChange, handleCapture, handleExport, requestPreviewQuantity,
+    updatePreview, handleViewModeChange, handleCapture, handleExport,
+    requestDisplayQuantity, requestPreviewQuantity,
   }), [
     setWorkspaceMode,
     setWorkspaceStage,
@@ -2537,10 +2596,12 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     requestedPreviewQuantity, requestedPreviewComponent, requestedPreviewLayer,
     requestedPreviewAllLayers, requestedPreviewEveryN,
     requestedPreviewXChosenSize, requestedPreviewYChosenSize, requestedPreviewAutoScale,
-    requestedPreviewMaxPoints, previewEveryNOptions, previewMaxPointOptions,
+    requestedPreviewMaxPoints, requestedPreviewQuantityDataStatus,
+    previewEveryNOptions, previewMaxPointOptions,
     previewIsStale, previewIsInitialSampleStale,
     patchDisplay,
-    updatePreview, handleViewModeChange, handleCapture, handleExport, requestPreviewQuantity,
+    updatePreview, handleViewModeChange, handleCapture, handleExport,
+    requestDisplayQuantity, requestPreviewQuantity,
   ]);
 
   const commandValue = useMemo<CommandContextValue>(() => ({
@@ -2630,7 +2691,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
-    femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers,
+    femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers, viewportLegendVisible,
     fdmVisualizationSettings,
     visualizationProjectPresets: projectVisualizationPresets,
     visualizationLocalPresets: localVisualizationPresets,
@@ -2681,7 +2742,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     activeWorkspaceTabId,
     setSolverSettings, setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis, setMeshRenderMode, setMeshOpacity, setMeshClipEnabled, setMeshClipAxis,
     setMeshClipPos, setMeshClipFlip, setMeshShowArrows, setFemArrowColorMode, setFemArrowMonoColor, setFemArrowAlpha, setFemArrowLengthScale, setFemArrowThickness, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
-    setFemVectorDomainFilter, setFemFerromagnetVisibilityMode, setFemViewportLayers,
+    setFemVectorDomainFilter, setFemFerromagnetVisibilityMode, setFemViewportLayers, setViewportLegendVisible,
     setSelectedSidebarNodeId, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setAirMeshVisible, setAirMeshOpacity, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
     openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset,
@@ -2690,7 +2751,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
-    femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers,
+    femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers, viewportLegendVisible,
     fdmVisualizationSettings, projectVisualizationPresets, localVisualizationPresets, activeVisualizationPresetRef,
     meshSelection, meshOptions, meshQualityData, meshGenerating, femDockTab,
     effectiveFemMesh, femMeshData, femTopologyKey, femColorField,

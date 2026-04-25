@@ -22,14 +22,23 @@ pub enum FieldComponent {
 pub struct LiveStatus {
     pub api_contract_version: String,
     pub runtime_bundle_version: String,
+    /// Thin current-session summary. Full session persistence state is owned by persistence resources.
     pub session: SessionSummary,
+    /// Thin run summary for header/status surfaces. Full run metadata is owned by `simulation/runs/*`.
     pub run: Option<RunSummary>,
+    /// Thin solver summary for polling cadence and top-bar state. Detailed solver state is owned by `simulation/solver/status`.
     pub solver: SolverSummary,
+    /// Current renderer/view selection. The writable display resource is `visualization/display`.
     pub display: DisplaySelection,
+    /// Thin domain summary for adapter selection. Heavy topology is owned by `data/domain/topology` and meshing mesh resources.
     pub domain: DomainSummary,
+    /// Revision pointers used to invalidate resource hooks. Heavy resources must be fetched from their owning endpoint.
     pub resources: ResourceRevisionMap,
+    /// Canonical UI gating source for the current session. Platform and meshing capabilities have narrower ownership.
     pub capabilities: CapabilityMap,
+    /// Thin latest energy summary for status surfaces. Energy samples/history are owned by `simulation/solver/energies/*`.
     pub energies: EnergySummary,
+    /// Lightweight runtime metrics for status surfaces. Detailed logs/diagnostics live under `diagnostics/*`.
     pub metrics: MetricsSummary,
 }
 

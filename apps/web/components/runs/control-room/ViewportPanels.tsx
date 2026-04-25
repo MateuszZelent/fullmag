@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useCallback, useEffect, useRef } from "react";
+import { memo, useMemo, useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 
 import { MAGNETIC_PRESET_CATALOG } from "@/lib/magnetizationPresetCatalog";
@@ -14,23 +14,29 @@ import {
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { displayPatchFromPreviewComponent } from "@/src/api/displaySelection";
-import type { FieldComponent, LiveStatus } from "@/src/api/types";
+import type { DisplaySelection, FieldComponent } from "@/src/api/types";
 import { useFieldSlice2D } from "@/src/hooks/resources/useFieldSlice2D";
-import { statusToViewport3DCapabilities } from "@/src/features/view3d/adapters/statusToCapabilities";
-import { resourcesToViewportModel } from "@/src/features/view3d/adapters/resourcesToViewportModel";
-import { runtimeToViewport3DToolbarState } from "@/src/features/view3d/adapters/runtimeToToolbarState";
-import { Viewport3DHost } from "@/features/viewport-unified";
-import { mapRouteFlagsToViewport3DStages } from "@/features/viewport-unified/model/viewport3dFlags";
 import {
-  buildToolbarStateFromLegacy,
-  buildViewport3DModelFromAdapter,
-} from "@/features/viewport-unified/model/viewport3dAdapters";
+  useMeshWorkspaceModel,
+  useSubmitMeshBuildCommand,
+} from "@/src/hooks/resources/useMeshResources";
+import { useSlice2DModel } from "@/src/hooks/resources/useSliceResource";
+import { MeshWorkspaceShell } from "@/src/features/meshWorkspace";
+import type { MeshWorkspaceModel } from "@/src/features/meshWorkspace";
+import type { Slice2DModel } from "@/src/features/slice2d";
+import {
+  DEFAULT_WORKSPACE_SYNC_STATE,
+  selectionFromControlRoomState,
+} from "@/src/features/workspaceSync";
+import {
+  resolveViewportInternalToolbarModes,
+  UnifiedViewport3DRenderer,
+  Viewport3DHost,
+  useViewport3DController,
+} from "@/features/viewport-unified";
+import { mapRouteFlagsToViewport3DStages } from "@/features/viewport-unified/model/viewport3dFlags";
 import type {
-  Viewport3DCapabilities as UnifiedViewport3DCapabilities,
-  Viewport3DDiscretization,
-  Viewport3DFallbackMode,
   Viewport3DInteractionMode,
-  Viewport3DModel,
 } from "@/features/viewport-unified/model/viewport3dContracts";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
 import type { UnifiedRenderState } from "@/features/viewport-unified/model/unifiedViewportTypes";
@@ -50,7 +56,6 @@ import {
 } from "./shared";
 import { useTransport, useViewport, useCommand, useModel } from "./context-hooks";
 import UnifiedViewport2DPresenter from "./UnifiedViewport2DPresenter";
-import UnifiedViewport3DPresenter from "./UnifiedViewport3DPresenter";
 import UnifiedViewport3DVectorSurface from "./UnifiedViewport3DVectorSurface";
 import type {
   MeshEntityViewStateMap,
@@ -95,6 +100,14 @@ function toUnifiedRenderMode(
   return "solid";
 }
 
+function meshWorkspaceRenderModeToFem(
+  mode: MeshWorkspaceModel["toolbar"]["renderMode"],
+): FemRenderMode {
+  if (mode === "solid+wireframe") return "surface+edges";
+  if (mode === "wireframe" || mode === "points") return mode;
+  return "surface";
+}
+
 function toViewportInteractionMode(tool: string): Viewport3DInteractionMode {
   if (
     tool === "camera" ||
@@ -124,87 +137,23 @@ function toViewportFieldComponent(component: string): FieldComponent | null {
   return null;
 }
 
-function mapCanonicalCapabilitiesToUnified(
-  capabilities: ReturnType<typeof statusToViewport3DCapabilities>,
-  authoringEnabled: boolean,
-  diagnosticsEnabled: boolean,
-): UnifiedViewport3DCapabilities {
-  const preview3d = Boolean(capabilities.can_render_3d);
-  const structuredGrid = preview3d && Boolean(capabilities.can_show_structured_grid);
-  const explicitTopology = preview3d && Boolean(capabilities.can_show_topology);
-  const authoringPrimitives = preview3d && explicitTopology && authoringEnabled;
-  const vectorField = preview3d && Boolean(capabilities.can_show_vectors);
-  const clip = preview3d && explicitTopology;
-  const screenshot = preview3d;
-  const diagnostics = preview3d && diagnosticsEnabled;
-
-  return {
-    preview3d: preview3d
-      ? { enabled: true }
-      : { enabled: false, reason: "Requires preview_3d capability." },
-    structuredGrid: structuredGrid
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? "Requires structured_grid capability."
-            : "Requires preview_3d capability.",
-        },
-    explicitTopology: explicitTopology
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? "Requires explicit_topology capability."
-            : "Requires preview_3d capability.",
-        },
-    authoringPrimitives: authoringPrimitives
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? (explicitTopology
-                ? "Requires Geometry Authoring mode."
-                : "Requires explicit_topology capability.")
-            : "Requires preview_3d capability.",
-        },
-    vectorField: vectorField
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? "Requires binary_fields + (node_fields|cell_fields) capability."
-            : "Requires preview_3d capability.",
-        },
-    clip: clip
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? "Requires explicit_topology capability."
-            : "Requires preview_3d capability.",
-        },
-    screenshot: screenshot
-      ? { enabled: true }
-      : { enabled: false, reason: "Requires preview_3d capability." },
-    diagnostics: diagnostics
-      ? { enabled: true }
-      : {
-          enabled: false,
-          reason: preview3d
-            ? "Requires render diagnostics flag."
-            : "Requires preview_3d capability.",
-        },
-  };
+function toDisplayFieldComponent(component: string): DisplaySelection["field_component"] {
+  if (component === "x" || component === "y" || component === "z") {
+    return component;
+  }
+  return "magnitude";
 }
 
-function toStatusResourcesSnapshot(
-  resources: LiveStatus["resources"] | null,
-): Pick<LiveStatus, "resources"> | null {
-  if (!resources) {
-    return null;
-  }
-  return { resources };
+function sliceAxisFromPlane(plane: "xy" | "xz" | "yz"): "x" | "y" | "z" {
+  if (plane === "yz") return "x";
+  if (plane === "xz") return "y";
+  return "z";
+}
+
+function planeFromSliceAxis(axis: "x" | "y" | "z"): "xy" | "xz" | "yz" {
+  if (axis === "x") return "yz";
+  if (axis === "y") return "xz";
+  return "xy";
 }
 
 function requireFemTopologyKey(value: string | null): string {
@@ -312,7 +261,30 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     () => ({ ..._transport, ..._viewport, ..._cmd, ..._model }),
     [_transport, _viewport, _cmd, _model],
   );
+  const runtimeSessionId = useSessionRuntimeStore((s) => s.session?.session_id ?? null);
   const runtimeResourceRevisions = useSessionRuntimeStore((s) => s.resourceRevisions);
+  const workspaceSyncState = DEFAULT_WORKSPACE_SYNC_STATE;
+  const [meshWorkspaceToolbarPatch, setMeshWorkspaceToolbarPatch] = useState<
+    Partial<MeshWorkspaceModel["toolbar"]>
+  >({});
+  const [slice2DToolbarPatch, setSlice2DToolbarPatch] = useState<
+    Partial<Slice2DModel["toolbar"]>
+  >({});
+  const workspaceSelection = useMemo(
+    () =>
+      selectionFromControlRoomState({
+        selectedObjectId: ctx.selectedObjectId,
+        selectedEntityId: ctx.selectedEntityId,
+        selectedSidebarNodeId: ctx.selectedSidebarNodeId,
+        sourceSurface: ctx.effectiveViewMode === "Mesh" ? "mesh" : ctx.effectiveViewMode === "2D" ? "slice2d" : "viewport3d",
+      }),
+    [
+      ctx.effectiveViewMode,
+      ctx.selectedEntityId,
+      ctx.selectedObjectId,
+      ctx.selectedSidebarNodeId,
+    ],
+  );
   const builderEnabled = useGeometryBuilderStore((s) => s.builderMode.enabled);
   const builderViewportTool = useGeometryBuilderStore((s) => s.viewportTool);
   const builderSnapSettings = useGeometryBuilderStore((s) => s.snapSettings);
@@ -321,6 +293,70 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   const builderMeshDirty = useGeometryBuilderStore((s) => s.dirty.meshDirty);
   useBuilderKeyboardShortcuts();
   const femDiscretization = resolveFemDiscretization(ctx.domainCapabilities, false);
+  const meshWorkspaceResource = useMeshWorkspaceModel({
+    enabled: ctx.effectiveViewMode === "Mesh",
+    sessionKey: runtimeSessionId,
+    resources: runtimeResourceRevisions,
+    liveCapabilities: ctx.domainCapabilities,
+  });
+  const meshBuildCommand = useSubmitMeshBuildCommand({
+    enabled: ctx.effectiveViewMode === "Mesh",
+    sessionKey: runtimeSessionId,
+  });
+  const requestDisplayQuantity = ctx.requestDisplayQuantity;
+  const setMeshClipAxis = ctx.setMeshClipAxis;
+  const setMeshClipEnabled = ctx.setMeshClipEnabled;
+  const setMeshClipPos = ctx.setMeshClipPos;
+  const setMeshOpacity = ctx.setMeshOpacity;
+  const setMeshRenderMode = ctx.setMeshRenderMode;
+  const setMeshShowArrows = ctx.setMeshShowArrows;
+  const setPlane = ctx.setPlane;
+  const setSliceIndex = ctx.setSliceIndex;
+  const handleMeshWorkspaceBuild = useCallback(() => {
+    void meshBuildCommand
+      .submit({
+        mesh_target: { kind: "study_domain" },
+        mesh_reason: "mesh_workspace_shell",
+      })
+      .then(() => meshWorkspaceResource.refresh());
+  }, [meshBuildCommand, meshWorkspaceResource]);
+  const effectiveMeshWorkspaceModel = useMemo<MeshWorkspaceModel | null>(() => {
+    if (!meshWorkspaceResource.model) return null;
+    return {
+      ...meshWorkspaceResource.model,
+      toolbar: {
+        ...meshWorkspaceResource.model.toolbar,
+        ...meshWorkspaceToolbarPatch,
+      },
+    };
+  }, [meshWorkspaceResource.model, meshWorkspaceToolbarPatch]);
+  const handleMeshWorkspaceToolbarChange = useCallback(
+    (patch: Partial<MeshWorkspaceModel["toolbar"]>) => {
+      setMeshWorkspaceToolbarPatch((previous) => ({ ...previous, ...patch }));
+      if (patch.renderMode) {
+        setMeshRenderMode(meshWorkspaceRenderModeToFem(patch.renderMode));
+      }
+      if (typeof patch.opacity === "number") {
+        setMeshOpacity(patch.opacity);
+      }
+      if (typeof patch.clipEnabled === "boolean") {
+        setMeshClipEnabled(patch.clipEnabled);
+      }
+      if (patch.clipAxis) {
+        setMeshClipAxis(patch.clipAxis);
+      }
+      if (typeof patch.clipPosition === "number") {
+        setMeshClipPos(patch.clipPosition);
+      }
+    },
+    [
+      setMeshClipAxis,
+      setMeshClipEnabled,
+      setMeshClipPos,
+      setMeshOpacity,
+      setMeshRenderMode,
+    ],
+  );
   const showGeometryAuthoringViewport =
     builderEnabled && ctx.effectiveViewMode === "3D";
   const minimalViewportSelectionPath = FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.useMinimalViewportSelectionPath;
@@ -723,6 +759,54 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     },
     [previewControlsActive, setComponent, patchDisplay],
   );
+  const handleSlice2DToolbarChange = useCallback(
+    (patch: Partial<Slice2DModel["toolbar"]>) => {
+      setSlice2DToolbarPatch((previous) => ({
+        ...previous,
+        showPrimitives: patch.showPrimitives ?? previous.showPrimitives,
+        showMesh: patch.showMesh ?? previous.showMesh,
+        showQuantity: patch.showQuantity ?? previous.showQuantity,
+        showVectors: patch.showVectors ?? previous.showVectors,
+        renderMode: patch.renderMode ?? previous.renderMode,
+      }));
+      if (patch.quantityId) {
+        requestDisplayQuantity(patch.quantityId);
+      }
+      if (patch.component) {
+        handleFemSliceComponentChange(patch.component);
+      }
+      if (patch.axis) {
+        setPlane(planeFromSliceAxis(patch.axis));
+      }
+      if (patch.mode) {
+        void patchDisplay({
+          slice_mode: patch.mode === "all_layers" ? "all" : patch.mode,
+        });
+      }
+      if (typeof patch.layerIndex === "number") {
+        setSliceIndex(patch.layerIndex);
+        void patchDisplay({ slice_layer: patch.layerIndex });
+      }
+      if (patch.colormap) {
+        void patchDisplay({ colormap: patch.colormap });
+      }
+      if (typeof patch.autoContrast === "boolean") {
+        void patchDisplay({ auto_contrast: patch.autoContrast });
+      }
+      if (typeof patch.showVectors === "boolean") {
+        setMeshShowArrows(patch.showVectors);
+        void patchDisplay({ vector_glyphs: patch.showVectors });
+      }
+    },
+    [
+      handleFemSliceComponentChange,
+      patchDisplay,
+      requestDisplayQuantity,
+      setMeshShowArrows,
+      setPlane,
+      setSliceIndex,
+    ],
+  );
   const hasExactScopeSegment = useMemo(
     () => {
       if (!selectedFemObjectId) {
@@ -833,6 +917,68 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       sliceSampling.yPixels,
     ],
   );
+  const unifiedSliceDisplaySelection = useMemo<DisplaySelection>(
+    () => ({
+      active_quantity_id: String(sliceQuantityId ?? ctx.selectedQuantity),
+      view_mode: "2d",
+      field_component: toDisplayFieldComponent(sliceComponent),
+      colormap: "viridis",
+      auto_contrast: ctx.requestedPreviewAutoScale,
+      contrast_min: null,
+      contrast_max: null,
+      vector_glyphs: ctx.meshShowArrows,
+      vector_density: ctx.requestedPreviewEveryN,
+      slice_mode: ctx.requestedPreviewAllLayers ? "all_layers" : "single",
+      slice_layer: ctx.sliceIndex,
+      max_points: ctx.requestedPreviewMaxPoints,
+      x_chosen_size: ctx.requestedPreviewXChosenSize,
+      y_chosen_size: ctx.requestedPreviewYChosenSize,
+    }),
+    [
+      ctx.meshShowArrows,
+      ctx.requestedPreviewAllLayers,
+      ctx.requestedPreviewAutoScale,
+      ctx.requestedPreviewEveryN,
+      ctx.requestedPreviewMaxPoints,
+      ctx.requestedPreviewXChosenSize,
+      ctx.requestedPreviewYChosenSize,
+      ctx.selectedQuantity,
+      ctx.sliceIndex,
+      sliceComponent,
+      sliceQuantityId,
+    ],
+  );
+  const slice2DPlaneOptions = useMemo(
+    () => ({
+      axis: sliceAxisFromPlane(ctx.plane),
+      positionPercent: sliceSampling.cutNorm * 100,
+    }),
+    [ctx.plane, sliceSampling.cutNorm],
+  );
+  const slice2DBaseModel: Slice2DModel = useSlice2DModel({
+    display: unifiedSliceDisplaySelection,
+    resources: runtimeResourceRevisions,
+    capabilities: ctx.domainCapabilities,
+    adapterKind: femDiscretization ? "fem" : "fdm",
+    planeOptions: slice2DPlaneOptions,
+  });
+  const slice2DModel = useMemo<Slice2DModel>(() => {
+    const toolbar = {
+      ...slice2DBaseModel.toolbar,
+      ...slice2DToolbarPatch,
+    };
+    return {
+      ...slice2DBaseModel,
+      toolbar,
+      overlays: {
+        ...slice2DBaseModel.overlays,
+        showPrimitives: toolbar.showPrimitives,
+        showMesh: toolbar.showMesh,
+        showQuantity: toolbar.showQuantity,
+        showVectors: toolbar.showVectors,
+      },
+    };
+  }, [slice2DBaseModel, slice2DToolbarPatch]);
   const slice2D = useFieldSlice2D(
     shouldUseSliceApi2D ? sliceQuantityId : null,
     shouldUseSliceApi2D ? sliceFieldRevision : null,
@@ -995,28 +1141,10 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     enableUnifiedViewport3D: unifiedViewport3DEnabled,
     enableUnifiedViewportToolbar: unifiedToolbarEnabled,
   });
-  const femToolbarMode: "visible" | "hidden" =
-    unifiedToolbarEnabled
-      ? "hidden"
-      : (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showToolbar ? "visible" : "hidden");
-  const vectorToolbarMode: "visible" | "hidden" =
-    unifiedToolbarEnabled ? "hidden" : "visible";
-  const viewport3DContractCapabilities = useMemo(
-    () =>
-      statusToViewport3DCapabilities(
-        ctx.domainCapabilities ? { capabilities: ctx.domainCapabilities } : null,
-      ),
-    [ctx.domainCapabilities],
-  );
-  const viewport3DCapabilities = useMemo(
-    () =>
-      mapCanonicalCapabilitiesToUnified(
-        viewport3DContractCapabilities,
-        builderEnabled,
-        FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging,
-      ),
-    [builderEnabled, viewport3DContractCapabilities],
-  );
+  const { femToolbarMode, vectorToolbarMode } = resolveViewportInternalToolbarModes({
+    unifiedToolbarEnabled,
+    femDiagnosticToolbarEnabled: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showToolbar,
+  });
   const viewport3DInteractionMode: Viewport3DInteractionMode = showGeometryAuthoringViewport
     ? toViewportInteractionMode(builderViewportTool)
     : "camera";
@@ -1055,207 +1183,74 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
       ctx.sliceIndex,
     ],
   );
-  const viewport3DContractModel = useMemo(
-    () =>
-      resourcesToViewportModel({
-        status: toStatusResourcesSnapshot(runtimeResourceRevisions),
-        quantity_id: ctx.requestedPreviewQuantity ?? null,
-        component: toViewportFieldComponent(
-          ctx.effectiveViewMode === "3D" ? "3D" : ctx.requestedPreviewComponent,
-        ),
-        selection: {
-          object_id: viewportSelectedObjectId,
-          part_id: ctx.selectedEntityId,
-        },
-        clip: {
-          enabled: ctx.meshClipEnabled,
-          axis: ctx.meshClipAxis,
-          position: ctx.meshClipPos,
-          invert: ctx.meshClipFlip,
-        },
-      }),
-    [
-      ctx.effectiveViewMode,
-      ctx.meshClipAxis,
-      ctx.meshClipEnabled,
-      ctx.meshClipFlip,
-      ctx.meshClipPos,
-      ctx.requestedPreviewComponent,
-      ctx.requestedPreviewQuantity,
-      ctx.selectedEntityId,
-      runtimeResourceRevisions,
-      viewportSelectedObjectId,
-    ],
-  );
-  const viewport3DContractToolbarState = useMemo(
-    () =>
-      runtimeToViewport3DToolbarState({
-        capabilities: viewport3DContractCapabilities,
-        has_topology:
-          viewport3DContractModel.topology_revision != null || Boolean(resolvedFemTopologyKey),
-        has_field_data:
-          viewport3DContractModel.field_revision != null ||
-          scaledFemMeshData?.fieldRevision != null ||
-          ctx.fieldDataRevision != null,
-      }),
-    [
-      ctx.fieldDataRevision,
-      resolvedFemTopologyKey,
-      scaledFemMeshData?.fieldRevision,
-      viewport3DContractCapabilities,
-      viewport3DContractModel.field_revision,
-      viewport3DContractModel.topology_revision,
-    ],
-  );
-  const viewport3DToolbarState = useMemo(
-    () => {
-      const legacyToolbarState = buildToolbarStateFromLegacy({
-        renderState: viewport3DRenderState,
-        quantityId: ctx.requestedPreviewQuantity ?? null,
-        clipFlip: ctx.meshClipFlip,
-        interactionMode: viewport3DInteractionMode,
-        snapEnabled: Boolean(builderSnapSettings.enabled),
-        objectViewMode: ctx.objectViewMode,
-        vectorsVisible: femDiscretization ? ctx.meshShowArrows : true,
-        legendVisible: true,
-        partExplorerVisible: selectedSubmeshesToolboxOpen,
-        projection: "perspective",
-        navProfile: "trackball",
-      });
-      return {
-        ...legacyToolbarState,
-        rowA: {
-          ...legacyToolbarState.rowA,
-          clipEnabled:
-            legacyToolbarState.rowA.clipEnabled && viewport3DContractToolbarState.clip_enabled,
-        },
-        controlStates: {
-          ...legacyToolbarState.controlStates,
-          quantity: viewport3DContractToolbarState.quantity_enabled
-            ? ("inactive" as const)
-            : ("disabled" as const),
-          component: viewport3DContractToolbarState.component_enabled
-            ? ("inactive" as const)
-            : ("disabled" as const),
-          clip: viewport3DContractToolbarState.clip_enabled
-            ? ("inactive" as const)
-            : ("disabled" as const),
-          renderMode: viewport3DContractToolbarState.render_mode_enabled
-            ? ("inactive" as const)
-            : ("disabled" as const),
-        },
-      };
+  const viewport3DController = useViewport3DController({
+    capabilities: ctx.domainCapabilities,
+    authoringEnabled: builderEnabled,
+    diagnosticsEnabled: FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging,
+    renderState: viewport3DRenderState,
+    resources: {
+      statusResources: runtimeResourceRevisions,
+      quantityId: ctx.requestedPreviewQuantity ?? null,
+      component: toViewportFieldComponent(
+        ctx.effectiveViewMode === "3D" ? "3D" : ctx.requestedPreviewComponent,
+      ),
+      selection: {
+        objectId: viewportSelectedObjectId,
+        partId: ctx.selectedEntityId,
+      },
+      clip: {
+        enabled: ctx.meshClipEnabled,
+        axis: ctx.meshClipAxis,
+        position: ctx.meshClipPos,
+        invert: ctx.meshClipFlip,
+      },
+      topologyFallbackRevision: resolvedFemTopologyKey,
+      femMeshFieldRevision: scaledFemMeshData?.fieldRevision,
+      dataPlaneFieldRevision: ctx.fieldDataRevision,
+      selectedVectorCount: ctx.selectedVectors?.length ?? 0,
     },
-    [
-      builderSnapSettings.enabled,
-      ctx.meshClipFlip,
-      ctx.meshShowArrows,
-      ctx.objectViewMode,
-      ctx.requestedPreviewQuantity,
-      femDiscretization,
-      selectedSubmeshesToolboxOpen,
-      viewport3DContractToolbarState.clip_enabled,
-      viewport3DContractToolbarState.component_enabled,
-      viewport3DContractToolbarState.quantity_enabled,
-      viewport3DContractToolbarState.render_mode_enabled,
-      viewport3DInteractionMode,
-      viewport3DRenderState,
-    ],
-  );
-  const createViewport3DModel = useCallback(
-    (
-      discretization: Viewport3DDiscretization,
-      fallbackMode: Viewport3DFallbackMode = "none",
-    ): Viewport3DModel => {
-      const model = buildViewport3DModelFromAdapter({
-        discretization,
-        renderState: viewport3DRenderState,
-        toolbarState: viewport3DToolbarState,
-        capabilities: viewport3DCapabilities,
-        worldExtent: ctx.worldExtent,
-        worldCenter: ctx.worldCenter,
-        topologyRevision:
-          viewport3DContractModel.topology_revision != null
-            ? String(viewport3DContractModel.topology_revision)
-            : resolvedFemTopologyKey,
-        fieldRevision:
-          viewport3DContractModel.field_revision != null
-            ? String(viewport3DContractModel.field_revision)
-            : scaledFemMeshData?.fieldRevision != null
-            ? String(scaledFemMeshData.fieldRevision)
-            : (ctx.fieldDataRevision != null ? String(ctx.fieldDataRevision) : null),
-        quantityId: viewport3DContractModel.quantity_id,
-        selectedObjectId: viewport3DContractModel.selection.object_id,
-        selectedEntityId: viewport3DContractModel.selection.part_id ?? ctx.selectedEntityId,
-        focusedEntityId: ctx.focusedEntityId,
-        selectedSidebarNodeId: ctx.selectedSidebarNodeId,
-        loading: ctx.previewBusy,
-        message: ctx.previewMessage,
-        error: ctx.error,
-        pendingMeshBuild: builderMeshDirty,
-        sourceKind: ctx.selectedVectorSourceKind,
-        fieldDataRevision: ctx.fieldDataRevision != null ? String(ctx.fieldDataRevision) : null,
-        fieldDataTimestamp: ctx.fieldDataTimestamp,
-        effectiveStep: ctx.effectiveStep,
-        authoring: showGeometryAuthoringViewport
-          ? {
-              enabled: true,
-              activeTool: viewport3DInteractionMode,
-              snapEnabled: Boolean(builderSnapSettings.enabled),
-              snapSettings: {
-                translateStepMeters: builderSnapSettings.translateStepMeters,
-                rotateStepDeg: builderSnapSettings.rotateStepDeg,
-                scaleStep: builderSnapSettings.scaleStep,
-              },
-            }
-          : null,
-        fdmSettings: ctx.fdmVisualizationSettings,
-        fdmVectorsVisible: ctx.fdmVisualizationSettings.render_mode === "glyph",
-      });
-      if (model.scene.fallbackMode === fallbackMode) {
-        return model;
-      }
-      return {
-        ...model,
-        scene: {
-          ...model.scene,
-          fallbackMode,
-        },
-      };
+    toolbar: {
+      clipFlip: ctx.meshClipFlip,
+      interactionMode: viewport3DInteractionMode,
+      snapEnabled: Boolean(builderSnapSettings.enabled),
+      objectViewMode: ctx.objectViewMode,
+      vectorsVisible: femDiscretization ? ctx.meshShowArrows : true,
+      legendVisible: ctx.viewportLegendVisible,
+      partExplorerVisible: selectedSubmeshesToolboxOpen,
+      projection: "perspective",
+      navProfile: "trackball",
     },
-    [
-      builderMeshDirty,
-      builderSnapSettings.enabled,
-      builderSnapSettings.rotateStepDeg,
-      builderSnapSettings.scaleStep,
-      builderSnapSettings.translateStepMeters,
-      ctx.effectiveStep,
-      ctx.error,
-      ctx.fdmVisualizationSettings,
-      ctx.fieldDataRevision,
-      ctx.fieldDataTimestamp,
-      ctx.focusedEntityId,
-      ctx.previewBusy,
-      ctx.previewMessage,
-      ctx.selectedEntityId,
-      ctx.selectedSidebarNodeId,
-      ctx.selectedVectorSourceKind,
-      ctx.worldCenter,
-      ctx.worldExtent,
-      resolvedFemTopologyKey,
-      scaledFemMeshData?.fieldRevision,
-      showGeometryAuthoringViewport,
-      viewport3DContractModel.field_revision,
-      viewport3DContractModel.quantity_id,
-      viewport3DContractModel.selection.object_id,
-      viewport3DContractModel.selection.part_id,
-      viewport3DContractModel.topology_revision,
-      viewport3DCapabilities,
-      viewport3DInteractionMode,
-      viewport3DRenderState,
-      viewport3DToolbarState,
-    ],
-  );
+    model: {
+      discretization: femDiscretization ? "fem" : "fdm",
+      worldExtent: ctx.worldExtent,
+      worldCenter: ctx.worldCenter,
+      selectedEntityFallbackId: ctx.selectedEntityId,
+      focusedEntityId: ctx.focusedEntityId,
+      selectedSidebarNodeId: ctx.selectedSidebarNodeId,
+      loading: ctx.previewBusy,
+      message: ctx.previewMessage,
+      error: ctx.error,
+      pendingMeshBuild: builderMeshDirty,
+      sourceKind: ctx.selectedVectorSourceKind,
+      fieldDataTimestamp: ctx.fieldDataTimestamp,
+      effectiveStep: ctx.effectiveStep,
+      authoring: showGeometryAuthoringViewport
+        ? {
+            enabled: true,
+            activeTool: viewport3DInteractionMode,
+            snapEnabled: Boolean(builderSnapSettings.enabled),
+            snapSettings: {
+              translateStepMeters: builderSnapSettings.translateStepMeters,
+              rotateStepDeg: builderSnapSettings.rotateStepDeg,
+              scaleStep: builderSnapSettings.scaleStep,
+            },
+          }
+        : null,
+      fdmSettings: ctx.fdmVisualizationSettings,
+      fdmVectorsVisible: ctx.fdmVisualizationSettings.render_mode === "glyph",
+    },
+  });
+  const createViewport3DModel = viewport3DController.createModel;
   const hostedMixedViewportModel = useMemo(
     () => createViewport3DModel("mixed"),
     [createViewport3DModel],
@@ -1419,6 +1414,10 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
   } = {}): React.ReactNode => {
     return (
       <UnifiedViewport2DPresenter
+        slice2DModel={slice2DModel}
+        workspaceSelection={workspaceSelection}
+        workspaceSync={workspaceSyncState}
+        onSlice2DToolbarChange={handleSlice2DToolbarChange}
         shouldUseSliceApi2D={shouldUseSliceApi2D}
         hasSliceScalar={hasSliceScalar}
         sliceLoading={slice2D.loading}
@@ -1451,7 +1450,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         selectedAntennaId={selectedAntennaName}
         showArrows={femShowArrowsForRender}
         previewMaxPoints={ctx.requestedPreviewMaxPoints}
-        onQuantityChange={ctx.requestPreviewQuantity}
+        onQuantityChange={ctx.requestDisplayQuantity}
         onComponentChange={handleFemSliceComponentChange}
         onPlaneChange={ctx.setPlane}
         onClipAxisChange={ctx.setMeshClipAxis}
@@ -1488,6 +1487,8 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             worldCenter={ctx.worldCenter}
             partExplorerOpen={selectedSubmeshesToolboxOpen}
             onTogglePartExplorer={openSelectedSubmeshesToolbox}
+            legendOpen={ctx.viewportLegendVisible}
+            onLegendOpenChange={ctx.setViewportLegendVisible}
             onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
           />
         </ViewportErrorBoundary>
@@ -1742,7 +1743,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             worldCenter={ctx.worldCenter}
             onEntitySelect={ctx.setSelectedEntityId}
             onEntityFocus={ctx.setFocusedEntityId}
-            onQuantityChange={ctx.requestPreviewQuantity}
+            onQuantityChange={ctx.requestDisplayQuantity}
             activeTextureTransform={activeTextureTransform}
             textureGizmoMode={activeTextureGizmoMode}
             activeTexturePreviewProxy={activeTexturePreviewProxy}
@@ -1751,6 +1752,8 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             onTextureTransformCommit={applyTextureTransform}
             partExplorerOpen={selectedSubmeshesToolboxOpen}
             onTogglePartExplorer={openSelectedSubmeshesToolbox}
+            legendOpen={ctx.viewportLegendVisible}
+            onLegendOpenChange={ctx.setViewportLegendVisible}
             onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
           />
         </ViewportErrorBoundary>
@@ -1846,7 +1849,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             onAntennaTranslate={ctx.applyAntennaTranslation}
             worldExtent={ctx.worldExtent}
             worldCenter={ctx.worldCenter}
-            onQuantityChange={ctx.requestPreviewQuantity}
+            onQuantityChange={ctx.requestDisplayQuantity}
             activeTextureTransform={activeTextureTransform}
             textureGizmoMode={activeTextureGizmoMode}
             activeTexturePreviewProxy={activeTexturePreviewProxy}
@@ -1949,17 +1952,30 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
             renderComponent={(componentKey) => {
               switch (componentKey) {
                 case "UnifiedViewport3D":
-                  return (
-                    <UnifiedViewport3DPresenter
-                      showGeometryAuthoringViewport={showGeometryAuthoringViewport}
-                      isFemMeshMode={ctx.effectiveViewMode === "Mesh" && femDiscretization}
-                      isFem3DMode={Boolean(femDiscretization && ctx.effectiveViewMode === "3D")}
-                      renderGeometryAuthoring={renderHostedGeometryAuthoringViewport}
-                      renderFemMesh={renderHostedFemMeshViewport}
-                      renderFem3D={renderHostedFem3DViewport}
-                      renderFdm={renderHostedVectorSurfaceViewport}
-                    />
-                  );
+                  {
+                    const viewport3D = (
+                      <UnifiedViewport3DRenderer
+                        showGeometryAuthoringViewport={showGeometryAuthoringViewport}
+                        isFemMeshMode={ctx.effectiveViewMode === "Mesh" && femDiscretization}
+                        isFem3DMode={Boolean(femDiscretization && ctx.effectiveViewMode === "3D")}
+                        renderGeometryAuthoring={renderHostedGeometryAuthoringViewport}
+                        renderFemMesh={renderHostedFemMeshViewport}
+                        renderFem3D={renderHostedFem3DViewport}
+                        renderFdm={renderHostedVectorSurfaceViewport}
+                      />
+                    );
+	                    return ctx.effectiveViewMode === "Mesh" && effectiveMeshWorkspaceModel ? (
+	                      <MeshWorkspaceShell
+	                        model={effectiveMeshWorkspaceModel}
+	                        selection={workspaceSelection}
+	                        sync={workspaceSyncState}
+	                        onBuild={handleMeshWorkspaceBuild}
+	                        onToolbarChange={handleMeshWorkspaceToolbarChange}
+	                      >
+                        {viewport3D}
+                      </MeshWorkspaceShell>
+                    ) : viewport3D;
+                  }
                 case "UnifiedViewport2D":
                   return renderUnified2DViewport({
                     preferFemMesh: Boolean(scaledFemMeshData),

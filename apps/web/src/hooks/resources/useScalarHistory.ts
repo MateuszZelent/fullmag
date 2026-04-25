@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 import {
   mergeScalarWindows,
@@ -27,7 +27,7 @@ export function fetchScalarWindow(
   opts?: { sinceRevision?: number; limit?: number },
   requestOptions?: { signal?: AbortSignal },
 ): Promise<ScalarWindow> {
-  return getLiveApiClient().scalars.getWindow(opts, requestOptions);
+  return getLiveSessionClient().scalars.getWindow(opts, requestOptions);
 }
 
 export function useScalarHistory(

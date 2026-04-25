@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ArtifactEntry } from "../../api/contracts";
-import { getLiveApiClient } from "../../api/client/LiveApiClient";
+import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { ResourceCache } from "../../api/client/cache/ResourceCache";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
@@ -25,7 +25,7 @@ export function useArtifacts(): UseArtifactsResult {
   const fetchArtifacts = useCallback(async () => {
     setLoading(true);
     try {
-      const client = getLiveApiClient();
+      const client = getLiveSessionClient();
       const cacheKey = ResourceCache.domainKey(0, "artifacts:list");
       const cached = client.getCache().get<ArtifactEntry[]>(cacheKey);
       const response = await client.artifacts.listResponse({

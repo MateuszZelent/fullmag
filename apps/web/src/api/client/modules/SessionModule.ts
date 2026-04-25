@@ -9,19 +9,20 @@ import type {
   SessionImportInspectRequest,
   SessionImportInspectResponse,
 } from "../../contracts";
-import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
+import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
+import { sessionApiPaths } from "../sessionPaths";
 
 const SESSION_PERSISTENCE_TIMEOUT_MS = 120_000;
 
 export class SessionModule {
-  constructor(private client: LiveApiClient) {}
+  constructor(private client: LiveSessionClient) {}
 
   async export(
     request: SessionExportRequest,
     opts?: RequestOptions,
   ): Promise<SessionExportResponse> {
     return this.client.post<SessionExportResponse>(
-      "/v1/live/current/session/export",
+      sessionApiPaths.persistence.exports,
       request,
       {
         ...opts,
@@ -35,7 +36,7 @@ export class SessionModule {
     opts?: RequestOptions,
   ): Promise<SessionImportInspectResponse> {
     return this.client.post<SessionImportInspectResponse>(
-      "/v1/live/current/session/import/inspect",
+      sessionApiPaths.persistence.importInspections,
       request,
       {
         ...opts,
@@ -49,7 +50,7 @@ export class SessionModule {
     opts?: RequestOptions,
   ): Promise<SessionImportCommitResponse> {
     return this.client.post<SessionImportCommitResponse>(
-      "/v1/live/current/session/import/commit",
+      sessionApiPaths.persistence.imports,
       request,
       {
         ...opts,
@@ -60,23 +61,19 @@ export class SessionModule {
 
   async listCheckpoints(opts?: RequestOptions): Promise<CheckpointListResponse> {
     return this.client.get<CheckpointListResponse>(
-      "/v1/live/current/session/checkpoints",
+      sessionApiPaths.persistence.checkpoints,
       opts,
     );
   }
 
   async listRecovery(opts?: RequestOptions): Promise<RecoveryListResponse> {
     return this.client.get<RecoveryListResponse>(
-      "/v1/live/current/session/recovery",
+      sessionApiPaths.persistence.recovery,
       opts,
     );
   }
 
   async clearRecovery(opts?: RequestOptions): Promise<RecoveryClearResponse> {
-    return this.client.post<RecoveryClearResponse>(
-      "/v1/live/current/session/recovery/clear",
-      {},
-      opts,
-    );
+    return this.client.delete<RecoveryClearResponse>(sessionApiPaths.persistence.recovery, opts);
   }
 }

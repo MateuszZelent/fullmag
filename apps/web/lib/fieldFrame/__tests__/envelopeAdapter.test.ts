@@ -1,7 +1,24 @@
 import { describe, expect, it } from "vitest";
 
 import { buildFieldFrameEnvelopeFromRuntimeState, type EnvelopeAdapterInput } from "../envelopeAdapter";
-import { synthesizeCapabilitiesFromDiscretization } from "@/src/domain/capabilities";
+import type { CapabilityMap } from "@/src/api/types";
+
+function makeCapabilities(overrides: Partial<CapabilityMap> = {}): CapabilityMap {
+  return {
+    structured_grid: true,
+    explicit_topology: false,
+    binary_fields: true,
+    cell_fields: true,
+    node_fields: false,
+    scalar_history: true,
+    eigen_modes: false,
+    gpu_telemetry: false,
+    preview_2d: true,
+    preview_3d: true,
+    algorithms_available: [],
+    ...overrides,
+  };
+}
 
 function makeInput(overrides: Partial<EnvelopeAdapterInput> = {}): EnvelopeAdapterInput {
   return {
@@ -76,7 +93,12 @@ describe("buildFieldFrameEnvelopeFromRuntimeState", () => {
   it("uses mesh generation id from femMesh for FEM", () => {
     const result = buildFieldFrameEnvelopeFromRuntimeState(
       makeInput({
-        domainCapabilities: synthesizeCapabilitiesFromDiscretization(true),
+        domainCapabilities: makeCapabilities({
+          structured_grid: false,
+          explicit_topology: true,
+          cell_fields: false,
+          node_fields: true,
+        }),
         fallbackFemDiscretization: false,
         femMesh: {
           nodes: [],
@@ -94,7 +116,12 @@ describe("buildFieldFrameEnvelopeFromRuntimeState", () => {
   it("falls back to mesh_id when generation_id is absent", () => {
     const result = buildFieldFrameEnvelopeFromRuntimeState(
       makeInput({
-        domainCapabilities: synthesizeCapabilitiesFromDiscretization(true),
+        domainCapabilities: makeCapabilities({
+          structured_grid: false,
+          explicit_topology: true,
+          cell_fields: false,
+          node_fields: true,
+        }),
         fallbackFemDiscretization: false,
         femMesh: {
           nodes: [],

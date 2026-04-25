@@ -1,7 +1,7 @@
 "use client";
 
-import type { LiveApiClient } from "@/src/api/client/LiveApiClient";
-import type { RequestOptions } from "@/src/api/client/LiveApiClient";
+import type { LiveSessionClient } from "@/src/api/client/LiveSessionClient";
+import type { RequestOptions } from "@/src/api/client/LiveSessionClient";
 import type { JsonResourceResponse } from "@/src/api/types";
 
 export async function getCachedJsonResource<T>({
@@ -12,7 +12,7 @@ export async function getCachedJsonResource<T>({
   responseFetcher,
   generationId = 0,
 }: {
-  client: LiveApiClient;
+  client: LiveSessionClient;
   cacheKey: string;
   revision: number;
   fetcher: () => Promise<T>;

@@ -4,7 +4,6 @@ export {
   canShowWireframe,
   canShowGridDimensions,
   getAvailableAlgorithms,
-  synthesizeCapabilitiesFromDiscretization,
   isFemDiscretization,
   isFdmDiscretization,
   resolveFemDiscretization,

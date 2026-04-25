@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * useRuntimeFeatureFlags — compatibility shim resolved through `/v1/capabilities`.
+ * useRuntimeFeatureFlags — compatibility shim resolved through `/v2/platform/capabilities`.
  *
  * Returns `null` while loading (first render), then the resolved flags.
  * Components should show a loading placeholder or nothing until flags are
  * available to avoid mounting expensive subsystems (e.g. Three.js) that might
  * be immediately disabled.
  *
- * The canonical runtime capability source is `GET /v1/capabilities`.
+ * The canonical runtime capability source is `GET /v2/platform/capabilities`.
  * During migration we preserve the old boolean shape locally, but the network
  * request now goes through the capability endpoint instead of legacy flags.
  */

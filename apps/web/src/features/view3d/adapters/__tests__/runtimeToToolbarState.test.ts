@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { runtimeToViewport3DToolbarState } from "../runtimeToToolbarState";
+import {
+  hasViewport3DFieldData,
+  resolveViewport3DResourceState,
+  runtimeToViewport3DToolbarState,
+} from "../runtimeToToolbarState";
 
 describe("runtimeToViewport3DToolbarState", () => {
   it("enables controls when runtime has required data and capabilities", () => {
@@ -54,6 +58,56 @@ describe("runtimeToViewport3DToolbarState", () => {
       component: "vector components unsupported",
       clip: "topology unavailable",
       render_mode: "3d preview unavailable",
+    });
+  });
+
+  it("treats FEM renderer field revisions as available field data without status field_revision", () => {
+    expect(
+      hasViewport3DFieldData({
+        statusFieldRevision: null,
+        femMeshFieldRevision: "fem-field-12",
+        dataPlaneFieldRevision: null,
+        selectedVectorCount: 0,
+      }),
+    ).toBe(true);
+
+    const state = runtimeToViewport3DToolbarState({
+      capabilities: {
+        can_render_3d: true,
+        can_show_topology: true,
+        can_show_structured_grid: false,
+        can_show_vectors: true,
+        can_show_scalar_history: false,
+        algorithms_available: [],
+      },
+      has_topology: true,
+      has_field_data: hasViewport3DFieldData({
+        statusFieldRevision: null,
+        femMeshFieldRevision: "fem-field-12",
+      }),
+    });
+
+    expect(state.quantity_enabled).toBe(true);
+    expect(state.component_enabled).toBe(true);
+    expect(state.reasons.quantity).toBeNull();
+  });
+
+  it("resolves topology and field revisions from the same evidence used by toolbar gating", () => {
+    const resolved = resolveViewport3DResourceState({
+      statusTopologyRevision: null,
+      topologyFallbackRevision: "fem-topology-4",
+      statusFieldRevision: null,
+      femMeshFieldRevision: 17,
+      dataPlaneFieldRevision: "field-buffer-18",
+      selectedVectorCount: 0,
+    });
+
+    expect(resolved).toEqual({
+      hasTopology: true,
+      hasFieldData: true,
+      topologyRevision: "fem-topology-4",
+      fieldRevision: "17",
+      fieldDataRevision: "field-buffer-18",
     });
   });
 });

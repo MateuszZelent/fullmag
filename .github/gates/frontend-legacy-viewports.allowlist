@@ -2,6 +2,3 @@
 #   <path>:<matched_fragment>
 #
 # Keep only temporary, intentional legacy viewport references here.
-
-apps/web/components/preview/VectorFieldView3D.tsx:VectorFieldView3D
-apps/web/components/runs/control-room/UnifiedViewport3DVectorSurface.tsx:VectorFieldView3D

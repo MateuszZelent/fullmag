@@ -10,7 +10,7 @@ import type {
   FemMeshPayload,
 } from "@/components/analyze/eigenTypes";
 import { fetchAnalyzeArtifact } from "@/features/analyze";
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import { decodeTopology } from "@/src/api/codecs/topologyCodec";
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
@@ -102,7 +102,7 @@ export function useCurrentAnalyzeArtifacts(
       setError(null);
 
       try {
-        const client = getLiveApiClient();
+        const client = getLiveSessionClient();
         const queryNonce = `${refreshNonce}:${internalRefreshNonce}`;
         const [meshTopology, liveArtifacts] = await Promise.all([
           fetchAnalyzeArtifact<FemMeshPayload | null>(
@@ -230,7 +230,7 @@ export function useCurrentAnalyzeArtifacts(
     setModeError(null);
 
     try {
-      const client = getLiveApiClient();
+      const client = getLiveSessionClient();
       const artifact = await fetchAnalyzeArtifact<EigenModeArtifact>(
         {
           domain: "eigenmodes",

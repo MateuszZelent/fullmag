@@ -2100,6 +2100,7 @@ export function normalizeSessionState(
           unit: String(quantity?.unit ?? ""),
           location: String(quantity?.location ?? ""),
           available: Boolean(quantity?.available),
+          data_available: Boolean(quantity?.data_available ?? quantity?.available),
           interactive_preview: Boolean(quantity?.interactive_preview),
           quick_access_label:
             typeof quantity?.quick_access_label === "string" ? quantity.quick_access_label : null,

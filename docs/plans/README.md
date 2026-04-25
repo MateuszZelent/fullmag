@@ -108,3 +108,5 @@ Minimum expected structure:
   - plan for true interactive sessions with command injection, pause/resume/break, and live UI controls
 - `active/resource-first-api-endpoint-reference-rollout-2026-04-21.md`
   - plan for the field-complete resource-first endpoint reference, legacy-to-resource mapping, and final control-room cutover backlog
+- `active/v2-api-cutover-and-v1-removal-plan-2026-04-25.mdx`
+  - plan for generated v2 frontend transport, v2-native backend handlers, and public v1 API removal

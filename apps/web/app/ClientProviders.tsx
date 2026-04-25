@@ -3,17 +3,16 @@
 /**
  * Client-side providers wrapper.
  *
- * Wraps children with the ResourceApiProvider (which requires a browser
- * environment to resolve `window.location.origin` for the API base URL).
- * This component is "use client" so it can safely access `window`.
+ * Wraps children with the ResourceApiProvider using the same runtime API base
+ * resolution as the resource hooks and singleton LiveSessionClient.
  */
 
 import type { ReactNode } from "react";
+import { resolveApiBase } from "@/lib/apiBase";
 import { ResourceApiProvider } from "../src/providers/ResourceApiProvider";
 
 export function ClientProviders({ children }: { children: ReactNode }) {
-  const baseUrl =
-    typeof window !== "undefined" ? window.location.origin : "/";
+  const baseUrl = resolveApiBase();
 
   return (
     <ResourceApiProvider baseUrl={baseUrl}>{children}</ResourceApiProvider>
