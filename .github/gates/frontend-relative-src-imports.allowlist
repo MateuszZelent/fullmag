@@ -6,7 +6,6 @@
 # CI fails on any new finding outside this allowlist.
 
 apps/web/app/ClientProviders.tsx:from "../src/providers/ResourceApiProvider"
-apps/web/components/runs/control-room/ControlRoomContext.tsx:from "../../../src/api/client/LiveApiClient"
 apps/web/components/runs/control-room/ControlRoomContext.tsx:from "../../../src/api/codecs/fieldVectorCodec"
 apps/web/components/runs/control-room/ControlRoomContext.tsx:from "../../../src/api/codecs/topologyCodec"
 apps/web/components/runs/control-room/ControlRoomContext.tsx:from "../../../src/api/types"

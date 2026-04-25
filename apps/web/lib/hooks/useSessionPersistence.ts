@@ -8,10 +8,7 @@
  */
 
 import { useCallback, useState } from "react";
-import {
-  getLiveApiClient,
-  initLiveApiClient,
-} from "@/src/api/client/LiveApiClient";
+import { ensureLiveApiResourceClient } from "@/src/hooks/resources/liveApiClientResource";
 import type {
   CheckpointEntry,
   RecoveryEntry,
@@ -20,7 +17,6 @@ import type {
   SessionImportCommitResponse,
   SessionInspection,
 } from "@/src/api/types";
-import { resolveApiBase } from "../apiBase";
 import { useWorkspaceStore } from "../workspace/workspace-store";
 
 export interface UseSessionPersistenceResult {
@@ -82,7 +78,7 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
     async (profile: SaveProfile, name?: string) => {
       return wrap(async () => {
         const uiState = useWorkspaceStore.getState().exportUiStateSnapshot();
-        const resp = await ensureResourceClient().session.export({
+        const resp = await ensureLiveApiResourceClient().session.export({
           profile,
           name,
           ui_state: uiState,
@@ -99,7 +95,7 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
     async (file: File) => {
       return wrap(async () => {
         const base64 = await fileToBase64(file);
-        const resp = await ensureResourceClient().session.inspectImport({
+        const resp = await ensureLiveApiResourceClient().session.inspectImport({
           fms_base64: base64,
         });
         return resp.inspection;
@@ -112,7 +108,7 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
     async (file: File, restoreMode?: string) => {
       return wrap(async () => {
         const base64 = await fileToBase64(file);
-        const response = await ensureResourceClient().session.commitImport({
+        const response = await ensureLiveApiResourceClient().session.commitImport({
           fms_base64: base64,
           restore_mode: restoreMode,
         });
@@ -127,7 +123,7 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
 
   const fetchCheckpoints = useCallback(async () => {
     const result = await wrap(async () => {
-      const resp = await ensureResourceClient().session.listCheckpoints();
+      const resp = await ensureLiveApiResourceClient().session.listCheckpoints();
       return resp.checkpoints;
     });
     return result ?? [];
@@ -135,7 +131,7 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
 
   const fetchRecovery = useCallback(async () => {
     const result = await wrap(async () => {
-      const resp = await ensureResourceClient().session.listRecovery();
+      const resp = await ensureLiveApiResourceClient().session.listRecovery();
       return resp.snapshots;
     });
     return result ?? [];
@@ -143,7 +139,7 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
 
   const doClearRecovery = useCallback(async () => {
     const result = await wrap(async () => {
-      const resp = await ensureResourceClient().session.clearRecovery();
+      const resp = await ensureLiveApiResourceClient().session.clearRecovery();
       return resp.cleared;
     });
     return result ?? 0;
@@ -162,14 +158,6 @@ export function useSessionPersistence(): UseSessionPersistenceResult {
     doClearRecovery,
     clearError,
   };
-}
-
-function ensureResourceClient() {
-  try {
-    return getLiveApiClient();
-  } catch {
-    return initLiveApiClient({ baseUrl: resolveApiBase() });
-  }
 }
 
 function fileToBase64(file: File): Promise<string> {

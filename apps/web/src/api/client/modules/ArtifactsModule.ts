@@ -1,5 +1,5 @@
 import type { JsonResourceResponse } from "../../types";
-import type { ArtifactEntry } from "../../generated/openapi-types";
+import type { ArtifactEntry } from "../../contracts";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
 
 export class ArtifactsModule {

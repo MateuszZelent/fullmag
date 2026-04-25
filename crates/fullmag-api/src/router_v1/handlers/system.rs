@@ -7,7 +7,7 @@ use axum::http::HeaderMap;
 use axum::Json;
 
 use crate::error::ApiError;
-use crate::schemas::common::HealthResponse;
+use crate::schemas::common::{HealthResponse, RuntimeCapabilityMatrix};
 use crate::schemas::logs::EngineLogResource;
 use crate::types::{AppState, GpuTelemetryResponse};
 
@@ -38,7 +38,7 @@ pub async fn get_health(State(state): State<Arc<AppState>>) -> Json<HealthRespon
     get,
     path = "/v1/capabilities",
     responses(
-        (status = 200, description = "Runtime capabilities"),
+        (status = 200, description = "Runtime capabilities", body = RuntimeCapabilityMatrix),
     ),
     tag = "system"
 )]

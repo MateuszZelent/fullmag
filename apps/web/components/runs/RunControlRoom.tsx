@@ -296,8 +296,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }, [commandFixedDtFromPlan, commandFixedDtFromSettings]);
   const sidebarCollapsed = ctx.sidebarCollapsed;
   const setSidebarCollapsed = ctx.setSidebarCollapsed;
-  const workspaceMode = ctx.workspaceMode;
-  const setWorkspaceMode = ctx.setWorkspaceMode;
+  const workspaceStage = ctx.workspaceStage;
+  const setWorkspaceStage = ctx.setWorkspaceStage;
   const effectiveViewMode = ctx.effectiveViewMode;
   const handleViewModeChange = ctx.handleViewModeChange;
   const quickPreviewTargets = ctx.quickPreviewTargets;
@@ -380,10 +380,11 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 
   useEffect(() => {
     if (!initialWorkspaceMode) return;
-    if (workspaceMode !== initialWorkspaceMode) {
-      setWorkspaceMode(initialWorkspaceMode);
+    const initialStage = initialWorkspaceMode === "build" ? "build" : "study";
+    if (workspaceStage !== initialStage) {
+      setWorkspaceStage(initialStage);
     }
-  }, [initialWorkspaceMode, setWorkspaceMode, workspaceMode]);
+  }, [initialWorkspaceMode, setWorkspaceStage, workspaceStage]);
 
   useEffect(() => {
     const next = Boolean(activeStageLayout.rightDock);
@@ -393,7 +394,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }, [activeStageLayout.rightDock, rightInspectorOpen, setRightInspectorOpen]);
 
   useEffect(() => {
-    const geometryTabActive = isGeometryAuthoringWorkspace(workspaceMode, activeCoreTab);
+    const geometryTabActive = isGeometryAuthoringWorkspace(workspaceStage, activeCoreTab);
     if (geometryTabActive && !builderModeEnabled) {
       enableBuilderMode();
     } else if (!geometryTabActive && builderModeEnabled) {
@@ -402,8 +403,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     if (!geometryTabActive) {
       return;
     }
-    if (workspaceMode !== "build") {
-      setWorkspaceMode("build");
+    if (workspaceStage !== "build") {
+      setWorkspaceStage("build");
     }
     if (effectiveViewMode !== "3D") {
       handleViewModeChange("3D");
@@ -415,13 +416,13 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     effectiveViewMode,
     enableBuilderMode,
     handleViewModeChange,
-    setWorkspaceMode,
-    workspaceMode,
+    setWorkspaceStage,
+    workspaceStage,
   ]);
 
   useEffect(() => {
     if (!shouldForceCameraFirstViewport({
-      workspaceMode,
+      workspaceMode: workspaceStage,
       activeCoreTab,
       effectiveViewMode,
     })) {
@@ -442,7 +443,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     ctx,
     effectiveViewMode,
     setBuilderViewportTool,
-    workspaceMode,
+    workspaceStage,
   ]);
 
   const spatialPreview = ctx.preview?.kind === "spatial" ? ctx.preview : null;
@@ -593,7 +594,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     if (ctx.sidebarCollapsed) {
       ctx.setSidebarCollapsed(false);
     }
-    ctx.setWorkspaceMode("build");
+    ctx.setWorkspaceStage("build");
     ctx.setSelectedObjectId(nextObjectId);
     ctx.setSelectedSidebarNodeId(`obj-${nextObjectId}`);
     ctx.setObjectViewMode("context");
@@ -603,15 +604,15 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     builderSelection.type === "primitive" ? builderSelection.id : null;
 
   const handleBuilderAddPrimitive = useCallback((kind: "box" | "cylinder" | "sphere" | "disk" | "triangular_prism") => {
-    if (workspaceMode !== "build") {
-      setWorkspaceMode("build");
+    if (workspaceStage !== "build") {
+      setWorkspaceStage("build");
     }
     if (ctx.effectiveViewMode !== "3D") {
       ctx.handleViewModeChange("3D");
     }
     addBuilderPrimitive(kind);
     setBuilderViewportTool("move");
-  }, [addBuilderPrimitive, ctx, setBuilderViewportTool, setWorkspaceMode, workspaceMode]);
+  }, [addBuilderPrimitive, ctx, setBuilderViewportTool, setWorkspaceStage, workspaceStage]);
 
   const handleBuilderSetViewportMode = useCallback((mode: "camera" | "manipulate") => {
     setBuilderViewportTool(mode === "camera" ? "camera" : selectedBuilderPrimitiveId ? "move" : "select");
@@ -1424,7 +1425,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onSyncScriptBuilder={() => void ctx.syncScriptBuilder()}
       />
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showRibbonBar ? <RibbonBar
-        workspaceMode={ctx.workspaceMode}
+        workspaceMode={ctx.workspaceStage}
         viewMode={ctx.effectiveViewMode}
         femDiscretization={femDiscretization}
         domainCapabilities={ctx.domainCapabilities}
@@ -1575,7 +1576,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
                 <div className="h-full min-h-0">
                   {ctx.effectiveViewMode === "Analyze" ? (
                     <AnalyzeRightInspector />
-                  ) : ctx.workspaceMode === "build" ? (
+                  ) : ctx.workspaceStage === "build" ? (
                     <BuildRightInspector />
                   ) : (
                     <StudyRightInspector />

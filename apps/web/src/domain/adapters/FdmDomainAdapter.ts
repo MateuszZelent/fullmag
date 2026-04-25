@@ -3,7 +3,7 @@
  * Builds cell-center positions from structured grid metadata.
  */
 
-import type { DomainMeta } from "../../api/generated/openapi-types";
+import type { DomainMeta } from "../../api/contracts";
 import type {
   SpatialDomainAdapter,
   Bounds3,

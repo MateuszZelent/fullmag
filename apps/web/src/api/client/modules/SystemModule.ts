@@ -1,7 +1,7 @@
 import type {
   HealthResponse,
   RuntimeCapabilityMatrix,
-} from "../../generated/openapi-types";
+} from "../../contracts";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
 
 export class SystemModule {

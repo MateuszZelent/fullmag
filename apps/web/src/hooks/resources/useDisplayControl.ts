@@ -5,7 +5,7 @@
  */
 
 import { useState, useCallback } from "react";
-import type { DisplaySelection } from "../../api/generated/openapi-types";
+import type { DisplaySelection } from "../../api/contracts";
 import type { DisplayPatchRequest } from "../../api/types";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";

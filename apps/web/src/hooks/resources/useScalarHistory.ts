@@ -11,6 +11,7 @@ import {
   mergeScalarWindows,
   type ScalarHistoryRow,
 } from "../../api/client/modules/ScalarHistoryAdapter";
+import type { ScalarWindow } from "../../api/contracts";
 
 interface UseScalarHistoryResult {
   scalars: ScalarHistoryRow[];
@@ -21,6 +22,13 @@ interface UseScalarHistoryResult {
 }
 
 const POLL_INTERVAL_MS = 2000;
+
+export function fetchScalarWindow(
+  opts?: { sinceRevision?: number; limit?: number },
+  requestOptions?: { signal?: AbortSignal },
+): Promise<ScalarWindow> {
+  return getLiveApiClient().scalars.getWindow(opts, requestOptions);
+}
 
 export function useScalarHistory(
   scalarRevision: number | null,
@@ -36,8 +44,7 @@ export function useScalarHistory(
   const fetchScalars = useCallback(async () => {
     setLoading(true);
     try {
-      const client = getLiveApiClient();
-      const window = await client.scalars.getWindow({
+      const window = await fetchScalarWindow({
         sinceRevision: lastRevRef.current,
       });
       if (!mountedRef.current) return;

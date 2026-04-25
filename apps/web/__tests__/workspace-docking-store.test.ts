@@ -150,6 +150,15 @@ describe("workspace docking store", () => {
     expect(useWorkspaceStore.getState().currentStage).toBe("study");
   });
 
+  it("normalizes legacy analyze stage writes to study", () => {
+    useWorkspaceStore.getState().setCurrentStage("build");
+    expect(useWorkspaceStore.getState().currentStage).toBe("build");
+
+    useWorkspaceStore.getState().setCurrentStage("analyze");
+
+    expect(useWorkspaceStore.getState().currentStage).toBe("study");
+  });
+
   it("uses explicit cold lifecycle defaults for heavy viewport panels", () => {
     const defaults = getDefaultWorkspaceTabsByStage();
     const studyTabs = defaults.study;

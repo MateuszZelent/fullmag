@@ -17,7 +17,6 @@ import { useSceneDocument } from "../../../src/hooks/resources/useSceneDocument"
 import { useStageExecution } from "../../../src/hooks/resources/useStageExecution";
 import { useMeshWorkspaceResourceState } from "../../../src/hooks/resources/useMeshResources";
 import { useWorkspaceSelection } from "../../../src/hooks/resources/useWorkspaceSelection";
-import { getLiveApiClient } from "../../../src/api/client/LiveApiClient";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
 import { useSessionRuntimeStore } from "../../../features/session-runtime/store/useSessionRuntimeStore";
 import {
@@ -150,6 +149,11 @@ import {
 } from "./analyzeSelection";
 import type { VisibleSubmeshSnapshot } from "./submeshSnapshot";
 import { resetSceneEditorToCameraFirst } from "./workspaceViewportGuards";
+import {
+  resolvePersistedWorkspaceSelection,
+  resolveRemoteWorkspaceSelectionHydration,
+  workspaceSelectionIdentity,
+} from "./workspaceSelectionGuards";
 
 /* Context interfaces, hooks, and React context objects are in context-hooks.tsx */
 export {
@@ -167,6 +171,7 @@ export type {
   ViewportContextValue,
   CommandContextValue,
   ModelContextValue,
+  WorkspaceStage,
   WorkspaceMode,
   ResultWorkspaceEntry,
   ResultWorkspaceKind,
@@ -187,6 +192,7 @@ import type {
   ViewportContextValue,
   CommandContextValue,
   ModelContextValue,
+  WorkspaceStage,
   WorkspaceMode,
   ResultWorkspaceEntry,
   ResultWorkspaceKind,
@@ -216,18 +222,6 @@ function vectorHead(values: Float64Array | null | undefined): [number, number, n
     return null;
   }
   return [values[0] ?? 0, values[1] ?? 0, values[2] ?? 0];
-}
-
-function workspaceSelectionIdentity(value: {
-  selected_node_id?: string | null;
-  selected_object_id?: string | null;
-  selected_entity_id?: string | null;
-} | null | undefined): string {
-  return JSON.stringify([
-    value?.selected_node_id ?? null,
-    value?.selected_object_id ?? null,
-    value?.selected_entity_id ?? null,
-  ]);
 }
 
 type BinaryFieldFrame = {
@@ -307,8 +301,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const connection = runtimeConnection;
   const error = runtimeConnectionError;
   const refreshLiveState = useCallback(async () => {
-    await getLiveApiClient().status.get();
-  }, []);
+    await liveApi.getStatus();
+  }, [liveApi]);
 
   // Runtime bridge adapter: sync Control Room transport into session-runtime store.
   useSessionRuntimeBridgeRouter();
@@ -330,6 +324,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       _setPerspective(typeof v === "function" ? v(workspaceMode) : v);
     },
     [_setPerspective, workspaceMode],
+  );
+  const workspaceStage = workspaceMode === "build" ? "build" : "study";
+  const setWorkspaceStage = useCallback(
+    (v: WorkspaceStage | ((prev: WorkspaceStage) => WorkspaceStage)) => {
+      _setPerspective(typeof v === "function" ? v(workspaceStage) : v);
+    },
+    [_setPerspective, workspaceStage],
   );
   const [viewMode, setViewMode] = useState<ViewportMode>("3D");
   const [component, setComponent] = useState<VectorComponent>("magnitude");
@@ -487,6 +488,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   });
   const workspaceSelectionHydratingRef = useRef(false);
   const lastPersistedWorkspaceSelectionRef = useRef<string | null>(null);
+  const pendingWorkspaceSelectionIdentityRef = useRef<string | null>(null);
   const metadata = runtimeMetadata;
   const problemMeta =
     metadata?.problem_meta && typeof metadata.problem_meta === "object"
@@ -565,6 +567,26 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       return created.id;
     },
     [resultWorkspaceEntries],
+  );
+  const markPendingWorkspaceSelection = useCallback(
+    (nextNodeId: string | null) => {
+      pendingWorkspaceSelectionIdentityRef.current = workspaceSelectionIdentity({
+        selected_node_id: nextNodeId,
+        selected_object_id: selectedObjectId,
+        selected_entity_id: selectedEntityId,
+      });
+    },
+    [selectedEntityId, selectedObjectId],
+  );
+  const setSelectedSidebarNodeIdFromUi = useCallback<Dispatch<SetStateAction<string | null>>>(
+    (next) => {
+      setSelectedSidebarNodeId((previous) => {
+        const resolved = typeof next === "function" ? next(previous) : next;
+        markPendingWorkspaceSelection(resolved);
+        return resolved;
+      });
+    },
+    [markPendingWorkspaceSelection],
   );
   const run = runtimeRun;
   const liveState = runtimeLiveState;
@@ -840,12 +862,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     );
     lastAppliedVisualizationPresetRef.current = null;
     lastPersistedWorkspaceSelectionRef.current = null;
+    pendingWorkspaceSelectionIdentityRef.current = null;
     workspaceSelectionHydratingRef.current = false;
   }, [workspaceHydrationKey]);
 
   useEffect(() => {
     if (!sceneResourceSessionKey) {
       lastPersistedWorkspaceSelectionRef.current = null;
+      pendingWorkspaceSelectionIdentityRef.current = null;
       workspaceSelectionHydratingRef.current = false;
       return;
     }
@@ -853,15 +877,37 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       return;
     }
     const nextIdentity = workspaceSelectionIdentity(workspaceSelection);
-    lastPersistedWorkspaceSelectionRef.current = nextIdentity;
     const currentIdentity = workspaceSelectionIdentity({
       selected_node_id: selectedSidebarNodeId,
       selected_object_id: selectedObjectId,
       selected_entity_id: selectedEntityId,
     });
-    if (currentIdentity === nextIdentity) {
+    const decision = resolveRemoteWorkspaceSelectionHydration({
+      remoteIdentity: nextIdentity,
+      currentIdentity,
+      pendingIdentity: pendingWorkspaceSelectionIdentityRef.current,
+    });
+    if (decision.kind === "confirm-pending") {
+      lastPersistedWorkspaceSelectionRef.current = nextIdentity;
+      pendingWorkspaceSelectionIdentityRef.current = null;
       return;
     }
+    if (decision.kind === "noop") {
+      lastPersistedWorkspaceSelectionRef.current = nextIdentity;
+      return;
+    }
+    if (decision.kind === "reject-stale-pending") {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[ControlRoomContext] Ignoring stale workspace selection hydration", {
+          currentIdentity,
+          pendingIdentity: pendingWorkspaceSelectionIdentityRef.current,
+          remoteIdentity: nextIdentity,
+        });
+      }
+      return;
+    }
+    lastPersistedWorkspaceSelectionRef.current = nextIdentity;
+    pendingWorkspaceSelectionIdentityRef.current = null;
     workspaceSelectionHydratingRef.current = true;
     setSelectedSidebarNodeId(workspaceSelection.selected_node_id ?? null);
     setSelectedObjectId(workspaceSelection.selected_object_id ?? null);
@@ -1037,6 +1083,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     sceneDocumentDraft,
     localBuilderDraft,
     remoteSceneDocument,
+    patchStudyRuntime: liveApi.patchStudyRuntime,
     setModelBuilderGraph,
     setSceneDocumentDraft,
     setSolverSettingsState,
@@ -1299,13 +1346,31 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       return;
     }
     lastPersistedWorkspaceSelectionRef.current = nextIdentity;
+    pendingWorkspaceSelectionIdentityRef.current = nextIdentity;
     void replaceWorkspaceSelection({
       selected_node_id: selectedSidebarNodeId,
       selected_object_id: selectedObjectId,
       selected_entity_id: selectedEntityId,
     }).then((persisted) => {
       if (persisted) {
-        lastPersistedWorkspaceSelectionRef.current = workspaceSelectionIdentity(persisted);
+        const persistedIdentity = workspaceSelectionIdentity(persisted);
+        const decision = resolvePersistedWorkspaceSelection({
+          persistedIdentity,
+          pendingIdentity: pendingWorkspaceSelectionIdentityRef.current,
+        });
+        if (decision.accepted) {
+          lastPersistedWorkspaceSelectionRef.current = persistedIdentity;
+          if (decision.clearPending) {
+            pendingWorkspaceSelectionIdentityRef.current = null;
+          }
+          return;
+        }
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[ControlRoomContext] Ignoring stale workspace selection persistence response", {
+            pendingIdentity: pendingWorkspaceSelectionIdentityRef.current,
+            persistedIdentity,
+          });
+        }
       }
     });
   }, [
@@ -1758,7 +1823,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setMeshClipEnabled,
     setMeshOpacity,
     setComponent,
-    setSelectedSidebarNodeId,
+    setSelectedSidebarNodeId: setSelectedSidebarNodeIdFromUi,
     setSelectedQuantity,
     setFocusObjectRequest,
     setScriptBuilderCurrentModules,
@@ -2439,6 +2504,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   ]);
 
   const viewportValue = useMemo<ViewportContextValue>(() => ({
+    workspaceStage, setWorkspaceStage,
     workspaceMode, setWorkspaceMode,
     viewMode, effectiveViewMode, component, plane, sliceIndex, selectedQuantity,
     consoleCollapsed, sidebarCollapsed,
@@ -2458,6 +2524,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     updatePreview, handleViewModeChange, handleCapture, handleExport, requestPreviewQuantity,
   }), [
     setWorkspaceMode,
+    setWorkspaceStage,
+    workspaceStage,
     workspaceMode,
     viewMode, effectiveViewMode, component, plane, sliceIndex, selectedQuantity,
     consoleCollapsed, sidebarCollapsed,
@@ -2636,6 +2704,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis,
     handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset, createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     applyAntennaTranslation, applyGeometryTranslation, setMeshOptions, setSolverSettings, activeTransformScope,
+    setSelectedSidebarNodeIdFromUi,
     resetViewportDisplayState,
   ]);
 

@@ -1,6 +1,7 @@
 export interface Viewport3DRouteFlagsInput {
   enableUnifiedViewport3D: boolean;
   enableUnifiedViewportToolbar: boolean;
+  enableUnifiedViewportCutover?: boolean;
 }
 
 export interface Viewport3DStageFlags {
@@ -24,8 +25,8 @@ export function mapRouteFlagsToViewport3DStages(
 ): Viewport3DStageFlags {
   const toolbar = input.enableUnifiedViewportToolbar;
   const routing = input.enableUnifiedViewport3D;
-  // Stage 8 cutover landed in runtime routing: legacy FDM 3D path is no longer mounted.
-  const cutover = routing;
+  // Stage 8 is a renderer cleanup gate, not just a routing gate.
+  const cutover = Boolean(input.enableUnifiedViewportCutover);
   return {
     viewport3d_unified_model: routing,
     viewport3d_unified_toolbar: toolbar,

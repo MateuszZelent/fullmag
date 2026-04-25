@@ -2,8 +2,10 @@
 
 import { getLiveApiClient, type RequestOptions } from "@/src/api/client/LiveApiClient";
 import { normalizeCommandRequest } from "@/src/api/client/modules/CommandAdapter";
-import type { DisplaySelection } from "@/src/api/generated/openapi-types";
+import type { DisplaySelection, LiveStatus } from "@/src/api/contracts";
 import type {
+  AuthoringStudyRuntimePatchRequest,
+  AuthoringStudyRuntimeResource,
   DisplayPatchRequest,
   DisplayReplaceRequest,
   MeshBuildCommandRequest,
@@ -35,6 +37,9 @@ export interface ControlRoomApi {
     payload: QueueRemeshPayload,
     options?: RequestOptions,
   ) => Promise<JsonObject>;
+  getStatus: (
+    options?: RequestOptions,
+  ) => Promise<LiveStatus>;
   getDisplay: (
     options?: RequestOptions,
   ) => Promise<DisplaySelection>;
@@ -50,6 +55,10 @@ export interface ControlRoomApi {
     payload: SceneDocument,
     options?: RequestOptions,
   ) => Promise<SceneDocument>;
+  patchStudyRuntime: (
+    payload: AuthoringStudyRuntimePatchRequest,
+    options?: RequestOptions,
+  ) => Promise<AuthoringStudyRuntimeResource>;
   syncScript: (
     payload?: JsonBody,
     options?: RequestOptions,
@@ -99,6 +108,9 @@ export function createControlRoomApi(): ControlRoomApi {
         .submitBuildCommand(request, options)
         .then((response) => response as unknown as JsonObject);
     },
+    getStatus(options) {
+      return client.status.get(options);
+    },
     getDisplay(options) {
       return client.display.get(options);
     },
@@ -110,6 +122,9 @@ export function createControlRoomApi(): ControlRoomApi {
     },
     updateSceneDocument(payload, options) {
       return client.scene.update(payload, options);
+    },
+    patchStudyRuntime(payload, options) {
+      return client.scene.patchStudyRuntime(payload, options);
     },
     syncScript(payload = {}, options) {
       return client.scene

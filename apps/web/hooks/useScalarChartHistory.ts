@@ -8,8 +8,8 @@ import {
   useRef,
 } from "react";
 
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
-import type { ScalarWindow } from "@/src/api/generated/openapi-types";
+import type { ScalarWindow } from "@/src/api/contracts";
+import { fetchScalarWindow } from "@/src/hooks/resources/useScalarHistory";
 import { coerceScalarRows } from "@/lib/plots/scalarRows";
 import { mergeScalarRowsDelta } from "@/lib/session/merge";
 import type { ScalarRow } from "@/lib/session/types";
@@ -226,14 +226,11 @@ export function useScalarChartHistory({
     }
 
     const abortController = new AbortController();
-    const client = getLiveApiClient();
     startTransition(() => {
       dispatch({ type: "full_history_start", sessionKey });
     });
 
-    void client
-      .scalars
-      .getWindow(undefined, { signal: abortController.signal })
+    void fetchScalarWindow(undefined, { signal: abortController.signal })
       .then((window) => {
         if (abortController.signal.aborted) {
           return;

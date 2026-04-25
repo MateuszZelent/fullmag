@@ -2,10 +2,7 @@
 
 import type { LaunchEntryKind, LaunchIntent, WorkspaceStage } from "./launch-intent";
 import { resolveApiBase } from "@/lib/apiBase";
-import {
-  getLiveApiClient,
-  initLiveApiClient,
-} from "@/src/api/client/LiveApiClient";
+import { ensureLiveApiResourceClient } from "@/src/hooks/resources/liveApiClientResource";
 import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
 import { recordFrontendDebugEvent } from "./navigation-debug";
 import type { LiveStatus } from "@/src/api/types";
@@ -54,7 +51,7 @@ export async function detectLiveSessionIntent(): Promise<DetectedLiveSession | n
   recordFrontendDebugEvent("live-intent", "status_fetch_start", { baseUrl });
   let payload: LiveStatus;
   try {
-    payload = await ensureResourceClient().status.get();
+    payload = await ensureLiveApiResourceClient().status.get();
   } catch (error) {
     if (error instanceof LiveApiError && error.status === 404) {
       recordFrontendDebugEvent("live-intent", "status_fetch_not_found", { baseUrl });
@@ -116,13 +113,5 @@ export async function detectLiveSessionIntent(): Promise<DetectedLiveSession | n
     if (current?.promise === promise) {
       liveIntentInFlight.delete(baseUrl);
     }
-  }
-}
-
-function ensureResourceClient() {
-  try {
-    return getLiveApiClient();
-  } catch {
-    return initLiveApiClient({ baseUrl: resolveApiBase() });
   }
 }

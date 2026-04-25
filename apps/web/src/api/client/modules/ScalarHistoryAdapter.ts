@@ -2,7 +2,7 @@
  * Adapters between the columnar ScalarWindow format and row-shaped frontend consumers.
  */
 
-import type { ScalarWindow } from "../../generated/openapi-types";
+import type { ScalarWindow } from "../../contracts";
 
 export interface ScalarHistoryRow {
   step: number;

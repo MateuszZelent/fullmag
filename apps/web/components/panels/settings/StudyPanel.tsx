@@ -180,8 +180,8 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
   const ctx = {
     ...model,
     totalCells: viewport.totalCells,
-    workspaceMode: viewport.workspaceMode,
-    setWorkspaceMode: viewport.setWorkspaceMode,
+    workspaceMode: viewport.workspaceStage,
+    setWorkspaceMode: viewport.setWorkspaceStage,
     isFemBackend: cmd.isFemBackend,
     domainCapabilities: cmd.domainCapabilities,
     activity: cmd.activity,

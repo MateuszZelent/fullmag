@@ -1,4 +1,4 @@
-import type { ScalarWindow } from "../../generated/openapi-types";
+import type { ScalarWindow } from "../../contracts";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
 
 export class ScalarsModule {

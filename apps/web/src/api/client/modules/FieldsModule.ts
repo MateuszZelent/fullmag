@@ -5,7 +5,7 @@ import type {
   FieldSliceQuery,
   FieldVectorOptions,
 } from "../../types";
-import type { FieldCatalog, FieldMeta } from "../../generated/openapi-types";
+import type { FieldCatalog, FieldMeta } from "../../contracts";
 import type { DecodedFieldVector } from "../../codecs/types";
 import { decodeFieldVectorOffThread } from "../../codecs/decodeOffThread";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";

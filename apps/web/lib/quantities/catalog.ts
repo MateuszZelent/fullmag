@@ -15,8 +15,8 @@
  * Rust crate first.
  */
 
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
 import type { QuantityCatalogResponse } from "@/src/api/client/modules/QuantitiesModule";
+import { fetchRuntimeQuantityCatalog } from "@/src/hooks/resources/quantityCatalog";
 import type { QuantityDescriptor, QuantityId, QuantityShape } from "./types";
 
 // ── Static catalog ───────────────────────────────────────────────
@@ -615,7 +615,7 @@ export function quantityColumnLabel(id: QuantityId): string {
     : d.label;
 }
 
-// ── Remote catalog fetch (QB-13 integration) ─────────────────────
+// ── Remote catalog retrieval (QB-13 integration) ─────────────────
 
 /** Wire shape of a single quantity from GET /v1/live/current/quantities/catalog */
 interface WireQuantityDescriptor {
@@ -666,8 +666,7 @@ export async function fetchQuantityCatalog(
   _baseUrl: string = "",
 ): Promise<readonly QuantityDescriptor[]> {
   try {
-    const client = getLiveApiClient();
-    const body = (await client.quantities.getCatalog()) as QuantityCatalogResponse;
+    const body = (await fetchRuntimeQuantityCatalog()) as QuantityCatalogResponse;
     return body.quantities.map(wireToDescriptor);
   } catch {
     return CATALOG;

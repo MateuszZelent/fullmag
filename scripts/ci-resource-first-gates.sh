@@ -153,6 +153,24 @@ run_gate \
   "$ALLOWLIST_DIR/backend-main-public-legacy-routes.allowlist" \
   "$REPO_ROOT/crates/fullmag-api/src/main.rs"
 
+run_gate \
+  "frontend-direct-fetch" \
+  "Frontend Direct Fetch Gate" \
+  'fetch\s*\(' \
+  "$ALLOWLIST_DIR/frontend-direct-fetch.allowlist" \
+  "$REPO_ROOT/apps/web"
+
+echo
+echo "=== Generated OpenAPI Types Gate ==="
+if rg -n --color never 'export \* from "\.\./types"' "$REPO_ROOT/apps/web/src/api/generated/openapi-types.ts"; then
+  echo "Generated OpenAPI types still re-export manual api/types.ts."
+  if [[ "$MODE" == "strict" ]]; then
+    GATE_FAILED=1
+  fi
+else
+  echo "openapi-types.ts is not a manual re-export."
+fi
+
 echo
 if [[ $GATE_FAILED -ne 0 ]]; then
   echo "Resource-first gate failed: unexpected legacy findings detected."

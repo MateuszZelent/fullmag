@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import { fetchRuntimeCapabilities } from "@/src/hooks/resources/useRuntimeCapabilities";
 
 export interface RuntimeFeatureFlags {
   disable_charts: boolean;
@@ -42,10 +42,7 @@ export function useRuntimeFeatureFlags(): RuntimeFeatureFlags | null {
   useEffect(() => {
     if (cachedFlags) return;
     let cancelled = false;
-    const client = getLiveApiClient();
-    client
-      .system
-      .getCapabilities()
+    fetchRuntimeCapabilities()
       .then(() => {
         if (cancelled) return;
         cachedFlags = DEFAULT_FLAGS;

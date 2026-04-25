@@ -152,6 +152,8 @@ export default function RunSidebar() {
   const vp = useViewport();
   const activeStageLayout = useActiveStageLayout();
   const launchIntent = useWorkspaceStore((state) => state.launchIntent);
+  const setRightInspectorOpen = useWorkspaceStore((state) => state.setRightInspectorOpen);
+  const setRightInspectorTab = useWorkspaceStore((state) => state.setRightInspectorTab);
   const [treeOpen, setTreeOpen] = useState(true);
   const [treeQuery, setTreeQuery] = useState("");
   const [treeFilterScope, setTreeFilterScope] = useState<TreeFilterScope>("all");
@@ -582,6 +584,9 @@ export default function RunSidebar() {
     [filteredModelTreeNodes],
   );
   const selectModelNode = useCallback((id: string) => {
+    setRightInspectorOpen(true);
+    setRightInspectorTab("properties");
+
     if (builderEnabled && id.startsWith("builder-")) {
       if (id === "builder-universe") {
         selectBuilderTarget({ type: "universe", id: "universe" });
@@ -725,6 +730,8 @@ export default function RunSidebar() {
     model,
     selectBuilderTarget,
     setGraphSelection,
+    setRightInspectorOpen,
+    setRightInspectorTab,
   ]);
 
   /* ── Tree click handler ── */

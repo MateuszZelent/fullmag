@@ -4,6 +4,8 @@
  * and revision-based caching.
  */
 
+import createOpenApiClient from "openapi-fetch";
+import type { paths } from "../generated/openapi-types";
 import { LiveApiError } from "./errors/LiveApiError";
 import { ResourceCache } from "./cache/ResourceCache";
 import { applyRequestId } from "./interceptors/requestId";
@@ -53,6 +55,7 @@ export interface RequestOptions {
 
 const DEFAULT_TIMEOUT = 15_000;
 const DEFAULT_MAX_RETRIES = 3;
+type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export class LiveApiClient {
   readonly status: StatusModule;
@@ -106,9 +109,7 @@ export class LiveApiClient {
   // ── Public HTTP helpers (used by modules) ───────────────────────────
 
   async get<T>(path: string, opts?: RequestOptions): Promise<T> {
-    const url = this.resolveUrl(path);
-    const response = await this.executeRequest("GET", url, undefined, opts);
-    return this.parseJson<T>(response, url);
+    return this.executeOpenApiJson<T>("GET", path, undefined, opts);
   }
 
   async getJsonResponse<T>(
@@ -157,27 +158,21 @@ export class LiveApiClient {
   }
 
   async post<T>(path: string, body: unknown, opts?: RequestOptions): Promise<T> {
-    const url = this.resolveUrl(path);
-    const response = await this.executeRequest("POST", url, body, opts, {
+    return this.executeOpenApiJson<T>("POST", path, body, opts, {
       retryable: false,
     });
-    return this.parseJson<T>(response, url);
   }
 
   async put<T>(path: string, body: unknown, opts?: RequestOptions): Promise<T> {
-    const url = this.resolveUrl(path);
-    const response = await this.executeRequest("PUT", url, body, opts, {
+    return this.executeOpenApiJson<T>("PUT", path, body, opts, {
       retryable: false,
     });
-    return this.parseJson<T>(response, url);
   }
 
   async patch<T>(path: string, body: unknown, opts?: RequestOptions): Promise<T> {
-    const url = this.resolveUrl(path);
-    const response = await this.executeRequest("PATCH", url, body, opts, {
+    return this.executeOpenApiJson<T>("PATCH", path, body, opts, {
       retryable: false,
     });
-    return this.parseJson<T>(response, url);
   }
 
   getCache(): ResourceCache {
@@ -313,6 +308,138 @@ export class LiveApiClient {
     }
   }
 
+  private async executeOpenApiJson<T>(
+    method: HttpMethod,
+    path: string,
+    body?: unknown,
+    opts?: RequestOptions,
+    execution?: { retryable?: boolean; acceptStatuses?: number[] },
+  ): Promise<T> {
+    const client = createOpenApiClient<paths>({
+      baseUrl: this.config.baseUrl.replace(/\/+$/, ""),
+      fetch: (input: Request) =>
+        this.executeOpenApiFetch(input, undefined, opts, execution),
+    });
+    const request: Record<string, unknown> = {
+      headers: opts?.headers,
+      signal: opts?.signal,
+      cache: opts?.cache ?? "no-store",
+    };
+    if (body !== undefined) {
+      request.body = body;
+    }
+
+    const call = (
+      client as unknown as Record<
+        HttpMethod,
+        (
+          path: string,
+          request: Record<string, unknown>,
+        ) => Promise<{ data?: unknown; error?: unknown; response?: Response }>
+      >
+    )[method];
+    const result = await call(path, request);
+    const response = result.response as Response | undefined;
+    if (!response) {
+      throw LiveApiError.networkError(path, "OpenAPI client returned no response");
+    }
+
+    const acceptStatuses = execution?.acceptStatuses ?? [];
+    if (!response.ok && !acceptStatuses.includes(response.status)) {
+      throw LiveApiError.httpError(
+        response.status,
+        formatOpenApiError(result.error),
+        response.headers.get("x-request-id") ?? undefined,
+        this.resolveUrl(path),
+      );
+    }
+
+    return result.data as T;
+  }
+
+  private async executeOpenApiFetch(
+    input: RequestInfo | URL,
+    init: RequestInit | undefined,
+    opts?: RequestOptions,
+    execution?: { retryable?: boolean; acceptStatuses?: number[] },
+  ): Promise<Response> {
+    const request = normalizeFetchInput(input, init);
+    return this.executeFetchRequest(
+      request.method,
+      request.url,
+      request.init,
+      opts,
+      execution,
+    );
+  }
+
+  private async executeFetchRequest(
+    method: string,
+    url: string,
+    init: RequestInit,
+    opts?: RequestOptions,
+    execution?: { retryable?: boolean; acceptStatuses?: number[] },
+  ): Promise<Response> {
+    const timeout = opts?.timeout ?? this.config.timeout ?? DEFAULT_TIMEOUT;
+    const maxRetries = this.config.maxRetries ?? DEFAULT_MAX_RETRIES;
+    const retryable = execution?.retryable ?? true;
+    const acceptStatuses = execution?.acceptStatuses ?? [];
+
+    const headers = new Headers(init.headers);
+    const requestId = applyRequestId(headers);
+
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    opts?.signal?.addEventListener("abort", abort);
+    init.signal?.addEventListener("abort", abort);
+    const timer = setTimeout(() => controller.abort(), timeout);
+    const diag = createDiagnosticEntry(requestId, method, url);
+
+    try {
+      const doFetch = () =>
+        fetch(url, {
+          ...init,
+          method,
+          headers,
+          signal: controller.signal,
+          cache: opts?.cache ?? init.cache ?? "no-store",
+        });
+
+      const response = await withRetry(
+        doFetch,
+        { maxRetries: retryable ? maxRetries : 0 },
+        opts?.signal,
+      );
+      checkContractVersion(response);
+
+      const acceptedStatus = acceptStatuses.includes(response.status);
+      const contentLength = response.headers.get("content-length");
+      diag.finish(
+        response.status,
+        contentLength ? parseInt(contentLength, 10) : null,
+        response.ok || acceptedStatus,
+      );
+      return response;
+    } catch (err) {
+      if (err instanceof LiveApiError) {
+        throw err;
+      }
+      if (err instanceof DOMException && err.name === "AbortError") {
+        if (opts?.signal?.aborted || init.signal?.aborted) {
+          throw LiveApiError.networkError(url, err);
+        }
+        diag.finish(0, null, false, "timeout");
+        throw LiveApiError.timeoutError(url, timeout);
+      }
+      diag.finish(0, null, false, String(err));
+      throw LiveApiError.networkError(url, err);
+    } finally {
+      clearTimeout(timer);
+      opts?.signal?.removeEventListener("abort", abort);
+      init.signal?.removeEventListener("abort", abort);
+    }
+  }
+
   private async parseJson<T>(response: Response, url: string): Promise<T> {
     try {
       return (await response.json()) as T;
@@ -320,6 +447,54 @@ export class LiveApiClient {
       throw LiveApiError.parseError(url, err);
     }
   }
+}
+
+function normalizeFetchInput(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+): { url: string; method: string; init: RequestInit } {
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    return {
+      url: input.url,
+      method: init?.method ?? input.method,
+      init: {
+        ...init,
+        headers: init?.headers ?? input.headers,
+        body: init?.body ?? input.body,
+        cache: init?.cache ?? input.cache,
+        signal: init?.signal ?? input.signal,
+      },
+    };
+  }
+  return {
+    url: String(input),
+    method: init?.method ?? "GET",
+    init: init ?? {},
+  };
+}
+
+function formatOpenApiError(error: unknown): string {
+  if (error == null) {
+    return "Request failed";
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    if (typeof record.message === "string") {
+      return record.message;
+    }
+    if (typeof record.error === "string") {
+      return record.error;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+  return String(error);
 }
 
 // ── Singleton ─────────────────────────────────────────────────────────

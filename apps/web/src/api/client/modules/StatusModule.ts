@@ -1,4 +1,4 @@
-import type { LiveStatus } from "../../generated/openapi-types";
+import type { LiveStatus } from "../../contracts";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
 
 export class StatusModule {

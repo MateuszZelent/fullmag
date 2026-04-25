@@ -1,4 +1,4 @@
-import type { DisplaySelection } from "../../generated/openapi-types";
+import type { DisplaySelection } from "../../contracts";
 import type { DisplayPatchRequest, DisplayReplaceRequest } from "../../types";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
 

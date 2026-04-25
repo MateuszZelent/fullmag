@@ -8,7 +8,7 @@ import type {
   SessionImportCommitResponse,
   SessionImportInspectRequest,
   SessionImportInspectResponse,
-} from "../../generated/openapi-types";
+} from "../../contracts";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
 
 const SESSION_PERSISTENCE_TIMEOUT_MS = 120_000;

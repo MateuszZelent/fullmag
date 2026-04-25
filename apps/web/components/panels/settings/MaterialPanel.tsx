@@ -15,7 +15,7 @@ import { fmtSI } from "../../runs/control-room/shared";
 import { TextField } from "../../ui/TextField";
 import SelectField from "../../ui/SelectField";
 import { Button } from "../../ui/button";
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
 import type {
   MagnetizationAsset,
   SceneDocument,
@@ -231,7 +231,7 @@ export default function MaterialPanel({
     () => buildPhysicsCapabilityView(cmd.capabilities, physicsStack),
     [cmd.capabilities, physicsStack],
   );
-  const liveApi = useMemo(() => getLiveApiClient(), []);
+  const sceneAuthoring = useSceneAuthoringActions();
 
   const updateMaterial = useCallback(
     (updater: (asset: SceneMaterialAsset) => SceneMaterialAsset) => {
@@ -304,13 +304,13 @@ export default function MaterialPanel({
       },
     ) => {
       if (!sceneObject) return;
-      void liveApi.scene
+      void sceneAuthoring
         .patchObjectInteraction(sceneObject.id, kind, request)
         .catch((error) => {
           console.error("failed to patch authoring object interaction", error);
         });
     },
-    [liveApi, sceneObject],
+    [sceneAuthoring, sceneObject],
   );
 
   const assignPresetTexture = useCallback(
@@ -511,7 +511,7 @@ export default function MaterialPanel({
       });
     }
     if (sceneObject?.material_ref) {
-      void liveApi.scene
+      void sceneAuthoring
         .patchMaterial(sceneObject.material_ref, materialPatch)
         .catch((error) => {
           console.error("failed to patch authoring material", error);
@@ -875,9 +875,8 @@ export default function MaterialPanel({
       }, 70);
     }
 
-    void liveApi
-      .scene
-      .update(scenePayload)
+    void sceneAuthoring
+      .updateSceneDocument(scenePayload)
       .then((committedScene) => {
         if (presetTextureSyncGenerationRef.current !== generation) {
           return;
@@ -918,7 +917,7 @@ export default function MaterialPanel({
     refreshViewportAfterMagnetizationCommit,
     magnetizationAsset?.kind,
     magnetizationAssetHash,
-    liveApi,
+    sceneAuthoring,
     model.sceneDocument,
     setPresetTextureModalOpen,
     setPresetTextureSync,
@@ -940,9 +939,8 @@ export default function MaterialPanel({
     }
     lastAutoAppliedMagnetizationHashRef.current = magnetizationAssetHash;
     const scenePayload = model.sceneDocument;
-    void liveApi
-      .scene
-      .update(scenePayload)
+    void sceneAuthoring
+      .updateSceneDocument(scenePayload)
       .then(async (committedScene) => {
         model.setSceneDocument(committedScene);
         await model.refreshLiveState();
@@ -953,7 +951,7 @@ export default function MaterialPanel({
   }, [
     isMagnetizationDirty,
     isMagnetizationSyncBusy,
-    liveApi,
+    sceneAuthoring,
     magnetizationAssetHash,
     model,
     showMagneticTexturePanel,

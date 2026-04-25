@@ -1,8 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { SceneDocument } from "@/lib/session/types";
+import type {
+  AuthoringMaterialPatchRequest,
+  AuthoringMaterialResource,
+  AuthoringObjectInteractionPatchRequest,
+  AuthoringObjectInteractionResource,
+  AuthoringStudyRuntimePatchRequest,
+  AuthoringStudyRuntimeResource,
+} from "../../api/types";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
@@ -98,4 +106,34 @@ export function useSceneDocument(options?: {
     error,
     refresh: fetchSceneDocument,
   };
+}
+
+export function useSceneAuthoringActions() {
+  return useMemo(() => ({
+    updateSceneDocument(document: SceneDocument): Promise<SceneDocument> {
+      return getLiveApiClient().scene.update(document);
+    },
+    patchMaterial(
+      materialId: string,
+      request: AuthoringMaterialPatchRequest,
+    ): Promise<AuthoringMaterialResource> {
+      return getLiveApiClient().scene.patchMaterial(materialId, request);
+    },
+    patchObjectInteraction(
+      objectId: string,
+      interactionKind: string,
+      request: AuthoringObjectInteractionPatchRequest,
+    ): Promise<AuthoringObjectInteractionResource> {
+      return getLiveApiClient().scene.patchObjectInteraction(
+        objectId,
+        interactionKind,
+        request,
+      );
+    },
+    patchStudyRuntime(
+      request: AuthoringStudyRuntimePatchRequest,
+    ): Promise<AuthoringStudyRuntimeResource> {
+      return getLiveApiClient().scene.patchStudyRuntime(request);
+    },
+  }), []);
 }

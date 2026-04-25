@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { getLiveApiClient } from "@/src/api/client/LiveApiClient";
+import type { AuthoringStudyRuntimePatchRequest } from "@/src/api/types";
 import type {
   ModelBuilderGraphV2,
   SceneDocument,
@@ -48,6 +48,7 @@ export interface UseModelBuilderActionsParams {
   sceneDocumentDraft: SceneDocument | null;
   localBuilderDraft: SceneDocument | null;
   remoteSceneDocument: SceneDocument | null;
+  patchStudyRuntime: (request: AuthoringStudyRuntimePatchRequest) => Promise<unknown>;
   setModelBuilderGraph: Dispatch<SetStateAction<ModelBuilderGraphV2 | null>>;
   setSceneDocumentDraft: Dispatch<SetStateAction<SceneDocument | null>>;
   setSolverSettingsState: Dispatch<SetStateAction<SolverSettingsState>>;
@@ -59,6 +60,7 @@ export function useModelBuilderActions({
   sceneDocumentDraft,
   localBuilderDraft,
   remoteSceneDocument,
+  patchStudyRuntime,
   setModelBuilderGraph,
   setSceneDocumentDraft,
   setSolverSettingsState,
@@ -167,14 +169,13 @@ export function useModelBuilderActions({
       });
 
       if (nextRuntimeSelection) {
-        void getLiveApiClient()
-          .scene.patchStudyRuntime(nextRuntimeSelection)
+        void patchStudyRuntime(nextRuntimeSelection)
           .catch((error) => {
             console.error("failed to patch authoring study runtime", error);
           });
       }
     },
-    [modelBuilderDefaults, setModelBuilderGraph, setSceneDocumentDraft],
+    [modelBuilderDefaults, patchStudyRuntime, setModelBuilderGraph, setSceneDocumentDraft],
   );
 
   const setScriptBuilderDemagRealization = useCallback<

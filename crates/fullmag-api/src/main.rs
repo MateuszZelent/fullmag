@@ -22,6 +22,7 @@ use tokio::sync::{broadcast, watch, Mutex, RwLock};
 use tokio::time::{interval, Duration};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
+use utoipa::OpenApi;
 
 use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
 use fullmag_runner::LivePreviewField;
@@ -306,6 +307,16 @@ fn parse_texture_projection_mode(value: &str) -> TextureProjectionMode {
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().any(|arg| arg == "--print-openapi") {
+        let openapi = <openapi::ApiDoc as OpenApi>::openapi();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&openapi)
+                .expect("OpenAPI document should serialize to JSON")
+        );
+        return;
+    }
+
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     let repo_root = repo_root();

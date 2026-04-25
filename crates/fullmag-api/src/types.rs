@@ -205,7 +205,7 @@ pub(crate) struct RunManifest {
     pub artifact_dir: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub(crate) struct ArtifactEntry {
     pub path: String,
     pub kind: String,

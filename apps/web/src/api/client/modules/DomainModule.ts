@@ -1,5 +1,5 @@
 import type { BinaryResourceResponse } from "../../types";
-import type { DomainMeta } from "../../generated/openapi-types";
+import type { DomainMeta } from "../../contracts";
 import type { LiveApiClient, RequestOptions } from "../LiveApiClient";
 
 export class DomainModule {

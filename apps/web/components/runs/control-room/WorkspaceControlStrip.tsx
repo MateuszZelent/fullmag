@@ -144,7 +144,7 @@ const WorkspaceControlStrip = memo(function WorkspaceControlStrip() {
     ctx.setStudyPipeline(nextDocument);
     ctx.setStudyStages(compiled.stages);
     syncStudyRuntimeState(ctx, compiled.stages);
-    ctx.setWorkspaceMode("study");
+    ctx.setWorkspaceStage("study");
     ctx.setSelectedSidebarNodeId(buildPipelineStudyStageNodeId(nextNode.id));
   };
 

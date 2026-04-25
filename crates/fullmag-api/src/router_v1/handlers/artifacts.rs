@@ -16,7 +16,7 @@ use crate::types::AppState;
     get,
     path = "/v1/live/current/artifacts",
     responses(
-        (status = 200, description = "List of artifacts"),
+        (status = 200, description = "List of artifacts", body = Vec<crate::types::ArtifactEntry>),
         (status = 304, description = "Artifact list not modified for the supplied ETag"),
         (status = 404, description = "No active workspace"),
     ),

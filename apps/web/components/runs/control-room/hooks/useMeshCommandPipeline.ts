@@ -18,7 +18,7 @@ import {
 } from "@/src/api/displaySelection";
 import type {
   DisplayPatchRequest,
-} from "@/src/api/generated/openapi-types";
+} from "@/src/api/contracts";
 import { parseOptionalFiniteNumberText } from "../controlRoomUtils";
 import type { ControlRoomApi } from "../controlRoomApi";
 import type { useBuilderAutoSync } from "./useBuilderAutoSync";

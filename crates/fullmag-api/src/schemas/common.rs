@@ -16,3 +16,25 @@ pub struct HealthResponse {
     pub api_contract_version: String,
     pub active_session: bool,
 }
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct HostEngineEntry {
+    pub backend: String,
+    pub device: String,
+    pub precision: String,
+    pub mode: String,
+    pub runtime_family: String,
+    pub runtime_version: String,
+    pub worker: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_reason: Option<String>,
+    pub public: bool,
+    pub stability: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct RuntimeCapabilityMatrix {
+    pub profile_version: String,
+    pub engines: Vec<HostEngineEntry>,
+}

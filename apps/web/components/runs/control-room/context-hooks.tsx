@@ -131,7 +131,8 @@ export interface TransportContextValue {
 }
 
 /* ── Viewport: user-driven UI state ── */
-export type WorkspaceMode = "build" | "study" | "analyze";
+export type WorkspaceStage = "build" | "study";
+export type WorkspaceMode = WorkspaceStage | "analyze";
 export type ResultWorkspaceKind =
   | "spectrum"
   | "dispersion"
@@ -162,7 +163,11 @@ export interface OpenAnalyzeSurfaceOptions {
 }
 
 export interface ViewportContextValue {
+  workspaceStage: WorkspaceStage;
+  setWorkspaceStage: (v: WorkspaceStage | ((prev: WorkspaceStage) => WorkspaceStage)) => void;
+  /** @deprecated Use workspaceStage. Kept while older panels are migrated. */
   workspaceMode: WorkspaceMode;
+  /** @deprecated Use setWorkspaceStage. Legacy "analyze" inputs are normalized to study. */
   setWorkspaceMode: (v: WorkspaceMode | ((prev: WorkspaceMode) => WorkspaceMode)) => void;
   viewMode: ViewportMode;
   effectiveViewMode: ViewportMode;

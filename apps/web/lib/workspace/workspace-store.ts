@@ -9,7 +9,8 @@ import {
 } from "./dockLayoutContract";
 import type { LaunchIntent } from "./launch-intent";
 
-export type WorkspaceMode = "build" | "study" | "analyze";
+export type WorkspaceStage = "build" | "study";
+export type WorkspaceMode = WorkspaceStage | "analyze";
 export type RightInspectorTab = "properties" | "selected-submeshes" | "tools" | "console";
 export type WorkspaceTabLifecycle = "unmount-on-hide" | "warm";
 
@@ -68,6 +69,10 @@ interface StageLayoutState {
 
 const STAGES: WorkspaceMode[] = ["build", "study", "analyze"];
 const DOCKING_STORAGE_KEY = "fullmag.workspace.docking.v4";
+
+function normalizeRuntimeWorkspaceStage(stage: WorkspaceMode): WorkspaceStage {
+  return stage === "build" ? "build" : "study";
+}
 
 function defaultCoreTabs(): WorkspaceTab[] {
   return [
@@ -446,7 +451,10 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
     dockLayoutByStage: dockingState.dockLayoutByStage,
 
     setCurrentStage: (currentStage) =>
-      set((state) => (state.currentStage === currentStage ? state : { currentStage })),
+      set((state) => {
+        const nextStage = normalizeRuntimeWorkspaceStage(currentStage);
+        return state.currentStage === nextStage ? state : { currentStage: nextStage };
+      }),
     setActiveCoreTab: (activeCoreTab) =>
       set((state) => (state.activeCoreTab === activeCoreTab ? state : { activeCoreTab })),
     setActiveContextualTab: (activeContextualTab) =>

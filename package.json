@@ -5,6 +5,9 @@
   "scripts": {
     "web:dev": "pnpm --dir apps/web dev",
     "web:clean": "pnpm --dir apps/web clean",
+    "web:generate-api": "pnpm --dir apps/web generate:api",
+    "web:generate-openapi": "pnpm --dir apps/web generate:openapi",
+    "web:generate-api-types": "pnpm --dir apps/web generate:api-types",
     "web:typegen": "pnpm --dir apps/web typegen",
     "web:typecheck": "pnpm --dir apps/web typecheck",
     "web:build": "pnpm --dir apps/web build",

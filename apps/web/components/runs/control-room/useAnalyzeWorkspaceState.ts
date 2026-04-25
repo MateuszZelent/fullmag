@@ -3,7 +3,7 @@
 import { useEffect, useMemo } from "react";
 
 import type { AnalyzeSelectionState, AnalyzeTab } from "./analyzeSelection";
-import { useCurrentAnalyzeArtifacts } from "./useCurrentAnalyzeArtifacts";
+import { useCurrentAnalyzeArtifacts } from "@/src/hooks/resources/useCurrentAnalyzeArtifacts";
 
 interface AnalyzeWorkspaceController {
   analyzeSelection: AnalyzeSelectionState;

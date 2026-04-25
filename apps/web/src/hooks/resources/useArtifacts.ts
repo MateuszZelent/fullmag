@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { ArtifactEntry } from "../../api/generated/openapi-types";
+import type { ArtifactEntry } from "../../api/contracts";
 import { getLiveApiClient } from "../../api/client/LiveApiClient";
 import { ResourceCache } from "../../api/client/cache/ResourceCache";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
