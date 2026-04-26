@@ -13,18 +13,44 @@ export type Vec3Tuple = [number, number, number];
 export type QuatTuple = [number, number, number, number];
 
 /**
- * Physical `[x, y, z]` -> scene `[x, z, y]`.
+ * Three.js scene units for authoring/world-space viewports.
+ *
+ * Runtime geometry is stored in SI metres. Rendering it directly makes typical
+ * micromagnetic objects smaller than the camera near plane, so the viewport
+ * uses nanometres as scene units.
  */
-export function physicalPositionToScene(v: Vec3Tuple): Vec3Tuple {
-  return [v[0], v[2], v[1]];
+export const PHYSICAL_TO_SCENE_SCALE = 1e9;
+export const SCENE_TO_PHYSICAL_SCALE = 1 / PHYSICAL_TO_SCENE_SCALE;
+
+export function physicalLengthToScene(value: number): number {
+  return value * PHYSICAL_TO_SCENE_SCALE;
+}
+
+export function sceneLengthToPhysical(value: number): number {
+  return value * SCENE_TO_PHYSICAL_SCALE;
 }
 
 /**
- * Scene `[x, y, z]` -> physical `[x, z, y]`.
+ * Physical position `[x, y, z]` in metres -> scene `[x, z, y]` in nanometres.
+ */
+export function physicalPositionToScene(v: Vec3Tuple): Vec3Tuple {
+  return [
+    physicalLengthToScene(v[0]),
+    physicalLengthToScene(v[2]),
+    physicalLengthToScene(v[1]),
+  ];
+}
+
+/**
+ * Scene position `[x, y, z]` in nanometres -> physical `[x, z, y]` in metres.
  * For the current swap matrix, inverse equals forward transform.
  */
 export function scenePositionToPhysical(v: Vec3Tuple): Vec3Tuple {
-  return [v[0], v[2], v[1]];
+  return [
+    sceneLengthToPhysical(v[0]),
+    sceneLengthToPhysical(v[2]),
+    sceneLengthToPhysical(v[1]),
+  ];
 }
 
 /**
@@ -35,17 +61,31 @@ export function sceneDeltaToPhysical(v: Vec3Tuple): Vec3Tuple {
 }
 
 /**
- * Physical non-uniform scale -> scene scale.
+ * Physical non-uniform size/scale in metres -> scene size in nanometres.
  */
 export function physicalScaleToScene(v: Vec3Tuple): Vec3Tuple {
   return physicalPositionToScene(v);
 }
 
 /**
- * Scene non-uniform scale -> physical scale.
+ * Scene non-uniform size in nanometres -> physical size in metres.
  */
 export function sceneScaleToPhysical(v: Vec3Tuple): Vec3Tuple {
   return scenePositionToPhysical(v);
+}
+
+/**
+ * Dimensionless transform scale in physical axis order -> scene axis order.
+ *
+ * Do not use `physicalScaleToScene` for primitive transform scale factors:
+ * those are unitless multipliers, not SI lengths.
+ */
+export function dimensionlessScaleToScene(v: Vec3Tuple): Vec3Tuple {
+  return [v[0], v[2], v[1]];
+}
+
+export function sceneScaleToDimensionless(v: Vec3Tuple): Vec3Tuple {
+  return [v[0], v[2], v[1]];
 }
 
 /**

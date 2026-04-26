@@ -15,7 +15,8 @@ export function isGeometryAuthoringWorkspace(
   workspaceMode: WorkspaceMode,
   activeCoreTab: string | null,
 ): boolean {
-  return workspaceMode === "build" && activeCoreTab === "Geometry";
+  void workspaceMode;
+  return activeCoreTab === "Geometry";
 }
 
 export function shouldForceCameraFirstViewport({

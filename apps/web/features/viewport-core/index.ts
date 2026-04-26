@@ -33,6 +33,12 @@ export {
   sceneDeltaToPhysical,
   physicalScaleToScene,
   sceneScaleToPhysical,
+  dimensionlessScaleToScene,
+  sceneScaleToDimensionless,
+  physicalLengthToScene,
+  sceneLengthToPhysical,
+  PHYSICAL_TO_SCENE_SCALE,
+  SCENE_TO_PHYSICAL_SCALE,
   physicalQuatToScene,
   sceneQuatToPhysical,
 } from "./coordinates/physicalToScene";

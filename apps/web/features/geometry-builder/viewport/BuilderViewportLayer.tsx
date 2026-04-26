@@ -15,11 +15,13 @@ import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 
 import {
+  dimensionlessScaleToScene,
   physicalPositionToScene,
+  physicalLengthToScene,
   physicalScaleToScene,
   physicalQuatToScene,
   sceneDeltaToPhysical,
-  sceneScaleToPhysical,
+  sceneScaleToDimensionless,
   sceneQuatToPhysical,
   type QuatTuple,
   type Vec3Tuple,
@@ -40,7 +42,9 @@ function boxGeometry(size: Vec3): THREE.BufferGeometry {
 }
 
 function cylinderGeometry(radius: number, height: number, axis: "x" | "y" | "z"): THREE.BufferGeometry {
-  const geo = new THREE.CylinderGeometry(radius, radius, height, 32);
+  const sceneRadius = physicalLengthToScene(radius);
+  const sceneHeight = physicalLengthToScene(height);
+  const geo = new THREE.CylinderGeometry(sceneRadius, sceneRadius, sceneHeight, 32);
   // CylinderGeometry default axis is scene-Y (physical Z with swapYZ convention).
   if (axis === "x") {
     geo.rotateZ(Math.PI / 2);
@@ -51,11 +55,13 @@ function cylinderGeometry(radius: number, height: number, axis: "x" | "y" | "z")
 }
 
 function sphereGeometry(radius: number): THREE.BufferGeometry {
-  return new THREE.SphereGeometry(radius, 32, 24);
+  return new THREE.SphereGeometry(physicalLengthToScene(radius), 32, 24);
 }
 
 function diskGeometry(radius: number, thickness: number, axis: "x" | "y" | "z"): THREE.BufferGeometry {
-  const geo = new THREE.CylinderGeometry(radius, radius, thickness, 32);
+  const sceneRadius = physicalLengthToScene(radius);
+  const sceneThickness = physicalLengthToScene(thickness);
+  const geo = new THREE.CylinderGeometry(sceneRadius, sceneRadius, sceneThickness, 32);
   if (axis === "x") {
     geo.rotateZ(Math.PI / 2);
   } else if (axis === "y") {
@@ -70,14 +76,17 @@ function triangularPrismGeometry(
   depth: number,
   axis: "x" | "y" | "z",
 ): THREE.BufferGeometry {
+  const sceneBase = physicalLengthToScene(base);
+  const sceneTriHeight = physicalLengthToScene(triHeight);
+  const sceneDepth = physicalLengthToScene(depth);
   const shape = new THREE.Shape();
-  shape.moveTo(-base / 2, 0);
-  shape.lineTo(base / 2, 0);
-  shape.lineTo(0, triHeight);
+  shape.moveTo(-sceneBase / 2, 0);
+  shape.lineTo(sceneBase / 2, 0);
+  shape.lineTo(0, sceneTriHeight);
   shape.closePath();
 
-  const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
-  geo.translate(0, 0, -depth / 2);
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: sceneDepth, bevelEnabled: false });
+  geo.translate(0, 0, -sceneDepth / 2);
 
   if (axis === "x") {
     geo.rotateY(Math.PI / 2);
@@ -205,7 +214,7 @@ function BuilderPrimitiveMesh({
   const scale = useMemo(
     (): [number, number, number] => {
       const transform = readTransform(node.transform);
-      return physicalScaleToScene(transform.scale as Vec3Tuple);
+      return dimensionlessScaleToScene(transform.scale as Vec3Tuple);
     },
     [node.transform],
   );
@@ -484,7 +493,7 @@ export function BuilderViewportLayer({
       }
 
       const [sxScene, syScene, szScene] = delta.scale;
-      let [sx, sy, sz] = sceneScaleToPhysical([sxScene, syScene, szScene]);
+      let [sx, sy, sz] = sceneScaleToDimensionless([sxScene, syScene, szScene]);
       if (snapSettings.enabled) {
         sx = snapScaleFactor(sx, snapSettings.scaleStep);
         sy = snapScaleFactor(sy, snapSettings.scaleStep);

@@ -9,7 +9,6 @@
 
 import "./home";
 import "./definitions";
-import "./geometry";
 import "./geometry-builder";
 import "./materials";
 import "./physics";

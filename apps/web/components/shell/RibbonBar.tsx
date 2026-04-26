@@ -326,7 +326,6 @@ export default function RibbonBar(props: RibbonBarProps) {
     (s) => s.resourceRevisions?.workspace_revision ?? null,
   );
   const currentStage = useWorkspaceStore((s) => s.currentStage);
-  const setCurrentStage = useWorkspaceStore((s) => s.setCurrentStage);
   const activeCoreTab = useWorkspaceStore((s) => s.activeCoreTab);
   const setActiveCoreTab = useWorkspaceStore((s) => s.setActiveCoreTab);
   const activeContextualTab = useWorkspaceStore((s) => s.activeContextualTab);
@@ -514,15 +513,8 @@ export default function RibbonBar(props: RibbonBarProps) {
   const handleCoreTabClick = useCallback(
     (tab: string) => {
       setActiveCoreTab(tab);
-      if (tab === "Geometry") {
-        setCurrentStage("build");
-        return;
-      }
-      if (workspaceStage === "build") {
-        setCurrentStage("study");
-      }
     },
-    [setActiveCoreTab, setCurrentStage, workspaceStage],
+    [setActiveCoreTab],
   );
 
   const groups = useMemo(() => {

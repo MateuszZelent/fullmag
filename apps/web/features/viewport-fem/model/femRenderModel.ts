@@ -9,7 +9,10 @@
 import type { FemMeshPart, MeshEntityViewState, MeshEntityViewStateMap } from "../../../lib/session/types";
 import { defaultMeshEntityViewState } from "../../../lib/session/types";
 import type { ObjectViewMode } from "../../../components/runs/control-room/shared";
-import type { FemFerromagnetVisibilityMode, FemVectorDomainFilter } from "../../../components/preview/FemMeshView3D";
+import type {
+  FemFerromagnetVisibilityMode,
+  FemVectorDomainFilter,
+} from "@/components/preview/FemMeshView3D";
 import type { PartRenderData } from "./femTopologyCache";
 import { partMeshTint, partEdgeTint } from "../../../components/preview/fem/femColorUtils";
 import { DEFAULT_VIEWPORT_VISUAL_PROFILE } from "../../../lib/profiles/frontendRuntimeProfiles";

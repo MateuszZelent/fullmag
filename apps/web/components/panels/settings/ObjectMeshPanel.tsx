@@ -41,7 +41,7 @@ import {
   estimateDenseSolverRamGb,
   extractMeshLogHighlights,
 } from "../../runs/control-room/meshWorkspace";
-import type { RenderMode } from "../../preview/FemMeshView3D";
+import type { RenderMode } from "@/components/preview/FemMeshView3D";
 import { TextField } from "../../ui/TextField";
 import SelectField from "../../ui/SelectField";
 import { Button } from "../../ui/button";

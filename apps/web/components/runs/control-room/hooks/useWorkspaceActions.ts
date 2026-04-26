@@ -20,7 +20,7 @@ import type {
   ScriptBuilderCurrentModuleEntry,
 } from "../../../../lib/session/types";
 import type { SolverSettingsState } from "../../../panels/SolverSettingsPanel";
-import type { RenderMode } from "../../../preview/FemMeshView3D";
+import type { RenderMode } from "@/components/preview/FemMeshView3D";
 import type {
   FemDockTab,
   FocusObjectRequest,

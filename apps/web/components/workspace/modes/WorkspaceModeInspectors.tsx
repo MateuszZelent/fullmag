@@ -20,8 +20,8 @@ import {
   useTransport,
 } from "../../runs/control-room/context-hooks";
 import { DEFAULT_CONVERGENCE_THRESHOLD } from "../../panels/SolverSettingsPanel";
-import { FemPartExplorerPanel } from "../../preview/fem/FemPartExplorerPanel";
-import type { PartQualitySummary } from "../../preview/fem/FemPartExplorerPanel";
+import { FemPartExplorerPanel } from "@/components/preview/fem/FemPartExplorerPanel";
+import type { PartQualitySummary } from "@/components/preview/fem/FemPartExplorerPanel";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import GeometryInspectorRouter from "@/features/geometry-builder/inspector/GeometryInspectorRouter";
 

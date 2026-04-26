@@ -49,6 +49,7 @@ function requireFemTopologyKey(value: string | null): string {
 }
 
 const VIEWPORT_BADGE_STYLE = { zIndex: "var(--z-viewport-badge)" } as const;
+const GEOMETRY_AUTHORING_WORLD_GRID: [number, number, number] = [0, 0, 0];
 
 /* ── Props ── */
 
@@ -160,7 +161,7 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
         <UnifiedViewport3DVectorSurface
           boundaryLabel="Hosted Geometry Authoring Viewport"
           vectorFieldProps={{
-            grid: ctx.previewGrid,
+            grid: GEOMETRY_AUTHORING_WORLD_GRID,
             vectors: bridge.geometryAuthoringShowQuantity ? bridge.scaledVectors : null,
             fieldLabel: bridge.geometryAuthoringShowQuantity
               ? (ctx.quantityDescriptor?.label ?? ctx.selectedQuantity)

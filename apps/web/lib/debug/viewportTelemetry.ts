@@ -30,11 +30,23 @@ const listeners = new Set<() => void>();
 const entries = new Map<string, ViewportTelemetryEntry>();
 let nextViewportTelemetryId = 1;
 let telemetrySnapshot: ViewportTelemetryEntry[] = [];
+let telemetryEmitScheduled = false;
 
 function emitViewportTelemetryChange(): void {
-  for (const listener of listeners) {
-    listener();
-  }
+  if (telemetryEmitScheduled) return;
+  telemetryEmitScheduled = true;
+  const schedule =
+    typeof queueMicrotask === "function"
+      ? queueMicrotask
+      : (callback: () => void) => {
+          setTimeout(callback, 0);
+        };
+  schedule(() => {
+    telemetryEmitScheduled = false;
+    for (const listener of listeners) {
+      listener();
+    }
+  });
 }
 
 function refreshTelemetrySnapshot(): void {

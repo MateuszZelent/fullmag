@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  dimensionlessScaleToScene,
   physicalPositionToScene,
   scenePositionToPhysical,
   sceneDeltaToPhysical,
   physicalScaleToScene,
   sceneScaleToPhysical,
+  sceneScaleToDimensionless,
   physicalQuatToScene,
   sceneQuatToPhysical,
 } from "../../features/viewport-core/coordinates/physicalToScene";
@@ -29,7 +31,7 @@ function expectQuatClose(
 
 describe("physical <-> scene coordinates", () => {
   it("position round-trip is stable", () => {
-    const physical: [number, number, number] = [1.25, -3.5, 8.75];
+    const physical: [number, number, number] = [1.25e-9, -3.5e-9, 8.75e-9];
     const scene = physicalPositionToScene(physical);
     const back = scenePositionToPhysical(scene);
     expect(scene).toEqual([1.25, 8.75, -3.5]);
@@ -39,13 +41,21 @@ describe("physical <-> scene coordinates", () => {
   it("delta round-trip keeps axis mapping", () => {
     const sceneDelta: [number, number, number] = [0.1, 0.2, 0.3];
     const physicalDelta = sceneDeltaToPhysical(sceneDelta);
-    expect(physicalDelta).toEqual([0.1, 0.3, 0.2]);
+    expectVec3Close(physicalDelta, [0.1e-9, 0.3e-9, 0.2e-9]);
   });
 
   it("scale round-trip is stable", () => {
-    const scalePhysical: [number, number, number] = [2.0, 0.5, 1.5];
+    const scalePhysical: [number, number, number] = [2.0e-9, 0.5e-9, 1.5e-9];
     const scaleScene = physicalScaleToScene(scalePhysical);
     const back = sceneScaleToPhysical(scaleScene);
+    expect(scaleScene).toEqual([2.0, 1.5, 0.5]);
+    expectVec3Close(back, scalePhysical);
+  });
+
+  it("dimensionless transform scale keeps only axis mapping", () => {
+    const scalePhysical: [number, number, number] = [2.0, 0.5, 1.5];
+    const scaleScene = dimensionlessScaleToScene(scalePhysical);
+    const back = sceneScaleToDimensionless(scaleScene);
     expect(scaleScene).toEqual([2.0, 1.5, 0.5]);
     expectVec3Close(back, scalePhysical);
   });

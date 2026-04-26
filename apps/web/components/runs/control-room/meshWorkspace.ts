@@ -9,7 +9,7 @@ import type {
 } from "../../../lib/session/types";
 import { resolveMeshBuildIntentFromNodeId } from "../../../lib/session/modelBuilderGraph";
 import type { MeshQualityData, MeshOptionsState } from "@/lib/mesh/options";
-import type { RenderMode } from "../../preview/FemMeshView3D";
+import type { RenderMode } from "@/components/preview/FemMeshView3D";
 import type { FemDockTab, ViewportMode } from "./shared";
 import { type LucideIcon, Grid3x3, Box, Scissors, Activity, Zap } from "lucide-react";
 import { resolveObjectNameFromNodeId } from "../../panels/settings/objectSelection";

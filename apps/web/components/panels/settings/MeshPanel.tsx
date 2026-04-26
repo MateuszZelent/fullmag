@@ -29,7 +29,7 @@ import {
   estimateDenseSolverRamGb,
   extractMeshLogHighlights,
 } from "../../runs/control-room/meshWorkspace";
-import type { RenderMode } from "../../preview/FemMeshView3D";
+import type { RenderMode } from "@/components/preview/FemMeshView3D";
 import { Button } from "../../ui/button";
 
 import { SidebarSection } from "./primitives";

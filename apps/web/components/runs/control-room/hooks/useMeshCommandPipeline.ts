@@ -12,7 +12,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
 import type { MeshOptionsState, SizeFieldSpec } from "../../../panels/MeshSettingsPanel";
 import type { DisplaySelection, MeshCommandTarget, SceneDocument } from "../../../../lib/session/types";
-import type { FemMeshData } from "../../../preview/FemMeshView3D";
+import type { FemMeshData } from "@/components/preview/FemMeshView3D";
 import {
   displayPatchFromPreviewComponent,
 } from "@/src/api/displaySelection";

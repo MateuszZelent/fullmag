@@ -9,8 +9,8 @@ import type {
   CrossSurfaceSelectionState,
   WorkspaceSyncState,
 } from "@/src/features/workspaceSync";
-import type { FemMeshData, FemVectorDomainFilter } from "../../preview/FemMeshView3D";
-import MagnetizationSlice2D from "../../preview/MagnetizationSlice2D";
+import type { FemMeshData, FemVectorDomainFilter } from "@/components/preview/FemMeshView3D";
+import MagnetizationSlice2D from "@/components/preview/MagnetizationSlice2D";
 import EmptyState from "../../ui/EmptyState";
 import type { MeshEntityViewStateMap, FemMeshPart } from "../../../lib/session/types";
 import type { AntennaOverlay, ObjectViewMode } from "./shared";
@@ -33,7 +33,7 @@ function ViewportModuleLoading({ label }: { label: string }) {
   );
 }
 
-const FemMeshSlice2D = dynamic(() => import("../../preview/FemMeshSlice2DPlotly"), {
+const FemMeshSlice2D = dynamic(() => import("@/components/preview/FemMeshSlice2DPlotly"), {
   ssr: false,
   loading: () => <ViewportModuleLoading label="Loading FEM slice viewport..." />,
 });

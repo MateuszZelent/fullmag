@@ -11,7 +11,15 @@
 import { create } from "zustand";
 import type { InteractionMode, ViewportHoverTarget } from "../interaction/interactionMode.types";
 import type { ViewportMode, VectorComponent, SlicePlane, FemDockTab, ViewportScope, ObjectViewMode } from "../../../components/runs/control-room/shared";
-import type { RenderMode, ClipAxis, FemColorField, FemArrowColorMode, FemVectorDomainFilter, FemFerromagnetVisibilityMode, MeshSelectionSnapshot } from "../../../components/preview/FemMeshView3D";
+import type {
+  ClipAxis,
+  FemArrowColorMode,
+  FemColorField,
+  FemFerromagnetVisibilityMode,
+  FemVectorDomainFilter,
+  MeshSelectionSnapshot,
+  RenderMode,
+} from "@/components/preview/FemMeshView3D";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
 /* ── Camera Profile ── */

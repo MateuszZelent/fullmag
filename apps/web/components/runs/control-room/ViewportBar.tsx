@@ -46,7 +46,7 @@ import type {
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
 
-import type { FemColorField, RenderMode } from "../../preview/FemMeshView3D";
+import type { FemColorField, RenderMode } from "@/components/preview/FemMeshView3D";
 import type { VectorComponent } from "./shared";
 import { useCommand, useModel, useTransport, useViewport } from "./context-hooks";
 

@@ -14,7 +14,7 @@ import type {
   FemFerromagnetVisibilityMode,
   FemVectorDomainFilter,
   RenderMode,
-} from "../../../preview/FemMeshView3D";
+} from "@/components/preview/FemMeshView3D";
 import type {
   ObjectViewMode,
   SlicePlane,

@@ -53,9 +53,9 @@ function makeSceneDocument() {
 }
 
 describe("workspaceViewportGuards", () => {
-  it("treats only build + Geometry as geometry authoring", () => {
+  it("treats the Geometry ribbon tab as geometry authoring", () => {
     expect(isGeometryAuthoringWorkspace("build", "Geometry")).toBe(true);
-    expect(isGeometryAuthoringWorkspace("study", "Geometry")).toBe(false);
+    expect(isGeometryAuthoringWorkspace("study", "Geometry")).toBe(true);
     expect(isGeometryAuthoringWorkspace("build", "Study")).toBe(false);
   });
 
@@ -72,7 +72,7 @@ describe("workspaceViewportGuards", () => {
   it("does not force camera-first for explicit Geometry authoring", () => {
     expect(
       shouldForceCameraFirstViewport({
-        workspaceMode: "build",
+        workspaceMode: "study",
         activeCoreTab: "Geometry",
         effectiveViewMode: "3D",
       }),

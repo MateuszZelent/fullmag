@@ -1,5 +1,5 @@
 import type { FemViewportLayerState } from "@/features/viewport-unified/model/unifiedViewportTypes";
-import type { FemColorField } from "../../preview/FemMeshView3D";
+import type { FemColorField } from "@/components/preview/FemMeshView3D";
 
 export interface FemLayerRenderState<TOverlay> {
   objectOverlays: TOverlay[];

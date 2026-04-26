@@ -403,9 +403,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     if (!geometryTabSelected) {
       return;
     }
-    if (workspaceStage !== "build") {
-      setWorkspaceStage("build");
-    }
     if (effectiveViewMode !== "3D") {
       handleViewModeChange("3D");
     }
@@ -416,8 +413,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     effectiveViewMode,
     enableBuilderMode,
     handleViewModeChange,
-    setWorkspaceStage,
-    workspaceStage,
   ]);
 
   useEffect(() => {
@@ -594,25 +589,31 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     if (ctx.sidebarCollapsed) {
       ctx.setSidebarCollapsed(false);
     }
-    ctx.setWorkspaceStage("build");
+    setActiveCoreTab("Geometry");
+    enableBuilderMode();
     ctx.setSelectedObjectId(nextObjectId);
     ctx.setSelectedSidebarNodeId(`obj-${nextObjectId}`);
     ctx.setObjectViewMode("context");
-  }, [ctx]);
+  }, [ctx, enableBuilderMode, setActiveCoreTab]);
 
   const selectedBuilderPrimitiveId =
     builderSelection.type === "primitive" ? builderSelection.id : null;
 
   const handleBuilderAddPrimitive = useCallback((kind: "box" | "cylinder" | "sphere" | "disk" | "triangular_prism") => {
-    if (workspaceStage !== "build") {
-      setWorkspaceStage("build");
-    }
+    setActiveCoreTab("Geometry");
+    enableBuilderMode();
     if (ctx.effectiveViewMode !== "3D") {
       ctx.handleViewModeChange("3D");
     }
     addBuilderPrimitive(kind);
     setBuilderViewportTool("move");
-  }, [addBuilderPrimitive, ctx, setBuilderViewportTool, setWorkspaceStage, workspaceStage]);
+  }, [
+    addBuilderPrimitive,
+    ctx,
+    enableBuilderMode,
+    setActiveCoreTab,
+    setBuilderViewportTool,
+  ]);
 
   const handleBuilderSetViewportMode = useCallback((mode: "camera" | "manipulate") => {
     setBuilderViewportTool(mode === "camera" ? "camera" : selectedBuilderPrimitiveId ? "move" : "select");

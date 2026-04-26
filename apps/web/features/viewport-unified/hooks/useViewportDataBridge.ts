@@ -635,15 +635,32 @@ export function useViewportDataBridge() {
 
   /* ── FEM layer state ── */
   const femLayerState = ctx.femViewportLayers;
-  const geometryAuthoringShowPrimitives = femLayerState.showPrimitives;
-  const geometryAuthoringShowMesh = femLayerState.showMesh;
-  const geometryAuthoringShowQuantity = femLayerState.showQuantity;
+  const geometryAuthoringShowPrimitives = showGeometryAuthoringViewport
+    ? true
+    : femLayerState.showPrimitives;
+  const geometryAuthoringShowMesh = showGeometryAuthoringViewport
+    ? false
+    : femLayerState.showMesh;
+  const geometryAuthoringShowQuantity = showGeometryAuthoringViewport
+    ? false
+    : femLayerState.showQuantity;
   const geometryModeObjectOverlays = useMemo(
-    () =>
-      geometryAuthoringShowPrimitives
-        ? ctx.objectOverlays.filter((o) => visibleObjectIds.includes(o.id))
-        : [],
-    [ctx.objectOverlays, geometryAuthoringShowPrimitives, visibleObjectIds],
+    () => {
+      if (!geometryAuthoringShowPrimitives) return [];
+      if (femDiscretization) {
+        const visibleIds = new Set(ctx.visibleMagneticObjectIds);
+        const visibleOverlays = ctx.objectOverlays.filter((o) => visibleIds.has(o.id));
+        return visibleOverlays.length > 0 ? visibleOverlays : ctx.objectOverlays;
+      }
+      return ctx.objectOverlays.filter((o) => visibleObjectIds.includes(o.id));
+    },
+    [
+      ctx.objectOverlays,
+      ctx.visibleMagneticObjectIds,
+      femDiscretization,
+      geometryAuthoringShowPrimitives,
+      visibleObjectIds,
+    ],
   );
   const geometryAuthoringMeshStatus = useMemo(() => {
     if (!geometryAuthoringShowMesh) return "hidden";

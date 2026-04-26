@@ -2,7 +2,7 @@
 
 import { memo, type ComponentProps } from "react";
 import UnifiedVectorFieldRenderer from "@/features/viewport-unified/renderers/UnifiedVectorFieldRenderer";
-import { ViewportErrorBoundary } from "../../preview/ViewportErrorBoundary";
+import { ViewportErrorBoundary } from "@/components/preview/ViewportErrorBoundary";
 
 type VectorFieldProps = ComponentProps<typeof UnifiedVectorFieldRenderer>;
 
