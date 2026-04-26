@@ -2093,7 +2093,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       !binaryFieldTransportEnabled ||
       !isFemBackend ||
       effectiveViewMode !== "3D" ||
-      !meshShowArrows ||
+      (!meshShowArrows && !femViewportLayers.showQuantity) ||
       !activeQuantityId ||
       !selectedFieldFrame ||
       scopedFemVectorScopes.length === 0 ||
@@ -2121,6 +2121,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     femMesh?.generation_id,
     femMesh?.mesh_id,
     femMesh?.node_count,
+    femViewportLayers.showQuantity,
     isFemBackend,
     meshShowArrows,
     scopedFemVectorScopes,

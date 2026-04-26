@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import AppBar from "../shell/AppBar";
 import RibbonBar from "../shell/RibbonBar";
 import StatusBar from "../shell/StatusBar";
 import { DataPlaneStatusBadges } from "./control-room/DataPlaneStatusBadges";
 import RunSidebar from "./control-room/RunSidebar";
 import { ViewportBar, ViewportCanvasArea } from "./control-room/ViewportPanels";
+import { ViewportTabBar } from "./control-room/ViewportTabBar";
+import { WorkspaceBodyLayout } from "./control-room/WorkspaceBodyLayout";
 import FullmagLogo from "../brand/FullmagLogo";
 import { recordFrontendDebugEvent } from "../../lib/workspace/navigation-debug";
 import type {
@@ -67,7 +68,6 @@ import {
   AnalyzeRightInspector,
 } from "../workspace/modes/WorkspaceModeInspectors";
 import {
-  isGeometryAuthoringWorkspace,
   resetSceneEditorToCameraFirst,
   shouldForceCameraFirstViewport,
 } from "./control-room/workspaceViewportGuards";
@@ -373,7 +373,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     }
   }, [autoCollapseSidebar, setSidebarCollapsed, sidebarCollapsed]);
 
-  const viewportPanelDefaultSize = compactVerticalLayout ? "90%" : PANEL_SIZES.viewportDefault;
   const rightInspectorDefaultSize = compactHorizontalLayout ? "18%" : PANEL_SIZES.rightInspectorDefault;
   const rightInspectorMinSize = compactHorizontalLayout ? "10%" : PANEL_SIZES.rightInspectorMin;
   const rightInspectorMaxSize = compactHorizontalLayout ? "36%" : PANEL_SIZES.rightInspectorMax;
@@ -395,13 +394,13 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }, [activeStageLayout.rightDock, rightInspectorOpen, setRightInspectorOpen]);
 
   useEffect(() => {
-    const geometryTabActive = isGeometryAuthoringWorkspace(workspaceStage, activeCoreTab);
-    if (geometryTabActive && !builderModeEnabled) {
+    const geometryTabSelected = activeCoreTab === "Geometry";
+    if (geometryTabSelected && !builderModeEnabled) {
       enableBuilderMode();
-    } else if (!geometryTabActive && builderModeEnabled) {
+    } else if (!geometryTabSelected && builderModeEnabled) {
       disableBuilderMode();
     }
-    if (!geometryTabActive) {
+    if (!geometryTabSelected) {
       return;
     }
     if (workspaceStage !== "build") {
@@ -1451,6 +1450,15 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         canSyncScriptBuilder={Boolean(ctx.sessionFooter.scriptPath)}
         scriptSyncBusy={ctx.scriptSyncBusy}
         onSyncScriptBuilder={() => void ctx.syncScriptBuilder()}
+        runtimeStatus={ctx.workspaceStatus as "idle" | "running" | "paused" | "failed" | "awaiting_command"}
+        canRun={ctx.canRunCommand && !builderRunBlocked}
+        canPause={ctx.canPauseCommand}
+        canStop={ctx.canStopCommand}
+        canSkip={ctx.canSkipCommand}
+        onRun={() => ctx.handleSimulationAction(ctx.primaryRunAction)}
+        onPause={() => ctx.handleSimulationAction("pause")}
+        onStop={() => ctx.handleSimulationAction("stop")}
+        onSkip={() => ctx.handleSimulationAction("skip")}
       />
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showRibbonBar ? <RibbonBar
         workspaceMode={ctx.workspaceStage}
@@ -1547,73 +1555,31 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
           )}
         </div>
       ) : (
-        <PanelGroup
-          orientation="horizontal"
-          className="flex flex-row flex-1 min-h-0 min-w-0 overflow-hidden"
-          resizeTargetMinimumSize={{ coarse: 40, fine: 12 }}
-        >
-          {FRONTEND_DIAGNOSTIC_FLAGS.shell.showSidebar && !ctx.sidebarCollapsed && (
+        <WorkspaceBodyLayout
+          leftCollapsed={ctx.sidebarCollapsed}
+          leftPanel={<RunSidebar />}
+          center={
             <>
-              <Panel
-                id="workspace-sidebar"
-                defaultSize={PANEL_SIZES.sidebarDefault}
-                minSize={PANEL_SIZES.sidebarMin}
-                maxSize={PANEL_SIZES.sidebarMax}
-                collapsible
-                collapsedSize="0%"
-              >
-                <RunSidebar />
-              </Panel>
-              <PanelResizeHandle className="h-full w-2 bg-transparent cursor-ew-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:w-[2px] after:h-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
+              {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar ? <ViewportBar /> : null}
+              {FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices ? previewNotices : null}
+              <ViewportTabBar />
+              <ViewportCanvasArea />
             </>
-          )}
-
-          <Panel
-            id="workspace-main"
-            defaultSize={ctx.sidebarCollapsed ? "100%" : PANEL_SIZES.bodyMainDefault}
-            minSize={PANEL_SIZES.bodyMainMin}
-          >
-            <Panel
-              id="workspace-viewport"
-              defaultSize={viewportPanelDefaultSize}
-              minSize={PANEL_SIZES.viewportMin}
-            >
-              <div className="flex flex-row h-full min-h-0 min-w-0 overflow-hidden bg-background flex-1 relative">
-                <div className="flex flex-col flex-1 min-w-0 min-h-0">
-                  {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar ? <ViewportBar /> : null}
-                  {FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices ? previewNotices : null}
-                  <ViewportCanvasArea />
-                </div>
-              </div>
-            </Panel>
-          </Panel>
-
-          {/* ── Right inspector (mode-specific) ── */}
-          {FRONTEND_DIAGNOSTIC_FLAGS.shell.showRightInspector && rightInspectorOpen ? (
-            <>
-              <PanelResizeHandle className="h-full w-2 bg-transparent cursor-ew-resize flex items-center justify-center transition-colors relative hover:bg-muted/50 active:bg-muted/50 after:content-[''] after:absolute after:top-1/2 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:w-[2px] after:h-9 after:rounded-full after:bg-border hover:after:bg-primary active:after:bg-primary z-50" />
-              <Panel
-                id="workspace-right-inspector"
-                defaultSize={rightInspectorDefaultSize}
-                minSize={rightInspectorMinSize}
-                maxSize={rightInspectorMaxSize}
-                collapsible
-                collapsedSize={0}
-                className="h-full min-h-0 overflow-y-auto overflow-x-hidden"
-              >
-                <div className="h-full min-h-0">
-                  {ctx.effectiveViewMode === "Analyze" ? (
-                    <AnalyzeRightInspector />
-                  ) : ctx.workspaceStage === "build" ? (
-                    <BuildRightInspector />
-                  ) : (
-                    <StudyRightInspector />
-                  )}
-                </div>
-              </Panel>
-            </>
-          ) : null}
-        </PanelGroup>
+          }
+          rightOpen={rightInspectorOpen}
+          rightPanel={
+            ctx.effectiveViewMode === "Analyze" ? (
+              <AnalyzeRightInspector />
+            ) : ctx.workspaceStage === "build" ? (
+              <BuildRightInspector />
+            ) : (
+              <StudyRightInspector />
+            )
+          }
+          rightDefaultSize={rightInspectorDefaultSize}
+          rightMinSize={rightInspectorMinSize}
+          rightMaxSize={rightInspectorMaxSize}
+        />
       )}
 
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showStatusBar ? <StatusBar

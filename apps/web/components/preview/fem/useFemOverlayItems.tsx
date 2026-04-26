@@ -403,14 +403,16 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
     if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showViewCube) {
       items.push({
         id: "gizmo-stack",
-        anchor: "bottom-left",
+        anchor: "top-right",
         priority: 3,
         render: () => (
-          <div className="flex flex-col items-start gap-2">
+          <div className="flex flex-col items-end gap-2">
             <ViewCube
               sceneRef={args.viewCubeSceneRef}
               onRotate={args.handleViewCubeRotate}
               onReset={() => args.setCameraPreset("reset")}
+              axisConvention="swapYZ"
+              size={1.42}
               onOrientationSnapshot={(snapshot) => args.updateRotationSnapshot("viewCube", snapshot)}
               embedded
             />
@@ -453,7 +455,7 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
         render: ({ variant }) => (
           <HslSphere
             sceneRef={args.viewCubeSceneRef}
-            axisConvention="identity"
+            axisConvention="swapYZ"
             compact={variant !== "full"}
             onOrientationSnapshot={(snapshot) => args.updateRotationSnapshot("hsl", snapshot)}
             embedded

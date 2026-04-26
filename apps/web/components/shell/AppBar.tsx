@@ -11,6 +11,10 @@ import {
   Info,
   Settings,
   ChevronDown,
+  Play,
+  Pause,
+  Square,
+  SkipForward,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import FullmagLogo from "../brand/FullmagLogo";
@@ -30,6 +34,17 @@ export interface AppBarProps {
   canSyncScriptBuilder?: boolean;
   scriptSyncBusy?: boolean;
   onSyncScriptBuilder?: () => void;
+  // Run controls
+  runtimeStatus?: "idle" | "running" | "paused" | "failed" | "awaiting_command";
+  currentStep?: number | null;
+  canRun?: boolean;
+  canPause?: boolean;
+  canStop?: boolean;
+  canSkip?: boolean;
+  onRun?: () => void;
+  onPause?: () => void;
+  onStop?: () => void;
+  onSkip?: () => void;
 }
 
 interface MenuItem {
@@ -231,11 +246,70 @@ export default function AppBar(props: AppBarProps) {
           </div>
         ) : null}
 
-        <div
-          className="hidden rounded-md border border-border/40 bg-card/30 px-2 py-1 text-[0.62rem] font-medium tracking-wide text-muted-foreground lg:block"
-          title="Stage authoring and execution now live in the Study ribbon."
-        >
-          Compute in Study
+        <div className="hidden items-center gap-0.5 lg:flex">
+          {/* Runtime status badge */}
+          {props.runtimeStatus && props.runtimeStatus !== "idle" ? (
+            <span
+              className={cn(
+                "mr-1.5 rounded-sm border px-2 py-0.5 text-[0.58rem] font-medium tracking-wider uppercase tabular-nums",
+                props.runtimeStatus === "running"
+                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                  : props.runtimeStatus === "paused"
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
+                    : props.runtimeStatus === "failed"
+                      ? "border-rose-500/40 bg-rose-500/10 text-rose-400"
+                      : "border-sky-500/30 bg-sky-500/10 text-sky-300",
+              )}
+            >
+              {props.runtimeStatus === "running" && props.currentStep != null
+                ? `step ${props.currentStep}`
+                : props.runtimeStatus}
+            </span>
+          ) : null}
+
+          {/* Run */}
+          <button
+            type="button"
+            disabled={!props.canRun}
+            onClick={props.onRun}
+            title="Run (R)"
+            className="inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-emerald-400 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <Play size={12} fill="currentColor" />
+          </button>
+
+          {/* Pause */}
+          <button
+            type="button"
+            disabled={!props.canPause}
+            onClick={props.onPause}
+            title="Pause"
+            className="inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-amber-400 transition-colors hover:border-amber-500/30 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <Pause size={12} fill="currentColor" />
+          </button>
+
+          {/* Stop */}
+          <button
+            type="button"
+            disabled={!props.canStop}
+            onClick={props.onStop}
+            title="Stop"
+            className="inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-rose-400 transition-colors hover:border-rose-500/30 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <Square size={12} fill="currentColor" />
+          </button>
+
+          {/* Skip */}
+          <button
+            type="button"
+            disabled={!props.canSkip}
+            onClick={props.onSkip}
+            title="Skip stage"
+            className="inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-violet-400 transition-colors hover:border-violet-500/30 hover:bg-violet-500/10 disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <SkipForward size={12} />
+          </button>
         </div>
       </div>
     </div>

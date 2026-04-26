@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 interface TabsContextValue {
   value: string | undefined;
   setValue: (next: string) => void;
+  variant: "underline" | "pill";
 }
 
 const TabsContext = React.createContext<TabsContextValue | null>(null);
@@ -22,10 +23,11 @@ interface TabsProps extends React.HTMLAttributes<HTMLDivElement> {
   value?: string;
   defaultValue?: string;
   onValueChange?: (value: string) => void;
+  variant?: "underline" | "pill";
 }
 
 const Tabs = React.forwardRef<HTMLDivElement, TabsProps>(
-  ({ className, value, defaultValue, onValueChange, children, ...props }, ref) => {
+  ({ className, value, defaultValue, onValueChange, variant = "underline", children, ...props }, ref) => {
     const isControlled = value !== undefined;
     const [internalValue, setInternalValue] = React.useState<string | undefined>(defaultValue);
     const resolvedValue = isControlled ? value : internalValue;
@@ -43,8 +45,8 @@ const Tabs = React.forwardRef<HTMLDivElement, TabsProps>(
     );
 
     const context = React.useMemo<TabsContextValue>(
-      () => ({ value: resolvedValue, setValue }),
-      [resolvedValue, setValue],
+      () => ({ value: resolvedValue, setValue, variant }),
+      [resolvedValue, setValue, variant],
     );
 
     return (
@@ -59,18 +61,21 @@ const Tabs = React.forwardRef<HTMLDivElement, TabsProps>(
 Tabs.displayName = "Tabs";
 
 const TabsList = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, ...props }, ref) => (
-    <div
-      ref={ref}
-      role="tablist"
-      className={cn(
-        "inline-flex h-9 items-center justify-center rounded-lg p-1",
-        "bg-[var(--ide-surface-raised)] border border-[var(--ide-border-subtle)]",
-        className,
-      )}
-      {...props}
-    />
-  ),
+  ({ className, ...props }, ref) => {
+    const { variant } = useTabsContext("TabsList");
+    return (
+      <div
+        ref={ref}
+        role="tablist"
+        className={cn(
+          "inline-flex items-center justify-center",
+          variant === "pill" ? "gap-1 rounded-md p-1 bg-transparent" : "h-9 bg-transparent",
+          className,
+        )}
+        {...props}
+      />
+    );
+  }
 );
 TabsList.displayName = "TabsList";
 
@@ -80,7 +85,7 @@ interface TabsTriggerProps extends React.ButtonHTMLAttributes<HTMLButtonElement>
 
 const TabsTrigger = React.forwardRef<HTMLButtonElement, TabsTriggerProps>(
   ({ className, value, onClick, onKeyDown, disabled, ...props }, ref) => {
-    const { value: activeValue, setValue } = useTabsContext("TabsTrigger");
+    const { value: activeValue, setValue, variant } = useTabsContext("TabsTrigger");
     const active = activeValue === value;
     return (
       <button
@@ -92,16 +97,17 @@ const TabsTrigger = React.forwardRef<HTMLButtonElement, TabsTriggerProps>(
         data-state={active ? "active" : "inactive"}
         disabled={disabled}
         className={cn(
-          "inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1",
-          "text-[length:var(--ide-text-xs)] font-bold uppercase tracking-wider",
-          "text-[var(--ide-text-3)]",
-          "ring-offset-[var(--ide-bg)] transition-all duration-150",
+          "inline-flex items-center justify-center whitespace-nowrap px-3 py-1.5",
+          "text-[length:var(--ide-text-xs)] font-medium tracking-wider transition-all duration-150",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ide-accent)] focus-visible:ring-offset-1",
-          "disabled:pointer-events-none disabled:opacity-50",
-          "data-[state=active]:bg-[var(--ide-accent-bg)] data-[state=active]:text-[var(--ide-accent-text)]",
-          "data-[state=active]:border data-[state=active]:border-[var(--ide-accent)]",
-          "data-[state=active]:shadow-sm",
-          "cursor-pointer",
+          "disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
+          variant === "pill" ? cn(
+            "rounded-md text-muted-foreground hover:text-foreground",
+            "data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+          ) : cn(
+            "rounded-none border-b-2 border-transparent text-muted-foreground hover:text-foreground",
+            "data-[state=active]:border-primary data-[state=active]:text-foreground"
+          ),
           className,
         )}
         onClick={(event) => {

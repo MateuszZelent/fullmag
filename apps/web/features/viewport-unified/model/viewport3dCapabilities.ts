@@ -33,6 +33,7 @@ export function resolveViewport3DCapabilities({
   const preview3d = Boolean(capabilities?.preview_3d);
   const structuredGrid = Boolean(capabilities?.structured_grid);
   const explicitTopology = Boolean(capabilities?.explicit_topology);
+  const binaryFields = Boolean(capabilities?.binary_fields);
 
   const preview3dCap = available(preview3d, "Requires preview_3d capability.");
   const structuredGridCap = preview3d
@@ -47,10 +48,12 @@ export function resolveViewport3DCapabilities({
       : available(false, "Requires explicit_topology capability.")
     : requirePreview3D(false, "Requires preview_3d capability.");
   const vectorFieldCap = preview3d
-    ? available(
-        structuredGrid || explicitTopology,
-        "Requires structured_grid or explicit_topology capability.",
-      )
+    ? binaryFields
+      ? available(
+          structuredGrid || explicitTopology,
+          "Requires structured_grid or explicit_topology capability.",
+        )
+      : available(false, "Requires binary_fields capability.")
     : requirePreview3D(false, "Requires preview_3d capability.");
   const clipCap = preview3d
     ? available(explicitTopology, "Requires explicit_topology capability.")

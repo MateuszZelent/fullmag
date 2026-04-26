@@ -623,6 +623,39 @@ function FdmObjectOverlayMeshes({
   );
 }
 
+function FdmUniverseBounds({
+  worldExtent,
+  universeCenter = null,
+}: {
+  worldExtent?: [number, number, number] | null;
+  universeCenter?: [number, number, number] | null;
+}) {
+  const geometry = useMemo(() => {
+    if (!worldExtent || !worldExtent.every((value) => Number.isFinite(value) && value > 0)) {
+      return null;
+    }
+    const [sx, sy, sz] = physicalScaleToScene(worldExtent);
+    return new THREE.BoxGeometry(sx, sy, sz);
+  }, [worldExtent]);
+  const center = useMemo(
+    () => physicalPositionToScene(universeCenter ?? [0, 0, 0]),
+    [universeCenter],
+  );
+
+  useEffect(() => () => geometry?.dispose(), [geometry]);
+
+  if (!geometry) {
+    return null;
+  }
+
+  return (
+    <lineSegments position={center} renderOrder={3}>
+      <edgesGeometry args={[geometry]} />
+      <lineBasicMaterial color="#89b4fa" transparent opacity={0.5} depthWrite={false} />
+    </lineSegments>
+  );
+}
+
 function FdmAntennaOverlayMeshes({
   overlays,
   selectedAntennaId,
@@ -819,7 +852,18 @@ function UnifiedVectorFieldRendererInner({
     interactionMode === "rotate" ? "rotate" :
     interactionMode === "scale"  ? "scale"  : "translate";
   // Hidden viewport should not consume high-frequency vector updates.
-  const deferredVectors = useDeferredValue(viewportVisible ? vectors : null);
+  const modelVectorField = viewport3DModel?.vectorField ?? null;
+  const modelVectorData =
+    !geometryMode && modelVectorField?.visible && modelVectorField.status === "ready"
+      ? modelVectorField.data
+      : null;
+  const effectiveVectors = modelVectorData?.values ?? vectors;
+  const effectiveGrid =
+    modelVectorData?.grid && modelVectorData.grid.every((value) => value > 0)
+      ? modelVectorData.grid
+      : grid;
+  const deferredVectors = useDeferredValue(viewportVisible ? effectiveVectors : null);
+  const deferredGrid = useDeferredValue(effectiveGrid);
   const deferredSettings = useDeferredValue(settings);
   // Vectors-visible flag from toolbar (glyph mode toggle).
   const vectorsVisible = viewport3DModel?.fdm?.vectorsVisible ?? true;
@@ -840,7 +884,7 @@ function UnifiedVectorFieldRendererInner({
     viewCube: null,
     hsl: null,
   });
-  const [nx, ny, nz] = grid;
+  const [nx, ny, nz] = deferredGrid;
   const hasRenderableGrid = nx > 0 && ny > 0 && nz > 0;
   const sceneMode: ViewportSceneMode = geometryMode && !hasRenderableGrid ? "world" : "grid";
   const overlayBounds = useMemo(() => combineOverlayBounds(objectOverlays), [objectOverlays]);
@@ -894,9 +938,9 @@ function UnifiedVectorFieldRendererInner({
   const cameraPersistenceKey = useMemo(
     () =>
       sceneMode === "grid"
-        ? `fdm:${geometryMode ? "mesh" : "3d"}:${grid.join("x")}`
+        ? `fdm:${geometryMode ? "mesh" : "3d"}:${deferredGrid.join("x")}`
         : `fdm:world:${sceneTarget.join("x")}:${sceneFrame.extent.join("x")}`,
-    [geometryMode, grid, sceneFrame.extent, sceneMode, sceneTarget],
+    [deferredGrid, geometryMode, sceneFrame.extent, sceneMode, sceneTarget],
   );
   const cameraRestoreReadyRef = useRef(false);
   const updateRotationSnapshot = useCallback((key: RotationPanelKey, snapshot: OrientationDebugSnapshot) => {
@@ -1640,7 +1684,7 @@ function UnifiedVectorFieldRendererInner({
 
             {sceneMode === "grid" ? (
               <FdmInstances
-                grid={grid}
+                grid={deferredGrid}
                 vectors={deferredVectors}
                 geometryMode={geometryMode}
                 activeMask={activeMask}
@@ -1663,6 +1707,10 @@ function UnifiedVectorFieldRendererInner({
                 onRequestObjectSelect={onRequestObjectSelect}
                 onGeometryTranslate={onGeometryTranslate}
               />
+            ) : null}
+
+            {geometryMode && sceneMode === "world" ? (
+              <FdmUniverseBounds worldExtent={worldExtent} universeCenter={universeCenter} />
             ) : null}
 
             {antennaOverlays.length > 0 && objectViewMode !== "isolate" && (sceneMode === "world" || Boolean(worldExtent)) ? (

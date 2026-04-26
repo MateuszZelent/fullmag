@@ -53,6 +53,7 @@ export interface ViewCubeProps {
   onRotate?: (q: THREE.Quaternion) => void;
   onReset?: () => void;
   axisConvention?: AxisConvention;
+  size?: number;
   className?: string;
   cubeClassName?: string;
   axisClassName?: string;
@@ -292,7 +293,17 @@ function CubeFace({
   );
 }
 
-function TripodArm({ color, label, rotation }: { color: string; label: string; rotation: string }) {
+function TripodArm({
+  color,
+  label,
+  rotation,
+  fontSize = 9,
+}: {
+  color: string;
+  label: string;
+  rotation: string;
+  fontSize?: number;
+}) {
   const length = 17;
   return (
     <>
@@ -315,7 +326,7 @@ function TripodArm({ color, label, rotation }: { color: string; label: string; r
       <div
         style={{
           position: "absolute",
-          fontSize: 9,
+          fontSize,
           fontWeight: 800,
           left: "50%",
           top: "50%",
@@ -340,11 +351,13 @@ function OrbitRing({
   setHoveredArcId,
   onArcClick,
   onHome,
+  scale = 1,
 }: {
   hoveredArcId: string | null;
   setHoveredArcId: (id: string | null) => void;
   onArcClick: (deltaTheta: number, deltaPhi: number) => void;
   onHome: () => void;
+  scale?: number;
 }) {
   const homeAngle = (45 - 90) * Math.PI / 180;
   const homeRadius = R_OUT - RING_W / 2;
@@ -353,8 +366,9 @@ function OrbitRing({
 
   return (
     <svg
-      width={SVG_SIZE}
-      height={SVG_SIZE}
+      width={SVG_SIZE * scale}
+      height={SVG_SIZE * scale}
+      viewBox={`0 0 ${SVG_SIZE} ${SVG_SIZE}`}
       style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
       aria-hidden
     >
@@ -417,6 +431,7 @@ export default function ViewCube({
   onRotate,
   onReset,
   axisConvention = "identity",
+  size = 1,
   className,
   cubeClassName,
   axisClassName,
@@ -425,6 +440,7 @@ export default function ViewCube({
   const axisX = sceneAxisDescriptor(0, axisConvention);
   const axisY = sceneAxisDescriptor(1, axisConvention);
   const axisZ = sceneAxisDescriptor(2, axisConvention);
+  const scale = Number.isFinite(size) && size > 0 ? size : 1;
 
   const faces = useMemo(() => buildViewCubeFaces(axisConvention), [axisConvention]);
   const targetsById = useMemo(() => buildViewCubeTargetMap(faces), [faces]);
@@ -612,71 +628,86 @@ export default function ViewCube({
   }, []);
 
   return (
-    <div className={cn("pointer-events-auto flex flex-col items-center select-none", className)} style={{ gap: 5 }}>
-      <div className={cn("pointer-events-auto relative", cubeClassName)} style={{ width: WIDGET, height: WIDGET }}>
+    <div className={cn("pointer-events-auto flex flex-col items-center select-none", className)} style={{ gap: 8 * scale }}>
+      <div
+        className={cn("pointer-events-auto relative", cubeClassName)}
+        style={{ width: WIDGET * scale, height: WIDGET * scale }}
+      >
         <OrbitRing
           hoveredArcId={hoveredArcId}
           setHoveredArcId={setHoveredArcId}
           onArcClick={orbitByArc}
           onHome={resetView}
+          scale={scale}
         />
 
         <div
           style={{
-            perspective: 320,
-            width: CUBE,
-            height: CUBE,
+            perspective: 320 * scale,
+            width: CUBE * scale,
+            height: CUBE * scale,
             position: "absolute",
-            left: (WIDGET - CUBE) / 2,
-            top: (WIDGET - CUBE) / 2,
+            left: ((WIDGET - CUBE) / 2) * scale,
+            top: ((WIDGET - CUBE) / 2) * scale,
           }}
         >
           <div
-            ref={cubeRef}
-            className="cursor-grab active:cursor-grabbing touch-none"
             style={{
               width: CUBE,
               height: CUBE,
-              transformStyle: "preserve-3d",
-              willChange: "transform",
+              transform: `scale(${scale})`,
+              transformOrigin: "top left",
             }}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={finishDrag}
-            onPointerCancel={cancelDrag}
-            onPointerOver={handlePointerOver}
-            onPointerLeave={handlePointerLeave}
           >
-            {faces.map((face) => (
-              <CubeFace
-                key={face.id}
-                transform={face.transform}
-                targets={face.targets}
-                hoveredTargetId={hoveredTargetId}
-                onPreviewTarget={setHoveredTargetId}
-                onCommitTarget={commitSnap}
-              />
-            ))}
+            <div
+              ref={cubeRef}
+              className="cursor-grab active:cursor-grabbing touch-none"
+              style={{
+                width: CUBE,
+                height: CUBE,
+                transformStyle: "preserve-3d",
+                willChange: "transform",
+              }}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={finishDrag}
+              onPointerCancel={cancelDrag}
+              onPointerOver={handlePointerOver}
+              onPointerLeave={handlePointerLeave}
+            >
+              {faces.map((face) => (
+                <CubeFace
+                  key={face.id}
+                  transform={face.transform}
+                  targets={face.targets}
+                  hoveredTargetId={hoveredTargetId}
+                  onPreviewTarget={setHoveredTargetId}
+                  onCommitTarget={commitSnap}
+                />
+              ))}
+            </div>
           </div>
         </div>
       </div>
 
       <div
         className={cn("relative pointer-events-none", axisClassName)}
-        style={{ width: 52, height: 52, perspective: 180 }}
+        style={{ width: 58 * scale, height: 58 * scale, perspective: 180 * scale }}
       >
         <div
           ref={tripodRef}
           style={{
             width: 52,
             height: 52,
+            transform: `scale(${scale})`,
+            transformOrigin: "center",
             transformStyle: "preserve-3d",
             willChange: "transform",
           }}
         >
-          <TripodArm color={axisX.color} label={axisX.text} rotation="rotateZ(-90deg)" />
-          <TripodArm color={axisY.color} label={axisY.text} rotation="rotateX(0deg)" />
-          <TripodArm color={axisZ.color} label={axisZ.text} rotation="rotateX(90deg)" />
+          <TripodArm color={axisX.color} label={axisX.text} rotation="rotateZ(-90deg)" fontSize={12} />
+          <TripodArm color={axisY.color} label={axisY.text} rotation="rotateX(0deg)" fontSize={12} />
+          <TripodArm color={axisZ.color} label={axisZ.text} rotation="rotateX(90deg)" fontSize={12} />
         </div>
       </div>
     </div>

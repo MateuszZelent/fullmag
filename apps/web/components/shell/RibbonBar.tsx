@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useMemo, useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useMemo, useEffect, useRef } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
 import type { WorkspaceMode } from "../runs/control-room/context-hooks";
+import { RibbonTabStrip, type ContextualRibbonTab } from "./ribbon/RibbonTabStrip";
+import { RibbonGroupsRow } from "./ribbon/RibbonGroupsRow";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import {
@@ -30,8 +31,6 @@ import {
   type RibbonTabId,
   type ContextualTabId,
   type RibbonBuildContext,
-  type RibbonAction,
-  type RibbonGroup,
 } from "@/features/shell/registry/ribbonRegistry";
 // Side-effect: registers all contributions
 import "@/features/shell/contributions";
@@ -195,11 +194,6 @@ function tabsForMode(mode: WorkspaceMode | undefined): RibbonTab[] {
   ];
 }
 
-interface ContextualRibbonTab {
-  id: ContextualTabId;
-  label: string;
-}
-
 function contextualTabsForSelection(p: RibbonBarProps): ContextualRibbonTab[] {
   const nodeId = p.selectedNodeId ?? "";
   const tabs: ContextualRibbonTab[] = [];
@@ -324,217 +318,6 @@ function isRibbonTabVisibleForMode(
   return Boolean(tab) && tabsForMode(mode).includes(tab as RibbonTab);
 }
 
-/* ── Render helpers ──────────────────────────────── */
-
-function ribbonActionTriggerClassName(
-  action: RibbonAction,
-  previewPending?: boolean,
-  className?: string,
-): string {
-  const isPrimaryAction = action.accent && !action.disabled;
-  return cn(
-    "flex min-h-[52px] min-w-[58px] flex-col items-center justify-center gap-1 rounded-md border p-1 transition-all",
-    action.active
-      ? "border-primary/20 bg-primary/10 text-primary shadow-inner"
-      : isPrimaryAction
-        ? "border-transparent bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
-        : "border-transparent text-foreground hover:border-border/50 hover:bg-muted/80",
-    previewPending && action.active && "animate-pulse shadow-[0_0_0_1px_rgba(99,102,241,0.35)]",
-    action.disabled && "pointer-events-none cursor-not-allowed opacity-40",
-    className,
-  );
-}
-
-function RibbonActionTriggerContent({ action }: { action: RibbonAction }) {
-  const isPrimaryAction = action.accent && !action.disabled;
-  return (
-    <>
-      <span
-        className={cn(
-          "flex flex-col items-center",
-          isPrimaryAction
-            ? action.iconColor ?? "text-primary-foreground"
-            : action.active
-              ? "text-primary"
-              : action.iconColor ?? "text-muted-foreground",
-        )}
-      >
-        {action.icon}
-      </span>
-      <span
-        className={cn(
-          "text-[0.62rem] font-medium leading-none text-center",
-          isPrimaryAction
-            ? "text-primary-foreground"
-            : action.active
-              ? "text-primary"
-              : "text-foreground",
-        )}
-      >
-        {action.label}
-      </span>
-    </>
-  );
-}
-
-const RibbonActionTrigger = React.forwardRef<
-  HTMLButtonElement,
-  {
-    action: RibbonAction;
-    previewPending?: boolean;
-  } & React.ButtonHTMLAttributes<HTMLButtonElement>
->(({ action, previewPending, ...props }, ref) => {
-  const propsOnClick = props.onClick;
-  const isHandlingRef = useRef(false);
-
-  const handleClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    if (isHandlingRef.current) {
-      return;
-    }
-    isHandlingRef.current = true;
-    try {
-      propsOnClick?.(e);
-      if (e.defaultPrevented) {
-        return;
-      }
-      action.action?.();
-    } finally {
-      queueMicrotask(() => {
-        isHandlingRef.current = false;
-      });
-    }
-  }, [action, propsOnClick]);
-  return (
-    <button
-      ref={ref}
-      {...props}
-      type={props.type ?? "button"}
-      className={ribbonActionTriggerClassName(action, previewPending, props.className)}
-      disabled={action.disabled}
-      onClick={handleClick}
-    >
-      <RibbonActionTriggerContent action={action} />
-    </button>
-  );
-});
-RibbonActionTrigger.displayName = "RibbonActionTrigger";
-
-function RibbonActionMenu({
-  action,
-  previewPending,
-}: {
-  action: RibbonAction;
-  previewPending?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const visibleItems = (action.menuItems ?? []).filter((item) => !item.hidden);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) {
-        return;
-      }
-      if (!rootRef.current?.contains(target)) {
-        setOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", handlePointerDown);
-    window.addEventListener("touchstart", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("mousedown", handlePointerDown);
-      window.removeEventListener("touchstart", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
-
-  if (visibleItems.length === 0) {
-    return (
-      <RibbonActionTrigger
-        action={action}
-        previewPending={previewPending}
-      />
-    );
-  }
-
-  return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        className={ribbonActionTriggerClassName(action, previewPending)}
-        disabled={action.disabled}
-        onClick={() => setOpen((previous) => !previous)}
-      >
-        <RibbonActionTriggerContent action={action} />
-      </button>
-      {open ? (
-        <div className="absolute left-0 top-full z-[100] mt-2 min-w-[280px] rounded-md border border-border/50 bg-popover/95 p-1 text-popover-foreground shadow-md backdrop-blur-xl">
-          {visibleItems.map((item) =>
-            item.separator ? (
-              <div key={item.id} className="my-1 h-px bg-border/50" />
-            ) : (
-              <button
-                key={item.id}
-                type="button"
-                className={cn(
-                  "relative flex w-full cursor-default select-none items-start gap-2 rounded-sm px-2 py-2 text-left text-xs outline-none transition-colors disabled:pointer-events-none disabled:opacity-50 hover:bg-muted hover:text-foreground",
-                  item.active && "bg-primary/10 text-primary",
-                )}
-                disabled={item.disabled}
-                onClick={() => {
-                  item.action?.();
-                  setOpen(false);
-                }}
-              >
-                <span className="mt-0.5 flex h-4 w-4 items-center justify-center text-muted-foreground opacity-80">
-                  {item.icon}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">{item.label}</span>
-                  {item.description ? (
-                    <span className="block truncate text-[0.68rem] text-muted-foreground">
-                      {item.description}
-                    </span>
-                  ) : null}
-                </span>
-              </button>
-            ),
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function ribbonGroupToneClass(tone: RibbonGroup["tone"] | undefined): string {
-  switch (tone) {
-    case "authoring":
-      return "border-emerald-500/30 bg-emerald-500/10";
-    case "compose":
-      return "border-violet-500/30 bg-violet-500/10";
-    case "compute":
-      return "border-primary/40 bg-primary/10";
-    case "selection":
-      return "border-amber-500/30 bg-amber-500/10";
-    case "sync":
-      return "border-cyan-500/30 bg-cyan-500/10";
-    case "neutral":
-      return "border-border/40 bg-muted/30";
-    default:
-      return "border-border/40 bg-muted/30";
-  }
-}
-
 /* ── Component ──────────────────────────────────── */
 
 export default function RibbonBar(props: RibbonBarProps) {
@@ -543,6 +326,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     (s) => s.resourceRevisions?.workspace_revision ?? null,
   );
   const currentStage = useWorkspaceStore((s) => s.currentStage);
+  const setCurrentStage = useWorkspaceStore((s) => s.setCurrentStage);
   const activeCoreTab = useWorkspaceStore((s) => s.activeCoreTab);
   const setActiveCoreTab = useWorkspaceStore((s) => s.setActiveCoreTab);
   const activeContextualTab = useWorkspaceStore((s) => s.activeContextualTab);
@@ -571,6 +355,39 @@ export default function RibbonBar(props: RibbonBarProps) {
     s.builderSelection.type === "primitive" ? s.builderSelection.id : null,
   );
   const workspaceStage = props.workspaceMode ?? currentStage;
+
+  // ── Auto-activate ribbon tab when selected sidebar node changes ──
+  const prevAutoActivateNodeIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const nodeId = props.selectedNodeId ?? "";
+    if (!nodeId || nodeId === prevAutoActivateNodeIdRef.current) {
+      return;
+    }
+    prevAutoActivateNodeIdRef.current = nodeId;
+    let targetTab: RibbonTab | null = null;
+    const lower = nodeId.toLowerCase();
+    if (lower.includes("physics") || lower.includes("interaction") || lower.includes("anisotropy") || lower.includes("zeeman") || lower.includes("stochastic")) {
+      targetTab = "Physics";
+    } else if (lower.includes("material")) {
+      targetTab = "Materials";
+    } else if (lower.includes("geometry") || (lower.includes("object") && !lower.includes("study"))) {
+      targetTab = "Geometry";
+    } else if (lower.includes("mesh") && !lower.includes("study")) {
+      targetTab = "Mesh";
+    } else if (lower.includes("study") || lower.includes("stage")) {
+      targetTab = "Study";
+    } else if (lower.includes("result") || lower.includes("analysis") || lower.includes("plot") || lower.includes("spectrum") || lower.includes("dispersion")) {
+      targetTab = "Results";
+    } else if (lower.includes("definition") || lower.includes("parameter") || lower.includes("constant")) {
+      targetTab = "Definitions";
+    }
+    if (targetTab) {
+      const currentVisible = tabsForMode(workspaceStage);
+      if (currentVisible.includes(targetTab)) {
+        setActiveCoreTab(targetTab);
+      }
+    }
+  }, [props.selectedNodeId, workspaceStage, setActiveCoreTab]);
 
   useEffect(() => {
     if (lastSessionIdRef.current === sessionId) {
@@ -694,6 +511,19 @@ export default function RibbonBar(props: RibbonBarProps) {
       : activeContextualTab && contextualTabs.some((tab) => tab.id === activeContextualTab)
         ? activeContextualTab
         : contextualTabs[0]?.id ?? null;
+  const handleCoreTabClick = useCallback(
+    (tab: string) => {
+      setActiveCoreTab(tab);
+      if (tab === "Geometry") {
+        setCurrentStage("build");
+        return;
+      }
+      if (workspaceStage === "build") {
+        setCurrentStage("study");
+      }
+    },
+    [setActiveCoreTab, setCurrentStage, workspaceStage],
+  );
 
   const groups = useMemo(() => {
     const ctx = buildContext(props, {
@@ -773,148 +603,17 @@ export default function RibbonBar(props: RibbonBarProps) {
   return (
     <TooltipProvider delayDuration={200}>
       <div className="flex flex-col w-full bg-card/10 border-b border-border/15 backdrop-blur-xl shrink-0 z-30">
-        {/* ── Tab row ── */}
-        <div className="flex px-3 pt-2 gap-1 border-b border-border/10">
-          {visibleTabs.map((tab) => {
-            const isActive = String(tab) === String(activeTab);
-            return (
-            <button
-              key={tab}
-              onClick={() => setActiveCoreTab(tab)}
-              className={cn(
-                "px-5 py-2.5 min-w-[80px] text-[0.80rem] transition-all duration-300 rounded-t-lg font-sans cursor-pointer",
-                isActive 
-                  ? "text-foreground font-medium tracking-wide relative"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/20"
-              )}
-              style={isActive ? {
-                textShadow: '0 0 8px rgba(255,255,255,0.2)',
-              } : undefined}
-            >
-              {/* Very subtle gradient background */}
-              {isActive && (
-                <span 
-                  className="absolute inset-0 rounded-t-lg"
-                  style={{
-                    background: 'linear-gradient(135deg, rgba(99,102,241,0.10) 0%, rgba(139,92,246,0.06) 100%)',
-                    boxShadow: 'inset 0 0 10px rgba(255,255,255,0.04), 0 0 8px rgba(99,102,241,0.08)',
-                  }}
-                />
-              )}
-              <span className="relative z-10">{tab}</span>
-            </button>
-            );
-          })}
-          {contextualTabs.length > 0 ? (
-            <div className="ml-auto mb-2 flex items-center gap-1.5 pl-4">
-              <span className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
-                Context
-              </span>
-              {contextualTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  className={cn(
-                    "rounded-md border px-2 py-1 text-[0.63rem] font-semibold tracking-wide transition-colors",
-                    activeContextualTabId === tab.id
-                      ? "border-primary/30 bg-primary/12 text-primary"
-                      : "border-border/30 bg-background/30 text-muted-foreground hover:bg-muted/40 hover:text-foreground",
-                  )}
-                  onClick={() => setActiveContextualTab(tab.id)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {activeTab === "Mesh" && (
-            <div className={cn(
-              "mb-2 flex items-center gap-2 pl-4",
-              contextualTabs.length > 0 ? "border-l border-border/20 ml-1" : "ml-auto",
-            )}>
-              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
-                Mesh Status
-              </span>
-              <span
-                className={cn(
-                  "rounded-md border px-2 py-1 text-[0.68rem] font-medium",
-                  props.meshGenerating
-                    ? "border-cyan-400/30 bg-cyan-400/10 text-cyan-200"
-                    : props.meshConfigDirty
-                      ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
-                      : "border-emerald-400/25 bg-emerald-400/10 text-emerald-200",
-                )}
-              >
-                {props.meshGenerating
-                  ? "Building"
-                  : props.meshConfigDirty
-                    ? "Out of date"
-                    : "Up to date"}
-              </span>
-              <span className="text-[0.7rem] text-muted-foreground">
-                {props.meshGenerating
-                  ? "The build modal is streaming live meshing progress."
-                  : props.meshConfigDirty
-                    ? "Viewport shows the last built mesh until you rebuild."
-                    : "Viewport reflects the latest built mesh."}
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* ── Actions row ── */}
-        <div className="flex items-stretch overflow-x-auto scrollbar-none py-2 px-2 gap-1 min-h-[88px]">
-          {groups.filter((g) => g.actions.some((a) => !a.hidden)).map((group, gi) => (
-            <div key={group.id} className="flex items-stretch shrink-0">
-              {gi > 0 && <div className="w-px bg-border/20 mx-2 self-stretch my-3" />}
-              <div
-                className={cn(
-                  "flex min-h-[74px] flex-col justify-between items-center rounded-lg border px-2 py-1.5 shrink-0",
-                  ribbonGroupToneClass(group.tone),
-                )}
-              >
-                <div className="flex items-center gap-1">
-                  {group.actions.filter((a) => !a.hidden).map((action) =>
-                    action.menuItems && action.menuItems.length > 0 ? (
-                      <RibbonActionMenu
-                        key={action.id}
-                        action={action}
-                        previewPending={props.previewPending}
-                      />
-                    ) : action.tooltip ? (
-                      <RibbonActionTrigger
-                        key={action.id}
-                        action={action}
-                        previewPending={props.previewPending}
-                        title={
-                          action.shortcut
-                            ? `${action.tooltip} (${action.shortcut})`
-                            : action.tooltip
-                        }
-                      />
-                    ) : (
-                      <RibbonActionTrigger
-                        key={action.id}
-                        action={action}
-                        previewPending={props.previewPending}
-                      />
-                    ),
-                  )}
-                </div>
-                <div className="mt-1 w-full border-t border-border/20 pt-1 text-center">
-                  <span className="block text-[0.6rem] font-semibold text-muted-foreground opacity-85">
-                    {group.title}
-                  </span>
-                  {group.subtitle ? (
-                    <span className="block text-[0.54rem] font-medium text-muted-foreground/75">
-                      {group.subtitle}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        <RibbonTabStrip
+          visibleTabs={visibleTabs}
+          activeTab={activeTab}
+          onTabClick={handleCoreTabClick}
+          contextualTabs={contextualTabs}
+          activeContextualTabId={activeContextualTabId}
+          onContextualTabClick={setActiveContextualTab}
+          meshGenerating={props.meshGenerating}
+          meshConfigDirty={props.meshConfigDirty}
+        />
+        <RibbonGroupsRow groups={groups} previewPending={props.previewPending} />
       </div>
     </TooltipProvider>
   );

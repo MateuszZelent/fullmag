@@ -20,6 +20,6 @@ export function deriveFemLayerRenderState<TOverlay>(args: {
     objectOverlays: layers.showPrimitives ? objectOverlays : [],
     meshOpacity: layers.showMesh ? meshOpacity : 0,
     colorField: layers.showQuantity ? colorField : "none",
-    showArrows: layers.showQuantity ? showArrows : false,
+    showArrows,
   };
 }

@@ -78,7 +78,11 @@ export default function ScalarTable({ rows, quantities = [] }: ScalarTableProps)
   const handleCopyCSV = useCallback(() => {
     const header = columns.map((c) => c.label).join("\t");
     const body = rows.map((r) => columns.map((c) => textCell(r, c.key)).join("\t")).join("\n");
-    void navigator.clipboard.writeText(`${header}\n${body}`);
+    void navigator.clipboard
+      .writeText(`${header}\n${body}`)
+      .catch((error) => {
+        console.warn("[ScalarTable] Clipboard copy failed", error);
+      });
   }, [columns, rows]);
 
   if (rows.length === 0) {

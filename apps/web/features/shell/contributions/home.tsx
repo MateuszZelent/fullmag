@@ -4,6 +4,7 @@
 
 import {
   FileText, Box, Columns2, BarChart3, Sparkles, PanelRight, Eye,
+  Play, Pause, Square, SkipForward,
 } from "lucide-react";
 import { registerRibbonContribution } from "../registry/ribbonRegistry";
 import type { RibbonBuildContext, RibbonGroup } from "../registry/ribbonRegistry";
@@ -90,6 +91,54 @@ function buildHomeGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           disabled: !ctx.can({ id: "viewport.focus-selected-object" }),
           action: () => ctx.run({ id: "viewport.focus-selected-object" }),
           iconColor: "text-teal-400",
+        },
+      ],
+    },
+    {
+      id: "home-compute",
+      title: "Compute",
+      tone: "compute",
+      actions: [
+        {
+          id: "home-compute-run",
+          icon: <Play size={20} fill="currentColor" />,
+          label: ctx.runLabel === "Resume" ? "Resume" : "Compute",
+          tooltip:
+            ctx.runLabel === "Resume"
+              ? "Resume the staged compute pipeline"
+              : "Execute the current study pipeline",
+          shortcut: "F5",
+          accent: true,
+          disabled: !ctx.can({ id: "solver.control", action: "run" }),
+          action: () => ctx.run({ id: "solver.control", action: "run" }),
+          iconColor: "text-cyan-400",
+        },
+        {
+          id: "home-compute-pause",
+          icon: <Pause size={20} fill="currentColor" />,
+          label: "Pause",
+          tooltip: "Pause execution",
+          disabled: !ctx.can({ id: "solver.control", action: "pause" }),
+          action: () => ctx.run({ id: "solver.control", action: "pause" }),
+          iconColor: "text-amber-500",
+        },
+        {
+          id: "home-compute-stop",
+          icon: <Square size={20} fill="currentColor" />,
+          label: "Stop",
+          tooltip: "Stop execution",
+          disabled: !ctx.can({ id: "solver.control", action: "stop" }),
+          action: () => ctx.run({ id: "solver.control", action: "stop" }),
+          iconColor: "text-rose-500",
+        },
+        {
+          id: "home-compute-skip",
+          icon: <SkipForward size={20} />,
+          label: "Skip",
+          tooltip: "Skip the active stage",
+          disabled: !ctx.can({ id: "solver.control", action: "skip" }),
+          action: () => ctx.run({ id: "solver.control", action: "skip" }),
+          iconColor: "text-violet-400",
         },
       ],
     },

@@ -82,6 +82,12 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
   const values = new Float64Array(buffer, HEADER_LEN, elementCount);
 
   const pointCount = gridX * gridY * gridZ;
+  const expectedElementCount = pointCount * nComp;
+  if (elementCount !== expectedElementCount) {
+    throw new Error(
+      `FMVP element count mismatch: expected grid*nComp=${expectedElementCount}, got ${elementCount}`,
+    );
+  }
 
   return {
     quantityId,

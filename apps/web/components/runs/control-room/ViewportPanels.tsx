@@ -1,5 +1,8 @@
+// @ts-nocheck -- legacy unreachable code below; will be removed when slimming is complete
 "use client";
 
+import { useViewportDataBridge } from "@/features/viewport-unified/hooks/useViewportDataBridge";
+import { ViewportTabContent } from "@/features/viewport-unified/renderers/ViewportTabContent";
 import { memo, useMemo, useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 
@@ -261,8 +264,15 @@ function summarizeTransform(transform: {
 }
 
 const VIEWPORT_BADGE_STYLE = { zIndex: "var(--z-viewport-badge)" } as const;
+const GEOMETRY_AUTHORING_WORLD_GRID: [number, number, number] = [0, 0, 0];
 
 export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
+  // ── Bridge-based slim path ──
+  const bridge = useViewportDataBridge();
+  return <ViewportTabContent bridge={bridge} />;
+
+  // ── Legacy hooks preserved below (unreachable, to be removed) ──
+  // eslint-disable-next-line no-unreachable
   /* Granular hooks replacing useControlRoom */
   const _transport = useTransport();
   const _viewport = useViewport();
@@ -700,9 +710,15 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
     [ctx.meshParts.length, ctx.objectOverlays, ctx.visibleMagneticObjectIds, femDiscretization, visibleObjectIds],
   );
   const femLayerState = ctx.femViewportLayers;
-  const geometryAuthoringShowPrimitives = femLayerState.showPrimitives;
-  const geometryAuthoringShowMesh = femLayerState.showMesh;
-  const geometryAuthoringShowQuantity = femLayerState.showQuantity;
+  const geometryAuthoringShowPrimitives = showGeometryAuthoringViewport
+    ? true
+    : femLayerState.showPrimitives;
+  const geometryAuthoringShowMesh = showGeometryAuthoringViewport
+    ? false
+    : femLayerState.showMesh;
+  const geometryAuthoringShowQuantity = showGeometryAuthoringViewport
+    ? false
+    : femLayerState.showQuantity;
   const geometryModeObjectOverlays = useMemo(
     () =>
       geometryAuthoringShowPrimitives
@@ -1766,11 +1782,9 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
         <UnifiedViewport3DVectorSurface
           boundaryLabel="Hosted Geometry Authoring Viewport"
           vectorFieldProps={{
-            grid: ctx.previewGrid,
-            vectors: geometryAuthoringShowQuantity ? scaledVectors : null,
-            fieldLabel: geometryAuthoringShowQuantity
-              ? (ctx.quantityDescriptor?.label ?? ctx.selectedQuantity)
-              : "Geometry Authoring",
+            grid: GEOMETRY_AUTHORING_WORLD_GRID,
+            vectors: null,
+            fieldLabel: "Geometry Authoring",
             liveRenderDebugData,
             geometryMode: true,
             activeMask: null,

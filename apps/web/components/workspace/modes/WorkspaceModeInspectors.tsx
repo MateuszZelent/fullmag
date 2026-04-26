@@ -167,18 +167,18 @@ function WorkspaceRightToolbox() {
         value={rightInspectorTab}
         onValueChange={(value) => setRightInspectorTab(value as RightInspectorTab)}
       >
-        <div className="border-b border-border/30 px-3 py-2.5">
-          <TabsList className="grid h-8 w-full grid-cols-4">
-            <TabsTrigger value="properties" className="text-[0.63rem] uppercase tracking-[0.08em]">
+        <div className="border-b border-border/10 px-4 py-2">
+          <TabsList className="flex w-full justify-start gap-5">
+            <TabsTrigger value="properties" className="text-[0.7rem] normal-case px-0">
               Properties
             </TabsTrigger>
-            <TabsTrigger value="selected-submeshes" className="text-[0.68rem] uppercase tracking-[0.08em]">
+            <TabsTrigger value="selected-submeshes" className="text-[0.7rem] normal-case px-0">
               Submeshes
             </TabsTrigger>
-            <TabsTrigger value="tools" className="text-[0.68rem] uppercase tracking-[0.08em]">
+            <TabsTrigger value="tools" className="text-[0.7rem] normal-case px-0">
               Tools
             </TabsTrigger>
-            <TabsTrigger value="console" className="text-[0.68rem] uppercase tracking-[0.08em]">
+            <TabsTrigger value="console" className="text-[0.7rem] normal-case px-0">
               Console
             </TabsTrigger>
           </TabsList>

@@ -146,7 +146,7 @@ export default function HslSphere({
     >
       <div className="fem-hsl-gizmo__frame pointer-events-none absolute inset-[8px] rounded-[22px] border" />
       <div className="fem-hsl-gizmo__ring pointer-events-none absolute inset-[16px] rounded-full border" />
-      <div className="fem-hsl-gizmo__title pointer-events-none absolute inset-x-4 top-3 flex items-center justify-between text-[0.55rem] font-bold uppercase tracking-[0.24em]">
+      <div className="fem-hsl-gizmo__title pointer-events-none absolute inset-x-4 top-3 flex items-center justify-between text-[0.68rem] font-bold uppercase tracking-[0.16em]">
         <span>HSL</span>
         <span className="fem-hsl-gizmo__title-accent">Gizmo</span>
       </div>
@@ -271,7 +271,7 @@ function HslSphereScene({
 
       {/* Axis labels — visual XYZ reference for the active viewport convention */}
       {(() => {
-        const fs = compact ? 0.22 : 0.30;
+        const fs = compact ? 0.30 : 0.38;
         const ld = compact ? 1.12 : 1.26;
         return (
           <>

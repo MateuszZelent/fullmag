@@ -713,7 +713,11 @@ export default function ModelTree({
       }
       onContextAction?.(ctxMenu.nodeId, action);
       if (action === "select") onNodeClick?.(ctxMenu.nodeId);
-      if (action === "copy-name" && ctxMenu.label) void navigator.clipboard.writeText(ctxMenu.label);
+      if (action === "copy-name" && ctxMenu.label) {
+        void navigator.clipboard.writeText(ctxMenu.label).catch((error) => {
+          console.warn("[ModelTree] Clipboard copy failed", error);
+        });
+      }
     }
     setCtxMenu(null);
   }, [ctxMenu, onContextAction, onNodeClick]);

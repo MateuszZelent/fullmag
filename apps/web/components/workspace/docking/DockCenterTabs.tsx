@@ -227,6 +227,7 @@ export default function DockCenterTabs() {
     <Tabs
       value={activeTab?.id}
       onValueChange={handleTabValueChange}
+      variant="pill"
       className="flex min-h-0 min-w-0 flex-1 flex-col"
     >
       <DockCenterTabHeader

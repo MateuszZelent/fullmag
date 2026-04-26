@@ -25,7 +25,7 @@ export function ArrowLayer({
       data-vector-status={vectorField?.status ?? "idle"}
     >
       {statusChipsVisible && chip ? (
-        <div className="pointer-events-none absolute right-3 top-3 z-20 rounded border border-border/45 bg-background/80 px-2 py-1 font-mono text-[10px] uppercase text-muted-foreground backdrop-blur">
+        <div className="pointer-events-none absolute bottom-3 right-3 z-20 rounded border border-border/45 bg-background/80 px-2 py-1 font-mono text-[10px] uppercase text-muted-foreground backdrop-blur">
           {chip}
         </div>
       ) : null}

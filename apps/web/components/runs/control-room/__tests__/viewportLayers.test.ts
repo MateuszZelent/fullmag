@@ -42,7 +42,7 @@ describe("deriveFemLayerRenderState", () => {
     expect(result.showArrows).toBe(true);
   });
 
-  it("forces color/arrow off when quantity layer is disabled", () => {
+  it("keeps arrows independent when quantity layer is disabled", () => {
     const result = deriveFemLayerRenderState({
       layers: {
         showPrimitives: true,
@@ -56,7 +56,6 @@ describe("deriveFemLayerRenderState", () => {
     });
 
     expect(result.colorField).toBe("none");
-    expect(result.showArrows).toBe(false);
+    expect(result.showArrows).toBe(true);
   });
 });
-
