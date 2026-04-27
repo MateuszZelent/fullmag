@@ -134,6 +134,12 @@ export default function RegionPanel({ nodeId }: { nodeId?: string }) {
               </span>
             </div>
             <div className="mt-1 flex items-center justify-between gap-3">
+              <span>Bodies</span>
+              <span className="font-mono text-foreground">
+                {regionResource?.source_body_ids.length ?? 0}
+              </span>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-3">
               <span>Mesh parts</span>
               <span className="font-mono text-foreground">
                 {regionResource?.mesh_part_ids.length ?? 0}

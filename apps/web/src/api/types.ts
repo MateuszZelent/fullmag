@@ -628,14 +628,31 @@ export interface MeshPartEntry {
   bounds_max?: [number, number, number] | null;
 }
 
+export interface MeshRegionEntry {
+  region_id: string;
+  name: string;
+  source_object_ids: string[];
+  source_region_candidate_id?: string | null;
+  material_ref: string;
+  magnetization_ref?: string | null;
+  mesh_part_ids: string[];
+  element_count?: number | null;
+  cell_count?: number | null;
+  bounds_min?: [number, number, number] | null;
+  bounds_max?: [number, number, number] | null;
+}
+
 export interface MeshSharedDomainManifestResource {
   revision: number;
+  source_scene_revision?: number | null;
+  geometry_realization_revision?: number | null;
   mesh_name: string;
   mesh_id: string;
   generation_id?: string | null;
   domain_mesh_mode?: string | null;
   object_segments: MeshObjectSegmentEntry[];
   mesh_parts: MeshPartEntry[];
+  regions: MeshRegionEntry[];
 }
 
 export interface MeshObjectConfigResource {
@@ -1028,6 +1045,7 @@ export interface RegionResource {
   name: string;
   source: "object" | "csg_fragment" | "manual" | string;
   source_object_ids: string[];
+  source_body_ids: string[];
   material_ref: string;
   magnetization_ref?: string | null;
   interaction_refs: string[];

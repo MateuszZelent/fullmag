@@ -239,8 +239,34 @@ impl From<&FemMeshPartPayload> for MeshPartResource {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshRegionResource {
+    pub region_id: String,
+    pub name: String,
+    pub source_object_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_region_candidate_id: Option<String>,
+    pub material_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub magnetization_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mesh_part_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds_min: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds_max: Option<[f64; 3]>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshSharedDomainManifestResource {
     pub revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_scene_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry_realization_revision: Option<u64>,
     /// Mesh identity for tree/selection metadata.
     pub mesh_name: String,
     pub mesh_id: String,
@@ -253,6 +279,8 @@ pub struct MeshSharedDomainManifestResource {
     /// Scoped mesh parts for object/airbox/selection fetches. Heavy topology remains in binary topology endpoints.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_parts: Vec<MeshPartResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<MeshRegionResource>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

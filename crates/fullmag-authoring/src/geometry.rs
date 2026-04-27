@@ -102,6 +102,36 @@ pub struct GeometryValidationResource {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct GeometryWorkspace {
+    pub scene_revision: u64,
+    pub backend_target: GeometryBackendTarget,
+    #[serde(default)]
+    pub bodies: Vec<GeometryBody>,
+    #[serde(default)]
+    pub diagnostics: Vec<GeometryDiagnostic>,
+    #[serde(default)]
+    pub provenance: Vec<GeometryProvenanceEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct GeometryBody {
+    pub body_id: String,
+    pub object_id: String,
+    pub object_name: String,
+    pub geometry_kind: String,
+    pub geometry_path: String,
+    pub transform: Transform3D,
+    pub bounds_min: [f64; 3],
+    pub bounds_max: [f64; 3],
+    pub material_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_hint: Option<String>,
+    pub visible: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct GeometryRealizationSnapshot {
     pub source_scene_revision: u64,
     pub realization_revision: u64,
@@ -123,6 +153,7 @@ pub struct GeometryRealizationSnapshot {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct RealizedGeometryBody {
+    pub body_id: String,
     pub object_id: String,
     pub object_name: String,
     pub geometry_kind: String,
@@ -141,6 +172,9 @@ pub struct RealizedGeometryBody {
 pub struct GeometryRegionCandidate {
     pub id: String,
     pub object_id: String,
+    pub source_body_id: String,
+    #[serde(default)]
+    pub source_body_ids: Vec<String>,
     pub material_ref: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub magnetization_ref: Option<String>,
@@ -151,6 +185,7 @@ pub struct GeometryRegionCandidate {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct GeometryProvenanceEntry {
+    pub body_id: String,
     pub object_id: String,
     pub geometry_path: String,
     pub source: String,
@@ -189,23 +224,10 @@ pub fn validate_geometry_scene(
     backend_target: GeometryBackendTarget,
 ) -> GeometryValidationResource {
     let diagnostics = collect_geometry_diagnostics(scene, &backend_target);
-    let status = if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity == GeometryDiagnosticSeverity::Error)
-    {
-        "blocked"
-    } else if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity == GeometryDiagnosticSeverity::Warning)
-    {
-        "warning"
-    } else {
-        "ready"
-    };
     GeometryValidationResource {
         scene_revision: scene.revision,
         backend_target,
-        status: status.to_string(),
+        status: workspace_status(&diagnostics),
         dirty: scene_has_dirty_mesh_tags(scene),
         diagnostics,
     }
@@ -215,52 +237,45 @@ pub fn realize_geometry_scene(
     scene: &SceneDocument,
     backend_target: GeometryBackendTarget,
 ) -> GeometryRealizationSnapshot {
-    let validation = validate_geometry_scene(scene, backend_target.clone());
+    let workspace = build_geometry_workspace(scene, backend_target);
+    let mut bounds: Option<([f64; 3], [f64; 3])> = None;
     let mut bodies = Vec::new();
     let mut region_candidates = Vec::new();
-    let mut provenance = Vec::new();
-    let mut bounds: Option<([f64; 3], [f64; 3])> = None;
 
-    for object in &scene.objects {
-        let Some((bounds_min, bounds_max)) = derive_object_bounds(object) else {
-            continue;
-        };
-        let path = format!("objects/{}/geometry", object.id);
+    for body in &workspace.bodies {
         bodies.push(RealizedGeometryBody {
-            object_id: object.id.clone(),
-            object_name: object.name.clone(),
-            geometry_kind: object.geometry.geometry_kind.clone(),
-            material_ref: object.material_ref.clone(),
-            magnetization_ref: object.magnetization_ref.clone(),
-            visible: object.visible,
-            status: if object.visible { "ready" } else { "hidden" }.to_string(),
-            bounds_min,
-            bounds_max,
-            provenance: vec![path.clone()],
+            body_id: body.body_id.clone(),
+            object_id: body.object_id.clone(),
+            object_name: body.object_name.clone(),
+            geometry_kind: body.geometry_kind.clone(),
+            material_ref: body.material_ref.clone(),
+            magnetization_ref: body.magnetization_ref.clone(),
+            visible: body.visible,
+            status: if body.visible { "ready" } else { "hidden" }.to_string(),
+            bounds_min: body.bounds_min,
+            bounds_max: body.bounds_max,
+            provenance: vec![body.geometry_path.clone()],
         });
         region_candidates.push(GeometryRegionCandidate {
-            id: object
-                .region_name
+            id: body
+                .region_hint
                 .clone()
-                .unwrap_or_else(|| format!("region:{}", object.id)),
-            object_id: object.id.clone(),
-            material_ref: object.material_ref.clone(),
-            magnetization_ref: object.magnetization_ref.clone(),
-            bounds_min,
-            bounds_max,
-            source_geometry_path: path.clone(),
-        });
-        provenance.push(GeometryProvenanceEntry {
-            object_id: object.id.clone(),
-            geometry_path: path,
-            source: object.geometry.geometry_kind.clone(),
+                .unwrap_or_else(|| format!("region:{}", body.object_id)),
+            object_id: body.object_id.clone(),
+            source_body_id: body.body_id.clone(),
+            source_body_ids: vec![body.body_id.clone()],
+            material_ref: body.material_ref.clone(),
+            magnetization_ref: body.magnetization_ref.clone(),
+            bounds_min: body.bounds_min,
+            bounds_max: body.bounds_max,
+            source_geometry_path: body.geometry_path.clone(),
         });
         bounds = Some(match bounds {
             Some((current_min, current_max)) => (
-                min_vec3(current_min, bounds_min),
-                max_vec3(current_max, bounds_max),
+                min_vec3(current_min, body.bounds_min),
+                max_vec3(current_max, body.bounds_max),
             ),
-            None => (bounds_min, bounds_max),
+            None => (body.bounds_min, body.bounds_max),
         });
     }
 
@@ -270,13 +285,56 @@ pub fn realize_geometry_scene(
     GeometryRealizationSnapshot {
         source_scene_revision: scene.revision,
         realization_revision: scene.revision,
-        backend_target,
-        status: validation.status,
+        backend_target: workspace.backend_target,
+        status: workspace_status(&workspace.diagnostics),
         bodies,
         bounds_min,
         bounds_max,
-        diagnostics: validation.diagnostics,
+        diagnostics: workspace.diagnostics,
         region_candidates,
+        provenance: workspace.provenance,
+    }
+}
+
+pub fn build_geometry_workspace(
+    scene: &SceneDocument,
+    backend_target: GeometryBackendTarget,
+) -> GeometryWorkspace {
+    let diagnostics = collect_geometry_diagnostics(scene, &backend_target);
+    let mut bodies = Vec::new();
+    let mut provenance = Vec::new();
+    for object in &scene.objects {
+        let Some((bounds_min, bounds_max)) = derive_object_bounds(object) else {
+            continue;
+        };
+        let geometry_path = format!("objects/{}/geometry", object.id);
+        let body_id = stable_body_id(&object.id, &geometry_path);
+        bodies.push(GeometryBody {
+            body_id: body_id.clone(),
+            object_id: object.id.clone(),
+            object_name: object.name.clone(),
+            geometry_kind: object.geometry.geometry_kind.clone(),
+            geometry_path: geometry_path.clone(),
+            transform: object.transform.clone(),
+            bounds_min,
+            bounds_max,
+            material_ref: object.material_ref.clone(),
+            magnetization_ref: object.magnetization_ref.clone(),
+            region_hint: object.region_name.clone(),
+            visible: object.visible,
+        });
+        provenance.push(GeometryProvenanceEntry {
+            body_id,
+            object_id: object.id.clone(),
+            geometry_path,
+            source: object.geometry.geometry_kind.clone(),
+        });
+    }
+    GeometryWorkspace {
+        scene_revision: scene.revision,
+        backend_target,
+        bodies,
+        diagnostics,
         provenance,
     }
 }
@@ -316,7 +374,25 @@ fn collect_geometry_diagnostics(
     for object in &scene.objects {
         validate_object_geometry(scene, object, backend_target, &mut diagnostics);
     }
+    validate_region_names(scene, &mut diagnostics);
+    validate_object_overlaps(scene, &mut diagnostics);
     diagnostics
+}
+
+fn workspace_status(diagnostics: &[GeometryDiagnostic]) -> String {
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == GeometryDiagnosticSeverity::Error)
+    {
+        "blocked".to_string()
+    } else if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == GeometryDiagnosticSeverity::Warning)
+    {
+        "warning".to_string()
+    } else {
+        "ready".to_string()
+    }
 }
 
 fn validate_object_geometry(
@@ -389,6 +465,7 @@ fn validate_object_geometry(
         &object_path,
         diagnostics,
     );
+    validate_tiny_features(scene, object, &object_path, diagnostics);
     if let (Some((bounds_min, bounds_max)), Some(universe)) =
         (derive_object_bounds(object), scene.universe.as_ref())
     {
@@ -418,6 +495,90 @@ fn validate_object_geometry(
                 ));
             }
         }
+    }
+}
+
+fn validate_region_names(scene: &SceneDocument, diagnostics: &mut Vec<GeometryDiagnostic>) {
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for object in scene.objects.iter().filter(|object| object.visible) {
+        let region_name = object
+            .region_name
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(object.name.as_str())
+            .trim()
+            .to_string();
+        if let Some((first_object_id, _)) = seen
+            .iter()
+            .find(|(_, existing)| existing.eq_ignore_ascii_case(&region_name))
+        {
+            diagnostics.push(warning(
+                "GEOMETRY_REGION_NAME_DUPLICATE",
+                format!(
+                    "Region name '{}' is used by both '{}' and '{}'.",
+                    region_name, first_object_id, object.id
+                ),
+                Some(object.id.clone()),
+                Some(format!("objects/{}/region_name", object.id)),
+                &["build_mesh", "run_solver"],
+            ));
+        } else {
+            seen.push((object.id.clone(), region_name));
+        }
+    }
+}
+
+fn validate_object_overlaps(scene: &SceneDocument, diagnostics: &mut Vec<GeometryDiagnostic>) {
+    let realized: Vec<_> = scene
+        .objects
+        .iter()
+        .filter(|object| object.visible)
+        .filter_map(|object| derive_object_bounds(object).map(|bounds| (object, bounds)))
+        .collect();
+    for left_index in 0..realized.len() {
+        for right_index in (left_index + 1)..realized.len() {
+            let (left, (left_min, left_max)) = realized[left_index];
+            let (right, (right_min, right_max)) = realized[right_index];
+            if aabb_overlap(left_min, left_max, right_min, right_max) {
+                diagnostics.push(warning(
+                    "GEOMETRY_OBJECT_OVERLAPS_OBJECT",
+                    format!("Object '{}' overlaps object '{}'.", left.id, right.id),
+                    Some(left.id.clone()),
+                    Some(format!("objects/{}/geometry", left.id)),
+                    &["build_mesh"],
+                ));
+            }
+        }
+    }
+}
+
+fn validate_tiny_features(
+    scene: &SceneDocument,
+    object: &SceneObject,
+    object_path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    let Some(mesh_size) = mesh_reference_size(scene) else {
+        return;
+    };
+    let Some((bounds_min, bounds_max)) = derive_object_bounds(object) else {
+        return;
+    };
+    let smallest_extent = (0..3)
+        .map(|axis| bounds_max[axis] - bounds_min[axis])
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    if smallest_extent.is_finite() && smallest_extent < mesh_size {
+        diagnostics.push(warning(
+            "GEOMETRY_TINY_FEATURE_BELOW_MESH_SIZE",
+            format!(
+                "Object '{}' has feature size {:.3e} m below mesh size {:.3e} m.",
+                object.id, smallest_extent, mesh_size
+            ),
+            Some(object.id.clone()),
+            Some(object_path.to_string()),
+            &["build_mesh"],
+        ));
     }
 }
 
@@ -577,17 +738,28 @@ fn validate_csg_node(
 fn derive_object_bounds(object: &SceneObject) -> Option<([f64; 3], [f64; 3])> {
     let (local_min, local_max) = derive_geometry_bounds(&object.geometry)?;
     let scale = object.transform.scale;
-    let translation = object.transform.translation;
-    if !finite_vec3(scale) || !finite_vec3(translation) {
+    if !finite_vec3(scale)
+        || !finite_vec3(object.transform.translation)
+        || !quat_is_valid(object.transform.rotation_quat)
+    {
         return None;
     }
-    let mut world_min = [0.0; 3];
-    let mut world_max = [0.0; 3];
-    for axis in 0..3 {
-        let a = local_min[axis] * scale[axis] + translation[axis];
-        let b = local_max[axis] * scale[axis] + translation[axis];
-        world_min[axis] = a.min(b);
-        world_max[axis] = a.max(b);
+    let mut world_min = [f64::INFINITY; 3];
+    let mut world_max = [f64::NEG_INFINITY; 3];
+    for x in [local_min[0], local_max[0]] {
+        for y in [local_min[1], local_max[1]] {
+            for z in [local_min[2], local_max[2]] {
+                let scaled = [x * scale[0], y * scale[1], z * scale[2]];
+                let rotated = rotate_point_by_quat(scaled, object.transform.rotation_quat);
+                let world = [
+                    rotated[0] + object.transform.translation[0],
+                    rotated[1] + object.transform.translation[1],
+                    rotated[2] + object.transform.translation[2],
+                ];
+                world_min = min_vec3(world_min, world);
+                world_max = max_vec3(world_max, world);
+            }
+        }
     }
     Some((world_min, world_max))
 }
@@ -702,14 +874,7 @@ fn transform_is_valid(transform: &Transform3D) -> bool {
         && finite_vec3(transform.scale)
         && finite_vec3(transform.pivot)
         && transform.scale.iter().all(|value| *value > 0.0)
-        && transform
-            .rotation_quat
-            .iter()
-            .all(|value| value.is_finite())
-        && transform
-            .rotation_quat
-            .iter()
-            .any(|value| value.abs() > f64::EPSILON)
+        && quat_is_valid(transform.rotation_quat)
 }
 
 fn positive_vec3(value: [f64; 3]) -> bool {
@@ -720,6 +885,91 @@ fn positive_vec3(value: [f64; 3]) -> bool {
 
 fn finite_vec3(value: [f64; 3]) -> bool {
     value.iter().all(|component| component.is_finite())
+}
+
+fn quat_is_valid(value: [f64; 4]) -> bool {
+    value.iter().all(|component| component.is_finite())
+        && value.iter().any(|component| component.abs() > f64::EPSILON)
+}
+
+fn rotate_point_by_quat(point: [f64; 3], quat: [f64; 4]) -> [f64; 3] {
+    let norm = (quat[0] * quat[0] + quat[1] * quat[1] + quat[2] * quat[2] + quat[3] * quat[3])
+        .sqrt();
+    if !norm.is_finite() || norm <= f64::EPSILON {
+        return point;
+    }
+    let qx = quat[0] / norm;
+    let qy = quat[1] / norm;
+    let qz = quat[2] / norm;
+    let qw = quat[3] / norm;
+    let uv = cross([qx, qy, qz], point);
+    let uuv = cross([qx, qy, qz], uv);
+    [
+        point[0] + 2.0 * (qw * uv[0] + uuv[0]),
+        point[1] + 2.0 * (qw * uv[1] + uuv[1]),
+        point[2] + 2.0 * (qw * uv[2] + uuv[2]),
+    ]
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn aabb_overlap(
+    left_min: [f64; 3],
+    left_max: [f64; 3],
+    right_min: [f64; 3],
+    right_max: [f64; 3],
+) -> bool {
+    (0..3).all(|axis| left_min[axis] < right_max[axis] && right_min[axis] < left_max[axis])
+}
+
+fn mesh_reference_size(scene: &SceneDocument) -> Option<f64> {
+    parse_mesh_size(scene.study.mesh_defaults.maximum_element_size.as_deref())
+        .or_else(|| parse_mesh_size(Some(scene.study.mesh_defaults.hmax.as_str())))
+        .or_else(|| parse_mesh_size(scene.study.shared_domain_mesh.maximum_element_size.as_deref()))
+        .or_else(|| parse_mesh_size(Some(scene.study.shared_domain_mesh.hmax.as_str())))
+}
+
+fn parse_mesh_size(value: Option<&str>) -> Option<f64> {
+    let raw = value?.trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    raw.parse::<f64>().ok().filter(|value| value.is_finite() && *value > 0.0)
+}
+
+fn stable_body_id(object_id: &str, geometry_path: &str) -> String {
+    format!("body:{}:{}", slug_token(object_id), fnv1a64_hex(geometry_path.as_bytes()))
+}
+
+fn slug_token(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "object".to_string()
+    } else {
+        out
+    }
+}
+
+fn fnv1a64_hex(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn scene_has_dirty_mesh_tags(scene: &SceneDocument) -> bool {

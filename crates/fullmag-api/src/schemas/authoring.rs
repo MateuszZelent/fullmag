@@ -208,6 +208,7 @@ pub struct RegionResource {
     pub name: String,
     pub source: String,
     pub source_object_ids: Vec<String>,
+    pub source_body_ids: Vec<String>,
     pub material_ref: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub magnetization_ref: Option<String>,

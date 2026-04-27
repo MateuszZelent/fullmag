@@ -2649,6 +2649,16 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
         snapshot.mesh_revision = 41;
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {
+                "source_scene_revision": 3,
+                "geometry_realization": {
+                    "source_scene_revision": 3,
+                    "realization_revision": 3
+                }
+            }
+        }));
     }
     let app = build_v2_router().with_state(state);
 
@@ -2665,10 +2675,17 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["revision"], 41);
+    assert_eq!(json["source_scene_revision"], 3);
+    assert_eq!(json["geometry_realization_revision"], 3);
     assert_eq!(json["mesh_name"], "test-mesh");
     assert_eq!(json["object_segments"][0]["object_id"], "body");
     assert_eq!(json["mesh_parts"][0]["role"], "air");
     assert_eq!(json["mesh_parts"][1]["object_id"], "body");
+    assert_eq!(json["regions"][0]["region_id"], "region:body");
+    assert_eq!(json["regions"][0]["source_object_ids"][0], "body");
+    assert_eq!(json["regions"][0]["material_ref"], "mat:body");
+    assert_eq!(json["regions"][0]["mesh_part_ids"][0], "body");
+    assert_eq!(json["regions"][0]["element_count"], 1);
 }
 
 #[tokio::test]

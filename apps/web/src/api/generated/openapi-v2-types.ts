@@ -2198,6 +2198,21 @@ export interface components {
             role: string;
             surface_faces?: number[][];
         };
+        MeshRegionResource: {
+            bounds_max?: number[] | null;
+            bounds_min?: number[] | null;
+            /** Format: int32 */
+            cell_count?: number | null;
+            /** Format: int32 */
+            element_count?: number | null;
+            magnetization_ref?: string | null;
+            material_ref: string;
+            mesh_part_ids?: string[];
+            name: string;
+            region_id: string;
+            source_object_ids: string[];
+            source_region_candidate_id?: string | null;
+        };
         MeshSemanticsResource: {
             mesh_build_diagnostics?: null | components["schemas"]["MeshBuildDiagnosticsResource"];
             object_configs?: components["schemas"]["MeshObjectConfigEntryResource"][];
@@ -2221,14 +2236,19 @@ export interface components {
         MeshSharedDomainManifestResource: {
             domain_mesh_mode?: string | null;
             generation_id?: string | null;
+            /** Format: int64 */
+            geometry_realization_revision?: number | null;
             mesh_id: string;
             /** @description Mesh identity for tree/selection metadata. */
             mesh_name: string;
             /** @description Scoped mesh parts for object/airbox/selection fetches. Heavy topology remains in binary topology endpoints. */
             mesh_parts?: components["schemas"]["MeshPartResource"][];
             object_segments?: components["schemas"]["MeshObjectSegmentResource"][];
+            regions?: components["schemas"]["MeshRegionResource"][];
             /** Format: int64 */
             revision: number;
+            /** Format: int64 */
+            source_scene_revision?: number | null;
         };
         MeshSharedDomainQualityResource: {
             quality?: Record<string, never> | null;

@@ -17,7 +17,7 @@ use crate::schemas::mesh::{
     MeshInterfaceQualityResource, MeshInterfaceReportResource, MeshLastSuccessfulBuildResource,
     MeshObjectConfigEntryResource, MeshObjectConfigReplaceRequest, MeshObjectConfigResource,
     MeshObjectQualityResource, MeshObjectReportResource, MeshObjectSegmentResource,
-    MeshObjectSizeFieldResource, MeshPartResource, MeshSemanticsResource,
+    MeshObjectSizeFieldResource, MeshPartResource, MeshRegionResource, MeshSemanticsResource,
     MeshSharedDomainConfigReplaceRequest, MeshSharedDomainConfigResource,
     MeshSharedDomainManifestResource, MeshSharedDomainQualityResource,
     MeshSharedDomainReportResource, MeshSolverMeshResource, MeshSummaryResource,
@@ -501,8 +501,11 @@ pub async fn get_mesh_shared_domain_manifest(
     let snapshot = current_snapshot(&state).await?;
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
+            let provenance = mesh_build_provenance(&snapshot);
             let body = MeshSharedDomainManifestResource {
                 revision: snapshot.mesh_revision,
+                source_scene_revision: provenance.source_scene_revision,
+                geometry_realization_revision: provenance.geometry_realization_revision,
                 mesh_name: mesh.mesh_name.clone(),
                 mesh_id: mesh.mesh_id.clone(),
                 generation_id: mesh.generation_id.clone(),
@@ -513,6 +516,11 @@ pub async fn get_mesh_shared_domain_manifest(
                     .map(MeshObjectSegmentResource::from)
                     .collect(),
                 mesh_parts: mesh.mesh_parts.iter().map(MeshPartResource::from).collect(),
+                regions: snapshot
+                    .scene_document
+                    .as_ref()
+                    .map(|scene| mesh_manifest_regions(scene, mesh))
+                    .unwrap_or_default(),
             };
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
@@ -1128,6 +1136,110 @@ fn object_quality(
         "effective_target": effective_target.unwrap_or(Value::Null),
         "per_domain_quality": per_domain_quality.unwrap_or(Value::Null),
     }))
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct MeshBuildProvenance {
+    source_scene_revision: Option<u64>,
+    geometry_realization_revision: Option<u64>,
+}
+
+fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance {
+    let last_build = snapshot
+        .mesh_workspace
+        .as_ref()
+        .and_then(|workspace| workspace.get("last_build_summary"));
+    MeshBuildProvenance {
+        source_scene_revision: last_build
+            .and_then(|summary| summary.get("source_scene_revision"))
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                last_build
+                    .and_then(|summary| summary.get("geometry_realization"))
+                    .and_then(|realization| realization.get("source_scene_revision"))
+                    .and_then(Value::as_u64)
+            }),
+        geometry_realization_revision: last_build
+            .and_then(|summary| summary.get("geometry_realization"))
+            .and_then(|realization| realization.get("realization_revision"))
+            .and_then(Value::as_u64),
+    }
+}
+
+fn mesh_manifest_regions(scene: &SceneDocument, mesh: &FemMeshPayload) -> Vec<MeshRegionResource> {
+    scene
+        .objects
+        .iter()
+        .filter_map(|object| mesh_manifest_region_for_object(object, mesh))
+        .collect()
+}
+
+fn mesh_manifest_region_for_object(
+    object: &SceneObject,
+    mesh: &FemMeshPayload,
+) -> Option<MeshRegionResource> {
+    let mesh_part_ids = mesh
+        .mesh_parts
+        .iter()
+        .filter(|part| part.object_id.as_deref() == Some(object.id.as_str()))
+        .map(|part| part.id.clone())
+        .collect::<Vec<_>>();
+    let element_count = mesh
+        .object_segments
+        .iter()
+        .filter(|segment| segment.object_id == object.id)
+        .map(|segment| segment.element_count)
+        .sum::<u32>();
+    if mesh_part_ids.is_empty() && element_count == 0 {
+        return None;
+    }
+    let bounds = object_mesh_bounds(object, mesh);
+    let region_id = object
+        .region_name
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("region:{}", object.id));
+    Some(MeshRegionResource {
+        region_id: region_id.clone(),
+        name: object
+            .region_name
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| object.name.clone()),
+        source_object_ids: vec![object.id.clone()],
+        source_region_candidate_id: Some(region_id),
+        material_ref: object.material_ref.clone(),
+        magnetization_ref: object.magnetization_ref.clone(),
+        mesh_part_ids,
+        element_count: Some(element_count),
+        cell_count: None,
+        bounds_min: bounds.map(|(min, _)| min),
+        bounds_max: bounds.map(|(_, max)| max),
+    })
+}
+
+fn object_mesh_bounds(object: &SceneObject, mesh: &FemMeshPayload) -> Option<([f64; 3], [f64; 3])> {
+    mesh.mesh_parts
+        .iter()
+        .filter(|part| part.object_id.as_deref() == Some(object.id.as_str()))
+        .filter_map(|part| part.bounds_min.zip(part.bounds_max))
+        .fold(None, |current, (min, max)| {
+            Some(match current {
+                Some((current_min, current_max)) => {
+                    (min_vec3(current_min, min), max_vec3(current_max, max))
+                }
+                None => (min, max),
+            })
+        })
+        .or_else(|| object.geometry.bounds_min.zip(object.geometry.bounds_max))
+}
+
+fn min_vec3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])]
+}
+
+fn max_vec3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])]
 }
 
 fn subset_object_mesh(mesh: &FemMeshPayload, object_id: &str) -> Option<FemMeshPayload> {

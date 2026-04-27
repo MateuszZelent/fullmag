@@ -364,6 +364,7 @@ pub async fn get_authoring_regions(
                 name,
                 source: "object".to_string(),
                 source_object_ids: vec![candidate.object_id.clone()],
+                source_body_ids: candidate.source_body_ids.clone(),
                 material_ref: candidate.material_ref.clone(),
                 magnetization_ref: candidate.magnetization_ref.clone(),
                 interaction_refs,

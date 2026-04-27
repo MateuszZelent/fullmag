@@ -2845,6 +2845,86 @@
         ],
         "type": "object"
       },
+      "MeshRegionResource": {
+        "properties": {
+          "bounds_max": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "bounds_min": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "cell_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "element_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "magnetization_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "material_ref": {
+            "type": "string"
+          },
+          "mesh_part_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "source_object_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "source_region_candidate_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "region_id",
+          "name",
+          "source_object_ids",
+          "material_ref"
+        ],
+        "type": "object"
+      },
       "MeshSemanticsResource": {
         "properties": {
           "mesh_build_diagnostics": {
@@ -2943,6 +3023,14 @@
               "null"
             ]
           },
+          "geometry_realization_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "mesh_id": {
             "type": "string"
           },
@@ -2963,10 +3051,24 @@
             },
             "type": "array"
           },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/MeshRegionResource"
+            },
+            "type": "array"
+          },
           "revision": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "source_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
