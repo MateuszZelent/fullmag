@@ -28,9 +28,36 @@ import {
   Eye,
   Magnet,
   AlertTriangle,
+  Plus,
+  Minus,
+  Combine,
 } from "lucide-react";
+import type React from "react";
 import { registerRibbonContribution } from "../registry/ribbonRegistry";
 import type { RibbonBuildContext, RibbonGroup } from "../registry/ribbonRegistry";
+import {
+  PRIMITIVE_CAPABILITIES,
+  type PrimitiveKind,
+} from "@/features/geometry-builder/model/types";
+import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
+
+const CREATE_SHAPES: Array<{ kind: PrimitiveKind; icon: React.ReactNode; color: string }> = [
+  { kind: "box", icon: <Box size={20} />, color: "text-emerald-400" },
+  { kind: "cylinder", icon: <Cylinder size={20} />, color: "text-cyan-400" },
+  { kind: "sphere", icon: <Circle size={20} />, color: "text-violet-400" },
+  { kind: "ellipsoid", icon: <Circle size={20} />, color: "text-purple-300" },
+  { kind: "disk", icon: <Disc size={20} />, color: "text-sky-400" },
+  { kind: "thin_film", icon: <Box size={20} />, color: "text-lime-300" },
+  { kind: "pillar", icon: <Cylinder size={20} />, color: "text-fuchsia-300" },
+  { kind: "nanowire", icon: <Minus size={20} />, color: "text-rose-300" },
+  { kind: "ring", icon: <Circle size={20} />, color: "text-amber-300" },
+  { kind: "triangular_prism", icon: <Triangle size={20} />, color: "text-orange-300" },
+  { kind: "cone", icon: <Triangle size={20} />, color: "text-yellow-300" },
+  { kind: "capsule", icon: <Disc size={20} />, color: "text-teal-300" },
+  { kind: "tube", icon: <Circle size={20} />, color: "text-blue-300" },
+  { kind: "wedge", icon: <Box size={20} />, color: "text-stone-300" },
+  { kind: "polygon_prism", icon: <Circle size={20} />, color: "text-indigo-300" },
+];
 
 function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   const groups: RibbonGroup[] = [];
@@ -38,56 +65,61 @@ function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   // ── Create group ────────────────────────────────────────────
   groups.push({
     id: "builder-create",
-    title: "Create",
-    subtitle: "Add primitives",
+    title: "Create Object / Shape",
+    subtitle: "Parametric primitives",
+    tone: "authoring",
+    actions: CREATE_SHAPES.map(({ kind, icon, color }) => {
+      const capability = PRIMITIVE_CAPABILITIES[kind];
+      const backendReady = ctx.isFemBackend ? capability.fem : capability.fdm;
+      return {
+        id: `builder-add-${kind}`,
+        icon,
+        label: capability.label,
+        tooltip: backendReady
+          ? `Create ${capability.label}.`
+          : `Create ${capability.label} preview. Mesh build is blocked until this shape is supported by the active backend.`,
+        action: () => ctx.run({ id: "builder.add-primitive", primitiveKind: kind }),
+        iconColor: backendReady ? color : "text-slate-400",
+      };
+    }),
+  });
+
+  groups.push({
+    id: "builder-boolean",
+    title: "Boolean",
+    subtitle: "Compose object geometry",
     tone: "authoring",
     actions: [
       {
-        id: "builder-add-box",
-        icon: <Box size={20} />,
-        label: "Box",
-        tooltip: "Create a parametric box (W)",
-        shortcut: "Shift+B",
-        action: () => ctx.run({ id: "builder.add-primitive", primitiveKind: "box" }),
-        iconColor: "text-emerald-400",
+        id: "builder-boolean-union",
+        icon: <Combine size={20} />,
+        label: "Union",
+        tooltip: "Combine enabled shapes into one object body.",
+        action: () => ctx.run({ id: "builder.create-boolean", op: "union" }),
+        iconColor: "text-emerald-300",
       },
       {
-        id: "builder-add-cylinder",
-        icon: <Cylinder size={20} />,
-        label: "Cylinder",
-        tooltip: "Create a parametric cylinder",
-        action: () => ctx.run({ id: "builder.add-primitive", primitiveKind: "cylinder" }),
-        iconColor: "text-cyan-400",
+        id: "builder-boolean-subtract",
+        icon: <Minus size={20} />,
+        label: "Subtract",
+        tooltip: "Use enabled shapes as a subtractive boolean graph.",
+        action: () => ctx.run({ id: "builder.create-boolean", op: "subtract" }),
+        iconColor: "text-rose-300",
       },
       {
-        id: "builder-add-sphere",
-        icon: <Circle size={20} />,
-        label: "Sphere",
-        tooltip: "Create a parametric sphere",
-        action: () => ctx.run({ id: "builder.add-primitive", primitiveKind: "sphere" }),
-        iconColor: "text-violet-400",
-      },
-      {
-        id: "builder-add-disk",
-        icon: <Disc size={20} />,
-        label: "Disk",
-        tooltip: "Create a thin circular disk",
-        action: () => ctx.run({ id: "builder.add-primitive", primitiveKind: "disk" }),
-        iconColor: "text-sky-400",
-      },
-      {
-        id: "builder-add-triangle",
-        icon: <Triangle size={20} />,
-        label: "Triangle",
-        tooltip: "Create a triangular prism",
-        action: () => ctx.run({ id: "builder.add-primitive", primitiveKind: "triangular_prism" }),
-        iconColor: "text-amber-400",
+        id: "builder-boolean-intersect",
+        icon: <Plus size={20} />,
+        label: "Intersect",
+        tooltip: "Create an intersection boolean graph from enabled shapes.",
+        action: () => ctx.run({ id: "builder.create-boolean", op: "intersect" }),
+        iconColor: "text-sky-300",
       },
     ],
   });
 
   // ── Transform group ─────────────────────────────────────────
   const hasPrimitiveSelection = Boolean(ctx.builderSelectedPrimitiveId);
+  const hasTransformSelection = Boolean(ctx.selectedObjectId || ctx.builderSelectedPrimitiveId);
 
   groups.push({
     id: "builder-transform",
@@ -99,10 +131,10 @@ function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         id: "builder-tool-move",
         icon: <Move size={20} />,
         label: "Move",
-        tooltip: "Translate selected primitive (W)",
+        tooltip: "Translate selected object or primitive (W)",
         shortcut: "W",
         active: ctx.activeTransformScope === "object",
-        disabled: !hasPrimitiveSelection,
+        disabled: !hasTransformSelection,
         action: () => ctx.run({ id: "builder.set-transform-tool", tool: "move" }),
         iconColor: "text-red-400",
       },
@@ -110,9 +142,9 @@ function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         id: "builder-tool-rotate",
         icon: <RotateCcw size={20} />,
         label: "Rotate",
-        tooltip: "Rotate selected primitive (E)",
+        tooltip: "Rotate selected object or primitive (E)",
         shortcut: "E",
-        disabled: !hasPrimitiveSelection,
+        disabled: !hasTransformSelection,
         action: () => ctx.run({ id: "builder.set-transform-tool", tool: "rotate" }),
         iconColor: "text-green-400",
       },
@@ -120,9 +152,9 @@ function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         id: "builder-tool-scale",
         icon: <Maximize2 size={20} />,
         label: "Scale",
-        tooltip: "Scale selected primitive (R)",
+        tooltip: "Scale selected object or primitive (R)",
         shortcut: "R",
-        disabled: !hasPrimitiveSelection,
+        disabled: !hasTransformSelection,
         action: () => ctx.run({ id: "builder.set-transform-tool", tool: "scale" }),
         iconColor: "text-blue-400",
       },
@@ -170,6 +202,10 @@ function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   // ── Geometry Lifecycle group ────────────────────────────────
   const isDirtyGeometry = Boolean(ctx.builderDirtyGeometry);
   const isDirtyMesh = Boolean(ctx.builderDirtyMesh);
+  const buildTargetLabel = ctx.isFemBackend ? "FEM Mesh" : "FDM Grid";
+  const backendBlockedReason = useGeometryBuilderStore
+    .getState()
+    .getBackendBuildBlockedReason(ctx.isFemBackend);
 
   groups.push({
     id: "builder-lifecycle",
@@ -194,12 +230,12 @@ function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
       {
         id: "builder-build-mesh",
         icon: <Grid3x3 size={20} />,
-        label: "Build Mesh",
-        tooltip: "Generate solver mesh from realized geometry",
+        label: `Build ${buildTargetLabel}`,
+        tooltip: backendBlockedReason ?? `Generate solver ${buildTargetLabel.toLowerCase()} from realized geometry`,
         accent: isDirtyMesh && !isDirtyGeometry,
-        disabled: isDirtyGeometry || !isDirtyMesh,
+        disabled: Boolean(backendBlockedReason) || isDirtyGeometry || !isDirtyMesh || !ctx.builderHasRealization,
         action: () => ctx.run({ id: "builder.build-mesh" }),
-        iconColor: isDirtyMesh ? "text-amber-400" : "text-slate-400",
+        iconColor: backendBlockedReason ? "text-rose-400" : isDirtyMesh ? "text-amber-400" : "text-slate-400",
       },
       {
         id: "builder-validate",

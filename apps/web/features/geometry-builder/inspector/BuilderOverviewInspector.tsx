@@ -66,6 +66,9 @@ export default function BuilderOverviewInspector() {
   const geometryBuildBlockedReason = useGeometryBuilderStore((s) =>
     s.getGeometryBuildBlockedReason(),
   );
+  const getBackendBuildBlockedReason = useGeometryBuilderStore((s) =>
+    s.getBackendBuildBlockedReason,
+  );
   const geometryRealization = useGeometryBuilderStore((s) => s.geometryRealization);
   const buildGeometry = useGeometryBuilderStore((s) => s.buildGeometry);
   const buildMesh = useGeometryBuilderStore((s) => s.buildMesh);
@@ -75,6 +78,8 @@ export default function BuilderOverviewInspector() {
     command.domainCapabilities,
     command.isFemBackend,
   );
+  const backendBuildBlockedReason = getBackendBuildBlockedReason(femDiscretization);
+  const buildTargetLabel = femDiscretization ? "FEM Mesh" : "FDM Grid";
   const meshGenerating = model.meshGenerating;
 
   const validations = validateAll();
@@ -89,16 +94,20 @@ export default function BuilderOverviewInspector() {
     geometryRealization !== null &&
     dirty.meshDirty &&
     !dirty.geometryRealizationDirty &&
+    !backendBuildBlockedReason &&
     !meshGenerating;
   // Fit Universe: enabled when objects cross or exceed universe bounds
   const canFitUniverse = hasOutsideBounds && primitiveCount > 0;
 
   const handleBuildMesh = useCallback(() => {
+    if (backendBuildBlockedReason) {
+      return;
+    }
     buildMesh();
     if (femDiscretization) {
       void model.handleStudyDomainMeshGenerate("geometry_builder_build_mesh");
     }
-  }, [buildMesh, femDiscretization, model]);
+  }, [backendBuildBlockedReason, buildMesh, femDiscretization, model]);
 
   return (
     <div className="flex flex-col gap-4 p-3 text-sm">
@@ -148,7 +157,7 @@ export default function BuilderOverviewInspector() {
             onClick={handleBuildMesh}
           >
             <Grid3x3 size={13} />
-            {meshGenerating ? "Queueing Mesh Build…" : "Build Mesh"}
+            {meshGenerating ? "Queueing Mesh Build…" : `Build ${buildTargetLabel}`}
             {dirty.meshDirty && geometryRealization && (
               <span className="ml-auto text-[9px] font-normal text-cyan-400/70">● out of date</span>
             )}
@@ -179,6 +188,12 @@ export default function BuilderOverviewInspector() {
           <div className="flex items-start gap-1.5 text-[10px] text-red-400">
             <AlertTriangle size={12} className="shrink-0 mt-0.5" />
             <span>{geometryBuildBlockedReason}</span>
+          </div>
+        )}
+        {backendBuildBlockedReason && (
+          <div className="flex items-start gap-1.5 text-[10px] text-red-400">
+            <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+            <span>{backendBuildBlockedReason}</span>
           </div>
         )}
       </div>

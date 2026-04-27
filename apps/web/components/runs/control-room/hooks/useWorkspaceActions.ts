@@ -381,15 +381,19 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
   const applyGeometryTranslation = useCallback((geometryName: string, dx: number, dy: number, dz: number) => {
     setSceneDocument((previousScene) => {
       const baseScene = (previousScene ?? localBuilderDraft)!;
+      let changed = false;
       const nextScene: SceneDocument = {
         ...baseScene,
+        revision: baseScene.revision + 1,
         objects: baseScene.objects.map((object) => {
           if (object.id !== geometryName && object.name !== geometryName) {
             return object;
           }
+          changed = true;
           const translation = object.transform.translation ?? [0, 0, 0];
           return {
             ...object,
+            tags: Array.from(new Set([...(object.tags ?? []), "mesh:dirty"])),
             transform: {
               ...object.transform,
               translation: [
@@ -401,7 +405,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
           };
         }),
       };
-      return nextScene;
+      return changed ? nextScene : baseScene;
     });
   }, [localBuilderDraft, setSceneDocument]);
 

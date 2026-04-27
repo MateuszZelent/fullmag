@@ -32,6 +32,9 @@ import {
 } from "@/lib/study-builder/node-context";
 import { parseVisualizationPresetNodeId } from "../runs/control-room/visualizationPresets";
 import TreeNodeIcon from "@/features/iconography/TreeNodeIcon";
+import { buildGeometryBuilderTreeNodes } from "@/features/geometry-builder/tree/builderTreeNodes";
+import type { DirtyState, GeometryGraphDocument, BuilderSelectionTarget } from "@/features/geometry-builder/model/types";
+import type { PrimitiveNode } from "@/features/geometry-builder/model/types";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
 
@@ -39,6 +42,10 @@ export type NodeStatus =
   | "ready"
   | "active"
   | "pending"
+  | "dirty"
+  | "stale"
+  | "blocked"
+  | "warning"
   | "error"
   | "completed"
   | "running"
@@ -432,8 +439,11 @@ function nodeStatusTone(status: NodeStatus | undefined, isActive: boolean): stri
   if (status === "running") {
     return "bg-sky-500/10 text-sky-300 border border-sky-500/20";
   }
-  if (status === "failed") {
+  if (status === "failed" || status === "blocked" || status === "stale" || status === "dirty") {
     return "bg-rose-500/10 text-rose-300 border border-rose-500/20";
+  }
+  if (status === "warning") {
+    return "bg-amber-500/10 text-amber-300 border border-amber-500/20";
   }
   if (status === "completed") {
     return "bg-emerald-500/10 text-emerald-300 border border-emerald-500/20";
@@ -456,6 +466,12 @@ function StatusIcon({ status }: { status: NodeStatus }) {
   }
   if (status === "failed") {
     return <XCircle className="h-3.5 w-3.5 text-rose-400" aria-hidden="true" />;
+  }
+  if (status === "blocked" || status === "stale" || status === "dirty") {
+    return <XCircle className="h-3.5 w-3.5 text-rose-400" aria-hidden="true" />;
+  }
+  if (status === "warning") {
+    return <Circle className="h-3.5 w-3.5 fill-current text-amber-400 opacity-80" aria-hidden="true" />;
   }
   if (status === "skipped") {
     return <MinusCircle className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />;
@@ -887,6 +903,9 @@ export function buildFullmagModelTree(opts: {
   completedStudyStageIndexes?: number[];
   studyStageStatuses?: string[];
   pipelineStageIndexesByNodeId?: Record<string, number[]>;
+  geometryAuthoringGraph?: GeometryGraphDocument | null;
+  geometryAuthoringDirty?: DirtyState | null;
+  onGeometryAuthoringSelect?: (target: BuilderSelectionTarget) => void;
 }): TreeNodeData[] {
   const graph = opts.graph ?? null;
   const sceneDocument = opts.sceneDocument ?? null;
@@ -942,6 +961,7 @@ export function buildFullmagModelTree(opts: {
             region: `reg-${object.name || object.id}`,
             mesh: `geo-${object.name || object.id}-mesh`,
           },
+          meshDirty: object.tags?.includes("mesh:dirty") ?? false,
         }))
       : [];
   const geos = sceneTreeObjects.map((objectNode) => objectNode.geometry).length > 0
@@ -1008,6 +1028,12 @@ export function buildFullmagModelTree(opts: {
   const universeDeclaredSize = opts.universeDeclaredSize ?? graphUniverse?.size ?? null;
   const universeCenter = opts.universeCenter ?? graphUniverse?.center ?? null;
   const universePadding = opts.universePadding ?? graphUniverse?.padding ?? null;
+  const geometryAuthoringDirty = opts.geometryAuthoringDirty ?? null;
+  const geometryAuthoringMeshDirty = Boolean(
+    geometryAuthoringDirty?.geometryDraftDirty ||
+      geometryAuthoringDirty?.geometryRealizationDirty ||
+      geometryAuthoringDirty?.meshDirty,
+  );
 
   /* ── Physics ─────────────────────────────────────────────────────── */
   const aggregatePhysicsStack = normalizePhysicsStack(
@@ -1094,9 +1120,27 @@ export function buildFullmagModelTree(opts: {
     })),
   ];
 
+  const authoringPrimitiveObjects =
+    opts.geometryAuthoringGraph && geometryAuthoringDirty
+      ? opts.geometryAuthoringGraph.nodes
+          .filter((node): node is PrimitiveNode => node.kind === "primitive")
+          .map((node) =>
+            _buildAuthoringPrimitiveObjectNode(
+              node,
+              geometryAuthoringDirty,
+              opts.onGeometryAuthoringSelect,
+            ),
+          )
+      : [];
+
   const objectsChildren: TreeNodeData[] =
     objects.length > 0
-      ? objects.map((objectNode) => _buildObjectNode(objectNode))
+      ? [
+          ...objects.map((objectNode) => _buildObjectNode(objectNode)),
+          ...authoringPrimitiveObjects,
+        ]
+      : authoringPrimitiveObjects.length > 0
+        ? authoringPrimitiveObjects
       : [
           {
             id: "objects-empty",
@@ -1152,9 +1196,12 @@ export function buildFullmagModelTree(opts: {
         : opts.meshNodes
           ? `${opts.meshNodes.toLocaleString()} nodes`
           : "—",
-      status: opts.meshStatus ?? "pending",
+      status: geometryAuthoringMeshDirty ? "stale" : (opts.meshStatus ?? "pending"),
       defaultOpen: false,
       children: [
+        ...(geometryAuthoringMeshDirty
+          ? [{ id: "mesh-authoring-dirty", label: "Mesh out of date - build mesh before compute", icon: "alert-triangle", status: "blocked" as const }]
+          : []),
         { id: "mesh-view", label: "Inspector", icon: "eye" },
         { id: "mesh-size", label: "Size", icon: "ruler" },
         { id: "mesh-quality", label: "Quality", icon: "gauge" },
@@ -1167,8 +1214,8 @@ export function buildFullmagModelTree(opts: {
     id: "objects",
     label: "Objects",
     icon: "package",
-    badge: `${objects.length}`,
-    status: objects.length > 0 ? "ready" : "pending",
+    badge: `${objects.length + authoringPrimitiveObjects.length}`,
+    status: objects.length + authoringPrimitiveObjects.length > 0 ? "ready" : "pending",
     defaultOpen: true,
     onClick: opts.onGeometryClick,
     children: objectsChildren,
@@ -1818,29 +1865,56 @@ function _buildObjectNode(objectNode: {
   name: string;
   label: string;
   geometry: ScriptBuilderGeometryEntry;
+  meshDirty?: boolean;
   tree: {
     geometry: string;
     material: string;
     region: string;
     mesh: string;
   };
+}, authoring?: {
+  authoringGraph: GeometryGraphDocument | null;
+  authoringDirty: DirtyState | null;
+  onAuthoringSelect?: (target: BuilderSelectionTarget) => void;
 }): TreeNodeData {
   const geo = objectNode.geometry;
   const geometryId = objectNode.tree.geometry;
   const regionId = objectNode.tree.region;
   const meshId = objectNode.tree.mesh;
 
-  const geometryChildren = _buildGeometryParamChildren(geometryId, geo);
+  const authoringChildren = authoring?.authoringGraph && authoring.authoringDirty
+    ? buildGeometryBuilderTreeNodes(
+        authoring.authoringGraph,
+        authoring.authoringDirty,
+        authoring.onAuthoringSelect,
+      ).children ?? []
+    : [];
+  const geometryChildren = [
+    ..._buildGeometryParamChildren(geometryId, geo),
+    ...authoringChildren,
+  ];
+  const authoringMeshDirty = Boolean(
+    objectNode.meshDirty ||
+    authoring?.authoringDirty?.geometryDraftDirty ||
+      authoring?.authoringDirty?.geometryRealizationDirty ||
+      authoring?.authoringDirty?.meshDirty,
+  );
   const meshNode: TreeNodeData = {
     id: meshId,
     label: "Mesh",
     icon: "◫",
-    status: geo.mesh?.mode === "custom" ? "ready" : "pending",
+    status: authoringMeshDirty ? "stale" : (geo.mesh?.mode === "custom" ? "ready" : "pending"),
     badge:
+      authoringMeshDirty
+        ? "Mesh out of date"
+        :
       geo.mesh?.mode === "custom"
         ? (geo.mesh.order ? `override · P${geo.mesh.order}` : "override")
         : "inherits",
     children: [
+      ...(authoringMeshDirty
+        ? [{ id: `${meshId}-authoring-dirty`, label: "Build mesh before compute", icon: "alert-triangle", status: "blocked" as const }]
+        : []),
       {
         id: `${meshId}-mode`,
         label:
@@ -1876,6 +1950,7 @@ function _buildObjectNode(objectNode: {
         label: "Geometry",
         icon: "🔷",
         status: "ready",
+        defaultOpen: authoringChildren.length > 0,
         children: geometryChildren,
       },
       _buildRegionNode(geo, regionId),
@@ -1932,6 +2007,100 @@ function _buildObjectNode(objectNode: {
         ],
       },
       meshNode,
+    ],
+  };
+}
+
+function primitiveDimensionBadge(node: PrimitiveNode): string {
+  switch (node.params.kind) {
+    case "box":
+    case "thin_film":
+    case "nanowire":
+    case "wedge":
+      return fmtVec(node.params.data.size);
+    case "cylinder":
+    case "pillar":
+      return `r=${fmtLength(node.params.data.radius)} h=${fmtLength(node.params.data.height)}`;
+    case "sphere":
+      return `r=${fmtLength(node.params.data.radius)}`;
+    case "ellipsoid":
+      return fmtVec(node.params.data.radii);
+    case "disk":
+      return `r=${fmtLength(node.params.data.radius)} t=${fmtLength(node.params.data.thickness)}`;
+    case "ring":
+    case "tube":
+      return `ro=${fmtLength(node.params.data.outerRadius)} ri=${fmtLength(node.params.data.innerRadius)}`;
+    case "triangular_prism":
+      return `b=${fmtLength(node.params.data.base)} h=${fmtLength(node.params.data.triangleHeight)}`;
+    case "cone":
+      return `r=${fmtLength(node.params.data.radiusBottom)} h=${fmtLength(node.params.data.height)}`;
+    case "capsule":
+      return `r=${fmtLength(node.params.data.radius)} h=${fmtLength(node.params.data.height)}`;
+    case "polygon_prism":
+      return `${node.params.data.sides} sides · r=${fmtLength(node.params.data.radius)}`;
+  }
+}
+
+function _buildAuthoringPrimitiveObjectNode(
+  node: PrimitiveNode,
+  dirty: DirtyState,
+  onSelect?: (target: BuilderSelectionTarget) => void,
+): TreeNodeData {
+  const objectId = `builder-prim-${node.id}`;
+  const meshDirty = dirty.geometryDraftDirty || dirty.geometryRealizationDirty || dirty.meshDirty;
+  const select = onSelect ? () => onSelect({ type: "primitive", id: node.id }) : undefined;
+  return {
+    id: objectId,
+    label: node.name,
+    icon: "◻",
+    badge: "draft object",
+    status: meshDirty ? "dirty" : "ready",
+    defaultOpen: true,
+    domain: "build",
+    onClick: select,
+    children: [
+      {
+        id: `${objectId}-geometry`,
+        label: "Geometry",
+        icon: "🔷",
+        badge: primitiveDimensionBadge(node),
+        status: meshDirty ? "dirty" : "ready",
+        defaultOpen: true,
+        onClick: select,
+        children: [
+          {
+            id: `${objectId}/params`,
+            label: "Parameters",
+            icon: "settings",
+            badge: primitiveDimensionBadge(node),
+            onClick: select,
+          },
+          {
+            id: `${objectId}/transform`,
+            label: "Transform",
+            icon: "move",
+            badge: `pos: ${fmtVec(node.transform.translation)}`,
+            onClick: select,
+          },
+        ],
+      },
+      {
+        id: `${objectId}-mesh`,
+        label: "Mesh",
+        icon: "◫",
+        status: meshDirty ? "stale" : "pending",
+        badge: meshDirty ? "Mesh out of date" : "not built",
+        children: meshDirty
+          ? [
+              {
+                id: `${objectId}-mesh-build-required`,
+                label: "Build mesh before compute",
+                icon: "alert-triangle",
+                status: "blocked",
+              },
+            ]
+          : undefined,
+      },
     ],
   };
 }

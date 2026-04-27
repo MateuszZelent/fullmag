@@ -1,8 +1,7 @@
 import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
 import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
 import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
-import type { GeometryPresetKind } from "@/lib/geometryPresetCatalog";
-import type { PrimitiveKind } from "@/features/geometry-builder/model/types";
+import type { BooleanOp, PrimitiveKind } from "@/features/geometry-builder/model/types";
 import type { CapabilityMap } from "@/src/api/types";
 import { isFemDiscretization } from "@/src/domain/capabilities";
 
@@ -32,7 +31,6 @@ export interface RibbonCommandContext {
   scriptSyncBusy?: boolean;
   selectedObjectId?: string | null;
   activeTransformScope?: "object" | "texture" | null;
-  onAddGeometryPreset?: (preset: GeometryPresetKind) => void;
   onViewChange?: (mode: string) => void;
   onSidebarToggle?: () => void;
   onCreateVisualizationPreset?: () => void;
@@ -89,6 +87,7 @@ export interface RibbonCommandContext {
 
   // ── Geometry builder callbacks ──────────────────────────
   onBuilderAddPrimitive?: (kind: PrimitiveKind) => void;
+  onBuilderCreateBoolean?: (op: BooleanOp) => void;
   onBuilderRemovePrimitive?: (id: string) => void;
   onBuilderDuplicatePrimitive?: (id: string) => void;
   onBuilderBuildGeometry?: () => void;
@@ -144,7 +143,6 @@ function normalizeViewportMode(mode: string | undefined | null): CanonicalViewpo
 }
 
 export type RibbonCommand =
-  | { id: "geometry.add-preset"; preset: GeometryPresetKind }
   | { id: "navigation.select-node"; nodeId: string }
   | { id: "viewport.set-mode"; mode: string }
   | { id: "visualization.create-preset" }
@@ -206,6 +204,7 @@ export type RibbonCommand =
   | { id: "results.add-analysis"; kind: ResultAnalysisKind }
   // ── Geometry Builder commands ────────────────────────────
   | { id: "builder.add-primitive"; primitiveKind: PrimitiveKind }
+  | { id: "builder.create-boolean"; op: BooleanOp }
   | { id: "builder.remove-primitive"; primitiveId: string }
   | { id: "builder.duplicate-primitive"; primitiveId: string }
   | { id: "builder.build-geometry" }
@@ -224,8 +223,6 @@ export function canExecuteRibbonCommand(
   command: RibbonCommand,
 ): boolean {
   switch (command.id) {
-    case "geometry.add-preset":
-      return typeof ctx.onAddGeometryPreset === "function";
     case "navigation.select-node":
       return typeof ctx.onSelectModelNode === "function";
     case "viewport.set-mode":
@@ -290,6 +287,8 @@ export function canExecuteRibbonCommand(
     // ── Geometry Builder ──────────────────────────────────
     case "builder.add-primitive":
       return typeof ctx.onBuilderAddPrimitive === "function";
+    case "builder.create-boolean":
+      return typeof ctx.onBuilderCreateBoolean === "function";
     case "builder.remove-primitive":
       return typeof ctx.onBuilderRemovePrimitive === "function" && Boolean(command.primitiveId);
     case "builder.duplicate-primitive":
@@ -325,9 +324,6 @@ export function executeRibbonCommand(
     return;
   }
   switch (command.id) {
-    case "geometry.add-preset":
-      ctx.onAddGeometryPreset?.(command.preset);
-      return;
     case "navigation.select-node":
       ctx.onSelectModelNode?.(command.nodeId);
       return;
@@ -417,6 +413,9 @@ export function executeRibbonCommand(
     // ── Geometry Builder ──────────────────────────────────
     case "builder.add-primitive":
       ctx.onBuilderAddPrimitive?.(command.primitiveKind);
+      return;
+    case "builder.create-boolean":
+      ctx.onBuilderCreateBoolean?.(command.op);
       return;
     case "builder.remove-primitive":
       ctx.onBuilderRemovePrimitive?.(command.primitiveId);

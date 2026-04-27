@@ -12,6 +12,18 @@ Agents must preserve one semantic core across Python authoring, UI authoring, `P
 session/run APIs, and backend execution.
 If the UI creates or edits a simulation, it must remain exportable as canonical Python.
 
+## Unified workspace rule
+
+`/workspace` is one application shell. Do not reintroduce `Build` / `Study` / `Analyze` as
+workspace-switching modes. Top-level modules such as `Geometry`, `Mesh`, `Study`, and `Results`
+may change ribbon groups, inspector panels, viewport presets, and commands, but they must stay
+inside the same workspace model and unified viewport system.
+
+When touching frontend workspace code, agents must actively retire remaining stage-based assumptions
+unless they are explicitly documented as temporary compatibility shims. Geometry authoring must use
+the same unified 3D viewport used for FEM and FDM; it is a display/authoring preset, not a separate
+builder viewport.
+
 ## Control-room API rule
 
 The canonical local browser contract is the v2 session-scoped resource-first API described in:

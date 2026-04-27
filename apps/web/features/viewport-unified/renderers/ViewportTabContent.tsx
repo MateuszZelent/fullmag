@@ -6,15 +6,12 @@ import { cn } from "@/lib/utils";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { DEFAULT_WORKSPACE_SYNC_STATE } from "@/src/features/workspaceSync";
 import { ViewportHost } from "@/features";
-import {
-  BuilderViewportLayer,
-  GeometryToolbar,
-} from "@/features/geometry-builder";
 import { MeshWorkspaceShell } from "@/src/features/meshWorkspace";
 import { UnifiedViewport3DRenderer, Viewport3DHost } from "@/features/viewport-unified";
 import FemMeshView3D from "@/components/preview/FemMeshView3D";
 import { ViewportErrorBoundary } from "@/components/preview/ViewportErrorBoundary";
 import EmptyState from "@/components/ui/EmptyState";
+import { defaultMeshEntityViewState } from "@/lib/session/types";
 import { fmtExp, fmtSI } from "@/components/runs/control-room/shared";
 import UnifiedViewport2DPresenter from "@/components/runs/control-room/UnifiedViewport2DPresenter";
 import UnifiedViewport3DVectorSurface from "@/components/runs/control-room/UnifiedViewport3DVectorSurface";
@@ -49,7 +46,6 @@ function requireFemTopologyKey(value: string | null): string {
 }
 
 const VIEWPORT_BADGE_STYLE = { zIndex: "var(--z-viewport-badge)" } as const;
-const GEOMETRY_AUTHORING_WORLD_GRID: [number, number, number] = [0, 0, 0];
 
 /* ── Props ── */
 
@@ -63,6 +59,41 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
   const ctx = bridge.ctx;
   const workspaceSyncState = DEFAULT_WORKSPACE_SYNC_STATE;
   const viewportSelectedObjectId = bridge.viewportSelectedObjectId;
+  const geometryViewportPresetActive = bridge.geometryViewportPresetActive;
+  const geometryPresetFemMeshEntityViewState = React.useMemo(() => {
+    if (!geometryViewportPresetActive) {
+      return bridge.effectiveFemMeshEntityViewState;
+    }
+    if (ctx.meshParts.length === 0) {
+      return Object.fromEntries(
+        Object.entries(bridge.effectiveFemMeshEntityViewState).map(([id, state]) => [
+          id,
+          {
+            ...state,
+            visible: state.visible,
+            colorField: "none" as const,
+            renderMode: "surface" as const,
+            opacity: 100,
+          },
+        ]),
+      );
+    }
+    return Object.fromEntries(
+      ctx.meshParts.map((part) => {
+        const base = bridge.effectiveFemMeshEntityViewState[part.id] ?? defaultMeshEntityViewState(part);
+        return [
+          part.id,
+          {
+            ...base,
+            visible: part.role === "magnetic_object",
+            colorField: "none" as const,
+            renderMode: "surface" as const,
+            opacity: part.role === "magnetic_object" ? 100 : base.opacity,
+          },
+        ];
+      }),
+    );
+  }, [bridge.effectiveFemMeshEntityViewState, ctx.meshParts, geometryViewportPresetActive]);
 
   /* ── Render helpers ── */
 
@@ -151,60 +182,6 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
     />
   );
 
-  const renderHostedGeometryAuthoringViewport = () => (
-    <Viewport3DHost
-      model={bridge.hostedMixedViewportModel}
-      mode="3D"
-      discretization="mixed"
-    >
-      <div className="relative h-full w-full">
-        <UnifiedViewport3DVectorSurface
-          boundaryLabel="Hosted Geometry Authoring Viewport"
-          vectorFieldProps={{
-            grid: GEOMETRY_AUTHORING_WORLD_GRID,
-            vectors: bridge.geometryAuthoringShowQuantity ? bridge.scaledVectors : null,
-            fieldLabel: bridge.geometryAuthoringShowQuantity
-              ? (ctx.quantityDescriptor?.label ?? ctx.selectedQuantity)
-              : "Geometry Authoring",
-            liveRenderDebugData: bridge.liveRenderDebugData,
-            geometryMode: true,
-            activeMask: null,
-            worldExtent: ctx.worldExtent,
-            objectOverlays: bridge.geometryModeObjectOverlays,
-            selectedObjectId: bridge.viewportSelectedObjectId,
-            universeCenter: ctx.worldCenter,
-            objectViewMode: ctx.objectViewMode,
-            onRequestObjectSelect: bridge.handleRequestObjectSelect,
-            onGeometryTranslate: ctx.applyGeometryTranslation,
-            viewport3DModel: bridge.hostedMixedViewportModel,
-            authoringOverlay: (
-              <BuilderViewportLayer
-                showPrimitives={bridge.geometryAuthoringShowPrimitives}
-                showMeshPreview={bridge.geometryAuthoringShowMesh}
-              />
-            ),
-            toolbarMode: bridge.vectorToolbarMode,
-            viewportVisible: true,
-          }}
-        />
-        <div
-          className="pointer-events-none absolute left-3 top-3 z-20 rounded-md border border-border/50 bg-background/75 px-2 py-1 text-[10px] text-muted-foreground backdrop-blur"
-          style={VIEWPORT_BADGE_STYLE}
-        >
-          Geometry Mode
-          <span className="ml-2">
-            primitives:{bridge.geometryAuthoringShowPrimitives ? "on" : "off"} · mesh:
-            {bridge.geometryAuthoringMeshStatus} · quantity:
-            {bridge.geometryAuthoringShowQuantity ? "on" : "off"}
-          </span>
-        </div>
-        {!bridge.unifiedToolbarEnabled ? (
-          <GeometryToolbar className="pointer-events-auto absolute bottom-4 left-1/2 z-20 -translate-x-1/2" />
-        ) : null}
-      </div>
-    </Viewport3DHost>
-  );
-
   const renderHostedFemMeshViewport = () => {
     if (!ctx.femMeshData) {
       if (
@@ -261,7 +238,11 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             onRefine={ctx.handleLassoRefine}
             antennaOverlays={ctx.antennaOverlays}
             selectedAntennaId={bridge.selectedAntennaName}
-            objectOverlays={bridge.femObjectOverlaysForRender}
+            objectOverlays={
+              geometryViewportPresetActive
+                ? bridge.geometryModeObjectOverlays
+                : bridge.femObjectOverlaysForRender
+            }
             selectedObjectId={bridge.selectedFemObjectId}
             selectedEntityId={ctx.selectedEntityId}
             focusedEntityId={ctx.focusedEntityId}
@@ -270,13 +251,15 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             meshParts={ctx.meshParts}
             elementMarkers={ctx.effectiveFemMesh?.element_markers ?? null}
             perDomainQuality={ctx.effectiveFemMesh?.per_domain_quality ?? null}
-            meshEntityViewState={bridge.effectiveFemMeshEntityViewState}
+            meshEntityViewState={geometryPresetFemMeshEntityViewState}
             onMeshPartViewStatePatch={bridge.patchMeshPartViewState}
             visibleObjectIds={bridge.visibleObjectIds}
-            airSegmentVisible={ctx.airMeshVisible}
+            airSegmentVisible={geometryViewportPresetActive ? false : ctx.airMeshVisible}
             airSegmentOpacity={ctx.airMeshOpacity}
             focusObjectRequest={ctx.focusObjectRequest}
             onAntennaTranslate={ctx.applyAntennaTranslation}
+            onGeometryTranslate={ctx.applyGeometryTranslation}
+            onRequestObjectSelect={bridge.handleRequestObjectSelect}
             worldExtent={ctx.worldExtent}
             worldCenter={ctx.worldCenter}
             onEntitySelect={ctx.setSelectedEntityId}
@@ -320,88 +303,103 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
     return (
       <Viewport3DHost model={bridge.hostedFemViewportModel} mode="3D" discretization="fem">
         <ViewportErrorBoundary label="Hosted Unified 3D Viewport">
-          <FemMeshView3D
-            topologyKey={requireFemTopologyKey(bridge.resolvedFemTopologyKey)}
-            meshData={bridge.scopedFetchedFemMeshData!}
-            selectedSidebarNodeId={ctx.selectedSidebarNodeId}
-            viewportFitSeed={bridge.viewportFitSeed}
-            fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
-            liveRenderDebugData={bridge.femLiveRenderDebugData}
-            quantityId={ctx.requestedPreviewQuantity}
-            quantityOptions={bridge.femQuantityOptions}
-            toolbarMode={bridge.femToolbarMode}
-            colorField={bridge.femColorFieldForRender}
-            showOrientationLegend={ctx.femMagnetization3DActive}
-            renderMode={
-              FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
-                ? "wireframe"
-                : ctx.meshRenderMode
-            }
-            opacity={bridge.femOpacityForRender}
-            clipEnabled={
-              FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip
-                ? false
-                : ctx.meshClipEnabled
-            }
-            clipAxis={ctx.meshClipAxis}
-            clipPos={ctx.meshClipPos}
-            clipFlip={ctx.meshClipFlip}
-            showArrowsRequested={bridge.femShowArrowsForRender}
-            arrowColorMode={ctx.femArrowColorMode}
-            arrowMonoColor={ctx.femArrowMonoColor}
-            arrowAlpha={ctx.femArrowAlpha}
-            arrowLengthScale={ctx.femArrowLengthScale}
-            arrowThickness={ctx.femArrowThickness}
-            vectorDomainFilter={ctx.femVectorDomainFilter}
-            ferromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
-            previewMaxPoints={ctx.requestedPreviewMaxPoints}
-            onRenderModeChange={ctx.setMeshRenderMode}
-            onOpacityChange={ctx.setMeshOpacity}
-            onClipEnabledChange={ctx.setMeshClipEnabled}
-            onClipAxisChange={ctx.setMeshClipAxis}
-            onClipPosChange={ctx.setMeshClipPos}
-            onClipFlipChange={ctx.setMeshClipFlip}
-            onShowArrowsChange={ctx.setMeshShowArrows}
-            onArrowColorModeChange={ctx.setFemArrowColorMode}
-            onArrowMonoColorChange={ctx.setFemArrowMonoColor}
-            onArrowAlphaChange={ctx.setFemArrowAlpha}
-            onArrowLengthScaleChange={ctx.setFemArrowLengthScale}
-            onArrowThicknessChange={ctx.setFemArrowThickness}
-            onVectorDomainFilterChange={ctx.setFemVectorDomainFilter}
-            onFerromagnetVisibilityModeChange={ctx.setFemFerromagnetVisibilityMode}
-            onPreviewMaxPointsChange={bridge.handlePreviewMaxPointsChange}
-            onSelectionChange={ctx.setMeshSelection}
-            antennaOverlays={ctx.antennaOverlays}
-            selectedAntennaId={bridge.selectedAntennaName}
-            objectOverlays={bridge.femObjectOverlaysForRender}
-            selectedObjectId={bridge.selectedFemObjectId}
-            selectedEntityId={ctx.selectedEntityId}
-            focusedEntityId={ctx.focusedEntityId}
-            objectViewMode={ctx.objectViewMode}
-            objectSegments={ctx.effectiveFemMesh?.object_segments ?? []}
-            meshParts={ctx.meshParts}
-            elementMarkers={ctx.effectiveFemMesh?.element_markers ?? null}
-            perDomainQuality={ctx.effectiveFemMesh?.per_domain_quality ?? null}
-            meshEntityViewState={bridge.effectiveFemMeshEntityViewState}
-            onMeshPartViewStatePatch={bridge.patchMeshPartViewState}
-            visibleObjectIds={bridge.visibleObjectIds}
-            airSegmentVisible={ctx.airMeshVisible}
-            airSegmentOpacity={ctx.airMeshOpacity}
-            focusObjectRequest={ctx.focusObjectRequest}
-            onAntennaTranslate={ctx.applyAntennaTranslation}
-            worldExtent={ctx.worldExtent}
-            worldCenter={ctx.worldCenter}
-            onQuantityChange={ctx.requestDisplayQuantity}
-            activeTextureTransform={bridge.activeTextureTransform}
-            textureGizmoMode={bridge.activeTextureGizmoMode}
-            activeTexturePreviewProxy={bridge.activeTexturePreviewProxy}
-            activeTransformScope={ctx.activeTransformScope}
-            onTextureTransformChange={bridge.applyTextureTransform}
-            onTextureTransformCommit={bridge.applyTextureTransform}
-            partExplorerOpen={bridge.selectedSubmeshesToolboxOpen}
-            onTogglePartExplorer={bridge.openSelectedSubmeshesToolbox}
-            onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
-          />
+          <div className="relative h-full w-full">
+            <FemMeshView3D
+              topologyKey={requireFemTopologyKey(bridge.resolvedFemTopologyKey)}
+              meshData={bridge.scopedFetchedFemMeshData!}
+              selectedSidebarNodeId={ctx.selectedSidebarNodeId}
+              viewportFitSeed={bridge.viewportFitSeed}
+              fieldLabel={
+                geometryViewportPresetActive
+                  ? "Geometry"
+                  : (ctx.quantityDescriptor?.label ?? ctx.selectedQuantity)
+              }
+              liveRenderDebugData={bridge.femLiveRenderDebugData}
+              quantityId={geometryViewportPresetActive ? undefined : ctx.requestedPreviewQuantity}
+              quantityOptions={bridge.femQuantityOptions}
+              toolbarMode={bridge.femToolbarMode}
+              colorField={geometryViewportPresetActive ? "none" : bridge.femColorFieldForRender}
+              showOrientationLegend={!geometryViewportPresetActive && ctx.femMagnetization3DActive}
+              renderMode={
+                geometryViewportPresetActive
+                  ? "surface"
+                  : FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
+                  ? "wireframe"
+                  : ctx.meshRenderMode
+              }
+              opacity={bridge.femOpacityForRender}
+              clipEnabled={
+                FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip
+                  ? false
+                  : ctx.meshClipEnabled
+              }
+              clipAxis={ctx.meshClipAxis}
+              clipPos={ctx.meshClipPos}
+              clipFlip={ctx.meshClipFlip}
+              showArrowsRequested={geometryViewportPresetActive ? false : bridge.femShowArrowsForRender}
+              arrowColorMode={ctx.femArrowColorMode}
+              arrowMonoColor={ctx.femArrowMonoColor}
+              arrowAlpha={ctx.femArrowAlpha}
+              arrowLengthScale={ctx.femArrowLengthScale}
+              arrowThickness={ctx.femArrowThickness}
+              vectorDomainFilter={geometryViewportPresetActive ? "magnetic_only" : ctx.femVectorDomainFilter}
+              ferromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
+              previewMaxPoints={ctx.requestedPreviewMaxPoints}
+              onRenderModeChange={ctx.setMeshRenderMode}
+              onOpacityChange={ctx.setMeshOpacity}
+              onClipEnabledChange={ctx.setMeshClipEnabled}
+              onClipAxisChange={ctx.setMeshClipAxis}
+              onClipPosChange={ctx.setMeshClipPos}
+              onClipFlipChange={ctx.setMeshClipFlip}
+              onShowArrowsChange={ctx.setMeshShowArrows}
+              onArrowColorModeChange={ctx.setFemArrowColorMode}
+              onArrowMonoColorChange={ctx.setFemArrowMonoColor}
+              onArrowAlphaChange={ctx.setFemArrowAlpha}
+              onArrowLengthScaleChange={ctx.setFemArrowLengthScale}
+              onArrowThicknessChange={ctx.setFemArrowThickness}
+              onVectorDomainFilterChange={ctx.setFemVectorDomainFilter}
+              onFerromagnetVisibilityModeChange={ctx.setFemFerromagnetVisibilityMode}
+              onPreviewMaxPointsChange={bridge.handlePreviewMaxPointsChange}
+              onSelectionChange={ctx.setMeshSelection}
+              antennaOverlays={ctx.antennaOverlays}
+              selectedAntennaId={bridge.selectedAntennaName}
+              objectOverlays={
+                geometryViewportPresetActive
+                  ? bridge.geometryModeObjectOverlays
+                  : bridge.femObjectOverlaysForRender
+              }
+              selectedObjectId={bridge.selectedFemObjectId}
+              selectedEntityId={ctx.selectedEntityId}
+              focusedEntityId={ctx.focusedEntityId}
+              objectViewMode={ctx.objectViewMode}
+              objectSegments={ctx.effectiveFemMesh?.object_segments ?? []}
+              meshParts={ctx.meshParts}
+              elementMarkers={ctx.effectiveFemMesh?.element_markers ?? null}
+              perDomainQuality={ctx.effectiveFemMesh?.per_domain_quality ?? null}
+              meshEntityViewState={geometryPresetFemMeshEntityViewState}
+              onMeshPartViewStatePatch={bridge.patchMeshPartViewState}
+              visibleObjectIds={bridge.visibleObjectIds}
+              airSegmentVisible={geometryViewportPresetActive ? false : ctx.airMeshVisible}
+              airSegmentOpacity={ctx.airMeshOpacity}
+              focusObjectRequest={ctx.focusObjectRequest}
+              onAntennaTranslate={ctx.applyAntennaTranslation}
+              onGeometryTranslate={ctx.applyGeometryTranslation}
+              onRequestObjectSelect={bridge.handleRequestObjectSelect}
+              worldExtent={ctx.worldExtent}
+              worldCenter={ctx.worldCenter}
+              onQuantityChange={ctx.requestDisplayQuantity}
+              activeTextureTransform={bridge.activeTextureTransform}
+              textureGizmoMode={bridge.activeTextureGizmoMode}
+              activeTexturePreviewProxy={bridge.activeTexturePreviewProxy}
+              activeTransformScope={ctx.activeTransformScope}
+              onTextureTransformChange={bridge.applyTextureTransform}
+              onTextureTransformCommit={bridge.applyTextureTransform}
+              partExplorerOpen={bridge.selectedSubmeshesToolboxOpen}
+              onTogglePartExplorer={bridge.openSelectedSubmeshesToolbox}
+              onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
+              authoringOverlay={null}
+            />
+          </div>
         </ViewportErrorBoundary>
       </Viewport3DHost>
     );
@@ -413,16 +411,23 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
       mode={bridge.isVectorSurfaceMeshActive ? "Mesh" : "3D"}
       discretization="fdm"
     >
-      <UnifiedViewport3DVectorSurface
-        boundaryLabel="Hosted Unified 3D Viewport"
-        vectorFieldProps={{
-          ...bridge.vectorSurfaceSharedProps,
-          viewport3DModel: bridge.hostedVectorSurfaceViewportModel,
-          vectors: bridge.vectorSurfaceVectors,
-          toolbarMode: bridge.vectorToolbarMode,
-          viewportVisible: true,
-        }}
-      />
+      <div className="relative h-full w-full">
+        <UnifiedViewport3DVectorSurface
+          boundaryLabel="Hosted Unified 3D Viewport"
+          vectorFieldProps={{
+            ...bridge.vectorSurfaceSharedProps,
+            fieldLabel: geometryViewportPresetActive
+              ? "Geometry"
+              : bridge.vectorSurfaceSharedProps.fieldLabel,
+            geometryMode: geometryViewportPresetActive || bridge.vectorSurfaceSharedProps.geometryMode,
+            viewport3DModel: bridge.hostedVectorSurfaceViewportModel,
+            vectors: geometryViewportPresetActive ? null : bridge.vectorSurfaceVectors,
+            toolbarMode: bridge.vectorToolbarMode,
+            viewportVisible: true,
+            authoringOverlay: null,
+          }}
+        />
+      </div>
     </Viewport3DHost>
   );
 
@@ -648,14 +653,14 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
                 case "UnifiedViewport3D": {
                   const viewport3D = (
                     <UnifiedViewport3DRenderer
-                      showGeometryAuthoringViewport={bridge.showGeometryAuthoringViewport}
+                      showGeometryAuthoringViewport={false}
                       isFemMeshMode={
                         ctx.effectiveViewMode === "Mesh" && bridge.femDiscretization
                       }
                       isFem3DMode={Boolean(
                         bridge.femDiscretization && ctx.effectiveViewMode === "3D",
                       )}
-                      renderGeometryAuthoring={renderHostedGeometryAuthoringViewport}
+                      renderGeometryAuthoring={renderHostedFem3DViewport}
                       renderFemMesh={renderHostedFemMeshViewport}
                       renderFem3D={renderHostedFem3DViewport}
                       renderFdm={renderHostedVectorSurfaceViewport}

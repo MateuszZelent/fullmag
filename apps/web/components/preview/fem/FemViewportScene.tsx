@@ -8,7 +8,7 @@ import { FemArrows } from "../r3f/FemArrows";
 import { FemHighlightView } from "../r3f/FemHighlightView";
 import { getSharedVertexColors } from "../r3f/femVertexColors";
 import SceneAxes3D from "../r3f/SceneAxes3D";
-import type { AntennaOverlay } from "../../runs/control-room/shared";
+import type { AntennaOverlay, BuilderObjectOverlay } from "../../runs/control-room/shared";
 import type {
   ArrowSamplingMode,
   FemArrowColorMode,
@@ -130,6 +130,100 @@ function AntennaOverlayMeshes({
   );
 }
 
+function ObjectOverlayMeshes({
+  overlays,
+  geomCenter,
+  selectedObjectId,
+  activeTransformScope,
+  onGeometryTranslate,
+  onObjectSelect,
+}: {
+  overlays: BuilderObjectOverlay[];
+  geomCenter: THREE.Vector3;
+  selectedObjectId?: string | null;
+  activeTransformScope?: "object" | "texture" | null;
+  onGeometryTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
+  onObjectSelect?: (id: string) => void;
+}) {
+  const groupRef = React.useRef<THREE.Group>(null);
+  const previewOverlays = overlays.filter((overlay) => overlay.fidelity !== "mesh-backed");
+  if (previewOverlays.length === 0) return null;
+  return (
+    <group>
+      {previewOverlays.map((overlay) => {
+        const size = [
+          overlay.boundsMax[0] - overlay.boundsMin[0],
+          overlay.boundsMax[1] - overlay.boundsMin[1],
+          overlay.boundsMax[2] - overlay.boundsMin[2],
+        ] as const;
+        if (size.some((value) => !Number.isFinite(value) || value <= 0)) {
+          return null;
+        }
+        const center = [
+          0.5 * (overlay.boundsMin[0] + overlay.boundsMax[0]) - geomCenter.x,
+          0.5 * (overlay.boundsMin[1] + overlay.boundsMax[1]) - geomCenter.y,
+          0.5 * (overlay.boundsMin[2] + overlay.boundsMax[2]) - geomCenter.z,
+        ] as const;
+        const selected = selectedObjectId === overlay.id;
+        const fill = selected ? "#86efac" : "#8dd3ff";
+        const wire = selected ? "#22c55e" : "#bae6fd";
+        const overlayMeshes = (
+          <group
+            key={`${overlay.id}-meshes`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onObjectSelect?.(overlay.id);
+            }}
+          >
+            <mesh position={center} renderOrder={7}>
+              <boxGeometry args={size} />
+              <meshStandardMaterial
+                color={fill}
+                emissive={fill}
+                emissiveIntensity={selected ? 0.24 : 0.12}
+                transparent
+                opacity={selected ? 0.52 : 0.34}
+                depthWrite={false}
+              />
+            </mesh>
+            <mesh position={center} renderOrder={8}>
+              <boxGeometry args={size} />
+              <meshBasicMaterial
+                color={wire}
+                wireframe
+                transparent
+                opacity={selected ? 0.98 : 0.78}
+                depthWrite={false}
+              />
+            </mesh>
+          </group>
+        );
+        if (selected && activeTransformScope === "object" && onGeometryTranslate) {
+          return (
+            <PivotControls
+              key={overlay.id}
+              depthTest={false}
+              lineWidth={2}
+              axisColors={["#f87171", "#4ade80", "#60a5fa"]}
+              scale={75}
+              fixed
+              onDragEnd={() => {
+                if (!groupRef.current) return;
+                const p = groupRef.current.position;
+                onGeometryTranslate(overlay.id, p.x, p.y, p.z);
+                groupRef.current.position.set(0, 0, 0);
+              }}
+            >
+              <group ref={groupRef}>{overlayMeshes}</group>
+            </PivotControls>
+          );
+        }
+        return <group key={overlay.id}>{overlayMeshes}</group>;
+      })}
+    </group>
+  );
+}
+
 export const FemViewportScene = React.memo(function FemViewportScene({
   meshData,
   hasMeshParts,
@@ -165,9 +259,14 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   arrowBoundaryFaceIndices,
   selectedFaces,
   antennaOverlays,
+  objectOverlays = [],
   focusedEntityId,
   selectedAntennaId,
+  selectedObjectId,
   onAntennaTranslate,
+  activeTransformScope,
+  onGeometryTranslate,
+  onObjectSelect,
   axesWorldExtent,
   axesCenter,
   onFaceClick,
@@ -228,9 +327,14 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   arrowBoundaryFaceIndices: number[] | null;
   selectedFaces: number[];
   antennaOverlays: AntennaOverlay[];
+  objectOverlays?: BuilderObjectOverlay[];
   focusedEntityId: string | null;
   selectedAntennaId?: string | null;
+  selectedObjectId?: string | null;
   onAntennaTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
+  activeTransformScope?: "object" | "texture" | null;
+  onGeometryTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
+  onObjectSelect?: (id: string) => void;
   axesWorldExtent: [number, number, number];
   axesCenter: [number, number, number];
   onFaceClick?: (e: any) => void;
@@ -428,6 +532,17 @@ export const FemViewportScene = React.memo(function FemViewportScene({
       />
       {showSelectionHighlight ? (
         <FemHighlightView meshData={meshData} selectedFaces={selectedFaces} center={dynamicGeomCenter} />
+      ) : null}
+
+      {showSceneGeometry ? (
+        <ObjectOverlayMeshes
+          overlays={objectOverlays}
+          geomCenter={dynamicGeomCenter}
+          selectedObjectId={selectedObjectId}
+          activeTransformScope={activeTransformScope}
+          onGeometryTranslate={onGeometryTranslate}
+          onObjectSelect={onObjectSelect}
+        />
       ) : null}
 
       {showAntennaOverlays && antennaOverlays.length > 0 && !Boolean(focusedEntityId) ? (

@@ -58,6 +58,13 @@ function sphereGeometry(radius: number): THREE.BufferGeometry {
   return new THREE.SphereGeometry(physicalLengthToScene(radius), 32, 24);
 }
 
+function ellipsoidGeometry(radii: Vec3): THREE.BufferGeometry {
+  const [rx, ry, rz] = physicalScaleToScene(radii as Vec3Tuple);
+  const geo = new THREE.SphereGeometry(1, 32, 24);
+  geo.scale(rx, ry, rz);
+  return geo;
+}
+
 function diskGeometry(radius: number, thickness: number, axis: "x" | "y" | "z"): THREE.BufferGeometry {
   const sceneRadius = physicalLengthToScene(radius);
   const sceneThickness = physicalLengthToScene(thickness);
@@ -96,11 +103,100 @@ function triangularPrismGeometry(
   return geo;
 }
 
+function coneGeometry(radiusTop: number, radiusBottom: number, height: number, axis: "x" | "y" | "z"): THREE.BufferGeometry {
+  const geo = new THREE.CylinderGeometry(
+    physicalLengthToScene(radiusTop),
+    physicalLengthToScene(radiusBottom),
+    physicalLengthToScene(height),
+    32,
+  );
+  if (axis === "x") {
+    geo.rotateZ(Math.PI / 2);
+  } else if (axis === "y") {
+    geo.rotateX(Math.PI / 2);
+  }
+  return geo;
+}
+
+function capsuleGeometry(radius: number, height: number, axis: "x" | "y" | "z"): THREE.BufferGeometry {
+  const geo = new THREE.CapsuleGeometry(
+    physicalLengthToScene(radius),
+    physicalLengthToScene(Math.max(height - radius * 2, 0)),
+    12,
+    24,
+  );
+  if (axis === "x") {
+    geo.rotateZ(Math.PI / 2);
+  } else if (axis === "z") {
+    geo.rotateX(Math.PI / 2);
+  }
+  return geo;
+}
+
+function tubeGeometry(outerRadius: number, innerRadius: number, height: number, axis: "x" | "y" | "z"): THREE.BufferGeometry {
+  const outer = physicalLengthToScene(outerRadius);
+  const inner = physicalLengthToScene(Math.min(innerRadius, outerRadius * 0.92));
+  const sceneHeight = physicalLengthToScene(height);
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, outer, 0, Math.PI * 2, false);
+  const hole = new THREE.Path();
+  hole.absarc(0, 0, inner, 0, Math.PI * 2, true);
+  shape.holes.push(hole);
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: sceneHeight, bevelEnabled: false, curveSegments: 48 });
+  geo.translate(0, 0, -sceneHeight / 2);
+  if (axis === "x") {
+    geo.rotateY(Math.PI / 2);
+  } else if (axis === "y") {
+    geo.rotateX(-Math.PI / 2);
+  }
+  return geo;
+}
+
+function wedgeGeometry(size: Vec3, slope: number): THREE.BufferGeometry {
+  const [sx, sy, sz] = physicalScaleToScene(size as Vec3Tuple);
+  const topOffset = THREE.MathUtils.clamp(slope, 0, 1) * sx;
+  const vertices = new Float32Array([
+    -sx / 2, -sy / 2, -sz / 2, sx / 2, -sy / 2, -sz / 2, sx / 2, sy / 2, -sz / 2, -sx / 2, sy / 2, -sz / 2,
+    -sx / 2 + topOffset, -sy / 2, sz / 2, sx / 2, -sy / 2, sz / 2, sx / 2, sy / 2, sz / 2, -sx / 2 + topOffset, sy / 2, sz / 2,
+  ]);
+  const indices = [
+    0, 1, 2, 0, 2, 3,
+    4, 6, 5, 4, 7, 6,
+    0, 4, 5, 0, 5, 1,
+    1, 5, 6, 1, 6, 2,
+    2, 6, 7, 2, 7, 3,
+    3, 7, 4, 3, 4, 0,
+  ];
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function polygonPrismGeometry(radius: number, sides: number, depth: number, axis: "x" | "y" | "z"): THREE.BufferGeometry {
+  const geo = new THREE.CylinderGeometry(
+    physicalLengthToScene(radius),
+    physicalLengthToScene(radius),
+    physicalLengthToScene(depth),
+    Math.max(3, Math.round(sides)),
+  );
+  if (axis === "x") {
+    geo.rotateZ(Math.PI / 2);
+  } else if (axis === "y") {
+    geo.rotateX(Math.PI / 2);
+  }
+  return geo;
+}
+
 function geometryForPrimitive(node: PrimitiveNode): THREE.BufferGeometry {
   switch (node.params.kind) {
     case "box":
+    case "thin_film":
+    case "nanowire":
       return boxGeometry(node.params.data.size);
     case "cylinder":
+    case "pillar":
       return cylinderGeometry(
         node.params.data.radius,
         node.params.data.height,
@@ -108,16 +204,48 @@ function geometryForPrimitive(node: PrimitiveNode): THREE.BufferGeometry {
       );
     case "sphere":
       return sphereGeometry(node.params.data.radius);
+    case "ellipsoid":
+      return ellipsoidGeometry(node.params.data.radii);
     case "disk":
       return diskGeometry(
         node.params.data.radius,
         node.params.data.thickness,
         node.params.data.axis,
       );
+    case "ring":
+    case "tube":
+      return tubeGeometry(
+        node.params.data.outerRadius,
+        node.params.data.innerRadius,
+        node.params.data.height,
+        node.params.data.axis,
+      );
     case "triangular_prism":
       return triangularPrismGeometry(
         node.params.data.base,
         node.params.data.triangleHeight,
+        node.params.data.depth,
+        node.params.data.axis,
+      );
+    case "cone":
+      return coneGeometry(
+        node.params.data.radiusTop,
+        node.params.data.radiusBottom,
+        node.params.data.height,
+        node.params.data.axis,
+      );
+    case "capsule":
+      return capsuleGeometry(
+        node.params.data.radius,
+        node.params.data.height,
+        node.params.data.axis,
+      );
+    case "wedge":
+      return wedgeGeometry(node.params.data.size, node.params.data.slope);
+    case "polygon_prism":
+      return polygonPrismGeometry(
+        node.params.data.radius,
+        node.params.data.sides,
         node.params.data.depth,
         node.params.data.axis,
       );

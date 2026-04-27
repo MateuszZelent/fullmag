@@ -41,20 +41,26 @@ function formatSI(value: number): string {
   return `${(value * 1e9).toFixed(3)} nm`;
 }
 
-const PRIMITIVE_LABELS: Record<PrimitiveKind, string> = {
-  box: "Box",
-  cylinder: "Cylinder",
-  sphere: "Sphere",
-  disk: "Disk",
-  triangular_prism: "Triangular Prism",
-};
+const PRIMITIVE_LABELS: Record<PrimitiveKind, string> = Object.fromEntries(
+  Object.entries(PRIMITIVE_CAPABILITIES).map(([kind, capability]) => [kind, capability.label]),
+) as Record<PrimitiveKind, string>;
 
 const PRIMITIVE_ICONS: Record<PrimitiveKind, React.ReactNode> = {
   box: <Box size={16} />,
   cylinder: <Cylinder size={16} />,
   sphere: <Circle size={16} />,
+  ellipsoid: <Circle size={16} />,
   disk: <Disc size={16} />,
+  thin_film: <Box size={16} />,
+  pillar: <Cylinder size={16} />,
+  nanowire: <ArrowRight size={16} />,
+  ring: <Circle size={16} />,
   triangular_prism: <Triangle size={16} />,
+  cone: <Triangle size={16} />,
+  capsule: <Disc size={16} />,
+  tube: <Circle size={16} />,
+  wedge: <Box size={16} />,
+  polygon_prism: <Circle size={16} />,
 };
 
 // ── Number input ──────────────────────────────────────────────
@@ -219,24 +225,28 @@ function ParamsSection({ node }: { node: PrimitiveNode }) {
 
   switch (node.params.kind) {
     case "box":
+    case "thin_film":
+    case "nanowire":
+    case "wedge":
       return (
         <Section title="Parameters">
           <Vec3Field
             label="Size"
             value={node.params.data.size}
-            onChange={(size) => setPrimitiveParams(node.id, { kind: "box", data: { size } })}
+            onChange={(size) => setPrimitiveParams(node.id, { kind: node.params.kind, data: { ...node.params.data, size } } as typeof node.params)}
             labels={["Width", "Depth", "Height"]}
           />
         </Section>
       );
     case "cylinder":
+    case "pillar":
       return (
         <Section title="Parameters">
           <NumberField
             label="Radius"
             value={node.params.data.radius}
             onChange={(radius) =>
-              setPrimitiveParams(node.id, { kind: "cylinder", data: { ...node.params.data as any, radius } })
+              setPrimitiveParams(node.id, { kind: node.params.kind, data: { ...node.params.data as any, radius } } as typeof node.params)
             }
             min={0}
           />
@@ -244,7 +254,7 @@ function ParamsSection({ node }: { node: PrimitiveNode }) {
             label="Height"
             value={node.params.data.height}
             onChange={(height) =>
-              setPrimitiveParams(node.id, { kind: "cylinder", data: { ...node.params.data as any, height } })
+              setPrimitiveParams(node.id, { kind: node.params.kind, data: { ...node.params.data as any, height } } as typeof node.params)
             }
             min={0}
           />
@@ -252,7 +262,7 @@ function ParamsSection({ node }: { node: PrimitiveNode }) {
             label="Axis"
             value={(node.params.data as any).axis}
             onChange={(axis) =>
-              setPrimitiveParams(node.id, { kind: "cylinder", data: { ...node.params.data as any, axis } })
+              setPrimitiveParams(node.id, { kind: node.params.kind, data: { ...node.params.data as any, axis } } as typeof node.params)
             }
           />
         </Section>
@@ -265,6 +275,17 @@ function ParamsSection({ node }: { node: PrimitiveNode }) {
             value={node.params.data.radius}
             onChange={(radius) => setPrimitiveParams(node.id, { kind: "sphere", data: { radius } })}
             min={0}
+          />
+        </Section>
+      );
+    case "ellipsoid":
+      return (
+        <Section title="Parameters">
+          <Vec3Field
+            label="Radii"
+            value={node.params.data.radii}
+            onChange={(radii) => setPrimitiveParams(node.id, { kind: "ellipsoid", data: { radii } })}
+            labels={["Rx", "Ry", "Rz"]}
           />
         </Section>
       );
@@ -293,6 +314,36 @@ function ParamsSection({ node }: { node: PrimitiveNode }) {
             onChange={(axis) =>
               setPrimitiveParams(node.id, { kind: "disk", data: { ...node.params.data as any, axis } })
             }
+          />
+        </Section>
+      );
+    case "ring":
+    case "tube":
+      return (
+        <Section title="Parameters">
+          <NumberField
+            label="Outer radius"
+            value={node.params.data.outerRadius}
+            onChange={(outerRadius) =>
+              setPrimitiveParams(node.id, { kind: node.params.kind, data: { ...node.params.data as any, outerRadius } } as typeof node.params)
+            }
+            min={0}
+          />
+          <NumberField
+            label="Inner radius"
+            value={node.params.data.innerRadius}
+            onChange={(innerRadius) =>
+              setPrimitiveParams(node.id, { kind: node.params.kind, data: { ...node.params.data as any, innerRadius } } as typeof node.params)
+            }
+            min={0}
+          />
+          <NumberField
+            label="Height"
+            value={node.params.data.height}
+            onChange={(height) =>
+              setPrimitiveParams(node.id, { kind: node.params.kind, data: { ...node.params.data as any, height } } as typeof node.params)
+            }
+            min={0}
           />
         </Section>
       );
@@ -330,6 +381,16 @@ function ParamsSection({ node }: { node: PrimitiveNode }) {
               setPrimitiveParams(node.id, { kind: "triangular_prism", data: { ...node.params.data as any, axis } })
             }
           />
+        </Section>
+      );
+    case "cone":
+    case "capsule":
+    case "polygon_prism":
+      return (
+        <Section title="Parameters">
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-100">
+            This preview primitive is editable in the viewport. Detailed parameter controls will use the unified shape registry.
+          </div>
         </Section>
       );
   }

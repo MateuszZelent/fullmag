@@ -26,6 +26,8 @@ import type {
   PrimitiveKind,
   PrimitiveParams,
   GeometryNode,
+  BooleanNode,
+  BooleanOp,
   UniverseNode,
   Transform3D,
   DirtyState,
@@ -41,7 +43,7 @@ import type {
   GeometrySnapSettings,
   Vec3,
 } from "../model/types";
-import { IDENTITY_TRANSFORM, CLEAN_STATE } from "../model/types";
+import { IDENTITY_TRANSFORM, CLEAN_STATE, PRIMITIVE_CAPABILITIES } from "../model/types";
 import {
   createDefaultPrimitive,
   type DefaultPrimitiveContext,
@@ -136,6 +138,7 @@ export interface GeometryBuilderState {
   setPrimitiveVisible: (id: string, visible: boolean) => void;
   setPrimitiveEnabled: (id: string, enabled: boolean) => void;
   setPrimitiveLocked: (id: string, locked: boolean) => void;
+  createBooleanFromEnabled: (op: BooleanOp) => string | null;
 
   // ── Actions: transform transactions ───────────────────────
   /**
@@ -188,6 +191,8 @@ export interface GeometryBuilderState {
   // ── Queries ────────────────────────────────────────────────
   getPrimitive: (id: string) => PrimitiveNode | null;
   getAllPrimitives: () => PrimitiveNode[];
+  getUnsupportedPrimitivesForBackend: (isFemBackend: boolean) => PrimitiveNode[];
+  getBackendBuildBlockedReason: (isFemBackend: boolean) => string | null;
   isRunBlocked: () => boolean;
   getGeometryBuildBlockedReason: () => string | null;
   getRunBlockedReason: () => string | null;
@@ -224,8 +229,18 @@ const nameCounters: Record<PrimitiveKind, number> = {
   box: 0,
   cylinder: 0,
   sphere: 0,
+  ellipsoid: 0,
   disk: 0,
+  thin_film: 0,
+  pillar: 0,
+  nanowire: 0,
+  ring: 0,
   triangular_prism: 0,
+  cone: 0,
+  capsule: 0,
+  tube: 0,
+  wedge: 0,
+  polygon_prism: 0,
 };
 
 // ── Store ─────────────────────────────────────────────────────
@@ -442,6 +457,29 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
       updateNode(id, (n) => (n.kind === "primitive" ? { ...n, locked } : n));
     },
 
+    createBooleanFromEnabled: (op) => {
+      const primitives = get().graph.nodes.filter(
+        (n): n is PrimitiveNode => n.kind === "primitive" && n.enabled,
+      );
+      if (primitives.length < 2) return null;
+      const id = `bool-${nanoid(8)}`;
+      const node: BooleanNode = {
+        id,
+        kind: "boolean",
+        name: op === "union" ? "Union" : op === "subtract" ? "Subtract" : "Intersect",
+        op,
+        inputs: primitives.map((primitive) => primitive.id),
+        enabled: true,
+      };
+      pushUndo(`Create ${node.name}`);
+      set((s) => ({
+        graph: { ...s.graph, nodes: [...s.graph.nodes, node] },
+        builderSelection: { type: "boolean", id },
+      }));
+      markGeometryDirty();
+      return id;
+    },
+
     // ── Transform transactions ────────────────────────────────
 
     beginTransformTransaction: (id) => {
@@ -550,13 +588,45 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
       const primitives = graph.nodes.filter(
         (n): n is PrimitiveNode => n.kind === "primitive" && n.enabled,
       );
+      const booleans = graph.nodes.filter(
+        (n): n is BooleanNode => n.kind === "boolean" && n.enabled,
+      );
 
-      const bodies = primitives.map((p) => ({
+      const primitiveBodies = primitives.map((p) => ({
         sourceNodeId: p.id,
         name: p.name,
         boundsMin: computeBoundsMin(p),
         boundsMax: computeBoundsMax(p),
       }));
+      const bodies = booleans.length > 0
+        ? booleans.map((node) => {
+            const inputs = primitiveBodies.filter((body) => node.inputs.includes(body.sourceNodeId));
+            if (inputs.length === 0) {
+              return {
+                sourceNodeId: node.id,
+                name: node.name,
+                boundsMin: [0, 0, 0] as Vec3,
+                boundsMax: [0, 0, 0] as Vec3,
+              };
+            }
+            const min: Vec3 = [
+              Math.min(...inputs.map((body) => body.boundsMin[0])),
+              Math.min(...inputs.map((body) => body.boundsMin[1])),
+              Math.min(...inputs.map((body) => body.boundsMin[2])),
+            ];
+            const max: Vec3 = [
+              Math.max(...inputs.map((body) => body.boundsMax[0])),
+              Math.max(...inputs.map((body) => body.boundsMax[1])),
+              Math.max(...inputs.map((body) => body.boundsMax[2])),
+            ];
+            return {
+              sourceNodeId: node.id,
+              name: node.name,
+              boundsMin: min,
+              boundsMax: max,
+            };
+          })
+        : primitiveBodies;
 
       const allMins = bodies.map((b) => b.boundsMin);
       const allMaxs = bodies.map((b) => b.boundsMax);
@@ -735,6 +805,30 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
       return get().graph.nodes.filter((n): n is PrimitiveNode => n.kind === "primitive");
     },
 
+    getUnsupportedPrimitivesForBackend: (isFemBackend) => {
+      return get().graph.nodes.filter((node): node is PrimitiveNode => {
+        if (node.kind !== "primitive" || !node.enabled) {
+          return false;
+        }
+        const capability = PRIMITIVE_CAPABILITIES[node.primitiveKind];
+        return isFemBackend ? !capability.fem : !capability.fdm;
+      });
+    },
+
+    getBackendBuildBlockedReason: (isFemBackend) => {
+      const unsupported = get().getUnsupportedPrimitivesForBackend(isFemBackend);
+      if (unsupported.length === 0) {
+        return null;
+      }
+      const backendLabel = isFemBackend ? "FEM mesh" : "FDM grid";
+      const labels = unsupported
+        .slice(0, 3)
+        .map((node) => PRIMITIVE_CAPABILITIES[node.primitiveKind].label)
+        .join(", ");
+      const suffix = unsupported.length > 3 ? ` and ${unsupported.length - 3} more` : "";
+      return `${backendLabel} build blocked: ${labels}${suffix} ${unsupported.length === 1 ? "is" : "are"} preview-only for the active backend.`;
+    },
+
     isRunBlocked: () => {
       const { dirty, meshSnapshot, geometryRealization, getGeometryBuildBlockedReason } = get();
       const geometryBuildBlockedReason = getGeometryBuildBlockedReason();
@@ -829,12 +923,16 @@ function computeHalfExtent(p: PrimitiveNode): Vec3 {
   const [sx, sy, sz] = p.transform.scale;
   switch (p.params.kind) {
     case "box":
+    case "thin_film":
+    case "nanowire":
+    case "wedge":
       return [
         (p.params.data.size[0] / 2) * sx,
         (p.params.data.size[1] / 2) * sy,
         (p.params.data.size[2] / 2) * sz,
       ];
-    case "cylinder": {
+    case "cylinder":
+    case "pillar": {
       const { radius, height, axis } = p.params.data;
       if (axis === "x") return [(height / 2) * sx, radius * sy, radius * sz];
       if (axis === "y") return [radius * sx, (height / 2) * sy, radius * sz];
@@ -844,17 +942,46 @@ function computeHalfExtent(p: PrimitiveNode): Vec3 {
       const r = p.params.data.radius;
       return [r * sx, r * sy, r * sz];
     }
+    case "ellipsoid":
+      return [
+        p.params.data.radii[0] * sx,
+        p.params.data.radii[1] * sy,
+        p.params.data.radii[2] * sz,
+      ];
     case "disk": {
       const { radius, thickness, axis } = p.params.data;
       if (axis === "x") return [(thickness / 2) * sx, radius * sy, radius * sz];
       if (axis === "y") return [radius * sx, (thickness / 2) * sy, radius * sz];
       return [radius * sx, radius * sy, (thickness / 2) * sz];
     }
+    case "ring":
+    case "tube": {
+      const { outerRadius, height, axis } = p.params.data;
+      if (axis === "x") return [(height / 2) * sx, outerRadius * sy, outerRadius * sz];
+      if (axis === "y") return [outerRadius * sx, (height / 2) * sy, outerRadius * sz];
+      return [outerRadius * sx, outerRadius * sy, (height / 2) * sz];
+    }
     case "triangular_prism": {
       const { base, triangleHeight, depth, axis } = p.params.data;
       if (axis === "x") return [(depth / 2) * sx, (base / 2) * sy, (triangleHeight / 2) * sz];
       if (axis === "y") return [(base / 2) * sx, (depth / 2) * sy, (triangleHeight / 2) * sz];
       return [(base / 2) * sx, (triangleHeight / 2) * sy, (depth / 2) * sz];
+    }
+    case "cone":
+    case "capsule": {
+      const radius = p.params.kind === "cone"
+        ? Math.max(p.params.data.radiusTop, p.params.data.radiusBottom)
+        : p.params.data.radius;
+      const { height, axis } = p.params.data;
+      if (axis === "x") return [(height / 2) * sx, radius * sy, radius * sz];
+      if (axis === "y") return [radius * sx, (height / 2) * sy, radius * sz];
+      return [radius * sx, radius * sy, (height / 2) * sz];
+    }
+    case "polygon_prism": {
+      const { radius, depth, axis } = p.params.data;
+      if (axis === "x") return [(depth / 2) * sx, radius * sy, radius * sz];
+      if (axis === "y") return [radius * sx, (depth / 2) * sy, radius * sz];
+      return [radius * sx, radius * sy, (depth / 2) * sz];
     }
   }
 }

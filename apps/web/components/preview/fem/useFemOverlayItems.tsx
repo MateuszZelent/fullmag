@@ -411,8 +411,8 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
               sceneRef={args.viewCubeSceneRef}
               onRotate={args.handleViewCubeRotate}
               onReset={() => args.setCameraPreset("reset")}
-              axisConvention="swapYZ"
-              size={1.42}
+              axisConvention="identity"
+              size={1.72}
               onOrientationSnapshot={(snapshot) => args.updateRotationSnapshot("viewCube", snapshot)}
               embedded
             />

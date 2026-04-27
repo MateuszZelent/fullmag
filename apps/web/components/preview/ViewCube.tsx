@@ -297,14 +297,14 @@ function TripodArm({
   color,
   label,
   rotation,
-  fontSize = 9,
+  fontSize = 16,
 }: {
   color: string;
   label: string;
   rotation: string;
   fontSize?: number;
 }) {
-  const length = 17;
+  const length = 32;
   return (
     <>
       <div
@@ -326,17 +326,35 @@ function TripodArm({
       <div
         style={{
           position: "absolute",
+          width: 0,
+          height: 0,
+          left: "50%",
+          top: "50%",
+          marginLeft: -5,
+          transformOrigin: "50% 0",
+          transform: `${rotation} translateY(-${length + 6}px)`,
+          transformStyle: "preserve-3d",
+          borderLeft: "5px solid transparent",
+          borderRight: "5px solid transparent",
+          borderBottom: `10px solid ${color}`,
+          filter: `drop-shadow(0 0 4px ${color}90)`,
+          pointerEvents: "none",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
           fontSize,
           fontWeight: 800,
           left: "50%",
           top: "50%",
-          marginLeft: -5,
-          marginTop: -6,
+          marginLeft: -7,
+          marginTop: -9,
           transformOrigin: "center",
-          transform: `${rotation} translateY(-${length + 7}px)`,
+          transform: `${rotation} translateY(-${length + 22}px)`,
           transformStyle: "preserve-3d",
           color,
-          textShadow: "0 1px 3px rgba(0,0,0,0.7)",
+          textShadow: "0 1px 3px rgba(0,0,0,0.85), 0 0 8px rgba(15,23,42,0.75)",
           pointerEvents: "none",
         }}
       >
@@ -692,22 +710,22 @@ export default function ViewCube({
 
       <div
         className={cn("relative pointer-events-none", axisClassName)}
-        style={{ width: 58 * scale, height: 58 * scale, perspective: 180 * scale }}
+        style={{ width: 98 * scale, height: 98 * scale, perspective: 260 * scale }}
       >
         <div
           ref={tripodRef}
           style={{
-            width: 52,
-            height: 52,
+            width: 90,
+            height: 90,
             transform: `scale(${scale})`,
             transformOrigin: "center",
             transformStyle: "preserve-3d",
             willChange: "transform",
           }}
         >
-          <TripodArm color={axisX.color} label={axisX.text} rotation="rotateZ(-90deg)" fontSize={12} />
-          <TripodArm color={axisY.color} label={axisY.text} rotation="rotateX(0deg)" fontSize={12} />
-          <TripodArm color={axisZ.color} label={axisZ.text} rotation="rotateX(90deg)" fontSize={12} />
+          <TripodArm color={axisX.color} label={axisX.text} rotation="rotateZ(90deg)" />
+          <TripodArm color={axisY.color} label={axisY.text} rotation="rotateX(0deg)" />
+          <TripodArm color={axisZ.color} label={axisZ.text} rotation="rotateX(-90deg)" />
         </div>
       </div>
     </div>

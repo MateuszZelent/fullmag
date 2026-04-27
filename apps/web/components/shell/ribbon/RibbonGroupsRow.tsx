@@ -67,23 +67,36 @@ export const RibbonActionTrigger = React.forwardRef<
   } & React.ButtonHTMLAttributes<HTMLButtonElement>
 >(({ action, previewPending, ...rest }, ref) => {
   const propsOnClick = rest.onClick;
+  const propsOnPointerUp = rest.onPointerUp;
   const isHandlingRef = useRef(false);
+  const invokeAction = useCallback(() => {
+    if (isHandlingRef.current) return;
+    isHandlingRef.current = true;
+    try {
+      action.action?.();
+    } finally {
+      window.setTimeout(() => {
+        isHandlingRef.current = false;
+      }, 0);
+    }
+  }, [action]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
-      if (isHandlingRef.current) return;
-      isHandlingRef.current = true;
-      try {
-        propsOnClick?.(e);
-        if (e.defaultPrevented) return;
-        action.action?.();
-      } finally {
-        queueMicrotask(() => {
-          isHandlingRef.current = false;
-        });
-      }
+      propsOnClick?.(e);
+      if (e.defaultPrevented) return;
+      invokeAction();
     },
-    [action, propsOnClick],
+    [invokeAction, propsOnClick],
+  );
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>) => {
+      propsOnPointerUp?.(e);
+      if (e.defaultPrevented || e.button !== 0) return;
+      invokeAction();
+    },
+    [invokeAction, propsOnPointerUp],
   );
 
   return (
@@ -94,6 +107,7 @@ export const RibbonActionTrigger = React.forwardRef<
       className={ribbonActionTriggerClassName(action, previewPending, rest.className)}
       disabled={action.disabled}
       onClick={handleClick}
+      onPointerUp={handlePointerUp}
     >
       <RibbonActionTriggerContent action={action} />
     </button>

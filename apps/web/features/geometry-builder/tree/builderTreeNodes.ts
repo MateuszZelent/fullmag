@@ -9,6 +9,7 @@ import type { TreeNodeData, NodeStatus } from "@/components/panels/ModelTree";
 import type {
   GeometryGraphDocument,
   PrimitiveNode,
+  BooleanNode,
   DirtyState,
   PrimitiveKind,
   BuilderSelectionTarget,
@@ -18,8 +19,18 @@ const PRIMITIVE_ICONS: Record<PrimitiveKind, string> = {
   box: "box",
   cylinder: "cylinder",
   sphere: "sphere",
+  ellipsoid: "sphere",
   disk: "disc",
+  thin_film: "square",
+  pillar: "cylinder",
+  nanowire: "minus",
+  ring: "circle-dashed",
   triangular_prism: "triangle",
+  cone: "triangle",
+  capsule: "pill",
+  tube: "circle-dashed",
+  wedge: "box",
+  polygon_prism: "hexagon",
 };
 
 function primitiveStatus(
@@ -27,7 +38,7 @@ function primitiveStatus(
   dirty: DirtyState,
 ): NodeStatus {
   if (!node.enabled) return "pending";
-  if (dirty.geometryDraftDirty) return "active";
+  if (dirty.geometryDraftDirty) return "dirty";
   return "ready";
 }
 
@@ -47,14 +58,32 @@ function primitiveBadge(node: PrimitiveNode): string {
       const [x, y, z] = node.params.data.size;
       return `${formatDimension(x)} × ${formatDimension(y)} × ${formatDimension(z)}`;
     }
+    case "thin_film":
+    case "nanowire":
+    case "wedge": {
+      const [x, y, z] = node.params.data.size;
+      return `${formatDimension(x)} × ${formatDimension(y)} × ${formatDimension(z)}`;
+    }
     case "cylinder":
+    case "pillar":
       return `r=${formatDimension(node.params.data.radius)} h=${formatDimension(node.params.data.height)}`;
     case "sphere":
       return `r=${formatDimension(node.params.data.radius)}`;
+    case "ellipsoid":
+      return `r=${node.params.data.radii.map(formatDimension).join(" × ")}`;
     case "disk":
       return `r=${formatDimension(node.params.data.radius)} t=${formatDimension(node.params.data.thickness)}`;
+    case "ring":
+    case "tube":
+      return `ro=${formatDimension(node.params.data.outerRadius)} ri=${formatDimension(node.params.data.innerRadius)}`;
     case "triangular_prism":
       return `b=${formatDimension(node.params.data.base)} h=${formatDimension(node.params.data.triangleHeight)}`;
+    case "cone":
+      return `r=${formatDimension(node.params.data.radiusBottom)} h=${formatDimension(node.params.data.height)}`;
+    case "capsule":
+      return `r=${formatDimension(node.params.data.radius)} h=${formatDimension(node.params.data.height)}`;
+    case "polygon_prism":
+      return `${node.params.data.sides} sides · r=${formatDimension(node.params.data.radius)}`;
   }
 }
 
@@ -116,6 +145,9 @@ export function buildGeometryBuilderTreeNodes(
   const primitives = graph.nodes.filter(
     (n): n is PrimitiveNode => n.kind === "primitive",
   );
+  const booleans = graph.nodes.filter(
+    (n): n is BooleanNode => n.kind === "boolean",
+  );
 
   const universeNode: TreeNodeData = {
     id: "builder-universe",
@@ -132,9 +164,9 @@ export function buildGeometryBuilderTreeNodes(
   );
 
   const lifecycleStatus: NodeStatus = dirty.geometryRealizationDirty
-    ? "active"
+    ? "dirty"
     : dirty.meshDirty
-      ? "active"
+      ? "stale"
       : "ready";
 
   const lifecycleNode: TreeNodeData = {
@@ -152,7 +184,7 @@ export function buildGeometryBuilderTreeNodes(
 
   return {
     id: "builder-root",
-    label: "Geometry Builder",
+    label: "Object Geometry",
     icon: "shapes",
     defaultOpen: true,
     domain: "build",
@@ -160,12 +192,23 @@ export function buildGeometryBuilderTreeNodes(
       universeNode,
       {
         id: "builder-primitives",
-        label: "Primitives",
+        label: "Geometry Graph",
         icon: "shapes",
-        badge: `${primitives.length} object${primitives.length !== 1 ? "s" : ""}`,
+        badge: `${primitives.length} primitive${primitives.length !== 1 ? "s" : ""}`,
         defaultOpen: true,
         domain: "build",
-        children: primitiveNodes,
+        children: [
+          ...booleans.map((node): TreeNodeData => ({
+            id: `builder-bool-${node.id}`,
+            label: node.name,
+            icon: node.op === "union" ? "plus" : node.op === "subtract" ? "minus" : "intersect",
+            badge: `${node.op} · ${node.inputs.length} inputs`,
+            status: dirty.geometryDraftDirty ? "dirty" : "ready",
+            domain: "build",
+            onClick: onSelect ? () => onSelect({ type: "boolean", id: node.id }) : undefined,
+          })),
+          ...primitiveNodes,
+        ],
       },
       lifecycleNode,
     ],

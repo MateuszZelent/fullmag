@@ -886,7 +886,11 @@ function UnifiedVectorFieldRendererInner({
   });
   const [nx, ny, nz] = deferredGrid;
   const hasRenderableGrid = nx > 0 && ny > 0 && nz > 0;
-  const sceneMode: ViewportSceneMode = geometryMode && !hasRenderableGrid ? "world" : "grid";
+  const sceneMode: ViewportSceneMode = geometryMode
+    ? "world"
+    : hasRenderableGrid
+      ? "grid"
+      : "world";
   const overlayBounds = useMemo(() => combineOverlayBounds(objectOverlays), [objectOverlays]);
   const worldBounds = useMemo(() => {
     if (worldExtent && worldExtent.every((value) => Number.isFinite(value) && value > 0)) {
@@ -1460,7 +1464,7 @@ function UnifiedVectorFieldRendererInner({
         </ViewportOverlayLayout.TopRight>
 
         <ViewportOverlayLayout.BottomLeft>
-          {showOrientationSphere && viewportVisible && !geometryMode ? (
+          {showOrientationSphere && viewportVisible ? (
             <HslSphere
               sceneRef={viewCubeSceneRef}
               axisConvention={VECTOR_SURFACE_AXIS_CONVENTION}

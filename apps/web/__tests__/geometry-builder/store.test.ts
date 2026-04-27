@@ -322,6 +322,38 @@ describe("build policy and clipping acknowledgement", () => {
   });
 });
 
+// ── Backend capability gating ────────────────────────────────
+
+describe("backend build capability gating", () => {
+  beforeEach(resetStore);
+
+  it("allows production primitives for FEM and FDM builds", () => {
+    getState().addPrimitive("box");
+
+    expect(getState().getUnsupportedPrimitivesForBackend(true)).toHaveLength(0);
+    expect(getState().getUnsupportedPrimitivesForBackend(false)).toHaveLength(0);
+    expect(getState().getBackendBuildBlockedReason(true)).toBeNull();
+    expect(getState().getBackendBuildBlockedReason(false)).toBeNull();
+  });
+
+  it("blocks preview-only primitives for the active backend", () => {
+    getState().addPrimitive("sphere");
+
+    expect(getState().getUnsupportedPrimitivesForBackend(true)).toHaveLength(1);
+    expect(getState().getUnsupportedPrimitivesForBackend(false)).toHaveLength(1);
+    expect(getState().getBackendBuildBlockedReason(true)).toContain("FEM mesh build blocked");
+    expect(getState().getBackendBuildBlockedReason(false)).toContain("FDM grid build blocked");
+  });
+
+  it("ignores disabled preview-only primitives when checking build support", () => {
+    const id = getState().addPrimitive("sphere");
+    getState().setPrimitiveEnabled(id, false);
+
+    expect(getState().getUnsupportedPrimitivesForBackend(true)).toHaveLength(0);
+    expect(getState().getBackendBuildBlockedReason(true)).toBeNull();
+  });
+});
+
 // ── Camera focus requests ────────────────────────────────────
 
 describe("camera focus requests", () => {

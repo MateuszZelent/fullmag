@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, memo, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, memo, useCallback, type ReactNode } from "react";
 import * as THREE from "three";
 import { FemClipPlanes, CameraAutoFit } from "./fem/FemR3FHelpers";
 import { useFemViewportModel } from "./fem/useFemViewportModel";
@@ -150,6 +150,8 @@ interface Props {
   worldExtent?: [number, number, number] | null;
   worldCenter?: [number, number, number] | null;
   onAntennaTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
+  onGeometryTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
+  onRequestObjectSelect?: (id: string) => void;
   onEntitySelect?: (id: string | null) => void;
   onEntityFocus?: (id: string | null) => void;
   onQuantityChange?: (quantityId: string) => void;
@@ -164,6 +166,7 @@ interface Props {
   onVisibleSubmeshSnapshotChange?: (snapshot: VisibleSubmeshSnapshot | null) => void;
   selectedSidebarNodeId?: string | null;
   liveRenderDebugData?: FemLiveRenderDebugData | null;
+  authoringOverlay?: ReactNode;
 }
 
 /* ── Component ─────────────────────────────────────────────────────── */
@@ -233,6 +236,8 @@ function FemMeshView3DInner({
   airSegmentOpacity = 28,
   focusObjectRequest = null,
   onAntennaTranslate,
+  onGeometryTranslate,
+  onRequestObjectSelect,
   onQuantityChange,
   activeTextureTransform = null,
   textureGizmoMode = "translate",
@@ -245,6 +250,7 @@ function FemMeshView3DInner({
   onVisibleSubmeshSnapshotChange,
   selectedSidebarNodeId = null,
   liveRenderDebugData = null,
+  authoringOverlay = null,
 }: Props) {
   if (FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging) {
     recordFrontendRender("FemMeshView3DInner", {
@@ -802,9 +808,14 @@ function FemMeshView3DInner({
             arrowBoundaryFaceIndices={arrowBoundaryFaceIndices}
             selectedFaces={selectedFaces}
             antennaOverlays={antennaOverlays}
+            objectOverlays={objectOverlays}
             focusedEntityId={focusedEntityId}
             selectedAntennaId={selectedAntennaId}
+            selectedObjectId={selectedObjectId}
             onAntennaTranslate={onAntennaTranslate}
+            activeTransformScope={activeTransformScope}
+            onGeometryTranslate={onGeometryTranslate}
+            onObjectSelect={onRequestObjectSelect}
             axesWorldExtent={axesWorldExtent}
             axesCenter={axesCenter}
             onFaceClick={geometryPointerInteractionsEnabled ? handleFaceClick : undefined}
@@ -831,6 +842,7 @@ function FemMeshView3DInner({
             showSceneAxes={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSceneAxes}
             onArrowSampledCount={setSampledArrowCount}
           />
+          {authoringOverlay}
           </>
         ) : null}
 

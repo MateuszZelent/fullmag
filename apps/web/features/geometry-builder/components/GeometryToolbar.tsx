@@ -13,11 +13,11 @@
  *
  *   <div className="relative">
  *     <ThreeCanvas ... />
- *     <GeometryToolbar className="absolute bottom-4 left-1/2 -translate-x-1/2" />
+ *     <GeometryToolbar className="absolute left-3 top-3" />
  *   </div>
  */
 
-import { Camera, Hand, Move, RotateCcw, Maximize2 } from "lucide-react";
+import { Camera, Move, RotateCcw, Maximize2 } from "lucide-react";
 import { useGeometryBuilderStore } from "../store/useGeometryBuilderStore";
 import type { GeometryViewportTool } from "../model/types";
 import { cn } from "@/lib/utils";
@@ -32,11 +32,10 @@ interface ToolDef {
 }
 
 const TOOLS: ToolDef[] = [
-  { tool: "camera", label: "Camera", shortcut: "Q", icon: <Camera size={14} /> },
-  { tool: "select", label: "Select", shortcut: "S", icon: <Hand size={14} /> },
-  { tool: "move", label: "Move", shortcut: "W", icon: <Move size={14} /> },
-  { tool: "rotate", label: "Rotate", shortcut: "E", icon: <RotateCcw size={14} /> },
-  { tool: "scale", label: "Scale", shortcut: "R", icon: <Maximize2 size={14} /> },
+  { tool: "camera", label: "Camera", shortcut: "Q", icon: <Camera size={16} /> },
+  { tool: "move", label: "Move", shortcut: "W", icon: <Move size={16} /> },
+  { tool: "rotate", label: "Rotate", shortcut: "E", icon: <RotateCcw size={16} /> },
+  { tool: "scale", label: "Scale", shortcut: "R", icon: <Maximize2 size={16} /> },
 ];
 
 // ── Component ─────────────────────────────────────────────────
@@ -71,9 +70,9 @@ export function GeometryToolbar({ className }: GeometryToolbarProps) {
             aria-pressed={active}
             aria-label={label}
             className={cn(
-              "flex h-7 min-w-[2.25rem] items-center justify-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors",
+              "flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-[11px] font-medium transition-colors",
               active
-                ? "bg-primary/15 text-primary ring-1 ring-primary/30"
+                ? "bg-emerald-500/18 text-emerald-300 ring-1 ring-emerald-400/55 shadow-[0_0_14px_rgba(16,185,129,0.22)]"
                 : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
             )}
             onClick={() => setViewportTool(tool)}

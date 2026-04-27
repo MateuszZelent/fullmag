@@ -328,8 +328,9 @@ export function useViewportDataBridge() {
   );
 
   /* ── Derived flags ── */
-  const showGeometryAuthoringViewport =
-    builderEnabled && ctx.effectiveViewMode === "3D";
+  const showGeometryAuthoringViewport = false;
+  const activeCoreTab = useWorkspaceStore((state) => state.activeCoreTab);
+  const geometryViewportPresetActive = activeCoreTab === "Geometry";
   const minimalViewportSelectionPath =
     FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.useMinimalViewportSelectionPath;
 
@@ -635,22 +636,26 @@ export function useViewportDataBridge() {
 
   /* ── FEM layer state ── */
   const femLayerState = ctx.femViewportLayers;
-  const geometryAuthoringShowPrimitives = showGeometryAuthoringViewport
+  const geometryAuthoringShowPrimitives = geometryViewportPresetActive
+    ? true
+    : showGeometryAuthoringViewport
     ? true
     : femLayerState.showPrimitives;
-  const geometryAuthoringShowMesh = showGeometryAuthoringViewport
+  const geometryAuthoringShowMesh = geometryViewportPresetActive
+    ? false
+    : showGeometryAuthoringViewport
     ? false
     : femLayerState.showMesh;
-  const geometryAuthoringShowQuantity = showGeometryAuthoringViewport
+  const geometryAuthoringShowQuantity = geometryViewportPresetActive
+    ? false
+    : showGeometryAuthoringViewport
     ? false
     : femLayerState.showQuantity;
   const geometryModeObjectOverlays = useMemo(
     () => {
       if (!geometryAuthoringShowPrimitives) return [];
       if (femDiscretization) {
-        const visibleIds = new Set(ctx.visibleMagneticObjectIds);
-        const visibleOverlays = ctx.objectOverlays.filter((o) => visibleIds.has(o.id));
-        return visibleOverlays.length > 0 ? visibleOverlays : ctx.objectOverlays;
+        return ctx.objectOverlays;
       }
       return ctx.objectOverlays.filter((o) => visibleObjectIds.includes(o.id));
     },
@@ -1255,7 +1260,7 @@ export function useViewportDataBridge() {
     unifiedToolbarEnabled,
     femDiagnosticToolbarEnabled: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showToolbar,
   });
-  const viewport3DInteractionMode: Viewport3DInteractionMode = showGeometryAuthoringViewport
+  const viewport3DInteractionMode: Viewport3DInteractionMode = geometryViewportPresetActive
     ? toViewportInteractionMode(builderViewportTool)
     : "camera";
   const viewport3DRenderState = useMemo<UnifiedRenderState>(
@@ -1404,8 +1409,6 @@ export function useViewportDataBridge() {
     let fallbackUsed = false;
     if (minimalViewportSelectionPath) {
       route = "minimal-diagnostic";
-    } else if (showGeometryAuthoringViewport) {
-      route = "geometry-authoring";
     } else if (
       femDiscretization &&
       (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh")
@@ -1588,6 +1591,7 @@ export function useViewportDataBridge() {
     isVectorSurfaceMeshActive,
     showVectorSurface3D,
     showGeometryAuthoringViewport,
+    geometryViewportPresetActive,
     showFemBoundsPreview,
     vectorSurfaceFieldLabel,
     vectorSurfaceVectors,

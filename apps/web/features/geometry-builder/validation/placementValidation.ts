@@ -33,13 +33,17 @@ function computeWorldAABB(p: PrimitiveNode): { min: Vec3; max: Vec3 } {
 
   switch (p.params.kind) {
     case "box":
+    case "thin_film":
+    case "nanowire":
+    case "wedge":
       halfExtent = [
         (p.params.data.size[0] / 2) * sx,
         (p.params.data.size[1] / 2) * sy,
         (p.params.data.size[2] / 2) * sz,
       ];
       break;
-    case "cylinder": {
+    case "cylinder":
+    case "pillar": {
       const { radius, height, axis } = p.params.data;
       if (axis === "x") halfExtent = [(height / 2) * sx, radius * sy, radius * sz];
       else if (axis === "y") halfExtent = [radius * sx, (height / 2) * sy, radius * sz];
@@ -51,6 +55,13 @@ function computeWorldAABB(p: PrimitiveNode): { min: Vec3; max: Vec3 } {
       halfExtent = [r * sx, r * sy, r * sz];
       break;
     }
+    case "ellipsoid":
+      halfExtent = [
+        p.params.data.radii[0] * sx,
+        p.params.data.radii[1] * sy,
+        p.params.data.radii[2] * sz,
+      ];
+      break;
     case "disk": {
       const { radius, thickness, axis } = p.params.data;
       if (axis === "x") halfExtent = [(thickness / 2) * sx, radius * sy, radius * sz];
@@ -58,11 +69,37 @@ function computeWorldAABB(p: PrimitiveNode): { min: Vec3; max: Vec3 } {
       else halfExtent = [radius * sx, radius * sy, (thickness / 2) * sz];
       break;
     }
+    case "ring":
+    case "tube": {
+      const { outerRadius, height, axis } = p.params.data;
+      if (axis === "x") halfExtent = [(height / 2) * sx, outerRadius * sy, outerRadius * sz];
+      else if (axis === "y") halfExtent = [outerRadius * sx, (height / 2) * sy, outerRadius * sz];
+      else halfExtent = [outerRadius * sx, outerRadius * sy, (height / 2) * sz];
+      break;
+    }
     case "triangular_prism": {
       const { base, triangleHeight, depth, axis } = p.params.data;
       if (axis === "x") halfExtent = [(depth / 2) * sx, (base / 2) * sy, (triangleHeight / 2) * sz];
       else if (axis === "y") halfExtent = [(base / 2) * sx, (depth / 2) * sy, (triangleHeight / 2) * sz];
       else halfExtent = [(base / 2) * sx, (triangleHeight / 2) * sy, (depth / 2) * sz];
+      break;
+    }
+    case "cone":
+    case "capsule": {
+      const radius = p.params.kind === "cone"
+        ? Math.max(p.params.data.radiusTop, p.params.data.radiusBottom)
+        : p.params.data.radius;
+      const { height, axis } = p.params.data;
+      if (axis === "x") halfExtent = [(height / 2) * sx, radius * sy, radius * sz];
+      else if (axis === "y") halfExtent = [radius * sx, (height / 2) * sy, radius * sz];
+      else halfExtent = [radius * sx, radius * sy, (height / 2) * sz];
+      break;
+    }
+    case "polygon_prism": {
+      const { radius, depth, axis } = p.params.data;
+      if (axis === "x") halfExtent = [(depth / 2) * sx, radius * sy, radius * sz];
+      else if (axis === "y") halfExtent = [radius * sx, (depth / 2) * sy, radius * sz];
+      else halfExtent = [radius * sx, radius * sy, (depth / 2) * sz];
       break;
     }
   }
@@ -141,15 +178,19 @@ export function validatePlacement(
   // ── 4. Zero-size param check ───────────────────────────────
   switch (primitive.params.kind) {
     case "box":
+    case "thin_film":
+    case "nanowire":
+    case "wedge":
       if (primitive.params.data.size.some((s) => s <= 0)) {
         selfInvalid = true;
-        diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Box has zero or negative dimension" });
+        diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Primitive has zero or negative dimension" });
       }
       break;
     case "cylinder":
+    case "pillar":
       if (primitive.params.data.radius <= 0 || primitive.params.data.height <= 0) {
         selfInvalid = true;
-        diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Cylinder has zero or negative radius/height" });
+        diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Cylinder-like primitive has zero or negative radius/height" });
       }
       break;
     case "sphere":
@@ -158,10 +199,28 @@ export function validatePlacement(
         diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Sphere has zero or negative radius" });
       }
       break;
+    case "ellipsoid":
+      if (primitive.params.data.radii.some((r) => r <= 0)) {
+        selfInvalid = true;
+        diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Ellipsoid has zero or negative radius" });
+      }
+      break;
     case "disk":
       if (primitive.params.data.radius <= 0 || primitive.params.data.thickness <= 0) {
         selfInvalid = true;
         diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Disk has zero or negative radius/thickness" });
+      }
+      break;
+    case "ring":
+    case "tube":
+      if (
+        primitive.params.data.outerRadius <= 0 ||
+        primitive.params.data.innerRadius <= 0 ||
+        primitive.params.data.innerRadius >= primitive.params.data.outerRadius ||
+        primitive.params.data.height <= 0
+      ) {
+        selfInvalid = true;
+        diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Tube has invalid inner/outer radius or height" });
       }
       break;
     case "triangular_prism":
@@ -172,6 +231,24 @@ export function validatePlacement(
       ) {
         selfInvalid = true;
         diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Triangular prism has zero or negative dimensions" });
+      }
+      break;
+    case "cone":
+      if (primitive.params.data.radiusTop < 0 || primitive.params.data.radiusBottom <= 0 || primitive.params.data.height <= 0) {
+        selfInvalid = true;
+        diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Cone has invalid radii or height" });
+      }
+      break;
+    case "capsule":
+      if (primitive.params.data.radius <= 0 || primitive.params.data.height <= 0) {
+        selfInvalid = true;
+        diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Capsule has zero or negative radius/height" });
+      }
+      break;
+    case "polygon_prism":
+      if (primitive.params.data.radius <= 0 || primitive.params.data.depth <= 0 || primitive.params.data.sides < 3) {
+        selfInvalid = true;
+        diagnostics.push({ nodeId: primitive.id, severity: "error", code: "zero_size", message: "Polygon prism has invalid radius, depth, or side count" });
       }
       break;
   }

@@ -33,7 +33,6 @@ import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { useEigenSpectrumSummary } from "@/src/hooks/resources/useEigenSpectrumSummary";
 import type { StudyPipelineDocumentState } from "@/lib/session/types";
-import { buildGeometryBuilderTreeNodes } from "@/features/geometry-builder";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 
 function removeStudyPipelineNode(
@@ -465,16 +464,11 @@ export default function RunSidebar() {
         completedStudyStageIndexes: stageExecutionState.completedStageIndexes,
         studyStageStatuses: stageExecutionState.stageStatuses,
         pipelineStageIndexesByNodeId,
+        geometryAuthoringGraph: builderEnabled ? builderGraph : null,
+        geometryAuthoringDirty: builderEnabled ? builderDirty : null,
+        onGeometryAuthoringSelect: selectBuilderTarget,
       });
-      if (!builderEnabled) {
-        return baseNodes;
-      }
-      const builderTreeNode = buildGeometryBuilderTreeNodes(
-        builderGraph,
-        builderDirty,
-        selectBuilderTarget,
-      );
-      return [builderTreeNode, ...baseNodes];
+      return baseNodes;
     },
     [
       builderDirty,
@@ -567,7 +561,10 @@ export default function RunSidebar() {
     if (builderSelection.type === "universe") {
       return "builder-universe";
     }
-    return "builder-root";
+    if (builderSelection.type === "boolean") {
+      return `builder-bool-${builderSelection.id}`;
+    }
+    return null;
   }, [builderEnabled, builderSelection]);
 
   const activeNodeId =
@@ -608,6 +605,14 @@ export default function RunSidebar() {
         if (primitiveId.length > 0) {
           selectBuilderTarget({ type: "primitive", id: primitiveId });
           model.setSelectedSidebarNodeId(`builder-prim-${primitiveId}`);
+          return;
+        }
+      }
+      if (id.startsWith("builder-bool-")) {
+        const boolId = id.slice("builder-bool-".length);
+        if (boolId.length > 0) {
+          selectBuilderTarget({ type: "boolean", id: boolId });
+          model.setSelectedSidebarNodeId(`builder-bool-${boolId}`);
           return;
         }
       }

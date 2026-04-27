@@ -263,14 +263,22 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
   const [geometryPresetLibraryOpen, setGeometryPresetLibraryOpen] = useState(false);
 
   const updateObject = useCallback(
-    (updater: (object: SceneObject) => SceneObject) => {
+    (updater: (object: SceneObject) => SceneObject, options?: { meshDirty?: boolean }) => {
       if (objectIndex < 0 || !model.sceneDocument) return;
       const nextObjects = [...model.sceneDocument.objects];
       const target = nextObjects[objectIndex];
       if (!target) return;
-      nextObjects[objectIndex] = updater(target);
+      const updated = updater(target);
+      nextObjects[objectIndex] =
+        options?.meshDirty === false
+          ? updated
+          : {
+              ...updated,
+              tags: Array.from(new Set([...(updated.tags ?? []), "mesh:dirty"])),
+            };
       model.setSceneDocument({
         ...model.sceneDocument,
+        revision: model.sceneDocument.revision + 1,
         objects: nextObjects,
       });
       void sceneAuthoring
@@ -443,6 +451,28 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
   const scale = p.scale;
   const regionName = sceneObject.region_name?.trim() || sceneObject.name;
   const liveBounds = extractGeometryBoundsFromParams(geo);
+  const referenceObject = model.sceneDocument?.objects.find(
+    (object) => (object.name || object.id) !== (sceneObject.name || sceneObject.id),
+  ) ?? null;
+  const referenceBounds = referenceObject
+    ? extractGeometryBoundsFromParams(
+        buildProjectedGeometryEntry(
+          referenceObject,
+          model.sceneDocument?.materials.find((entry) => entry.id === referenceObject.material_ref),
+          model.sceneDocument?.magnetization_assets.find(
+            (entry) => entry.id === referenceObject.magnetization_ref,
+          ),
+        ),
+      )
+    : null;
+  const referenceExtent =
+    referenceBounds?.boundsMin && referenceBounds.boundsMax
+      ? ([
+          referenceBounds.boundsMax[0] - referenceBounds.boundsMin[0],
+          referenceBounds.boundsMax[1] - referenceBounds.boundsMin[1],
+          referenceBounds.boundsMax[2] - referenceBounds.boundsMin[2],
+        ] as [number, number, number])
+      : null;
   const csgSummary =
     geo.geometry_kind === "Difference"
       ? `base: ${describeGeometryDescriptor(p.base)} | tool: ${describeGeometryDescriptor(p.tool)}`
@@ -466,7 +496,7 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
             label="Visible"
             checked={sceneObject.visible !== false}
             onChange={(next) =>
-              updateObject((obj) => ({ ...obj, visible: next }))
+              updateObject((obj) => ({ ...obj, visible: next }), { meshDirty: false })
             }
           />
           <div className="flex gap-2 pt-1">
@@ -693,10 +723,34 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
                 tooltip="Choose the underlying geometry recipe for this object."
               />
           {geo.geometry_kind === "Box" && (
-            <div className="grid grid-cols-3 gap-3">
-              <TextField key={`${geo.name}-size-x`} label="X Length" defaultValue={(size[0] * 1e9).toFixed(1)} onBlur={(e) => handleBoxSize(0, e.target.value)} unit="nm" mono />
-              <TextField key={`${geo.name}-size-y`} label="Y Length" defaultValue={(size[1] * 1e9).toFixed(1)} onBlur={(e) => handleBoxSize(1, e.target.value)} unit="nm" mono />
-              <TextField key={`${geo.name}-size-z`} label="Z Length" defaultValue={(size[2] * 1e9).toFixed(1)} onBlur={(e) => handleBoxSize(2, e.target.value)} unit="nm" mono />
+            <div className="space-y-2">
+              <div className="grid grid-cols-3 gap-3">
+                <TextField key={`${geo.name}-size-x-${size[0]}`} label="X Length" defaultValue={(size[0] * 1e9).toFixed(1)} onBlur={(e) => handleBoxSize(0, e.target.value)} unit="nm" mono />
+                <TextField key={`${geo.name}-size-y-${size[1]}`} label="Y Length" defaultValue={(size[1] * 1e9).toFixed(1)} onBlur={(e) => handleBoxSize(1, e.target.value)} unit="nm" mono />
+                <TextField key={`${geo.name}-size-z-${size[2]}`} label="Z Length" defaultValue={(size[2] * 1e9).toFixed(1)} onBlur={(e) => handleBoxSize(2, e.target.value)} unit="nm" mono />
+              </div>
+              {referenceExtent ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 w-full text-[0.65rem] uppercase tracking-wider"
+                  onClick={() =>
+                    updateObject((object) => ({
+                      ...object,
+                      geometry: {
+                        ...object.geometry,
+                        geometry_params: {
+                          ...object.geometry.geometry_params,
+                          size: [...referenceExtent],
+                        },
+                      },
+                    }))
+                  }
+                >
+                  Match {referenceObject?.name || referenceObject?.id} dimensions
+                </Button>
+              ) : null}
             </div>
           )}
           {geo.geometry_kind === "Cylinder" && (
@@ -810,6 +864,11 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
       {/* ── Card 4: Mesh Properties ── */}
       <SidebarSection title="Mesh Properties" icon="🔷" defaultOpen={true}>
         <div className="flex flex-col gap-2">
+          {sceneObject.tags?.includes("mesh:dirty") ? (
+            <div className="rounded-lg border border-rose-500/35 bg-rose-950/20 px-3 py-2 text-[0.72rem] leading-relaxed text-rose-100">
+              Mesh out of date — build mesh before compute.
+            </div>
+          ) : null}
           <div className="flex items-center justify-between">
             <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground/80">Resolution</span>
             <StatusBadge label={sceneObject.mesh_override?.mode === "custom" ? "Custom" : "Defaults"} tone={sceneObject.mesh_override?.mode === "custom" ? "accent" : "default"} />
@@ -818,6 +877,34 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
             <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground/80">Geometry</span>
             <StatusBadge label={geo.geometry_kind} tone="info" />
           </div>
+          <Button
+            type="button"
+            size="sm"
+            className="mt-1 h-8"
+            disabled={model.meshGenerating}
+            onClick={() => {
+              void model.handleStudyDomainMeshGenerate("geometry_panel_build_mesh")
+                .then(() => {
+                  model.setSceneDocument((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          objects: prev.objects.map((object) =>
+                            object.id === sceneObject.id || object.name === sceneObject.name
+                              ? {
+                                  ...object,
+                                  tags: (object.tags ?? []).filter((tag) => tag !== "mesh:dirty"),
+                                }
+                              : object,
+                          ),
+                        }
+                      : prev,
+                  );
+                });
+            }}
+          >
+            {model.meshGenerating ? "Building..." : "Build Mesh / Grid"}
+          </Button>
         </div>
       </SidebarSection>
 

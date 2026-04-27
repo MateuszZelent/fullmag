@@ -16,10 +16,9 @@ import {
   type RibbonCommand,
 } from "./ribbon/command-registry";
 import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
-import type { GeometryPresetKind } from "@/lib/geometryPresetCatalog";
 import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
 import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
-import type { PrimitiveKind } from "@/features/geometry-builder/model/types";
+import type { BooleanOp, PrimitiveKind } from "@/features/geometry-builder/model/types";
 import type { CapabilityMap } from "@/src/api/types";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { useWorkspaceRibbon } from "@/src/hooks/resources/useWorkspaceRibbon";
@@ -96,7 +95,6 @@ interface RibbonBarProps {
   onOpenMeshMethodSettings?: () => void;
   onOpenMeshPipeline?: () => void;
   selectedObjectId?: string | null;
-  onAddGeometryPreset?: (preset: GeometryPresetKind) => void;
   onRequestObjectFocus?: (objectId: string) => void;
   hasSharedAirboxDomain?: boolean;
   canSyncScriptBuilder?: boolean;
@@ -151,6 +149,7 @@ interface RibbonBarProps {
   ) => void;
   // Geometry Builder callbacks
   onBuilderAddPrimitive?: (kind: PrimitiveKind) => void;
+  onBuilderCreateBoolean?: (op: BooleanOp) => void;
   onBuilderRemovePrimitive?: (id: string) => void;
   onBuilderDuplicatePrimitive?: (id: string) => void;
   onBuilderBuildGeometry?: () => void;
@@ -249,7 +248,9 @@ function buildContext(
     builderSelectedPrimitiveId: string | null;
   },
 ): RibbonBuildContext {
-  const run = (command: RibbonCommand) => executeRibbonCommand(props, command);
+  const run = (command: RibbonCommand) => {
+    executeRibbonCommand(props, command);
+  };
   const can = (command: RibbonCommand) => canExecuteRibbonCommand(props, command);
 
   return {
@@ -358,6 +359,9 @@ export default function RibbonBar(props: RibbonBarProps) {
   // ── Auto-activate ribbon tab when selected sidebar node changes ──
   const prevAutoActivateNodeIdRef = useRef<string | null>(null);
   useEffect(() => {
+    if (builderEnabled && activeCoreTab === "Geometry") {
+      return;
+    }
     const nodeId = props.selectedNodeId ?? "";
     if (!nodeId || nodeId === prevAutoActivateNodeIdRef.current) {
       return;
@@ -386,7 +390,7 @@ export default function RibbonBar(props: RibbonBarProps) {
         setActiveCoreTab(targetTab);
       }
     }
-  }, [props.selectedNodeId, workspaceStage, setActiveCoreTab]);
+  }, [activeCoreTab, builderEnabled, props.selectedNodeId, workspaceStage, setActiveCoreTab]);
 
   useEffect(() => {
     if (lastSessionIdRef.current === sessionId) {
@@ -571,7 +575,6 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.canSyncScriptBuilder,
     props.scriptSyncBusy,
     props.selectedObjectId,
-    props.onAddGeometryPreset,
     props.onStudyAddPrimitive,
     props.onStudyAddMacro,
     props.onStudyDuplicateSelected,
@@ -579,6 +582,10 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.onObjectAddInteraction,
     props.onAssignMagnetizationPreset,
     props.onSetTextureTransformMode,
+    props.onBuilderAddPrimitive,
+    props.onBuilderCreateBoolean,
+    props.onBuilderBuildGeometry,
+    props.onBuilderBuildMesh,
     props.meshGenerating,
     props.meshConfigDirty,
     props.meshTargetLabel,

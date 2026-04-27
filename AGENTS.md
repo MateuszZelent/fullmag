@@ -266,13 +266,28 @@ The control room must use:
 - one resource-hook layer,
 - one capability vocabulary,
 - one domain-adapter layer,
-- one unified UI tree.
+- one unified UI tree,
+- one workspace shell whose active module changes the interface context.
 
 The control room must not:
 
 - call `fetch()` directly from React components,
 - fork the product tree into separate FDM and FEM applications,
+- reintroduce stage-switched workspace shells such as `Build`, `Study`, and `Analyze`,
+- use legacy workspace stage state as the source of truth for ribbon, inspector, viewport, or docking behavior,
 - treat old `bootstrap` / `poll` / `preview/*` flows as canonical architecture.
+
+Workspace UI doctrine:
+
+- `/workspace` is one unified workspace, not a family of build/study/analyze workspaces.
+- Top-level modules such as `Home`, `Definitions`, `Geometry`, `Materials`, `Physics`, `Mesh`,
+  `Study`, `Results`, and `Automation` are modular interface contexts inside the same workspace.
+- Module selection may change visible ribbon groups, inspector content, viewport presets, and commands,
+  but it must not switch to a separate application shell or duplicate the workspace model.
+- Geometry authoring must run in the same unified 3D viewport used for FDM and FEM; Geometry mode is
+  a viewport/display preset, not a separate builder viewport.
+- When touching frontend workspace code, agents must actively remove remaining `Build`/`Study`/`Analyze`
+  stage assumptions unless they are explicitly marked as temporary compatibility shims.
 
 ---
 
@@ -830,6 +845,8 @@ The following stale concepts should be actively retired when encountered:
 | UI-only mesh semantics | canonical script + IR + runtime contract |
 | direct `fetch()` in React components | typed shared API client + resource hooks |
 | FDM/FEM UI forks | capability guards + domain adapters + one UI tree |
+| Build/Study/Analyze workspace stage switching | one workspace shell + active module context |
+| geometry-only builder viewport | unified 3D viewport with Geometry display preset |
 | long-lived old/new API dual stack | one canonical resource-first stack after migration |
 | dense eigensolver as default future path | matrix-free Krylov operator architecture |
 | “relax = run with another stop” | explicit relax semantics and stop reason |

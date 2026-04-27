@@ -159,6 +159,25 @@ export function useFemSceneGeometry({
         tryAddFaceIndices(magneticBoundaryFaceIndices);
     }
 
+    for (const overlay of objectOverlays) {
+      const min = overlay.boundsMin;
+      const max = overlay.boundsMax;
+      if (
+        min.length !== 3 ||
+        max.length !== 3 ||
+        min.some((value) => !Number.isFinite(value)) ||
+        max.some((value) => !Number.isFinite(value))
+      ) {
+        continue;
+      }
+      minX = Math.min(minX, min[0]);
+      minY = Math.min(minY, min[1]);
+      minZ = Math.min(minZ, min[2]);
+      maxX = Math.max(maxX, max[0]);
+      maxY = Math.max(maxY, max[1]);
+      maxZ = Math.max(maxZ, max[2]);
+    }
+
     if (minX === Infinity) {
       minX = 0;
       maxX = 1;
@@ -186,6 +205,7 @@ export function useFemSceneGeometry({
     magneticBoundaryFaceIndices,
     meshData.boundaryFaces,
     meshData.nodes,
+    objectOverlays,
     shouldRenderAirGeometry,
     shouldRenderMagneticGeometryResolved,
     visibleLayers,

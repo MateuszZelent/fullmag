@@ -28,8 +28,18 @@ export type PrimitiveKind =
   | "box"
   | "cylinder"
   | "sphere"
+  | "ellipsoid"
   | "disk"
-  | "triangular_prism";
+  | "thin_film"
+  | "pillar"
+  | "nanowire"
+  | "ring"
+  | "triangular_prism"
+  | "cone"
+  | "capsule"
+  | "tube"
+  | "wedge"
+  | "polygon_prism";
 
 // ── Primitive capability matrix ───────────────────────────────
 
@@ -39,15 +49,28 @@ export interface PrimitiveCapability {
   fdm: boolean;
   fem: boolean;
   dsl: boolean;
+  boolean: boolean;
   status: PrimitiveSupport;
+  category: "core" | "mumax" | "dcc";
+  label: string;
 }
 
 export const PRIMITIVE_CAPABILITIES: Record<PrimitiveKind, PrimitiveCapability> = {
-  box: { fdm: true, fem: true, dsl: true, status: "production" },
-  cylinder: { fdm: true, fem: true, dsl: true, status: "production" },
-  sphere: { fdm: false, fem: false, dsl: false, status: "preview" },
-  disk: { fdm: false, fem: false, dsl: false, status: "preview" },
-  triangular_prism: { fdm: false, fem: false, dsl: false, status: "preview" },
+  box: { fdm: true, fem: true, dsl: true, boolean: true, status: "production", category: "core", label: "Box" },
+  cylinder: { fdm: true, fem: true, dsl: true, boolean: true, status: "production", category: "core", label: "Cylinder" },
+  sphere: { fdm: false, fem: false, dsl: false, boolean: true, status: "preview", category: "mumax", label: "Sphere" },
+  ellipsoid: { fdm: false, fem: false, dsl: false, boolean: true, status: "preview", category: "mumax", label: "Ellipsoid" },
+  disk: { fdm: false, fem: false, dsl: false, boolean: true, status: "preview", category: "core", label: "Disk" },
+  thin_film: { fdm: true, fem: true, dsl: true, boolean: true, status: "production", category: "mumax", label: "Thin Film" },
+  pillar: { fdm: true, fem: true, dsl: true, boolean: true, status: "production", category: "mumax", label: "Pillar" },
+  nanowire: { fdm: true, fem: true, dsl: true, boolean: true, status: "production", category: "mumax", label: "Nanowire" },
+  ring: { fdm: false, fem: false, dsl: false, boolean: true, status: "preview", category: "mumax", label: "Ring" },
+  triangular_prism: { fdm: false, fem: false, dsl: false, boolean: true, status: "preview", category: "core", label: "Triangular Prism" },
+  cone: { fdm: false, fem: false, dsl: false, boolean: true, status: "preview", category: "dcc", label: "Cone" },
+  capsule: { fdm: false, fem: false, dsl: false, boolean: true, status: "preview", category: "dcc", label: "Capsule" },
+  tube: { fdm: false, fem: false, dsl: false, boolean: true, status: "preview", category: "dcc", label: "Tube" },
+  wedge: { fdm: false, fem: false, dsl: false, boolean: true, status: "preview", category: "dcc", label: "Wedge" },
+  polygon_prism: { fdm: false, fem: false, dsl: false, boolean: true, status: "preview", category: "dcc", label: "Polygon Prism" },
 } as const;
 
 // ── Primitive parameters (per kind) ───────────────────────────
@@ -66,6 +89,10 @@ export interface SphereParams {
   radius: number;
 }
 
+export interface EllipsoidParams {
+  radii: Vec3;
+}
+
 export interface DiskParams {
   radius: number;
   thickness: number;
@@ -79,12 +106,54 @@ export interface TriangularPrismParams {
   axis: "x" | "y" | "z";
 }
 
+export interface ConeParams {
+  radiusTop: number;
+  radiusBottom: number;
+  height: number;
+  axis: "x" | "y" | "z";
+}
+
+export interface CapsuleParams {
+  radius: number;
+  height: number;
+  axis: "x" | "y" | "z";
+}
+
+export interface TubeParams {
+  outerRadius: number;
+  innerRadius: number;
+  height: number;
+  axis: "x" | "y" | "z";
+}
+
+export interface WedgeParams {
+  size: Vec3;
+  slope: number;
+}
+
+export interface PolygonPrismParams {
+  radius: number;
+  sides: number;
+  depth: number;
+  axis: "x" | "y" | "z";
+}
+
 export type PrimitiveParams =
   | { kind: "box"; data: BoxParams }
   | { kind: "cylinder"; data: CylinderParams }
   | { kind: "sphere"; data: SphereParams }
+  | { kind: "ellipsoid"; data: EllipsoidParams }
   | { kind: "disk"; data: DiskParams }
-  | { kind: "triangular_prism"; data: TriangularPrismParams };
+  | { kind: "thin_film"; data: BoxParams }
+  | { kind: "pillar"; data: CylinderParams }
+  | { kind: "nanowire"; data: BoxParams }
+  | { kind: "ring"; data: TubeParams }
+  | { kind: "triangular_prism"; data: TriangularPrismParams }
+  | { kind: "cone"; data: ConeParams }
+  | { kind: "capsule"; data: CapsuleParams }
+  | { kind: "tube"; data: TubeParams }
+  | { kind: "wedge"; data: WedgeParams }
+  | { kind: "polygon_prism"; data: PolygonPrismParams };
 
 // ── Transform ─────────────────────────────────────────────────
 
