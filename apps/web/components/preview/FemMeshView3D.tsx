@@ -792,7 +792,7 @@ function FemMeshView3DInner({
             magneticVisibilityMode={
               effectiveVectorDomainFilter === "airbox_only"
                 ? ferromagnetVisibilityMode
-                : "ghost"
+                : "hide"
             }
             field={field}
             renderMode={runtimeRenderMode}

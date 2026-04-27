@@ -19,7 +19,6 @@ import { UNIFIED_VIEWPORT_3D } from "../../viewport-unified/registry/unifiedView
 export type ViewKind =
   | "viewport-3d"
   | "viewport-2d"
-  | "mesh-workspace"
   | "analyze"
   | "table"
   | "chart"
@@ -91,14 +90,6 @@ const VIEWPORT_2D: ViewRegistryEntry = {
   canOpen: (ctx) => ctx.viewportMode === "2D",
 };
 
-const MESH_WORKSPACE: ViewRegistryEntry = {
-  id: "mesh-workspace",
-  kind: "mesh-workspace",
-  title: "Mesh Workspace",
-  componentKey: "UnifiedViewport3D",
-  canOpen: (ctx) => ctx.viewportMode === "Mesh",
-};
-
 const ANALYZE_WORKSPACE: ViewRegistryEntry = {
   id: "analyze-workspace",
   kind: "analyze",
@@ -151,7 +142,6 @@ export const VIEW_REGISTRY: readonly ViewRegistryEntry[] = [
   RESULT_CHART_VIEW,
   UNIFIED_VIEWPORT_3D,
   VIEWPORT_2D,
-  MESH_WORKSPACE,
   ANALYZE_WORKSPACE,
   EMPTY_VIEW,
 ];

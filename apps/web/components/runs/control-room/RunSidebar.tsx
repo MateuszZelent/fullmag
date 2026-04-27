@@ -884,13 +884,13 @@ export default function RunSidebar() {
           // It must not mutate viewport mode or carry mesh-workspace render presets into 3D.
           return;
         }
-        // Per-object mesh nodes (e.g. "geo-nanoflower-mesh") → open mesh workspace
+        // Per-object mesh nodes (e.g. "geo-nanoflower-mesh") use the unified 3D viewport.
         const isObjectMeshNode = id.startsWith("geo-") && id.endsWith("-mesh");
         if (isObjectMeshNode) {
           if (femDiscretization) {
             model.openFemMeshWorkspace("mesh");
           } else {
-            vp.handleViewModeChange("Mesh");
+            vp.handleViewModeChange("3D");
           }
           return;
         }

@@ -99,17 +99,6 @@ function defaultCoreTabs(): WorkspaceTab[] {
       payload: { viewMode: "2D" },
     },
     {
-      id: "core:mesh",
-      key: "core:mesh",
-      kind: "viewport-mesh",
-      title: "Mesh Workspace",
-      closable: false,
-      pinned: true,
-      keepAlive: false,
-      lifecycle: "unmount-on-hide",
-      payload: { viewMode: "Mesh" },
-    },
-    {
       id: "core:analyze",
       key: "core:analyze",
       kind: "analyze",
@@ -150,6 +139,10 @@ function normalizeWorkspaceTab(tab: WorkspaceTab): WorkspaceTab {
     lifecycle,
     payload: tab.payload ? { ...tab.payload } : undefined,
   };
+}
+
+function isDeprecatedWorkspaceTab(tab: WorkspaceTab): boolean {
+  return tab.id === "core:mesh" || tab.key === "core:mesh" || tab.kind === "viewport-mesh";
 }
 
 const DEFAULT_STAGE_LAYOUTS: Record<WorkspaceMode, StageLayoutState> = {
@@ -244,9 +237,24 @@ function parsePersistedDockingState(raw: string | null): PersistedDockingState |
     };
 
     const activeWorkspaceTabByStage: Record<WorkspaceMode, string | null> = {
-      build: typeof active.build === "string" ? (active.build as string) : DEFAULT_ACTIVE_WORKSPACE_TAB.build,
-      study: typeof active.study === "string" ? (active.study as string) : DEFAULT_ACTIVE_WORKSPACE_TAB.study,
-      analyze: typeof active.analyze === "string" ? (active.analyze as string) : DEFAULT_ACTIVE_WORKSPACE_TAB.analyze,
+      build:
+        active.build === "core:mesh"
+          ? "core:3d"
+          : typeof active.build === "string"
+            ? (active.build as string)
+            : DEFAULT_ACTIVE_WORKSPACE_TAB.build,
+      study:
+        active.study === "core:mesh"
+          ? "core:3d"
+          : typeof active.study === "string"
+            ? (active.study as string)
+            : DEFAULT_ACTIVE_WORKSPACE_TAB.study,
+      analyze:
+        active.analyze === "core:mesh"
+          ? "core:3d"
+          : typeof active.analyze === "string"
+            ? (active.analyze as string)
+            : DEFAULT_ACTIVE_WORKSPACE_TAB.analyze,
     };
 
     const dockLayoutByStage: Record<WorkspaceMode, DockLayoutByPreset> = {
@@ -366,7 +374,9 @@ function updateStageLayout(
 const persistedDockingState = loadPersistedDockingState();
 
 function ensureCoreTabsForStage(tabs: WorkspaceTab[] | undefined): WorkspaceTab[] {
-  const incoming = Array.isArray(tabs) ? tabs : [];
+  const incoming = Array.isArray(tabs)
+    ? tabs.filter((tab) => !isDeprecatedWorkspaceTab(tab))
+    : [];
   const coreTabs = defaultCoreTabs();
   const incomingById = new Map(incoming.map((tab) => [tab.id, normalizeWorkspaceTab(tab)]));
   const merged: WorkspaceTab[] = coreTabs.map((core) => {
@@ -846,7 +856,7 @@ export function useActiveWorkspaceTabId(): string | null {
 export function coreTabIdForViewMode(mode: "3D" | "2D" | "Mesh" | "Analyze"): string {
   if (mode === "3D") return "core:3d";
   if (mode === "2D") return "core:2d";
-  if (mode === "Mesh") return "core:mesh";
+  if (mode === "Mesh") return "core:3d";
   return "core:analyze";
 }
 

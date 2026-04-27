@@ -26,6 +26,7 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     sidebarVisible: true,
     previewPending: false,
     airboxVisible: false,
+    quantityShaderVisible: true,
     viewportAxesScope: "universe",
     universeWireframeVisible: true,
     viewportLegendVisible: false,
@@ -55,6 +56,7 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     femVectorDomainFilter: "auto",
     femFerromagnetVisibilityMode: "ghost",
     airMeshOpacity: 28,
+    airMeshRenderMode: "surface+edges",
     antennaSources: [],
     selectedAntennaName: null,
     canSyncScriptBuilder: false,
@@ -101,9 +103,11 @@ describe("View ribbon contribution", () => {
     expect(quantity?.menu).toBeTruthy();
 
     const source = findNode(quantity?.menu ?? [], "quantity:source");
+    const shader = findNode(quantity?.menu ?? [], "quantity:shader-visible");
     const everyN = findNode(quantity?.menu ?? [], "quantity:every-n");
 
     expect(source).toMatchObject({ type: "radio-group", value: "m" });
+    expect(shader).toMatchObject({ type: "checkbox", checked: true });
     expect(source?.type === "radio-group" ? source.items[1] : null).toMatchObject({
       value: "H_eff",
       disabled: true,
@@ -124,5 +128,56 @@ describe("View ribbon contribution", () => {
     const selected = buildViewRibbonGroups(baseContext({ selectedObjectId: null }))[1];
     expect(selected.actions.every((action) => action.disabled)).toBe(true);
     expect(selected.actions[0].tooltip).toBe("Select object to edit object display");
+  });
+
+  it("exposes independent airbox shaded wireframe points and vector controls", () => {
+    const global = buildViewRibbonGroups(baseContext({ airboxVisible: true }))[0];
+    const airbox = global.actions.find((action) => action.id === "view-airbox");
+
+    expect(findNode(airbox?.menu ?? [], "airbox:shaded")).toMatchObject({
+      type: "checkbox",
+      checked: true,
+    });
+    expect(findNode(airbox?.menu ?? [], "airbox:wireframe")).toMatchObject({
+      type: "checkbox",
+      checked: true,
+    });
+    expect(findNode(airbox?.menu ?? [], "airbox:points")).toMatchObject({
+      type: "checkbox",
+      checked: false,
+    });
+    expect(findNode(airbox?.menu ?? [], "airbox:vectors")).toMatchObject({
+      type: "checkbox",
+      checked: false,
+    });
+    expect(findNode(airbox?.menu ?? [], "airbox:render-mode")).toMatchObject({
+      type: "radio-group",
+      value: "surface+edges",
+    });
+    expect(findNode(airbox?.menu ?? [], "airbox:vectors-submenu")).toMatchObject({
+      type: "submenu",
+    });
+  });
+
+  it("tracks airbox vector checkbox by domain and global vector visibility", () => {
+    const globalWithAirboxVectors = buildViewRibbonGroups(
+      baseContext({ femVectorDomainFilter: "airbox_only", meshShowArrows: false, airboxVisible: true }),
+    )[0];
+    const airboxWithAirboxVectors = globalWithAirboxVectors.actions.find((action) => action.id === "view-airbox");
+
+    expect(findNode(airboxWithAirboxVectors?.menu ?? [], "airbox:vectors")).toMatchObject({
+      type: "checkbox",
+      checked: false,
+    });
+
+    const globalWithAirboxVectorsVisible = buildViewRibbonGroups(
+      baseContext({ femVectorDomainFilter: "airbox_only", meshShowArrows: true, airboxVisible: true }),
+    )[0];
+    const airboxWithAirboxVectorsVisible = globalWithAirboxVectorsVisible.actions.find((action) => action.id === "view-airbox");
+
+    expect(findNode(airboxWithAirboxVectorsVisible?.menu ?? [], "airbox:vectors")).toMatchObject({
+      type: "checkbox",
+      checked: true,
+    });
   });
 });

@@ -5,6 +5,10 @@ import { usePathname, useRouter } from "next/navigation";
 import AppBar from "../shell/AppBar";
 import RibbonBar from "../shell/RibbonBar";
 import StatusBar from "../shell/StatusBar";
+import type {
+  AirboxDisplayPatch,
+  ViewportMeshRenderMode,
+} from "../shell/ribbon/command-registry";
 import { DataPlaneStatusBadges } from "./control-room/DataPlaneStatusBadges";
 import RunSidebar from "./control-room/RunSidebar";
 import { ViewportBar, ViewportCanvasArea } from "./control-room/ViewportPanels";
@@ -84,7 +88,6 @@ import { useActiveStageLayout, useWorkspaceStore } from "@/lib/workspace/workspa
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
-import { displayPatchFromPreviewComponent } from "@/src/api/displaySelection";
 import {
   appendNode,
   createMacroNode,
@@ -107,6 +110,20 @@ import { extractFemCpuThreadSummary } from "./control-room/helpers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 const WORKSPACE_ANALYZE_HREF = "/workspace/analyze";
+
+type RibbonPreviewComponent = "3D" | "x" | "y" | "z" | "magnitude";
+
+function surfaceColorFieldFromRibbonComponent(
+  component: RibbonPreviewComponent,
+): "orientation" | "x" | "y" | "z" | "magnitude" {
+  if (component === "x" || component === "y" || component === "z") {
+    return component;
+  }
+  if (component === "3D") {
+    return "orientation";
+  }
+  return "magnitude";
+}
 
 function launchDisplayName(intent: ReturnType<typeof useWorkspaceStore.getState>["launchIntent"]): string | null {
   if (!intent) return null;
@@ -1133,34 +1150,34 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 
   const handleOpenMeshInspector = useCallback(() => {
     openMeshNode(hasSharedAirboxDomain ? "mesh-view" : "universe-mesh-view");
-    ctx.handleViewModeChange("Mesh");
+    ctx.handleViewModeChange("3D");
   }, [ctx, hasSharedAirboxDomain, openMeshNode]);
 
   const handleOpenMeshQuality = useCallback(() => {
     openMeshNode(hasSharedAirboxDomain ? "mesh-quality" : "universe-mesh-quality");
-    ctx.handleViewModeChange("Mesh");
+    ctx.handleViewModeChange("3D");
   }, [ctx, hasSharedAirboxDomain, openMeshNode]);
 
   const handleOpenMeshSize = useCallback(() => {
     if (ctx.selectedSidebarNodeId?.startsWith("geo-") && ctx.selectedSidebarNodeId.endsWith("-mesh")) {
       handleSelectModelNode(ctx.selectedSidebarNodeId);
       ctx.openFemMeshWorkspace("mesher");
-      ctx.handleViewModeChange("Mesh");
+      ctx.handleViewModeChange("3D");
       return;
     }
     openMeshNode(hasSharedAirboxDomain ? "universe-airbox-mesh" : "universe-mesh-size");
-    ctx.handleViewModeChange("Mesh");
+    ctx.handleViewModeChange("3D");
   }, [ctx, handleSelectModelNode, hasSharedAirboxDomain, openMeshNode]);
 
   const handleOpenMeshMethod = useCallback(() => {
     openMeshNode(hasSharedAirboxDomain ? "mesh-pipeline" : "universe-mesh-size");
     ctx.openFemMeshWorkspace("mesher");
-    ctx.handleViewModeChange("Mesh");
+    ctx.handleViewModeChange("3D");
   }, [ctx, hasSharedAirboxDomain, openMeshNode]);
 
   const handleOpenMeshPipeline = useCallback(() => {
     openMeshNode(hasSharedAirboxDomain ? "mesh-pipeline" : "universe-mesh-pipeline");
-    ctx.handleViewModeChange("Mesh");
+    ctx.handleViewModeChange("3D");
   }, [ctx, hasSharedAirboxDomain, openMeshNode]);
   const handleAddResultAnalysis = useCallback(
     (
@@ -1464,10 +1481,34 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     </>
   );
 
-  const handleRibbonPreviewComponent = (component: "3D" | "x" | "y" | "z" | "magnitude") => {
+  const handleRibbonPreviewComponent = (component: RibbonPreviewComponent) => {
     const nextComponent = component === "3D" ? "magnitude" : component;
     ctx.setComponent(nextComponent);
-    void ctx.patchDisplay(displayPatchFromPreviewComponent(component));
+    void ctx.patchDisplay({
+      view_mode: component === "3D" ? "3d" : "2d",
+      field_component: nextComponent,
+    });
+    const nextColorField = surfaceColorFieldFromRibbonComponent(component);
+    ctx.setMeshEntityViewState((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const part of ctx.meshParts) {
+        if (part.role !== "magnetic_object") {
+          continue;
+        }
+        const current = next[part.id] ?? defaultMeshEntityViewState(part);
+        if (current.colorField === nextColorField) {
+          if (!next[part.id]) {
+            next[part.id] = current;
+            changed = true;
+          }
+          continue;
+        }
+        next[part.id] = { ...current, colorField: nextColorField };
+        changed = true;
+      }
+      return changed ? next : previous;
+    });
   };
 
   const handleRibbonPreviewEveryN = (everyN: number) => {
@@ -1500,12 +1541,133 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     if (patch.ferromagnetVisibility) ctx.setFemFerromagnetVisibilityMode(patch.ferromagnetVisibility);
   };
 
-  const handleRibbonAirboxDisplay = (patch: Partial<{ visible: boolean; opacity: number; vectors: boolean }>) => {
-    if (typeof patch.visible === "boolean") ctx.setAirMeshVisible(patch.visible);
-    if (typeof patch.opacity === "number") ctx.setAirMeshOpacity(patch.opacity);
-    if (typeof patch.vectors === "boolean") {
-      ctx.setFemVectorDomainFilter(patch.vectors ? "airbox_only" : "auto");
+  const airboxParts = ctx.meshParts.filter((part) => part.role === "air" || part.role === "outer_boundary");
+  const airboxRepresentativePart = airboxParts[0] ?? ctx.airPart;
+  const airMeshRenderMode: ViewportMeshRenderMode | null = airboxRepresentativePart
+    ? (ctx.meshEntityViewState[airboxRepresentativePart.id]?.renderMode
+      ?? defaultMeshEntityViewState(airboxRepresentativePart).renderMode)
+    : null;
+
+  const airboxVectorDomainRef = useRef<{
+    active: boolean;
+    vectorDomainFilter: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
+    ferromagnetVisibilityMode: "hide" | "ghost";
+  } | null>(null);
+
+  const resolveAirboxRenderMode = (
+    currentMode: ViewportMeshRenderMode,
+    patch: AirboxDisplayPatch,
+  ): ViewportMeshRenderMode => {
+    if (patch.renderMode) {
+      return patch.renderMode;
     }
+    let shaded = currentMode === "surface" || currentMode === "surface+edges";
+    let wireframe = currentMode === "wireframe" || currentMode === "surface+edges";
+    let points = currentMode === "points";
+
+    if (typeof patch.points === "boolean") {
+      points = patch.points;
+      if (points) {
+        shaded = false;
+        wireframe = false;
+      }
+    }
+    if (typeof patch.shaded === "boolean") {
+      shaded = patch.shaded;
+      if (shaded) points = false;
+    }
+    if (typeof patch.wireframe === "boolean") {
+      wireframe = patch.wireframe;
+      if (wireframe) points = false;
+    }
+
+    if (points) return "points";
+    if (shaded && wireframe) return "surface+edges";
+    if (shaded) return "surface";
+    return "wireframe";
+  };
+
+  const handleRibbonAirboxDisplay = (patch: AirboxDisplayPatch) => {
+    if (typeof patch.vectors === "boolean") {
+      ctx.setMeshShowArrows(patch.vectors);
+      if (patch.vectors) {
+        ctx.setAirMeshVisible(true);
+        if (!airboxVectorDomainRef.current?.active) {
+          airboxVectorDomainRef.current = {
+            active: true,
+            vectorDomainFilter: ctx.femVectorDomainFilter,
+            ferromagnetVisibilityMode: ctx.femFerromagnetVisibilityMode,
+          };
+        }
+        ctx.setFemVectorDomainFilter("airbox_only");
+        if (ctx.femFerromagnetVisibilityMode === "hide") {
+          ctx.setFemFerromagnetVisibilityMode("ghost");
+        }
+      } else if (airboxVectorDomainRef.current?.active) {
+        const saved = airboxVectorDomainRef.current;
+        ctx.setFemVectorDomainFilter(saved.vectorDomainFilter);
+        ctx.setFemFerromagnetVisibilityMode(saved.ferromagnetVisibilityMode);
+        airboxVectorDomainRef.current = null;
+      } else {
+        ctx.setFemVectorDomainFilter("auto");
+      }
+    }
+    if (typeof patch.opacity === "number") {
+      ctx.setAirMeshOpacity(patch.opacity);
+    }
+    const updatesRender =
+      typeof patch.visible === "boolean" ||
+      typeof patch.opacity === "number" ||
+      typeof patch.shaded === "boolean" ||
+      typeof patch.wireframe === "boolean" ||
+      typeof patch.points === "boolean" ||
+      typeof patch.renderMode === "string";
+    if (!updatesRender || airboxParts.length === 0) {
+      return;
+    }
+    const renderToggle =
+      typeof patch.shaded === "boolean" ||
+      typeof patch.wireframe === "boolean" ||
+      typeof patch.points === "boolean" ||
+      typeof patch.renderMode === "string";
+    if (typeof patch.visible === "boolean") {
+      ctx.setAirMeshVisible(patch.visible);
+    } else if (renderToggle) {
+      ctx.setAirMeshVisible(true);
+    }
+    ctx.setMeshEntityViewState((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const part of airboxParts) {
+        const current = next[part.id] ?? defaultMeshEntityViewState(part);
+        const nextMode = resolveAirboxRenderMode(current.renderMode, patch);
+        const nextVisible = typeof patch.visible === "boolean"
+          ? patch.visible
+          : renderToggle
+            ? true
+            : current.visible;
+        const nextOpacity = typeof patch.opacity === "number" ? patch.opacity : current.opacity;
+        if (
+          current.visible === nextVisible &&
+          current.renderMode === nextMode &&
+          current.opacity === nextOpacity
+        ) {
+          if (!next[part.id]) {
+            next[part.id] = current;
+            changed = true;
+          }
+          continue;
+        }
+        next[part.id] = {
+          ...current,
+          visible: nextVisible,
+          renderMode: nextMode,
+          opacity: nextOpacity,
+        };
+        changed = true;
+      }
+      return changed ? next : previous;
+    });
   };
 
   const selectedObjectPartIds = ctx.selectedObjectId
@@ -1536,6 +1698,25 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       return changed ? next : previous;
     });
   };
+
+  const handleRibbonMeshRenderMode = useCallback((nextMode: ViewportMeshRenderMode) => {
+    ctx.setMeshRenderMode(nextMode);
+    const nonAirParts = ctx.meshParts.filter(
+      (part) => part.role !== "air" && part.role !== "outer_boundary",
+    );
+    if (nonAirParts.length === 0) return;
+    ctx.setMeshEntityViewState((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const part of nonAirParts) {
+        const current = next[part.id] ?? defaultMeshEntityViewState(part);
+        if (current.renderMode === nextMode) continue;
+        next[part.id] = { ...current, renderMode: nextMode };
+        changed = true;
+      }
+      return changed ? next : previous;
+    });
+  }, [ctx.meshParts, ctx.setMeshEntityViewState, ctx.setMeshRenderMode]);
 
   if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableControlRoomShell) {
     return (
@@ -1603,6 +1784,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         requestedPreviewEveryN={ctx.requestedPreviewEveryN}
         requestedPreviewAutoScale={ctx.requestedPreviewAutoScale}
         requestedPreviewQuantityDataStatus={ctx.requestedPreviewQuantityDataStatus}
+        quantityShaderVisible={ctx.femViewportLayers.showQuantity}
         meshRenderMode={ctx.meshRenderMode}
         meshOpacity={ctx.meshOpacity}
         selectedObjectOpacity={selectedObjectOpacity}
@@ -1619,12 +1801,16 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         femVectorDomainFilter={ctx.femVectorDomainFilter}
         femFerromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
         airMeshOpacity={ctx.airMeshOpacity}
+        airMeshRenderMode={airMeshRenderMode}
         previewPending={ctx.previewBusy}
         onQuickPreviewSelect={ctx.requestPreviewQuantity}
         onSetPreviewComponent={handleRibbonPreviewComponent}
         onSetPreviewEveryN={handleRibbonPreviewEveryN}
         onSetPreviewColormap={handleRibbonPreviewColormap}
         onSetPreviewAutoScale={handleRibbonPreviewAutoScale}
+        onSetQuantityShaderVisible={(visible) =>
+          ctx.setFemViewportLayers((previous) => ({ ...previous, showQuantity: visible }))
+        }
         onCapture={ctx.handleCapture}
         onExport={ctx.handleExport}
         onStateExport={() => void ctx.handleStateExport("compact")}
@@ -1662,7 +1848,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onAssignMagnetizationPreset={handleAssignMagnetizationPreset}
         activeTransformScope={ctx.activeTransformScope}
         onSetTransformScope={handleSetTransformScope}
-        onSetMeshRenderMode={ctx.setMeshRenderMode}
+        onSetMeshRenderMode={handleRibbonMeshRenderMode}
         onSetMeshOpacity={ctx.setMeshOpacity}
         onSetSelectedObjectOpacity={handleRibbonSelectedObjectOpacity}
         onSetMeshClipEnabled={ctx.setMeshClipEnabled}

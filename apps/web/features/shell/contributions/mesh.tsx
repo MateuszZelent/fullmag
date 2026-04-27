@@ -120,10 +120,10 @@ function buildMeshGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         {
           id: "mesh-focus",
           icon: <Grid3X3 size={20} />,
-          label: "Workspace",
-          tooltip: "Open the mesh workspace",
-          disabled: !ctx.can({ id: "viewport.set-mode", mode: "Mesh" }),
-          action: () => ctx.run({ id: "viewport.set-mode", mode: "Mesh" }),
+          label: "3D View",
+          tooltip: "Show mesh overlays in the unified 3D viewport",
+          disabled: !ctx.can({ id: "viewport.set-mode", mode: "3D" }),
+          action: () => ctx.run({ id: "viewport.set-mode", mode: "3D" }),
           iconColor: "text-fuchsia-400",
         },
         {

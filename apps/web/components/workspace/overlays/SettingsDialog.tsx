@@ -174,7 +174,6 @@ function ShortcutsTab() {
     { action: "Switch to Runs mode", keys: "Ctrl+4" },
     { action: "3D view", keys: "1" },
     { action: "2D view", keys: "2" },
-    { action: "Mesh view", keys: "3" },
   ];
   return (
     <div className="flex flex-col gap-2">

@@ -129,7 +129,7 @@ export function applyWorkspaceTabSelection(
   }
   if (tab.kind === "viewport-mesh") {
     if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
-    if (api.effectiveViewMode !== "Mesh") api.handleViewModeChange("Mesh");
+    if (api.effectiveViewMode !== "3D") api.handleViewModeChange("3D");
     return;
   }
   if (tab.kind === "viewport-charts") {

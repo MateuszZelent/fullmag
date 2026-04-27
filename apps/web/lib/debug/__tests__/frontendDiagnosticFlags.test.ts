@@ -71,7 +71,7 @@ describe("frontendDiagnosticFlags loader", () => {
     expect(loaded.workspace.enableWorkspaceShell).toBe(true);
     expect(loaded.workspace.enableRunControlRoom).toBe(true);
     expect(loaded.shell.showRibbonBar).toBe(true);
-    expect(loaded.shell.showViewportBar).toBe(true);
+    expect(loaded.shell.showViewportBar).toBe(false);
     expect(loaded.viewportRouting.enableUnifiedViewportToolbar).toBe(true);
   });
 

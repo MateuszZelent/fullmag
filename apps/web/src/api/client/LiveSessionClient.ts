@@ -17,6 +17,7 @@ import { DomainModule } from "./modules/DomainModule";
 import { FieldsModule } from "./modules/FieldsModule";
 import { ScalarsModule } from "./modules/ScalarsModule";
 import { DisplayModule } from "./modules/DisplayModule";
+import { VisualizationStateModule } from "./modules/VisualizationStateModule";
 import { CommandsModule } from "./modules/CommandsModule";
 import { ArtifactsModule } from "./modules/ArtifactsModule";
 import { EigenModule } from "./modules/EigenModule";
@@ -62,6 +63,7 @@ export class LiveSessionClient {
   readonly fields: FieldsModule;
   readonly scalars: ScalarsModule;
   readonly display: DisplayModule;
+  readonly visualizationState: VisualizationStateModule;
   readonly commands: CommandsModule;
   readonly artifacts: ArtifactsModule;
   readonly eigen: EigenModule;
@@ -89,6 +91,7 @@ export class LiveSessionClient {
     this.fields = new FieldsModule(this);
     this.scalars = new ScalarsModule(this);
     this.display = new DisplayModule(this);
+    this.visualizationState = new VisualizationStateModule(this);
     this.commands = new CommandsModule(this);
     this.artifacts = new ArtifactsModule(this);
     this.eigen = new EigenModule(this);

@@ -23,7 +23,7 @@ Stan po tej iteracji:
 | Auto-scale | `PATCH /visualization/display { auto_contrast }` | `viewport.set-auto-scale` | wrapper, dziala |
 | Vectors toggle | `setMeshShowArrows` | `viewport.toggle-vectors` | wrapper, dziala |
 | Vector style | FEM local arrow setters | `viewport.set-vector-style` | wrapper, dziala lokalnie |
-| Airbox visible/opacity | `setAirMeshVisible`, `setAirMeshOpacity` | `viewport.set-airbox-display` | wrapper, dziala lokalnie |
+| Airbox visible/render/opacity/vectors | `setAirMeshVisible`, `setAirMeshOpacity`, `meshEntityViewState`, `femVectorDomainFilter` | `viewport.set-airbox-display` | wrapper, dziala lokalnie; shaded/wireframe/points sa niezalezne od vectors |
 | Mesh render mode | `setMeshRenderMode` | `viewport.set-global-render-mode` | wrapper, dziala |
 | Mesh opacity | `setMeshOpacity` | `viewport.set-global-opacity` | wrapper, dziala |
 | Global clip | `setMeshClip*` | `viewport.set-global-clip` | wrapper, dziala |
@@ -54,6 +54,7 @@ Globalne:
 - `meshShowArrows`
 - `airMeshVisible`
 - `airMeshOpacity`
+- `airMeshRenderMode` z reprezentatywnego airbox mesh part (`meshEntityViewState`)
 - `viewportLegendVisible`
 - `viewportAxesScope`
 - `universeWireframeVisible`
@@ -96,7 +97,7 @@ Docelowy backend owner po P3/P6:
 - Selected opacity zapisuje lokalny `meshEntityViewState` dla czesci mesha nalezacych do zaznaczonego obiektu.
 - Pelne per-object render/clip/color overrides sa widoczne w ribbonie, ale backendowy canonical zapis per-object nie istnieje jeszcze.
 - Navigation profile, transparent capture, overlay capture toggle i topography state sa pokazane jako planned/disabled tam, gdzie nie ma jeszcze stabilnego kontraktu.
-- Airbox shaded/wireframe sa przygotowane w menu docelowym tylko czesciowo; obecny runtime expose'uje glownie visible/opacity/vector-domain.
+- Airbox shaded/wireframe/points/vectors sa dostepne w ribbonie jako osobne kontrolki lokalnego viewportu. Persistencja backendowa nadal czeka na docelowy `VisualizationStateResource`.
 - Pelny cleanup `ViewportBar.tsx` jako pliku moze nastapic po P3/P6/P7, gdy wszystkie jego lokalne akcje beda pokryte przez canonical visualization state.
 
 ## Testy dodane w tej iteracji
@@ -111,3 +112,30 @@ Pokrycie:
 - rich quantity menu z disabled reason,
 - per-object opacity czytane z `selectedObjectOpacity`, nie z globalnego opacity,
 - `Selected Display` widoczne, ale disabled bez selekcji.
+- regresja: `viewport.set-component` nie zmienia `meshShowArrows`,
+- regresja: `viewport.set-vector-style` nie zmienia `meshShowArrows`,
+- regresja: helper `displayPatchFromPreviewComponentOnly` nie wysyla `vector_glyphs`.
+
+## Poprawka izolacji strzalek i mapy kolorow
+
+Po pierwszym slice zauwazony problem: zmiana komponentu / mapy kolorowania potrafila wlaczyc lub wylaczyc strzalki, bo stary helper `displayPatchFromPreviewComponent()` niesie tez pole `vector_glyphs`.
+
+Naprawa:
+
+- `View` ribbon i preview component controls uzywaja teraz `displayPatchFromPreviewComponentOnly()`, ktory zmienia tylko `view_mode` i `field_component`.
+- `meshShowArrows` jest modyfikowane tylko przez jawna komende `viewport.toggle-vectors`.
+- zmiana `viewport.set-vector-style` aktualizuje styl strzalek, ale nie ich widocznosc.
+- zmiana komponentu w ribbonie aktualizuje `meshEntityViewState.colorField` dla magnetic parts, czyli shading / magnetyczna tekstura pozostaja niezalezne od toggle strzalek.
+
+## Poprawka trybow renderu airboxa
+
+Po kolejnym slice airbox ma osobny zestaw kontrolek:
+
+- `Shaded on/off`
+- `Wireframe on/off`
+- `Points on/off`
+- `Vectors on/off`
+- radio `Airbox render`: `Shaded`, `Wireframe`, `Shaded + wireframe`, `Points`
+
+Zmiana shaded/wireframe/points zapisuje `renderMode` tylko na airboxowych czesciach mesha (`air` i `outer_boundary`) przez `meshEntityViewState`.
+Zmiana `Vectors on/off` zmienia tylko `femVectorDomainFilter` (`airbox_only` / `auto`) i nie przestawia trybu renderu airboxa.

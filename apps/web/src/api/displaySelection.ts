@@ -41,6 +41,17 @@ export function displayPatchFromPreviewComponent(
   return displaySelectionFromPreviewComponent(component, fallbackFieldComponent);
 }
 
+export function displayPatchFromPreviewComponentOnly(
+  component: DisplayPreviewComponent,
+  fallbackFieldComponent: DisplaySelection["field_component"] = "magnitude",
+): Pick<DisplayPatchRequest, "view_mode" | "field_component"> {
+  const selection = displaySelectionFromPreviewComponent(component, fallbackFieldComponent);
+  return {
+    view_mode: selection.view_mode,
+    field_component: selection.field_component,
+  };
+}
+
 export function previewComponentFromDisplaySelection(
   selection: Pick<DisplaySelection, "view_mode" | "field_component">,
 ): DisplayPreviewComponent {

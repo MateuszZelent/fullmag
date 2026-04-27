@@ -11,7 +11,7 @@ describe("workspace tab route helpers", () => {
   it("normalizes canonical and legacy tab slugs", () => {
     expect(normalizeWorkspaceTabSlug("3d")).toBe("3d");
     expect(normalizeWorkspaceTabSlug("viewport-2d")).toBe("2d");
-    expect(normalizeWorkspaceTabSlug(["mesh-workspace"])).toBe("mesh");
+    expect(normalizeWorkspaceTabSlug(["mesh-workspace"])).toBe("3d");
     expect(normalizeWorkspaceTabSlug("analysis")).toBe("analyze");
     expect(normalizeWorkspaceTabSlug("plots")).toBe("charts");
     expect(normalizeWorkspaceTabSlug("unknown")).toBeNull();
@@ -27,6 +27,7 @@ describe("workspace tab route helpers", () => {
     expect(workspaceRouteSlugForTab({ id: "core:charts", kind: "viewport-charts" })).toBe(
       "charts",
     );
+    expect(workspaceRouteSlugForTab({ id: "core:mesh", kind: "viewport-mesh" })).toBe("3d");
     expect(workspaceRouteSlugForTab({ id: "result:spectrum", kind: "result-spectrum" })).toBe(
       "analyze",
     );

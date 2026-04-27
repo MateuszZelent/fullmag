@@ -324,6 +324,12 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .patch(handlers::visualization::patch_display),
         )
         .route(
+            "/v2/sessions/current/visualization/state",
+            get(handlers::visualization::get_visualization_state)
+                .put(handlers::visualization::replace_visualization_state)
+                .patch(handlers::visualization::patch_visualization_state),
+        )
+        .route(
             "/v2/sessions/current/workspace/layout",
             get(handlers::workspace::get_workspace_layout)
                 .put(handlers::workspace::replace_workspace_layout),

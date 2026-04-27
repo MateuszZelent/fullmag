@@ -35,6 +35,7 @@ interface UseFemVectorDomainArgs {
   visibleLayers: RenderLayer[];
   effectiveVectorDomainFilter: FemVectorDomainFilter;
   ferromagnetVisibilityMode: FemFerromagnetVisibilityMode;
+  showArrowsForGeometry?: boolean;
   resolvedPreviewMaxPoints: number;
   captureActive: boolean;
   interactionActive: boolean;
@@ -56,6 +57,7 @@ export function useFemVectorDomain({
   visibleLayers,
   effectiveVectorDomainFilter,
   ferromagnetVisibilityMode,
+  showArrowsForGeometry,
   resolvedPreviewMaxPoints,
   captureActive,
   interactionActive,
@@ -373,6 +375,7 @@ export function useFemVectorDomain({
     shouldRenderMagneticGeometry &&
     !(
       effectiveVectorDomainFilter === "airbox_only" &&
+      showArrowsForGeometry !== false &&
       ferromagnetVisibilityMode === "hide"
     );
 

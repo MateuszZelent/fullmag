@@ -7,7 +7,7 @@
  * that existing components consume.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
 import { useLiveStatus } from "@/src/hooks/resources/useLiveStatus";
 import { previewComponentFromDisplaySelection } from "@/src/api/displaySelection";
@@ -24,6 +24,7 @@ import type {
   RuntimeStatusState,
   RuntimeStatusKind,
 } from "@/lib/session/types";
+import type { QuantityDescriptor } from "@/lib/session/types";
 import type { LiveState, PreviewState } from "@/lib/session/types";
 import type { FieldFrameEnvelope } from "@/lib/fieldFrame/types";
 
@@ -215,11 +216,33 @@ function mapLiveState(status: LiveStatus): LiveState {
   };
 }
 
+export function resolveQuantityDomainForDisplay(
+  activeQuantityId: string | null | undefined,
+  quantityById:
+    | Map<string, QuantityDescriptor>
+    | null
+    | undefined,
+): "magnetic_only" | "full_domain" {
+  if (!activeQuantityId || !quantityById) {
+    return "magnetic_only";
+  }
+  return quantityById.get(activeQuantityId)?.domain === "full_domain"
+    ? "full_domain"
+    : "magnetic_only";
+}
+
 // ── LiveStatus → PreviewState (partial from display_selection) ──────
 
-function mapPreviewState(status: LiveStatus): PreviewState | null {
+function mapPreviewState(
+  status: LiveStatus,
+  quantityById?: Map<string, QuantityDescriptor> | null,
+): PreviewState | null {
   const ds = status.display;
   if (!ds?.active_quantity_id) return null;
+  const quantityDomain = resolveQuantityDomainForDisplay(
+    ds.active_quantity_id,
+    quantityById,
+  );
 
   // Build a minimal spatial preview from display selection.
   // Full preview data arrives via the data-plane bridge (useDataPlaneBridge).
@@ -232,7 +255,8 @@ function mapPreviewState(status: LiveStatus): PreviewState | null {
     spatial_kind: "grid",
     quantity: ds.active_quantity_id,
     unit: "",
-    quantity_domain: "magnetic_only",
+    quantity_domain:
+      quantityDomain === "full_domain" ? "full_domain" : "magnetic_only",
     component: displayComponentFromStatus(ds),
     layer: ds.slice_layer ?? 0,
     all_layers: ds.slice_mode === "all",
@@ -267,11 +291,16 @@ function mapPreviewState(status: LiveStatus): PreviewState | null {
 
 function mapFieldFrameEnvelope(
   status: LiveStatus,
+  quantityById?: Map<string, QuantityDescriptor> | null,
 ): FieldFrameEnvelope | null {
   if (!status.run) return null;
 
   const ds = status.display;
   const quantityId = ds?.active_quantity_id ?? "m";
+  const quantityDomain = resolveQuantityDomainForDisplay(
+    quantityId,
+    quantityById,
+  );
   const component: FieldFrameEnvelope["component"] = !ds
     ? "3D"
     : ds.view_mode === "3d"
@@ -295,7 +324,7 @@ function mapFieldFrameEnvelope(
     quantityId,
     component,
     nComp: 3,
-    domain: "magnetic_only",
+    domain: quantityDomain,
     location: status.capabilities.node_fields ? "node" : "grid_cell",
     dtype: "f64",
     payloadKind: "binary-ref",
@@ -317,12 +346,13 @@ function mapFieldFrameEnvelope(
 
 function mapLiveStatusToNormalized(
   status: LiveStatus,
+  quantityById?: Map<string, QuantityDescriptor> | null,
 ): NormalizedSessionState {
   const session = mapSessionManifest(status);
   const run = mapRunManifest(status);
   const liveState = mapLiveState(status);
   const runtimeStatus = mapSolverStateToRuntimeStatus(status.solver.state);
-  const preview = mapPreviewState(status);
+  const preview = mapPreviewState(status, quantityById);
   const workspaceStatus = runtimeStatus.code || status.solver.state || "idle";
   const displaySelection = mapCurrentDisplaySelection(status);
   const previewConfig = mapPreviewConfig(status);
@@ -352,7 +382,7 @@ function mapLiveStatusToNormalized(
     previewConfig,
     latestFieldFrames: EMPTY_LATEST_FIELD_FRAMES,
     latestFieldGrid: liveState.grid.some((value) => value > 0) ? liveState.grid : null,
-    fieldFrameEnvelope: mapFieldFrameEnvelope(status),
+    fieldFrameEnvelope: mapFieldFrameEnvelope(status, quantityById),
   };
 }
 
@@ -406,6 +436,11 @@ export function useNewApiBridge(
     (s) => s.applyNormalizedState,
   );
   const setConnection = useSessionRuntimeStore((s) => s.setConnection);
+  const runtimeQuantities = useSessionRuntimeStore((s) => s.quantities);
+  const quantityById = useMemo(
+    () => new Map(runtimeQuantities.map((quantity) => [quantity.id, quantity])),
+    [runtimeQuantities],
+  );
 
   const prevRevisionKeyRef = useRef<string | null>(null);
   const prevConnectionRef = useRef<"connecting" | "connected" | "disconnected">(
@@ -448,7 +483,7 @@ export function useNewApiBridge(
 
     const normalized = preserveDataPlaneState(
       useSessionRuntimeStore.getState(),
-      mapLiveStatusToNormalized(status),
+      mapLiveStatusToNormalized(status, quantityById),
     );
     applyNormalizedState(normalized);
     prevRevisionKeyRef.current = nextRevisionKey;

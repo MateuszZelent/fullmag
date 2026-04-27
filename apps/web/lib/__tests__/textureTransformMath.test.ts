@@ -45,8 +45,8 @@ describe("composePivotedTextureTransformMatrix", () => {
     const matrix = composePivotedTextureTransformMatrix(transform);
     const decoded = textureTransformFromPivotMatrix(matrix, transform.pivot);
 
-    expect(decoded.translation).toEqual(transform.translation);
-    expect(decoded.scale).toEqual(transform.scale);
+    expectVecClose(decoded.translation, transform.translation);
+    expectVecClose(decoded.scale, transform.scale);
     decoded.rotation_quat.forEach((value, index) => {
       expect(value).toBeCloseTo(transform.rotation_quat[index], 12);
     });

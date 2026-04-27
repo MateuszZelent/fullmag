@@ -846,7 +846,7 @@ export const ViewportBar = memo(function ViewportBar() {
               disabled={!supports3D}
               title={
                 isMeshWorkspace
-                  ? "Mesh display is controlled in the Mesh Workspace toolbar below."
+                  ? "Mesh display is controlled from the View ribbon."
                   : supports3D
                     ? "Display popover: quality and visual profile controls."
                     : "Requires preview_3d capability."

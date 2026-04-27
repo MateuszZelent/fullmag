@@ -49,6 +49,7 @@ export interface BuildVisibleLayersInput {
   selectedEntityId: string | null;
   focusedEntityId: string | null;
   airSegmentVisible: boolean;
+  showArrows?: boolean;
 }
 
 /**
@@ -67,7 +68,9 @@ export function buildVisibleLayers(input: BuildVisibleLayersInput): RenderLayer[
     selectedEntityId,
     focusedEntityId,
     airSegmentVisible,
+    showArrows: showArrows,
   } = input;
+  const showArrowsEnabled = showArrows ?? true;
 
   if (meshParts.length === 0) return [];
 
@@ -92,7 +95,7 @@ export function buildVisibleLayers(input: BuildVisibleLayersInput): RenderLayer[
     null;
 
   const hasSelection = Boolean(selectedAirPartId || selectedObjectIdForHighlight || preferredCameraPartId);
-  const isAirboxOnly = effectiveVectorDomainFilter === "airbox_only";
+  const isAirboxOnly = effectiveVectorDomainFilter === "airbox_only" && showArrowsEnabled;
 
   for (const part of meshParts) {
     const baseViewState = meshEntityViewState[part.id] ?? defaultMeshEntityViewState(part);
@@ -142,7 +145,6 @@ export function buildVisibleLayers(input: BuildVisibleLayersInput): RenderLayer[
             ...viewState,
             opacity: Math.min(viewState.opacity, 22),
             renderMode: viewState.renderMode === "points" ? "wireframe" : viewState.renderMode,
-            colorField: "none",
           }
         : viewState;
 

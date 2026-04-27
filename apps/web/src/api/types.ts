@@ -62,6 +62,11 @@ export interface DisplaySelection {
   y_chosen_size: number;
 }
 
+export interface VisualizationStateResource extends DisplaySelection {
+  revision: number;
+  schema_version: number;
+}
+
 export interface DomainSummary {
   generation_id: number;
   discretization: string;
@@ -81,6 +86,7 @@ export interface ResourceRevisionMap {
   artifacts_revision: number;
   engine_log_revision: number;
   display_revision: number;
+  visualization_state_revision: number;
   workspace_revision: number;
   mesh_revision: number;
   mesh_build_revision: number;
@@ -235,6 +241,7 @@ export interface FieldBinaryResponse {
 
 export type RealtimeResourceName =
   | "display"
+  | "visualization_state"
   | "workspace"
   | "fields"
   | "scalars"
@@ -260,6 +267,7 @@ export interface RealtimeResourceRevisionMap {
   artifacts_revision: number;
   engine_log_revision: number;
   display_revision: number;
+  visualization_state_revision: number;
   workspace_revision: number;
   mesh_revision: number;
   mesh_build_revision: number;
@@ -505,6 +513,8 @@ export interface DisplayPatchRequest {
   x_chosen_size?: number;
   y_chosen_size?: number;
 }
+
+export type VisualizationStatePatch = DisplayPatchRequest;
 
 // ── Commands ──────────────────────────────────────────────────────────
 

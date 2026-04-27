@@ -3,6 +3,7 @@ export { DomainModule } from "./DomainModule";
 export { FieldsModule } from "./FieldsModule";
 export { ScalarsModule } from "./ScalarsModule";
 export { DisplayModule } from "./DisplayModule";
+export { VisualizationStateModule } from "./VisualizationStateModule";
 export { CommandsModule } from "./CommandsModule";
 export { ArtifactsModule } from "./ArtifactsModule";
 export { EigenModule } from "./EigenModule";

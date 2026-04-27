@@ -166,6 +166,7 @@ export function useFemViewportDerivedModel({
       selectedEntityId,
       focusedEntityId,
       airSegmentVisible,
+      showArrows: showArrowsRequested,
     });
   }, [
     airSegmentVisible,
@@ -179,6 +180,7 @@ export function useFemViewportDerivedModel({
     partRenderDataById,
     selectedEntityId,
     selectedObjectId,
+    showArrowsRequested,
     wrapperFlags.enablePartDerivedModel,
   ]);
 
@@ -218,6 +220,7 @@ export function useFemViewportDerivedModel({
     visibleLayers,
     effectiveVectorDomainFilter,
     ferromagnetVisibilityMode,
+    showArrowsForGeometry: showArrowsRequested,
     resolvedPreviewMaxPoints,
     captureActive,
     interactionActive,

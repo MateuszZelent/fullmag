@@ -194,7 +194,29 @@ describe("buildVisibleLayers", () => {
     const ghostLayer = layers.find((l) => l.part.id === "mag-1");
     expect(ghostLayer).toBeDefined();
     expect(ghostLayer!.viewState.opacity).toBeLessThanOrEqual(22);
-    expect(ghostLayer!.viewState.colorField).toBe("none");
+    expect(ghostLayer!.viewState.colorField).toBe("orientation");
     expect(ghostLayer!.meshColor).toBe("#94a3b8");
+  });
+
+  it("does not hide magnetic parts in airbox_only when arrows are disabled", () => {
+    const air = makePart({ id: "air-1", role: "air", object_id: "air" });
+    const mag = makePart({ id: "mag-1", object_id: "obj-1" });
+    const viewState = {
+      "air-1": { visible: true, renderMode: "wireframe" as const, opacity: 28, colorField: "none" as const },
+      "mag-1": { visible: true, renderMode: "surface" as const, opacity: 100, colorField: "orientation" as const },
+    };
+
+    const layers = buildVisibleLayers({
+      ...BASE_INPUT,
+      meshParts: [air, mag],
+      meshEntityViewState: viewState,
+      vectorDomainFilter: "airbox_only",
+      ferromagnetVisibilityMode: "hide",
+      airSegmentVisible: true,
+      showArrows: false,
+    });
+
+    expect(layers).toHaveLength(2);
+    expect(layers.map((l) => l.part.role).sort()).toEqual(["air", "magnetic_object"]);
   });
 });

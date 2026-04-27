@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   displayPatchFromPreviewComponent,
+  displayPatchFromPreviewComponentOnly,
   displaySelectionFromPreviewComponent,
   previewComponentFromDisplaySelection,
   quantitySelectionStateFromDisplaySelection,
@@ -34,6 +35,15 @@ describe("displaySelection helpers", () => {
       field_component: "z",
       vector_glyphs: true,
     });
+  });
+
+  it("returns component-only patch when vector visibility must stay independent", () => {
+    const patch = displayPatchFromPreviewComponentOnly("3D", "z");
+    expect(patch).toEqual({
+      view_mode: "3d",
+      field_component: "z",
+    });
+    expect("vector_glyphs" in patch).toBe(false);
   });
 
   it("maps selection back to preview component", () => {

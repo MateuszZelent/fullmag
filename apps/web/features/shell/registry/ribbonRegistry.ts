@@ -18,7 +18,10 @@
 import type { ReactNode } from "react";
 import type { NodeKind, NodeDomain } from "../../model-builder/types";
 import type { StudyNodeContext } from "@/lib/study-builder/node-context";
-import type { RibbonCommand } from "@/components/shell/ribbon/command-registry";
+import type {
+  RibbonCommand,
+  ViewportMeshRenderMode,
+} from "@/components/shell/ribbon/command-registry";
 import type { CapabilityMap, GeometryCapabilitiesResource } from "@/src/api/types";
 import type { RibbonMenuNode, RibbonNodeState } from "./ribbonMenuTypes";
 
@@ -151,6 +154,7 @@ export interface RibbonBuildContext {
   sidebarVisible: boolean;
   previewPending: boolean;
   airboxVisible: boolean;
+  quantityShaderVisible: boolean;
   viewportAxesScope: "universe" | "object";
   universeWireframeVisible: boolean;
   viewportLegendVisible: boolean;
@@ -185,6 +189,7 @@ export interface RibbonBuildContext {
   femVectorDomainFilter?: string | null;
   femFerromagnetVisibilityMode?: string | null;
   airMeshOpacity?: number | null;
+  airMeshRenderMode?: ViewportMeshRenderMode | null;
 
   // ── Antenna context ──
   antennaSources: Array<{

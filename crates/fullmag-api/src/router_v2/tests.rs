@@ -2769,6 +2769,7 @@ async fn mesh_universe_config_put_commits_scene_projection() {
     assert_eq!(json["config"]["mode"], "box");
     assert_eq!(json["config"]["size"][0], 4.0);
     assert_eq!(json["config"]["airbox_hmax"], 8.0e-9);
+    assert_eq!(json["config"]["airbox_hmin"], 2.0e-9);
 
     let guard = state.current_live_state.read().await;
     let committed = guard
@@ -2782,6 +2783,8 @@ async fn mesh_universe_config_put_commits_scene_projection() {
         .expect("study universe mesh present");
     assert_eq!(universe.mode, "box");
     assert_eq!(universe.size, Some([4.0, 5.0, 6.0]));
+    assert_eq!(universe.airbox_hmax, Some(8.0e-9));
+    assert_eq!(universe.airbox_hmin, Some(2.0e-9));
     assert_eq!(committed.universe.as_ref(), Some(universe));
 }
 
@@ -5970,6 +5973,7 @@ fn openapi_v2_exposes_professional_session_tree() {
         "/v2/sessions/current/data/quantities",
         "/v2/sessions/current/data/fields/{quantity_id}/samples/vector",
         "/v2/sessions/current/visualization/display",
+        "/v2/sessions/current/visualization/state",
         "/v2/sessions/current/workspace/layout",
         "/v2/sessions/current/analysis/eigenmodes/spectrum",
         "/v2/sessions/current/persistence/imports",

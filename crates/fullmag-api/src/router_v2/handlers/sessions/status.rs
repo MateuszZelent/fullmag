@@ -142,6 +142,7 @@ pub(crate) fn build_live_status(
         artifacts_revision: snapshot.artifacts.len() as u64,
         engine_log_revision: snapshot.engine_log.len() as u64,
         display_revision: display_sel.revision,
+        visualization_state_revision: display_sel.revision,
         workspace_revision: workspace_selection
             .revision
             .max(workspace_ribbon.revision)

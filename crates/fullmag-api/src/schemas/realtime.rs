@@ -23,6 +23,7 @@ pub struct RealtimeResourceRevisionMap {
     pub stages_revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_revision: Option<u64>,
+    pub visualization_state_revision: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -40,6 +41,7 @@ pub enum RealtimeResourceName {
     Commands,
     Stages,
     SceneDocument,
+    VisualizationState,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

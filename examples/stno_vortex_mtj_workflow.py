@@ -11,7 +11,16 @@ study = fm.study("stno_vortex_mtj_workflow")
 # Engine
 study.engine("fem")
 study.device("gpu", precision="double")
-study.universe(mode="auto", size=(1e-07, 1e-07, 3e-08), center=(0, 0, 0), padding=(0, 0, 0), maximum_element_size=5e-08)
+study.universe(
+    mode="auto",
+    size=(2e-07, 2e-07, 9e-08),
+    center=(0, 0, 0),
+    padding=(0, 0, 0),
+    airbox_hmax=5.5e-08,
+    airbox_hmin=7e-09,
+    airbox_growth_rate=1.22,
+    airbox_grading="geometric",
+)
 study.interactive(True)
 study.wait_for_solve(True)
 
@@ -29,8 +38,23 @@ study.b_ext(0, 0, 1.02)
 study.demag(realization="poisson_robin")
 
 # Mesh
-study.object_mesh_defaults(algorithm_2d=6, algorithm_3d=10, size_factor=1, size_from_curvature=0, smoothing_steps=1, optimize_iterations=1, curvature_factor=0.3, maximum_element_growth_rate=1.3, narrow_regions=0, narrow_region_resolution=0.5, compute_quality=True, per_element_quality=True)
-body.mesh(maximum_element_size=2e-08, minimum_element_size=5e-09, order=1, compute_quality=True)
+study.object_mesh_defaults(
+    maximum_element_size=1.2e-08,
+    minimum_element_size=3e-09,
+    algorithm_2d=6,
+    algorithm_3d=10,
+    size_factor=1,
+    size_from_curvature=32,
+    smoothing_steps=1,
+    optimize_iterations=1,
+    curvature_factor=0.25,
+    maximum_element_growth_rate=1.22,
+    narrow_regions=5,
+    narrow_region_resolution=0.7,
+    compute_quality=True,
+    per_element_quality=True,
+)
+body.mesh(maximum_element_size=1.2e-08, minimum_element_size=3e-09, order=1, compute_quality=True)
 study.build_domain_mesh()
 
 # Solver

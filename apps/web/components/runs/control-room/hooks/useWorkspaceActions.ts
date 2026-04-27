@@ -340,12 +340,12 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
 
   /* ── openFemMeshWorkspace ── */
   const openFemMeshWorkspace = useCallback((tab: FemDockTab = "mesh") => {
-    transitionToViewMode("Mesh", {
+    setFemDockTab(tab);
+    transitionToViewMode("3D", {
       force: true,
-      femDockTab: tab,
     });
     setMeshRenderMode((c) => (c === "surface" ? "surface+edges" : c));
-  }, [setMeshRenderMode, transitionToViewMode]);
+  }, [setFemDockTab, setMeshRenderMode, transitionToViewMode]);
 
   /* ── requestFocusObject ── */
   const requestFocusObject = useCallback((objectId: string) => {
@@ -458,10 +458,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       return;
     }
     if (normalizedMode === "Mesh") {
-      if (femDiscretization) openFemMeshWorkspace("mesh");
-      else {
-        transitionToViewMode("3D");
-      }
+      transitionToViewMode("3D", { force: true });
       return;
     }
     transitionToViewMode(normalizedMode, {
@@ -476,8 +473,6 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     activateWorkspaceTab,
     currentStage,
     effectiveViewMode,
-    femDiscretization,
-    openFemMeshWorkspace,
     setComponent,
     transitionToViewMode,
   ]);

@@ -2,7 +2,7 @@
 
 import { useViewport } from "../../runs/control-room/context-hooks";
 import { fmtPreviewEveryN, fmtPreviewMaxPoints, type PreviewComponent } from "../../runs/control-room/shared";
-import { displayPatchFromPreviewComponent } from "@/src/api/displaySelection";
+import { displayPatchFromPreviewComponentOnly } from "@/src/api/displaySelection";
 import { Button } from "../../ui/button";
 import { SidebarSection, InfoRow, ToggleRow } from "./primitives";
 import SelectField from "../../ui/SelectField";
@@ -47,7 +47,7 @@ export default function PreviewControlsPanel() {
             <SelectField
               label="Component"
               value={ctx.requestedPreviewComponent}
-              onchange={(val) => void ctx.patchDisplay(displayPatchFromPreviewComponent(val as PreviewComponent))}
+              onchange={(val) => void ctx.patchDisplay(displayPatchFromPreviewComponentOnly(val as PreviewComponent))}
               disabled={ctx.previewBusy}
               options={[
                 { value: "3D", label: "3D Vector" },

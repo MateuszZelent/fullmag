@@ -7,7 +7,7 @@ import { useWorkspaceGraphStore } from "@/features";
 import { useBuilderKeyboardShortcuts } from "@/features/geometry-builder";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
-import { displayPatchFromPreviewComponent } from "@/src/api/displaySelection";
+import { displayPatchFromPreviewComponentOnly } from "@/src/api/displaySelection";
 import type { DisplaySelection } from "@/src/api/types";
 import { useFieldSlice2D } from "@/src/hooks/resources/useFieldSlice2D";
 import {
@@ -252,9 +252,7 @@ export function useViewportDataBridge() {
         selectedEntityId: ctx.selectedEntityId,
         selectedSidebarNodeId: ctx.selectedSidebarNodeId,
         sourceSurface:
-          ctx.effectiveViewMode === "Mesh"
-            ? "mesh"
-            : ctx.effectiveViewMode === "2D"
+          ctx.effectiveViewMode === "2D"
               ? "slice2d"
               : "viewport3d",
       }),
@@ -280,13 +278,13 @@ export function useViewportDataBridge() {
 
   /* ── Mesh workspace resource ── */
   const meshWorkspaceResource = useMeshWorkspaceModel({
-    enabled: ctx.effectiveViewMode === "Mesh",
+    enabled: false,
     sessionKey: runtimeSessionId,
     resources: runtimeResourceRevisions,
     liveCapabilities: ctx.domainCapabilities,
   });
   const meshBuildCommand = useSubmitMeshBuildCommand({
-    enabled: ctx.effectiveViewMode === "Mesh",
+    enabled: false,
     sessionKey: runtimeSessionId,
   });
 
@@ -377,8 +375,16 @@ export function useViewportDataBridge() {
         meshParts: ctx.meshParts,
         meshEntityViewState: ctx.meshEntityViewState,
         airMeshVisible: ctx.airMeshVisible,
+        vectorDomainFilter: ctx.femVectorDomainFilter,
+        selectedFieldDomain: femMeshData?.quantityDomain ?? null,
       }),
-    [ctx.airMeshVisible, ctx.meshEntityViewState, ctx.meshParts],
+    [
+      ctx.airMeshVisible,
+      ctx.femVectorDomainFilter,
+      ctx.meshEntityViewState,
+      ctx.meshParts,
+      femMeshData?.quantityDomain,
+    ],
   );
   const vectorFetchScope =
     femDiscretization && femVectorScopes.length === 1
@@ -712,8 +718,11 @@ export function useViewportDataBridge() {
     const next: MeshEntityViewStateMap = { ...ctx.meshEntityViewState };
     for (const part of ctx.meshParts) {
       const current = next[part.id] ?? defaultMeshEntityViewState(part);
+      const airboxScoped = part.role === "air" || part.role === "outer_boundary";
       const renderMode =
-        femLayerState.showMesh && current.renderMode === "surface"
+        airboxScoped
+          ? current.renderMode
+          : femLayerState.showMesh && current.renderMode === "surface"
           ? "surface+edges"
           : !femLayerState.showMesh && current.renderMode === "surface+edges"
             ? "surface"
@@ -721,7 +730,7 @@ export function useViewportDataBridge() {
       next[part.id] = {
         ...current,
         renderMode,
-        opacity: ctx.meshOpacity,
+        opacity: airboxScoped ? current.opacity : ctx.meshOpacity,
         colorField:
           femLayerState.showQuantity && part.role === "magnetic_object"
             ? current.colorField
@@ -813,7 +822,7 @@ export function useViewportDataBridge() {
     (nextComponent: "x" | "y" | "z" | "magnitude") => {
       if (previewControlsActive) {
         void patchDisplay(
-          displayPatchFromPreviewComponent(nextComponent === "magnitude" ? "3D" : nextComponent),
+          displayPatchFromPreviewComponentOnly(nextComponent === "magnitude" ? "3D" : nextComponent),
         );
         return;
       }
@@ -1180,7 +1189,7 @@ export function useViewportDataBridge() {
     (ctx.isVectorQuantity || hasVectorData) &&
     !globalScalarPreview;
   const isVectorSurfaceMeshActive =
-    ctx.effectiveViewMode === "Mesh" && !femDiscretization && !ctx.femMeshData;
+    false;
   const showVectorSurface3D =
     !showGeometryAuthoringViewport &&
     (isVectorSurface3DActive || isVectorSurfaceMeshActive);
@@ -1419,7 +1428,7 @@ export function useViewportDataBridge() {
         route = "fem-bounds-fallback";
         fallbackUsed = true;
       } else {
-        route = ctx.effectiveViewMode === "Mesh" ? "fem-mesh" : "fem-3d";
+        route = "fem-3d";
       }
     } else if (showVectorSurface3D) {
       route = isVectorSurfaceMeshActive ? "fdm-mesh" : "fdm-3d";

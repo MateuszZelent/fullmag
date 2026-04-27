@@ -74,6 +74,22 @@ def _apply_mesh_options(
 
     extra_field_ids: list[int] = list(preexisting_field_ids or [])
 
+    if resolved_curvature > 0:
+        fid = _add_curvature_surface_field(
+            gmsh,
+            resolved_curvature,
+            hmax,
+            hscale,
+            hmin=opts.hmin,
+            component_surface_tags=component_surface_tags,
+        )
+        if fid is not None:
+            extra_field_ids.append(fid)
+            emit_progress(
+                "Gmsh: curvature surface refinement active "
+                f"(samples={resolved_curvature})"
+            )
+
     resolved_narrow_regions = int(resolved_size_controls["resolved_narrow_regions"])
     if resolved_narrow_regions > 0:
         fid = _add_narrow_region_field(
@@ -221,6 +237,61 @@ def _add_narrow_region_field(
             return f_restrict
 
     return f_math
+
+
+def _add_curvature_surface_field(
+    gmsh: Any,
+    curvature_samples: int,
+    hmax: float,
+    hscale: float = 1.0,
+    *,
+    hmin: float | None = None,
+    component_surface_tags: dict[str, list[int]] | None = None,
+) -> int | None:
+    """Add an explicit surface-near field for rounded-feature refinement.
+
+    Gmsh's global ``MeshSizeFromCurvature`` works well on native CAD in simple
+    cases, but shared-domain Fullmag meshes often pass through recovered STL or
+    fragmented component surfaces.  In those paths the global option can be too
+    weak to survive the background-field stack, producing a visually uniform
+    mesh even when the user requested curvature refinement.  This field keeps
+    the same public control but turns it into a local ``Distance -> Threshold``
+    constraint around recovered object surfaces.
+    """
+    if curvature_samples < 1:
+        return None
+
+    if component_surface_tags:
+        surf_tags: list[int] = []
+        for tags in component_surface_tags.values():
+            surf_tags.extend(int(tag) for tag in tags)
+        if not surf_tags:
+            return None
+    else:
+        surfaces = gmsh.model.getEntities(2)
+        if not surfaces:
+            return None
+        surf_tags = [int(tag) for _, tag in surfaces]
+
+    target_min = hmax / float(max(curvature_samples, 1))
+    target_min = max(target_min, hmax * 0.05)
+    if hmin is not None and hmin > 0.0:
+        target_min = max(target_min, float(hmin))
+
+    # Keep the influence local.  The global SmoothRatio / transition fields
+    # handle far-field grading; this field only makes rounded surfaces visible
+    # to the background-field stack.
+    influence = min(hmax, max(target_min * 3.0, hmax * 0.25))
+    return _add_surface_threshold_field(
+        gmsh,
+        surface_tags=surf_tags,
+        size_min=target_min,
+        size_max=hmax,
+        dist_min=0.0,
+        dist_max=influence,
+        sampling=max(20, int(curvature_samples)),
+        hscale=hscale,
+    )
 
 
 def _add_boundary_layer_field(
@@ -563,5 +634,4 @@ def _configure_mesh_size_fields(
         gmsh.model.mesh.field.setAsBackgroundMesh(size_upper_field)
     elif size_lower_field is not None:
         gmsh.model.mesh.field.setAsBackgroundMesh(size_lower_field)
-
 

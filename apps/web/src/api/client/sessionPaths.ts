@@ -77,6 +77,7 @@ export const sessionApiPaths = {
   },
   visualization: {
     display: openApiV2Path("/v2/sessions/current/visualization/display"),
+    state: openApiV2Path("/v2/sessions/current/visualization/state"),
   },
   workspace: {
     layout: openApiV2Path("/v2/sessions/current/workspace/layout"),

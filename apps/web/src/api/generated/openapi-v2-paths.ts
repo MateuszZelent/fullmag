@@ -86,6 +86,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/simulation/stages/execution",
   "/v2/sessions/current/status",
   "/v2/sessions/current/visualization/display",
+  "/v2/sessions/current/visualization/state",
   "/v2/sessions/current/workspace/layout",
   "/v2/sessions/current/workspace/ribbon",
   "/v2/sessions/current/workspace/selection",

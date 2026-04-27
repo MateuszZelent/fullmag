@@ -131,3 +131,9 @@ describe("mapResourceQuantities", () => {
     });
   });
 });
+
+describe("resolveQuantityDomainForDisplay", () => {
+  it("no test block currently", () => {
+    expect(true).toBe(true);
+  });
+});

@@ -3,7 +3,7 @@
  */
 
 import {
-  Box, Columns2, Grid3X3, PanelRight, Eye, Sparkles,
+  Box, Columns2, PanelRight, Eye, Sparkles,
 } from "lucide-react";
 import type { RibbonBuildContext, RibbonGroup } from "../registry/ribbonRegistry";
 
@@ -32,16 +32,6 @@ export function buildViewGroup(ctx: RibbonBuildContext): RibbonGroup {
         active: ctx.viewMode === "2D",
         action: () => ctx.run({ id: "viewport.set-mode", mode: "2D" }),
         iconColor: "text-sky-400",
-      },
-      {
-        id: "mesh-view",
-        icon: <Grid3X3 size={20} />,
-        label: "Mesh",
-        tooltip: "Mesh view",
-        shortcut: "3",
-        active: ctx.viewMode === "Mesh",
-        action: () => ctx.run({ id: "viewport.set-mode", mode: "Mesh" }),
-        iconColor: "text-fuchsia-400",
       },
       {
         id: "visualization-preset",

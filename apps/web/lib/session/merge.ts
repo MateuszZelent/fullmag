@@ -261,7 +261,6 @@ export function mergeScalarRowsDelta(
     const firstNextStep = nextRows[0]?.step ?? -1;
     const looksLikeFullSnapshot =
       firstNextStep === 0 ||
-      nextRows.length >= prevRows.length ||
       nextRows.length === (scalarRowsTotal ?? -1);
 
     if (looksLikeFullSnapshot && nextScalarStep >= prevScalarStep) {

@@ -131,6 +131,7 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             artifacts_revision: snapshot.artifacts.len() as u64,
             engine_log_revision: snapshot.engine_log.len() as u64,
             display_revision,
+            visualization_state_revision: display_revision,
             workspace_revision,
             mesh_revision: snapshot.mesh_revision,
             mesh_build_revision: snapshot.mesh_build_revision,
@@ -162,6 +163,13 @@ fn current_live_realtime_changes(
             resource_id: None,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/visualization/display".to_string()),
+        },
+        RealtimeResourceChange {
+            resource: RealtimeResourceName::VisualizationState,
+            revision: realtime_state.revisions.visualization_state_revision,
+            resource_id: None,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v2/sessions/current/visualization/state".to_string()),
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Workspace,

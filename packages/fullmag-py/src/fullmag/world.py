@@ -2088,6 +2088,7 @@ class StudyBuilder:
         center: Sequence[float] | None = None,
         padding: Sequence[float] | None = None,
         airbox_hmax: float | None = None,
+        airbox_hmin: float | None = None,
         airbox_growth_rate: float | None = None,
         airbox_grading: str | None = None,
         maximum_element_size: float | None = None,
@@ -2097,7 +2098,7 @@ class StudyBuilder:
         # airbox_hmax / airbox_hmin.  Prefer the explicit airbox_hmax/airbox_hmin when
         # both are supplied.
         resolved_hmax = airbox_hmax if airbox_hmax is not None else maximum_element_size
-        resolved_hmin = minimum_element_size
+        resolved_hmin = airbox_hmin if airbox_hmin is not None else minimum_element_size
         _configure_study_universe(
             mode=mode,
             size=size,

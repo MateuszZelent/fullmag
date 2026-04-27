@@ -217,7 +217,7 @@ function WorkspaceRightToolbox() {
               <div className="rounded-xl border border-border/25 bg-background/35 px-4 py-3 text-[0.75rem] text-muted-foreground">
                 No active submesh snapshot.
                 <br />
-                Open FEM 3D/Mesh viewport to populate this list.
+                Open the FEM 3D viewport to populate this list.
               </div>
             </div>
           )}

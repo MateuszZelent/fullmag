@@ -484,13 +484,15 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     const payloadMode = activeWorkspaceTab.payload?.viewMode;
     const inferredMode: ViewportMode | null =
       payloadMode === "3D" || payloadMode === "2D" || payloadMode === "Mesh" || payloadMode === "Analyze"
-        ? payloadMode
+        ? payloadMode === "Mesh"
+          ? "3D"
+          : payloadMode
         : activeWorkspaceTab.id === "core:3d"
           ? "3D"
           : activeWorkspaceTab.id === "core:2d"
             ? "2D"
             : activeWorkspaceTab.id === "core:mesh"
-              ? "Mesh"
+              ? "3D"
               : activeWorkspaceTab.id === "core:analyze"
                 ? "Analyze"
                 : null;
@@ -2070,6 +2072,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const selectedFieldNComp =
     selectedFieldFrame?.n_comp
     ?? (activeQuantityId ? quantityDescriptorById.get(activeQuantityId)?.n_comp ?? 3 : 3);
+  const selectedFieldCatalogDomain =
+    activeQuantityId
+      ? (quantityDescriptorById.get(activeQuantityId)?.domain ?? null)
+      : null;
   const liveFieldSourceStep =
     selectedFieldFrame?.source_step
     ?? selectedFieldFrame?.field_revision
@@ -2077,6 +2083,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const previewSourceStep = renderPreview?.source_step ?? null;
   const selectedFieldDomain =
     (selectedFieldFrame?.domain as "magnetic_only" | "full_domain" | "surface_only" | null | undefined)
+    ?? selectedFieldCatalogDomain
     ?? null;
   const selectedFieldTransportKey = useMemo(() => {
     if (!binaryFieldTransportEnabled || !activeQuantityId || !selectedFieldFrame) {
@@ -2100,8 +2107,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         meshParts: femMesh?.mesh_parts ?? [],
         meshEntityViewState,
         airMeshVisible,
+        vectorDomainFilter: femVectorDomainFilter,
+        selectedFieldDomain,
       }),
-    [airMeshVisible, femMesh?.mesh_parts, meshEntityViewState],
+    [airMeshVisible, femMesh?.mesh_parts, femVectorDomainFilter, meshEntityViewState, selectedFieldDomain],
   );
   const scopedFieldTransportKey = useMemo(() => {
     if (

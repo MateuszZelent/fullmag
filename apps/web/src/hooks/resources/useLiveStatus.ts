@@ -73,6 +73,9 @@ function mergeRealtimeRevisionsIntoStatusResources(
     ...(incoming.display_revision != null
       ? { display_revision: incoming.display_revision }
       : {}),
+    ...(incoming.visualization_state_revision != null
+      ? { visualization_state_revision: incoming.visualization_state_revision }
+      : {}),
     ...(incoming.workspace_revision != null
       ? { workspace_revision: incoming.workspace_revision }
       : {}),
@@ -103,6 +106,10 @@ function mergeRealtimeBatchIntoStatusResources(
     switch (change.resource) {
       case "display":
         patch.display_revision = change.revision;
+        patch.visualization_state_revision = change.revision;
+        break;
+      case "visualization_state":
+        patch.visualization_state_revision = change.revision;
         break;
       case "workspace":
         patch.workspace_revision = change.revision;
@@ -168,7 +175,10 @@ function realtimeEventNeedsStatusRefresh(event: LiveRealtimeEvent): boolean {
     return false;
   }
   return event.payload.changes.some(
-    (change) => change.resource === "display" || change.resource === "domain",
+    (change) =>
+      change.resource === "display" ||
+      change.resource === "visualization_state" ||
+      change.resource === "domain",
   );
 }
 

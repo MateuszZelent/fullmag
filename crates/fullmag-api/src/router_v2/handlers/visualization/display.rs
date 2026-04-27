@@ -8,6 +8,7 @@ use axum::Json;
 use crate::error::ApiError;
 use crate::schemas::display::DisplayPatch;
 use crate::schemas::status::{DisplaySelection, DisplayViewMode, FieldComponent};
+use crate::schemas::visualization_state::{VisualizationStatePatch, VisualizationStateResource};
 use crate::types::{AppState, CurrentDisplaySelection, DisplayPresentationState};
 use fullmag_runner::{DisplayFieldComponent, DisplayViewMode as RunnerDisplayViewMode};
 
@@ -32,6 +33,26 @@ pub async fn get_display(
 }
 
 #[utoipa::path(
+    get,
+    path = "/v2/sessions/current/visualization/state",
+    responses(
+        (status = 200, description = "Current visualization state", body = VisualizationStateResource),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "visualization"
+)]
+pub async fn get_visualization_state(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<VisualizationStateResource>, ApiError> {
+    let selection = state.current_display_selection.read().await;
+    let presentation = state.current_display_presentation.read().await;
+    Ok(Json(build_visualization_state_response(
+        &selection,
+        &presentation,
+    )))
+}
+
+#[utoipa::path(
     put,
     path = "/v2/sessions/current/visualization/display",
     request_body = DisplaySelection,
@@ -45,6 +66,103 @@ pub async fn replace_display(
     State(state): State<Arc<AppState>>,
     Json(replacement): Json<DisplaySelection>,
 ) -> Result<Json<DisplaySelection>, ApiError> {
+    apply_display_replace(state.clone(), replacement).await?;
+    let selection = state.current_display_selection.read().await;
+    let presentation = state.current_display_presentation.read().await;
+    Ok(Json(build_display_selection_response(
+        &selection,
+        &presentation,
+    )))
+}
+
+#[utoipa::path(
+    put,
+    path = "/v2/sessions/current/visualization/state",
+    request_body = VisualizationStateResource,
+    responses(
+        (status = 200, description = "Visualization state replaced", body = VisualizationStateResource),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "visualization"
+)]
+pub async fn replace_visualization_state(
+    State(state): State<Arc<AppState>>,
+    Json(replacement): Json<VisualizationStateResource>,
+) -> Result<Json<VisualizationStateResource>, ApiError> {
+    let display_replacement = visualization_state_to_display_selection(&replacement);
+    apply_display_replace(state.clone(), display_replacement).await?;
+    let selection = state.current_display_selection.read().await;
+    let presentation = state.current_display_presentation.read().await;
+    Ok(Json(build_visualization_state_response(
+        &selection,
+        &presentation,
+    )))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v2/sessions/current/visualization/display",
+    request_body = DisplayPatch,
+    responses(
+        (status = 200, description = "Display patched", body = DisplaySelection),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "visualization"
+)]
+pub async fn patch_display(
+    State(state): State<Arc<AppState>>,
+    Json(update): Json<DisplayPatch>,
+) -> Result<Json<DisplaySelection>, ApiError> {
+    let response = apply_display_patch(state, update).await?;
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v2/sessions/current/visualization/state",
+    request_body = VisualizationStatePatch,
+    responses(
+        (status = 200, description = "Visualization state patched", body = VisualizationStateResource),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "visualization"
+)]
+pub async fn patch_visualization_state(
+    State(state): State<Arc<AppState>>,
+    Json(update): Json<VisualizationStatePatch>,
+) -> Result<Json<VisualizationStateResource>, ApiError> {
+    apply_display_patch(
+        state.clone(),
+        DisplayPatch {
+            active_quantity_id: update.active_quantity_id,
+            view_mode: update.view_mode,
+            field_component: update.field_component,
+            colormap: update.colormap,
+            auto_contrast: update.auto_contrast,
+            contrast_min: update.contrast_min,
+            contrast_max: update.contrast_max,
+            vector_glyphs: update.vector_glyphs,
+            vector_density: update.vector_density,
+            slice_mode: update.slice_mode,
+            slice_layer: update.slice_layer,
+            max_points: update.max_points,
+            x_chosen_size: update.x_chosen_size,
+            y_chosen_size: update.y_chosen_size,
+        },
+    )
+    .await?;
+    let selection = state.current_display_selection.read().await;
+    let presentation = state.current_display_presentation.read().await;
+    Ok(Json(build_visualization_state_response(
+        &selection,
+        &presentation,
+    )))
+}
+
+async fn apply_display_replace(
+    state: Arc<AppState>,
+    replacement: DisplaySelection,
+) -> Result<(), ApiError> {
     let mut selection = state.current_display_selection.write().await;
     let mut presentation = state.current_display_presentation.write().await;
 
@@ -74,35 +192,18 @@ pub async fn replace_display(
     presentation.vector_glyphs = replacement.vector_glyphs;
 
     selection.revision = selection.revision.wrapping_add(1);
-    let response = build_display_selection_response(&selection, &presentation);
-    drop(presentation);
     let display_revision = selection.revision;
+    drop(presentation);
     drop(selection);
     emit_display_realtime_change(&state, display_revision).await?;
-    Ok(Json(response))
-}
 
-#[utoipa::path(
-    patch,
-    path = "/v2/sessions/current/visualization/display",
-    request_body = DisplayPatch,
-    responses(
-        (status = 200, description = "Display patched", body = DisplaySelection),
-        (status = 404, description = "No active workspace"),
-    ),
-    tag = "visualization"
-)]
-pub async fn patch_display(
-    State(state): State<Arc<AppState>>,
-    Json(update): Json<DisplayPatch>,
-) -> Result<Json<DisplaySelection>, ApiError> {
-    apply_display_patch(state, update).await
+    Ok(())
 }
 
 async fn apply_display_patch(
     state: Arc<AppState>,
     update: DisplayPatch,
-) -> Result<Json<DisplaySelection>, ApiError> {
+) -> Result<DisplaySelection, ApiError> {
     let mut sel = state.current_display_selection.write().await;
     let mut presentation = state.current_display_presentation.write().await;
 
@@ -130,7 +231,7 @@ async fn apply_display_patch(
         sel.selection.every_n = vd;
     }
     if let Some(sl) = update.slice_layer {
-        sel.selection.layer = sl as u32;
+        sel.selection.layer = sl.max(0) as u32;
     }
     if let Some(sm) = update.slice_mode {
         sel.selection.all_layers = sm == "all";
@@ -165,7 +266,7 @@ async fn apply_display_patch(
     drop(sel);
     emit_display_realtime_change(&state, display_revision).await?;
 
-    Ok(Json(response))
+    Ok(response)
 }
 
 async fn emit_display_realtime_change(
@@ -182,11 +283,68 @@ async fn emit_display_realtime_change(
     Ok(())
 }
 
+fn visualization_state_to_display_selection(
+    replacement: &VisualizationStateResource,
+) -> DisplaySelection {
+    DisplaySelection {
+        active_quantity_id: replacement.active_quantity_id.clone(),
+        view_mode: replacement.view_mode,
+        field_component: replacement.field_component,
+        colormap: replacement.colormap.clone(),
+        auto_contrast: replacement.auto_contrast,
+        contrast_min: replacement.contrast_min,
+        contrast_max: replacement.contrast_max,
+        vector_glyphs: replacement.vector_glyphs,
+        vector_density: replacement.vector_density,
+        slice_mode: replacement.slice_mode.clone(),
+        slice_layer: replacement.slice_layer,
+        max_points: replacement.max_points,
+        x_chosen_size: replacement.x_chosen_size,
+        y_chosen_size: replacement.y_chosen_size,
+    }
+}
+
 pub(crate) fn build_display_selection_response(
     selection: &CurrentDisplaySelection,
     presentation: &DisplayPresentationState,
 ) -> DisplaySelection {
     DisplaySelection {
+        active_quantity_id: selection.selection.quantity.clone(),
+        view_mode: match selection.selection.view_mode {
+            RunnerDisplayViewMode::TwoD => DisplayViewMode::TwoD,
+            RunnerDisplayViewMode::ThreeD => DisplayViewMode::ThreeD,
+        },
+        field_component: match selection.selection.field_component {
+            DisplayFieldComponent::X => FieldComponent::X,
+            DisplayFieldComponent::Y => FieldComponent::Y,
+            DisplayFieldComponent::Z => FieldComponent::Z,
+            DisplayFieldComponent::Magnitude => FieldComponent::Magnitude,
+        },
+        colormap: presentation.colormap.clone(),
+        auto_contrast: selection.selection.auto_scale_enabled,
+        contrast_min: presentation.contrast_min,
+        contrast_max: presentation.contrast_max,
+        vector_glyphs: presentation.vector_glyphs,
+        vector_density: selection.selection.every_n,
+        slice_mode: if selection.selection.all_layers {
+            "all".into()
+        } else {
+            "single".into()
+        },
+        slice_layer: selection.selection.layer as i32,
+        max_points: selection.selection.max_points,
+        x_chosen_size: selection.selection.x_chosen_size,
+        y_chosen_size: selection.selection.y_chosen_size,
+    }
+}
+
+pub(crate) fn build_visualization_state_response(
+    selection: &CurrentDisplaySelection,
+    presentation: &DisplayPresentationState,
+) -> VisualizationStateResource {
+    VisualizationStateResource {
+        revision: selection.revision,
+        schema_version: 1,
         active_quantity_id: selection.selection.quantity.clone(),
         view_mode: match selection.selection.view_mode {
             RunnerDisplayViewMode::TwoD => DisplayViewMode::TwoD,

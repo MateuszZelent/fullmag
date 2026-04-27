@@ -1270,6 +1270,7 @@ fn fem_backend_prefers_domain_frame_declared_universe_over_legacy_study_universe
                 "size": [9.0, 7.0, 5.0],
                 "center": [1.0, 2.0, 3.0],
                 "airbox_hmax": 7.5,
+                "airbox_hmin": 1.5,
             },
             "object_bounds_min": [0.0, 0.0, 0.0],
             "object_bounds_max": [1.0, 1.0, 1.0],
@@ -1285,6 +1286,7 @@ fn fem_backend_prefers_domain_frame_declared_universe_over_legacy_study_universe
             "size": [99.0, 99.0, 99.0],
             "center": [0.0, 0.0, 0.0],
             "airbox_hmax": 0.5,
+            "airbox_hmin": 0.25,
         }),
     );
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
@@ -1342,6 +1344,7 @@ fn fem_backend_prefers_domain_frame_declared_universe_over_legacy_study_universe
             assert_eq!(declared_universe.size, Some([9.0, 7.0, 5.0]));
             assert_eq!(declared_universe.center, Some([1.0, 2.0, 3.0]));
             assert_eq!(declared_universe.airbox_hmax, Some(7.5));
+            assert_eq!(declared_universe.airbox_hmin, Some(1.5));
         }
         _ => panic!("expected FEM plan"),
     }

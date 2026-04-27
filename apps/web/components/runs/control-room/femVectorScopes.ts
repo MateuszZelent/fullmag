@@ -10,6 +10,9 @@ export type FemVectorScope =
   | { kind: "full"; id?: null }
   | { kind: Extract<FieldSampleScopeKind, "object" | "part" | "airbox" | "selection">; id?: string | null };
 
+type FemFieldDomain = "magnetic_only" | "full_domain" | "surface_only";
+type FemVectorDomainFilter = "auto" | "magnetic_only" | "full_domain" | "airbox_only";
+
 export interface ScopedFemVectorFrame {
   scope: FemVectorScope;
   field: DecodedFieldVector;
@@ -30,9 +33,19 @@ export function deriveFemVectorScopes(args: {
   meshParts: FemMeshPart[];
   meshEntityViewState: MeshEntityViewStateMap;
   airMeshVisible: boolean;
+  vectorDomainFilter?: FemVectorDomainFilter | null;
+  selectedFieldDomain?: FemFieldDomain | null;
 }): FemVectorScope[] {
-  const { meshParts, meshEntityViewState, airMeshVisible } = args;
-  if (meshParts.length === 0 || airMeshVisible) {
+  const { meshParts, meshEntityViewState, vectorDomainFilter, selectedFieldDomain } = args;
+  if (meshParts.length === 0) {
+    return [{ kind: "full" }];
+  }
+
+  if (
+    selectedFieldDomain === "full_domain" ||
+    selectedFieldDomain === "surface_only" ||
+    vectorDomainFilter === "full_domain"
+  ) {
     return [{ kind: "full" }];
   }
 

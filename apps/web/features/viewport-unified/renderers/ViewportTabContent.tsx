@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { DEFAULT_WORKSPACE_SYNC_STATE } from "@/src/features/workspaceSync";
 import { ViewportHost } from "@/features";
-import { MeshWorkspaceShell } from "@/src/features/meshWorkspace";
 import { UnifiedViewport3DRenderer, Viewport3DHost } from "@/features/viewport-unified";
 import FemMeshView3D from "@/components/preview/FemMeshView3D";
 import { ViewportErrorBoundary } from "@/components/preview/ViewportErrorBoundary";
@@ -212,7 +211,8 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             viewportFitSeed={bridge.viewportFitSeed}
             quantityId={ctx.requestedPreviewQuantity}
             quantityOptions={bridge.femQuantityOptions}
-            colorField="none"
+            colorField={bridge.femColorFieldForRender}
+            showOrientationLegend={ctx.femMagnetization3DActive}
             toolbarMode={bridge.femToolbarMode}
             renderMode={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
@@ -238,6 +238,14 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             onPreviewMaxPointsChange={bridge.handlePreviewMaxPointsChange}
             onSelectionChange={ctx.setMeshSelection}
             onRefine={ctx.handleLassoRefine}
+            showArrowsRequested={bridge.femShowArrowsForRender}
+            arrowColorMode={ctx.femArrowColorMode}
+            arrowMonoColor={ctx.femArrowMonoColor}
+            arrowAlpha={ctx.femArrowAlpha}
+            arrowLengthScale={ctx.femArrowLengthScale}
+            arrowThickness={ctx.femArrowThickness}
+            vectorDomainFilter={ctx.femVectorDomainFilter}
+            ferromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
             antennaOverlays={ctx.antennaOverlays}
             selectedAntennaId={bridge.selectedAntennaName}
             objectOverlays={
@@ -662,11 +670,10 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
                   const viewport3D = (
                     <UnifiedViewport3DRenderer
                       showGeometryAuthoringViewport={false}
-                      isFemMeshMode={
-                        ctx.effectiveViewMode === "Mesh" && bridge.femDiscretization
-                      }
+                      isFemMeshMode={false}
                       isFem3DMode={Boolean(
-                        bridge.femDiscretization && ctx.effectiveViewMode === "3D",
+                        bridge.femDiscretization &&
+                          (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh"),
                       )}
                       renderGeometryAuthoring={renderHostedFem3DViewport}
                       renderFemMesh={renderHostedFemMeshViewport}
@@ -674,20 +681,7 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
                       renderFdm={renderHostedVectorSurfaceViewport}
                     />
                   );
-                  return ctx.effectiveViewMode === "Mesh" &&
-                    bridge.effectiveMeshWorkspaceModel ? (
-                    <MeshWorkspaceShell
-                      model={bridge.effectiveMeshWorkspaceModel}
-                      selection={bridge.workspaceSelection}
-                      sync={workspaceSyncState}
-                      onBuild={bridge.handleMeshWorkspaceBuild}
-                      onToolbarChange={bridge.handleMeshWorkspaceToolbarChange}
-                    >
-                      {viewport3D}
-                    </MeshWorkspaceShell>
-                  ) : (
-                    viewport3D
-                  );
+                  return viewport3D;
                 }
                 case "UnifiedViewport2D":
                   return renderUnified2DViewport({

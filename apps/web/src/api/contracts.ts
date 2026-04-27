@@ -17,6 +17,8 @@ export type {
   CurrentRunResource,
   DisplayPatchRequest,
   DisplaySelection,
+  VisualizationStatePatch,
+  VisualizationStateResource,
   DomainMeta,
   EngineLogResource,
   FieldCatalog,

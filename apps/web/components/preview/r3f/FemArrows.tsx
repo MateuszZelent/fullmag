@@ -286,6 +286,7 @@ export function FemArrows({
       : samplingMode === "surface"
         ? false
         : (
+            Boolean(effectiveNodeMask) ||
             meshData.quantityDomain === "full_domain" ||
             meshData.quantityDomain === "surface_only"
           );

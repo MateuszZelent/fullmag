@@ -14,7 +14,6 @@ import { useCommand, useViewport, useModel } from "../components/runs/control-ro
  * - Ctrl+O           → Open session
  * - 1                → 3D view
  * - 2                → 2D view
- * - 3                → Mesh view
  * - Ctrl+Shift+P     → Toggle solver setup
  * - I                → Toggle isolate/context mode
  * - H                → Show all (exit isolate + reset visibility)
@@ -83,10 +82,9 @@ export function useKeyboardShortcuts(callbacks?: KeyboardShortcutCallbacks) {
         return;
       }
 
-      /* 1/2/3 → View modes */
+      /* 1/2 → View modes */
       if (e.key === "1" && !ctrl) { e.preventDefault(); handleViewModeChange("3D"); return; }
       if (e.key === "2" && !ctrl) { e.preventDefault(); handleViewModeChange("2D"); return; }
-      if (e.key === "3" && !ctrl) { e.preventDefault(); handleViewModeChange("Mesh"); return; }
 
       /* Ctrl+Shift+P → Solver setup */
       if (e.key === "P" && ctrl && shift) {

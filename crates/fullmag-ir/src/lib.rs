@@ -1778,6 +1778,8 @@ pub struct DeclaredUniverseIR {
     pub padding: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub airbox_hmax: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airbox_hmin: Option<f64>,
 }
 
 impl Default for DeclaredUniverseIR {
@@ -1788,6 +1790,7 @@ impl Default for DeclaredUniverseIR {
             center: None,
             padding: None,
             airbox_hmax: None,
+            airbox_hmin: None,
         }
     }
 }
@@ -1807,6 +1810,9 @@ impl DeclaredUniverseIR {
             airbox_hmax: object
                 .get("airbox_hmax")
                 .and_then(|candidate| candidate.as_f64()),
+            airbox_hmin: object
+                .get("airbox_hmin")
+                .and_then(|candidate| candidate.as_f64()),
         })
     }
 }
@@ -1822,6 +1828,8 @@ pub struct UniverseMeshConfigIR {
     pub padding: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub airbox_hmax: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airbox_hmin: Option<f64>,
 }
 
 impl From<&DeclaredUniverseIR> for UniverseMeshConfigIR {
@@ -1832,6 +1840,7 @@ impl From<&DeclaredUniverseIR> for UniverseMeshConfigIR {
             center: value.center,
             padding: value.padding,
             airbox_hmax: value.airbox_hmax,
+            airbox_hmin: value.airbox_hmin,
         }
     }
 }
@@ -1908,6 +1917,16 @@ impl MeshSemanticsIR {
             }
             if universe.airbox_hmax.is_some_and(|value| value <= 0.0) {
                 errors.push("universe_mesh_config.airbox_hmax must be positive".to_string());
+            }
+            if universe.airbox_hmin.is_some_and(|value| value <= 0.0) {
+                errors.push("universe_mesh_config.airbox_hmin must be positive".to_string());
+            }
+            if let (Some(hmin), Some(hmax)) = (universe.airbox_hmin, universe.airbox_hmax) {
+                if hmin > hmax {
+                    errors.push(
+                        "universe_mesh_config.airbox_hmin must be <= airbox_hmax".to_string(),
+                    );
+                }
             }
         }
 
@@ -4779,6 +4798,7 @@ mod tests {
                 center: None,
                 padding: None,
                 airbox_hmax: Some(10e-9),
+                airbox_hmin: Some(2e-9),
             }),
             per_object_mesh_configs: vec![
                 PerObjectMeshConfigIR {
@@ -4824,6 +4844,7 @@ mod tests {
                 center: None,
                 padding: Some([20e-9, 20e-9, 20e-9]),
                 airbox_hmax: Some(8e-9),
+                airbox_hmin: Some(2e-9),
             }),
             per_object_mesh_configs: vec![PerObjectMeshConfigIR {
                 object_id: "strip".to_string(),
@@ -4862,6 +4883,7 @@ mod tests {
                 center: None,
                 padding: None,
                 airbox_hmax: Some(-1.0),
+                airbox_hmin: Some(-2.0),
             }),
             per_object_mesh_configs: vec![PerObjectMeshConfigIR {
                 object_id: String::new(),

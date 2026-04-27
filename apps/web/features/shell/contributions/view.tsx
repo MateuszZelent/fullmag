@@ -44,6 +44,13 @@ const VECTOR_COLOR_ITEMS = [
   { value: "monochrome", label: "Monochrome" },
 ];
 
+const AIRBOX_RENDER_ITEMS = [
+  { value: "surface", label: "Shaded" },
+  { value: "wireframe", label: "Wireframe" },
+  { value: "surface+edges", label: "Shaded + wireframe" },
+  { value: "points", label: "Points" },
+];
+
 function noSessionReason(ctx: RibbonBuildContext): string | null {
   return ctx.can({ id: "viewport.set-mode", mode: "3D" }) ? null : "No active workspace session";
 }
@@ -83,6 +90,7 @@ function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const quantityStatus = ctx.requestedPreviewQuantityDataStatus ?? (ctx.previewPending ? "pending" : "ready");
   const everyN = ctx.requestedPreviewEveryN ?? 4;
   const autoScale = Boolean(ctx.requestedPreviewAutoScale ?? true);
+  const shaderVisible = ctx.quantityShaderVisible;
   const component = ctx.requestedPreviewComponent ?? "magnitude";
   const scalarReason = ctx.isFemBackend
     ? "FEM explicit topology may expose orientation/component coloring before scalar colormap support."
@@ -91,6 +99,15 @@ function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   return [
     { type: "label", id: "quantity:header", label: "Active quantity", badge: quantityStatus },
     { type: "status", id: "quantity:current", label: "Current", value: ctx.selectedQuantity ?? "None" },
+    {
+      type: "checkbox",
+      id: "quantity:shader-visible",
+      label: "Shader / magnetic texture on/off",
+      checked: shaderVisible,
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onCheckedChange: (visible) => ctx.run({ id: "viewport.toggle-quantity-shader", visible }),
+    },
     { type: "separator", id: "quantity:s0" },
     {
       type: "radio-group",
@@ -300,7 +317,13 @@ function buildVectorsMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
 
 function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const global = canUse3D(ctx);
+  const renderMode = ctx.airMeshRenderMode ?? "wireframe";
+  const shaded = renderMode === "surface" || renderMode === "surface+edges";
+  const wireframe = renderMode === "wireframe" || renderMode === "surface+edges";
+  const points = renderMode === "points";
+  const vectors = ctx.femVectorDomainFilter === "airbox_only" && Boolean(ctx.meshShowArrows);
   return [
+    { type: "label", id: "airbox:header", label: "Airbox display", badge: ctx.airboxVisible ? renderMode : "hidden" },
     {
       type: "checkbox",
       id: "airbox:visible",
@@ -312,12 +335,54 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
     },
     {
       type: "checkbox",
-      id: "airbox:vectors",
-      label: "Vectors on/off",
-      checked: ctx.femVectorDomainFilter === "airbox_only",
+      id: "airbox:shaded",
+      label: "Shaded on/off",
+      checked: ctx.airboxVisible && shaded,
       disabled: global.disabled,
       disabledReason: global.reason,
-      onCheckedChange: (vectors) => ctx.run({ id: "viewport.set-airbox-display", patch: { vectors } }),
+      onCheckedChange: (nextShaded) => ctx.run({ id: "viewport.set-airbox-display", patch: { shaded: nextShaded } }),
+    },
+    {
+      type: "checkbox",
+      id: "airbox:wireframe",
+      label: "Wireframe on/off",
+      checked: ctx.airboxVisible && wireframe,
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onCheckedChange: (nextWireframe) => ctx.run({ id: "viewport.set-airbox-display", patch: { wireframe: nextWireframe } }),
+    },
+    {
+      type: "checkbox",
+      id: "airbox:points",
+      label: "Points on/off",
+      checked: ctx.airboxVisible && points,
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onCheckedChange: (nextPoints) => ctx.run({ id: "viewport.set-airbox-display", patch: { points: nextPoints } }),
+    },
+    {
+      type: "checkbox",
+      id: "airbox:vectors",
+      label: "Vectors on/off",
+      checked: vectors,
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onCheckedChange: (nextVectors) => ctx.run({ id: "viewport.set-airbox-display", patch: { vectors: nextVectors } }),
+    },
+    { type: "separator", id: "airbox:s-visible" },
+    {
+      type: "radio-group",
+      id: "airbox:render-mode",
+      label: "Airbox render",
+      value: renderMode,
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onValueChange: (nextRenderMode) =>
+        ctx.run({
+          id: "viewport.set-airbox-display",
+          patch: { renderMode: nextRenderMode as "surface" | "wireframe" | "surface+edges" | "points" },
+        }),
+      items: AIRBOX_RENDER_ITEMS,
     },
     {
       type: "slider",
@@ -332,9 +397,98 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       disabledReason: global.reason,
       onValueChange: (opacity) => ctx.run({ id: "viewport.set-airbox-display", patch: { opacity } }),
     },
+    {
+      type: "submenu",
+      id: "airbox:vectors-submenu",
+      label: "Airbox vectors",
+      nodes: [
+        {
+          type: "slider",
+          id: "airbox:vectors-density",
+          label: "Density / Every N",
+          value: ctx.requestedPreviewEveryN ?? 4,
+          min: 1,
+          max: 64,
+          step: 1,
+          disabled: global.disabled || !vectors,
+          disabledReason: vectors ? global.reason : "Enable Airbox vectors first",
+          onValueChange: (everyN) => ctx.run({ id: "viewport.set-vector-density", everyN }),
+        },
+        {
+          type: "slider",
+          id: "airbox:vectors-length",
+          label: "Length scale",
+          value: ctx.femArrowLengthScale ?? 1,
+          min: 0.2,
+          max: 4,
+          step: 0.1,
+          disabled: global.disabled || !vectors,
+          disabledReason: vectors ? global.reason : "Enable Airbox vectors first",
+          onValueChange: (lengthScale) => ctx.run({ id: "viewport.set-vector-style", patch: { lengthScale } }),
+        },
+        {
+          type: "slider",
+          id: "airbox:vectors-thickness",
+          label: "Thickness",
+          value: ctx.femArrowThickness ?? 1,
+          min: 0.2,
+          max: 4,
+          step: 0.1,
+          disabled: global.disabled || !vectors,
+          disabledReason: vectors ? global.reason : "Enable Airbox vectors first",
+          onValueChange: (thickness) => ctx.run({ id: "viewport.set-vector-style", patch: { thickness } }),
+        },
+        {
+          type: "slider",
+          id: "airbox:vectors-alpha",
+          label: "Alpha",
+          value: ctx.femArrowAlpha ?? 0.9,
+          min: 0,
+          max: 1,
+          step: 0.05,
+          disabled: global.disabled || !vectors,
+          disabledReason: vectors ? global.reason : "Enable Airbox vectors first",
+          onValueChange: (alpha) => ctx.run({ id: "viewport.set-vector-style", patch: { alpha } }),
+        },
+      ],
+    },
+    {
+      type: "submenu",
+      id: "airbox:vector-colors",
+      label: "Airbox vector colors",
+      nodes: [
+        {
+          type: "radio-group",
+          id: "airbox:vector-coloring",
+          label: "Vector colors",
+          value: ctx.femArrowColorMode ?? "orientation",
+          disabled: global.disabled || !vectors,
+          disabledReason: vectors ? global.reason : "Enable Airbox vectors first",
+          onValueChange: (colorMode) =>
+            ctx.run({
+              id: "viewport.set-vector-style",
+              patch: { colorMode: colorMode as "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome" },
+            }),
+          items: VECTOR_COLOR_ITEMS,
+        },
+        {
+          type: "color",
+          id: "airbox:vector-mono-color",
+          label: "Monochrome vector color",
+          value: ctx.femArrowMonoColor ?? "#38d9ff",
+          disabled: global.disabled || !vectors || ctx.femArrowColorMode !== "monochrome",
+          disabledReason: !vectors
+            ? "Enable Airbox vectors first"
+            : ctx.femArrowColorMode === "monochrome"
+              ? global.reason
+              : "Use Monochrome vector coloring first",
+          onValueChange: (monoColor) => ctx.run({ id: "viewport.set-vector-style", patch: { monoColor } }),
+        },
+      ],
+    },
     { type: "separator", id: "airbox:s0" },
     { type: "item", id: "airbox:focus", label: "Focus airbox", disabled: true, disabledReason: "Airbox focus command is pending viewport preset support" },
-    { type: "item", id: "airbox:reset", label: "Reset airbox display", action: () => ctx.run({ id: "viewport.set-airbox-display", patch: { visible: true, opacity: 35, vectors: false } }) },
+    { type: "item", id: "airbox:reset", label: "Reset airbox display", action: () => ctx.run({ id: "viewport.set-airbox-display", patch: { visible: true, opacity: 35, renderMode: "wireframe", vectors: false } }) },
   ];
 }
 

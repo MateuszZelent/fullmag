@@ -14,7 +14,7 @@ import type { MeshOptionsState, SizeFieldSpec } from "../../../panels/MeshSettin
 import type { DisplaySelection, MeshCommandTarget, SceneDocument } from "../../../../lib/session/types";
 import type { FemMeshData } from "@/components/preview/FemMeshView3D";
 import {
-  displayPatchFromPreviewComponent,
+  displayPatchFromPreviewComponentOnly,
 } from "@/src/api/displaySelection";
 import type {
   DisplayPatchRequest,
@@ -357,7 +357,7 @@ export function useMeshCommandPipeline({
         displayPatch = selectionToDisplayPatch(nextSelection);
         break;
       case "/component":
-        Object.assign(nextSelection, displayPatchFromPreviewComponent(
+        Object.assign(nextSelection, displayPatchFromPreviewComponentOnly(
           payload.component === "3D" ||
             payload.component === "x" ||
             payload.component === "y" ||
@@ -370,7 +370,6 @@ export function useMeshCommandPipeline({
         displayPatch = {
           view_mode: nextSelection.view_mode,
           field_component: nextSelection.field_component,
-          vector_glyphs: Boolean(nextSelection.vector_glyphs ?? false),
         };
         break;
       case "/layer":

@@ -5,7 +5,7 @@
  */
 
 import { useCallback } from "react";
-import { displayPatchFromPreviewComponent } from "@/src/api/displaySelection";
+import { displayPatchFromPreviewComponentOnly } from "@/src/api/displaySelection";
 import type { DisplayPatchRequest } from "@/src/api/types";
 
 export function useUnifiedDisplayControls(
@@ -13,7 +13,7 @@ export function useUnifiedDisplayControls(
 ) {
   const setComponent = useCallback(
     (component: string) => {
-      return updateDisplay(displayPatchFromPreviewComponent(
+      return updateDisplay(displayPatchFromPreviewComponentOnly(
         component === "3D" ||
           component === "x" ||
           component === "y" ||

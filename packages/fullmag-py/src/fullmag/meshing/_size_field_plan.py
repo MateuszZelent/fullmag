@@ -268,8 +268,12 @@ def _build_transition_fields(
         )
 
         if transition_distance is None:
-            # Default: transition zone = 3× bulk hmax
-            transition_distance = bulk_hmax * 3.0
+            # Keep plain per-object hmax local to the object.  Automatically
+            # injecting a shell transition leaks fine object targets into the
+            # surrounding airbox and makes the shared-domain mesh look nearly
+            # uniform.  Users can still request a graded air/body shell
+            # explicitly with transition_distance.
+            continue
 
         if bulk_hmax >= default_hmax:
             continue

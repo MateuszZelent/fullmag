@@ -4,7 +4,6 @@ import { memo } from "react";
 import {
   Box,
   ScanLine,
-  Layers3,
   BarChart3,
   Activity,
   Cpu,
@@ -28,7 +27,6 @@ interface CenterTab {
 
 const CENTER_TABS: CenterTab[] = [
   { id: "3d-view",      label: "3D View",    icon: <Box size={12} />,     mode: "3D" },
-  { id: "mesh",         label: "Mesh",       icon: <Layers3 size={12} />, mode: "Mesh" },
   { id: "2d-slice",     label: "2D Slice",   icon: <ScanLine size={12} />, mode: "2D" },
   { id: "analysis",     label: "Analysis",   icon: <BarChart3 size={12} />, mode: "Analyze" },
   { id: "charts",       label: "Charts",     icon: <Activity size={12} />, mode: null, disabled: true },
@@ -39,7 +37,7 @@ function viewModeToTabId(mode: ViewportMode): string {
   switch (mode) {
     case "3D":      return "3d-view";
     case "2D":      return "2d-slice";
-    case "Mesh":    return "mesh";
+    case "Mesh":    return "3d-view";
     case "Analyze": return "analysis";
     default:        return "3d-view";
   }
@@ -96,8 +94,9 @@ function QuantitySelector({ targets, selected, onSelect }: QuantitySelectorProps
 
 export const ViewportTabBar = memo(function ViewportTabBar() {
   const viewport = useViewport();
+  const effectiveViewMode = viewport.effectiveViewMode === "Mesh" ? "3D" : viewport.effectiveViewMode;
 
-  const activeTabId = viewModeToTabId(viewport.effectiveViewMode);
+  const activeTabId = viewModeToTabId(effectiveViewMode);
 
   const handleTabClick = (tab: CenterTab) => {
     if (tab.disabled || tab.mode === null) return;
@@ -137,7 +136,7 @@ export const ViewportTabBar = memo(function ViewportTabBar() {
       <div className="flex-1" />
 
       {/* ── Quantity selector (visible in 3D and Mesh modes) ── */}
-      {(viewport.effectiveViewMode === "3D" || viewport.effectiveViewMode === "Mesh") &&
+      {effectiveViewMode === "3D" &&
       viewport.quickPreviewTargets.length > 0 ? (
         <div className="flex items-center gap-2">
           <span className="text-[0.6rem] font-semibold uppercase tracking-[0.14em] text-zinc-500">

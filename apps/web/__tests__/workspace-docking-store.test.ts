@@ -164,7 +164,7 @@ describe("workspace docking store", () => {
     const studyTabs = defaults.study;
     expect(studyTabs.find((tab) => tab.id === "core:3d")?.lifecycle).toBe("unmount-on-hide");
     expect(studyTabs.find((tab) => tab.id === "core:2d")?.lifecycle).toBe("unmount-on-hide");
-    expect(studyTabs.find((tab) => tab.id === "core:mesh")?.lifecycle).toBe("unmount-on-hide");
+    expect(studyTabs.some((tab) => tab.id === "core:mesh")).toBe(false);
     expect(studyTabs.find((tab) => tab.id === "core:charts")?.lifecycle).toBe("unmount-on-hide");
     expect(studyTabs.find((tab) => tab.id === "core:charts")?.keepAlive).toBe(false);
   });

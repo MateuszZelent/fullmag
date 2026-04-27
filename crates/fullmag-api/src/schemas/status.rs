@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy)]
 pub enum DisplayViewMode {
     #[serde(rename = "2d")]
     TwoD,
@@ -9,7 +9,7 @@ pub enum DisplayViewMode {
     ThreeD,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldComponent {
     X,
@@ -117,6 +117,7 @@ pub struct ResourceRevisionMap {
     pub stages_revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_revision: Option<u64>,
+    pub visualization_state_revision: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

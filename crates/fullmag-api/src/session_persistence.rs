@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::error::ApiError;
-use crate::types::{AppState, RuntimeStatusView, SessionStateResponse};
+use crate::types::{AppState, DisplayPresentationState, RuntimeStatusView, SessionStateResponse};
 use crate::{
     current_live_realtime_state_from_snapshot, publish_current_live_realtime_batch_changed,
 };
@@ -40,6 +40,8 @@ struct PersistedCurrentLiveSnapshot {
     latest_fields: crate::types::LatestFields,
     artifacts: Vec<crate::types::ArtifactEntry>,
     display_selection: crate::types::CurrentDisplaySelection,
+    #[serde(default)]
+    display_presentation: DisplayPresentationState,
     preview_config: crate::types::CurrentPreviewConfig,
     preview: Option<crate::types::PreviewState>,
     builder_adapter: Option<fullmag_authoring::ScriptBuilderState>,
@@ -73,6 +75,7 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
             builder_adapter: value.builder_adapter.clone(),
             mesh_revision: value.mesh_revision,
             mesh_build_revision: value.mesh_build_revision,
+            display_presentation: DisplayPresentationState::default(),
         }
     }
 }
@@ -246,7 +249,12 @@ async fn collect_project_documents(
             docs.insert("ui_state.json".into(), b"{}".to_vec());
         }
         // Full workspace/session snapshot used for exact workspace restore.
+        let presentation = state.current_display_presentation.read().await.clone();
         let persisted = PersistedCurrentLiveSnapshot::from(snapshot);
+        let persisted = PersistedCurrentLiveSnapshot {
+            display_presentation: presentation,
+            ..persisted
+        };
         if let Ok(data) = serde_json::to_vec_pretty(&persisted) {
             docs.insert("current_live_snapshot.json".into(), data);
         }
@@ -409,6 +417,7 @@ pub(crate) async fn import_session_commit(
         if let Ok(persisted) =
             serde_json::from_slice::<PersistedCurrentLiveSnapshot>(&snapshot_bytes)
         {
+            let restored_display_presentation = persisted.display_presentation.clone();
             let restored: SessionStateResponse = persisted.into();
             // Refresh the in-memory active workspace.
             {
@@ -418,6 +427,10 @@ pub(crate) async fn import_session_commit(
             {
                 let mut selection = state.current_display_selection.write().await;
                 *selection = restored.display_selection.clone();
+            }
+            {
+                let mut presentation = state.current_display_presentation.write().await;
+                *presentation = restored_display_presentation;
             }
             let realtime_state = current_live_realtime_state_from_snapshot(
                 &state,

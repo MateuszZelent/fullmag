@@ -1,12 +1,11 @@
 import type { Route } from "next";
 import type { WorkspaceTab } from "./workspace-store";
 
-export type WorkspaceRouteTabSlug = "3d" | "2d" | "mesh" | "analyze" | "charts";
+export type WorkspaceRouteTabSlug = "3d" | "2d" | "analyze" | "charts";
 
 const SLUG_TO_CORE_TAB_ID: Record<WorkspaceRouteTabSlug, string> = {
   "3d": "core:3d",
   "2d": "core:2d",
-  mesh: "core:mesh",
   analyze: "core:analyze",
   charts: "core:charts",
 };
@@ -14,7 +13,6 @@ const SLUG_TO_CORE_TAB_ID: Record<WorkspaceRouteTabSlug, string> = {
 const CORE_TAB_ID_TO_SLUG: Record<string, WorkspaceRouteTabSlug> = {
   "core:3d": "3d",
   "core:2d": "2d",
-  "core:mesh": "mesh",
   "core:analyze": "analyze",
   "core:charts": "charts",
 };
@@ -27,7 +25,7 @@ export function normalizeWorkspaceTabSlug(
   if (!slug) return null;
   if (slug === "3d" || slug === "viewport" || slug === "viewport-3d") return "3d";
   if (slug === "2d" || slug === "slice" || slug === "viewport-2d") return "2d";
-  if (slug === "mesh" || slug === "mesh-workspace" || slug === "viewport-mesh") return "mesh";
+  if (slug === "mesh" || slug === "mesh-workspace" || slug === "viewport-mesh") return "3d";
   if (slug === "analyze" || slug === "analysis") return "analyze";
   if (slug === "charts" || slug === "chart" || slug === "plots") return "charts";
   return null;
@@ -49,7 +47,7 @@ export function workspaceRouteSlugForTab(
   if (coreSlug) return coreSlug;
   if (tab.kind === "viewport-3d" || tab.kind === "result-quantity") return "3d";
   if (tab.kind === "viewport-2d") return "2d";
-  if (tab.kind === "viewport-mesh") return "mesh";
+  if (tab.kind === "viewport-mesh") return "3d";
   if (tab.kind === "viewport-charts") return "charts";
   return "analyze";
 }

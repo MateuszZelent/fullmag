@@ -1380,6 +1380,22 @@ export interface paths {
         patch: operations["visualization_patch_sessions_current_visualization_display"];
         trace?: never;
     };
+    "/v2/sessions/current/visualization/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["visualization_get_sessions_current_visualization_state"];
+        put: operations["visualization_put_sessions_current_visualization_state"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["visualization_patch_sessions_current_visualization_state"];
+        trace?: never;
+    };
     "/v2/sessions/current/workspace/layout": {
         parameters: {
             query?: never;
@@ -2450,6 +2466,8 @@ export interface components {
             /** Format: int64 */
             topology_revision: number;
             /** Format: int64 */
+            visualization_state_revision: number;
+            /** Format: int64 */
             workspace_revision: number;
         };
         /**
@@ -2777,6 +2795,62 @@ export interface components {
             scene_revision: number;
             study_universe_mesh: Record<string, never> | null;
             universe: Record<string, never> | null;
+        };
+        VisualizationStatePatch: {
+            active_quantity_id?: string | null;
+            auto_contrast?: boolean | null;
+            colormap?: string | null;
+            /** Format: double */
+            contrast_max?: number | null;
+            /** Format: double */
+            contrast_min?: number | null;
+            field_component?: null | components["schemas"]["FieldComponent"];
+            /** Format: int32 */
+            max_points?: number | null;
+            /** Format: int32 */
+            slice_layer?: number | null;
+            slice_mode?: string | null;
+            /** Format: int32 */
+            vector_density?: number | null;
+            vector_glyphs?: boolean | null;
+            view_mode?: null | components["schemas"]["DisplayViewMode"];
+            /** Format: int32 */
+            x_chosen_size?: number | null;
+            /** Format: int32 */
+            y_chosen_size?: number | null;
+        };
+        VisualizationStateResource: {
+            active_quantity_id: string;
+            auto_contrast: boolean;
+            colormap: string;
+            /** Format: double */
+            contrast_max?: number | null;
+            /** Format: double */
+            contrast_min?: number | null;
+            field_component: components["schemas"]["FieldComponent"];
+            /** Format: int32 */
+            max_points: number;
+            /**
+             * Format: int64
+             * @description Monotonic revision of all visualization state.
+             */
+            revision: number;
+            /**
+             * Format: int32
+             * @description Schema semver for consumers to detect payload shape changes.
+             */
+            schema_version: number;
+            /** Format: int32 */
+            slice_layer: number;
+            slice_mode: string;
+            /** Format: int32 */
+            vector_density: number;
+            vector_glyphs: boolean;
+            view_mode: components["schemas"]["DisplayViewMode"];
+            /** Format: int32 */
+            x_chosen_size: number;
+            /** Format: int32 */
+            y_chosen_size: number;
         };
         WorkspaceActiveNodeReplaceRequest: {
             node_id?: string | null;
@@ -6101,6 +6175,95 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DisplaySelection"];
+                };
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    visualization_get_sessions_current_visualization_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current visualization state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisualizationStateResource"];
+                };
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    visualization_put_sessions_current_visualization_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VisualizationStateResource"];
+            };
+        };
+        responses: {
+            /** @description Visualization state replaced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisualizationStateResource"];
+                };
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    visualization_patch_sessions_current_visualization_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VisualizationStatePatch"];
+            };
+        };
+        responses: {
+            /** @description Visualization state patched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisualizationStateResource"];
                 };
             };
             /** @description No active workspace */

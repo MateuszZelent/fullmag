@@ -418,7 +418,7 @@ class ProblemApiTests(unittest.TestCase):
             center=(5e-9, 0.0, -1e-9),
             padding=(2e-9, 2e-9, 1e-9),
             airbox_hmax=50e-9,
-            minimum_element_size=15e-9,
+            airbox_hmin=15e-9,
             airbox_growth_rate=1.4,
             airbox_grading="linear",
         )

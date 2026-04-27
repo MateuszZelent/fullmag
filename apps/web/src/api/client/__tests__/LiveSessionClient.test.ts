@@ -21,6 +21,7 @@ describe("LiveSessionClient v2 transport contract", () => {
     assertOpenApiV2Path(sessionApiPaths.data.quantities);
     assertOpenApiV2Path(sessionApiPaths.data.fields);
     assertOpenApiV2Path(sessionApiPaths.visualization.display);
+    assertOpenApiV2Path(sessionApiPaths.visualization.state);
     assertOpenApiV2Path(sessionApiPaths.simulation.commands);
     assertOpenApiV2Path(sessionApiPaths.simulation.runsCurrent);
     assertOpenApiV2Path(sessionApiPaths.meshing.sharedDomainTopology);

@@ -16,6 +16,18 @@ export type ResultAnalysisKind =
   | "quantity"
   | "table";
 
+export type ViewportMeshRenderMode = "surface" | "wireframe" | "surface+edges" | "points";
+
+export type AirboxDisplayPatch = Partial<{
+  visible: boolean;
+  opacity: number;
+  vectors: boolean;
+  shaded: boolean;
+  wireframe: boolean;
+  points: boolean;
+  renderMode: ViewportMeshRenderMode;
+}>;
+
 export interface RibbonCommandContext {
   viewMode?: string;
   isFemBackend?: boolean;
@@ -48,6 +60,7 @@ export interface RibbonCommandContext {
   onSetPreviewEveryN?: (everyN: number) => void;
   onSetPreviewColormap?: (colormap: string) => void;
   onSetPreviewAutoScale?: (enabled: boolean) => void;
+  onSetQuantityShaderVisible?: (visible: boolean) => void;
   onExport?: () => void;
   onCapture?: () => void;
   onStateExport?: () => void;
@@ -91,7 +104,7 @@ export interface RibbonCommandContext {
   onSetTransformScope?: (
     scope: "camera" | "object" | "texture",
   ) => void;
-  onSetMeshRenderMode?: (mode: "surface" | "wireframe" | "surface+edges" | "points") => void;
+  onSetMeshRenderMode?: (mode: ViewportMeshRenderMode) => void;
   onSetMeshOpacity?: (opacity: number) => void;
   onSetSelectedObjectOpacity?: (opacity: number) => void;
   onSetMeshClipEnabled?: (enabled: boolean) => void;
@@ -108,11 +121,7 @@ export interface RibbonCommandContext {
     domain: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
     ferromagnetVisibility: "hide" | "ghost";
   }>) => void;
-  onSetAirboxDisplay?: (patch: Partial<{
-    visible: boolean;
-    opacity: number;
-    vectors: boolean;
-  }>) => void;
+  onSetAirboxDisplay?: (patch: AirboxDisplayPatch) => void;
   onSetTextureTransformMode?: (
     objectId: string,
     mode: "translate" | "rotate" | "scale",
@@ -193,6 +202,7 @@ export type RibbonCommand =
   | { id: "viewport.set-component"; component: "3D" | "x" | "y" | "z" | "magnitude" }
   | { id: "viewport.set-colormap"; colormap: string }
   | { id: "viewport.set-auto-scale"; enabled: boolean }
+  | { id: "viewport.toggle-quantity-shader"; visible: boolean }
   | { id: "viewport.set-vector-density"; everyN: number }
   | { id: "viewport.toggle-vectors"; visible: boolean }
   | {
@@ -207,8 +217,8 @@ export type RibbonCommand =
         ferromagnetVisibility: "hide" | "ghost";
       }>;
     }
-  | { id: "viewport.set-airbox-display"; patch: Partial<{ visible: boolean; opacity: number; vectors: boolean }> }
-  | { id: "viewport.set-global-render-mode"; renderMode: "surface" | "wireframe" | "surface+edges" | "points" }
+  | { id: "viewport.set-airbox-display"; patch: AirboxDisplayPatch }
+  | { id: "viewport.set-global-render-mode"; renderMode: ViewportMeshRenderMode }
   | { id: "viewport.set-global-opacity"; opacity: number }
   | { id: "viewport.set-global-clip"; patch: Partial<{ enabled: boolean; axis: "x" | "y" | "z"; position: number; flipped: boolean }> }
   | { id: "viewport.set-selected-opacity"; opacity: number }
@@ -326,6 +336,8 @@ export function canExecuteRibbonCommand(
       return typeof ctx.onSetPreviewColormap === "function";
     case "viewport.set-auto-scale":
       return typeof ctx.onSetPreviewAutoScale === "function";
+    case "viewport.toggle-quantity-shader":
+      return typeof ctx.onSetQuantityShaderVisible === "function";
     case "viewport.set-vector-density":
       return typeof ctx.onSetPreviewEveryN === "function";
     case "viewport.toggle-vectors":
@@ -497,6 +509,9 @@ export function executeRibbonCommand(
       return;
     case "viewport.set-auto-scale":
       ctx.onSetPreviewAutoScale?.(command.enabled);
+      return;
+    case "viewport.toggle-quantity-shader":
+      ctx.onSetQuantityShaderVisible?.(command.visible);
       return;
     case "viewport.set-vector-density":
       ctx.onSetPreviewEveryN?.(command.everyN);

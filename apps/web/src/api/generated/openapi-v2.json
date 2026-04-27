@@ -3874,6 +3874,11 @@
             "minimum": 0,
             "type": "integer"
           },
+          "visualization_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "workspace_revision": {
             "format": "int64",
             "minimum": 0,
@@ -3897,7 +3902,8 @@
           "mesh_revision",
           "mesh_build_revision",
           "commands_revision",
-          "stages_revision"
+          "stages_revision",
+          "visualization_state_revision"
         ],
         "type": "object"
       },
@@ -5181,6 +5187,206 @@
           "universe",
           "study_universe_mesh",
           "mesh_dirty"
+        ],
+        "type": "object"
+      },
+      "VisualizationStatePatch": {
+        "properties": {
+          "active_quantity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auto_contrast": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "colormap": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contrast_max": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "contrast_min": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "field_component": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FieldComponent"
+              }
+            ]
+          },
+          "max_points": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "slice_layer": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "slice_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vector_density": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "vector_glyphs": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "view_mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DisplayViewMode"
+              }
+            ]
+          },
+          "x_chosen_size": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "y_chosen_size": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "VisualizationStateResource": {
+        "properties": {
+          "active_quantity_id": {
+            "type": "string"
+          },
+          "auto_contrast": {
+            "type": "boolean"
+          },
+          "colormap": {
+            "type": "string"
+          },
+          "contrast_max": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "contrast_min": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "field_component": {
+            "$ref": "#/components/schemas/FieldComponent"
+          },
+          "max_points": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "description": "Monotonic revision of all visualization state.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "description": "Schema semver for consumers to detect payload shape changes.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slice_layer": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "slice_mode": {
+            "type": "string"
+          },
+          "vector_density": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "vector_glyphs": {
+            "type": "boolean"
+          },
+          "view_mode": {
+            "$ref": "#/components/schemas/DisplayViewMode"
+          },
+          "x_chosen_size": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "y_chosen_size": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "schema_version",
+          "active_quantity_id",
+          "view_mode",
+          "field_component",
+          "colormap",
+          "auto_contrast",
+          "vector_glyphs",
+          "vector_density",
+          "slice_mode",
+          "slice_layer",
+          "max_points",
+          "x_chosen_size",
+          "y_chosen_size"
         ],
         "type": "object"
       },
@@ -8692,6 +8898,91 @@
               }
             },
             "description": "Display replaced"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "visualization"
+        ]
+      }
+    },
+    "/v2/sessions/current/visualization/state": {
+      "get": {
+        "operationId": "visualization_get_sessions_current_visualization_state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisualizationStateResource"
+                }
+              }
+            },
+            "description": "Current visualization state"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "visualization"
+        ]
+      },
+      "patch": {
+        "operationId": "visualization_patch_sessions_current_visualization_state",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisualizationStatePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisualizationStateResource"
+                }
+              }
+            },
+            "description": "Visualization state patched"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "visualization"
+        ]
+      },
+      "put": {
+        "operationId": "visualization_put_sessions_current_visualization_state",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisualizationStateResource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisualizationStateResource"
+                }
+              }
+            },
+            "description": "Visualization state replaced"
           },
           "404": {
             "description": "No active workspace"

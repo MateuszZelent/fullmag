@@ -185,7 +185,7 @@ export default function MeshPanel() {
         currentSceneRevision={model.sceneDocument?.revision ?? null}
       />
 
-      <SidebarSection title="Mesh Workspace Presets" defaultOpen={true}>
+      <SidebarSection title="3D Mesh Display Presets" defaultOpen={true}>
         <div className="mb-2 flex items-center justify-end">
           <span className="text-[0.65rem] font-mono text-muted-foreground/70">{meshName ?? "mesh"}</span>
         </div>

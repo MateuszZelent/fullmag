@@ -37,14 +37,38 @@ describe("deriveFemVectorScopes", () => {
     ).toEqual([{ kind: "object", id: "free" }]);
   });
 
-  it("falls back to full scope when the airbox is visible", () => {
+  it("keeps magnetic object scope when the airbox is visible for magnetic-only quantities", () => {
     expect(
       deriveFemVectorScopes({
         meshParts: [part({}), part({ id: "part:air", role: "air", object_id: null })],
         meshEntityViewState: {},
         airMeshVisible: true,
+        selectedFieldDomain: "magnetic_only",
+      }),
+    ).toEqual([{ kind: "object", id: "free" }]);
+  });
+
+  it("uses full scope for full-domain quantities", () => {
+    expect(
+      deriveFemVectorScopes({
+        meshParts: [part({}), part({ id: "part:air", role: "air", object_id: null })],
+        meshEntityViewState: {},
+        airMeshVisible: true,
+        selectedFieldDomain: "full_domain",
       }),
     ).toEqual([{ kind: "full" }]);
+  });
+
+  it("does not force full scope for airbox vectors on magnetic-only quantities", () => {
+    expect(
+      deriveFemVectorScopes({
+        meshParts: [part({}), part({ id: "part:air", role: "air", object_id: null })],
+        meshEntityViewState: {},
+        airMeshVisible: true,
+        vectorDomainFilter: "airbox_only",
+        selectedFieldDomain: "magnetic_only",
+      }),
+    ).toEqual([{ kind: "object", id: "free" }]);
   });
 
   it("falls back to full scope when no mesh parts are available", () => {

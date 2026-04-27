@@ -13,7 +13,9 @@ import {
 import {
   canExecuteRibbonCommand,
   executeRibbonCommand,
+  type AirboxDisplayPatch,
   type RibbonCommand,
+  type ViewportMeshRenderMode,
 } from "./ribbon/command-registry";
 import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
 import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
@@ -85,6 +87,7 @@ interface RibbonBarProps {
   requestedPreviewEveryN?: number | null;
   requestedPreviewAutoScale?: boolean | null;
   requestedPreviewQuantityDataStatus?: string | null;
+  quantityShaderVisible?: boolean;
   meshRenderMode?: string | null;
   meshOpacity?: number | null;
   selectedObjectOpacity?: number | null;
@@ -101,12 +104,14 @@ interface RibbonBarProps {
   femVectorDomainFilter?: string | null;
   femFerromagnetVisibilityMode?: string | null;
   airMeshOpacity?: number | null;
+  airMeshRenderMode?: ViewportMeshRenderMode | null;
   previewPending?: boolean;
   onQuickPreviewSelect?: (quantityId: string) => void;
   onSetPreviewComponent?: (component: "3D" | "x" | "y" | "z" | "magnitude") => void;
   onSetPreviewEveryN?: (everyN: number) => void;
   onSetPreviewColormap?: (colormap: string) => void;
   onSetPreviewAutoScale?: (enabled: boolean) => void;
+  onSetQuantityShaderVisible?: (visible: boolean) => void;
   onExport?: () => void;
   onCapture?: () => void;
   onStateExport?: () => void;
@@ -178,7 +183,7 @@ interface RibbonBarProps {
   onSetTransformScope?: (
     scope: "camera" | "object" | "texture",
   ) => void;
-  onSetMeshRenderMode?: (mode: "surface" | "wireframe" | "surface+edges" | "points") => void;
+  onSetMeshRenderMode?: (mode: ViewportMeshRenderMode) => void;
   onSetMeshOpacity?: (opacity: number) => void;
   onSetSelectedObjectOpacity?: (opacity: number) => void;
   onSetMeshClipEnabled?: (enabled: boolean) => void;
@@ -195,7 +200,7 @@ interface RibbonBarProps {
     domain: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
     ferromagnetVisibility: "hide" | "ghost";
   }>) => void;
-  onSetAirboxDisplay?: (patch: Partial<{ visible: boolean; opacity: number; vectors: boolean }>) => void;
+  onSetAirboxDisplay?: (patch: AirboxDisplayPatch) => void;
   onSetTextureTransformMode?: (
     objectId: string,
     mode: "translate" | "rotate" | "scale",
@@ -337,6 +342,7 @@ function buildContext(
     sidebarVisible: Boolean(props.sidebarVisible),
     previewPending: Boolean(props.previewPending),
     airboxVisible: Boolean(props.airboxVisible),
+    quantityShaderVisible: props.quantityShaderVisible ?? true,
     viewportAxesScope: props.viewportAxesScope ?? "universe",
     universeWireframeVisible: props.universeWireframeVisible ?? true,
     viewportLegendVisible: Boolean(props.viewportLegendVisible),
@@ -365,6 +371,7 @@ function buildContext(
     femVectorDomainFilter: props.femVectorDomainFilter ?? null,
     femFerromagnetVisibilityMode: props.femFerromagnetVisibilityMode ?? null,
     airMeshOpacity: props.airMeshOpacity ?? null,
+    airMeshRenderMode: props.airMeshRenderMode ?? null,
 
     antennaSources: props.antennaSources ?? [],
     selectedAntennaName: props.selectedAntennaName ?? null,
@@ -672,6 +679,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.requestedPreviewEveryN,
     props.requestedPreviewAutoScale,
     props.requestedPreviewQuantityDataStatus,
+    props.quantityShaderVisible,
     props.meshRenderMode,
     props.meshOpacity,
     props.selectedObjectOpacity,
@@ -688,6 +696,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.femVectorDomainFilter,
     props.femFerromagnetVisibilityMode,
     props.airMeshOpacity,
+    props.airMeshRenderMode,
     props.antennaSources,
     props.selectedAntennaName,
     props.canSyncScriptBuilder,
@@ -704,6 +713,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.onSetPreviewEveryN,
     props.onSetPreviewColormap,
     props.onSetPreviewAutoScale,
+    props.onSetQuantityShaderVisible,
     props.onSetMeshRenderMode,
     props.onSetMeshOpacity,
     props.onSetSelectedObjectOpacity,
