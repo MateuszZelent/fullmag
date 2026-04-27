@@ -1,8 +1,15 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
 import type { RibbonAction, RibbonGroup } from "@/features/shell/registry/ribbonRegistry";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { legacyMenuItemsToNodes } from "@/features/shell/registry/ribbonMenuAdapter";
+import { RibbonMenuRenderer } from "./RibbonMenuRenderer";
 
 /* ── Action trigger class helper ─────────────────── */
 
@@ -122,80 +129,28 @@ export function RibbonActionMenu({
   action: RibbonAction;
   previewPending?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const visibleItems = (action.menuItems ?? []).filter((item) => !item.hidden);
+  const nodes = action.menu?.length ? action.menu : legacyMenuItemsToNodes(action.menuItems);
 
-  useEffect(() => {
-    if (!open) return;
-    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (!rootRef.current?.contains(target)) setOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", handlePointerDown);
-    window.addEventListener("touchstart", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("mousedown", handlePointerDown);
-      window.removeEventListener("touchstart", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
-
-  if (visibleItems.length === 0) {
+  if (nodes.length === 0) {
     return <RibbonActionTrigger action={action} previewPending={previewPending} />;
   }
 
   return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        className={ribbonActionTriggerClassName(action, previewPending)}
-        disabled={action.disabled}
-        onClick={() => setOpen((prev) => !prev)}
-      >
-        <RibbonActionTriggerContent action={action} />
-      </button>
-      {open ? (
-        <div className="absolute left-0 top-full z-[100] mt-2 min-w-[280px] rounded-md border border-border/50 bg-popover/95 p-1 text-popover-foreground shadow-md backdrop-blur-xl">
-          {visibleItems.map((item) =>
-            item.separator ? (
-              <div key={item.id} className="my-1 h-px bg-border/50" />
-            ) : (
-              <button
-                key={item.id}
-                type="button"
-                className={cn(
-                  "relative flex w-full cursor-default select-none items-start gap-2 rounded-sm px-2 py-2 text-left text-xs outline-none transition-colors disabled:pointer-events-none disabled:opacity-50 hover:bg-muted hover:text-foreground",
-                  item.active && "bg-primary/10 text-primary",
-                )}
-                disabled={item.disabled}
-                onClick={() => {
-                  item.action?.();
-                  setOpen(false);
-                }}
-              >
-                <span className="mt-0.5 flex h-4 w-4 items-center justify-center text-muted-foreground opacity-80">
-                  {item.icon}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">{item.label}</span>
-                  {item.description ? (
-                    <span className="block truncate text-[0.68rem] text-muted-foreground">
-                      {item.description}
-                    </span>
-                  ) : null}
-                </span>
-              </button>
-            ),
-          )}
-        </div>
-      ) : null}
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={ribbonActionTriggerClassName(action, previewPending)}
+          disabled={action.disabled}
+          title={action.tooltip}
+        >
+          <RibbonActionTriggerContent action={action} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-[70vh] overflow-y-auto">
+        <RibbonMenuRenderer nodes={nodes} />
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -236,7 +191,7 @@ export function RibbonGroupsRow({ groups, previewPending }: RibbonGroupsRowProps
             >
               <div className="flex items-center gap-0.5">
                 {group.actions.filter((a) => !a.hidden).map((action) =>
-                  action.menuItems && action.menuItems.length > 0 ? (
+                  (action.menu?.length ?? action.menuItems?.length ?? 0) > 0 ? (
                     <RibbonActionMenu
                       key={action.id}
                       action={action}

@@ -20,6 +20,7 @@ import type { NodeKind, NodeDomain } from "../../model-builder/types";
 import type { StudyNodeContext } from "@/lib/study-builder/node-context";
 import type { RibbonCommand } from "@/components/shell/ribbon/command-registry";
 import type { CapabilityMap, GeometryCapabilitiesResource } from "@/src/api/types";
+import type { RibbonMenuNode, RibbonNodeState } from "./ribbonMenuTypes";
 
 // ---------------------------------------------------------------------------
 // Core ribbon types — canonical, used by contributions AND the renderer
@@ -46,9 +47,13 @@ export interface RibbonAction {
   disabled?: boolean;
   hidden?: boolean;
   active?: boolean;
+  state?: RibbonNodeState;
   accent?: boolean;
   iconColor?: string;
   action?: () => void;
+  /** Rich menu model. Prefer this for new ribbon work. */
+  menu?: RibbonMenuNode[];
+  /** Legacy flat menu. Kept as compatibility during migration. */
   menuItems?: RibbonMenuItem[];
 }
 
@@ -160,6 +165,26 @@ export interface RibbonBuildContext {
     available: boolean;
   }>;
   selectedQuantity: string | null;
+  requestedPreviewComponent?: string | null;
+  requestedPreviewEveryN?: number | null;
+  requestedPreviewAutoScale?: boolean | null;
+  requestedPreviewQuantityDataStatus?: string | null;
+  meshRenderMode?: string | null;
+  meshOpacity?: number | null;
+  selectedObjectOpacity?: number | null;
+  meshClipEnabled?: boolean | null;
+  meshClipAxis?: "x" | "y" | "z" | null;
+  meshClipPos?: number | null;
+  meshClipFlip?: boolean | null;
+  meshShowArrows?: boolean | null;
+  femArrowColorMode?: string | null;
+  femArrowMonoColor?: string | null;
+  femArrowAlpha?: number | null;
+  femArrowLengthScale?: number | null;
+  femArrowThickness?: number | null;
+  femVectorDomainFilter?: string | null;
+  femFerromagnetVisibilityMode?: string | null;
+  airMeshOpacity?: number | null;
 
   // ── Antenna context ──
   antennaSources: Array<{

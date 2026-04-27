@@ -45,7 +45,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     useDockingShell: true,
     showRibbonBar: true,
     showSidebar: true,
-    showViewportBar: true,
+    showViewportBar: false,
     showPreviewNotices: true,
     showBottomDock: true,
     showRightInspector: true,
@@ -133,7 +133,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     forceDisableClip: false,
     forceHideArrows: false,
     forceLowQualityProfile: false,
-    showToolbar: true,
+    showToolbar: false,
     showWarnings: true,
     showViewCube: true,
     showOrientationSphere: true,
@@ -299,8 +299,9 @@ function normalizeFrontendDiagnosticFlags(
   normalized.workspace.enableWorkspaceShell = true;
   normalized.workspace.enableRunControlRoom = true;
   normalized.shell.showRibbonBar = true;
-  normalized.shell.showViewportBar = true;
+  normalized.shell.showViewportBar = false;
   normalized.viewportRouting.enableUnifiedViewportToolbar = true;
+  normalized.femViewport.showToolbar = false;
   return normalized;
 }
 

@@ -81,8 +81,32 @@ interface RibbonBarProps {
     available: boolean;
   }>;
   selectedQuantity?: string;
+  requestedPreviewComponent?: string | null;
+  requestedPreviewEveryN?: number | null;
+  requestedPreviewAutoScale?: boolean | null;
+  requestedPreviewQuantityDataStatus?: string | null;
+  meshRenderMode?: string | null;
+  meshOpacity?: number | null;
+  selectedObjectOpacity?: number | null;
+  meshClipEnabled?: boolean | null;
+  meshClipAxis?: "x" | "y" | "z" | null;
+  meshClipPos?: number | null;
+  meshClipFlip?: boolean | null;
+  meshShowArrows?: boolean | null;
+  femArrowColorMode?: string | null;
+  femArrowMonoColor?: string | null;
+  femArrowAlpha?: number | null;
+  femArrowLengthScale?: number | null;
+  femArrowThickness?: number | null;
+  femVectorDomainFilter?: string | null;
+  femFerromagnetVisibilityMode?: string | null;
+  airMeshOpacity?: number | null;
   previewPending?: boolean;
   onQuickPreviewSelect?: (quantityId: string) => void;
+  onSetPreviewComponent?: (component: "3D" | "x" | "y" | "z" | "magnitude") => void;
+  onSetPreviewEveryN?: (everyN: number) => void;
+  onSetPreviewColormap?: (colormap: string) => void;
+  onSetPreviewAutoScale?: (enabled: boolean) => void;
   onExport?: () => void;
   onCapture?: () => void;
   onStateExport?: () => void;
@@ -154,6 +178,24 @@ interface RibbonBarProps {
   onSetTransformScope?: (
     scope: "camera" | "object" | "texture",
   ) => void;
+  onSetMeshRenderMode?: (mode: "surface" | "wireframe" | "surface+edges" | "points") => void;
+  onSetMeshOpacity?: (opacity: number) => void;
+  onSetSelectedObjectOpacity?: (opacity: number) => void;
+  onSetMeshClipEnabled?: (enabled: boolean) => void;
+  onSetMeshClipAxis?: (axis: "x" | "y" | "z") => void;
+  onSetMeshClipPos?: (position: number) => void;
+  onSetMeshClipFlip?: (flipped: boolean) => void;
+  onSetMeshShowArrows?: (visible: boolean) => void;
+  onSetFemArrowStyle?: (patch: Partial<{
+    colorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
+    monoColor: string;
+    alpha: number;
+    lengthScale: number;
+    thickness: number;
+    domain: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
+    ferromagnetVisibility: "hide" | "ghost";
+  }>) => void;
+  onSetAirboxDisplay?: (patch: Partial<{ visible: boolean; opacity: number; vectors: boolean }>) => void;
   onSetTextureTransformMode?: (
     objectId: string,
     mode: "translate" | "rotate" | "scale",
@@ -303,6 +345,26 @@ function buildContext(
 
     quickPreviewTargets: props.quickPreviewTargets ?? [],
     selectedQuantity: props.selectedQuantity ?? null,
+    requestedPreviewComponent: props.requestedPreviewComponent ?? null,
+    requestedPreviewEveryN: props.requestedPreviewEveryN ?? null,
+    requestedPreviewAutoScale: props.requestedPreviewAutoScale ?? null,
+    requestedPreviewQuantityDataStatus: props.requestedPreviewQuantityDataStatus ?? null,
+    meshRenderMode: props.meshRenderMode ?? null,
+    meshOpacity: props.meshOpacity ?? null,
+    selectedObjectOpacity: props.selectedObjectOpacity ?? null,
+    meshClipEnabled: props.meshClipEnabled ?? null,
+    meshClipAxis: props.meshClipAxis ?? null,
+    meshClipPos: props.meshClipPos ?? null,
+    meshClipFlip: props.meshClipFlip ?? null,
+    meshShowArrows: props.meshShowArrows ?? null,
+    femArrowColorMode: props.femArrowColorMode ?? null,
+    femArrowMonoColor: props.femArrowMonoColor ?? null,
+    femArrowAlpha: props.femArrowAlpha ?? null,
+    femArrowLengthScale: props.femArrowLengthScale ?? null,
+    femArrowThickness: props.femArrowThickness ?? null,
+    femVectorDomainFilter: props.femVectorDomainFilter ?? null,
+    femFerromagnetVisibilityMode: props.femFerromagnetVisibilityMode ?? null,
+    airMeshOpacity: props.airMeshOpacity ?? null,
 
     antennaSources: props.antennaSources ?? [],
     selectedAntennaName: props.selectedAntennaName ?? null,
@@ -606,6 +668,26 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.canSkip,
     props.quickPreviewTargets,
     props.selectedQuantity,
+    props.requestedPreviewComponent,
+    props.requestedPreviewEveryN,
+    props.requestedPreviewAutoScale,
+    props.requestedPreviewQuantityDataStatus,
+    props.meshRenderMode,
+    props.meshOpacity,
+    props.selectedObjectOpacity,
+    props.meshClipEnabled,
+    props.meshClipAxis,
+    props.meshClipPos,
+    props.meshClipFlip,
+    props.meshShowArrows,
+    props.femArrowColorMode,
+    props.femArrowMonoColor,
+    props.femArrowAlpha,
+    props.femArrowLengthScale,
+    props.femArrowThickness,
+    props.femVectorDomainFilter,
+    props.femFerromagnetVisibilityMode,
+    props.airMeshOpacity,
     props.antennaSources,
     props.selectedAntennaName,
     props.canSyncScriptBuilder,
@@ -618,6 +700,20 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.onObjectAddInteraction,
     props.onAssignMagnetizationPreset,
     props.onSetTextureTransformMode,
+    props.onSetPreviewComponent,
+    props.onSetPreviewEveryN,
+    props.onSetPreviewColormap,
+    props.onSetPreviewAutoScale,
+    props.onSetMeshRenderMode,
+    props.onSetMeshOpacity,
+    props.onSetSelectedObjectOpacity,
+    props.onSetMeshClipEnabled,
+    props.onSetMeshClipAxis,
+    props.onSetMeshClipPos,
+    props.onSetMeshClipFlip,
+    props.onSetMeshShowArrows,
+    props.onSetFemArrowStyle,
+    props.onSetAirboxDisplay,
     props.onBuilderAddPrimitive,
     props.onBuilderCreateBoolean,
     props.onBuilderBuildGeometry,

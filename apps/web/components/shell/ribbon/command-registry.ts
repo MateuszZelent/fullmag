@@ -44,6 +44,10 @@ export interface RibbonCommandContext {
   onToggleViewportLegend?: () => void;
   onSimAction?: (action: string) => void;
   onQuickPreviewSelect?: (quantityId: string) => void;
+  onSetPreviewComponent?: (component: "3D" | "x" | "y" | "z" | "magnitude") => void;
+  onSetPreviewEveryN?: (everyN: number) => void;
+  onSetPreviewColormap?: (colormap: string) => void;
+  onSetPreviewAutoScale?: (enabled: boolean) => void;
   onExport?: () => void;
   onCapture?: () => void;
   onStateExport?: () => void;
@@ -87,6 +91,28 @@ export interface RibbonCommandContext {
   onSetTransformScope?: (
     scope: "camera" | "object" | "texture",
   ) => void;
+  onSetMeshRenderMode?: (mode: "surface" | "wireframe" | "surface+edges" | "points") => void;
+  onSetMeshOpacity?: (opacity: number) => void;
+  onSetSelectedObjectOpacity?: (opacity: number) => void;
+  onSetMeshClipEnabled?: (enabled: boolean) => void;
+  onSetMeshClipAxis?: (axis: "x" | "y" | "z") => void;
+  onSetMeshClipPos?: (position: number) => void;
+  onSetMeshClipFlip?: (flipped: boolean) => void;
+  onSetMeshShowArrows?: (visible: boolean) => void;
+  onSetFemArrowStyle?: (patch: Partial<{
+    colorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
+    monoColor: string;
+    alpha: number;
+    lengthScale: number;
+    thickness: number;
+    domain: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
+    ferromagnetVisibility: "hide" | "ghost";
+  }>) => void;
+  onSetAirboxDisplay?: (patch: Partial<{
+    visible: boolean;
+    opacity: number;
+    vectors: boolean;
+  }>) => void;
   onSetTextureTransformMode?: (
     objectId: string,
     mode: "translate" | "rotate" | "scale",
@@ -163,6 +189,35 @@ export type RibbonCommand =
   | { id: "viewport.focus-selected-object" }
   | { id: "solver.control"; action: "relax" | "run" | "pause" | "stop" | "skip" }
   | { id: "preview.select-quantity"; quantityId: string }
+  | { id: "viewport.set-quantity"; quantityId: string }
+  | { id: "viewport.set-component"; component: "3D" | "x" | "y" | "z" | "magnitude" }
+  | { id: "viewport.set-colormap"; colormap: string }
+  | { id: "viewport.set-auto-scale"; enabled: boolean }
+  | { id: "viewport.set-vector-density"; everyN: number }
+  | { id: "viewport.toggle-vectors"; visible: boolean }
+  | {
+      id: "viewport.set-vector-style";
+      patch: Partial<{
+        colorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
+        monoColor: string;
+        alpha: number;
+        lengthScale: number;
+        thickness: number;
+        domain: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
+        ferromagnetVisibility: "hide" | "ghost";
+      }>;
+    }
+  | { id: "viewport.set-airbox-display"; patch: Partial<{ visible: boolean; opacity: number; vectors: boolean }> }
+  | { id: "viewport.set-global-render-mode"; renderMode: "surface" | "wireframe" | "surface+edges" | "points" }
+  | { id: "viewport.set-global-opacity"; opacity: number }
+  | { id: "viewport.set-global-clip"; patch: Partial<{ enabled: boolean; axis: "x" | "y" | "z"; position: number; flipped: boolean }> }
+  | { id: "viewport.set-selected-opacity"; opacity: number }
+  | { id: "viewport.clear-selected-display-overrides" }
+  | { id: "viewport.set-control-mode"; mode: "camera" | "select" | "manipulate" }
+  | { id: "viewport.set-transform-tool"; tool: "select" | "move" | "rotate" | "scale" }
+  | { id: "viewport.capture"; transparent?: boolean; overlays?: boolean }
+  | { id: "viewport.export-image" }
+  | { id: "viewport.export-state" }
   | { id: "export.results" }
   | { id: "export.state" }
   | { id: "capture.viewport" }
@@ -263,6 +318,49 @@ export function canExecuteRibbonCommand(
       return Boolean(ctx.canStop);
     case "preview.select-quantity":
       return typeof ctx.onQuickPreviewSelect === "function";
+    case "viewport.set-quantity":
+      return typeof ctx.onQuickPreviewSelect === "function";
+    case "viewport.set-component":
+      return typeof ctx.onSetPreviewComponent === "function";
+    case "viewport.set-colormap":
+      return typeof ctx.onSetPreviewColormap === "function";
+    case "viewport.set-auto-scale":
+      return typeof ctx.onSetPreviewAutoScale === "function";
+    case "viewport.set-vector-density":
+      return typeof ctx.onSetPreviewEveryN === "function";
+    case "viewport.toggle-vectors":
+      return typeof ctx.onSetMeshShowArrows === "function";
+    case "viewport.set-vector-style":
+      return typeof ctx.onSetFemArrowStyle === "function";
+    case "viewport.set-airbox-display":
+      return typeof ctx.onSetAirboxDisplay === "function";
+    case "viewport.set-global-render-mode":
+      return typeof ctx.onSetMeshRenderMode === "function";
+    case "viewport.set-global-opacity":
+      return typeof ctx.onSetMeshOpacity === "function";
+    case "viewport.set-global-clip":
+      return (
+        typeof ctx.onSetMeshClipEnabled === "function" ||
+        typeof ctx.onSetMeshClipAxis === "function" ||
+        typeof ctx.onSetMeshClipPos === "function" ||
+        typeof ctx.onSetMeshClipFlip === "function"
+      );
+    case "viewport.set-selected-opacity":
+      return Boolean(ctx.selectedObjectId) && typeof ctx.onSetSelectedObjectOpacity === "function";
+    case "viewport.clear-selected-display-overrides":
+      return Boolean(ctx.selectedObjectId);
+    case "viewport.set-control-mode":
+      if (command.mode === "camera") return true;
+      if (command.mode === "select") return typeof ctx.onBuilderSetViewportMode === "function";
+      return typeof ctx.onBuilderSetViewportMode === "function" && Boolean(ctx.builderEnabled);
+    case "viewport.set-transform-tool":
+      return typeof ctx.onBuilderSetTransformTool === "function";
+    case "viewport.capture":
+      return typeof ctx.onCapture === "function";
+    case "viewport.export-image":
+      return typeof ctx.onExport === "function";
+    case "viewport.export-state":
+      return typeof ctx.onStateExport === "function";
     case "export.results":
       return typeof ctx.onExport === "function";
     case "export.state":
@@ -387,6 +485,66 @@ export function executeRibbonCommand(
       return;
     case "preview.select-quantity":
       ctx.onQuickPreviewSelect?.(command.quantityId);
+      return;
+    case "viewport.set-quantity":
+      ctx.onQuickPreviewSelect?.(command.quantityId);
+      return;
+    case "viewport.set-component":
+      ctx.onSetPreviewComponent?.(command.component);
+      return;
+    case "viewport.set-colormap":
+      ctx.onSetPreviewColormap?.(command.colormap);
+      return;
+    case "viewport.set-auto-scale":
+      ctx.onSetPreviewAutoScale?.(command.enabled);
+      return;
+    case "viewport.set-vector-density":
+      ctx.onSetPreviewEveryN?.(command.everyN);
+      return;
+    case "viewport.toggle-vectors":
+      ctx.onSetMeshShowArrows?.(command.visible);
+      return;
+    case "viewport.set-vector-style":
+      ctx.onSetFemArrowStyle?.(command.patch);
+      return;
+    case "viewport.set-airbox-display":
+      ctx.onSetAirboxDisplay?.(command.patch);
+      return;
+    case "viewport.set-global-render-mode":
+      ctx.onSetMeshRenderMode?.(command.renderMode);
+      return;
+    case "viewport.set-global-opacity":
+      ctx.onSetMeshOpacity?.(command.opacity);
+      return;
+    case "viewport.set-selected-opacity":
+      ctx.onSetSelectedObjectOpacity?.(command.opacity);
+      return;
+    case "viewport.set-global-clip":
+      if (typeof command.patch.enabled === "boolean") ctx.onSetMeshClipEnabled?.(command.patch.enabled);
+      if (command.patch.axis) ctx.onSetMeshClipAxis?.(command.patch.axis);
+      if (typeof command.patch.position === "number") ctx.onSetMeshClipPos?.(command.patch.position);
+      if (typeof command.patch.flipped === "boolean") ctx.onSetMeshClipFlip?.(command.patch.flipped);
+      return;
+    case "viewport.clear-selected-display-overrides":
+      return;
+    case "viewport.set-control-mode":
+      if (command.mode === "camera") {
+        ctx.onSetTransformScope?.("camera");
+        return;
+      }
+      ctx.onBuilderSetViewportMode?.(command.mode === "manipulate" ? "manipulate" : "camera");
+      return;
+    case "viewport.set-transform-tool":
+      ctx.onBuilderSetTransformTool?.(command.tool === "select" ? "move" : command.tool);
+      return;
+    case "viewport.capture":
+      ctx.onCapture?.();
+      return;
+    case "viewport.export-image":
+      ctx.onExport?.();
+      return;
+    case "viewport.export-state":
+      ctx.onStateExport?.();
       return;
     case "export.results":
       ctx.onExport?.();

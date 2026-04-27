@@ -16,6 +16,7 @@ import type {
   ScriptBuilderCurrentModuleEntry,
   ScriptBuilderMagneticInteractionKind,
 } from "../../lib/session/types";
+import { defaultMeshEntityViewState } from "../../lib/session/types";
 import {
   MAGNETIC_PRESET_CATALOG,
   type MagneticPresetKind,
@@ -83,6 +84,7 @@ import { useActiveStageLayout, useWorkspaceStore } from "@/lib/workspace/workspa
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
+import { displayPatchFromPreviewComponent } from "@/src/api/displaySelection";
 import {
   appendNode,
   createMacroNode,
@@ -1462,6 +1464,79 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     </>
   );
 
+  const handleRibbonPreviewComponent = (component: "3D" | "x" | "y" | "z" | "magnitude") => {
+    const nextComponent = component === "3D" ? "magnitude" : component;
+    ctx.setComponent(nextComponent);
+    void ctx.patchDisplay(displayPatchFromPreviewComponent(component));
+  };
+
+  const handleRibbonPreviewEveryN = (everyN: number) => {
+    void ctx.patchDisplay({ vector_density: everyN });
+  };
+
+  const handleRibbonPreviewColormap = (colormap: string) => {
+    void ctx.patchDisplay({ colormap });
+  };
+
+  const handleRibbonPreviewAutoScale = (enabled: boolean) => {
+    void ctx.patchDisplay({ auto_contrast: enabled });
+  };
+
+  const handleRibbonFemArrowStyle = (patch: Partial<{
+    colorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
+    monoColor: string;
+    alpha: number;
+    lengthScale: number;
+    thickness: number;
+    domain: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
+    ferromagnetVisibility: "hide" | "ghost";
+  }>) => {
+    if (patch.colorMode) ctx.setFemArrowColorMode(patch.colorMode);
+    if (patch.monoColor) ctx.setFemArrowMonoColor(patch.monoColor);
+    if (typeof patch.alpha === "number") ctx.setFemArrowAlpha(patch.alpha);
+    if (typeof patch.lengthScale === "number") ctx.setFemArrowLengthScale(patch.lengthScale);
+    if (typeof patch.thickness === "number") ctx.setFemArrowThickness(patch.thickness);
+    if (patch.domain) ctx.setFemVectorDomainFilter(patch.domain);
+    if (patch.ferromagnetVisibility) ctx.setFemFerromagnetVisibilityMode(patch.ferromagnetVisibility);
+  };
+
+  const handleRibbonAirboxDisplay = (patch: Partial<{ visible: boolean; opacity: number; vectors: boolean }>) => {
+    if (typeof patch.visible === "boolean") ctx.setAirMeshVisible(patch.visible);
+    if (typeof patch.opacity === "number") ctx.setAirMeshOpacity(patch.opacity);
+    if (typeof patch.vectors === "boolean") {
+      ctx.setFemVectorDomainFilter(patch.vectors ? "airbox_only" : "auto");
+    }
+  };
+
+  const selectedObjectPartIds = ctx.selectedObjectId
+    ? ctx.meshParts
+        .filter((part) => part.object_id === ctx.selectedObjectId || part.geometry_id === ctx.selectedObjectId)
+        .map((part) => part.id)
+    : [];
+  const selectedObjectRepresentativePart = selectedObjectPartIds[0]
+    ? ctx.meshParts.find((part) => part.id === selectedObjectPartIds[0]) ?? null
+    : null;
+  const selectedObjectOpacity = selectedObjectRepresentativePart
+    ? (ctx.meshEntityViewState[selectedObjectRepresentativePart.id]?.opacity
+      ?? defaultMeshEntityViewState(selectedObjectRepresentativePart).opacity)
+    : null;
+  const handleRibbonSelectedObjectOpacity = (opacity: number) => {
+    if (selectedObjectPartIds.length === 0) return;
+    ctx.setMeshEntityViewState((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const partId of selectedObjectPartIds) {
+        const part = ctx.meshParts.find((entry) => entry.id === partId);
+        if (!part) continue;
+        const current = next[partId] ?? defaultMeshEntityViewState(part);
+        if (current.opacity === opacity) continue;
+        next[partId] = { ...current, opacity };
+        changed = true;
+      }
+      return changed ? next : previous;
+    });
+  };
+
   if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableControlRoomShell) {
     return (
       <div className="flex min-h-[50vh] w-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
@@ -1524,8 +1599,32 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onSimAction={ctx.handleSimulationAction}
         quickPreviewTargets={ctx.quickPreviewTargets}
         selectedQuantity={ctx.requestedPreviewQuantity}
+        requestedPreviewComponent={ctx.requestedPreviewComponent}
+        requestedPreviewEveryN={ctx.requestedPreviewEveryN}
+        requestedPreviewAutoScale={ctx.requestedPreviewAutoScale}
+        requestedPreviewQuantityDataStatus={ctx.requestedPreviewQuantityDataStatus}
+        meshRenderMode={ctx.meshRenderMode}
+        meshOpacity={ctx.meshOpacity}
+        selectedObjectOpacity={selectedObjectOpacity}
+        meshClipEnabled={ctx.meshClipEnabled}
+        meshClipAxis={ctx.meshClipAxis}
+        meshClipPos={ctx.meshClipPos}
+        meshClipFlip={ctx.meshClipFlip}
+        meshShowArrows={ctx.meshShowArrows}
+        femArrowColorMode={ctx.femArrowColorMode}
+        femArrowMonoColor={ctx.femArrowMonoColor}
+        femArrowAlpha={ctx.femArrowAlpha}
+        femArrowLengthScale={ctx.femArrowLengthScale}
+        femArrowThickness={ctx.femArrowThickness}
+        femVectorDomainFilter={ctx.femVectorDomainFilter}
+        femFerromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
+        airMeshOpacity={ctx.airMeshOpacity}
         previewPending={ctx.previewBusy}
         onQuickPreviewSelect={ctx.requestPreviewQuantity}
+        onSetPreviewComponent={handleRibbonPreviewComponent}
+        onSetPreviewEveryN={handleRibbonPreviewEveryN}
+        onSetPreviewColormap={handleRibbonPreviewColormap}
+        onSetPreviewAutoScale={handleRibbonPreviewAutoScale}
         onCapture={ctx.handleCapture}
         onExport={ctx.handleExport}
         onStateExport={() => void ctx.handleStateExport("compact")}
@@ -1563,6 +1662,16 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onAssignMagnetizationPreset={handleAssignMagnetizationPreset}
         activeTransformScope={ctx.activeTransformScope}
         onSetTransformScope={handleSetTransformScope}
+        onSetMeshRenderMode={ctx.setMeshRenderMode}
+        onSetMeshOpacity={ctx.setMeshOpacity}
+        onSetSelectedObjectOpacity={handleRibbonSelectedObjectOpacity}
+        onSetMeshClipEnabled={ctx.setMeshClipEnabled}
+        onSetMeshClipAxis={ctx.setMeshClipAxis}
+        onSetMeshClipPos={ctx.setMeshClipPos}
+        onSetMeshClipFlip={ctx.setMeshClipFlip}
+        onSetMeshShowArrows={ctx.setMeshShowArrows}
+        onSetFemArrowStyle={handleRibbonFemArrowStyle}
+        onSetAirboxDisplay={handleRibbonAirboxDisplay}
         onSetTextureTransformMode={handleSetTextureTransformMode}
         onBuilderAddPrimitive={handleBuilderAddPrimitive}
         onBuilderBuildGeometry={handleBuilderBuildGeometry}
