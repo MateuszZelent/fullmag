@@ -2,6 +2,7 @@
 
 mod adapters;
 mod builder;
+mod geometry;
 mod scene;
 mod validation;
 
@@ -11,5 +12,6 @@ pub use adapters::{
     SceneProblemProjection,
 };
 pub use builder::*;
+pub use geometry::*;
 pub use scene::*;
 pub use validation::{validate_scene_document, SceneDocumentValidationError};

@@ -30,10 +30,18 @@ export interface RibbonCommandContext {
   canSyncScriptBuilder?: boolean;
   scriptSyncBusy?: boolean;
   selectedObjectId?: string | null;
+  airboxVisible?: boolean;
+  viewportAxesScope?: "universe" | "object";
+  universeWireframeVisible?: boolean;
+  viewportLegendVisible?: boolean;
   activeTransformScope?: "object" | "texture" | null;
   onViewChange?: (mode: string) => void;
   onSidebarToggle?: () => void;
   onCreateVisualizationPreset?: () => void;
+  onToggleAirbox?: () => void;
+  onSetViewportAxesScope?: (scope: "universe" | "object") => void;
+  onToggleUniverseWireframe?: () => void;
+  onToggleViewportLegend?: () => void;
   onSimAction?: (action: string) => void;
   onQuickPreviewSelect?: (quantityId: string) => void;
   onExport?: () => void;
@@ -104,6 +112,7 @@ export interface RibbonCommandContext {
   builderDirtyGeometry?: boolean;
   builderDirtyMesh?: boolean;
   builderHasRealization?: boolean;
+  builderSceneObjectCount?: number;
   builderSelectedPrimitiveId?: string | null;
 }
 
@@ -145,6 +154,10 @@ function normalizeViewportMode(mode: string | undefined | null): CanonicalViewpo
 export type RibbonCommand =
   | { id: "navigation.select-node"; nodeId: string }
   | { id: "viewport.set-mode"; mode: string }
+  | { id: "viewport.toggle-airbox" }
+  | { id: "viewport.set-axes-scope"; scope: "universe" | "object" }
+  | { id: "viewport.toggle-universe-wireframe" }
+  | { id: "viewport.toggle-legend" }
   | { id: "visualization.create-preset" }
   | { id: "viewport.toggle-sidebar" }
   | { id: "viewport.focus-selected-object" }
@@ -227,6 +240,14 @@ export function canExecuteRibbonCommand(
       return typeof ctx.onSelectModelNode === "function";
     case "viewport.set-mode":
       return typeof ctx.onViewChange === "function" && normalizeViewportMode(command.mode) !== null;
+    case "viewport.toggle-airbox":
+      return typeof ctx.onToggleAirbox === "function";
+    case "viewport.set-axes-scope":
+      return typeof ctx.onSetViewportAxesScope === "function";
+    case "viewport.toggle-universe-wireframe":
+      return typeof ctx.onToggleUniverseWireframe === "function";
+    case "viewport.toggle-legend":
+      return typeof ctx.onToggleViewportLegend === "function";
     case "visualization.create-preset":
       return typeof ctx.onCreateVisualizationPreset === "function";
     case "viewport.toggle-sidebar":
@@ -288,17 +309,25 @@ export function canExecuteRibbonCommand(
     case "builder.add-primitive":
       return typeof ctx.onBuilderAddPrimitive === "function";
     case "builder.create-boolean":
-      return typeof ctx.onBuilderCreateBoolean === "function";
+      return false;
     case "builder.remove-primitive":
       return typeof ctx.onBuilderRemovePrimitive === "function" && Boolean(command.primitiveId);
     case "builder.duplicate-primitive":
       return typeof ctx.onBuilderDuplicatePrimitive === "function" && Boolean(command.primitiveId);
     case "builder.build-geometry":
-      return typeof ctx.onBuilderBuildGeometry === "function" && Boolean(ctx.builderDirtyGeometry);
+      return typeof ctx.onBuilderBuildGeometry === "function";
     case "builder.build-mesh":
-      return typeof ctx.onBuilderBuildMesh === "function" && Boolean(ctx.builderHasRealization) && Boolean(ctx.builderDirtyMesh);
+      return (
+        typeof ctx.onBuilderBuildMesh === "function" &&
+        Boolean(ctx.isFemBackend) &&
+        (ctx.builderSceneObjectCount ?? 0) > 0
+      );
     case "builder.build-all":
-      return typeof ctx.onBuilderBuildAll === "function" && Boolean(ctx.builderDirtyGeometry || ctx.builderDirtyMesh);
+      return (
+        typeof ctx.onBuilderBuildAll === "function" &&
+        Boolean(ctx.isFemBackend) &&
+        (ctx.builderSceneObjectCount ?? 0) > 0
+      );
     case "builder.validate-geometry":
       return typeof ctx.onBuilderValidateGeometry === "function";
     case "builder.set-viewport-mode":
@@ -329,6 +358,18 @@ export function executeRibbonCommand(
       return;
     case "viewport.set-mode":
       ctx.onViewChange?.(normalizeViewportMode(command.mode) ?? "Analyze");
+      return;
+    case "viewport.toggle-airbox":
+      ctx.onToggleAirbox?.();
+      return;
+    case "viewport.set-axes-scope":
+      ctx.onSetViewportAxesScope?.(command.scope);
+      return;
+    case "viewport.toggle-universe-wireframe":
+      ctx.onToggleUniverseWireframe?.();
+      return;
+    case "viewport.toggle-legend":
+      ctx.onToggleViewportLegend?.();
       return;
     case "visualization.create-preset":
       ctx.onCreateVisualizationPreset?.();

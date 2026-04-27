@@ -370,7 +370,7 @@ export class LiveSessionClient {
     opts?: RequestOptions,
     execution?: { retryable?: boolean; acceptStatuses?: number[] },
   ): Promise<Response> {
-    const request = normalizeFetchInput(input, init);
+    const request = await normalizeFetchInput(input, init);
     return this.executeFetchRequest(
       request.method,
       request.url,
@@ -456,18 +456,28 @@ export class LiveSessionClient {
   }
 }
 
-function normalizeFetchInput(
+async function normalizeFetchInput(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
-): { url: string; method: string; init: RequestInit } {
+): Promise<{ url: string; method: string; init: RequestInit }> {
   if (typeof Request !== "undefined" && input instanceof Request) {
+    const method = init?.method ?? input.method;
+    let body = init?.body;
+    if (
+      body === undefined &&
+      method !== "GET" &&
+      method !== "HEAD" &&
+      input.body != null
+    ) {
+      body = await input.clone().arrayBuffer();
+    }
     return {
       url: input.url,
-      method: init?.method ?? input.method,
+      method,
       init: {
         ...init,
         headers: init?.headers ?? input.headers,
-        body: init?.body ?? input.body,
+        body,
         cache: init?.cache ?? input.cache,
         signal: init?.signal ?? input.signal,
       },

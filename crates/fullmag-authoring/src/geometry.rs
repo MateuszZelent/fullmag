@@ -1,0 +1,926 @@
+use crate::{SceneDocument, SceneGeometry, SceneObject, Transform3D};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GeometryBackendTarget {
+    Fem,
+    Fdm,
+}
+
+impl GeometryBackendTarget {
+    pub fn from_scene(scene: &SceneDocument) -> Self {
+        let backend = scene
+            .study
+            .backend
+            .as_deref()
+            .unwrap_or(scene.study.requested_backend.as_str())
+            .trim()
+            .to_ascii_lowercase();
+        if backend == "fdm" {
+            Self::Fdm
+        } else {
+            Self::Fem
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fem => "fem",
+            Self::Fdm => "fdm",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GeometrySupportStatus {
+    Production,
+    Preview,
+    Unsupported,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GeometryDiagnosticSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct GeometryDiagnostic {
+    pub id: String,
+    pub severity: GeometryDiagnosticSeverity,
+    pub code: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct PrimitiveGeometryCapability {
+    pub id: String,
+    pub label: String,
+    pub category: String,
+    pub fem: bool,
+    pub fdm: bool,
+    pub dsl: bool,
+    pub boolean: bool,
+    pub status: GeometrySupportStatus,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct BooleanGeometryCapability {
+    pub op: String,
+    pub fem: bool,
+    pub fdm: bool,
+    pub dsl: bool,
+    pub status: GeometrySupportStatus,
+    pub notes: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct GeometryCapabilitiesResource {
+    pub revision: u64,
+    pub primitive_capabilities: Vec<PrimitiveGeometryCapability>,
+    pub csg_capabilities: Vec<BooleanGeometryCapability>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct GeometryValidationResource {
+    pub scene_revision: u64,
+    pub backend_target: GeometryBackendTarget,
+    pub status: String,
+    pub dirty: bool,
+    pub diagnostics: Vec<GeometryDiagnostic>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct GeometryRealizationSnapshot {
+    pub source_scene_revision: u64,
+    pub realization_revision: u64,
+    pub backend_target: GeometryBackendTarget,
+    pub status: String,
+    #[serde(default)]
+    pub bodies: Vec<RealizedGeometryBody>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds_min: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds_max: Option<[f64; 3]>,
+    #[serde(default)]
+    pub diagnostics: Vec<GeometryDiagnostic>,
+    #[serde(default)]
+    pub region_candidates: Vec<GeometryRegionCandidate>,
+    #[serde(default)]
+    pub provenance: Vec<GeometryProvenanceEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct RealizedGeometryBody {
+    pub object_id: String,
+    pub object_name: String,
+    pub geometry_kind: String,
+    pub material_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_ref: Option<String>,
+    pub visible: bool,
+    pub status: String,
+    pub bounds_min: [f64; 3],
+    pub bounds_max: [f64; 3],
+    #[serde(default)]
+    pub provenance: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct GeometryRegionCandidate {
+    pub id: String,
+    pub object_id: String,
+    pub material_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_ref: Option<String>,
+    pub bounds_min: [f64; 3],
+    pub bounds_max: [f64; 3],
+    pub source_geometry_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct GeometryProvenanceEntry {
+    pub object_id: String,
+    pub geometry_path: String,
+    pub source: String,
+}
+
+pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
+    GeometryCapabilitiesResource {
+        revision,
+        primitive_capabilities: vec![
+            primitive("box", "Box", "core", true, true, true, true, GeometrySupportStatus::Production),
+            primitive("cylinder", "Cylinder", "core", true, true, true, true, GeometrySupportStatus::Production),
+            primitive("sphere", "Sphere", "mumax", false, false, false, true, GeometrySupportStatus::Preview),
+            primitive("ellipsoid", "Ellipsoid", "mumax", false, false, false, true, GeometrySupportStatus::Preview),
+            primitive("disk", "Disk", "core", true, true, true, true, GeometrySupportStatus::Production),
+            primitive("thin_film", "Thin Film", "mumax", true, true, true, true, GeometrySupportStatus::Production),
+            primitive("pillar", "Pillar", "mumax", true, true, true, true, GeometrySupportStatus::Production),
+            primitive("nanowire", "Nanowire", "mumax", true, true, true, true, GeometrySupportStatus::Production),
+            primitive("ring", "Ring", "mumax", true, true, true, true, GeometrySupportStatus::Production),
+            primitive("triangular_prism", "Triangular Prism", "core", false, false, false, true, GeometrySupportStatus::Preview),
+            primitive("cone", "Cone", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
+            primitive("capsule", "Capsule", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
+            primitive("tube", "Tube", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
+            primitive("wedge", "Wedge", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
+            primitive("polygon_prism", "Polygon Prism", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
+        ],
+        csg_capabilities: vec![
+            boolean("union", false, false, false, GeometrySupportStatus::Unsupported, "Union is represented in SceneDocument but not yet realized by the production mesh pipeline."),
+            boolean("subtract", true, true, true, GeometrySupportStatus::Production, "Difference is supported for Box/Cylinder inputs, including Cylinder minus Cylinder rings."),
+            boolean("intersect", false, false, false, GeometrySupportStatus::Unsupported, "Intersection is represented in SceneDocument but not yet realized by the production mesh pipeline."),
+        ],
+    }
+}
+
+pub fn validate_geometry_scene(
+    scene: &SceneDocument,
+    backend_target: GeometryBackendTarget,
+) -> GeometryValidationResource {
+    let diagnostics = collect_geometry_diagnostics(scene, &backend_target);
+    let status = if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == GeometryDiagnosticSeverity::Error)
+    {
+        "blocked"
+    } else if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == GeometryDiagnosticSeverity::Warning)
+    {
+        "warning"
+    } else {
+        "ready"
+    };
+    GeometryValidationResource {
+        scene_revision: scene.revision,
+        backend_target,
+        status: status.to_string(),
+        dirty: scene_has_dirty_mesh_tags(scene),
+        diagnostics,
+    }
+}
+
+pub fn realize_geometry_scene(
+    scene: &SceneDocument,
+    backend_target: GeometryBackendTarget,
+) -> GeometryRealizationSnapshot {
+    let validation = validate_geometry_scene(scene, backend_target.clone());
+    let mut bodies = Vec::new();
+    let mut region_candidates = Vec::new();
+    let mut provenance = Vec::new();
+    let mut bounds: Option<([f64; 3], [f64; 3])> = None;
+
+    for object in &scene.objects {
+        let Some((bounds_min, bounds_max)) = derive_object_bounds(object) else {
+            continue;
+        };
+        let path = format!("objects/{}/geometry", object.id);
+        bodies.push(RealizedGeometryBody {
+            object_id: object.id.clone(),
+            object_name: object.name.clone(),
+            geometry_kind: object.geometry.geometry_kind.clone(),
+            material_ref: object.material_ref.clone(),
+            magnetization_ref: object.magnetization_ref.clone(),
+            visible: object.visible,
+            status: if object.visible { "ready" } else { "hidden" }.to_string(),
+            bounds_min,
+            bounds_max,
+            provenance: vec![path.clone()],
+        });
+        region_candidates.push(GeometryRegionCandidate {
+            id: object
+                .region_name
+                .clone()
+                .unwrap_or_else(|| format!("region:{}", object.id)),
+            object_id: object.id.clone(),
+            material_ref: object.material_ref.clone(),
+            magnetization_ref: object.magnetization_ref.clone(),
+            bounds_min,
+            bounds_max,
+            source_geometry_path: path.clone(),
+        });
+        provenance.push(GeometryProvenanceEntry {
+            object_id: object.id.clone(),
+            geometry_path: path,
+            source: object.geometry.geometry_kind.clone(),
+        });
+        bounds = Some(match bounds {
+            Some((current_min, current_max)) => (
+                min_vec3(current_min, bounds_min),
+                max_vec3(current_max, bounds_max),
+            ),
+            None => (bounds_min, bounds_max),
+        });
+    }
+
+    let (bounds_min, bounds_max) = bounds
+        .map(|(min, max)| (Some(min), Some(max)))
+        .unwrap_or((None, None));
+    GeometryRealizationSnapshot {
+        source_scene_revision: scene.revision,
+        realization_revision: scene.revision,
+        backend_target,
+        status: validation.status,
+        bodies,
+        bounds_min,
+        bounds_max,
+        diagnostics: validation.diagnostics,
+        region_candidates,
+        provenance,
+    }
+}
+
+pub fn geometry_blocks_mesh_build(
+    scene: &SceneDocument,
+    backend_target: GeometryBackendTarget,
+) -> Option<String> {
+    let validation = validate_geometry_scene(scene, backend_target);
+    validation
+        .diagnostics
+        .into_iter()
+        .find(|diagnostic| diagnostic.blocks.iter().any(|block| block == "build_mesh"))
+        .map(|diagnostic| diagnostic.message)
+}
+
+pub fn geometry_blocks_solver_run(
+    scene: &SceneDocument,
+    backend_target: GeometryBackendTarget,
+) -> Option<String> {
+    let validation = validate_geometry_scene(scene, backend_target);
+    if validation.dirty {
+        return Some("Mesh out of date - build mesh before compute".to_string());
+    }
+    validation
+        .diagnostics
+        .into_iter()
+        .find(|diagnostic| diagnostic.blocks.iter().any(|block| block == "run_solver"))
+        .map(|diagnostic| diagnostic.message)
+}
+
+fn collect_geometry_diagnostics(
+    scene: &SceneDocument,
+    backend_target: &GeometryBackendTarget,
+) -> Vec<GeometryDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for object in &scene.objects {
+        validate_object_geometry(scene, object, backend_target, &mut diagnostics);
+    }
+    diagnostics
+}
+
+fn validate_object_geometry(
+    scene: &SceneDocument,
+    object: &SceneObject,
+    backend_target: &GeometryBackendTarget,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    let object_path = format!("objects/{}/geometry", object.id);
+    if object.id.trim().is_empty() {
+        diagnostics.push(error(
+            "GEOMETRY_OBJECT_ID_EMPTY",
+            "Scene object id must not be empty.",
+            Some(object.id.clone()),
+            Some(object_path.clone()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+    if object.material_ref.trim().is_empty()
+        || !scene
+            .materials
+            .iter()
+            .any(|material| material.id == object.material_ref)
+    {
+        diagnostics.push(error(
+            "GEOMETRY_OBJECT_MATERIAL_MISSING",
+            format!("Object '{}' references a missing material.", object.id),
+            Some(object.id.clone()),
+            Some(object_path.clone()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+    match object
+        .magnetization_ref
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(reference)
+            if scene
+                .magnetization_assets
+                .iter()
+                .any(|asset| asset.id == *reference) => {}
+        _ => diagnostics.push(error(
+            "GEOMETRY_OBJECT_MAGNETIZATION_MISSING",
+            format!(
+                "Object '{}' must reference a magnetization asset before mesh/compute.",
+                object.id
+            ),
+            Some(object.id.clone()),
+            Some(object_path.clone()),
+            &["build_mesh", "run_solver"],
+        )),
+    }
+    if !transform_is_valid(&object.transform) {
+        diagnostics.push(error(
+            "GEOMETRY_TRANSFORM_INVALID",
+            format!(
+                "Object '{}' has a non-finite or degenerate transform.",
+                object.id
+            ),
+            Some(object.id.clone()),
+            Some(format!("objects/{}/transform", object.id)),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+    validate_geometry_node(
+        &object.geometry,
+        backend_target,
+        &object.id,
+        &object_path,
+        diagnostics,
+    );
+    if let (Some((bounds_min, bounds_max)), Some(universe)) =
+        (derive_object_bounds(object), scene.universe.as_ref())
+    {
+        if let (Some(universe_size), Some(universe_center)) = (universe.size, universe.center) {
+            let universe_min = [
+                universe_center[0] - universe_size[0] / 2.0,
+                universe_center[1] - universe_size[1] / 2.0,
+                universe_center[2] - universe_size[2] / 2.0,
+            ];
+            let universe_max = [
+                universe_center[0] + universe_size[0] / 2.0,
+                universe_center[1] + universe_size[1] / 2.0,
+                universe_center[2] + universe_size[2] / 2.0,
+            ];
+            if (0..3).any(|axis| {
+                bounds_min[axis] < universe_min[axis] || bounds_max[axis] > universe_max[axis]
+            }) {
+                diagnostics.push(warning(
+                    "GEOMETRY_OBJECT_OUTSIDE_UNIVERSE",
+                    format!(
+                        "Object '{}' extends outside the declared Universe bounds.",
+                        object.id
+                    ),
+                    Some(object.id.clone()),
+                    Some(object_path),
+                    &[],
+                ));
+            }
+        }
+    }
+}
+
+fn validate_geometry_node(
+    geometry: &SceneGeometry,
+    backend_target: &GeometryBackendTarget,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    match geometry.geometry_kind.as_str() {
+        "Box" => validate_positive_vec3_param(
+            &geometry.geometry_params,
+            "size",
+            object_id,
+            path,
+            diagnostics,
+        ),
+        "Cylinder" => {
+            validate_positive_number_param(
+                &geometry.geometry_params,
+                "radius",
+                object_id,
+                path,
+                diagnostics,
+            );
+            validate_positive_number_param(
+                &geometry.geometry_params,
+                "height",
+                object_id,
+                path,
+                diagnostics,
+            );
+        }
+        "Difference" => validate_difference_node(
+            &geometry.geometry_params,
+            backend_target,
+            object_id,
+            path,
+            diagnostics,
+        ),
+        "Csg" => validate_csg_node(
+            &geometry.geometry_params,
+            backend_target,
+            object_id,
+            path,
+            diagnostics,
+        ),
+        "Ellipsoid" | "Sphere" | "Ellipse" => diagnostics.push(error(
+            "GEOMETRY_KIND_PREVIEW_ONLY",
+            format!(
+                "{} is preview-only for {} and cannot feed the production mesh pipeline yet.",
+                geometry.geometry_kind,
+                backend_target.as_str()
+            ),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        )),
+        other => diagnostics.push(error(
+            "GEOMETRY_KIND_UNSUPPORTED",
+            format!("Unsupported geometry kind '{other}'."),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        )),
+    }
+    if let (Some(min), Some(max)) = (geometry.bounds_min, geometry.bounds_max) {
+        if !finite_vec3(min) || !finite_vec3(max) || (0..3).any(|axis| max[axis] <= min[axis]) {
+            diagnostics.push(warning(
+                "GEOMETRY_BOUNDS_INVALID",
+                "Stored geometry bounds are invalid; backend will derive bounds from parameters where possible.",
+                Some(object_id.to_string()),
+                Some(path.to_string()),
+                &[],
+            ));
+        }
+    }
+}
+
+fn validate_difference_node(
+    params: &Value,
+    backend_target: &GeometryBackendTarget,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    let base = params.get("base").and_then(parse_geometry_value);
+    let tool = params.get("tool").and_then(parse_geometry_value);
+    match (base, tool) {
+        (Some(base), Some(tool)) => {
+            validate_geometry_node(
+                &base,
+                backend_target,
+                object_id,
+                &format!("{path}/base"),
+                diagnostics,
+            );
+            validate_geometry_node(
+                &tool,
+                backend_target,
+                object_id,
+                &format!("{path}/tool"),
+                diagnostics,
+            );
+            if !matches!(base.geometry_kind.as_str(), "Box" | "Cylinder")
+                || !matches!(tool.geometry_kind.as_str(), "Box" | "Cylinder")
+            {
+                diagnostics.push(error(
+                    "GEOMETRY_CSG_DIFFERENCE_UNSUPPORTED_INPUTS",
+                    "Difference currently supports Box/Cylinder base and tool geometries only.",
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+        }
+        _ => diagnostics.push(error(
+            "GEOMETRY_CSG_DIFFERENCE_INVALID",
+            "Difference geometry must provide base and tool geometry nodes.",
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        )),
+    }
+}
+
+fn validate_csg_node(
+    params: &Value,
+    _backend_target: &GeometryBackendTarget,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    let op = params.get("op").and_then(Value::as_str).unwrap_or("");
+    if op != "subtract" {
+        diagnostics.push(error(
+            "GEOMETRY_CSG_OP_UNSUPPORTED",
+            format!("CSG operation '{op}' is not production-realized yet."),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+    let children = params.get("children").and_then(Value::as_array);
+    if children.map_or(true, |children| children.len() < 2) {
+        diagnostics.push(error(
+            "GEOMETRY_CSG_CHILDREN_INVALID",
+            "CSG geometry requires at least two child geometry nodes.",
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        ));
+    }
+}
+
+fn derive_object_bounds(object: &SceneObject) -> Option<([f64; 3], [f64; 3])> {
+    let (local_min, local_max) = derive_geometry_bounds(&object.geometry)?;
+    let scale = object.transform.scale;
+    let translation = object.transform.translation;
+    if !finite_vec3(scale) || !finite_vec3(translation) {
+        return None;
+    }
+    let mut world_min = [0.0; 3];
+    let mut world_max = [0.0; 3];
+    for axis in 0..3 {
+        let a = local_min[axis] * scale[axis] + translation[axis];
+        let b = local_max[axis] * scale[axis] + translation[axis];
+        world_min[axis] = a.min(b);
+        world_max[axis] = a.max(b);
+    }
+    Some((world_min, world_max))
+}
+
+fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3])> {
+    match geometry.geometry_kind.as_str() {
+        "Box" => {
+            let size = vec3_param(&geometry.geometry_params, "size")
+                .or_else(|| vec3_param(&geometry.geometry_params, "dimensions"))?;
+            if !positive_vec3(size) {
+                return None;
+            }
+            Some((
+                [-size[0] / 2.0, -size[1] / 2.0, -size[2] / 2.0],
+                [size[0] / 2.0, size[1] / 2.0, size[2] / 2.0],
+            ))
+        }
+        "Cylinder" => {
+            let radius = number_param(&geometry.geometry_params, "radius")?;
+            let height = number_param(&geometry.geometry_params, "height")?;
+            if !(radius.is_finite() && radius > 0.0 && height.is_finite() && height > 0.0) {
+                return None;
+            }
+            Some((
+                [-radius, -radius, -height / 2.0],
+                [radius, radius, height / 2.0],
+            ))
+        }
+        "Ellipsoid" => {
+            let rx = number_param(&geometry.geometry_params, "rx")?;
+            let ry = number_param(&geometry.geometry_params, "ry")?;
+            let rz = number_param(&geometry.geometry_params, "rz")?;
+            if [rx, ry, rz]
+                .iter()
+                .any(|value| !value.is_finite() || *value <= 0.0)
+            {
+                return None;
+            }
+            Some(([-rx, -ry, -rz], [rx, ry, rz]))
+        }
+        "Difference" => {
+            let base = geometry
+                .geometry_params
+                .get("base")
+                .and_then(parse_geometry_value)?;
+            derive_geometry_bounds(&base)
+        }
+        _ => geometry.bounds_min.zip(geometry.bounds_max),
+    }
+}
+
+fn parse_geometry_value(value: &Value) -> Option<SceneGeometry> {
+    serde_json::from_value(value.clone()).ok()
+}
+
+fn validate_positive_vec3_param(
+    params: &Value,
+    key: &str,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    match vec3_param(params, key) {
+        Some(value) if positive_vec3(value) => {}
+        _ => diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            format!("Geometry parameter '{key}' must be a positive 3-vector."),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        )),
+    }
+}
+
+fn validate_positive_number_param(
+    params: &Value,
+    key: &str,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    match number_param(params, key) {
+        Some(value) if value.is_finite() && value > 0.0 => {}
+        _ => diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            format!("Geometry parameter '{key}' must be a positive number."),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        )),
+    }
+}
+
+fn number_param(params: &Value, key: &str) -> Option<f64> {
+    params.get(key)?.as_f64()
+}
+
+fn vec3_param(params: &Value, key: &str) -> Option<[f64; 3]> {
+    let values = params.get(key)?.as_array()?;
+    if values.len() != 3 {
+        return None;
+    }
+    Some([
+        values[0].as_f64()?,
+        values[1].as_f64()?,
+        values[2].as_f64()?,
+    ])
+}
+
+fn transform_is_valid(transform: &Transform3D) -> bool {
+    finite_vec3(transform.translation)
+        && finite_vec3(transform.scale)
+        && finite_vec3(transform.pivot)
+        && transform.scale.iter().all(|value| *value > 0.0)
+        && transform
+            .rotation_quat
+            .iter()
+            .all(|value| value.is_finite())
+        && transform
+            .rotation_quat
+            .iter()
+            .any(|value| value.abs() > f64::EPSILON)
+}
+
+fn positive_vec3(value: [f64; 3]) -> bool {
+    value
+        .iter()
+        .all(|component| component.is_finite() && *component > 0.0)
+}
+
+fn finite_vec3(value: [f64; 3]) -> bool {
+    value.iter().all(|component| component.is_finite())
+}
+
+fn scene_has_dirty_mesh_tags(scene: &SceneDocument) -> bool {
+    scene
+        .objects
+        .iter()
+        .any(|object| object.tags.iter().any(|tag| tag == "mesh:dirty"))
+}
+
+fn min_vec3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])]
+}
+
+fn max_vec3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])]
+}
+
+fn primitive(
+    id: &str,
+    label: &str,
+    category: &str,
+    fem: bool,
+    fdm: bool,
+    dsl: bool,
+    boolean: bool,
+    status: GeometrySupportStatus,
+) -> PrimitiveGeometryCapability {
+    PrimitiveGeometryCapability {
+        id: id.to_string(),
+        label: label.to_string(),
+        category: category.to_string(),
+        fem,
+        fdm,
+        dsl,
+        boolean,
+        status,
+    }
+}
+
+fn boolean(
+    op: &str,
+    fem: bool,
+    fdm: bool,
+    dsl: bool,
+    status: GeometrySupportStatus,
+    notes: &str,
+) -> BooleanGeometryCapability {
+    BooleanGeometryCapability {
+        op: op.to_string(),
+        fem,
+        fdm,
+        dsl,
+        status,
+        notes: notes.to_string(),
+    }
+}
+
+fn error(
+    code: &str,
+    message: impl Into<String>,
+    object_id: Option<String>,
+    geometry_path: Option<String>,
+    blocks: &[&str],
+) -> GeometryDiagnostic {
+    diagnostic(
+        GeometryDiagnosticSeverity::Error,
+        code,
+        message,
+        object_id,
+        geometry_path,
+        blocks,
+    )
+}
+
+fn warning(
+    code: &str,
+    message: impl Into<String>,
+    object_id: Option<String>,
+    geometry_path: Option<String>,
+    blocks: &[&str],
+) -> GeometryDiagnostic {
+    diagnostic(
+        GeometryDiagnosticSeverity::Warning,
+        code,
+        message,
+        object_id,
+        geometry_path,
+        blocks,
+    )
+}
+
+fn diagnostic(
+    severity: GeometryDiagnosticSeverity,
+    code: &str,
+    message: impl Into<String>,
+    object_id: Option<String>,
+    geometry_path: Option<String>,
+    blocks: &[&str],
+) -> GeometryDiagnostic {
+    let path = geometry_path.clone().unwrap_or_else(|| "scene".to_string());
+    GeometryDiagnostic {
+        id: format!("{}:{}", code, path),
+        severity,
+        code: code.to_string(),
+        message: message.into(),
+        object_id,
+        geometry_path,
+        blocks: blocks.iter().map(|block| (*block).to_string()).collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        SceneCurrentModulesState, SceneEditorState, SceneMaterialAsset, SceneMetadata,
+        SceneOutputsState, SceneStudyState, ScriptBuilderMaterialState,
+    };
+    use serde_json::json;
+
+    fn scene_with_object(geometry: SceneGeometry) -> SceneDocument {
+        SceneDocument {
+            revision: 7,
+            materials: vec![SceneMaterialAsset {
+                id: "mat:free".to_string(),
+                name: "material".to_string(),
+                properties: ScriptBuilderMaterialState {
+                    ms: None,
+                    aex: None,
+                    alpha: 0.01,
+                    dind: None,
+                },
+            }],
+            magnetization_assets: vec![crate::MagnetizationAsset {
+                id: "mag:free".to_string(),
+                name: "magnetization".to_string(),
+                kind: "uniform".to_string(),
+                value: Some(vec![0.0, 0.0, 1.0]),
+                seed: None,
+                source_path: None,
+                source_format: None,
+                dataset: None,
+                sample_index: None,
+                mapping: Default::default(),
+                texture_transform: Default::default(),
+                preset_kind: None,
+                preset_params: None,
+                preset_version: None,
+                ui_label: None,
+            }],
+            objects: vec![SceneObject {
+                id: "free".to_string(),
+                name: "free".to_string(),
+                geometry,
+                transform: Default::default(),
+                material_ref: "mat:free".to_string(),
+                region_name: None,
+                magnetization_ref: Some("mag:free".to_string()),
+                physics_stack: vec![],
+                object_mesh: None,
+                mesh_override: None,
+                visible: true,
+                locked: false,
+                tags: vec!["mesh:dirty".to_string()],
+            }],
+            version: "scene.v1".to_string(),
+            scene: SceneMetadata::default(),
+            universe: None,
+            current_modules: SceneCurrentModulesState::default(),
+            study: SceneStudyState::default(),
+            outputs: SceneOutputsState::default(),
+            editor: SceneEditorState::default(),
+        }
+    }
+
+    #[test]
+    fn box_scene_realizes_with_bounds_and_dirty_state() {
+        let scene = scene_with_object(SceneGeometry {
+            geometry_kind: "Box".to_string(),
+            geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
+            bounds_min: None,
+            bounds_max: None,
+        });
+        let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        assert_eq!(validation.status, "ready");
+        assert!(validation.dirty);
+        let snapshot = realize_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        assert_eq!(snapshot.source_scene_revision, 7);
+        assert_eq!(snapshot.bodies[0].bounds_min, [-0.5, -1.0, -1.5]);
+        assert_eq!(snapshot.bodies[0].bounds_max, [0.5, 1.0, 1.5]);
+    }
+
+    #[test]
+    fn unsupported_csg_blocks_mesh_build() {
+        let scene = scene_with_object(SceneGeometry {
+            geometry_kind: "Csg".to_string(),
+            geometry_params: json!({ "op": "union", "children": [] }),
+            bounds_min: None,
+            bounds_max: None,
+        });
+        let reason = geometry_blocks_mesh_build(&scene, GeometryBackendTarget::Fem);
+        assert!(reason.is_some());
+    }
+}

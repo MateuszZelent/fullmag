@@ -92,6 +92,23 @@ pub struct ObjectInteractionPatchRequest {
     pub params: Option<Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ObjectGeometryPatchRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    #[schema(value_type = Object)]
+    pub geometry: Value,
+    #[schema(value_type = Object, nullable)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct GeometryRealizationRequest {
+    #[serde(default)]
+    pub backend_target: Option<String>,
+}
+
 fn deserialize_nullable_u32_patch_field<'de, D>(
     deserializer: D,
 ) -> Result<Option<NullableU32PatchValue>, D::Error>
@@ -149,6 +166,16 @@ pub enum AuthoringTransactionRequest {
     MergePatch {
         #[schema(value_type = Object)]
         merge_patch: Value,
+    },
+    PatchObjectGeometry {
+        object_id: String,
+        #[serde(default)]
+        base_revision: Option<u64>,
+        #[schema(value_type = Object)]
+        geometry: Value,
+        #[schema(value_type = Object, nullable)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transform: Option<Value>,
     },
 }
 

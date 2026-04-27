@@ -102,6 +102,8 @@ interface Props {
   selectedAntennaId?: string | null;
   onAntennaTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
   universeCenter?: [number, number, number] | null;
+  viewportAxesScope?: "universe" | "object";
+  universeWireframeVisible?: boolean;
   focusObjectRequest?: FocusObjectRequest | null;
   objectViewMode?: ObjectViewMode;
   onRequestObjectSelect?: (id: string) => void;
@@ -784,6 +786,8 @@ function UnifiedVectorFieldRendererInner({
   viewport3DModel = null,
   onSettingsChange,
   toolbarMode = "visible",
+  viewportAxesScope = "universe",
+  universeWireframeVisible = true,
   viewportVisible = true,
   authoringOverlay = null,
 }: Props) {
@@ -1101,10 +1105,47 @@ function UnifiedVectorFieldRendererInner({
     link.click();
   }, []);
 
+  const selectedAxesOverlay = useMemo(
+    () => selectedObjectId
+      ? objectOverlays.find((candidate) => candidate.id === selectedObjectId) ?? null
+      : null,
+    [objectOverlays, selectedObjectId],
+  );
+  const selectedAxesSceneBox = useMemo(
+    () => selectedAxesOverlay
+      ? mapOverlayToFdmSceneBox(
+          selectedAxesOverlay,
+          sceneMode,
+          grid,
+          worldExtent,
+          universeCenter,
+        )
+      : null,
+    [grid, sceneMode, selectedAxesOverlay, universeCenter, worldExtent],
+  );
+
   // SceneAxes3D props — vector-surface coordinate mapping: scene-X=sim-X, scene-Y=sim-Z, scene-Z=sim-Y
-  const axesWorldExtent = worldExtent
+  const objectAxesWorldExtent = selectedAxesOverlay
+    ? [
+        selectedAxesOverlay.boundsMax[0] - selectedAxesOverlay.boundsMin[0],
+        selectedAxesOverlay.boundsMax[2] - selectedAxesOverlay.boundsMin[2],
+        selectedAxesOverlay.boundsMax[1] - selectedAxesOverlay.boundsMin[1],
+      ] as [number, number, number]
+    : null;
+  const universeAxesWorldExtent = worldExtent
     ? [worldExtent[0], worldExtent[2], worldExtent[1]] as [number, number, number]
     : null;
+  const axesWorldExtent =
+    viewportAxesScope === "object" && objectAxesWorldExtent
+      ? objectAxesWorldExtent
+      : universeAxesWorldExtent;
+  const axesCenter = viewportAxesScope === "object" && selectedAxesSceneBox
+    ? [
+        (selectedAxesSceneBox.sceneMin[0] + selectedAxesSceneBox.sceneMax[0]) * 0.5,
+        (selectedAxesSceneBox.sceneMin[1] + selectedAxesSceneBox.sceneMax[1]) * 0.5,
+        (selectedAxesSceneBox.sceneMin[2] + selectedAxesSceneBox.sceneMax[2]) * 0.5,
+      ] as [number, number, number]
+    : sceneTarget;
   const axesSceneScale: [number, number, number] = axesWorldExtent
     ? sceneMode === "world"
       ? [1, 1, 1]
@@ -1713,7 +1754,7 @@ function UnifiedVectorFieldRendererInner({
               />
             ) : null}
 
-            {geometryMode && sceneMode === "world" ? (
+            {universeWireframeVisible && sceneMode === "world" ? (
               <FdmUniverseBounds worldExtent={worldExtent} universeCenter={universeCenter} />
             ) : null}
 
@@ -1732,7 +1773,7 @@ function UnifiedVectorFieldRendererInner({
             {axesWorldExtent && axesWorldExtent[0] > 0 && axesWorldExtent[1] > 0 && axesWorldExtent[2] > 0 && (
               <SceneAxes3D
                 worldExtent={axesWorldExtent}
-                center={sceneTarget}
+                center={axesCenter}
                 sceneScale={axesSceneScale}
                 axisLabels={axisLabelsForConvention(VECTOR_SURFACE_AXIS_CONVENTION)}
               />

@@ -146,6 +146,8 @@ interface Props {
   visibleObjectIds?: string[];
   airSegmentVisible?: boolean;
   airSegmentOpacity?: number;
+  viewportAxesScope?: "universe" | "object";
+  universeWireframeVisible?: boolean;
   focusObjectRequest?: FocusObjectRequest | null;
   worldExtent?: [number, number, number] | null;
   worldCenter?: [number, number, number] | null;
@@ -234,7 +236,11 @@ function FemMeshView3DInner({
   visibleObjectIds,
   airSegmentVisible = false,
   airSegmentOpacity = 28,
+  viewportAxesScope = "universe",
+  universeWireframeVisible = true,
   focusObjectRequest = null,
+  worldExtent = null,
+  worldCenter = null,
   onAntennaTranslate,
   onGeometryTranslate,
   onRequestObjectSelect,
@@ -529,6 +535,8 @@ function FemMeshView3DInner({
     dynamicMaxDim,
     axesWorldExtent,
     axesCenter,
+    universeWireframeExtent,
+    universeWireframeCenter,
     sceneMaxDim,
     resolvedWorldTextureTransform,
     sceneTextureTransform,
@@ -554,6 +562,9 @@ function FemMeshView3DInner({
     selectedObjectOverlay,
     objectOverlays,
     focusObjectRequest,
+    worldExtent,
+    worldCenter,
+    viewportAxesScope,
     viewportFitSeed,
     viewCubeSceneRef,
     canvasRef,
@@ -818,6 +829,9 @@ function FemMeshView3DInner({
             onObjectSelect={onRequestObjectSelect}
             axesWorldExtent={axesWorldExtent}
             axesCenter={axesCenter}
+            universeWireframeExtent={universeWireframeExtent}
+            universeWireframeCenter={universeWireframeCenter}
+            universeWireframeVisible={universeWireframeVisible}
             onFaceClick={geometryPointerInteractionsEnabled ? handleFaceClick : undefined}
             onFaceHover={geometryHoverInteractionsEnabled && !interactionActive ? handleFaceHover : undefined}
             onFaceUnhover={geometryHoverInteractionsEnabled ? handleFaceUnhover : undefined}

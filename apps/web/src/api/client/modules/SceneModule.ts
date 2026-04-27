@@ -1,12 +1,17 @@
 import type {
   AuthoringMaterialPatchRequest,
   AuthoringMaterialResource,
+  AuthoringObjectGeometryPatchRequest,
   AuthoringObjectInteractionPatchRequest,
   AuthoringObjectInteractionResource,
   AuthoringStudyRuntimePatchRequest,
   AuthoringStudyRuntimeResource,
   AuthoringTransactionRequest,
   AuthoringTransactionResponse,
+  GeometryCapabilitiesResource,
+  GeometryRealizationRequest,
+  GeometryRealizationSnapshot,
+  GeometryValidationResource,
   ScenePatchRequest,
   ScriptSourceResponse,
   ScriptSyncRequest,
@@ -78,6 +83,44 @@ export class SceneModule {
     );
   }
 
+  async getGeometryCapabilities(
+    opts?: RequestOptions,
+  ): Promise<GeometryCapabilitiesResource> {
+    return this.client.get<GeometryCapabilitiesResource>(
+      sessionApiPaths.model.geometryCapabilities,
+      opts,
+    );
+  }
+
+  async getGeometryValidation(
+    opts?: RequestOptions,
+  ): Promise<GeometryValidationResource> {
+    return this.client.get<GeometryValidationResource>(
+      sessionApiPaths.model.geometryValidation,
+      opts,
+    );
+  }
+
+  async createGeometryRealization(
+    request: GeometryRealizationRequest = {},
+    opts?: RequestOptions,
+  ): Promise<GeometryRealizationSnapshot> {
+    return this.client.post<GeometryRealizationSnapshot>(
+      sessionApiPaths.model.geometryRealizations,
+      request,
+      opts,
+    );
+  }
+
+  async getCurrentGeometryRealization(
+    opts?: RequestOptions,
+  ): Promise<GeometryRealizationSnapshot> {
+    return this.client.get<GeometryRealizationSnapshot>(
+      sessionApiPaths.model.geometryRealizationCurrent,
+      opts,
+    );
+  }
+
   async transact(
     request: AuthoringTransactionRequest,
     opts?: RequestOptions,
@@ -138,6 +181,18 @@ export class SceneModule {
   ): Promise<AuthoringObjectInteractionResource> {
     return this.client.get<AuthoringObjectInteractionResource>(
       sessionApiPaths.model.objectInteraction(objectId, interactionKind),
+      opts,
+    );
+  }
+
+  async patchObjectGeometry(
+    objectId: string,
+    request: AuthoringObjectGeometryPatchRequest,
+    opts?: RequestOptions,
+  ): Promise<SceneDocument> {
+    return this.client.patch<SceneDocument>(
+      sessionApiPaths.model.objectGeometry(objectId),
+      request,
       opts,
     );
   }

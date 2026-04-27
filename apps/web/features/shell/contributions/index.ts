@@ -8,6 +8,7 @@
  */
 
 import "./home";
+import "./view";
 import "./definitions";
 import "./geometry-builder";
 import "./materials";

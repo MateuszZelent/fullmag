@@ -35,6 +35,9 @@ interface UseFemSceneGeometryArgs {
   selectedObjectOverlay: BuilderObjectOverlay | null;
   objectOverlays: BuilderObjectOverlay[];
   focusObjectRequest: FocusObjectRequest | null;
+  worldExtent?: [number, number, number] | null;
+  worldCenter?: [number, number, number] | null;
+  viewportAxesScope?: "universe" | "object";
   viewCubeSceneRef: MutableRefObject<any>;
   canvasRef: MutableRefObject<HTMLCanvasElement | null>;
   qualityProfileRef: MutableRefObject<string>;
@@ -52,6 +55,8 @@ export interface FemSceneGeometry {
   dynamicMaxDim: number;
   axesWorldExtent: [number, number, number];
   axesCenter: [number, number, number];
+  universeWireframeExtent: [number, number, number] | null;
+  universeWireframeCenter: [number, number, number];
   sceneMaxDim: number;
   resolvedWorldTextureTransform: TextureTransform3D | null;
   sceneTextureTransform: TextureTransform3D | null;
@@ -79,6 +84,9 @@ export function useFemSceneGeometry({
   selectedObjectOverlay,
   objectOverlays,
   focusObjectRequest,
+  worldExtent = null,
+  worldCenter = null,
+  viewportAxesScope = "universe",
   viewportFitSeed,
   viewCubeSceneRef,
   canvasRef,
@@ -349,8 +357,43 @@ export function useFemSceneGeometry({
   ]);
 
   // ── Derived scene constants ───────────────────────────────────────
-  const axesWorldExtent = dynamicGeomSize;
-  const axesCenter = [0, 0, 0] as [number, number, number];
+  const hasUniverseExtent =
+    Array.isArray(worldExtent) &&
+    worldExtent.every((value) => Number.isFinite(value) && value > 0);
+  const universeWireframeExtent = hasUniverseExtent
+    ? [...worldExtent] as [number, number, number]
+    : null;
+  const universeWireframeCenter = hasUniverseExtent
+    ? [
+        (worldCenter?.[0] ?? 0) - dynamicGeomCenter.x,
+        (worldCenter?.[1] ?? 0) - dynamicGeomCenter.y,
+        (worldCenter?.[2] ?? 0) - dynamicGeomCenter.z,
+      ] as [number, number, number]
+    : [0, 0, 0] as [number, number, number];
+  const selectedObjectAxes = selectedObjectOverlay
+    ? {
+        extent: [
+          selectedObjectOverlay.boundsMax[0] - selectedObjectOverlay.boundsMin[0],
+          selectedObjectOverlay.boundsMax[1] - selectedObjectOverlay.boundsMin[1],
+          selectedObjectOverlay.boundsMax[2] - selectedObjectOverlay.boundsMin[2],
+        ] as [number, number, number],
+        center: [
+          0.5 * (selectedObjectOverlay.boundsMin[0] + selectedObjectOverlay.boundsMax[0]) - dynamicGeomCenter.x,
+          0.5 * (selectedObjectOverlay.boundsMin[1] + selectedObjectOverlay.boundsMax[1]) - dynamicGeomCenter.y,
+          0.5 * (selectedObjectOverlay.boundsMin[2] + selectedObjectOverlay.boundsMax[2]) - dynamicGeomCenter.z,
+        ] as [number, number, number],
+      }
+    : null;
+  const axesWorldExtent =
+    viewportAxesScope === "object" && selectedObjectAxes?.extent.every((value) => value > 0)
+      ? selectedObjectAxes.extent
+      : universeWireframeExtent ?? dynamicGeomSize;
+  const axesCenter =
+    viewportAxesScope === "object" && selectedObjectAxes?.extent.every((value) => value > 0)
+      ? selectedObjectAxes.center
+      : hasUniverseExtent
+        ? universeWireframeCenter
+        : [0, 0, 0] as [number, number, number];
   const sceneMaxDim = dynamicMaxDim;
 
   // ── Camera presets ────────────────────────────────────────────────
@@ -439,6 +482,8 @@ export function useFemSceneGeometry({
     dynamicMaxDim,
     axesWorldExtent,
     axesCenter,
+    universeWireframeExtent,
+    universeWireframeCenter,
     sceneMaxDim,
     resolvedWorldTextureTransform,
     sceneTextureTransform,

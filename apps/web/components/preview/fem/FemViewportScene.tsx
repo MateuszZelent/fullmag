@@ -269,6 +269,9 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   onObjectSelect,
   axesWorldExtent,
   axesCenter,
+  universeWireframeExtent,
+  universeWireframeCenter,
+  universeWireframeVisible = true,
   onFaceClick,
   onFaceHover,
   onFaceUnhover,
@@ -337,6 +340,9 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   onObjectSelect?: (id: string) => void;
   axesWorldExtent: [number, number, number];
   axesCenter: [number, number, number];
+  universeWireframeExtent?: [number, number, number] | null;
+  universeWireframeCenter?: [number, number, number];
+  universeWireframeVisible?: boolean;
   onFaceClick?: (e: any) => void;
   onFaceHover?: (e: any) => void;
   onFaceUnhover?: (e: any) => void;
@@ -556,6 +562,19 @@ export const FemViewportScene = React.memo(function FemViewportScene({
 
       {showSceneAxes ? (
         <SceneAxes3D worldExtent={axesWorldExtent} center={axesCenter} sceneScale={[1, 1, 1]} />
+      ) : null}
+
+      {universeWireframeVisible && universeWireframeExtent ? (
+        <mesh position={universeWireframeCenter ?? [0, 0, 0]} renderOrder={18}>
+          <boxGeometry args={universeWireframeExtent} />
+          <meshBasicMaterial
+            color="#94a3b8"
+            transparent
+            opacity={0.22}
+            wireframe
+            depthWrite={false}
+          />
+        </mesh>
       ) : null}
     </>
   );

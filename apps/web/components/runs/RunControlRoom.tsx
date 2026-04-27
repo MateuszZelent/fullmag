@@ -15,7 +15,6 @@ import { recordFrontendDebugEvent } from "../../lib/workspace/navigation-debug";
 import type {
   ScriptBuilderCurrentModuleEntry,
   ScriptBuilderMagneticInteractionKind,
-  ScriptBuilderUniverseState,
 } from "../../lib/session/types";
 import {
   MAGNETIC_PRESET_CATALOG,
@@ -28,10 +27,6 @@ import {
 import {
   assignMagneticPreset,
 } from "../../lib/session/magnetizationAssetActions";
-import {
-  createSceneObjectFromGeometryPreset,
-} from "../../lib/session/sceneObjectFactory";
-import type { GeometryPresetKind } from "../../lib/geometryPresetCatalog";
 import {
   ControlRoomProvider,
 } from "./control-room/ControlRoomContext";
@@ -78,6 +73,8 @@ import { useAnalyzeStore } from "@/features/analyze";
 import { useWorkspaceGraphBridge } from "@/features/workspace-graph";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import type { PrimitiveKind } from "@/features/geometry-builder/model/types";
+import { createScenePrimitiveAuthoringUpdate } from "@/features/geometry-builder/scene/scenePrimitiveAuthoring";
+import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
 import type { WorkspaceMode } from "./control-room/context-hooks";
 import SettingsDialog from "../workspace/overlays/SettingsDialog";
 import PhysicsDocsDrawer from "../workspace/overlays/PhysicsDocsDrawer";
@@ -117,90 +114,6 @@ function launchDisplayName(intent: ReturnType<typeof useWorkspaceStore.getState>
     return parts[parts.length - 1] ?? intent.entryPath;
   }
   return intent.resumeProjectId;
-}
-
-function geometryPresetForPrimitive(kind: PrimitiveKind): GeometryPresetKind {
-  switch (kind) {
-    case "box":
-    case "cylinder":
-    case "sphere":
-    case "disk":
-    case "thin_film":
-    case "pillar":
-    case "nanowire":
-    case "ring":
-      return kind;
-    case "ellipsoid":
-      return "sphere";
-    case "tube":
-      return "ring";
-    default:
-      return "box";
-  }
-}
-
-function geometryHalfExtentMeters(
-  geometryKind: string,
-  params: Record<string, unknown>,
-): [number, number, number] {
-  if (geometryKind === "Box" && Array.isArray(params.size) && params.size.length === 3) {
-    const size = params.size.map((value) => Number(value));
-    if (size.every((value) => Number.isFinite(value) && value > 0)) {
-      return [size[0] / 2, size[1] / 2, size[2] / 2];
-    }
-  }
-  if (geometryKind === "Cylinder") {
-    const radius = Number(params.radius);
-    const height = Number(params.height);
-    if (Number.isFinite(radius) && radius > 0 && Number.isFinite(height) && height > 0) {
-      return [radius, radius, height / 2];
-    }
-  }
-  if (geometryKind === "Ellipsoid") {
-    const rx = Number(params.rx);
-    const ry = Number(params.ry);
-    const rz = Number(params.rz);
-    if ([rx, ry, rz].every((value) => Number.isFinite(value) && value > 0)) {
-      return [rx, ry, rz];
-    }
-  }
-  return [50e-9, 25e-9, 5e-9];
-}
-
-function expandUniverseToIncludeBounds(
-  universe: ScriptBuilderUniverseState | null,
-  boundsMin: [number, number, number],
-  boundsMax: [number, number, number],
-): ScriptBuilderUniverseState | null {
-  if (!universe?.size || !universe.center) {
-    return universe;
-  }
-  const currentMin = universe.center.map(
-    (component, axis) => component - universe.size![axis] / 2,
-  ) as [number, number, number];
-  const currentMax = universe.center.map(
-    (component, axis) => component + universe.size![axis] / 2,
-  ) as [number, number, number];
-  const padding = universe.padding ?? [0, 0, 0];
-  const nextMin = currentMin.map(
-    (component, axis) => Math.min(component, boundsMin[axis] - padding[axis]),
-  ) as [number, number, number];
-  const nextMax = currentMax.map(
-    (component, axis) => Math.max(component, boundsMax[axis] + padding[axis]),
-  ) as [number, number, number];
-  return {
-    ...universe,
-    center: nextMin.map((component, axis) => 0.5 * (component + nextMax[axis])) as [
-      number,
-      number,
-      number,
-    ],
-    size: nextMin.map((component, axis) => nextMax[axis] - component) as [
-      number,
-      number,
-      number,
-    ],
-  };
 }
 
 function nextAntennaName(
@@ -414,11 +327,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     state.builderMode.enabled ? state.isRunBlocked() : false,
   );
   const builderSelection = useGeometryBuilderStore((state) => state.builderSelection);
-  const createBuilderBoolean = useGeometryBuilderStore((state) => state.createBooleanFromEnabled);
-  const removeBuilderPrimitive = useGeometryBuilderStore((state) => state.removePrimitive);
-  const duplicateBuilderPrimitive = useGeometryBuilderStore((state) => state.duplicatePrimitive);
-  const buildBuilderGeometry = useGeometryBuilderStore((state) => state.buildGeometry);
-  const buildBuilderMesh = useGeometryBuilderStore((state) => state.buildMesh);
   const validateBuilderAll = useGeometryBuilderStore((state) => state.validateAll);
   const setBuilderViewportTool = useGeometryBuilderStore((state) => state.setViewportTool);
   const requestBuilderFocusSelected = useGeometryBuilderStore(
@@ -429,15 +337,11 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   );
   const setBuilderPrimitiveTransform = useGeometryBuilderStore((state) => state.setPrimitiveTransform);
   const getBuilderPrimitive = useGeometryBuilderStore((state) => state.getPrimitive);
-  const getGeometryBuildBlockedReason = useGeometryBuilderStore(
-    (state) => state.getGeometryBuildBlockedReason,
-  );
   const getBackendBuildBlockedReason = useGeometryBuilderStore(
     (state) => state.getBackendBuildBlockedReason,
   );
   const builderUniverseOrigin = useGeometryBuilderStore((state) => state.graph.universe.origin);
   const toggleBuilderSnap = useGeometryBuilderStore((state) => state.toggleSnap);
-  const enableBuilderMode = useGeometryBuilderStore((state) => state.enableBuilder);
   const disableBuilderMode = useGeometryBuilderStore((state) => state.disableBuilder);
   const [viewportSize, setViewportSize] = useState({ width: 1920, height: 1080 });
 
@@ -661,6 +565,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 
   const selectedBuilderPrimitiveId =
     builderSelection.type === "primitive" ? builderSelection.id : null;
+  const sceneAuthoring = useSceneAuthoringActions();
 
   const handleBuilderAddPrimitive = useCallback((kind: PrimitiveKind) => {
     setActiveCoreTab("Geometry");
@@ -675,74 +580,27 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         ? ctx.objectOverlays.find((overlay) => overlay.id === ctx.selectedObjectId) ?? null
         : null;
     const fallbackOverlay = ctx.objectOverlays[0] ?? null;
-    const overlay = referenceOverlay ?? fallbackOverlay;
-
-    let nextObjectId: string | null = null;
-    ctx.setSceneDocument((prev) => {
-      if (!prev) return prev;
-      const created = createSceneObjectFromGeometryPreset(
-        geometryPresetForPrimitive(kind),
-        prev.objects,
-      );
-      const halfExtent = geometryHalfExtentMeters(
-        created.object.geometry.geometry_kind,
-        created.object.geometry.geometry_params,
-      );
-      const center = overlay
-        ? ([
-            overlay.boundsMax[0] + Math.max(halfExtent[0] * 0.5, 5e-9) + halfExtent[0],
-            0.5 * (overlay.boundsMin[1] + overlay.boundsMax[1]),
-            0.5 * (overlay.boundsMin[2] + overlay.boundsMax[2]),
-          ] as [number, number, number])
-        : created.object.transform.translation;
-      const object = {
-        ...created.object,
-        tags: Array.from(new Set([...(created.object.tags ?? []), "mesh:dirty"])),
-        transform: {
-          ...created.object.transform,
-          translation: center,
-        },
-      };
-      const boundsMin = center.map((component, axis) => component - halfExtent[axis]) as [
-        number,
-        number,
-        number,
-      ];
-      const boundsMax = center.map((component, axis) => component + halfExtent[axis]) as [
-        number,
-        number,
-        number,
-      ];
-      nextObjectId = object.name || object.id;
-      return {
-        ...prev,
-        revision: prev.revision + 1,
-        universe: expandUniverseToIncludeBounds(prev.universe, boundsMin, boundsMax),
-        study: {
-          ...prev.study,
-          universe_mesh: expandUniverseToIncludeBounds(prev.study.universe_mesh, boundsMin, boundsMax),
-        },
-        objects: [...prev.objects, object],
-        materials: [...prev.materials, created.material],
-        magnetization_assets: [...prev.magnetization_assets, created.magnetization],
-        editor: {
-          ...prev.editor,
-          active_transform_scope: "object",
-          gizmo_mode: "translate",
-          selected_object_id: nextObjectId,
-          selected_entity_id: `geo-${nextObjectId}`,
-          focused_entity_id: nextObjectId,
-        },
-      };
+    const prev = ctx.sceneDocument;
+    if (!prev) return;
+    const update = createScenePrimitiveAuthoringUpdate({
+      scene: prev,
+      kind,
+      placementOverlay: referenceOverlay ?? fallbackOverlay,
     });
+    ctx.setSceneDocument(update.scene);
+    void sceneAuthoring
+      .updateSceneMergePatch(update.mergePatch)
+      .catch((error) => {
+        console.error("failed to commit authoring primitive to backend scene", error);
+      });
     if (ctx.sidebarCollapsed) {
       ctx.setSidebarCollapsed(false);
     }
-    if (nextObjectId) {
-      ctx.setSelectedObjectId(nextObjectId);
-      ctx.setSelectedSidebarNodeId(`geo-${nextObjectId}`);
-      ctx.requestFocusObject(nextObjectId);
-    }
+    ctx.setSelectedSidebarNodeId(`geo-${update.selectedObjectId}`);
+    ctx.setSelectedObjectId(update.selectedObjectId);
+    ctx.setSelectedEntityId(null);
+    ctx.setFocusedEntityId(null);
+    ctx.requestFocusObject(update.selectedObjectId);
     setRightInspectorOpen(true);
     ctx.setActiveTransformScope("object");
     setBuilderViewportTool("move");
@@ -750,16 +608,11 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     builderModeEnabled,
     ctx,
     disableBuilderMode,
+    sceneAuthoring,
     setActiveCoreTab,
     setRightInspectorOpen,
     setBuilderViewportTool,
   ]);
-
-  const handleBuilderCreateBoolean = useCallback((op: Parameters<typeof createBuilderBoolean>[0]) => {
-    setActiveCoreTab("Geometry");
-    enableBuilderMode();
-    createBuilderBoolean(op);
-  }, [createBuilderBoolean, enableBuilderMode, setActiveCoreTab]);
 
   const handleBuilderSetViewportMode = useCallback((mode: "camera" | "manipulate") => {
     setBuilderViewportTool(mode === "camera" ? "camera" : selectedBuilderPrimitiveId ? "move" : "select");
@@ -793,42 +646,27 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     });
   }, [builderUniverseOrigin, getBuilderPrimitive, setBuilderPrimitiveTransform]);
 
+  const handleBuilderBuildGeometry = useCallback(() => {
+    setRightInspectorOpen(true);
+  }, [setRightInspectorOpen]);
+
   const handleBuilderBuildMesh = useCallback(async () => {
     const backendBlockedReason = getBackendBuildBlockedReason(Boolean(femDiscretization));
-    if (backendBlockedReason) {
+    if (backendBlockedReason || !femDiscretization || !ctx.sceneDocument?.objects.length) {
       setRightInspectorOpen(true);
       return;
     }
-    // Keep builder-local lifecycle state coherent for geometry badges/run-gate.
-    buildBuilderMesh();
-    // Also enqueue canonical runtime mesh generation when FEM path is active.
-    if (femDiscretization) {
-      try {
-        await ctx.handleStudyDomainMeshGenerate("geometry_builder_build_mesh");
-      } catch {
-        // Mesh pipeline already surfaces command errors in the shared command state.
-      }
+    try {
+      await ctx.handleStudyDomainMeshGenerate("geometry_scene_build_mesh");
+    } catch {
+      // Mesh pipeline already surfaces command errors in the shared command state.
     }
-  }, [buildBuilderMesh, ctx, femDiscretization, getBackendBuildBlockedReason, setRightInspectorOpen]);
+  }, [ctx, femDiscretization, getBackendBuildBlockedReason, setRightInspectorOpen]);
 
   const handleBuilderBuildAll = useCallback(() => {
-    if (getGeometryBuildBlockedReason()) {
-      setRightInspectorOpen(true);
-      return;
-    }
-    if (getBackendBuildBlockedReason(Boolean(femDiscretization))) {
-      setRightInspectorOpen(true);
-      return;
-    }
-    buildBuilderGeometry();
     void handleBuilderBuildMesh();
   }, [
-    buildBuilderGeometry,
-    femDiscretization,
-    getBackendBuildBlockedReason,
-    getGeometryBuildBlockedReason,
     handleBuilderBuildMesh,
-    setRightInspectorOpen,
   ]);
 
   const handleBuilderValidateGeometry = useCallback(() => {
@@ -1656,6 +1494,14 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onViewChange={ctx.handleViewModeChange}
         onSidebarToggle={() => ctx.setSidebarCollapsed((v) => !v)}
         onCreateVisualizationPreset={handleCreateVisualizationPreset}
+        airboxVisible={ctx.airMeshVisible}
+        viewportAxesScope={ctx.viewportAxesScope}
+        universeWireframeVisible={ctx.universeWireframeVisible}
+        viewportLegendVisible={ctx.viewportLegendVisible}
+        onToggleAirbox={() => ctx.setAirMeshVisible((visible) => !visible)}
+        onSetViewportAxesScope={ctx.setViewportAxesScope}
+        onToggleUniverseWireframe={() => ctx.setUniverseWireframeVisible((visible) => !visible)}
+        onToggleViewportLegend={() => ctx.setViewportLegendVisible((visible) => !visible)}
         onSimAction={ctx.handleSimulationAction}
         quickPreviewTargets={ctx.quickPreviewTargets}
         selectedQuantity={ctx.requestedPreviewQuantity}
@@ -1683,6 +1529,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onOpenMeshMethodSettings={handleOpenMeshMethod}
         onOpenMeshPipeline={handleOpenMeshPipeline}
         selectedObjectId={ctx.selectedObjectId}
+        sceneObjectCount={ctx.sceneDocument?.objects.length ?? 0}
         onRequestObjectFocus={ctx.requestFocusObject}
         hasSharedAirboxDomain={hasSharedAirboxDomain}
         canSyncScriptBuilder={Boolean(ctx.sessionFooter.scriptPath)}
@@ -1699,10 +1546,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onSetTransformScope={handleSetTransformScope}
         onSetTextureTransformMode={handleSetTextureTransformMode}
         onBuilderAddPrimitive={handleBuilderAddPrimitive}
-        onBuilderCreateBoolean={handleBuilderCreateBoolean}
-        onBuilderRemovePrimitive={removeBuilderPrimitive}
-        onBuilderDuplicatePrimitive={duplicateBuilderPrimitive}
-        onBuilderBuildGeometry={buildBuilderGeometry}
+        onBuilderBuildGeometry={handleBuilderBuildGeometry}
         onBuilderBuildMesh={() => { void handleBuilderBuildMesh(); }}
         onBuilderBuildAll={handleBuilderBuildAll}
         onBuilderValidateGeometry={handleBuilderValidateGeometry}

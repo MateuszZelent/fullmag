@@ -19,7 +19,7 @@ import type { ReactNode } from "react";
 import type { NodeKind, NodeDomain } from "../../model-builder/types";
 import type { StudyNodeContext } from "@/lib/study-builder/node-context";
 import type { RibbonCommand } from "@/components/shell/ribbon/command-registry";
-import type { CapabilityMap } from "@/src/api/types";
+import type { CapabilityMap, GeometryCapabilitiesResource } from "@/src/api/types";
 
 // ---------------------------------------------------------------------------
 // Core ribbon types — canonical, used by contributions AND the renderer
@@ -66,6 +66,7 @@ export interface RibbonGroup {
 
 export type RibbonTabId =
   | "home"
+  | "view"
   | "definitions"
   | "geometry"
   | "materials"
@@ -144,6 +145,10 @@ export interface RibbonBuildContext {
   viewMode: string | null;
   sidebarVisible: boolean;
   previewPending: boolean;
+  airboxVisible: boolean;
+  viewportAxesScope: "universe" | "object";
+  universeWireframeVisible: boolean;
+  viewportLegendVisible: boolean;
 
   // ── Study context ──
   studyNodeContext: StudyNodeContext | null;
@@ -179,7 +184,9 @@ export interface RibbonBuildContext {
   builderDirtyGeometry: boolean;
   builderDirtyMesh: boolean;
   builderHasRealization: boolean;
+  builderSceneObjectCount: number;
   builderSelectedPrimitiveId: string | null;
+  geometryCapabilities: GeometryCapabilitiesResource | null;
 }
 
 // ---------------------------------------------------------------------------

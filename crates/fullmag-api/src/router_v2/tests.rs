@@ -3133,6 +3133,121 @@ async fn authoring_transactions_merge_patch_commits_document() {
 }
 
 #[tokio::test]
+async fn authoring_geometry_capabilities_returns_backend_matrix() {
+    let app = test_router_with_scene_document().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/geometry/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert!(json["primitive_capabilities"]
+        .as_array()
+        .expect("primitive capabilities")
+        .iter()
+        .any(|entry| entry["id"] == "box" && entry["fem"] == true));
+    assert!(json["csg_capabilities"]
+        .as_array()
+        .expect("csg capabilities")
+        .iter()
+        .any(|entry| entry["op"] == "subtract" && entry["status"] == "production"));
+}
+
+#[tokio::test]
+async fn authoring_object_geometry_patch_marks_mesh_dirty_and_checks_revision() {
+    let state = test_app_state_with_live_session().await;
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    let base_revision = scene.revision;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/v2/sessions/current/model/objects/{object_id}/geometry"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": base_revision,
+                        "geometry": {
+                            "geometry_kind": "Box",
+                            "geometry_params": { "size": [1.0, 2.0, 3.0] }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let guard = state.current_live_state.read().await;
+    let committed = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("scene document committed");
+    let object = committed
+        .objects
+        .iter()
+        .find(|entry| entry.id == object_id)
+        .expect("object retained");
+    assert_eq!(object.geometry.geometry_kind, "Box");
+    assert!(object.tags.iter().any(|tag| tag == "mesh:dirty"));
+}
+
+#[tokio::test]
+async fn authoring_geometry_realization_reports_blocked_csg() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.objects[0].geometry.geometry_kind = "Csg".to_string();
+    scene.objects[0].geometry.geometry_params = serde_json::json!({
+        "op": "union",
+        "children": []
+    });
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/geometry/realizations")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "backend_target": "fem" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "blocked");
+    assert!(json["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED"));
+}
+
+#[tokio::test]
 async fn authoring_study_runtime_get_returns_requested_selection() {
     let app = test_router_with_scene_document().await;
     let response = app

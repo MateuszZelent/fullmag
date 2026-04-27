@@ -61,6 +61,12 @@ const CREATE_SHAPES: Array<{ kind: PrimitiveKind; icon: React.ReactNode; color: 
 
 function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   const groups: RibbonGroup[] = [];
+  const backendPrimitiveCapabilities = new Map(
+    ctx.geometryCapabilities?.primitive_capabilities.map((entry) => [entry.id, entry]) ?? [],
+  );
+  const backendCsgCapabilities = new Map(
+    ctx.geometryCapabilities?.csg_capabilities.map((entry) => [entry.op, entry]) ?? [],
+  );
 
   // ── Create group ────────────────────────────────────────────
   groups.push({
@@ -70,14 +76,23 @@ function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
     tone: "authoring",
     actions: CREATE_SHAPES.map(({ kind, icon, color }) => {
       const capability = PRIMITIVE_CAPABILITIES[kind];
-      const backendReady = ctx.isFemBackend ? capability.fem : capability.fdm;
+      const backendCapability = backendPrimitiveCapabilities.get(kind);
+      const backendReady = backendCapability
+        ? ctx.isFemBackend
+          ? backendCapability.fem
+          : backendCapability.fdm
+        : ctx.isFemBackend
+          ? capability.fem
+          : capability.fdm;
+      const capabilityLabel = backendCapability?.label ?? capability.label;
+      const supportStatus = backendCapability?.status ?? capability.status;
       return {
         id: `builder-add-${kind}`,
         icon,
-        label: capability.label,
+        label: capabilityLabel,
         tooltip: backendReady
-          ? `Create ${capability.label}.`
-          : `Create ${capability.label} preview. Mesh build is blocked until this shape is supported by the active backend.`,
+          ? `Create ${capabilityLabel}.`
+          : `Create ${capabilityLabel} ${supportStatus} geometry. Mesh build is blocked until the active backend supports it.`,
         action: () => ctx.run({ id: "builder.add-primitive", primitiveKind: kind }),
         iconColor: backendReady ? color : "text-slate-400",
       };
@@ -94,25 +109,28 @@ function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
         id: "builder-boolean-union",
         icon: <Combine size={20} />,
         label: "Union",
-        tooltip: "Combine enabled shapes into one object body.",
+        tooltip: backendCsgCapabilities.get("union")?.notes ?? "Union is not production-realized by the backend yet.",
+        disabled: backendCsgCapabilities.get("union")?.status !== "production",
         action: () => ctx.run({ id: "builder.create-boolean", op: "union" }),
-        iconColor: "text-emerald-300",
+        iconColor: backendCsgCapabilities.get("union")?.status === "production" ? "text-emerald-400" : "text-slate-400",
       },
       {
         id: "builder-boolean-subtract",
         icon: <Minus size={20} />,
         label: "Subtract",
-        tooltip: "Use enabled shapes as a subtractive boolean graph.",
+        tooltip: backendCsgCapabilities.get("subtract")?.notes ?? "Subtract is available only when backend realization supports the selected shapes.",
+        disabled: backendCsgCapabilities.get("subtract")?.status !== "production",
         action: () => ctx.run({ id: "builder.create-boolean", op: "subtract" }),
-        iconColor: "text-rose-300",
+        iconColor: backendCsgCapabilities.get("subtract")?.status === "production" ? "text-amber-400" : "text-slate-400",
       },
       {
         id: "builder-boolean-intersect",
         icon: <Plus size={20} />,
         label: "Intersect",
-        tooltip: "Create an intersection boolean graph from enabled shapes.",
+        tooltip: backendCsgCapabilities.get("intersect")?.notes ?? "Intersect is not production-realized by the backend yet.",
+        disabled: backendCsgCapabilities.get("intersect")?.status !== "production",
         action: () => ctx.run({ id: "builder.create-boolean", op: "intersect" }),
-        iconColor: "text-sky-300",
+        iconColor: backendCsgCapabilities.get("intersect")?.status === "production" ? "text-emerald-400" : "text-slate-400",
       },
     ],
   });
@@ -202,6 +220,8 @@ function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   // ── Geometry Lifecycle group ────────────────────────────────
   const isDirtyGeometry = Boolean(ctx.builderDirtyGeometry);
   const isDirtyMesh = Boolean(ctx.builderDirtyMesh);
+  const sceneObjectCount = ctx.builderSceneObjectCount ?? 0;
+  const hasSceneGeometry = sceneObjectCount > 0;
   const buildTargetLabel = ctx.isFemBackend ? "FEM Mesh" : "FDM Grid";
   const backendBlockedReason = useGeometryBuilderStore
     .getState()
@@ -210,32 +230,31 @@ function buildGeometryBuilderGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   groups.push({
     id: "builder-lifecycle",
     title: "Lifecycle",
-    subtitle: isDirtyGeometry
-      ? "⚠ Geometry changed"
-      : isDirtyMesh
-        ? "⚠ Mesh out of date"
-        : "✓ Ready",
+    subtitle: hasSceneGeometry ? `${sceneObjectCount} scene object${sceneObjectCount === 1 ? "" : "s"}` : "No scene geometry",
     tone: isDirtyGeometry || isDirtyMesh ? "sync" : "neutral",
     actions: [
       {
         id: "builder-build-geometry",
         icon: <Hammer size={20} />,
-        label: "Build Geometry",
-        tooltip: "Realize authoring geometry for solver",
-        accent: isDirtyGeometry,
-        disabled: !isDirtyGeometry,
+        label: "Geometry Synced",
+        tooltip: "SceneDocument is updated live. Backend realization diagnostics are part of the mesh pipeline.",
+        accent: false,
+        disabled: true,
         action: () => ctx.run({ id: "builder.build-geometry" }),
-        iconColor: isDirtyGeometry ? "text-amber-400" : "text-slate-400",
+        iconColor: "text-emerald-400",
       },
       {
         id: "builder-build-mesh",
         icon: <Grid3x3 size={20} />,
         label: `Build ${buildTargetLabel}`,
-        tooltip: backendBlockedReason ?? `Generate solver ${buildTargetLabel.toLowerCase()} from realized geometry`,
-        accent: isDirtyMesh && !isDirtyGeometry,
-        disabled: Boolean(backendBlockedReason) || isDirtyGeometry || !isDirtyMesh || !ctx.builderHasRealization,
+        tooltip: backendBlockedReason
+          ?? (ctx.isFemBackend
+            ? "Generate solver mesh from canonical SceneDocument geometry."
+            : "FDM uses the canonical grid/domain path; Geometry mesh build is available for FEM."),
+        accent: hasSceneGeometry && Boolean(ctx.isFemBackend),
+        disabled: Boolean(backendBlockedReason) || !ctx.isFemBackend || !hasSceneGeometry || Boolean(ctx.meshGenerating),
         action: () => ctx.run({ id: "builder.build-mesh" }),
-        iconColor: backendBlockedReason ? "text-rose-400" : isDirtyMesh ? "text-amber-400" : "text-slate-400",
+        iconColor: backendBlockedReason ? "text-rose-400" : hasSceneGeometry ? "text-amber-400" : "text-slate-400",
       },
       {
         id: "builder-validate",

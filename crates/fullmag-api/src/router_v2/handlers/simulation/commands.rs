@@ -9,6 +9,9 @@ use axum::Json;
 use crate::error::ApiError;
 use crate::schemas::commands::{CommandResponse, StructuredCommandRequest};
 use crate::types::{AppState, CommandLifecycleState, SessionCommand, TrackedCommandRecord};
+use fullmag_authoring::{
+    geometry_blocks_mesh_build, geometry_blocks_solver_run, GeometryBackendTarget,
+};
 
 #[utoipa::path(
     post,
@@ -34,6 +37,7 @@ pub(crate) async fn submit_structured_command_impl(
     headers: &HeaderMap,
     req: StructuredCommandRequest,
 ) -> Result<CommandResponse, ApiError> {
+    validate_authoring_gate_for_command(&state, &req).await?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -41,6 +45,36 @@ pub(crate) async fn submit_structured_command_impl(
     let command_id = format!("fm-{}", uuid::Uuid::new_v4());
     let command = command_from_structured(req, command_id, now);
     enqueue_session_command_impl(state, headers, command).await
+}
+
+async fn validate_authoring_gate_for_command(
+    state: &Arc<AppState>,
+    req: &StructuredCommandRequest,
+) -> Result<(), ApiError> {
+    let should_check_mesh = matches!(req, StructuredCommandRequest::MeshBuild { .. });
+    let should_check_run = matches!(
+        req,
+        StructuredCommandRequest::Run { .. }
+            | StructuredCommandRequest::Relax { .. }
+            | StructuredCommandRequest::Solve
+    );
+    if !should_check_mesh && !should_check_run {
+        return Ok(());
+    }
+    let scene = match crate::get_or_load_current_live_scene_document(state).await {
+        Ok(scene) => scene,
+        Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let backend_target = GeometryBackendTarget::from_scene(&scene);
+    if should_check_mesh {
+        if let Some(reason) = geometry_blocks_mesh_build(&scene, backend_target) {
+            return Err(ApiError::bad_request(reason));
+        }
+    } else if let Some(reason) = geometry_blocks_solver_run(&scene, backend_target) {
+        return Err(ApiError::conflict(reason));
+    }
+    Ok(())
 }
 
 pub(crate) async fn enqueue_session_command_impl(

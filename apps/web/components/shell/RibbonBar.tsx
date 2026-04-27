@@ -19,8 +19,9 @@ import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
 import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
 import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
 import type { BooleanOp, PrimitiveKind } from "@/features/geometry-builder/model/types";
-import type { CapabilityMap } from "@/src/api/types";
+import type { CapabilityMap, GeometryCapabilitiesResource } from "@/src/api/types";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
+import { useGeometryCapabilities } from "@/src/hooks/resources/useSceneDocument";
 import { useWorkspaceRibbon } from "@/src/hooks/resources/useWorkspaceRibbon";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
 
@@ -38,6 +39,7 @@ import "@/features/shell/contributions";
 
 type RibbonTab =
   | "Home"
+  | "View"
   | "Definitions"
   | "Geometry"
   | "Materials"
@@ -64,6 +66,14 @@ interface RibbonBarProps {
   onViewChange?: (mode: string) => void;
   onSidebarToggle?: () => void;
   onCreateVisualizationPreset?: () => void;
+  airboxVisible?: boolean;
+  viewportAxesScope?: "universe" | "object";
+  universeWireframeVisible?: boolean;
+  viewportLegendVisible?: boolean;
+  onToggleAirbox?: () => void;
+  onSetViewportAxesScope?: (scope: "universe" | "object") => void;
+  onToggleUniverseWireframe?: () => void;
+  onToggleViewportLegend?: () => void;
   onSimAction?: (action: string) => void;
   quickPreviewTargets?: Array<{
     id: string;
@@ -95,6 +105,7 @@ interface RibbonBarProps {
   onOpenMeshMethodSettings?: () => void;
   onOpenMeshPipeline?: () => void;
   selectedObjectId?: string | null;
+  sceneObjectCount?: number;
   onRequestObjectFocus?: (objectId: string) => void;
   hasSharedAirboxDomain?: boolean;
   canSyncScriptBuilder?: boolean;
@@ -168,6 +179,7 @@ interface RibbonBarProps {
 
 const RIBBON_TAB_TO_ID: Record<RibbonTab, RibbonTabId> = {
   Home: "home",
+  View: "view",
   Definitions: "definitions",
   Geometry: "geometry",
   Materials: "materials",
@@ -182,6 +194,7 @@ function tabsForMode(mode: WorkspaceMode | undefined): RibbonTab[] {
   void mode;
   return [
     "Home",
+    "View",
     "Definitions",
     "Geometry",
     "Materials",
@@ -245,7 +258,9 @@ function buildContext(
     builderDirtyGeometry: boolean;
     builderDirtyMesh: boolean;
     builderHasRealization: boolean;
+    builderSceneObjectCount: number;
     builderSelectedPrimitiveId: string | null;
+    geometryCapabilities: GeometryCapabilitiesResource | null;
   },
 ): RibbonBuildContext {
   const run = (command: RibbonCommand) => {
@@ -279,6 +294,10 @@ function buildContext(
     viewMode: props.viewMode ?? null,
     sidebarVisible: Boolean(props.sidebarVisible),
     previewPending: Boolean(props.previewPending),
+    airboxVisible: Boolean(props.airboxVisible),
+    viewportAxesScope: props.viewportAxesScope ?? "universe",
+    universeWireframeVisible: props.universeWireframeVisible ?? true,
+    viewportLegendVisible: Boolean(props.viewportLegendVisible),
 
     studyNodeContext: parseStudyNodeContext(props.selectedNodeId),
 
@@ -295,7 +314,9 @@ function buildContext(
     builderDirtyGeometry: builderState.builderDirtyGeometry,
     builderDirtyMesh: builderState.builderDirtyMesh,
     builderHasRealization: builderState.builderHasRealization,
+    builderSceneObjectCount: builderState.builderSceneObjectCount,
     builderSelectedPrimitiveId: builderState.builderSelectedPrimitiveId,
+    geometryCapabilities: builderState.geometryCapabilities,
 
     run,
     can,
@@ -326,6 +347,9 @@ export default function RibbonBar(props: RibbonBarProps) {
   const workspaceRevision = useSessionRuntimeStore(
     (s) => s.resourceRevisions?.workspace_revision ?? null,
   );
+  const sceneRevision = useSessionRuntimeStore(
+    (s) => s.resourceRevisions?.scene_revision ?? null,
+  );
   const currentStage = useWorkspaceStore((s) => s.currentStage);
   const activeCoreTab = useWorkspaceStore((s) => s.activeCoreTab);
   const setActiveCoreTab = useWorkspaceStore((s) => s.setActiveCoreTab);
@@ -341,6 +365,11 @@ export default function RibbonBar(props: RibbonBarProps) {
     sessionKey: sessionId,
     revision: workspaceRevision,
   });
+  const { capabilities: geometryCapabilities } = useGeometryCapabilities({
+    enabled: true,
+    sessionKey: sessionId,
+    revision: sceneRevision,
+  });
   const workspaceRibbonHydratingRef = useRef(false);
   const lastPersistedWorkspaceRibbonRef = useRef<string | null>(null);
   const lastHydratedWorkspaceRibbonRevisionRef = useRef<number | null>(null);
@@ -351,6 +380,7 @@ export default function RibbonBar(props: RibbonBarProps) {
   );
   const builderDirtyMesh = useGeometryBuilderStore((s) => s.dirty.meshDirty);
   const builderHasRealization = useGeometryBuilderStore((s) => s.geometryRealization !== null);
+  const builderSceneObjectCount = props.sceneObjectCount ?? 0;
   const builderSelectedPrimitiveId = useGeometryBuilderStore((s) =>
     s.builderSelection.type === "primitive" ? s.builderSelection.id : null,
   );
@@ -527,7 +557,9 @@ export default function RibbonBar(props: RibbonBarProps) {
       builderDirtyGeometry,
       builderDirtyMesh,
       builderHasRealization,
+      builderSceneObjectCount,
       builderSelectedPrimitiveId,
+      geometryCapabilities,
     });
     const tabId = RIBBON_TAB_TO_ID[activeTab];
 
@@ -559,6 +591,10 @@ export default function RibbonBar(props: RibbonBarProps) {
     activeContextualTabId,
     props.workspaceMode,
     props.viewMode,
+    props.airboxVisible,
+    props.viewportAxesScope,
+    props.universeWireframeVisible,
+    props.viewportLegendVisible,
     props.femDiscretization,
     props.solverRunning,
     props.sidebarVisible,
@@ -586,6 +622,10 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.onBuilderCreateBoolean,
     props.onBuilderBuildGeometry,
     props.onBuilderBuildMesh,
+    props.onToggleAirbox,
+    props.onSetViewportAxesScope,
+    props.onToggleUniverseWireframe,
+    props.onToggleViewportLegend,
     props.meshGenerating,
     props.meshConfigDirty,
     props.meshTargetLabel,
@@ -596,7 +636,9 @@ export default function RibbonBar(props: RibbonBarProps) {
     builderDirtyGeometry,
     builderDirtyMesh,
     builderHasRealization,
+    builderSceneObjectCount,
     builderSelectedPrimitiveId,
+    geometryCapabilities,
   ]);
 
   return (

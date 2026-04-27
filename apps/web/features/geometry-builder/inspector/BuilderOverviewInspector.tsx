@@ -4,7 +4,7 @@
  * P3 — Geometry Builder Overview Inspector
  *
  * Shown when no primitive is selected in the builder.
- * Displays quick-create buttons, builder status, build actions, and
+ * Displays canonical scene quick-create buttons, builder status, build actions, and
  * keyboard shortcuts.
  */
 
@@ -18,14 +18,16 @@ import {
   Info,
   Layers,
   Grid3x3,
-  Maximize2,
   AlertTriangle,
 } from "lucide-react";
-import { useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useGeometryBuilderStore } from "../store/useGeometryBuilderStore";
 import type { PrimitiveKind } from "../model/types";
 import { useCommand, useModel } from "@/components/runs/control-room/context-hooks";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
+import { createScenePrimitiveAuthoringUpdate } from "../scene/scenePrimitiveAuthoring";
+import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
+import type { GeometryValidationResource } from "@/src/api/types";
 
 const QUICK_CREATE: Array<{
   kind: PrimitiveKind;
@@ -58,8 +60,13 @@ const SHORTCUTS = [
 export default function BuilderOverviewInspector() {
   const command = useCommand();
   const model = useModel();
-  const addPrimitive = useGeometryBuilderStore((s) => s.addPrimitive);
-  const primitiveCount = useGeometryBuilderStore((s) => s.getAllPrimitives().length);
+  const sceneAuthoring = useSceneAuthoringActions();
+  const graphNodes = useGeometryBuilderStore((s) => s.graph.nodes);
+  const draftPrimitiveCount = useMemo(
+    () => graphNodes.filter((node) => node.kind === "primitive").length,
+    [graphNodes],
+  );
+  const sceneObjectCount = model.sceneDocument?.objects.length ?? 0;
   const dirty = useGeometryBuilderStore((s) => s.dirty);
   const isRunBlocked = useGeometryBuilderStore((s) => s.isRunBlocked());
   const runBlockedReason = useGeometryBuilderStore((s) => s.getRunBlockedReason());
@@ -69,11 +76,6 @@ export default function BuilderOverviewInspector() {
   const getBackendBuildBlockedReason = useGeometryBuilderStore((s) =>
     s.getBackendBuildBlockedReason,
   );
-  const geometryRealization = useGeometryBuilderStore((s) => s.geometryRealization);
-  const buildGeometry = useGeometryBuilderStore((s) => s.buildGeometry);
-  const buildMesh = useGeometryBuilderStore((s) => s.buildMesh);
-  const fitUniverseToObjects = useGeometryBuilderStore((s) => s.fitUniverseToObjects);
-  const validateAll = useGeometryBuilderStore((s) => s.validateAll);
   const femDiscretization = resolveFemDiscretization(
     command.domainCapabilities,
     command.isFemBackend,
@@ -81,33 +83,76 @@ export default function BuilderOverviewInspector() {
   const backendBuildBlockedReason = getBackendBuildBlockedReason(femDiscretization);
   const buildTargetLabel = femDiscretization ? "FEM Mesh" : "FDM Grid";
   const meshGenerating = model.meshGenerating;
+  const [backendValidation, setBackendValidation] =
+    useState<GeometryValidationResource | null>(null);
 
-  const validations = validateAll();
-  const hasOutsideBounds = validations.some((v) => v.intersectsUniverseBoundary || v.exceedsUniverse);
+  const canCreateScenePrimitive = Boolean(model.sceneDocument);
 
-  // Build Geometry: enabled when geometry is dirty and store policy allows build
-  const canBuildGeometry =
-    (dirty.geometryDraftDirty || dirty.geometryRealizationDirty) &&
-    !geometryBuildBlockedReason;
-  // Build Mesh: enabled when realization is present and mesh is out of date
+  useEffect(() => {
+    let cancelled = false;
+    if (!model.sceneDocument) {
+      setBackendValidation(null);
+      return;
+    }
+    void sceneAuthoring.getGeometryValidation()
+      .then((validation) => {
+        if (!cancelled) {
+          setBackendValidation(validation);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn("failed to load backend geometry validation", error);
+          setBackendValidation(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [model.sceneDocument?.revision, sceneAuthoring]);
+
+  const handleCreatePrimitive = useCallback((kind: PrimitiveKind) => {
+    const scene = model.sceneDocument;
+    if (!scene) {
+      return;
+    }
+    const referenceOverlay =
+      model.selectedObjectId
+        ? model.objectOverlays.find((overlay) => overlay.id === model.selectedObjectId) ?? null
+        : null;
+    const update = createScenePrimitiveAuthoringUpdate({
+      scene,
+      kind,
+      placementOverlay: referenceOverlay ?? model.objectOverlays[0] ?? null,
+    });
+    model.setSceneDocument(update.scene);
+    model.setSelectedSidebarNodeId(`geo-${update.selectedObjectId}`);
+    model.setSelectedObjectId(update.selectedObjectId);
+    model.setSelectedEntityId(null);
+    model.setFocusedEntityId(null);
+    model.requestFocusObject(update.selectedObjectId);
+    void sceneAuthoring.updateSceneMergePatch(update.mergePatch).catch((error) => {
+      console.error("failed to commit inspector primitive to backend scene", error);
+    });
+  }, [model, sceneAuthoring]);
+
+  // Build Geometry is no longer a local production action: SceneDocument is updated live.
+  const canBuildGeometry = false;
+  const sceneGeometryReady = sceneObjectCount > 0 && Boolean(model.sceneDocument);
   const canBuildMesh =
-    geometryRealization !== null &&
-    dirty.meshDirty &&
-    !dirty.geometryRealizationDirty &&
+    sceneGeometryReady &&
+    Boolean(femDiscretization) &&
     !backendBuildBlockedReason &&
     !meshGenerating;
-  // Fit Universe: enabled when objects cross or exceed universe bounds
-  const canFitUniverse = hasOutsideBounds && primitiveCount > 0;
 
   const handleBuildMesh = useCallback(() => {
     if (backendBuildBlockedReason) {
       return;
     }
-    buildMesh();
     if (femDiscretization) {
-      void model.handleStudyDomainMeshGenerate("geometry_builder_build_mesh");
+      void model.handleStudyDomainMeshGenerate("geometry_scene_build_mesh");
     }
-  }, [backendBuildBlockedReason, buildMesh, femDiscretization, model]);
+  }, [backendBuildBlockedReason, femDiscretization, model]);
 
   return (
     <div className="flex flex-col gap-4 p-3 text-sm">
@@ -121,8 +166,14 @@ export default function BuilderOverviewInspector() {
             <button
               key={kind}
               type="button"
-              className="flex items-center gap-2 px-2.5 py-2 rounded-md bg-muted/50 hover:bg-muted border border-border/50 hover:border-border transition-colors"
-              onClick={() => addPrimitive(kind)}
+              disabled={!canCreateScenePrimitive}
+              className="flex items-center gap-2 px-2.5 py-2 rounded-md bg-muted/50 hover:bg-muted border border-border/50 hover:border-border transition-colors disabled:pointer-events-none disabled:opacity-40"
+              onClick={() => handleCreatePrimitive(kind)}
+              title={
+                canCreateScenePrimitive
+                  ? `Create ${label} in the backend scene document`
+                  : "Scene document is not loaded"
+              }
             >
               <span className={color}>{icon}</span>
               <span className="text-xs text-foreground">{label}</span>
@@ -141,13 +192,11 @@ export default function BuilderOverviewInspector() {
             type="button"
             disabled={!canBuildGeometry}
             className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-40 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30"
-            onClick={buildGeometry}
+            title="SceneDocument is updated live; backend realization diagnostics are handled in the mesh pipeline."
           >
             <Layers size={13} />
-            Build Geometry
-            {dirty.geometryDraftDirty && (
-              <span className="ml-auto text-[9px] font-normal text-emerald-400/70">● modified</span>
-            )}
+            Geometry Synced
+            <span className="ml-auto text-[9px] font-normal text-emerald-400/70">SceneDocument</span>
           </button>
 
           <button
@@ -158,30 +207,21 @@ export default function BuilderOverviewInspector() {
           >
             <Grid3x3 size={13} />
             {meshGenerating ? "Queueing Mesh Build…" : `Build ${buildTargetLabel}`}
-            {dirty.meshDirty && geometryRealization && (
+            {sceneGeometryReady && femDiscretization && (
               <span className="ml-auto text-[9px] font-normal text-cyan-400/70">● out of date</span>
             )}
           </button>
-
-          {canFitUniverse && (
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-colors bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 border border-amber-500/30"
-              onClick={() => fitUniverseToObjects()}
-            >
-              <Maximize2 size={13} />
-              Fit Universe
-              <span className="ml-auto text-[9px] font-normal text-amber-400/70">
-                {validations.filter((v) => v.intersectsUniverseBoundary || v.exceedsUniverse).length} outside
-              </span>
-            </button>
-          )}
         </div>
 
         {/* Build status messages */}
-        {!canBuildGeometry && !dirty.geometryDraftDirty && !dirty.geometryRealizationDirty && (
+        {!sceneGeometryReady && (
           <p className="text-[10px] text-muted-foreground">
-            {geometryRealization ? "Geometry is up to date." : "Geometry not built. Click Build Geometry first."}
+            Create a scene object before building a solver mesh.
+          </p>
+        )}
+        {sceneGeometryReady && !femDiscretization && (
+          <p className="text-[10px] text-muted-foreground">
+            FDM uses the canonical domain/grid path; Geometry mesh build is available for FEM.
           </p>
         )}
         {geometryBuildBlockedReason && (
@@ -205,9 +245,15 @@ export default function BuilderOverviewInspector() {
         </h3>
         <div className="text-xs text-muted-foreground space-y-1.5">
           <div className="flex items-center justify-between">
-            <span>Primitives</span>
-            <span className="font-mono">{primitiveCount}</span>
+            <span>Scene objects</span>
+            <span className="font-mono">{sceneObjectCount}</span>
           </div>
+          {draftPrimitiveCount > 0 && (
+            <div className="flex items-center justify-between">
+              <span>Draft primitives</span>
+              <span className="font-mono">{draftPrimitiveCount}</span>
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <span>Geometry</span>
             <span className={dirty.geometryDraftDirty ? "text-amber-400" : "text-emerald-400"}>
@@ -232,6 +278,33 @@ export default function BuilderOverviewInspector() {
               <span>{runBlockedReason}</span>
             </div>
           )}
+          {backendValidation && (
+            <div className="flex items-center justify-between">
+              <span>Backend realization</span>
+              <span className={
+                backendValidation.status === "blocked"
+                  ? "text-red-400"
+                  : backendValidation.status === "warning"
+                    ? "text-amber-400"
+                    : "text-emerald-400"
+              }>
+                {backendValidation.status}
+              </span>
+            </div>
+          )}
+          {backendValidation?.diagnostics.slice(0, 4).map((diagnostic) => (
+            <div
+              key={diagnostic.id}
+              className={
+                diagnostic.severity === "error"
+                  ? "flex items-start gap-1.5 text-[10px] text-red-400"
+                  : "flex items-start gap-1.5 text-[10px] text-amber-400"
+              }
+            >
+              <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+              <span>{diagnostic.message}</span>
+            </div>
+          ))}
         </div>
       </div>
 

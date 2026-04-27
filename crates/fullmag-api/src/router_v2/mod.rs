@@ -12,7 +12,7 @@ mod tests;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -59,9 +59,29 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .patch(handlers::model::patch_authoring_scene),
         )
         .route(
+            "/v2/sessions/current/model/geometry/capabilities",
+            get(handlers::model::get_authoring_geometry_capabilities),
+        )
+        .route(
+            "/v2/sessions/current/model/geometry/validation",
+            get(handlers::model::get_authoring_geometry_validation),
+        )
+        .route(
+            "/v2/sessions/current/model/geometry/realizations",
+            post(handlers::model::create_authoring_geometry_realization),
+        )
+        .route(
+            "/v2/sessions/current/model/geometry/realizations/current",
+            get(handlers::model::get_current_authoring_geometry_realization),
+        )
+        .route(
             "/v2/sessions/current/model/materials/:material_id",
             get(handlers::model::get_authoring_material)
                 .patch(handlers::model::patch_authoring_material),
+        )
+        .route(
+            "/v2/sessions/current/model/objects/:object_id/geometry",
+            patch(handlers::model::patch_authoring_object_geometry),
         )
         .route(
             "/v2/sessions/current/model/objects/:object_id/interactions/:interaction_kind",

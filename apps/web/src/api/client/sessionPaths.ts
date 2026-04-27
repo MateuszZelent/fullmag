@@ -15,6 +15,12 @@ export const sessionApiPaths = {
   },
   model: {
     scene: openApiV2Path("/v2/sessions/current/model/scene"),
+    geometryCapabilities: openApiV2Path("/v2/sessions/current/model/geometry/capabilities"),
+    geometryValidation: openApiV2Path("/v2/sessions/current/model/geometry/validation"),
+    geometryRealizations: openApiV2Path("/v2/sessions/current/model/geometry/realizations"),
+    geometryRealizationCurrent: openApiV2Path("/v2/sessions/current/model/geometry/realizations/current"),
+    objectGeometry: (objectId: string) =>
+      openApiV2Path("/v2/sessions/current/model/objects/{object_id}/geometry").replace("{object_id}", encodeURIComponent(objectId)),
     material: (materialId: string) =>
       openApiV2Path("/v2/sessions/current/model/materials/{material_id}").replace("{material_id}", encodeURIComponent(materialId)),
     objectInteraction: (objectId: string, interactionKind: string) =>

@@ -113,6 +113,7 @@ import {
   PREVIEW_EVERY_N_PRESETS,
   PREVIEW_MAX_POINTS_DEFAULT,
   PREVIEW_MAX_POINTS_PRESETS,
+  resolveSelectedObjectId,
   resolveViewportScope,
 } from "./shared";
 import {
@@ -408,6 +409,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     DEFAULT_FEM_VIEWPORT_LAYER_STATE,
   );
   const [viewportLegendVisible, setViewportLegendVisible] = useState(false);
+  const [viewportAxesScope, setViewportAxesScope] = useState<"universe" | "object">("universe");
+  const [universeWireframeVisible, setUniverseWireframeVisible] = useState(true);
   const [fdmVisualizationSettings, setFdmVisualizationSettings] =
     useState<VisualizationPresetFdmState>(DEFAULT_FDM_VISUALIZATION_SETTINGS);
   const [runUntilInput, setRunUntilInput] = useState("1e-12");
@@ -615,13 +618,25 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   );
   const markPendingWorkspaceSelection = useCallback(
     (nextNodeId: string | null) => {
+      const source = sceneDocumentDraft ?? modelBuilderGraph;
+      let nextObjectId = resolveSelectedObjectId(nextNodeId, source);
+      if (!nextObjectId && nextNodeId) {
+        const objectNodePrefixes = ["physobj-", "geo-", "reg-", "mat-", "mag-", "obj-"];
+        const matchedPrefix = objectNodePrefixes.find((prefix) => nextNodeId.startsWith(prefix));
+        if (matchedPrefix) {
+          const suffix = nextNodeId.slice(matchedPrefix.length);
+          nextObjectId = matchedPrefix === "geo-" && suffix.endsWith("-mesh")
+            ? suffix.slice(0, -"mesh".length - 1)
+            : suffix.split("/")[0] || null;
+        }
+      }
       pendingWorkspaceSelectionIdentityRef.current = workspaceSelectionIdentity({
         selected_node_id: nextNodeId,
-        selected_object_id: selectedObjectId,
-        selected_entity_id: selectedEntityId,
+        selected_object_id: nextObjectId,
+        selected_entity_id: nextObjectId ? null : selectedEntityId,
       });
     },
-    [selectedEntityId, selectedObjectId],
+    [modelBuilderGraph, sceneDocumentDraft, selectedEntityId],
   );
   const setSelectedSidebarNodeIdFromUi = useCallback<Dispatch<SetStateAction<string | null>>>(
     (next) => {
@@ -2860,6 +2875,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
     femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers, viewportLegendVisible,
+    viewportAxesScope, universeWireframeVisible,
     fdmVisualizationSettings,
     visualizationProjectPresets: projectVisualizationPresets,
     visualizationLocalPresets: localVisualizationPresets,
@@ -2911,7 +2927,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setSolverSettings, setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis, setMeshRenderMode, setMeshOpacity, setMeshClipEnabled, setMeshClipAxis,
     setMeshClipPos, setMeshClipFlip, setMeshShowArrows, setFemArrowColorMode, setFemArrowMonoColor, setFemArrowAlpha, setFemArrowLengthScale, setFemArrowThickness, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
     setFemVectorDomainFilter, setFemFerromagnetVisibilityMode, setFemViewportLayers, setViewportLegendVisible,
-    setSelectedSidebarNodeId, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setAirMeshVisible, setAirMeshOpacity, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
+    setViewportAxesScope, setUniverseWireframeVisible,
+    setSelectedSidebarNodeId: setSelectedSidebarNodeIdFromUi, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setAirMeshVisible, setAirMeshOpacity, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
     openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset,
     resetViewportDisplayState,
@@ -2920,6 +2937,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
     femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers, viewportLegendVisible,
+    viewportAxesScope, universeWireframeVisible,
     fdmVisualizationSettings, projectVisualizationPresets, localVisualizationPresets, activeVisualizationPresetRef,
     meshSelection, meshOptions, meshQualityData, meshGenerating, femDockTab,
     effectiveFemMesh, femMeshData, femTopologyKey, femColorField,

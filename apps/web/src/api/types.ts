@@ -933,6 +933,106 @@ export interface AuthoringObjectInteractionPatchRequest {
   params?: Record<string, unknown>;
 }
 
+export type GeometryBackendTarget = "fem" | "fdm";
+export type GeometrySupportStatus = "production" | "preview" | "unsupported";
+export type GeometryDiagnosticSeverity = "info" | "warning" | "error";
+
+export interface GeometryDiagnostic {
+  id: string;
+  severity: GeometryDiagnosticSeverity;
+  code: string;
+  message: string;
+  object_id?: string | null;
+  geometry_path?: string | null;
+  blocks: string[];
+}
+
+export interface PrimitiveGeometryCapability {
+  id: string;
+  label: string;
+  category: string;
+  fem: boolean;
+  fdm: boolean;
+  dsl: boolean;
+  boolean: boolean;
+  status: GeometrySupportStatus;
+}
+
+export interface BooleanGeometryCapability {
+  op: "union" | "subtract" | "intersect" | string;
+  fem: boolean;
+  fdm: boolean;
+  dsl: boolean;
+  status: GeometrySupportStatus;
+  notes: string;
+}
+
+export interface GeometryCapabilitiesResource {
+  revision: number;
+  primitive_capabilities: PrimitiveGeometryCapability[];
+  csg_capabilities: BooleanGeometryCapability[];
+}
+
+export interface GeometryValidationResource {
+  scene_revision: number;
+  backend_target: GeometryBackendTarget;
+  status: "ready" | "warning" | "blocked" | string;
+  dirty: boolean;
+  diagnostics: GeometryDiagnostic[];
+}
+
+export interface RealizedGeometryBody {
+  object_id: string;
+  object_name: string;
+  geometry_kind: string;
+  material_ref: string;
+  magnetization_ref?: string | null;
+  visible: boolean;
+  status: string;
+  bounds_min: [number, number, number];
+  bounds_max: [number, number, number];
+  provenance: string[];
+}
+
+export interface GeometryRegionCandidate {
+  id: string;
+  object_id: string;
+  material_ref: string;
+  magnetization_ref?: string | null;
+  bounds_min: [number, number, number];
+  bounds_max: [number, number, number];
+  source_geometry_path: string;
+}
+
+export interface GeometryProvenanceEntry {
+  object_id: string;
+  geometry_path: string;
+  source: string;
+}
+
+export interface GeometryRealizationSnapshot {
+  source_scene_revision: number;
+  realization_revision: number;
+  backend_target: GeometryBackendTarget;
+  status: "ready" | "warning" | "blocked" | string;
+  bodies: RealizedGeometryBody[];
+  bounds_min?: [number, number, number] | null;
+  bounds_max?: [number, number, number] | null;
+  diagnostics: GeometryDiagnostic[];
+  region_candidates: GeometryRegionCandidate[];
+  provenance: GeometryProvenanceEntry[];
+}
+
+export interface AuthoringObjectGeometryPatchRequest {
+  base_revision?: number;
+  geometry: Record<string, unknown>;
+  transform?: Record<string, unknown> | null;
+}
+
+export interface GeometryRealizationRequest {
+  backend_target?: GeometryBackendTarget;
+}
+
 export type AuthoringTransactionRequest =
   | {
       kind: "replace_scene";
@@ -941,6 +1041,13 @@ export type AuthoringTransactionRequest =
   | {
       kind: "merge_patch";
       merge_patch: Record<string, unknown>;
+    }
+  | {
+      kind: "patch_object_geometry";
+      object_id: string;
+      base_revision?: number;
+      geometry: Record<string, unknown>;
+      transform?: Record<string, unknown> | null;
     };
 
 export interface AuthoringTransactionResponse {

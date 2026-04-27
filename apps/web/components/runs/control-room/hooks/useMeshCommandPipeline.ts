@@ -19,6 +19,7 @@ import {
 import type {
   DisplayPatchRequest,
 } from "@/src/api/contracts";
+import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import { parseOptionalFiniteNumberText } from "../controlRoomUtils";
 import type { ControlRoomApi } from "../controlRoomApi";
 import type { useBuilderAutoSync } from "./useBuilderAutoSync";
@@ -276,6 +277,18 @@ export function useMeshCommandPipeline({
       };
       appendFrontendTrace("info", `TX: REMESH ${JSON.stringify(payload)}`);
       try {
+        const realization = await getLiveSessionClient().scene.createGeometryRealization({});
+        if (realization.status === "blocked") {
+          const reason =
+            realization.diagnostics.find((diagnostic) =>
+              diagnostic.blocks.includes("build_mesh"),
+            )?.message ?? "Geometry realization is blocked.";
+          throw new Error(reason);
+        }
+        appendFrontendTrace(
+          "system",
+          `RX: geometry realization ${realization.status} scene_rev=${realization.source_scene_revision}`,
+        );
         await liveApi.queueRemesh({
           mesh_options: meshOptionsPayload,
           mesh_target: meshTarget,

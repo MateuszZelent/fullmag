@@ -11,7 +11,7 @@ export { useDisplayControl } from "./useDisplayControl";
 export { useCommands } from "./useCommands";
 export { useCommandCompletion } from "./useCommandCompletion";
 export { useArtifacts } from "./useArtifacts";
-export { useSceneDocument } from "./useSceneDocument";
+export { useGeometryCapabilities, useSceneDocument } from "./useSceneDocument";
 export { useStageExecution } from "./useStageExecution";
 export { useWorkspaceLayout } from "./useWorkspaceLayout";
 export { useWorkspaceRibbon } from "./useWorkspaceRibbon";

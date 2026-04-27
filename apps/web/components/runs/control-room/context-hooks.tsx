@@ -336,6 +336,8 @@ export interface ModelContextValue {
   femFerromagnetVisibilityMode: "hide" | "ghost";
   femViewportLayers: FemViewportLayerState;
   viewportLegendVisible: boolean;
+  viewportAxesScope: "universe" | "object";
+  universeWireframeVisible: boolean;
   fdmVisualizationSettings: VisualizationPresetFdmState;
   visualizationProjectPresets: VisualizationPreset[];
   visualizationLocalPresets: VisualizationPreset[];
@@ -444,6 +446,8 @@ export interface ModelContextValue {
   setFemFerromagnetVisibilityMode: React.Dispatch<React.SetStateAction<"hide" | "ghost">>;
   setFemViewportLayers: React.Dispatch<React.SetStateAction<FemViewportLayerState>>;
   setViewportLegendVisible: React.Dispatch<React.SetStateAction<boolean>>;
+  setViewportAxesScope: React.Dispatch<React.SetStateAction<"universe" | "object">>;
+  setUniverseWireframeVisible: React.Dispatch<React.SetStateAction<boolean>>;
   setFdmVisualizationSettings: React.Dispatch<
     React.SetStateAction<VisualizationPresetFdmState>
   >;

@@ -118,6 +118,8 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             universeCenter: ctx.worldCenter,
             focusObjectRequest: ctx.focusObjectRequest,
             objectViewMode: ctx.objectViewMode,
+            viewportAxesScope: ctx.viewportAxesScope,
+            universeWireframeVisible: ctx.universeWireframeVisible,
             onRequestObjectSelect: bridge.handleRequestObjectSelect,
             viewport3DModel: bridge.hostedFemBoundsViewportModel,
             toolbarMode: bridge.vectorToolbarMode,
@@ -254,8 +256,10 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             meshEntityViewState={geometryPresetFemMeshEntityViewState}
             onMeshPartViewStatePatch={bridge.patchMeshPartViewState}
             visibleObjectIds={bridge.visibleObjectIds}
-            airSegmentVisible={geometryViewportPresetActive ? false : ctx.airMeshVisible}
+            airSegmentVisible={ctx.airMeshVisible}
             airSegmentOpacity={ctx.airMeshOpacity}
+            viewportAxesScope={ctx.viewportAxesScope}
+            universeWireframeVisible={ctx.universeWireframeVisible}
             focusObjectRequest={ctx.focusObjectRequest}
             onAntennaTranslate={ctx.applyAntennaTranslation}
             onGeometryTranslate={ctx.applyGeometryTranslation}
@@ -379,8 +383,10 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
               meshEntityViewState={geometryPresetFemMeshEntityViewState}
               onMeshPartViewStatePatch={bridge.patchMeshPartViewState}
               visibleObjectIds={bridge.visibleObjectIds}
-              airSegmentVisible={geometryViewportPresetActive ? false : ctx.airMeshVisible}
+              airSegmentVisible={ctx.airMeshVisible}
               airSegmentOpacity={ctx.airMeshOpacity}
+              viewportAxesScope={ctx.viewportAxesScope}
+              universeWireframeVisible={ctx.universeWireframeVisible}
               focusObjectRequest={ctx.focusObjectRequest}
               onAntennaTranslate={ctx.applyAntennaTranslation}
               onGeometryTranslate={ctx.applyGeometryTranslation}
@@ -397,7 +403,6 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
               partExplorerOpen={bridge.selectedSubmeshesToolboxOpen}
               onTogglePartExplorer={bridge.openSelectedSubmeshesToolbox}
               onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
-              authoringOverlay={null}
             />
           </div>
         </ViewportErrorBoundary>
@@ -424,7 +429,8 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             vectors: geometryViewportPresetActive ? null : bridge.vectorSurfaceVectors,
             toolbarMode: bridge.vectorToolbarMode,
             viewportVisible: true,
-            authoringOverlay: null,
+            viewportAxesScope: ctx.viewportAxesScope,
+            universeWireframeVisible: ctx.universeWireframeVisible,
           }}
         />
       </div>
@@ -463,6 +469,8 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             showOrientationLegend={false}
             worldExtent={ctx.worldExtent}
             worldCenter={ctx.worldCenter}
+            viewportAxesScope={ctx.viewportAxesScope}
+            universeWireframeVisible={ctx.universeWireframeVisible}
             partExplorerOpen={bridge.selectedSubmeshesToolboxOpen}
             onTogglePartExplorer={bridge.openSelectedSubmeshesToolbox}
             legendOpen={ctx.viewportLegendVisible}

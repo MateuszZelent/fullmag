@@ -804,6 +804,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/geometry/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_geometry_capabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/geometry/realizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_geometry_realizations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/geometry/realizations/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_geometry_realizations_current"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/geometry/validation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_geometry_validation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/materials/{material_id}": {
         parameters: {
             query?: never;
@@ -818,6 +882,22 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["model_patch_sessions_current_model_materials_material_id"];
+        trace?: never;
+    };
+    "/v2/sessions/current/model/objects/{object_id}/geometry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_objects_object_id_geometry"];
         trace?: never;
     };
     "/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}": {
@@ -1257,6 +1337,14 @@ export interface components {
             /** @enum {string} */
             kind: "merge_patch";
             merge_patch: Record<string, never>;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            geometry: Record<string, never>;
+            /** @enum {string} */
+            kind: "patch_object_geometry";
+            object_id: string;
+            transform?: Record<string, never> | null;
         };
         AuthoringTransactionResponse: {
             committed_scene: Record<string, never>;
@@ -1669,6 +1757,9 @@ export interface components {
              */
             scope_kind?: string | null;
         };
+        GeometryRealizationRequest: {
+            backend_target?: string | null;
+        };
         GpuTelemetryDevice: {
             /** Format: int32 */
             index: number;
@@ -2028,6 +2119,12 @@ export interface components {
         };
         NullableF64PatchValue: number | null;
         NullableU32PatchValue: number | null;
+        ObjectGeometryPatchRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            geometry: Record<string, never>;
+            transform?: Record<string, never> | null;
+        };
         ObjectInteractionPatchRequest: {
             enabled?: boolean | null;
             params: Record<string, never>;
@@ -4288,6 +4385,125 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_geometry_capabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backend-owned geometry primitive and CSG capability matrix */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_post_sessions_current_model_geometry_realizations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeometryRealizationRequest"];
+            };
+        };
+        responses: {
+            /** @description Derived geometry realization snapshot for the current scene */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Invalid backend target */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_geometry_realizations_current: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current derived geometry realization snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_geometry_validation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backend geometry validation diagnostics for the current scene */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_materials_material_id: {
         parameters: {
             query?: never;
@@ -4345,6 +4561,54 @@ export interface operations {
             };
             /** @description No active workspace or material not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_objects_object_id_geometry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical scene object id */
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObjectGeometryPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed object geometry patch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Invalid geometry patch payload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Base scene revision does not match current scene revision */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
