@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { SceneDocument } from "@/lib/session/types";
 import type {
+  AuthoringCreateObjectTransactionRequest,
   AuthoringObjectGeometryPatchRequest,
   AuthoringMaterialPatchRequest,
   AuthoringMaterialResource,
@@ -11,10 +12,18 @@ import type {
   AuthoringObjectInteractionResource,
   AuthoringStudyRuntimePatchRequest,
   AuthoringStudyRuntimeResource,
+  GeometryDiagnosticsResource,
   GeometryCapabilitiesResource,
   GeometryRealizationRequest,
   GeometryRealizationSnapshot,
   GeometryValidationResource,
+  ObjectCreateRequest,
+  ObjectPatchRequest,
+  RegionListResource,
+  RegionPatchRequest,
+  UniverseFitRequest,
+  UniversePatchRequest,
+  UniverseResource,
 } from "../../api/types";
 import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
@@ -209,8 +218,72 @@ export function useSceneAuthoringActions() {
     ): Promise<SceneDocument> {
       return getLiveSessionClient().scene.patchObjectGeometry(objectId, request);
     },
+    createObject(
+      request: Omit<AuthoringCreateObjectTransactionRequest, "kind">,
+    ): Promise<SceneDocument> {
+      return getLiveSessionClient().scene.createObject(request);
+    },
+    deleteObject(objectId: string, baseRevision?: number): Promise<SceneDocument> {
+      return getLiveSessionClient().scene.deleteObject(objectId, baseRevision);
+    },
+    renameObject(
+      objectId: string,
+      name: string,
+      baseRevision?: number,
+    ): Promise<SceneDocument> {
+      return getLiveSessionClient().scene.renameObject(objectId, name, baseRevision);
+    },
+    commitObjectTransform(
+      objectId: string,
+      transform: Record<string, unknown>,
+      baseRevision?: number,
+    ): Promise<SceneDocument> {
+      return getLiveSessionClient().scene.commitObjectTransform(
+        objectId,
+        transform,
+        baseRevision,
+      );
+    },
     getGeometryValidation(): Promise<GeometryValidationResource> {
       return getLiveSessionClient().scene.getGeometryValidation();
+    },
+    getGeometryCapabilities(): Promise<GeometryCapabilitiesResource> {
+      return getLiveSessionClient().scene.getGeometryCapabilities();
+    },
+    getRegions(): Promise<RegionListResource> {
+      return getLiveSessionClient().scene.getRegions();
+    },
+    patchRegion(regionId: string, request: RegionPatchRequest): Promise<SceneDocument> {
+      return getLiveSessionClient().scene.patchRegion(regionId, request);
+    },
+    getGeometryDiagnostics(): Promise<GeometryDiagnosticsResource> {
+      return getLiveSessionClient().scene.getGeometryDiagnostics();
+    },
+    getGeometryDiagnostic(
+      diagnosticId: string,
+    ): Promise<GeometryDiagnosticsResource["diagnostics"][number]> {
+      return getLiveSessionClient().scene.getGeometryDiagnostic(diagnosticId);
+    },
+    createObjectResource(request: ObjectCreateRequest): Promise<SceneDocument> {
+      return getLiveSessionClient().scene.createObjectResource(request);
+    },
+    patchObjectResource(
+      objectId: string,
+      request: ObjectPatchRequest,
+    ): Promise<SceneDocument> {
+      return getLiveSessionClient().scene.patchObjectResource(objectId, request);
+    },
+    deleteObjectResource(objectId: string): Promise<SceneDocument> {
+      return getLiveSessionClient().scene.deleteObjectResource(objectId);
+    },
+    getUniverse(): Promise<UniverseResource> {
+      return getLiveSessionClient().scene.getUniverse();
+    },
+    patchUniverse(request: UniversePatchRequest): Promise<UniverseResource> {
+      return getLiveSessionClient().scene.patchUniverse(request);
+    },
+    fitUniverse(request: UniverseFitRequest = {}): Promise<UniverseResource> {
+      return getLiveSessionClient().scene.fitUniverse(request);
     },
     createGeometryRealization(
       request: GeometryRealizationRequest = {},

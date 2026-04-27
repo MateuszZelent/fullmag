@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useModel } from "../../runs/control-room/ControlRoomContext";
 import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
+import type { RegionListResource } from "@/src/api/types";
 import { TextField } from "../../ui/TextField";
 import { findSceneObjectByNodeId } from "./objectSelection";
 import { SidebarSection } from "./primitives";
@@ -11,32 +12,36 @@ import { SidebarSection } from "./primitives";
 export default function RegionPanel({ nodeId }: { nodeId?: string }) {
   const model = useModel();
   const sceneAuthoring = useSceneAuthoringActions();
+  const [regions, setRegions] = useState<RegionListResource | null>(null);
 
   const { object: sceneObject } = useMemo(
     () => findSceneObjectByNodeId(nodeId, model.sceneDocument),
     [model.sceneDocument, nodeId],
   );
 
-  const updateObject = (updater: (regionName: string | null) => string | null) => {
-    if (!sceneObject || !model.sceneDocument) return;
-    const nextObjects = model.sceneDocument.objects.map((object) =>
-      object.id === sceneObject.id
-        ? {
-            ...object,
-            region_name: updater(object.region_name ?? null),
-          }
-        : object,
-    );
-    model.setSceneDocument({
-      ...model.sceneDocument,
-      objects: nextObjects,
-    });
+  useEffect(() => {
+    let cancelled = false;
+    if (!model.sceneDocument) {
+      setRegions(null);
+      return;
+    }
     void sceneAuthoring
-      .updateSceneMergePatch({ objects: nextObjects })
+      .getRegions()
+      .then((nextRegions) => {
+        if (!cancelled) {
+          setRegions(nextRegions);
+        }
+      })
       .catch((error) => {
-        console.error("failed to patch authoring region object", error);
+        if (!cancelled) {
+          console.warn("failed to load authoring regions", error);
+          setRegions(null);
+        }
       });
-  };
+    return () => {
+      cancelled = true;
+    };
+  }, [model.sceneDocument?.revision, sceneAuthoring]);
 
   if (!sceneObject) {
     return (
@@ -51,6 +56,38 @@ export default function RegionPanel({ nodeId }: { nodeId?: string }) {
   }
 
   const regionName = sceneObject.region_name?.trim() || sceneObject.name;
+  const regionResource = regions?.regions.find((region) =>
+    region.source_object_ids.includes(sceneObject.id),
+  );
+  const updateObject = (updater: (regionName: string | null) => string | null) => {
+    const currentScene = model.sceneDocument;
+    if (!currentScene) return;
+    const nextObjects = currentScene.objects.map((object) =>
+      object.id === sceneObject.id
+        ? {
+            ...object,
+            region_name: updater(object.region_name ?? null),
+            tags: Array.from(new Set([...(object.tags ?? []), "mesh:dirty"])),
+          }
+        : object,
+    );
+    model.setSceneDocument({
+      ...currentScene,
+      revision: currentScene.revision + 1,
+      objects: nextObjects,
+    });
+    void sceneAuthoring
+      .patchRegion(regionResource?.region_id ?? `region:${sceneObject.id}`, {
+        name: nextObjects.find((object) => object.id === sceneObject.id)?.region_name ?? "",
+      })
+      .then((committedScene) => {
+        model.setSceneDocument(committedScene);
+      })
+      .catch((error) => {
+        console.error("failed to patch authoring region object", error);
+        model.setSceneDocument(currentScene);
+      });
+  };
 
   return (
     <div className="flex flex-col px-2 pt-4">
@@ -85,13 +122,23 @@ export default function RegionPanel({ nodeId }: { nodeId?: string }) {
 
       <SidebarSection title="Region Authoring Status" defaultOpen={true}>
         <div className="flex flex-col gap-3">
-          <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100/90">
-            Regions are not yet first-class magnetic submodules. Today, one object still maps to one
-            editable magnetic setup.
-          </div>
           <div className="rounded-lg border border-border/30 bg-card/20 px-3 py-2 text-[0.72rem] leading-relaxed text-muted-foreground">
-            Planned next layer: each region will get its own `Magnetic Parameters` and `Magnetic Texture`
-            instead of inheriting the parent object setup.
+            <div className="flex items-center justify-between gap-3">
+              <span>Source</span>
+              <span className="font-mono text-foreground">{regionResource?.source ?? "object"}</span>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-3">
+              <span>Material</span>
+              <span className="font-mono text-foreground">
+                {regionResource?.material_ref ?? sceneObject.material_ref}
+              </span>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-3">
+              <span>Mesh parts</span>
+              <span className="font-mono text-foreground">
+                {regionResource?.mesh_part_ids.length ?? 0}
+              </span>
+            </div>
           </div>
         </div>
       </SidebarSection>

@@ -582,16 +582,35 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     const fallbackOverlay = ctx.objectOverlays[0] ?? null;
     const prev = ctx.sceneDocument;
     if (!prev) return;
-    const update = createScenePrimitiveAuthoringUpdate({
-      scene: prev,
-      kind,
-      placementOverlay: referenceOverlay ?? fallbackOverlay,
-    });
+    let update: ReturnType<typeof createScenePrimitiveAuthoringUpdate>;
+    try {
+      update = createScenePrimitiveAuthoringUpdate({
+        scene: prev,
+        kind,
+        placementOverlay: referenceOverlay ?? fallbackOverlay,
+      });
+    } catch (error) {
+      console.warn("scene primitive creation is not available", error);
+      return;
+    }
     ctx.setSceneDocument(update.scene);
     void sceneAuthoring
-      .updateSceneMergePatch(update.mergePatch)
+      .createObject(update.createObjectRequest)
+      .then(() => sceneAuthoring.updateSceneMergePatch(update.postCreateMergePatch))
+      .then((committedScene) => {
+        ctx.setSceneDocument(committedScene);
+      })
       .catch((error) => {
         console.error("failed to commit authoring primitive to backend scene", error);
+        void sceneAuthoring
+          .updateSceneMergePatch(update.mergePatch)
+          .then((committedScene) => {
+            ctx.setSceneDocument(committedScene);
+          })
+          .catch((fallbackError) => {
+            console.error("failed to fallback commit authoring primitive merge patch", fallbackError);
+            ctx.setSceneDocument(prev);
+          });
       });
     if (ctx.sidebarCollapsed) {
       ctx.setSidebarCollapsed(false);

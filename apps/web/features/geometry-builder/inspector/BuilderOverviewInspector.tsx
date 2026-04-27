@@ -25,9 +25,12 @@ import { useGeometryBuilderStore } from "../store/useGeometryBuilderStore";
 import type { PrimitiveKind } from "../model/types";
 import { useCommand, useModel } from "@/components/runs/control-room/context-hooks";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
-import { createScenePrimitiveAuthoringUpdate } from "../scene/scenePrimitiveAuthoring";
+import {
+  createScenePrimitiveAuthoringUpdate,
+  resolveScenePresetForPrimitiveKind,
+} from "../scene/scenePrimitiveAuthoring";
 import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
-import type { GeometryValidationResource } from "@/src/api/types";
+import type { GeometryCapabilitiesResource, GeometryValidationResource } from "@/src/api/types";
 
 const QUICK_CREATE: Array<{
   kind: PrimitiveKind;
@@ -85,6 +88,9 @@ export default function BuilderOverviewInspector() {
   const meshGenerating = model.meshGenerating;
   const [backendValidation, setBackendValidation] =
     useState<GeometryValidationResource | null>(null);
+  const [backendCapabilities, setBackendCapabilities] =
+    useState<GeometryCapabilitiesResource | null>(null);
+  const [sceneCommitError, setSceneCommitError] = useState<string | null>(null);
 
   const canCreateScenePrimitive = Boolean(model.sceneDocument);
 
@@ -92,8 +98,21 @@ export default function BuilderOverviewInspector() {
     let cancelled = false;
     if (!model.sceneDocument) {
       setBackendValidation(null);
+      setBackendCapabilities(null);
       return;
     }
+    void sceneAuthoring.getGeometryCapabilities()
+      .then((capabilities) => {
+        if (!cancelled) {
+          setBackendCapabilities(capabilities);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn("failed to load backend geometry capabilities", error);
+          setBackendCapabilities(null);
+        }
+      });
     void sceneAuthoring.getGeometryValidation()
       .then((validation) => {
         if (!cancelled) {
@@ -120,24 +139,93 @@ export default function BuilderOverviewInspector() {
       model.selectedObjectId
         ? model.objectOverlays.find((overlay) => overlay.id === model.selectedObjectId) ?? null
         : null;
-    const update = createScenePrimitiveAuthoringUpdate({
-      scene,
-      kind,
-      placementOverlay: referenceOverlay ?? model.objectOverlays[0] ?? null,
-    });
+    let update: ReturnType<typeof createScenePrimitiveAuthoringUpdate>;
+    try {
+      update = createScenePrimitiveAuthoringUpdate({
+        scene,
+        kind,
+        placementOverlay: referenceOverlay ?? model.objectOverlays[0] ?? null,
+      });
+    } catch (error) {
+      setSceneCommitError(
+        error instanceof Error ? error.message : "Scene object creation is not available",
+      );
+      return;
+    }
     model.setSceneDocument(update.scene);
+    setSceneCommitError(null);
     model.setSelectedSidebarNodeId(`geo-${update.selectedObjectId}`);
     model.setSelectedObjectId(update.selectedObjectId);
     model.setSelectedEntityId(null);
     model.setFocusedEntityId(null);
     model.requestFocusObject(update.selectedObjectId);
-    void sceneAuthoring.updateSceneMergePatch(update.mergePatch).catch((error) => {
-      console.error("failed to commit inspector primitive to backend scene", error);
-    });
+    void sceneAuthoring
+      .createObject(update.createObjectRequest)
+      .then(() => sceneAuthoring.updateSceneMergePatch(update.postCreateMergePatch))
+      .then((committedScene) => {
+        model.setSceneDocument(committedScene);
+      })
+      .catch((error) => {
+        console.error("failed to commit inspector primitive transaction", error);
+        void sceneAuthoring
+          .updateSceneMergePatch(update.mergePatch)
+          .then((committedScene) => {
+            model.setSceneDocument(committedScene);
+          })
+          .catch((fallbackError) => {
+            console.error("failed to fallback commit inspector primitive merge patch", fallbackError);
+            model.setSceneDocument(scene);
+            setSceneCommitError(
+              fallbackError instanceof Error
+                ? fallbackError.message
+                : "Scene object commit failed",
+            );
+          });
+      });
   }, [model, sceneAuthoring]);
 
-  // Build Geometry is no longer a local production action: SceneDocument is updated live.
-  const canBuildGeometry = false;
+  const primitiveCapabilities = useMemo(() => {
+    const entries = new Map<string, GeometryCapabilitiesResource["primitive_capabilities"][number]>();
+    for (const capability of backendCapabilities?.primitive_capabilities ?? []) {
+      entries.set(capability.id, capability);
+    }
+    return entries;
+  }, [backendCapabilities]);
+
+  const getCreateState = useCallback((kind: PrimitiveKind) => {
+    if (!canCreateScenePrimitive) {
+      return {
+        enabled: false,
+        status: "unsupported" as const,
+        title: "Scene document is not loaded",
+        badge: "Unavailable",
+      };
+    }
+    const presetResolution = resolveScenePresetForPrimitiveKind(kind);
+    const backendCapability = primitiveCapabilities.get(kind);
+    const isProduction =
+      presetResolution.status === "production" &&
+      Boolean(presetResolution.presetKind) &&
+      (backendCapability == null || backendCapability.status === "production");
+    if (!isProduction) {
+      return {
+        enabled: false,
+        status: presetResolution.status,
+        title:
+          presetResolution.message ??
+          backendCapability?.label ??
+          `${kind} is not available as a production SceneDocument primitive`,
+        badge: presetResolution.status === "preview" ? "Preview" : "Unsupported",
+      };
+    }
+    return {
+      enabled: true,
+      status: "production" as const,
+      title: `Create ${backendCapability?.label ?? kind} in the backend scene document`,
+      badge: "Production",
+    };
+  }, [canCreateScenePrimitive, primitiveCapabilities]);
+
   const sceneGeometryReady = sceneObjectCount > 0 && Boolean(model.sceneDocument);
   const canBuildMesh =
     sceneGeometryReady &&
@@ -162,23 +250,27 @@ export default function BuilderOverviewInspector() {
           Create Primitive
         </h3>
         <div className="grid grid-cols-2 gap-1.5">
-          {QUICK_CREATE.map(({ kind, label, icon, color }) => (
-            <button
-              key={kind}
-              type="button"
-              disabled={!canCreateScenePrimitive}
-              className="flex items-center gap-2 px-2.5 py-2 rounded-md bg-muted/50 hover:bg-muted border border-border/50 hover:border-border transition-colors disabled:pointer-events-none disabled:opacity-40"
-              onClick={() => handleCreatePrimitive(kind)}
-              title={
-                canCreateScenePrimitive
-                  ? `Create ${label} in the backend scene document`
-                  : "Scene document is not loaded"
-              }
-            >
-              <span className={color}>{icon}</span>
-              <span className="text-xs text-foreground">{label}</span>
-            </button>
-          ))}
+          {QUICK_CREATE.map(({ kind, label, icon, color }) => {
+            const createState = getCreateState(kind);
+            return (
+              <button
+                key={kind}
+                type="button"
+                disabled={!createState.enabled}
+                className="flex items-center gap-2 px-2.5 py-2 rounded-md bg-muted/50 hover:bg-muted border border-border/50 hover:border-border transition-colors disabled:pointer-events-none disabled:opacity-40"
+                onClick={() => handleCreatePrimitive(kind)}
+                title={createState.title}
+              >
+                <span className={color}>{icon}</span>
+                <span className="text-xs text-foreground">{label}</span>
+                {!createState.enabled && (
+                  <span className="ml-auto text-[9px] uppercase tracking-wide text-muted-foreground">
+                    {createState.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -188,16 +280,13 @@ export default function BuilderOverviewInspector() {
           Build
         </h3>
         <div className="space-y-1.5">
-          <button
-            type="button"
-            disabled={!canBuildGeometry}
-            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-40 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30"
-            title="SceneDocument is updated live; backend realization diagnostics are handled in the mesh pipeline."
-          >
+          <div className="flex w-full items-center gap-2 rounded-md border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-400">
             <Layers size={13} />
-            Geometry Synced
-            <span className="ml-auto text-[9px] font-normal text-emerald-400/70">SceneDocument</span>
-          </button>
+            SceneDocument
+            <span className="ml-auto text-[9px] font-normal text-emerald-400/70">
+              canonical
+            </span>
+          </div>
 
           <button
             type="button"
@@ -234,6 +323,12 @@ export default function BuilderOverviewInspector() {
           <div className="flex items-start gap-1.5 text-[10px] text-red-400">
             <AlertTriangle size={12} className="shrink-0 mt-0.5" />
             <span>{backendBuildBlockedReason}</span>
+          </div>
+        )}
+        {sceneCommitError && (
+          <div className="flex items-start gap-1.5 text-[10px] text-red-400">
+            <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+            <span>{sceneCommitError}</span>
           </div>
         )}
       </div>

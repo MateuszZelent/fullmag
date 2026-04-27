@@ -40,6 +40,11 @@ This spec does not define:
 
 The concrete local resource-first browser contract is specified in:
 
+- `docs/specs/resource-first-control-room-api-v2.md`
+
+The v1 files remain historical compatibility references for removed public
+`/v1/live/current/*` routes:
+
 - `docs/specs/resource-first-control-room-api-v1.md`
 - `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/control-room-api-tree-v1.md`
@@ -295,11 +300,11 @@ GET    /v1/docs/swagger
 
 Rules:
 
-- it is the v1 compatibility local browser contract,
+- it is the archived v1 compatibility local browser contract,
 - new control-room API work targets `docs/specs/resource-first-control-room-api-v2.md`,
 - it is resource-first and revision-driven,
 - it is subordinate to the broader session/run model, not contradictory to it,
-- the field-complete current endpoint inventory lives in
+- the field-complete historical v1 endpoint inventory lives in
   `docs/specs/control-room-api-endpoint-reference-v1.md`.
 
 ## 9. Event stream contract

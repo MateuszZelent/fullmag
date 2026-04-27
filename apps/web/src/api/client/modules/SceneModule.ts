@@ -1,6 +1,7 @@
 import type {
   AuthoringMaterialPatchRequest,
   AuthoringMaterialResource,
+  AuthoringCreateObjectTransactionRequest,
   AuthoringObjectGeometryPatchRequest,
   AuthoringObjectInteractionPatchRequest,
   AuthoringObjectInteractionResource,
@@ -9,13 +10,21 @@ import type {
   AuthoringTransactionRequest,
   AuthoringTransactionResponse,
   GeometryCapabilitiesResource,
+  GeometryDiagnosticsResource,
   GeometryRealizationRequest,
   GeometryRealizationSnapshot,
   GeometryValidationResource,
+  ObjectCreateRequest,
+  ObjectPatchRequest,
+  RegionListResource,
+  RegionPatchRequest,
   ScenePatchRequest,
   ScriptSourceResponse,
   ScriptSyncRequest,
   ScriptSyncResponse,
+  UniverseFitRequest,
+  UniversePatchRequest,
+  UniverseResource,
 } from "../../types";
 import type { SceneDocument } from "@/lib/session/types";
 import type { LiveSessionClient, RequestOptions } from "../LiveSessionClient";
@@ -121,6 +130,110 @@ export class SceneModule {
     );
   }
 
+  async getGeometryDiagnostics(
+    opts?: RequestOptions,
+  ): Promise<GeometryDiagnosticsResource> {
+    return this.client.get<GeometryDiagnosticsResource>(
+      sessionApiPaths.model.geometryDiagnostics,
+      opts,
+    );
+  }
+
+  async getGeometryDiagnostic(
+    diagnosticId: string,
+    opts?: RequestOptions,
+  ): Promise<GeometryDiagnosticsResource["diagnostics"][number]> {
+    return this.client.get<GeometryDiagnosticsResource["diagnostics"][number]>(
+      sessionApiPaths.model.geometryDiagnostic(diagnosticId),
+      opts,
+    );
+  }
+
+  async createObjectResource(
+    request: ObjectCreateRequest,
+    opts?: RequestOptions,
+  ): Promise<SceneDocument> {
+    return this.client.post<SceneDocument>(
+      sessionApiPaths.model.objects,
+      request,
+      opts,
+    );
+  }
+
+  async patchObjectResource(
+    objectId: string,
+    request: ObjectPatchRequest,
+    opts?: RequestOptions,
+  ): Promise<SceneDocument> {
+    return this.client.patch<SceneDocument>(
+      sessionApiPaths.model.object(objectId),
+      request,
+      opts,
+    );
+  }
+
+  async deleteObjectResource(
+    objectId: string,
+    opts?: RequestOptions,
+  ): Promise<SceneDocument> {
+    return this.client.delete<SceneDocument>(
+      sessionApiPaths.model.object(objectId),
+      opts,
+    );
+  }
+
+  async getRegions(
+    opts?: RequestOptions,
+  ): Promise<RegionListResource> {
+    return this.client.get<RegionListResource>(
+      sessionApiPaths.model.regions,
+      opts,
+    );
+  }
+
+  async patchRegion(
+    regionId: string,
+    request: RegionPatchRequest,
+    opts?: RequestOptions,
+  ): Promise<SceneDocument> {
+    return this.client.patch<SceneDocument>(
+      sessionApiPaths.model.region(regionId),
+      request,
+      opts,
+    );
+  }
+
+  async getUniverse(
+    opts?: RequestOptions,
+  ): Promise<UniverseResource> {
+    return this.client.get<UniverseResource>(
+      sessionApiPaths.model.universe,
+      opts,
+    );
+  }
+
+  async patchUniverse(
+    request: UniversePatchRequest,
+    opts?: RequestOptions,
+  ): Promise<UniverseResource> {
+    return this.client.patch<UniverseResource>(
+      sessionApiPaths.model.universe,
+      request,
+      opts,
+    );
+  }
+
+  async fitUniverse(
+    request: UniverseFitRequest = {},
+    opts?: RequestOptions,
+  ): Promise<UniverseResource> {
+    return this.client.post<UniverseResource>(
+      sessionApiPaths.model.universeFit,
+      request,
+      opts,
+    );
+  }
+
   async transact(
     request: AuthoringTransactionRequest,
     opts?: RequestOptions,
@@ -130,6 +243,68 @@ export class SceneModule {
       request,
       opts,
     );
+  }
+
+  async createObject(
+    request: Omit<AuthoringCreateObjectTransactionRequest, "kind">,
+    opts?: RequestOptions,
+  ): Promise<SceneDocument> {
+    return this.transact(
+      {
+        kind: "create_object",
+        ...request,
+      },
+      opts,
+    ).then((response) => response.committed_scene as unknown as SceneDocument);
+  }
+
+  async deleteObject(
+    objectId: string,
+    baseRevision?: number,
+    opts?: RequestOptions,
+  ): Promise<SceneDocument> {
+    return this.transact(
+      {
+        kind: "delete_object",
+        object_id: objectId,
+        ...(baseRevision != null ? { base_revision: baseRevision } : {}),
+      },
+      opts,
+    ).then((response) => response.committed_scene as unknown as SceneDocument);
+  }
+
+  async renameObject(
+    objectId: string,
+    name: string,
+    baseRevision?: number,
+    opts?: RequestOptions,
+  ): Promise<SceneDocument> {
+    return this.transact(
+      {
+        kind: "rename_object",
+        object_id: objectId,
+        name,
+        ...(baseRevision != null ? { base_revision: baseRevision } : {}),
+      },
+      opts,
+    ).then((response) => response.committed_scene as unknown as SceneDocument);
+  }
+
+  async commitObjectTransform(
+    objectId: string,
+    transform: Record<string, unknown>,
+    baseRevision?: number,
+    opts?: RequestOptions,
+  ): Promise<SceneDocument> {
+    return this.transact(
+      {
+        kind: "commit_object_transform",
+        object_id: objectId,
+        transform,
+        ...(baseRevision != null ? { base_revision: baseRevision } : {}),
+      },
+      opts,
+    ).then((response) => response.committed_scene as unknown as SceneDocument);
   }
 
   async getStudyRuntime(

@@ -19,6 +19,15 @@ export const sessionApiPaths = {
     geometryValidation: openApiV2Path("/v2/sessions/current/model/geometry/validation"),
     geometryRealizations: openApiV2Path("/v2/sessions/current/model/geometry/realizations"),
     geometryRealizationCurrent: openApiV2Path("/v2/sessions/current/model/geometry/realizations/current"),
+    geometryDiagnostics: openApiV2Path("/v2/sessions/current/model/geometry/diagnostics"),
+    geometryDiagnostic: (diagnosticId: string) =>
+      openApiV2Path("/v2/sessions/current/model/geometry/diagnostics/{diagnostic_id}").replace("{diagnostic_id}", encodeURIComponent(diagnosticId)),
+    regions: openApiV2Path("/v2/sessions/current/model/regions"),
+    region: (regionId: string) =>
+      openApiV2Path("/v2/sessions/current/model/regions/{region_id}").replace("{region_id}", encodeURIComponent(regionId)),
+    objects: openApiV2Path("/v2/sessions/current/model/objects"),
+    object: (objectId: string) =>
+      openApiV2Path("/v2/sessions/current/model/objects/{object_id}").replace("{object_id}", encodeURIComponent(objectId)),
     objectGeometry: (objectId: string) =>
       openApiV2Path("/v2/sessions/current/model/objects/{object_id}/geometry").replace("{object_id}", encodeURIComponent(objectId)),
     material: (materialId: string) =>
@@ -31,6 +40,8 @@ export const sessionApiPaths = {
     script: openApiV2Path("/v2/sessions/current/model/script"),
     syncs: openApiV2Path("/v2/sessions/current/model/syncs"),
     transactions: openApiV2Path("/v2/sessions/current/model/transactions"),
+    universe: openApiV2Path("/v2/sessions/current/model/universe"),
+    universeFit: openApiV2Path("/v2/sessions/current/model/universe/fit"),
   },
   simulation: {
     commands: openApiV2Path("/v2/sessions/current/simulation/commands"),

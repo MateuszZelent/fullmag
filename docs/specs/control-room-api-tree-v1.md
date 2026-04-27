@@ -1,15 +1,19 @@
 # Control-Room API Tree v1
 
-- Status: canonical target API tree for the local control room
+- Status: archived/superseded v1 route tree; current browser API targets v2
 - Last updated: 2026-04-21
 - Parent architecture: `docs/specs/resource-first-control-room-api-v1.md`
-- Concrete current endpoint reference: `docs/specs/control-room-api-endpoint-reference-v1.md`
+- Historical endpoint reference: `docs/specs/control-room-api-endpoint-reference-v1.md`
+- Canonical target architecture: `docs/specs/resource-first-control-room-api-v2.md`
 - Related authoring contract: `docs/specs/scene-document-authoring-v1.md`
 - Governing ADR: `docs/adr/0011-resource-first-api.md`
 
 ## 1. Purpose
 
-This document defines the **full target route tree** for the local Fullmag control-room API.
+This document records the former v1 target route tree for the local Fullmag
+control-room API. New browser API work targets
+`docs/specs/resource-first-control-room-api-v2.md`, `/v2/platform/...`, and
+`/v2/sessions/current/...`.
 
 The previous tree was too runtime-centric. It described status, fields, mesh, and artifacts, but
 it did not make the authoring side explicit enough:
@@ -31,7 +35,7 @@ must answer questions such as:
 
 ## 2. Core split
 
-The canonical local control-room API must keep these families separate:
+The former v1 local control-room API kept these families separate:
 
 1. `status/*`
    Thin runtime summary and revision map.
@@ -133,9 +137,9 @@ For FEM viewport work this implies a three-stage browser contract:
 - `commands` control runtime execution and explicit actions,
 - neither of them is allowed to become the hidden transport for model-authoring edits.
 
-## 4. Canonical route tree
+## 4. Former v1 route tree
 
-The canonical local control-room API tree is:
+The former v1 local control-room API tree was:
 
 ```text
 /v1

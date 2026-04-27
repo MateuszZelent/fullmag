@@ -87,12 +87,60 @@ fn apply_mesh_workspace_update(current: &mut SessionStateResponse, mesh_workspac
         .map(mesh_build_resource_signature);
     let next_mesh_signature = mesh_resource_signature(&mesh_workspace);
     let next_build_signature = mesh_build_resource_signature(&mesh_workspace);
+    if let Some(source_scene_revision) =
+        successful_mesh_build_source_scene_revision(&mesh_workspace)
+    {
+        clear_mesh_dirty_tags_for_built_scene(current, source_scene_revision);
+    }
     current.mesh_workspace = Some(mesh_workspace);
     if previous_build_signature.as_ref() != Some(&next_build_signature) {
         bump_mesh_build_revision(current);
     }
     if previous_mesh_signature.as_ref() != Some(&next_mesh_signature) {
         bump_mesh_revision(current);
+    }
+}
+
+fn successful_mesh_build_source_scene_revision(mesh_workspace: &Value) -> Option<u64> {
+    if mesh_workspace
+        .get("active_build")
+        .map(|value| !value.is_null())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    if mesh_workspace
+        .get("last_build_error")
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let summary = mesh_workspace.get("last_build_summary")?;
+    summary
+        .get("source_scene_revision")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            summary
+                .get("geometry_realization")
+                .and_then(|realization| realization.get("source_scene_revision"))
+                .and_then(Value::as_u64)
+        })
+}
+
+fn clear_mesh_dirty_tags_for_built_scene(
+    current: &mut SessionStateResponse,
+    source_scene_revision: u64,
+) {
+    let Some(scene) = current.scene_document.as_mut() else {
+        return;
+    };
+    if scene.revision != source_scene_revision {
+        return;
+    }
+    for object in &mut scene.objects {
+        object.tags.retain(|tag| tag != "mesh:dirty");
     }
 }
 

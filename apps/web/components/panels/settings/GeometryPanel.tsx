@@ -264,27 +264,49 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
 
   const updateObject = useCallback(
     (updater: (object: SceneObject) => SceneObject, options?: { meshDirty?: boolean }) => {
-      if (objectIndex < 0 || !model.sceneDocument) return;
-      const nextObjects = [...model.sceneDocument.objects];
+      const currentScene = model.sceneDocument;
+      if (objectIndex < 0 || !currentScene) return;
+      const nextObjects = [...currentScene.objects];
       const target = nextObjects[objectIndex];
       if (!target) return;
       const updated = updater(target);
-      nextObjects[objectIndex] =
+      const committedObject =
         options?.meshDirty === false
           ? updated
           : {
               ...updated,
               tags: Array.from(new Set([...(updated.tags ?? []), "mesh:dirty"])),
             };
+      nextObjects[objectIndex] = committedObject;
       model.setSceneDocument({
-        ...model.sceneDocument,
-        revision: model.sceneDocument.revision + 1,
+        ...currentScene,
+        revision: currentScene.revision + 1,
         objects: nextObjects,
       });
+      if (options?.meshDirty === false) {
+        void sceneAuthoring
+          .updateSceneMergePatch({ objects: nextObjects })
+          .then((committedScene) => {
+            model.setSceneDocument(committedScene);
+          })
+          .catch((error) => {
+            console.error("failed to patch authoring object", error);
+            model.setSceneDocument(currentScene);
+          });
+        return;
+      }
       void sceneAuthoring
-        .updateSceneMergePatch({ objects: nextObjects })
+        .patchObjectGeometry(committedObject.id, {
+          base_revision: currentScene.revision,
+          geometry: committedObject.geometry as unknown as Record<string, unknown>,
+          transform: committedObject.transform as unknown as Record<string, unknown>,
+        })
+        .then((committedScene) => {
+          model.setSceneDocument(committedScene);
+        })
         .catch((error) => {
           console.error("failed to patch authoring geometry object", error);
+          model.setSceneDocument(currentScene);
         });
     },
     [model, objectIndex, sceneAuthoring],
@@ -883,24 +905,7 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
             className="mt-1 h-8"
             disabled={model.meshGenerating}
             onClick={() => {
-              void model.handleStudyDomainMeshGenerate("geometry_panel_build_mesh")
-                .then(() => {
-                  model.setSceneDocument((prev) =>
-                    prev
-                      ? {
-                          ...prev,
-                          objects: prev.objects.map((object) =>
-                            object.id === sceneObject.id || object.name === sceneObject.name
-                              ? {
-                                  ...object,
-                                  tags: (object.tags ?? []).filter((tag) => tag !== "mesh:dirty"),
-                                }
-                              : object,
-                          ),
-                        }
-                      : prev,
-                  );
-                });
+              void model.handleStudyDomainMeshGenerate("geometry_panel_build_mesh");
             }}
           >
             {model.meshGenerating ? "Building..." : "Build Mesh / Grid"}

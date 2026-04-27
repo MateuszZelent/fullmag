@@ -15,7 +15,7 @@ v1 resource-first control-room API. It is not the target for new browser work.
 
 Use it when you need:
 
-- the concrete current endpoint inventory,
+- the concrete historical v1 endpoint inventory,
 - request and response field definitions,
 - revision and generation semantics,
 - binary payload notes,
@@ -25,7 +25,7 @@ This document does not replace the target v2 route tree.
 
 - `docs/specs/resource-first-control-room-api-v2.md` is the canonical target API architecture.
 - `docs/specs/control-room-api-tree-v1.md` remains a historical/transition route-tree reference.
-- This file describes the concrete v1 endpoints and the current migration
+- This file describes the concrete v1 endpoints and the historical migration
   boundary.
 
 New frontend work must target `/v2/platform/...` and `/v2/sessions/current/...`.

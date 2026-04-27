@@ -883,8 +883,19 @@ struct CurrentMeshBuildOverlay {
     failed: bool,
 }
 
-fn mesh_build_intent_json(mesh_target: &MeshCommandTarget, mesh_reason: &str) -> serde_json::Value {
-    match mesh_target {
+fn mesh_geometry_realization_json(mesh_options: &serde_json::Value) -> Option<serde_json::Value> {
+    mesh_options
+        .get("geometry_realization")
+        .filter(|value| value.is_object())
+        .cloned()
+}
+
+fn mesh_build_intent_json(
+    mesh_target: &MeshCommandTarget,
+    mesh_reason: &str,
+    mesh_options: &serde_json::Value,
+) -> serde_json::Value {
+    let mut intent = match mesh_target {
         MeshCommandTarget::StudyDomain => serde_json::json!({
             "mode": if mesh_reason.contains("_all") { "all" } else { "selected" },
             "target": { "kind": "study_domain" },
@@ -901,7 +912,13 @@ fn mesh_build_intent_json(mesh_target: &MeshCommandTarget, mesh_reason: &str) ->
             "mode": "selected",
             "target": { "kind": "adaptive_followup" },
         }),
+    };
+    if let Some(realization) = mesh_geometry_realization_json(mesh_options) {
+        if let Some(object) = intent.as_object_mut() {
+            object.insert("geometry_realization".to_string(), realization);
+        }
     }
+    intent
 }
 
 fn mesh_build_stage_status(
@@ -1528,7 +1545,7 @@ fn execute_manual_interactive_remesh(
             ),
         );
         let build_overlay = Arc::new(Mutex::new(CurrentMeshBuildOverlay {
-            active_build: Some(mesh_build_intent_json(mesh_target, mesh_reason)),
+            active_build: Some(mesh_build_intent_json(mesh_target, mesh_reason, &opts)),
             effective_airbox_target: None,
             effective_per_object_targets: None,
             last_build_summary: None,
@@ -1764,6 +1781,17 @@ fn execute_manual_interactive_remesh(
                         "kind": "mesh_build_summary",
                         "mesh_target": mesh_target_label.clone(),
                         "mesh_reason": mesh_reason,
+                        "geometry_realization": mesh_geometry_realization_json(&opts),
+                        "source_scene_revision": opts
+                            .get("geometry_realization")
+                            .and_then(|value| value.get("source_scene_revision"))
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                        "realization_revision": opts
+                            .get("geometry_realization")
+                            .and_then(|value| value.get("realization_revision"))
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
                         "shared_domain_build_mode": provenance
                             .and_then(|value| value.get("shared_domain_build_mode"))
                             .cloned()

@@ -105,10 +105,9 @@ describe("GeometryInspectorRouter state routing", () => {
 describe("overview inspector build gate", () => {
   beforeEach(resetStore);
 
-  it("isRunBlocked returns true on clean empty graph (no geometry built)", () => {
-    // An empty graph with no realization is blocked — nothing to run.
+  it("isRunBlocked does not treat the local draft store as solver source of truth", () => {
     const { isRunBlocked } = getState();
-    expect(isRunBlocked()).toBe(true);
+    expect(isRunBlocked()).toBe(false);
   });
 
   it("dirty geometry marks geometryDraftDirty after addPrimitive", () => {

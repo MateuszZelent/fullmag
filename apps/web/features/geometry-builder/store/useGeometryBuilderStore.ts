@@ -1,9 +1,10 @@
 /**
  * P1 — Geometry Builder Store
  *
- * Single source of truth for geometry authoring state.
- * Manages: geometry graph, dirty state, revision chain,
- * builder mode, viewport tool, universe constraints, and primitive CRUD.
+ * Local interaction state for geometry authoring. The canonical source of truth
+ * for production authoring is the backend SceneDocument.
+ * Manages: draft graph state, dirty hints, builder mode, viewport tool,
+ * universe constraints, and primitive CRUD for legacy/preview-only workflows.
  *
  * ADR: Store is domain-only — no rendering concerns.
  * UI components subscribe to narrow selectors.
@@ -168,7 +169,6 @@ export interface GeometryBuilderState {
 
   // ── Actions: build lifecycle ───────────────────────────────
   buildGeometry: () => void;
-  buildMesh: () => void;
 
   // ── Actions: universe utilities ───────────────────────────
   /**
@@ -719,32 +719,6 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
       }));
     },
 
-    buildMesh: () => {
-      const { geometryRealization, revisions, dirty } = get();
-      if (!geometryRealization || dirty.geometryRealizationDirty) return;
-
-      const snapshot: MeshSnapshot = {
-        revision: (revisions.meshRevision ?? 0) + 1,
-        sourceGeometryRevision: geometryRealization.revision,
-        meshState: "ready",
-        qualitySummary: null,
-        createdAt: new Date().toISOString(),
-      };
-
-      set((s) => ({
-        meshSnapshot: snapshot,
-        dirty: {
-          ...s.dirty,
-          meshDirty: false,
-          initialStateDirty: false,
-        },
-        revisions: {
-          ...s.revisions,
-          meshRevision: snapshot.revision,
-        },
-      }));
-    },
-
     // ── Undo / Redo ──────────────────────────────────────────
 
     undo: () => {
@@ -830,12 +804,11 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
     },
 
     isRunBlocked: () => {
-      const { dirty, meshSnapshot, geometryRealization, getGeometryBuildBlockedReason } = get();
-      const geometryBuildBlockedReason = getGeometryBuildBlockedReason();
-      if (dirty.geometryDraftDirty || dirty.geometryRealizationDirty) {
-        if (geometryBuildBlockedReason) return true;
+      const { dirty, getGeometryBuildBlockedReason } = get();
+      if (!dirty.geometryDraftDirty && !dirty.geometryRealizationDirty) {
+        return false;
       }
-      return dirty.meshDirty || !meshSnapshot || !geometryRealization;
+      return getGeometryBuildBlockedReason() !== null;
     },
 
     getGeometryBuildBlockedReason: () => {
@@ -875,15 +848,11 @@ export const useGeometryBuilderStore = create<GeometryBuilderState>((set, get) =
     },
 
     getRunBlockedReason: () => {
-      const { dirty, meshSnapshot, geometryRealization, getGeometryBuildBlockedReason } = get();
+      const { dirty, getGeometryBuildBlockedReason } = get();
       if (dirty.geometryDraftDirty || dirty.geometryRealizationDirty) {
         const geometryBuildBlockedReason = getGeometryBuildBlockedReason();
         if (geometryBuildBlockedReason) return geometryBuildBlockedReason;
       }
-      if (!geometryRealization) return "Geometry not built. Click Build Geometry first.";
-      if (dirty.geometryRealizationDirty) return "Geometry changed since last build. Rebuild geometry first.";
-      if (!meshSnapshot) return "Mesh not built. Click Build Mesh first.";
-      if (dirty.meshDirty) return "Mesh out of date. Rebuild mesh first.";
       return null;
     },
 

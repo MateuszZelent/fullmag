@@ -10,14 +10,18 @@ use crate::error::ApiError;
 use crate::schemas::authoring::{
     AuthoringTransactionRequest, AuthoringTransactionResponse, GeometryRealizationRequest,
     MaterialPatchRequest, MaterialPropertiesResource, MaterialResource, NullableF64PatchValue,
-    NullableU32PatchValue, ObjectGeometryPatchRequest, ObjectInteractionPatchRequest,
-    ObjectInteractionResource, ScenePatchRequest, StudyRuntimePatchRequest, StudyRuntimeResource,
+    NullableU32PatchValue, ObjectCreateRequest, ObjectGeometryPatchRequest,
+    ObjectInteractionPatchRequest, ObjectInteractionResource, ObjectPatchRequest,
+    RegionListResource, RegionPatchRequest, RegionResource, ScenePatchRequest,
+    StudyRuntimePatchRequest, StudyRuntimeResource, UniverseFitRequest, UniversePatchRequest,
+    UniverseResource,
 };
 use crate::types::{AppState, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse};
 use fullmag_authoring::{
     geometry_capabilities, realize_geometry_scene, validate_geometry_scene, GeometryBackendTarget,
-    SceneDocument, SceneGeometry, SceneObject, ScriptBuilderMagneticInteractionEntry,
-    ScriptBuilderMagneticInteractionKind, Transform3D,
+    MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneObject,
+    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
+    ScriptBuilderUniverseState, Transform3D,
 };
 
 #[utoipa::path(
@@ -179,6 +183,243 @@ pub async fn get_current_authoring_geometry_realization(
 }
 
 #[utoipa::path(
+    get,
+    path = "/v2/sessions/current/model/geometry/diagnostics",
+    responses(
+        (status = 200, description = "Current geometry diagnostics", body = Value),
+        (status = 404, description = "No active workspace or scene document"),
+    ),
+    tag = "model"
+)]
+pub async fn get_authoring_geometry_diagnostics(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let validation = validate_geometry_scene(&scene, GeometryBackendTarget::from_scene(&scene));
+    Ok(Json(serde_json::json!({
+        "scene_revision": validation.scene_revision,
+        "backend_target": validation.backend_target,
+        "status": validation.status,
+        "diagnostics": validation.diagnostics,
+    })))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/model/geometry/diagnostics/{diagnostic_id}",
+    params(
+        ("diagnostic_id" = String, Path, description = "Geometry diagnostic id")
+    ),
+    responses(
+        (status = 200, description = "Current geometry diagnostic", body = Value),
+        (status = 404, description = "No active workspace, scene document, or diagnostic"),
+    ),
+    tag = "model"
+)]
+pub async fn get_authoring_geometry_diagnostic(
+    State(state): State<Arc<AppState>>,
+    Path(diagnostic_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let validation = validate_geometry_scene(&scene, GeometryBackendTarget::from_scene(&scene));
+    let diagnostic = validation
+        .diagnostics
+        .into_iter()
+        .find(|diagnostic| diagnostic.id == diagnostic_id || diagnostic.code == diagnostic_id)
+        .ok_or_else(|| ApiError::not_found(format!("diagnostic not found: {diagnostic_id}")))?;
+    serde_json::to_value(diagnostic).map(Json).map_err(|error| {
+        ApiError::internal(format!("failed to serialize geometry diagnostic: {error}"))
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/model/objects",
+    request_body = ObjectCreateRequest,
+    responses(
+        (status = 200, description = "Committed canonical scene after object creation", body = Value),
+        (status = 400, description = "Invalid object payload"),
+        (status = 404, description = "No active workspace or scene document"),
+    ),
+    tag = "model"
+)]
+pub async fn create_authoring_object(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ObjectCreateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    apply_create_object_transaction(
+        &mut scene,
+        req.base_revision,
+        req.object_id,
+        req.name,
+        req.geometry,
+        req.transform,
+        req.material_ref,
+        req.region_name,
+        req.magnetization_ref,
+        req.material_asset,
+        req.magnetization_asset,
+        req.universe,
+        req.study_universe_mesh,
+    )?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    serde_json::to_value(committed)
+        .map(Json)
+        .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v2/sessions/current/model/objects/{object_id}",
+    params(
+        ("object_id" = String, Path, description = "Canonical scene object id")
+    ),
+    request_body = ObjectPatchRequest,
+    responses(
+        (status = 200, description = "Committed canonical scene after object patch", body = Value),
+        (status = 404, description = "No active workspace, scene document, or object"),
+    ),
+    tag = "model"
+)]
+pub async fn patch_authoring_object(
+    State(state): State<Arc<AppState>>,
+    Path(object_id): Path<String>,
+    Json(req): Json<ObjectPatchRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    apply_object_patch(&mut scene, &object_id, req)?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    serde_json::to_value(committed)
+        .map(Json)
+        .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v2/sessions/current/model/objects/{object_id}",
+    params(
+        ("object_id" = String, Path, description = "Canonical scene object id")
+    ),
+    responses(
+        (status = 200, description = "Committed canonical scene after object deletion", body = Value),
+        (status = 404, description = "No active workspace, scene document, or object"),
+    ),
+    tag = "model"
+)]
+pub async fn delete_authoring_object(
+    State(state): State<Arc<AppState>>,
+    Path(object_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    apply_delete_object_transaction(&mut scene, None, &object_id)?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    serde_json::to_value(committed)
+        .map(Json)
+        .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/model/regions",
+    responses(
+        (status = 200, description = "Current object-derived region resources", body = RegionListResource),
+        (status = 404, description = "No active workspace or scene document"),
+    ),
+    tag = "model"
+)]
+pub async fn get_authoring_regions(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<RegionListResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let realization = realize_geometry_scene(&scene, GeometryBackendTarget::from_scene(&scene));
+    let regions = realization
+        .region_candidates
+        .iter()
+        .map(|candidate| {
+            let object = scene
+                .objects
+                .iter()
+                .find(|object| object.id == candidate.object_id);
+            let name = object
+                .and_then(|object| object.region_name.as_ref())
+                .filter(|value| !value.trim().is_empty())
+                .cloned()
+                .unwrap_or_else(|| {
+                    object
+                        .map(|object| object.name.clone())
+                        .unwrap_or_else(|| candidate.id.clone())
+                });
+            let interaction_refs = object
+                .map(|object| {
+                    object
+                        .physics_stack
+                        .iter()
+                        .map(|entry| magnetic_interaction_kind_id(entry.kind).to_string())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            RegionResource {
+                region_id: candidate.id.clone(),
+                name,
+                source: "object".to_string(),
+                source_object_ids: vec![candidate.object_id.clone()],
+                material_ref: candidate.material_ref.clone(),
+                magnetization_ref: candidate.magnetization_ref.clone(),
+                interaction_refs,
+                mesh_part_ids: Vec::new(),
+                enabled: object.map(|object| object.visible).unwrap_or(true),
+                bounds_min: candidate.bounds_min,
+                bounds_max: candidate.bounds_max,
+            }
+        })
+        .collect();
+    Ok(Json(RegionListResource {
+        scene_revision: scene.revision,
+        geometry_realization_revision: realization.realization_revision,
+        regions,
+    }))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v2/sessions/current/model/regions/{region_id}",
+    params(
+        ("region_id" = String, Path, description = "Object-derived region id or name")
+    ),
+    request_body = RegionPatchRequest,
+    responses(
+        (status = 200, description = "Committed canonical authoring scene after region patch", body = Value),
+        (status = 404, description = "No active workspace, scene document, or region"),
+    ),
+    tag = "model"
+)]
+pub async fn patch_authoring_region(
+    State(state): State<Arc<AppState>>,
+    Path(region_id): Path<String>,
+    Json(req): Json<RegionPatchRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let object = find_scene_object_for_region_mut(&mut scene, &region_id)?;
+    if let Some(name) = req.name {
+        let name = name.trim();
+        object.region_name = if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        };
+    }
+    if let Some(enabled) = req.enabled {
+        object.visible = enabled;
+    }
+    mark_object_mesh_dirty(object);
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    serde_json::to_value(committed)
+        .map(Json)
+        .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
+}
+
+#[utoipa::path(
     patch,
     path = "/v2/sessions/current/model/objects/{object_id}/geometry",
     params(
@@ -210,6 +451,77 @@ pub async fn patch_authoring_object_geometry(
     serde_json::to_value(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/model/universe",
+    responses(
+        (status = 200, description = "Canonical authoring Universe resource", body = UniverseResource),
+        (status = 404, description = "No active workspace or scene document"),
+    ),
+    tag = "model"
+)]
+pub async fn get_authoring_universe(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<UniverseResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    build_universe_resource(&scene).map(Json)
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v2/sessions/current/model/universe",
+    request_body = UniversePatchRequest,
+    responses(
+        (status = 200, description = "Committed canonical Universe resource", body = UniverseResource),
+        (status = 400, description = "Invalid Universe payload"),
+        (status = 404, description = "No active workspace"),
+        (status = 409, description = "Base scene revision does not match current scene revision"),
+    ),
+    tag = "model"
+)]
+pub async fn patch_authoring_universe(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UniversePatchRequest>,
+) -> Result<Json<UniverseResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    apply_universe_patch(
+        &mut scene,
+        req.base_revision,
+        req.universe,
+        req.sync_study_universe_mesh,
+    )?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    build_universe_resource(&committed).map(Json)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/model/universe/fit",
+    request_body = UniverseFitRequest,
+    responses(
+        (status = 200, description = "Committed Universe fitted to realized object bounds", body = UniverseResource),
+        (status = 400, description = "Scene has no realizable object bounds"),
+        (status = 404, description = "No active workspace"),
+        (status = 409, description = "Base scene revision does not match current scene revision"),
+    ),
+    tag = "model"
+)]
+pub async fn fit_authoring_universe(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UniverseFitRequest>,
+) -> Result<Json<UniverseResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    apply_universe_fit(
+        &mut scene,
+        req.base_revision,
+        req.padding,
+        req.minimum_size,
+        req.sync_study_universe_mesh,
+    )?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    build_universe_resource(&committed).map(Json)
 }
 
 #[utoipa::path(
@@ -485,6 +797,93 @@ pub async fn commit_authoring_transaction(
                 crate::commit_current_live_scene_document(&state, current_scene).await?;
             ("patch_object_geometry", committed)
         }
+        AuthoringTransactionRequest::CreateObject {
+            base_revision,
+            object_id,
+            name,
+            geometry,
+            transform,
+            material_ref,
+            region_name,
+            magnetization_ref,
+            material_asset,
+            magnetization_asset,
+            universe,
+            study_universe_mesh,
+        } => {
+            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            apply_create_object_transaction(
+                &mut current_scene,
+                base_revision,
+                object_id,
+                name,
+                geometry,
+                transform,
+                material_ref,
+                region_name,
+                magnetization_ref,
+                material_asset,
+                magnetization_asset,
+                universe,
+                study_universe_mesh,
+            )?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            ("create_object", committed)
+        }
+        AuthoringTransactionRequest::DeleteObject {
+            base_revision,
+            object_id,
+        } => {
+            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            apply_delete_object_transaction(&mut current_scene, base_revision, &object_id)?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            ("delete_object", committed)
+        }
+        AuthoringTransactionRequest::RenameObject {
+            base_revision,
+            object_id,
+            name,
+        } => {
+            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            apply_rename_object_transaction(&mut current_scene, base_revision, &object_id, name)?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            ("rename_object", committed)
+        }
+        AuthoringTransactionRequest::CommitObjectTransform {
+            base_revision,
+            object_id,
+            transform,
+        } => {
+            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            apply_commit_object_transform_transaction(
+                &mut current_scene,
+                base_revision,
+                &object_id,
+                transform,
+            )?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            ("commit_object_transform", committed)
+        }
+        AuthoringTransactionRequest::PatchUniverse {
+            base_revision,
+            universe,
+            sync_study_universe_mesh,
+        } => {
+            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            apply_patch_universe_transaction(
+                &mut current_scene,
+                base_revision,
+                universe,
+                sync_study_universe_mesh,
+            )?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            ("patch_universe", committed)
+        }
     };
 
     let committed_scene = serde_json::to_value(&committed).map_err(|error| {
@@ -585,6 +984,111 @@ fn build_study_runtime_resource(scene: &SceneDocument) -> StudyRuntimeResource {
     }
 }
 
+fn build_universe_resource(scene: &SceneDocument) -> Result<UniverseResource, ApiError> {
+    let realization = realize_geometry_scene(scene, GeometryBackendTarget::from_scene(scene));
+    Ok(UniverseResource {
+        scene_revision: scene.revision,
+        universe: scene
+            .universe
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| {
+                ApiError::internal(format!("failed to serialize universe: {error}"))
+            })?,
+        study_universe_mesh: scene
+            .study
+            .universe_mesh
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| {
+                ApiError::internal(format!("failed to serialize study universe mesh: {error}"))
+            })?,
+        object_bounds_min: realization.bounds_min,
+        object_bounds_max: realization.bounds_max,
+        mesh_dirty: scene
+            .objects
+            .iter()
+            .any(|object| object.tags.iter().any(|tag| tag == "mesh:dirty")),
+    })
+}
+
+fn apply_universe_patch(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    universe_value: Value,
+    sync_study_universe_mesh: bool,
+) -> Result<(), ApiError> {
+    apply_patch_universe_transaction(
+        scene,
+        base_revision,
+        universe_value,
+        sync_study_universe_mesh,
+    )
+}
+
+fn apply_universe_fit(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    padding: Option<[f64; 3]>,
+    minimum_size: Option<[f64; 3]>,
+    sync_study_universe_mesh: bool,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let realization = realize_geometry_scene(scene, GeometryBackendTarget::from_scene(scene));
+    let (Some(bounds_min), Some(bounds_max)) = (realization.bounds_min, realization.bounds_max)
+    else {
+        return Err(ApiError::bad_request(
+            "scene has no realizable object bounds",
+        ));
+    };
+    let padding = padding.unwrap_or([0.0, 0.0, 0.0]);
+    let minimum_size = minimum_size.unwrap_or([0.0, 0.0, 0.0]);
+    let min = [
+        bounds_min[0] - padding[0],
+        bounds_min[1] - padding[1],
+        bounds_min[2] - padding[2],
+    ];
+    let max = [
+        bounds_max[0] + padding[0],
+        bounds_max[1] + padding[1],
+        bounds_max[2] + padding[2],
+    ];
+    let size = [
+        (max[0] - min[0]).max(minimum_size[0]),
+        (max[1] - min[1]).max(minimum_size[1]),
+        (max[2] - min[2]).max(minimum_size[2]),
+    ];
+    let center = [
+        0.5 * (min[0] + max[0]),
+        0.5 * (min[1] + max[1]),
+        0.5 * (min[2] + max[2]),
+    ];
+    let mut universe = scene
+        .universe
+        .clone()
+        .unwrap_or(ScriptBuilderUniverseState {
+            mode: "box".to_string(),
+            size: None,
+            center: None,
+            padding: None,
+            airbox_hmax: None,
+            airbox_hmin: None,
+            airbox_growth_rate: None,
+        });
+    universe.mode = "box".to_string();
+    universe.size = Some(size);
+    universe.center = Some(center);
+    universe.padding = Some(padding);
+    scene.universe = Some(universe.clone());
+    if sync_study_universe_mesh {
+        scene.study.universe_mesh = Some(universe);
+    }
+    mark_all_object_meshes_dirty(scene);
+    Ok(())
+}
+
 fn parse_geometry_backend_target(raw: &str) -> Result<GeometryBackendTarget, ApiError> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "fem" => Ok(GeometryBackendTarget::Fem),
@@ -602,14 +1106,7 @@ fn apply_object_geometry_patch(
     geometry_value: Value,
     transform_value: Option<Value>,
 ) -> Result<(), ApiError> {
-    if let Some(base_revision) = base_revision {
-        if base_revision != scene.revision {
-            return Err(ApiError::conflict(format!(
-                "scene revision mismatch: base={base_revision}, current={}",
-                scene.revision
-            )));
-        }
-    }
+    check_base_scene_revision(scene, base_revision)?;
     let geometry: SceneGeometry = serde_json::from_value(geometry_value).map_err(|error| {
         ApiError::bad_request(format!("invalid object geometry payload: {error}"))
     })?;
@@ -620,19 +1117,337 @@ fn apply_object_geometry_patch(
             })
         })
         .transpose()?;
-    let object = scene
-        .objects
-        .iter_mut()
-        .find(|entry| entry.id == object_id || entry.name == object_id)
-        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+    let object = find_scene_object_mut(scene, object_id)?;
     object.geometry = geometry;
     if let Some(transform) = transform {
         object.transform = transform;
     }
+    mark_object_mesh_dirty(object);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_create_object_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    object_id: String,
+    name: String,
+    geometry_value: Value,
+    transform_value: Option<Value>,
+    material_ref: Option<String>,
+    region_name: Option<String>,
+    magnetization_ref: Option<String>,
+    material_asset_value: Option<Value>,
+    magnetization_asset_value: Option<Value>,
+    universe_value: Option<Value>,
+    study_universe_mesh_value: Option<Value>,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let object_id = object_id.trim().to_string();
+    if object_id.is_empty() {
+        return Err(ApiError::bad_request("object_id must not be empty"));
+    }
+    if scene
+        .objects
+        .iter()
+        .any(|object| object.id == object_id || object.name == object_id)
+    {
+        return Err(ApiError::conflict(format!(
+            "object already exists: {object_id}"
+        )));
+    }
+    let geometry: SceneGeometry = serde_json::from_value(geometry_value).map_err(|error| {
+        ApiError::bad_request(format!("invalid object geometry payload: {error}"))
+    })?;
+    let transform: Transform3D = transform_value
+        .map(|value| {
+            serde_json::from_value(value).map_err(|error| {
+                ApiError::bad_request(format!("invalid object transform payload: {error}"))
+            })
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let material_asset: Option<SceneMaterialAsset> = material_asset_value
+        .map(|value| {
+            serde_json::from_value(value).map_err(|error| {
+                ApiError::bad_request(format!("invalid material asset payload: {error}"))
+            })
+        })
+        .transpose()?;
+    let magnetization_asset: Option<MagnetizationAsset> = magnetization_asset_value
+        .map(|value| {
+            serde_json::from_value(value).map_err(|error| {
+                ApiError::bad_request(format!("invalid magnetization asset payload: {error}"))
+            })
+        })
+        .transpose()?;
+    let universe: Option<ScriptBuilderUniverseState> = universe_value
+        .map(|value| {
+            serde_json::from_value(value).map_err(|error| {
+                ApiError::bad_request(format!("invalid universe payload: {error}"))
+            })
+        })
+        .transpose()?;
+    let study_universe_mesh: Option<ScriptBuilderUniverseState> = study_universe_mesh_value
+        .map(|value| {
+            serde_json::from_value(value).map_err(|error| {
+                ApiError::bad_request(format!("invalid study_universe_mesh payload: {error}"))
+            })
+        })
+        .transpose()?;
+    let material_ref = material_ref
+        .or_else(|| material_asset.as_ref().map(|material| material.id.clone()))
+        .or_else(|| scene.materials.first().map(|material| material.id.clone()))
+        .unwrap_or_default();
+    let magnetization_ref = magnetization_ref
+        .or_else(|| magnetization_asset.as_ref().map(|asset| asset.id.clone()))
+        .or_else(|| {
+            scene
+                .magnetization_assets
+                .first()
+                .map(|asset| asset.id.clone())
+        });
+    if let Some(material_asset) = material_asset {
+        upsert_material_asset(scene, material_asset);
+    }
+    if let Some(magnetization_asset) = magnetization_asset {
+        upsert_magnetization_asset(scene, magnetization_asset);
+    }
+    if let Some(universe) = universe {
+        scene.universe = Some(universe);
+    }
+    if let Some(study_universe_mesh) = study_universe_mesh {
+        scene.study.universe_mesh = Some(study_universe_mesh);
+    }
+    let mut object = SceneObject {
+        id: object_id,
+        name: name.trim().to_string(),
+        geometry,
+        transform,
+        material_ref,
+        region_name: region_name.filter(|value| !value.trim().is_empty()),
+        magnetization_ref: magnetization_ref.filter(|value| !value.trim().is_empty()),
+        physics_stack: Vec::new(),
+        object_mesh: None,
+        mesh_override: None,
+        visible: true,
+        locked: false,
+        tags: Vec::new(),
+    };
+    mark_object_mesh_dirty(&mut object);
+    scene.objects.push(object);
+    Ok(())
+}
+
+fn upsert_material_asset(scene: &mut SceneDocument, material: SceneMaterialAsset) {
+    if let Some(existing) = scene
+        .materials
+        .iter_mut()
+        .find(|entry| entry.id == material.id)
+    {
+        *existing = material;
+        return;
+    }
+    scene.materials.push(material);
+}
+
+fn upsert_magnetization_asset(scene: &mut SceneDocument, asset: MagnetizationAsset) {
+    if let Some(existing) = scene
+        .magnetization_assets
+        .iter_mut()
+        .find(|entry| entry.id == asset.id)
+    {
+        *existing = asset;
+        return;
+    }
+    scene.magnetization_assets.push(asset);
+}
+
+fn apply_delete_object_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    object_id: &str,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let before = scene.objects.len();
+    scene
+        .objects
+        .retain(|object| object.id != object_id && object.name != object_id);
+    if scene.objects.len() == before {
+        return Err(ApiError::not_found(format!(
+            "object not found: {object_id}"
+        )));
+    }
+    mark_all_object_meshes_dirty(scene);
+    Ok(())
+}
+
+fn apply_rename_object_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    object_id: &str,
+    name: String,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let object = find_scene_object_mut(scene, object_id)?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("object name must not be empty"));
+    }
+    object.name = name.to_string();
+    Ok(())
+}
+
+fn apply_commit_object_transform_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    object_id: &str,
+    transform_value: Value,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let transform: Transform3D = serde_json::from_value(transform_value).map_err(|error| {
+        ApiError::bad_request(format!("invalid object transform payload: {error}"))
+    })?;
+    let object = find_scene_object_mut(scene, object_id)?;
+    object.transform = transform;
+    mark_object_mesh_dirty(object);
+    Ok(())
+}
+
+fn apply_patch_universe_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    universe_value: Value,
+    sync_study_universe_mesh: bool,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let universe: ScriptBuilderUniverseState = serde_json::from_value(universe_value)
+        .map_err(|error| ApiError::bad_request(format!("invalid universe payload: {error}")))?;
+    scene.universe = Some(universe.clone());
+    if sync_study_universe_mesh {
+        scene.study.universe_mesh = Some(universe);
+    }
+    mark_all_object_meshes_dirty(scene);
+    Ok(())
+}
+
+fn apply_object_patch(
+    scene: &mut SceneDocument,
+    object_id: &str,
+    req: ObjectPatchRequest,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, req.base_revision)?;
+    let object = find_scene_object_mut(scene, object_id)?;
+    let mut mesh_dirty = false;
+    if let Some(name) = req.name {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ApiError::bad_request("object name must not be empty"));
+        }
+        object.name = name.to_string();
+    }
+    if let Some(visible) = req.visible {
+        object.visible = visible;
+    }
+    if let Some(material_ref) = req.material_ref {
+        object.material_ref = material_ref;
+        mesh_dirty = true;
+    }
+    if let Some(region_name) = req.region_name {
+        let region_name = region_name.trim();
+        object.region_name = if region_name.is_empty() {
+            None
+        } else {
+            Some(region_name.to_string())
+        };
+        mesh_dirty = true;
+    }
+    if let Some(magnetization_ref) = req.magnetization_ref {
+        object.magnetization_ref = if magnetization_ref.trim().is_empty() {
+            None
+        } else {
+            Some(magnetization_ref)
+        };
+    }
+    if let Some(geometry_value) = req.geometry {
+        object.geometry = serde_json::from_value(geometry_value).map_err(|error| {
+            ApiError::bad_request(format!("invalid object geometry payload: {error}"))
+        })?;
+        mesh_dirty = true;
+    }
+    if let Some(transform_value) = req.transform {
+        object.transform = serde_json::from_value(transform_value).map_err(|error| {
+            ApiError::bad_request(format!("invalid object transform payload: {error}"))
+        })?;
+        mesh_dirty = true;
+    }
+    if mesh_dirty {
+        mark_object_mesh_dirty(object);
+    }
+    Ok(())
+}
+
+fn check_base_scene_revision(
+    scene: &SceneDocument,
+    base_revision: Option<u64>,
+) -> Result<(), ApiError> {
+    if let Some(base_revision) = base_revision {
+        if base_revision != scene.revision {
+            return Err(ApiError::conflict(format!(
+                "scene revision mismatch: base={base_revision}, current={}",
+                scene.revision
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn find_scene_object_mut<'a>(
+    scene: &'a mut SceneDocument,
+    object_id: &str,
+) -> Result<&'a mut SceneObject, ApiError> {
+    scene
+        .objects
+        .iter_mut()
+        .find(|entry| entry.id == object_id || entry.name == object_id)
+        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))
+}
+
+fn find_scene_object_for_region_mut<'a>(
+    scene: &'a mut SceneDocument,
+    region_id: &str,
+) -> Result<&'a mut SceneObject, ApiError> {
+    scene
+        .objects
+        .iter_mut()
+        .find(|entry| {
+            entry.region_name.as_deref() == Some(region_id)
+                || format!("region:{}", entry.id) == region_id
+                || entry.id == region_id
+                || entry.name == region_id
+        })
+        .ok_or_else(|| ApiError::not_found(format!("region not found: {region_id}")))
+}
+
+fn mark_object_mesh_dirty(object: &mut SceneObject) {
     if !object.tags.iter().any(|tag| tag == "mesh:dirty") {
         object.tags.push("mesh:dirty".to_string());
     }
-    Ok(())
+}
+
+fn mark_all_object_meshes_dirty(scene: &mut SceneDocument) {
+    for object in &mut scene.objects {
+        mark_object_mesh_dirty(object);
+    }
+}
+
+fn magnetic_interaction_kind_id(kind: ScriptBuilderMagneticInteractionKind) -> &'static str {
+    match kind {
+        ScriptBuilderMagneticInteractionKind::Exchange => "exchange",
+        ScriptBuilderMagneticInteractionKind::Demag => "demag",
+        ScriptBuilderMagneticInteractionKind::InterfacialDmi => "interfacial_dmi",
+        ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy => "uniaxial_anisotropy",
+    }
 }
 
 fn build_material_resource(material: &fullmag_authoring::SceneMaterialAsset) -> MaterialResource {

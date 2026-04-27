@@ -7,7 +7,7 @@ If you are looking for the main architecture document for the whole application,
 - **Primary application architecture:** `docs/specs/fullmag-application-architecture-v2.md`
 - **Primary control-room API architecture:** `docs/specs/resource-first-control-room-api-v2.md`
 - **Compatibility endpoint reference:** `docs/specs/control-room-api-endpoint-reference-v1.md`
-- **Primary control-room API tree:** `docs/specs/control-room-api-tree-v1.md`
+- **Historical control-room API tree:** `docs/specs/control-room-api-tree-v1.md`
 
 ## Reading order
 
@@ -15,10 +15,10 @@ When you need to understand Fullmag quickly, read in this order:
 
 1. `docs/specs/fullmag-application-architecture-v2.md`
 2. `docs/specs/resource-first-control-room-api-v2.md`
-3. `docs/specs/resource-first-control-room-api-v1.md`
-4. `docs/specs/control-room-api-endpoint-reference-v1.md`
-5. `docs/specs/control-room-api-tree-v1.md`
-6. `docs/specs/session-run-api-v1.md`
+3. `docs/specs/session-run-api-v1.md`
+4. `docs/specs/resource-first-control-room-api-v1.md`
+5. `docs/specs/control-room-api-endpoint-reference-v1.md`
+6. `docs/specs/control-room-api-tree-v1.md`
 7. `docs/specs/command-lifecycle-v1.md`
 8. `docs/specs/runtime-distribution-and-managed-backends-v1.md`
 9. `docs/specs/hpc-cluster-execution-v1.md`
@@ -42,8 +42,10 @@ When you need to understand Fullmag quickly, read in this order:
 - `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/control-room-api-tree-v1.md`
 
-These are the highest-level, canonical descriptions of the whole Fullmag application and the
-current local control-room API contract.
+These are the highest-level descriptions of the whole Fullmag application and the
+local control-room API lineage. The current browser API contract is v2; v1 files
+are archived compatibility references for removed public `/v1/live/current/*`
+routes and migration history.
 
 It defines:
 
@@ -143,9 +145,9 @@ If those change and the canonical application architecture is not updated, the d
 longer honest.
 
 Whenever one of these changes, also update
-`docs/specs/resource-first-control-room-api-v1.md`:
+`docs/specs/resource-first-control-room-api-v2.md`:
 
-- the local `/v1/live/current/*` API contract,
+- the local `/v2/platform/*` and `/v2/sessions/current/*` API contract,
 - control-plane vs data-plane boundaries,
 - frontend API-client structure,
 - revision or generation semantics,
@@ -155,8 +157,8 @@ Whenever one of these changes, also update
 Whenever concrete current endpoint shapes, schemas, or transitional route
 mapping change, also update:
 
-- `docs/specs/control-room-api-endpoint-reference-v1.md`
+- `docs/specs/resource-first-control-room-api-v2.md`
 
 Whenever the route-family split or resource hierarchy changes, also update:
 
-- `docs/specs/control-room-api-tree-v1.md`
+- `docs/specs/resource-first-control-room-api-v2.md`

@@ -23,11 +23,11 @@ use tokio::sync::{watch, Mutex, RwLock};
 use crate::feature_flags::FeatureFlags;
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, CurrentDisplaySelection,
-    CurrentWorkspaceLayout, CurrentWorkspaceRibbon, CurrentWorkspaceSelection,
-    DisplayPresentationState, LatestFields, LiveState, RunManifest, RuntimeLifecycleState,
-    RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest, SessionStateResponse,
-    StageExecutionRecord, StageExecutionState, StageLifecycleState, StepUpdateView,
-    TrackedCommandRecord,
+    CurrentLiveSnapshotRequest, CurrentWorkspaceLayout, CurrentWorkspaceRibbon,
+    CurrentWorkspaceSelection, DisplayPresentationState, LatestFields, LiveState, RunManifest,
+    RuntimeLifecycleState, RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest,
+    SessionStateResponse, StageExecutionRecord, StageExecutionState, StageLifecycleState,
+    StepUpdateView, TrackedCommandRecord,
 };
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, RuntimeStatus};
 
@@ -412,6 +412,7 @@ async fn test_router_with_scene_document() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
     }
     build_v2_router().with_state(state)
 }
@@ -2258,6 +2259,9 @@ async fn mesh_active_build_returns_304_when_etag_matches() {
 #[tokio::test]
 async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
     let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
     let app = build_v2_router().with_state(state.clone());
 
     let response = app
@@ -2280,7 +2284,14 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
+    if status != StatusCode::OK {
+        let body = body_bytes(response).await;
+        panic!(
+            "expected remesh command to be accepted, got {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
 
     let queue = state.current_control_queue.lock().await;
     assert_eq!(queue.len(), 1);
@@ -2295,6 +2306,75 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
         Some(serde_json::json!("object_mesh"))
     );
     assert_eq!(command.mesh_reason.as_deref(), Some("user_request"));
+    let mesh_options = command
+        .mesh_options
+        .as_ref()
+        .expect("mesh options should be enriched with geometry realization");
+    assert_eq!(
+        mesh_options
+            .get("geometry_realization")
+            .and_then(|value| value.get("source_scene_revision"))
+            .and_then(serde_json::Value::as_u64),
+        state
+            .current_live_state
+            .read()
+            .await
+            .as_ref()
+            .and_then(|snapshot| snapshot.scene_document.as_ref())
+            .map(|scene| scene.revision)
+    );
+}
+
+#[tokio::test]
+async fn mesh_build_snapshot_for_current_scene_clears_mesh_dirty_tags() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 42;
+    scene.objects[0].tags.push("mesh:dirty".to_string());
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        crate::session::apply_current_live_snapshot(
+            snapshot,
+            CurrentLiveSnapshotRequest {
+                session_id: snapshot.session.session_id.clone(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: Some(serde_json::json!({
+                    "active_build": null,
+                    "last_build_error": null,
+                    "last_build_summary": {
+                        "kind": "mesh_build_summary",
+                        "source_scene_revision": 42,
+                        "realization_revision": 42,
+                    }
+                })),
+                stage_execution: None,
+                run: None,
+                live_state: None,
+                latest_scalar_row: None,
+                latest_fields: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("snapshot should apply");
+    }
+
+    let guard = state.current_live_state.read().await;
+    let object = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .and_then(|scene| scene.objects.first())
+        .expect("scene object exists");
+    assert!(!object.tags.iter().any(|tag| tag == "mesh:dirty"));
 }
 
 #[tokio::test]
@@ -3210,6 +3290,216 @@ async fn authoring_object_geometry_patch_marks_mesh_dirty_and_checks_revision() 
 }
 
 #[tokio::test]
+async fn authoring_transactions_create_transform_and_delete_objects() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 12;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "create_object",
+                        "base_revision": 12,
+                        "object_id": "box_001",
+                        "name": "Box 001",
+                        "geometry": {
+                            "geometry_kind": "Box",
+                            "geometry_params": { "size": [100e-9, 100e-9, 30e-9] }
+                        },
+                        "transform": {
+                            "translation": [120e-9, 0.0, 0.0],
+                            "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+                            "scale": [1.0, 1.0, 1.0],
+                            "pivot": [0.0, 0.0, 0.0]
+                        },
+                        "universe": {
+                            "mode": "box",
+                            "size": [300e-9, 200e-9, 100e-9],
+                            "center": [100e-9, 0.0, 0.0],
+                            "padding": [0.0, 0.0, 0.0]
+                        },
+                        "study_universe_mesh": {
+                            "mode": "box",
+                            "size": [300e-9, 200e-9, 100e-9],
+                            "center": [100e-9, 0.0, 0.0],
+                            "padding": [0.0, 0.0, 0.0]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::OK);
+    let create_json = body_json(create_response).await;
+    assert_eq!(create_json["transaction_kind"], "create_object");
+    let created_revision = create_json["scene_revision"].as_u64().unwrap();
+    let created_object = create_json["committed_scene"]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|object| object["id"] == "box_001")
+        .expect("created object present");
+    assert_eq!(created_object["geometry"]["geometry_kind"], "Box");
+    assert!(created_object["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "mesh:dirty"));
+    assert_eq!(
+        create_json["committed_scene"]["universe"]["size"][0],
+        300e-9
+    );
+    assert_eq!(
+        create_json["committed_scene"]["study"]["universe_mesh"]["center"][0],
+        100e-9
+    );
+
+    let transform_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "commit_object_transform",
+                        "base_revision": created_revision,
+                        "object_id": "box_001",
+                        "transform": {
+                            "translation": [150e-9, 0.0, 0.0],
+                            "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+                            "scale": [1.0, 1.0, 1.0],
+                            "pivot": [0.0, 0.0, 0.0]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(transform_response.status(), StatusCode::OK);
+    let transform_json = body_json(transform_response).await;
+    assert_eq!(
+        transform_json["transaction_kind"],
+        "commit_object_transform"
+    );
+    let transformed_revision = transform_json["scene_revision"].as_u64().unwrap();
+
+    let delete_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "delete_object",
+                        "base_revision": transformed_revision,
+                        "object_id": "box_001"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::OK);
+    let delete_json = body_json(delete_response).await;
+    assert_eq!(delete_json["transaction_kind"], "delete_object");
+    assert!(!delete_json["committed_scene"]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "box_001"));
+}
+
+#[tokio::test]
+async fn authoring_universe_patch_and_fit_are_scene_owned() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 21;
+    scene.objects[0].tags.clear();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let patch_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/universe")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": 21,
+                        "sync_study_universe_mesh": true,
+                        "universe": {
+                            "mode": "box",
+                            "size": [4.0, 5.0, 6.0],
+                            "center": [1.0, 2.0, 3.0],
+                            "padding": [0.0, 0.0, 0.0]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch_response.status(), StatusCode::OK);
+    let patch_json = body_json(patch_response).await;
+    assert_eq!(patch_json["universe"]["size"][0], 4.0);
+    assert_eq!(patch_json["study_universe_mesh"]["center"][2], 3.0);
+    assert_eq!(patch_json["mesh_dirty"], true);
+    let patched_revision = patch_json["scene_revision"].as_u64().unwrap();
+
+    let fit_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/universe/fit")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": patched_revision,
+                        "padding": [0.1, 0.2, 0.3],
+                        "minimum_size": [0.0, 0.0, 0.0],
+                        "sync_study_universe_mesh": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fit_response.status(), StatusCode::OK);
+    let fit_json = body_json(fit_response).await;
+    assert_eq!(fit_json["universe"]["mode"], "box");
+    assert!((fit_json["universe"]["size"][0].as_f64().unwrap() - 1.2).abs() < 1e-12);
+    assert!((fit_json["universe"]["size"][1].as_f64().unwrap() - 1.4).abs() < 1e-12);
+    assert!((fit_json["universe"]["size"][2].as_f64().unwrap() - 1.6).abs() < 1e-12);
+    assert!((fit_json["study_universe_mesh"]["size"][2].as_f64().unwrap() - 1.6).abs() < 1e-12);
+    assert_eq!(fit_json["mesh_dirty"], true);
+}
+
+#[tokio::test]
 async fn authoring_geometry_realization_reports_blocked_csg() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -3308,6 +3598,231 @@ async fn authoring_study_runtime_patch_commits_requested_selection() {
     assert_eq!(committed.study.requested_backend, "fem");
     assert_eq!(committed.study.requested_device, "gpu");
     assert_eq!(committed.study.requested_cpu_threads, Some(8));
+}
+
+#[tokio::test]
+async fn authoring_regions_returns_object_derived_regions() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 21;
+    scene.objects[0].region_name = Some("free_layer".to_string());
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/regions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["scene_revision"], 21);
+    assert_eq!(json["geometry_realization_revision"], 21);
+    assert_eq!(json["regions"][0]["name"], "free_layer");
+    assert_eq!(json["regions"][0]["source"], "object");
+    assert_eq!(json["regions"][0]["source_object_ids"][0], "body");
+    assert_eq!(
+        json["regions"][0]["mesh_part_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn authoring_region_patch_commits_name_and_marks_mesh_dirty() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 22;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/regions/region:body")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "name": "renamed_region",
+                        "enabled": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let object = &json["objects"][0];
+    assert_eq!(object["region_name"], "renamed_region");
+    assert_eq!(object["visible"], false);
+    assert!(object["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "mesh:dirty"));
+}
+
+#[tokio::test]
+async fn authoring_object_resource_crud_commits_scene() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 30;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/objects")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": 30,
+                        "object_id": "object_crud",
+                        "name": "Object CRUD",
+                        "geometry": {
+                            "geometry_kind": "Box",
+                            "geometry_params": { "size": [2.0, 1.0, 1.0] }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::OK);
+    let create_json = body_json(create_response).await;
+    let create_revision = create_json["revision"].as_u64().unwrap();
+    assert!(create_json["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "object_crud"));
+
+    let patch_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/objects/object_crud")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": create_revision,
+                        "name": "Object CRUD Renamed",
+                        "region_name": "crud_region"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch_response.status(), StatusCode::OK);
+    let patch_json = body_json(patch_response).await;
+    let patched_object = patch_json["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|object| object["id"] == "object_crud")
+        .expect("patched object present");
+    assert_eq!(patched_object["name"], "Object CRUD Renamed");
+    assert_eq!(patched_object["region_name"], "crud_region");
+    assert!(patched_object["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "mesh:dirty"));
+
+    let delete_response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v2/sessions/current/model/objects/object_crud")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::OK);
+    let delete_json = body_json(delete_response).await;
+    assert!(!delete_json["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "object_crud"));
+}
+
+#[tokio::test]
+async fn authoring_geometry_diagnostics_endpoints_return_current_diagnostics() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.objects[0].material_ref = "missing-material".to_string();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/geometry/diagnostics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list_json = body_json(list_response).await;
+    let diagnostic_id = list_json["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "GEOMETRY_OBJECT_MATERIAL_MISSING")
+        .and_then(|diagnostic| diagnostic["code"].as_str())
+        .expect("material diagnostic code")
+        .to_string();
+
+    let detail_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v2/sessions/current/model/geometry/diagnostics/{diagnostic_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail_json = body_json(detail_response).await;
+    assert_eq!(detail_json["code"], "GEOMETRY_OBJECT_MATERIAL_MISSING");
 }
 
 #[tokio::test]
@@ -4312,6 +4827,26 @@ async fn asyncapi_document_returns_200() {
         json["channels"]["/v2/sessions/current/events/ws"]["subscribe"]["operationId"],
         "subscribeCurrentLiveRealtime"
     );
+}
+
+#[tokio::test]
+async fn asyncapi_docs_page_links_to_v2_document() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/platform/docs/asyncapi")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = String::from_utf8(body_bytes(response).await).expect("HTML body should be UTF-8");
+    assert!(body.contains("/v2/platform/asyncapi.json"));
+    assert!(!body.contains("/v1/asyncapi.json"));
 }
 
 #[tokio::test]

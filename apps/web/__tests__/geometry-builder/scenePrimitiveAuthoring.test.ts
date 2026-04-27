@@ -4,6 +4,7 @@ import type { SceneDocument } from "../../lib/session/types";
 import {
   createScenePrimitiveAuthoringUpdate,
   geometryPresetForPrimitiveKind,
+  resolveScenePresetForPrimitiveKind,
 } from "../../features/geometry-builder/scene/scenePrimitiveAuthoring";
 
 function makeScene(): SceneDocument {
@@ -81,10 +82,29 @@ function makeScene(): SceneDocument {
 }
 
 describe("scene primitive authoring", () => {
-  it("maps preview-only primitive kinds onto the supported scene preset catalog", () => {
-    expect(geometryPresetForPrimitiveKind("ellipsoid")).toBe("sphere");
-    expect(geometryPresetForPrimitiveKind("tube")).toBe("ring");
-    expect(geometryPresetForPrimitiveKind("triangular_prism")).toBe("box");
+  it("does not silently map preview-only primitive kinds to production presets", () => {
+    expect(resolveScenePresetForPrimitiveKind("ellipsoid")).toMatchObject({
+      presetKind: "sphere",
+      status: "preview",
+    });
+    expect(resolveScenePresetForPrimitiveKind("tube")).toMatchObject({
+      presetKind: "ring",
+      status: "preview",
+    });
+    expect(resolveScenePresetForPrimitiveKind("triangular_prism")).toMatchObject({
+      presetKind: null,
+      status: "unsupported",
+    });
+    expect(geometryPresetForPrimitiveKind("triangular_prism")).toBeNull();
+  });
+
+  it("rejects preview-only primitive creation instead of creating a fallback box", () => {
+    expect(() =>
+      createScenePrimitiveAuthoringUpdate({
+        scene: makeScene(),
+        kind: "triangular_prism",
+      }),
+    ).toThrow(/not available as a production SceneDocument primitive/);
   });
 
   it("creates canonical SceneDocument updates instead of local builder primitives", () => {

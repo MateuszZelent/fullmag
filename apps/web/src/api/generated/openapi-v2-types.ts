@@ -820,6 +820,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/geometry/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_geometry_diagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/geometry/diagnostics/{diagnostic_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_geometry_diagnostics_diagnostic_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/geometry/realizations": {
         parameters: {
             query?: never;
@@ -884,6 +916,38 @@ export interface paths {
         patch: operations["model_patch_sessions_current_model_materials_material_id"];
         trace?: never;
     };
+    "/v2/sessions/current/model/objects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_objects"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/objects/{object_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_objects_object_id"];
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_objects_object_id"];
+        trace?: never;
+    };
     "/v2/sessions/current/model/objects/{object_id}/geometry": {
         parameters: {
             query?: never;
@@ -914,6 +978,38 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["model_patch_sessions_current_model_objects_object_id_interactions_interaction_kind"];
+        trace?: never;
+    };
+    "/v2/sessions/current/model/regions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_regions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/regions/{region_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_regions_region_id"];
         trace?: never;
     };
     "/v2/sessions/current/model/scene": {
@@ -990,6 +1086,38 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["model_post_sessions_current_model_transactions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/universe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_universe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_universe"];
+        trace?: never;
+    };
+    "/v2/sessions/current/model/universe/fit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_universe_fit"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1345,6 +1473,49 @@ export interface components {
             kind: "patch_object_geometry";
             object_id: string;
             transform?: Record<string, never> | null;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            geometry: Record<string, never>;
+            /** @enum {string} */
+            kind: "create_object";
+            magnetization_asset?: Record<string, never> | null;
+            magnetization_ref?: string | null;
+            material_asset?: Record<string, never> | null;
+            material_ref?: string | null;
+            name: string;
+            object_id: string;
+            region_name?: string | null;
+            study_universe_mesh?: Record<string, never> | null;
+            transform?: Record<string, never> | null;
+            universe?: Record<string, never> | null;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "delete_object";
+            object_id: string;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "rename_object";
+            name: string;
+            object_id: string;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "commit_object_transform";
+            object_id: string;
+            transform: Record<string, never>;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "patch_universe";
+            sync_study_universe_mesh?: boolean;
+            universe: Record<string, never>;
         };
         AuthoringTransactionResponse: {
             committed_scene: Record<string, never>;
@@ -2119,6 +2290,21 @@ export interface components {
         };
         NullableF64PatchValue: number | null;
         NullableU32PatchValue: number | null;
+        ObjectCreateRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            geometry: Record<string, never>;
+            magnetization_asset?: Record<string, never> | null;
+            magnetization_ref?: string | null;
+            material_asset?: Record<string, never> | null;
+            material_ref?: string | null;
+            name: string;
+            object_id: string;
+            region_name?: string | null;
+            study_universe_mesh?: Record<string, never> | null;
+            transform?: Record<string, never> | null;
+            universe?: Record<string, never> | null;
+        };
         ObjectGeometryPatchRequest: {
             /** Format: int64 */
             base_revision?: number | null;
@@ -2136,6 +2322,17 @@ export interface components {
             object_id: string;
             params: Record<string, never>;
             present: boolean;
+        };
+        ObjectPatchRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            geometry?: Record<string, never> | null;
+            magnetization_ref?: string | null;
+            material_ref?: string | null;
+            name?: string | null;
+            region_name?: string | null;
+            transform?: Record<string, never> | null;
+            visible?: boolean | null;
         };
         QuantityCatalogEntry: {
             description: string;
@@ -2171,6 +2368,30 @@ export interface components {
         };
         RecoveryListResponse: {
             snapshots: components["schemas"]["RecoveryEntry"][];
+        };
+        RegionListResource: {
+            /** Format: int64 */
+            geometry_realization_revision: number;
+            regions: components["schemas"]["RegionResource"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        RegionPatchRequest: {
+            enabled?: boolean | null;
+            name?: string | null;
+        };
+        RegionResource: {
+            bounds_max: number[];
+            bounds_min: number[];
+            enabled: boolean;
+            interaction_refs: string[];
+            magnetization_ref?: string | null;
+            material_ref: string;
+            mesh_part_ids: string[];
+            name: string;
+            region_id: string;
+            source: string;
+            source_object_ids: string[];
         };
         ResourceRevisionMap: {
             /** Format: int64 */
@@ -2513,6 +2734,28 @@ export interface components {
             requested_device: string;
             requested_mode: string;
             requested_precision: string;
+        };
+        UniverseFitRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            minimum_size?: number[] | null;
+            padding?: number[] | null;
+            sync_study_universe_mesh?: boolean;
+        };
+        UniversePatchRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            sync_study_universe_mesh?: boolean;
+            universe: Record<string, never>;
+        };
+        UniverseResource: {
+            mesh_dirty: boolean;
+            object_bounds_max?: number[] | null;
+            object_bounds_min?: number[] | null;
+            /** Format: int64 */
+            scene_revision: number;
+            study_universe_mesh: Record<string, never> | null;
+            universe: Record<string, never> | null;
         };
         WorkspaceActiveNodeReplaceRequest: {
             node_id?: string | null;
@@ -4412,6 +4655,63 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_geometry_diagnostics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current geometry diagnostics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_geometry_diagnostics_diagnostic_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Geometry diagnostic id */
+                diagnostic_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current geometry diagnostic */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description No active workspace, scene document, or diagnostic */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_post_sessions_current_model_geometry_realizations: {
         parameters: {
             query?: never;
@@ -4568,6 +4868,108 @@ export interface operations {
             };
         };
     };
+    model_post_sessions_current_model_objects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObjectCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed canonical scene after object creation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Invalid object payload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_objects_object_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical scene object id */
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Committed canonical scene after object deletion */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description No active workspace, scene document, or object */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_objects_object_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical scene object id */
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObjectPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed canonical scene after object patch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description No active workspace, scene document, or object */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_patch_sessions_current_model_objects_object_id_geometry: {
         parameters: {
             query?: never;
@@ -4683,6 +5085,67 @@ export interface operations {
                 content?: never;
             };
             /** @description No active workspace or object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_regions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current object-derived region resources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegionListResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_regions_region_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object-derived region id or name */
+                region_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegionPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed canonical authoring scene after region patch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description No active workspace, scene document, or region */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4941,6 +5404,123 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_universe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical authoring Universe resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UniverseResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_universe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UniversePatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed canonical Universe resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UniverseResource"];
+                };
+            };
+            /** @description Invalid Universe payload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Base scene revision does not match current scene revision */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_post_sessions_current_model_universe_fit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UniverseFitRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed Universe fitted to realized object bounds */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UniverseResource"];
+                };
+            };
+            /** @description Scene has no realizable object bounds */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Base scene revision does not match current scene revision */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -1,5 +1,6 @@
 //! POST /v2/sessions/current/simulation/commands — submit a command.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -10,7 +11,8 @@ use crate::error::ApiError;
 use crate::schemas::commands::{CommandResponse, StructuredCommandRequest};
 use crate::types::{AppState, CommandLifecycleState, SessionCommand, TrackedCommandRecord};
 use fullmag_authoring::{
-    geometry_blocks_mesh_build, geometry_blocks_solver_run, GeometryBackendTarget,
+    geometry_blocks_solver_run, realize_geometry_scene, GeometryBackendTarget,
+    GeometryRealizationSnapshot,
 };
 
 #[utoipa::path(
@@ -35,9 +37,11 @@ pub async fn submit_command(
 pub(crate) async fn submit_structured_command_impl(
     state: Arc<AppState>,
     headers: &HeaderMap,
-    req: StructuredCommandRequest,
+    mut req: StructuredCommandRequest,
 ) -> Result<CommandResponse, ApiError> {
-    validate_authoring_gate_for_command(&state, &req).await?;
+    if let Some(realization) = validate_authoring_gate_for_command(&state, &req).await? {
+        attach_geometry_realization_to_mesh_request(&mut req, &realization)?;
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -50,7 +54,7 @@ pub(crate) async fn submit_structured_command_impl(
 async fn validate_authoring_gate_for_command(
     state: &Arc<AppState>,
     req: &StructuredCommandRequest,
-) -> Result<(), ApiError> {
+) -> Result<Option<GeometryRealizationSnapshot>, ApiError> {
     let should_check_mesh = matches!(req, StructuredCommandRequest::MeshBuild { .. });
     let should_check_run = matches!(
         req,
@@ -59,21 +63,83 @@ async fn validate_authoring_gate_for_command(
             | StructuredCommandRequest::Solve
     );
     if !should_check_mesh && !should_check_run {
-        return Ok(());
+        return Ok(None);
     }
-    let scene = match crate::get_or_load_current_live_scene_document(state).await {
-        Ok(scene) => scene,
-        Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => return Ok(()),
-        Err(error) => return Err(error),
+    let Some(scene) = current_authoring_gate_scene(state).await? else {
+        return Ok(None);
     };
     let backend_target = GeometryBackendTarget::from_scene(&scene);
     if should_check_mesh {
-        if let Some(reason) = geometry_blocks_mesh_build(&scene, backend_target) {
+        let realization = realize_geometry_scene(&scene, backend_target);
+        if realization.status == "blocked" {
+            let reason = realization
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.blocks.iter().any(|block| block == "build_mesh"))
+                .map(|diagnostic| diagnostic.message.clone())
+                .unwrap_or_else(|| "Geometry realization is blocked.".to_string());
             return Err(ApiError::bad_request(reason));
         }
+        return Ok(Some(realization));
     } else if let Some(reason) = geometry_blocks_solver_run(&scene, backend_target) {
         return Err(ApiError::conflict(reason));
     }
+    Ok(None)
+}
+
+async fn current_authoring_gate_scene(
+    state: &Arc<AppState>,
+) -> Result<Option<fullmag_authoring::SceneDocument>, ApiError> {
+    let script_path = {
+        let current = state.current_live_state.read().await;
+        let Some(snapshot) = current.as_ref() else {
+            return Err(ApiError::not_found("no active local live workspace"));
+        };
+        if let Some(scene) = snapshot.scene_document.clone() {
+            return Ok(Some(scene));
+        }
+        snapshot.session.script_path.trim().to_string()
+    };
+
+    if script_path.is_empty() || !Path::new(&script_path).is_file() {
+        return Ok(None);
+    }
+
+    match crate::get_or_load_current_live_scene_document(state).await {
+        Ok(scene) => Ok(Some(scene)),
+        Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn attach_geometry_realization_to_mesh_request(
+    req: &mut StructuredCommandRequest,
+    realization: &GeometryRealizationSnapshot,
+) -> Result<(), ApiError> {
+    let StructuredCommandRequest::MeshBuild { mesh_options, .. } = req else {
+        return Ok(());
+    };
+    let mut options = mesh_options.take().unwrap_or_else(|| serde_json::json!({}));
+    if !options.is_object() {
+        options = serde_json::json!({ "user_options": options });
+    }
+    let Some(options_object) = options.as_object_mut() else {
+        return Err(ApiError::internal("failed to prepare mesh options payload"));
+    };
+    options_object.insert(
+        "geometry_realization".to_string(),
+        serde_json::json!({
+            "source_scene_revision": realization.source_scene_revision,
+            "realization_revision": realization.realization_revision,
+            "backend_target": realization.backend_target,
+            "status": realization.status,
+        }),
+    );
+    options_object.insert(
+        "source_scene_revision".to_string(),
+        serde_json::json!(realization.source_scene_revision),
+    );
+    *mesh_options = Some(options);
     Ok(())
 }
 

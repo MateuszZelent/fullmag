@@ -2,6 +2,7 @@
 
 import type { GeometryPresetKind } from "@/lib/geometryPresetCatalog";
 import { createSceneObjectFromGeometryPreset } from "@/lib/session/sceneObjectFactory";
+import type { AuthoringCreateObjectTransactionRequest } from "@/src/api/types";
 import type {
   SceneDocument,
   ScriptBuilderUniverseState,
@@ -16,27 +17,51 @@ type BoundsOverlay = {
 export interface ScenePrimitiveAuthoringUpdate {
   scene: SceneDocument;
   mergePatch: Record<string, unknown>;
+  createObjectRequest: Omit<AuthoringCreateObjectTransactionRequest, "kind">;
+  postCreateMergePatch: Record<string, unknown>;
   selectedObjectId: string;
 }
 
-export function geometryPresetForPrimitiveKind(kind: PrimitiveKind): GeometryPresetKind {
+export interface PrimitiveScenePresetResolution {
+  presetKind: GeometryPresetKind | null;
+  status: "production" | "preview" | "unsupported";
+  message: string | null;
+}
+
+export function resolveScenePresetForPrimitiveKind(kind: PrimitiveKind): PrimitiveScenePresetResolution {
   switch (kind) {
     case "box":
     case "cylinder":
-    case "sphere":
     case "disk":
     case "thin_film":
     case "pillar":
     case "nanowire":
     case "ring":
-      return kind;
+      return { presetKind: kind, status: "production", message: null };
+    case "sphere":
     case "ellipsoid":
-      return "sphere";
+      return {
+        presetKind: "sphere",
+        status: "preview",
+        message: "Sphere and ellipsoid authoring are preview-only until backend geometry capabilities mark them production.",
+      };
     case "tube":
-      return "ring";
+      return {
+        presetKind: "ring",
+        status: "preview",
+        message: "Tube authoring currently maps to the ring preset and is preview-only.",
+      };
     default:
-      return "box";
+      return {
+        presetKind: null,
+        status: "unsupported",
+        message: `${kind} is not available as a production SceneDocument primitive.`,
+      };
   }
+}
+
+export function geometryPresetForPrimitiveKind(kind: PrimitiveKind): GeometryPresetKind | null {
+  return resolveScenePresetForPrimitiveKind(kind).presetKind;
 }
 
 export function geometryHalfExtentMeters(
@@ -109,8 +134,14 @@ export function createScenePrimitiveAuthoringUpdate(input: {
   placementOverlay?: BoundsOverlay | null;
 }): ScenePrimitiveAuthoringUpdate {
   const { scene, kind, placementOverlay } = input;
+  const presetResolution = resolveScenePresetForPrimitiveKind(kind);
+  if (presetResolution.status !== "production" || !presetResolution.presetKind) {
+    throw new Error(
+      presetResolution.message ?? `${kind} is not available as a production SceneDocument primitive.`,
+    );
+  }
   const created = createSceneObjectFromGeometryPreset(
-    geometryPresetForPrimitiveKind(kind),
+    presetResolution.presetKind,
     scene.objects,
   );
   const halfExtent = geometryHalfExtentMeters(
@@ -159,6 +190,29 @@ export function createScenePrimitiveAuthoringUpdate(input: {
 
   return {
     selectedObjectId,
+    createObjectRequest: {
+      base_revision: scene.revision,
+      object_id: object.id,
+      name: object.name,
+      geometry: object.geometry as unknown as Record<string, unknown>,
+      transform: object.transform as unknown as Record<string, unknown>,
+      material_ref: object.material_ref,
+      region_name: object.region_name ?? null,
+      magnetization_ref: object.magnetization_ref ?? null,
+      material_asset: created.material as unknown as Record<string, unknown>,
+      magnetization_asset: created.magnetization as unknown as Record<string, unknown>,
+      universe: universe as unknown as Record<string, unknown>,
+      study_universe_mesh: universeMesh as unknown as Record<string, unknown>,
+    },
+    postCreateMergePatch: {
+      editor: {
+        active_transform_scope: "object",
+        gizmo_mode: "translate",
+        selected_object_id: selectedObjectId,
+        selected_entity_id: `geo-${selectedObjectId}`,
+        focused_entity_id: selectedObjectId,
+      },
+    },
     scene: {
       ...scene,
       revision: scene.revision + 1,

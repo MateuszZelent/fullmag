@@ -150,7 +150,7 @@ It is explicitly notification-first:
 - clients reconnect with `after_seq`,
 - clients offer `Sec-WebSocket-Protocol: fullmag.live.v1`,
 - websocket frames carry invalidation/lifecycle events, not heavy field/topology payloads,
-- the websocket contract is documented in AsyncAPI at `/v1/asyncapi.json` and `/v1/docs/asyncapi`.
+- the websocket contract is documented in AsyncAPI at `/v2/platform/asyncapi.json` and `/v2/platform/docs/asyncapi`.
 
 ### 8. Professional API client
 

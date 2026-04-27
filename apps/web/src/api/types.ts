@@ -1023,6 +1023,86 @@ export interface GeometryRealizationSnapshot {
   provenance: GeometryProvenanceEntry[];
 }
 
+export interface RegionResource {
+  region_id: string;
+  name: string;
+  source: "object" | "csg_fragment" | "manual" | string;
+  source_object_ids: string[];
+  material_ref: string;
+  magnetization_ref?: string | null;
+  interaction_refs: string[];
+  mesh_part_ids: string[];
+  enabled: boolean;
+  bounds_min: [number, number, number];
+  bounds_max: [number, number, number];
+}
+
+export interface RegionListResource {
+  scene_revision: number;
+  geometry_realization_revision: number;
+  regions: RegionResource[];
+}
+
+export interface RegionPatchRequest {
+  name?: string;
+  enabled?: boolean;
+}
+
+export interface GeometryDiagnosticsResource {
+  scene_revision: number;
+  backend_target: GeometryBackendTarget;
+  status: string;
+  diagnostics: GeometryDiagnostic[];
+}
+
+export interface ObjectCreateRequest {
+  base_revision?: number;
+  object_id: string;
+  name: string;
+  geometry: Record<string, unknown>;
+  transform?: Record<string, unknown> | null;
+  material_ref?: string | null;
+  region_name?: string | null;
+  magnetization_ref?: string | null;
+  material_asset?: Record<string, unknown> | null;
+  magnetization_asset?: Record<string, unknown> | null;
+  universe?: Record<string, unknown> | null;
+  study_universe_mesh?: Record<string, unknown> | null;
+}
+
+export interface ObjectPatchRequest {
+  base_revision?: number;
+  name?: string;
+  visible?: boolean;
+  material_ref?: string;
+  region_name?: string;
+  magnetization_ref?: string;
+  geometry?: Record<string, unknown> | null;
+  transform?: Record<string, unknown> | null;
+}
+
+export interface UniverseResource {
+  scene_revision: number;
+  universe?: Record<string, unknown> | null;
+  study_universe_mesh?: Record<string, unknown> | null;
+  object_bounds_min?: [number, number, number] | null;
+  object_bounds_max?: [number, number, number] | null;
+  mesh_dirty: boolean;
+}
+
+export interface UniversePatchRequest {
+  base_revision?: number;
+  universe: Record<string, unknown>;
+  sync_study_universe_mesh?: boolean;
+}
+
+export interface UniverseFitRequest {
+  base_revision?: number;
+  padding?: [number, number, number];
+  minimum_size?: [number, number, number];
+  sync_study_universe_mesh?: boolean;
+}
+
 export interface AuthoringObjectGeometryPatchRequest {
   base_revision?: number;
   geometry: Record<string, unknown>;
@@ -1031,6 +1111,22 @@ export interface AuthoringObjectGeometryPatchRequest {
 
 export interface GeometryRealizationRequest {
   backend_target?: GeometryBackendTarget;
+}
+
+export interface AuthoringCreateObjectTransactionRequest {
+  kind: "create_object";
+  base_revision?: number;
+  object_id: string;
+  name: string;
+  geometry: Record<string, unknown>;
+  transform?: Record<string, unknown> | null;
+  material_ref?: string | null;
+  region_name?: string | null;
+  magnetization_ref?: string | null;
+  material_asset?: Record<string, unknown> | null;
+  magnetization_asset?: Record<string, unknown> | null;
+  universe?: Record<string, unknown> | null;
+  study_universe_mesh?: Record<string, unknown> | null;
 }
 
 export type AuthoringTransactionRequest =
@@ -1048,6 +1144,24 @@ export type AuthoringTransactionRequest =
       base_revision?: number;
       geometry: Record<string, unknown>;
       transform?: Record<string, unknown> | null;
+    }
+  | AuthoringCreateObjectTransactionRequest
+  | {
+      kind: "delete_object";
+      base_revision?: number;
+      object_id: string;
+    }
+  | {
+      kind: "rename_object";
+      base_revision?: number;
+      object_id: string;
+      name: string;
+    }
+  | {
+      kind: "commit_object_transform";
+      base_revision?: number;
+      object_id: string;
+      transform: Record<string, unknown>;
     };
 
 export interface AuthoringTransactionResponse {

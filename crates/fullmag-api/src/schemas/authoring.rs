@@ -104,9 +104,133 @@ pub struct ObjectGeometryPatchRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ObjectCreateRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    pub object_id: String,
+    pub name: String,
+    #[schema(value_type = Object)]
+    pub geometry: Value,
+    #[schema(value_type = Object, nullable)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_ref: Option<String>,
+    #[schema(value_type = Object, nullable)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_asset: Option<Value>,
+    #[schema(value_type = Object, nullable)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_asset: Option<Value>,
+    #[schema(value_type = Object, nullable)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub universe: Option<Value>,
+    #[schema(value_type = Object, nullable)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub study_universe_mesh: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ObjectPatchRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_ref: Option<String>,
+    #[schema(value_type = Object, nullable)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<Value>,
+    #[schema(value_type = Object, nullable)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UniverseResource {
+    pub scene_revision: u64,
+    #[schema(value_type = Object, nullable)]
+    pub universe: Option<Value>,
+    #[schema(value_type = Object, nullable)]
+    pub study_universe_mesh: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_bounds_min: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_bounds_max: Option<[f64; 3]>,
+    pub mesh_dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UniversePatchRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    #[schema(value_type = Object)]
+    pub universe: Value,
+    #[serde(default = "default_true")]
+    pub sync_study_universe_mesh: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UniverseFitRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_size: Option<[f64; 3]>,
+    #[serde(default = "default_true")]
+    pub sync_study_universe_mesh: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct GeometryRealizationRequest {
     #[serde(default)]
     pub backend_target: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RegionResource {
+    pub region_id: String,
+    pub name: String,
+    pub source: String,
+    pub source_object_ids: Vec<String>,
+    pub material_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_ref: Option<String>,
+    pub interaction_refs: Vec<String>,
+    pub mesh_part_ids: Vec<String>,
+    pub enabled: bool,
+    pub bounds_min: [f64; 3],
+    pub bounds_max: [f64; 3],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RegionListResource {
+    pub scene_revision: u64,
+    pub geometry_realization_revision: u64,
+    pub regions: Vec<RegionResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RegionPatchRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
 }
 
 fn deserialize_nullable_u32_patch_field<'de, D>(
@@ -176,6 +300,61 @@ pub enum AuthoringTransactionRequest {
         #[schema(value_type = Object, nullable)]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         transform: Option<Value>,
+    },
+    CreateObject {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        name: String,
+        #[schema(value_type = Object)]
+        geometry: Value,
+        #[schema(value_type = Object, nullable)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transform: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        material_ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        magnetization_ref: Option<String>,
+        #[schema(value_type = Object, nullable)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        material_asset: Option<Value>,
+        #[schema(value_type = Object, nullable)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        magnetization_asset: Option<Value>,
+        #[schema(value_type = Object, nullable)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        universe: Option<Value>,
+        #[schema(value_type = Object, nullable)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        study_universe_mesh: Option<Value>,
+    },
+    DeleteObject {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+    },
+    RenameObject {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        name: String,
+    },
+    CommitObjectTransform {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        #[schema(value_type = Object)]
+        transform: Value,
+    },
+    PatchUniverse {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        #[schema(value_type = Object)]
+        universe: Value,
+        #[serde(default = "default_true")]
+        sync_study_universe_mesh: bool,
     },
 }
 

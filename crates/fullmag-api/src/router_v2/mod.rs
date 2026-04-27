@@ -75,9 +75,26 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::model::get_current_authoring_geometry_realization),
         )
         .route(
+            "/v2/sessions/current/model/geometry/diagnostics",
+            get(handlers::model::get_authoring_geometry_diagnostics),
+        )
+        .route(
+            "/v2/sessions/current/model/geometry/diagnostics/:diagnostic_id",
+            get(handlers::model::get_authoring_geometry_diagnostic),
+        )
+        .route(
             "/v2/sessions/current/model/materials/:material_id",
             get(handlers::model::get_authoring_material)
                 .patch(handlers::model::patch_authoring_material),
+        )
+        .route(
+            "/v2/sessions/current/model/objects",
+            post(handlers::model::create_authoring_object),
+        )
+        .route(
+            "/v2/sessions/current/model/objects/:object_id",
+            patch(handlers::model::patch_authoring_object)
+                .delete(handlers::model::delete_authoring_object),
         )
         .route(
             "/v2/sessions/current/model/objects/:object_id/geometry",
@@ -94,6 +111,15 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .patch(handlers::model::patch_authoring_study_runtime),
         )
         .route(
+            "/v2/sessions/current/model/universe",
+            get(handlers::model::get_authoring_universe)
+                .patch(handlers::model::patch_authoring_universe),
+        )
+        .route(
+            "/v2/sessions/current/model/universe/fit",
+            post(handlers::model::fit_authoring_universe),
+        )
+        .route(
             "/v2/sessions/current/model/script",
             get(handlers::model::get_authoring_script_source)
                 .put(handlers::model::sync_authoring_script),
@@ -105,6 +131,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/model/transactions",
             post(handlers::model::commit_authoring_transaction),
+        )
+        .route(
+            "/v2/sessions/current/model/regions",
+            get(handlers::model::get_authoring_regions),
+        )
+        .route(
+            "/v2/sessions/current/model/regions/:region_id",
+            patch(handlers::model::patch_authoring_region),
         )
         .route(
             "/v2/sessions/current/meshing/capabilities",

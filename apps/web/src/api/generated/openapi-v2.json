@@ -110,6 +110,203 @@
               "kind"
             ],
             "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "geometry": {
+                "type": "object"
+              },
+              "kind": {
+                "enum": [
+                  "create_object"
+                ],
+                "type": "string"
+              },
+              "magnetization_asset": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "magnetization_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "material_asset": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "material_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "study_universe_mesh": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "transform": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "universe": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "object_id",
+              "name",
+              "geometry",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "delete_object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "rename_object"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "name",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "commit_object_transform"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "transform": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "object_id",
+              "transform",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "patch_universe"
+                ],
+                "type": "string"
+              },
+              "sync_study_universe_mesh": {
+                "type": "boolean"
+              },
+              "universe": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "universe",
+              "kind"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -3016,6 +3213,81 @@
           }
         ]
       },
+      "ObjectCreateRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "geometry": {
+            "type": "object"
+          },
+          "magnetization_asset": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "magnetization_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "material_asset": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "material_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "region_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "study_universe_mesh": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "transform": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "universe": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "object_id",
+          "name",
+          "geometry"
+        ],
+        "type": "object"
+      },
       "ObjectGeometryPatchRequest": {
         "properties": {
           "base_revision": {
@@ -3089,6 +3361,61 @@
           "enabled",
           "params"
         ],
+        "type": "object"
+      },
+      "ObjectPatchRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "geometry": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "magnetization_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "material_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transform": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "QuantityCatalogEntry": {
@@ -3232,6 +3559,119 @@
         },
         "required": [
           "snapshots"
+        ],
+        "type": "object"
+      },
+      "RegionListResource": {
+        "properties": {
+          "geometry_realization_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/RegionResource"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "geometry_realization_revision",
+          "regions"
+        ],
+        "type": "object"
+      },
+      "RegionPatchRequest": {
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RegionResource": {
+        "properties": {
+          "bounds_max": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "bounds_min": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "interaction_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "magnetization_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "material_ref": {
+            "type": "string"
+          },
+          "mesh_part_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_object_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "region_id",
+          "name",
+          "source",
+          "source_object_ids",
+          "material_ref",
+          "interaction_refs",
+          "mesh_part_ids",
+          "enabled",
+          "bounds_min",
+          "bounds_max"
         ],
         "type": "object"
       },
@@ -4523,6 +4963,115 @@
           "requested_device",
           "requested_precision",
           "requested_mode"
+        ],
+        "type": "object"
+      },
+      "UniverseFitRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "minimum_size": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "padding": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "sync_study_universe_mesh": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "UniversePatchRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sync_study_universe_mesh": {
+            "type": "boolean"
+          },
+          "universe": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "universe"
+        ],
+        "type": "object"
+      },
+      "UniverseResource": {
+        "properties": {
+          "mesh_dirty": {
+            "type": "boolean"
+          },
+          "object_bounds_max": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "object_bounds_min": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "study_universe_mesh": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "universe": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "scene_revision",
+          "universe",
+          "study_universe_mesh",
+          "mesh_dirty"
         ],
         "type": "object"
       },
@@ -6642,6 +7191,59 @@
         ]
       }
     },
+    "/v2/sessions/current/model/geometry/diagnostics": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_geometry_diagnostics",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Current geometry diagnostics"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/geometry/diagnostics/{diagnostic_id}": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_geometry_diagnostics_diagnostic_id",
+        "parameters": [
+          {
+            "description": "Geometry diagnostic id",
+            "in": "path",
+            "name": "diagnostic_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Current geometry diagnostic"
+          },
+          "404": {
+            "description": "No active workspace, scene document, or diagnostic"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/geometry/realizations": {
       "post": {
         "operationId": "model_post_sessions_current_model_geometry_realizations",
@@ -6794,6 +7396,112 @@
         ]
       }
     },
+    "/v2/sessions/current/model/objects": {
+      "post": {
+        "operationId": "model_post_sessions_current_model_objects",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Committed canonical scene after object creation"
+          },
+          "400": {
+            "description": "Invalid object payload"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/objects/{object_id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_objects_object_id",
+        "parameters": [
+          {
+            "description": "Canonical scene object id",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Committed canonical scene after object deletion"
+          },
+          "404": {
+            "description": "No active workspace, scene document, or object"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_objects_object_id",
+        "parameters": [
+          {
+            "description": "Canonical scene object id",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Committed canonical scene after object patch"
+          },
+          "404": {
+            "description": "No active workspace, scene document, or object"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/objects/{object_id}/geometry": {
       "patch": {
         "operationId": "model_patch_sessions_current_model_objects_object_id_geometry",
@@ -6932,6 +7640,71 @@
           },
           "404": {
             "description": "No active workspace or object not found"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/regions": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_regions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegionListResource"
+                }
+              }
+            },
+            "description": "Current object-derived region resources"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/regions/{region_id}": {
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_regions_region_id",
+        "parameters": [
+          {
+            "description": "Object-derived region id or name",
+            "in": "path",
+            "name": "region_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegionPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Committed canonical authoring scene after region patch"
+          },
+          "404": {
+            "description": "No active workspace, scene document, or region"
           }
         },
         "tags": [
@@ -7161,6 +7934,105 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/universe": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_universe",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UniverseResource"
+                }
+              }
+            },
+            "description": "Canonical authoring Universe resource"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_universe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UniversePatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UniverseResource"
+                }
+              }
+            },
+            "description": "Committed canonical Universe resource"
+          },
+          "400": {
+            "description": "Invalid Universe payload"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "Base scene revision does not match current scene revision"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/universe/fit": {
+      "post": {
+        "operationId": "model_post_sessions_current_model_universe_fit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UniverseFitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UniverseResource"
+                }
+              }
+            },
+            "description": "Committed Universe fitted to realized object bounds"
+          },
+          "400": {
+            "description": "Scene has no realizable object bounds"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "Base scene revision does not match current scene revision"
           }
         },
         "tags": [

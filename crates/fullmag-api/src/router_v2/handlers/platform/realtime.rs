@@ -97,9 +97,9 @@ pub async fn get_asyncapi_docs() -> Html<&'static str> {
       <p><strong>Handshake</strong></p>
       <p><code>GET /v2/sessions/current/events/ws?after_seq=&lt;last_seen_seq&gt;</code></p>
       <p><code>Sec-WebSocket-Protocol: fullmag.live.v1</code></p>
-      <p><a href="/v1/asyncapi.json">Open raw AsyncAPI JSON</a></p>
+      <p><a href="/v2/platform/asyncapi.json">Open raw AsyncAPI JSON</a></p>
     </div>
-    <p>This page is intentionally lightweight for now. The machine-readable source of truth is <code>/v1/asyncapi.json</code>.</p>
+    <p>This page is intentionally lightweight for now. The machine-readable source of truth is <code>/v2/platform/asyncapi.json</code>.</p>
   </body>
 </html>"#,
     )
