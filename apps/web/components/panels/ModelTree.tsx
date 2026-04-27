@@ -5,6 +5,7 @@ import { CheckCircle2, Circle, LoaderCircle, MinusCircle, XCircle } from "lucide
 import { cn } from "@/lib/utils";
 import type {
   BackendCapabilities,
+  MeshWorkspaceManifestRegionState,
   ModelBuilderGraphV2,
   SceneDocument,
   ScriptBuilderCurrentModuleEntry,
@@ -905,6 +906,10 @@ export function buildFullmagModelTree(opts: {
   pipelineStageIndexesByNodeId?: Record<string, number[]>;
   geometryAuthoringGraph?: GeometryGraphDocument | null;
   geometryAuthoringDirty?: DirtyState | null;
+  meshManifestSceneRevision?: number | null;
+  meshManifestRealizationRevision?: number | null;
+  meshManifestRegionCount?: number | null;
+  meshManifestRegions?: MeshWorkspaceManifestRegionState[];
   onGeometryAuthoringSelect?: (target: BuilderSelectionTarget) => void;
 }): TreeNodeData[] {
   const graph = opts.graph ?? null;
@@ -916,6 +921,7 @@ export function buildFullmagModelTree(opts: {
   const graphObjects =
     graph?.objects.items.map((objectNode) => ({
       id: `obj-${objectNode.id}`,
+      objectId: objectNode.id,
       name: objectNode.name,
         label: objectNode.label,
         geometry: objectNode.geometry,
@@ -927,6 +933,7 @@ export function buildFullmagModelTree(opts: {
     sceneObjects.length > 0
       ? sceneObjects.map((object, index) => ({
           id: `obj-${object.name || object.id}`,
+          objectId: object.id,
           name: object.name || object.id,
           label: object.name || object.id,
           geometry:
@@ -975,6 +982,7 @@ export function buildFullmagModelTree(opts: {
       ? graphObjects
     : geos.map((geometry) => ({
         id: `obj-${geometry.name}`,
+        objectId: geometry.name,
         name: geometry.name,
         label: geometry.name,
         geometry,
@@ -1034,6 +1042,22 @@ export function buildFullmagModelTree(opts: {
       geometryAuthoringDirty?.geometryRealizationDirty ||
       geometryAuthoringDirty?.meshDirty,
   );
+  const meshManifestSceneRevision = opts.meshManifestSceneRevision ?? null;
+  const meshManifestRealizationRevision = opts.meshManifestRealizationRevision ?? null;
+  const meshManifestRegions = opts.meshManifestRegions ?? [];
+  const meshManifestStale = Boolean(
+    sceneDocument &&
+      meshManifestSceneRevision != null &&
+      sceneDocument.revision !== meshManifestSceneRevision,
+  );
+  const meshRegionsByObjectId = new Map<string, MeshWorkspaceManifestRegionState[]>();
+  for (const region of meshManifestRegions) {
+    for (const objectId of region.source_object_ids) {
+      const current = meshRegionsByObjectId.get(objectId) ?? [];
+      current.push(region);
+      meshRegionsByObjectId.set(objectId, current);
+    }
+  }
 
   /* ── Physics ─────────────────────────────────────────────────────── */
   const aggregatePhysicsStack = normalizePhysicsStack(
@@ -1136,7 +1160,15 @@ export function buildFullmagModelTree(opts: {
   const objectsChildren: TreeNodeData[] =
     objects.length > 0
       ? [
-          ...objects.map((objectNode) => _buildObjectNode(objectNode)),
+          ...objects.map((objectNode) =>
+            _buildObjectNode(objectNode, undefined, {
+              regions:
+                meshRegionsByObjectId.get(objectNode.objectId ?? objectNode.name) ??
+                meshRegionsByObjectId.get(objectNode.name) ??
+                [],
+              manifestStale: meshManifestStale,
+            }),
+          ),
           ...authoringPrimitiveObjects,
         ]
       : authoringPrimitiveObjects.length > 0
@@ -1201,6 +1233,18 @@ export function buildFullmagModelTree(opts: {
       children: [
         ...(geometryAuthoringMeshDirty
           ? [{ id: "mesh-authoring-dirty", label: "Mesh out of date - build mesh before compute", icon: "alert-triangle", status: "blocked" as const }]
+          : []),
+        ...(meshManifestStale
+          ? [{ id: "mesh-manifest-stale", label: "Mesh manifest is stale for current scene revision", icon: "alert-triangle", status: "warning" as const }]
+          : []),
+        ...(meshManifestSceneRevision != null
+          ? [{ id: "mesh-source-scene-revision", label: `Scene rev ${meshManifestSceneRevision}`, icon: "git-commit" } satisfies TreeNodeData]
+          : []),
+        ...(meshManifestRealizationRevision != null
+          ? [{ id: "mesh-realization-revision", label: `Geometry realization rev ${meshManifestRealizationRevision}`, icon: "workflow" } satisfies TreeNodeData]
+          : []),
+        ...(opts.meshManifestRegionCount != null
+          ? [{ id: "mesh-region-count", label: `${opts.meshManifestRegionCount} mesh region${opts.meshManifestRegionCount === 1 ? "" : "s"}`, icon: "layers" } satisfies TreeNodeData]
           : []),
         { id: "mesh-view", label: "Inspector", icon: "eye" },
         { id: "mesh-size", label: "Size", icon: "ruler" },
@@ -1862,6 +1906,7 @@ const GEOMETRY_ICONS: Record<string, string> = {
 
 function _buildObjectNode(objectNode: {
   id: string;
+  objectId?: string;
   name: string;
   label: string;
   geometry: ScriptBuilderGeometryEntry;
@@ -1876,6 +1921,9 @@ function _buildObjectNode(objectNode: {
   authoringGraph: GeometryGraphDocument | null;
   authoringDirty: DirtyState | null;
   onAuthoringSelect?: (target: BuilderSelectionTarget) => void;
+}, meshManifest?: {
+  regions: MeshWorkspaceManifestRegionState[];
+  manifestStale: boolean;
 }): TreeNodeData {
   const geo = objectNode.geometry;
   const geometryId = objectNode.tree.geometry;
@@ -1953,7 +2001,7 @@ function _buildObjectNode(objectNode: {
         defaultOpen: authoringChildren.length > 0,
         children: geometryChildren,
       },
-      _buildRegionNode(geo, regionId),
+      _buildRegionNode(geo, regionId, meshManifest),
       _buildMagneticParametersNode(geo, objectNode.name),
       {
         id: `mag-${objectNode.name}`,
@@ -2180,20 +2228,66 @@ function _buildGeometryParamChildren(
 function _buildRegionNode(
   geo: ScriptBuilderGeometryEntry,
   regionId: string,
+  meshManifest?: {
+    regions: MeshWorkspaceManifestRegionState[];
+    manifestStale: boolean;
+  },
 ): TreeNodeData {
   const regionName = geo.region_name?.trim() || geo.name;
+  const manifestRegions = meshManifest?.regions ?? [];
   return {
     id: regionId,
     label: "Regions",
     icon: "▣",
-    status: "ready",
+    status: meshManifest?.manifestStale ? "warning" : "ready",
+    badge:
+      manifestRegions.length > 0
+        ? `${manifestRegions.length} mapped`
+        : undefined,
     children: [
       {
         id: `${regionId}-item`,
         label: regionName,
         icon: "◫",
-        status: "ready",
-        children: [],
+        status: meshManifest?.manifestStale ? "warning" : "ready",
+        children: [
+          ...(meshManifest?.manifestStale
+            ? [
+                {
+                  id: `${regionId}-stale`,
+                  label: "Mesh region mapping is stale",
+                  icon: "alert-triangle",
+                  status: "warning" as const,
+                },
+              ]
+            : []),
+          ...manifestRegions.flatMap((region) => [
+            {
+              id: `${regionId}-${region.region_id}-material`,
+              label: `Material: ${region.material_ref}`,
+              icon: "layers",
+              status: "ready" as const,
+            },
+            {
+              id: `${regionId}-${region.region_id}-mesh-parts`,
+              label:
+                region.mesh_part_ids.length > 0
+                  ? `Mesh parts: ${region.mesh_part_ids.join(", ")}`
+                  : "Mesh parts: none",
+              icon: "grid-3x3",
+              status: region.mesh_part_ids.length > 0 ? "ready" as const : "pending" as const,
+            },
+            {
+              id: `${regionId}-${region.region_id}-elements`,
+              label:
+                region.element_count != null
+                  ? `${region.element_count.toLocaleString()} elements`
+                  : "Elements: unknown",
+              icon: "hash",
+              status: region.element_count != null ? "ready" as const : "pending" as const,
+            },
+          ]),
+        ],
       },
     ],
   };

@@ -3756,6 +3756,12 @@
           "source": {
             "type": "string"
           },
+          "source_body_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "source_object_ids": {
             "items": {
               "type": "string"
@@ -3768,6 +3774,7 @@
           "name",
           "source",
           "source_object_ids",
+          "source_body_ids",
           "material_ref",
           "interaction_refs",
           "mesh_part_ids",

@@ -46,6 +46,7 @@ import { TextField } from "../../ui/TextField";
 import SelectField from "../../ui/SelectField";
 import { Button } from "../../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
+import MeshManifestSection from "./MeshManifestSection";
 import type {
   ScriptBuilderPerGeometryMeshEntry,
 } from "../../../lib/session/types";
@@ -1356,6 +1357,12 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
           </Tabs>
         </div>
       </SidebarSection>
+
+      <MeshManifestSection
+        manifest={meshWorkspace?.shared_domain_manifest ?? null}
+        currentSceneRevision={model.sceneDocument?.revision ?? null}
+        objectId={sceneObject?.id ?? null}
+      />
     </div>
   );
 }

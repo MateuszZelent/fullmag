@@ -1709,6 +1709,58 @@ export function normalizeMeshWorkspace(raw: any): MeshWorkspaceState | null {
             avg_quality: Number(qualityRaw.avg_quality ?? 0),
           }
         : null,
+    shared_domain_manifest:
+      raw.shared_domain_manifest && typeof raw.shared_domain_manifest === "object"
+        ? {
+            source_scene_revision:
+              raw.shared_domain_manifest.source_scene_revision != null
+                ? Number(raw.shared_domain_manifest.source_scene_revision)
+                : null,
+            geometry_realization_revision:
+              raw.shared_domain_manifest.geometry_realization_revision != null
+                ? Number(raw.shared_domain_manifest.geometry_realization_revision)
+                : null,
+            mesh_name: String(raw.shared_domain_manifest.mesh_name ?? ""),
+            mesh_id: String(raw.shared_domain_manifest.mesh_id ?? ""),
+            generation_id:
+              typeof raw.shared_domain_manifest.generation_id === "string"
+                ? raw.shared_domain_manifest.generation_id
+                : null,
+            domain_mesh_mode:
+              typeof raw.shared_domain_manifest.domain_mesh_mode === "string"
+                ? raw.shared_domain_manifest.domain_mesh_mode
+                : null,
+            object_segment_count: Number(raw.shared_domain_manifest.object_segment_count ?? 0),
+            mesh_part_count: Number(raw.shared_domain_manifest.mesh_part_count ?? 0),
+            regions: Array.isArray(raw.shared_domain_manifest.regions)
+              ? raw.shared_domain_manifest.regions.map((region: any) => ({
+                  region_id: String(region?.region_id ?? ""),
+                  name: String(region?.name ?? region?.region_id ?? ""),
+                  source_object_ids: Array.isArray(region?.source_object_ids)
+                    ? region.source_object_ids.map((value: unknown) => String(value))
+                    : [],
+                  source_region_candidate_id:
+                    typeof region?.source_region_candidate_id === "string"
+                      ? region.source_region_candidate_id
+                      : null,
+                  material_ref: String(region?.material_ref ?? ""),
+                  magnetization_ref:
+                    typeof region?.magnetization_ref === "string"
+                      ? region.magnetization_ref
+                      : null,
+                  mesh_part_ids: Array.isArray(region?.mesh_part_ids)
+                    ? region.mesh_part_ids.map((value: unknown) => String(value))
+                    : [],
+                  element_count:
+                    region?.element_count != null ? Number(region.element_count) : null,
+                  cell_count:
+                    region?.cell_count != null ? Number(region.cell_count) : null,
+                  bounds_min: normalizeVec3(region?.bounds_min),
+                  bounds_max: normalizeVec3(region?.bounds_max),
+                }))
+              : [],
+          }
+        : null,
     mesh_pipeline_status: Array.isArray(raw.mesh_pipeline_status)
       ? raw.mesh_pipeline_status.map((phase: any) => ({
           id: String(phase?.id ?? ""),

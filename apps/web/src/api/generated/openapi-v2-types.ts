@@ -2411,6 +2411,7 @@ export interface components {
             name: string;
             region_id: string;
             source: string;
+            source_body_ids: string[];
             source_object_ids: string[];
         };
         ResourceRevisionMap: {

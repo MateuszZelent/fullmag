@@ -429,6 +429,14 @@ export default function RunSidebar() {
         meshNodes: model.effectiveFemMesh?.nodes.length,
         meshFeOrder: model.meshFeOrder,
         meshName: model.meshName,
+        meshManifestSceneRevision:
+          model.meshWorkspace?.shared_domain_manifest?.source_scene_revision ?? null,
+        meshManifestRealizationRevision:
+          model.meshWorkspace?.shared_domain_manifest?.geometry_realization_revision ?? null,
+        meshManifestRegionCount:
+          model.meshWorkspace?.shared_domain_manifest?.regions.length ?? null,
+        meshManifestRegions:
+          model.meshWorkspace?.shared_domain_manifest?.regions ?? [],
         solverStatus: tp.hasSolverTelemetry ? "active" : "pending",
         solverIntegrator: model.solverPlan?.integrator ?? model.solverSettings.integrator,
         solverRelaxAlgorithm: model.solverPlan?.relaxation?.algorithm ?? model.solverSettings.relaxAlgorithm,
@@ -488,6 +496,7 @@ export default function RunSidebar() {
       model.material,
       model.meshFeOrder,
       model.meshName,
+      model.meshWorkspace?.shared_domain_manifest,
       model.mesherSourceKind,
       model.modelBuilderGraph,
       model.sceneDocument,

@@ -893,8 +893,8 @@ fn quat_is_valid(value: [f64; 4]) -> bool {
 }
 
 fn rotate_point_by_quat(point: [f64; 3], quat: [f64; 4]) -> [f64; 3] {
-    let norm = (quat[0] * quat[0] + quat[1] * quat[1] + quat[2] * quat[2] + quat[3] * quat[3])
-        .sqrt();
+    let norm =
+        (quat[0] * quat[0] + quat[1] * quat[1] + quat[2] * quat[2] + quat[3] * quat[3]).sqrt();
     if !norm.is_finite() || norm <= f64::EPSILON {
         return point;
     }
@@ -931,7 +931,15 @@ fn aabb_overlap(
 fn mesh_reference_size(scene: &SceneDocument) -> Option<f64> {
     parse_mesh_size(scene.study.mesh_defaults.maximum_element_size.as_deref())
         .or_else(|| parse_mesh_size(Some(scene.study.mesh_defaults.hmax.as_str())))
-        .or_else(|| parse_mesh_size(scene.study.shared_domain_mesh.maximum_element_size.as_deref()))
+        .or_else(|| {
+            parse_mesh_size(
+                scene
+                    .study
+                    .shared_domain_mesh
+                    .maximum_element_size
+                    .as_deref(),
+            )
+        })
         .or_else(|| parse_mesh_size(Some(scene.study.shared_domain_mesh.hmax.as_str())))
 }
 
@@ -940,11 +948,17 @@ fn parse_mesh_size(value: Option<&str>) -> Option<f64> {
     if raw.is_empty() || raw.eq_ignore_ascii_case("auto") {
         return None;
     }
-    raw.parse::<f64>().ok().filter(|value| value.is_finite() && *value > 0.0)
+    raw.parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && *value > 0.0)
 }
 
 fn stable_body_id(object_id: &str, geometry_path: &str) -> String {
-    format!("body:{}:{}", slug_token(object_id), fnv1a64_hex(geometry_path.as_bytes()))
+    format!(
+        "body:{}:{}",
+        slug_token(object_id),
+        fnv1a64_hex(geometry_path.as_bytes())
+    )
 }
 
 fn slug_token(value: &str) -> String {
@@ -1172,5 +1186,97 @@ mod tests {
         });
         let reason = geometry_blocks_mesh_build(&scene, GeometryBackendTarget::Fem);
         assert!(reason.is_some());
+    }
+
+    #[test]
+    fn workspace_body_ids_are_stable_when_object_order_changes() {
+        let mut scene = scene_with_object(SceneGeometry {
+            geometry_kind: "Box".to_string(),
+            geometry_params: json!({ "size": [1.0, 1.0, 1.0] }),
+            bounds_min: None,
+            bounds_max: None,
+        });
+        let mut second = scene.objects[0].clone();
+        second.id = "second".to_string();
+        second.name = "second".to_string();
+        second.region_name = Some("second".to_string());
+        scene.objects.push(second);
+
+        let first_workspace = build_geometry_workspace(&scene, GeometryBackendTarget::Fem);
+        scene.objects.reverse();
+        let second_workspace = build_geometry_workspace(&scene, GeometryBackendTarget::Fem);
+        let mut first_ids: Vec<_> = first_workspace
+            .bodies
+            .iter()
+            .map(|body| body.body_id.clone())
+            .collect();
+        let mut second_ids: Vec<_> = second_workspace
+            .bodies
+            .iter()
+            .map(|body| body.body_id.clone())
+            .collect();
+        first_ids.sort();
+        second_ids.sort();
+        assert_eq!(first_ids, second_ids);
+    }
+
+    #[test]
+    fn rotated_box_bounds_are_conservative_world_aabb() {
+        let mut scene = scene_with_object(SceneGeometry {
+            geometry_kind: "Box".to_string(),
+            geometry_params: json!({ "size": [2.0, 4.0, 2.0] }),
+            bounds_min: None,
+            bounds_max: None,
+        });
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        scene.objects[0].transform.rotation_quat = [0.0, 0.0, s, s];
+        let snapshot = realize_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        let body = &snapshot.bodies[0];
+        assert!((body.bounds_min[0] + 2.0).abs() < 1e-12);
+        assert!((body.bounds_max[0] - 2.0).abs() < 1e-12);
+        assert!((body.bounds_min[1] + 1.0).abs() < 1e-12);
+        assert!((body.bounds_max[1] - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn duplicate_region_and_overlap_emit_diagnostics() {
+        let mut scene = scene_with_object(SceneGeometry {
+            geometry_kind: "Box".to_string(),
+            geometry_params: json!({ "size": [1.0, 1.0, 1.0] }),
+            bounds_min: None,
+            bounds_max: None,
+        });
+        scene.objects[0].region_name = Some("shared".to_string());
+        let mut second = scene.objects[0].clone();
+        second.id = "second".to_string();
+        second.name = "second".to_string();
+        second.region_name = Some("shared".to_string());
+        second.transform.translation = [0.25, 0.0, 0.0];
+        scene.objects.push(second);
+        let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        assert!(validation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "GEOMETRY_REGION_NAME_DUPLICATE"));
+        assert!(validation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "GEOMETRY_OBJECT_OVERLAPS_OBJECT"));
+    }
+
+    #[test]
+    fn tiny_feature_below_mesh_size_warns() {
+        let mut scene = scene_with_object(SceneGeometry {
+            geometry_kind: "Box".to_string(),
+            geometry_params: json!({ "size": [1.0, 1.0, 0.1] }),
+            bounds_min: None,
+            bounds_max: None,
+        });
+        scene.study.mesh_defaults.maximum_element_size = Some("0.2".to_string());
+        let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        assert!(validation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "GEOMETRY_TINY_FEATURE_BELOW_MESH_SIZE"));
     }
 }

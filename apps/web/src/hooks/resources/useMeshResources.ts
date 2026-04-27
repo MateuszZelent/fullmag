@@ -673,6 +673,11 @@ export function useMeshWorkspaceResourceState(options?: {
     sessionKey: options?.sessionKey,
     revision: options?.meshRevision,
   });
+  const manifest = useMeshSharedDomainManifest({
+    enabled: options?.enabled,
+    sessionKey: options?.sessionKey,
+    revision: options?.meshRevision,
+  });
   const builds = useMeshBuilds({
     enabled: options?.enabled,
     sessionKey: options?.sessionKey,
@@ -683,6 +688,7 @@ export function useMeshWorkspaceResourceState(options?: {
     if (
       !summary.summary &&
       !capabilities.capabilities &&
+      !manifest.manifest &&
       !builds.activeBuild &&
       !builds.history &&
       !builds.lastSuccess
@@ -692,6 +698,20 @@ export function useMeshWorkspaceResourceState(options?: {
     return {
       mesh_summary: summary.summary?.mesh_summary ?? null,
       mesh_quality_summary: summary.summary?.mesh_quality_summary ?? null,
+      shared_domain_manifest: manifest.manifest
+        ? {
+            source_scene_revision: manifest.manifest.source_scene_revision ?? null,
+            geometry_realization_revision:
+              manifest.manifest.geometry_realization_revision ?? null,
+            mesh_name: manifest.manifest.mesh_name,
+            mesh_id: manifest.manifest.mesh_id,
+            generation_id: manifest.manifest.generation_id ?? null,
+            domain_mesh_mode: manifest.manifest.domain_mesh_mode ?? null,
+            object_segment_count: manifest.manifest.object_segments.length,
+            mesh_part_count: manifest.manifest.mesh_parts.length,
+            regions: manifest.manifest.regions ?? [],
+          }
+        : null,
       effective_airbox_target:
         builds.activeBuild?.effective_airbox_target ??
         builds.lastSuccess?.effective_airbox_target ??
@@ -721,6 +741,7 @@ export function useMeshWorkspaceResourceState(options?: {
     builds.history,
     builds.lastSuccess,
     capabilities.capabilities,
+    manifest.manifest,
     summary.summary,
   ]);
 
@@ -730,8 +751,13 @@ export function useMeshWorkspaceResourceState(options?: {
   );
 
   const refresh = useCallback(async () => {
-    await Promise.all([summary.refresh(), capabilities.refresh(), builds.refresh()]);
-  }, [builds, capabilities, summary]);
+    await Promise.all([
+      summary.refresh(),
+      capabilities.refresh(),
+      manifest.refresh(),
+      builds.refresh(),
+    ]);
+  }, [builds, capabilities, manifest, summary]);
 
   return {
     meshWorkspace,
@@ -740,8 +766,8 @@ export function useMeshWorkspaceResourceState(options?: {
     activeBuild: builds.activeBuild,
     buildHistory: builds.history,
     lastSuccessfulBuild: builds.lastSuccess,
-    loading: summary.loading || capabilities.loading || builds.loading,
-    error: summary.error ?? capabilities.error ?? builds.error,
+    loading: summary.loading || capabilities.loading || manifest.loading || builds.loading,
+    error: summary.error ?? capabilities.error ?? manifest.error ?? builds.error,
     refresh,
   };
 }

@@ -3646,6 +3646,10 @@ async fn authoring_regions_returns_object_derived_regions() {
     assert_eq!(json["regions"][0]["name"], "free_layer");
     assert_eq!(json["regions"][0]["source"], "object");
     assert_eq!(json["regions"][0]["source_object_ids"][0], "body");
+    assert!(json["regions"][0]["source_body_ids"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("body:body:"));
     assert_eq!(
         json["regions"][0]["mesh_part_ids"]
             .as_array()

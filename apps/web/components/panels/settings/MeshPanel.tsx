@@ -33,6 +33,7 @@ import type { RenderMode } from "@/components/preview/FemMeshView3D";
 import { Button } from "../../ui/button";
 
 import { SidebarSection } from "./primitives";
+import MeshManifestSection from "./MeshManifestSection";
 
 function getPhaseStyle(status: "idle" | "active" | "done" | "warning" | "queued" | "failed") {
   switch (status) {
@@ -178,6 +179,11 @@ export default function MeshPanel() {
           </div>
         </div>
       </SidebarSection>
+
+      <MeshManifestSection
+        manifest={meshWorkspace?.shared_domain_manifest ?? null}
+        currentSceneRevision={model.sceneDocument?.revision ?? null}
+      />
 
       <SidebarSection title="Mesh Workspace Presets" defaultOpen={true}>
         <div className="mb-2 flex items-center justify-end">
