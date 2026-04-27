@@ -44,7 +44,8 @@ const UnifiedViewport3D = memo(function UnifiedViewport3D({
   const quantityLayerVisible = layerVisibility ? layerVisibility.showQuantity : true;
   const vectorField = model?.vectorField ?? null;
   const showArrowLayer = Boolean(
-    quantityLayerVisible &&
+    (mode === "3D" || mode === "Mesh") &&
+      quantityLayerVisible &&
       (vectorField?.visible ?? model?.fdm?.vectorsVisible ?? true) &&
       vectorField?.status !== "unsupported" &&
       vectorField?.status !== "mismatch" &&

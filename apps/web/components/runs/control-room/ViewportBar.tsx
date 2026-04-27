@@ -430,6 +430,9 @@ export const ViewportBar = memo(function ViewportBar() {
   const supportsTopology = capabilities.explicitTopology.enabled;
   const supportsStructuredGrid = capabilities.structuredGrid.enabled;
   const supportsAuthoring = builderEnabled;
+  const isMeshWorkspace = viewport.effectiveViewMode === "Mesh";
+  const isPhysical3DViewport = viewport.effectiveViewMode === "3D";
+  const supportsFieldOverlayInActiveView = isPhysical3DViewport || isMeshWorkspace;
   const authoringUnavailableReason = capabilities.authoringPrimitives.reason
     ?? (supportsTopology
       ? "Enable Geometry Authoring mode to use transform tools."
@@ -783,51 +786,85 @@ export const ViewportBar = memo(function ViewportBar() {
                 dispatchToolbar({ type: "setObjectView", value: "isolate" });
               }}
             />
-            <ToolbarActionButton
-              label={vectorsEnabled ? "Vectors On" : "Vectors Off"}
-              icon={Zap}
-              active={vectorsEnabled}
-              disabled={!supports3D}
-              title={supports3D ? "Toggle vectors/glyph layer" : "Requires preview_3d capability."}
-              pressed={vectorsEnabled}
-              onClick={() => toggleVectors()}
-            />
-            <ToolbarActionButton
-              label="Vector Settings"
-              icon={Settings2}
-              active={vectorsSettingsOpen}
-              disabled={!supports3D}
-              title={supports3D ? "Open vectors settings" : "Requires preview_3d capability."}
-              pressed={vectorsSettingsOpen}
-              onClick={() => dispatchToolbar({ type: "togglePopover", key: "vectors" })}
-            />
-            <ToolbarActionButton
-              label="Color"
-              icon={Palette}
-              active={colorSettingsOpen}
-              disabled={!supports3D}
-              title={supports3D ? "Color popover: surface/arrow/voxel color modes." : "Requires preview_3d capability."}
-              pressed={colorSettingsOpen}
-              onClick={() => dispatchToolbar({ type: "togglePopover", key: "color" })}
-            />
+            {supportsFieldOverlayInActiveView ? (
+              <>
+                <ToolbarActionButton
+                  label={
+                    isMeshWorkspace
+                      ? vectorsEnabled
+                        ? "Field Arrows On"
+                        : "Field Arrows Off"
+                      : vectorsEnabled
+                        ? "Vectors On"
+                        : "Vectors Off"
+                  }
+                  icon={Zap}
+                  active={vectorsEnabled}
+                  disabled={!supports3D}
+                  title={
+                    supports3D
+                      ? isMeshWorkspace
+                        ? "Overlay field arrows on top of the mesh/node view."
+                        : "Toggle vectors/glyph layer."
+                      : "Requires preview_3d capability."
+                  }
+                  pressed={vectorsEnabled}
+                  onClick={() => toggleVectors()}
+                />
+                <ToolbarActionButton
+                  label={isMeshWorkspace ? "Arrow Settings" : "Vector Settings"}
+                  icon={Settings2}
+                  active={vectorsSettingsOpen}
+                  disabled={!supports3D}
+                  title={
+                    supports3D
+                      ? isMeshWorkspace
+                        ? "Configure field arrow density and scale for the mesh overlay."
+                        : "Open vectors settings."
+                      : "Requires preview_3d capability."
+                  }
+                  pressed={vectorsSettingsOpen}
+                  onClick={() => dispatchToolbar({ type: "togglePopover", key: "vectors" })}
+                />
+                {isPhysical3DViewport ? (
+                  <ToolbarActionButton
+                    label="Color"
+                    icon={Palette}
+                    active={colorSettingsOpen}
+                    disabled={!supports3D}
+                    title={supports3D ? "Color popover: surface/arrow/voxel color modes." : "Requires preview_3d capability."}
+                    pressed={colorSettingsOpen}
+                    onClick={() => dispatchToolbar({ type: "togglePopover", key: "color" })}
+                  />
+                ) : null}
+              </>
+            ) : null}
             <ToolbarActionButton
               label="Display"
               icon={Monitor}
               active={displaySettingsOpen}
               disabled={!supports3D}
-              title={supports3D ? "Display popover: quality and visual profile controls." : "Requires preview_3d capability."}
+              title={
+                isMeshWorkspace
+                  ? "Mesh display is controlled in the Mesh Workspace toolbar below."
+                  : supports3D
+                    ? "Display popover: quality and visual profile controls."
+                    : "Requires preview_3d capability."
+              }
               pressed={displaySettingsOpen}
               onClick={() => dispatchToolbar({ type: "togglePopover", key: "display" })}
             />
-            <ToolbarActionButton
-              label="Topography"
-              icon={Sparkles}
-              active={topographySettingsOpen}
-              disabled={!supportsStructuredGrid}
-              title={supportsStructuredGrid ? "Topography popover for structured-grid views." : "Requires structured_grid capability."}
-              pressed={topographySettingsOpen}
-              onClick={() => dispatchToolbar({ type: "togglePopover", key: "topography" })}
-            />
+            {isPhysical3DViewport ? (
+              <ToolbarActionButton
+                label="Topography"
+                icon={Sparkles}
+                active={topographySettingsOpen}
+                disabled={!supportsStructuredGrid}
+                title={supportsStructuredGrid ? "Topography popover for structured-grid views." : "Requires structured_grid capability."}
+                pressed={topographySettingsOpen}
+                onClick={() => dispatchToolbar({ type: "togglePopover", key: "topography" })}
+              />
+            ) : null}
             <ToolbarActionButton
               label="Camera"
               icon={Camera}
@@ -888,7 +925,7 @@ export const ViewportBar = memo(function ViewportBar() {
         </div>
       </div>
 
-      {vectorsSettingsOpen ? (
+      {vectorsSettingsOpen && supportsFieldOverlayInActiveView ? (
         <div className="px-3 pb-2 flex flex-wrap items-center gap-2 border-t border-border/20">
           <span className={ROW_B_GROUP_TITLE_CLASS}>Vectors</span>
           {supportsTopology ? (
@@ -1018,7 +1055,7 @@ export const ViewportBar = memo(function ViewportBar() {
         </div>
       ) : null}
 
-      {colorSettingsOpen ? (
+      {colorSettingsOpen && isPhysical3DViewport ? (
         <div className="px-3 pb-2 flex flex-wrap items-center gap-2 border-t border-border/20">
           <span className={ROW_B_GROUP_TITLE_CLASS}>Color</span>
           {supportsTopology ? (

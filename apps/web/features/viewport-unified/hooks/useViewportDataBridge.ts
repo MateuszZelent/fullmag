@@ -407,7 +407,9 @@ export function useViewportDataBridge() {
     adapterPointCount: vectorAdapterPointCount,
     colorComponent:
       ctx.effectiveVectorComponent === "magnitude" ? "|v|" : ctx.effectiveVectorComponent,
-    vectorsVisible: ctx.effectiveViewMode === "3D" && ctx.meshShowArrows,
+    vectorsVisible:
+      (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
+      ctx.meshShowArrows,
     vectorCapabilityEnabled,
     unsupportedReason: null,
     quantityComponentCount: ctx.quantityDescriptor?.n_comp ?? null,
