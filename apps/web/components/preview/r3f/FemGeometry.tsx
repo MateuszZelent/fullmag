@@ -601,39 +601,10 @@ export const FemGeometry = memo(function FemGeometry({
     return wireGeometry;
   }, [geometry, renderMode]);
 
-  // ── Tetra edges geometry memo ─────────────────────────────────────
-  const tetraEdgesGeometry = useMemo(() => {
-    if (true) return null;
-    if (_doShrink || elements.length < 4 || !_positions) return null;
-    const seenEdges = new Set<number>();
-    const tetraEdgePairs: number[] = [];
-    const registerEdge = (a: number, b: number) => {
-      const lo = Math.min(a, b);
-      const hi = Math.max(a, b);
-      const key = lo * nNodes + hi;
-      if (seenEdges.has(key)) return;
-      seenEdges.add(key);
-      tetraEdgePairs.push(lo, hi);
-    };
-    for (const elementOffset of _activeElementOffsets) {
-      const a = elements[elementOffset];
-      const b = elements[elementOffset + 1];
-      const cIdx = elements[elementOffset + 2];
-      const d = elements[elementOffset + 3];
-      registerEdge(a, b);
-      registerEdge(a, cIdx);
-      registerEdge(a, d);
-      registerEdge(b, cIdx);
-      registerEdge(b, d);
-      registerEdge(cIdx, d);
-    }
-    if (tetraEdgePairs.length === 0) return null;
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute("position", new THREE.BufferAttribute(_positions, 3));
-    geom.setIndex(new THREE.BufferAttribute(new Uint32Array(tetraEdgePairs), 1));
-    geom.computeBoundingSphere();
-    return geom;
-  }, [renderMode, _doShrink, elements, nNodes, _positions, _activeElementOffsets]);
+  // Volume-edge wireframes are intentionally disabled in this surface mesh
+  // renderer. Building tetrahedral edge buffers during UI mode switches can
+  // transiently allocate very large GPU buffers and lose the WebGL context.
+  const tetraEdgesGeometry = null;
 
   // ── Points geometry memo ──────────────────────────────────────────
   const { pointsGeometry, pointsVertexMap } = useMemo(() => {
