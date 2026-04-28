@@ -83,7 +83,14 @@ const AIRBOX_RENDER_ITEMS = [
   { value: "surface", label: "Shaded" },
   { value: "wireframe", label: "Wireframe" },
   { value: "surface+edges", label: "Shaded + wireframe" },
-  { value: "points", label: "Points" },
+  { value: "points", label: "Points (nodes)" },
+];
+
+const MESH_RENDER_ITEMS = [
+  { value: "surface", label: "Shaded surface" },
+  { value: "surface+edges", label: "Shaded + wireframe" },
+  { value: "wireframe", label: "Wireframe" },
+  { value: "points", label: "Points (nodes)" },
 ];
 
 function noSessionReason(ctx: RibbonBuildContext): string | null {
@@ -240,6 +247,7 @@ function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
 function buildTextureMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const global = canUse3D(ctx);
   const textureDensity = ctx.magneticTextureDensity ?? 65_536;
+  const meshRenderMode = (ctx.meshRenderMode ?? "surface") as ViewportMeshRenderMode;
   const component = (ctx.requestedPreviewComponent ?? "magnitude") as
     | "3D"
     | "x"
@@ -268,6 +276,21 @@ function buildTextureMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       disabledReason: global.reason,
       onCheckedChange: (visible) => ctx.run({ id: "viewport.toggle-magnetic-texture", visible }),
     },
+    {
+      type: "radio-group",
+      id: "texture:mesh-display",
+      label: "Mesh display",
+      value: meshRenderMode,
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onValueChange: (renderMode) =>
+        ctx.run({
+          id: "viewport.set-global-render-mode",
+          renderMode: renderMode as ViewportMeshRenderMode,
+        }),
+      items: MESH_RENDER_ITEMS,
+    },
+    { type: "separator", id: "texture:s0" },
     buildComponentMenuNode(
       ctx,
       "texture:component",
@@ -593,14 +616,9 @@ function buildRenderLayersMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       onValueChange: (renderMode) =>
         ctx.run({
           id: "viewport.set-global-render-mode",
-          renderMode: renderMode as "surface" | "wireframe" | "surface+edges" | "points",
+          renderMode: renderMode as ViewportMeshRenderMode,
         }),
-      items: [
-        { value: "surface", label: "Shaded" },
-        { value: "wireframe", label: "Wireframe" },
-        { value: "surface+edges", label: "Shaded + wireframe" },
-        { value: "points", label: "Points" },
-      ],
+      items: MESH_RENDER_ITEMS,
     },
     {
       type: "slider",
@@ -715,7 +733,7 @@ function buildGlobalDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
       {
         id: "view-render-layers",
         icon: <Layers3 size={20} />,
-        label: "Layers",
+        label: "Mesh View",
         tooltip: "Control mesh render mode, opacity, and global clip",
         disabled: global.disabled,
         iconColor: "text-emerald-300",

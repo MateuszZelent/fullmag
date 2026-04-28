@@ -150,8 +150,8 @@ describe("buildVisibleLayers", () => {
     expect(layers.map((l) => l.part.id).sort()).toEqual(["core", "shell"]);
   });
 
-  // Airbox-only + magnetic hidden
-  it("hides magnetic parts in airbox_only + hide mode", () => {
+  // Vector-domain filters must not hide geometry; they only scope glyph sampling.
+  it("keeps magnetic parts visible in airbox_only + hide mode", () => {
     const air = makePart({ id: "air-1", role: "air", object_id: "air" });
     const mag = makePart({ id: "mag-1", object_id: "obj-1" });
     const viewState = {
@@ -168,12 +168,12 @@ describe("buildVisibleLayers", () => {
       airSegmentVisible: true,
     });
 
-    expect(layers).toHaveLength(1);
-    expect(layers[0].part.role).toBe("air");
+    expect(layers).toHaveLength(2);
+    expect(layers.map((l) => l.part.role).sort()).toEqual(["air", "magnetic_object"]);
   });
 
-  // Airbox-only + magnetic ghost
-  it("ghosts magnetic parts in airbox_only + ghost mode", () => {
+  // Vector-domain filters must not ghost texture geometry; they only scope glyph sampling.
+  it("keeps magnetic parts fully visible in airbox_only + ghost mode", () => {
     const air = makePart({ id: "air-1", role: "air", object_id: "air" });
     const mag = makePart({ id: "mag-1", object_id: "obj-1" });
     const viewState = {
@@ -191,11 +191,10 @@ describe("buildVisibleLayers", () => {
     });
 
     expect(layers).toHaveLength(2);
-    const ghostLayer = layers.find((l) => l.part.id === "mag-1");
-    expect(ghostLayer).toBeDefined();
-    expect(ghostLayer!.viewState.opacity).toBeLessThanOrEqual(22);
-    expect(ghostLayer!.viewState.colorField).toBe("orientation");
-    expect(ghostLayer!.meshColor).toBe("#94a3b8");
+    const magneticLayer = layers.find((l) => l.part.id === "mag-1");
+    expect(magneticLayer).toBeDefined();
+    expect(magneticLayer!.viewState.opacity).toBe(100);
+    expect(magneticLayer!.viewState.colorField).toBe("orientation");
   });
 
   it("preserves points mode for ghosted magnetic parts in airbox_only mode", () => {

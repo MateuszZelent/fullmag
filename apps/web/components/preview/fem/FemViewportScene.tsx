@@ -413,47 +413,53 @@ export const FemViewportScene = React.memo(function FemViewportScene({
               const emptyElements = Array.isArray(layer.elementIndices) && layer.elementIndices.length === 0;
               return !(emptyFaces && emptyElements);
             })
-            .map((layer) => (
-            <FemGeometry
-              key={layer.part.id}
-              meshData={meshData}
-              field={layer.viewState.colorField}
-              sharedBaseVertexColors={
-                layer.viewState.colorField === "none" && layer.meshColor
-                  ? null
-                  : sharedVertexColorsByField.get(layer.viewState.colorField) ?? null
-              }
-              renderMode={layer.viewState.renderMode}
-              opacity={layer.viewState.opacity}
-              customBoundaryFaces={layer.surfaceFaces}
-              displayBoundaryFaceIndices={layer.boundaryFaceIndices}
-              displayElementIndices={layer.elementIndices}
-              qualityPerFace={qualityPerFace}
-              shrinkFactor={shrinkFactor}
-              clipEnabled={clipEnabled}
-              clipAxis={clipAxis}
-              clipPos={clipPos}
-              uniformColor={layer.meshColor}
-              edgeColor={layer.edgeColor}
-              highlight={layer.isSelected}
-              globalCenter={dynamicGeomCenter}
-              onFaceClick={onFaceClick}
-              onFaceHover={onFaceHover}
-              onFaceUnhover={onFaceUnhover}
-              onFaceContextMenu={onFaceContextMenu}
-              showSurfacePass={showSurfacePass}
-              showSurfaceHiddenEdgesPass={showSurfaceHiddenEdgesPass}
-              showSurfaceVisibleEdgesPass={showSurfaceVisibleEdgesPass}
-              showVolumeHiddenEdgesPass={showVolumeHiddenEdgesPass}
-              showVolumeVisibleEdgesPass={showVolumeVisibleEdgesPass}
-              showPointsPass={showPointsPass}
-              enableGeometryCompaction={enableGeometryCompaction}
-              enableGeometryNormals={enableGeometryNormals}
-              enableGeometryVertexColors={enableGeometryVertexColors}
-              enableGeometryPointerInteractions={enableGeometryPointerInteractions}
-              enableGeometryHoverInteractions={enableGeometryHoverInteractions}
-            />
-          ))
+            .map((layer) => {
+              const layerRenderMode =
+                layer.part.role === "air" || layer.part.role === "outer_boundary"
+                  ? layer.viewState.renderMode
+                  : renderMode;
+              return (
+                <FemGeometry
+                  key={layer.part.id}
+                  meshData={meshData}
+                  field={layer.viewState.colorField}
+                  sharedBaseVertexColors={
+                    layer.viewState.colorField === "none" && layer.meshColor
+                      ? null
+                      : sharedVertexColorsByField.get(layer.viewState.colorField) ?? null
+                  }
+                  renderMode={layerRenderMode}
+                  opacity={layer.viewState.opacity}
+                  customBoundaryFaces={layer.surfaceFaces}
+                  displayBoundaryFaceIndices={layer.boundaryFaceIndices}
+                  displayElementIndices={layer.elementIndices}
+                  qualityPerFace={qualityPerFace}
+                  shrinkFactor={shrinkFactor}
+                  clipEnabled={clipEnabled}
+                  clipAxis={clipAxis}
+                  clipPos={clipPos}
+                  uniformColor={layer.meshColor}
+                  edgeColor={layer.edgeColor}
+                  highlight={layer.isSelected}
+                  globalCenter={dynamicGeomCenter}
+                  onFaceClick={onFaceClick}
+                  onFaceHover={onFaceHover}
+                  onFaceUnhover={onFaceUnhover}
+                  onFaceContextMenu={onFaceContextMenu}
+                  showSurfacePass={showSurfacePass}
+                  showSurfaceHiddenEdgesPass={showSurfaceHiddenEdgesPass}
+                  showSurfaceVisibleEdgesPass={showSurfaceVisibleEdgesPass}
+                  showVolumeHiddenEdgesPass={showVolumeHiddenEdgesPass}
+                  showVolumeVisibleEdgesPass={showVolumeVisibleEdgesPass}
+                  showPointsPass={showPointsPass}
+                  enableGeometryCompaction={enableGeometryCompaction}
+                  enableGeometryNormals={enableGeometryNormals}
+                  enableGeometryVertexColors={enableGeometryVertexColors}
+                  enableGeometryPointerInteractions={enableGeometryPointerInteractions}
+                  enableGeometryHoverInteractions={enableGeometryHoverInteractions}
+                />
+              );
+            })
         : null}
 
       {showSceneGeometry && showAirGeometry && !hasMeshParts && shouldRenderAirGeometry ? (

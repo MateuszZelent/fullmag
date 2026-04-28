@@ -132,12 +132,10 @@ export const FemGeometry = memo(function FemGeometry({
   onFaceHover,
   onFaceUnhover,
   onFaceContextMenu,
-  showSurfacePass = true,
   showSurfaceHiddenEdgesPass = true,
   showSurfaceVisibleEdgesPass = true,
   showVolumeHiddenEdgesPass = true,
   showVolumeVisibleEdgesPass = true,
-  showPointsPass = true,
   enableGeometryCompaction = true,
   enableGeometryNormals = true,
   enableGeometryVertexColors = true,
@@ -592,16 +590,20 @@ export const FemGeometry = memo(function FemGeometry({
     shrinkFactor,
   ]);
 
-  // ── Edges geometry memo: only rebuilds when surface geometry or renderMode changes ──
+  // ── Edges geometry memo: only used for shaded surface edge overlays.
+  // Wireframe-only renders directly from the surface geometry to avoid a large
+  // transient WireframeGeometry allocation during mode switches.
   const edgesGeometry = useMemo(() => {
-    const needsEdges = renderMode === "surface+edges" || renderMode === "wireframe";
+    const needsEdges = renderMode === "surface+edges";
     if (!needsEdges || !geometry) return null;
-    return new THREE.WireframeGeometry(geometry);
+    const wireGeometry = new THREE.WireframeGeometry(geometry);
+    wireGeometry.computeBoundingSphere();
+    return wireGeometry;
   }, [geometry, renderMode]);
 
   // ── Tetra edges geometry memo ─────────────────────────────────────
   const tetraEdgesGeometry = useMemo(() => {
-    if (renderMode !== "wireframe") return null;
+    if (true) return null;
     if (_doShrink || elements.length < 4 || !_positions) return null;
     const seenEdges = new Set<number>();
     const tetraEdgePairs: number[] = [];
@@ -629,12 +631,37 @@ export const FemGeometry = memo(function FemGeometry({
     const geom = new THREE.BufferGeometry();
     geom.setAttribute("position", new THREE.BufferAttribute(_positions, 3));
     geom.setIndex(new THREE.BufferAttribute(new Uint32Array(tetraEdgePairs), 1));
+    geom.computeBoundingSphere();
     return geom;
   }, [renderMode, _doShrink, elements, nNodes, _positions, _activeElementOffsets]);
 
   // ── Points geometry memo ──────────────────────────────────────────
   const { pointsGeometry, pointsVertexMap } = useMemo(() => {
-    if (renderMode !== "points" || !_positions) {
+    if (renderMode !== "points") {
+      return { pointsGeometry: null as THREE.BufferGeometry | null, pointsVertexMap: null as Int32Array | null };
+    }
+    const displayedPositions = geometry?.getAttribute("position") as THREE.BufferAttribute | undefined;
+    if (displayedPositions && displayedPositions.count > 0) {
+      const sourceArray = displayedPositions.array as ArrayLike<number>;
+      const pointPositions = new Float32Array(displayedPositions.count * 3);
+      for (let index = 0; index < pointPositions.length; index += 1) {
+        pointPositions[index] = Number(sourceArray[index] ?? 0);
+      }
+      const ptsGeom = new THREE.BufferGeometry();
+      ptsGeom.setAttribute("position", new THREE.BufferAttribute(pointPositions, 3));
+      ptsGeom.computeBoundingSphere();
+      if (enableGeometryVertexColors) {
+        ptsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointPositions.length), 3));
+      }
+      const pointVMap =
+        vertexMap && vertexMap.length === displayedPositions.count
+          ? new Int32Array(vertexMap)
+          : displayedPositions.count === nNodes
+            ? Int32Array.from({ length: nNodes }, (_, index) => index)
+            : null;
+      return { pointsGeometry: ptsGeom, pointsVertexMap: pointVMap };
+    }
+    if (!_positions) {
       return { pointsGeometry: null as THREE.BufferGeometry | null, pointsVertexMap: null as Int32Array | null };
     }
     const boundaryFaces = _resolvedBoundaryFaces;
@@ -668,11 +695,12 @@ export const FemGeometry = memo(function FemGeometry({
     }
     const ptsGeom = new THREE.BufferGeometry();
     ptsGeom.setAttribute("position", new THREE.BufferAttribute(pointPositions, 3));
+    ptsGeom.computeBoundingSphere();
     if (enableGeometryVertexColors) {
       ptsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointPositions.length), 3));
     }
     return { pointsGeometry: ptsGeom, pointsVertexMap: pointVMap };
-  }, [renderMode, _positions, _resolvedBoundaryFaces, customBoundaryFaces, _activeElementOffsets, elements, nElements, nNodes, _preferredFaceIndices, enableGeometryVertexColors]);
+  }, [renderMode, geometry, vertexMap, nNodes, enableGeometryVertexColors, _positions, _resolvedBoundaryFaces, customBoundaryFaces, _activeElementOffsets, elements, nElements, _preferredFaceIndices]);
 
   // Invalidate the R3F frame when topology geometry rebuilds
   useEffect(() => {
@@ -769,6 +797,13 @@ export const FemGeometry = memo(function FemGeometry({
           pointsColorAttr.array[i * 3 + 1] = baseColors[orig * 3 + 1];
           pointsColorAttr.array[i * 3 + 2] = baseColors[orig * 3 + 2];
         }
+      } else {
+        const colorCount = Math.min(pointsColorAttr.count, Math.floor(baseColors.length / 3));
+        for (let i = 0; i < colorCount; i += 1) {
+          pointsColorAttr.array[i * 3] = baseColors[i * 3];
+          pointsColorAttr.array[i * 3 + 1] = baseColors[i * 3 + 1];
+          pointsColorAttr.array[i * 3 + 2] = baseColors[i * 3 + 2];
+        }
       }
       pointsColorAttr.needsUpdate = true;
       mark("colorPointsApply", pointsApplyStart, { mapped: Boolean(pointsVertexMap) });
@@ -842,23 +877,28 @@ export const FemGeometry = memo(function FemGeometry({
       prevGeomsRef.current.p.dispose();
     }
     prevGeomsRef.current = { g: geometry, e: edgesGeometry, t: tetraEdgesGeometry, p: pointsGeometry };
-    return () => {
-      geometry?.dispose();
-      edgesGeometry?.dispose();
-      tetraEdgesGeometry?.dispose();
-      pointsGeometry?.dispose();
-    };
   }, [edgesGeometry, geometry, pointsGeometry, tetraEdgesGeometry]);
 
-  const showSurface = (renderMode === "surface" || renderMode === "surface+edges") && showSurfacePass;
-  const showWire = renderMode === "surface+edges";
-  const showVolumeWire = renderMode === "wireframe";
-  const showPoints = renderMode === "points" && showPointsPass;
+  useEffect(() => {
+    return () => {
+      const current = prevGeomsRef.current;
+      current.g?.dispose();
+      current.e?.dispose();
+      current.t?.dispose();
+      current.p?.dispose();
+      prevGeomsRef.current = { g: null, e: null, t: null, p: null };
+    };
+  }, []);
+
+  const showSurface = renderMode === "surface" || renderMode === "surface+edges";
+  const showWire = renderMode === "surface+edges" || renderMode === "wireframe";
+  const showWireOnly = renderMode === "wireframe";
+  const showVolumeWire = false;
+  const showPoints = renderMode === "points";
   const showSurfaceEdgeFallback =
     showWire &&
     edgesGeometry != null &&
-    !showSurfaceHiddenEdgesPass &&
-    !showSurfaceVisibleEdgesPass;
+    (showWireOnly || (!showSurfaceHiddenEdgesPass && !showSurfaceVisibleEdgesPass));
   const showVolumeEdgeFallback =
     showVolumeWire &&
     (tetraEdgesGeometry ?? edgesGeometry) != null &&
@@ -978,19 +1018,31 @@ export const FemGeometry = memo(function FemGeometry({
       
       {showWire && edgesGeometry && (
         <>
-          {showSurfaceEdgeFallback ? (
-            <lineSegments geometry={edgesGeometry} renderOrder={edgePolicy.renderOrder}>
+          {showWireOnly && geometry ? (
+            <mesh geometry={geometry} renderOrder={edgePolicy.renderOrder} frustumCulled={false}>
+              <meshBasicMaterial
+                color={resolvedEdgeColor}
+                wireframe
+                transparent
+                opacity={highlight ? 0.98 : 0.86}
+                depthWrite={false}
+                depthTest={false}
+                side={THREE.DoubleSide}
+              />
+            </mesh>
+          ) : showSurfaceEdgeFallback ? (
+            <lineSegments geometry={edgesGeometry} renderOrder={edgePolicy.renderOrder} frustumCulled={false}>
               <lineBasicMaterial
                 color={resolvedEdgeColor}
-                opacity={(highlight ? 0.95 : 0.58) * opacityVal}
+                opacity={(showWireOnly ? (highlight ? 0.98 : 0.82) : (highlight ? 0.95 : 0.58)) * Math.max(opacityVal, showWireOnly ? 0.75 : 0)}
                 transparent={edgePolicy.transparent}
                 depthWrite={edgePolicy.depthWrite}
-                depthTest={edgePolicy.depthTest}
+                depthTest={showWireOnly ? false : edgePolicy.depthTest}
               />
             </lineSegments>
           ) : null}
           {showSurfaceHiddenEdgesPass ? (
-            <lineSegments geometry={edgesGeometry} renderOrder={hiddenEdgePolicy.renderOrder}>
+            <lineSegments geometry={edgesGeometry} renderOrder={hiddenEdgePolicy.renderOrder} frustumCulled={false}>
               <lineBasicMaterial
                 color={resolvedEdgeColor}
                 opacity={(highlight ? 0.22 : 0.12) * opacityVal}
@@ -1001,7 +1053,7 @@ export const FemGeometry = memo(function FemGeometry({
             </lineSegments>
           ) : null}
           {showSurfaceVisibleEdgesPass ? (
-            <lineSegments geometry={edgesGeometry} renderOrder={edgePolicy.renderOrder}>
+            <lineSegments geometry={edgesGeometry} renderOrder={edgePolicy.renderOrder} frustumCulled={false}>
               <lineBasicMaterial
                 color={resolvedEdgeColor}
                 opacity={(highlight ? 0.95 : 0.58) * opacityVal}
@@ -1015,7 +1067,7 @@ export const FemGeometry = memo(function FemGeometry({
       )}
 
       {showSelectionWireOverlay ? (
-        <lineSegments geometry={edgesGeometry!} renderOrder={selectionEdgePolicy.renderOrder}>
+        <lineSegments geometry={edgesGeometry!} renderOrder={selectionEdgePolicy.renderOrder} frustumCulled={false}>
           <lineBasicMaterial
             color={resolvedEdgeColor}
             opacity={0.98}
@@ -1032,13 +1084,14 @@ export const FemGeometry = memo(function FemGeometry({
             <lineSegments
               geometry={(tetraEdgesGeometry ?? edgesGeometry)!}
               renderOrder={edgePolicy.renderOrder}
+              frustumCulled={false}
             >
               <lineBasicMaterial
                 color={resolvedEdgeColor}
-                opacity={(highlight ? 0.72 : 0.32) * opacityVal}
+                opacity={(highlight ? 0.98 : 0.78) * Math.max(opacityVal, 0.65)}
                 transparent={edgePolicy.transparent}
                 depthWrite={edgePolicy.depthWrite}
-                depthTest={edgePolicy.depthTest}
+                depthTest={false}
               />
             </lineSegments>
           ) : null}
@@ -1046,6 +1099,7 @@ export const FemGeometry = memo(function FemGeometry({
             <lineSegments
               geometry={(tetraEdgesGeometry ?? edgesGeometry)!}
               renderOrder={hiddenEdgePolicy.renderOrder}
+              frustumCulled={false}
             >
               <lineBasicMaterial
                 color={resolvedEdgeColor}
@@ -1060,6 +1114,7 @@ export const FemGeometry = memo(function FemGeometry({
             <lineSegments
               geometry={(tetraEdgesGeometry ?? edgesGeometry)!}
               renderOrder={edgePolicy.renderOrder}
+              frustumCulled={false}
             >
               <lineBasicMaterial
                 color={resolvedEdgeColor}
@@ -1074,16 +1129,16 @@ export const FemGeometry = memo(function FemGeometry({
       )}
 
       {showPoints && pointsGeometry && (
-        <points geometry={pointsGeometry} renderOrder={pointPolicy.renderOrder}>
+        <points geometry={pointsGeometry} renderOrder={pointPolicy.renderOrder} frustumCulled={false}>
           <pointsMaterial 
-            vertexColors={enableGeometryVertexColors}
-            color={enableGeometryVertexColors ? undefined : uniformColor ?? "#94a3b8"}
-            size={maxDim * 0.008 * (highlight ? 1.15 : 1)}
-            sizeAttenuation 
+            vertexColors={false}
+            color={highlight ? "#f8fafc" : resolvedEdgeColor}
+            size={highlight ? 6 : 5}
+            sizeAttenuation={false}
             transparent={pointPolicy.transparent}
             depthWrite={pointPolicy.depthWrite}
-            depthTest={pointPolicy.depthTest}
-            opacity={opacityVal} 
+            depthTest={false}
+            opacity={Math.max(opacityVal, 0.82)} 
           />
         </points>
       )}

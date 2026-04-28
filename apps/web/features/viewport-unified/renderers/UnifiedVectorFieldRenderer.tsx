@@ -90,7 +90,7 @@ interface Props {
   vectors: Float64Array | null;
   fieldLabel?: string;
   liveRenderDebugData?: {
-    source: "preview" | "live" | "none";
+    source: "authored" | "preview" | "live" | "none";
     fieldDataRevision: string | null;
     fieldDataTimestamp: number | null;
     liveFieldSourceStep: number | null;

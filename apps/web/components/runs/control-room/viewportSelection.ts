@@ -21,19 +21,21 @@ export function selectViewportVectorField(args: {
   requestedPreviewQuantity: string | null;
   previewControlsActive: boolean;
   renderPreview: SpatialPreviewState | null;
+  authoredField?: Float64Array | null;
   liveField: Float64Array | null;
   liveFieldSourceStep?: number | null;
   previewSourceStep?: number | null;
   isGlobalScalarQuantity: (quantity: string | null | undefined) => boolean;
 }): {
   vectors: Float64Array | null;
-  source: "preview" | "live" | "none";
+  source: "authored" | "preview" | "live" | "none";
 } {
   const {
     activeQuantityId,
     requestedPreviewQuantity,
     previewControlsActive,
     renderPreview,
+    authoredField = null,
     liveField,
     liveFieldSourceStep = null,
     previewSourceStep = null,
@@ -42,6 +44,10 @@ export function selectViewportVectorField(args: {
 
   if (isGlobalScalarQuantity(activeQuantityId)) {
     return { vectors: null, source: "none" };
+  }
+
+  if (authoredField && authoredField.length > 0) {
+    return { vectors: authoredField, source: "authored" };
   }
 
   const previewVectors = renderPreview?.vector_field_values ?? null;

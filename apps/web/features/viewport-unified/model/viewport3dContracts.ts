@@ -107,7 +107,7 @@ export interface Viewport3DStatusState {
 export interface Viewport3DDebugState {
   rotationDebugOpen: boolean;
   liveRenderDebugOpen: boolean;
-  sourceKind: "preview" | "live" | "none";
+  sourceKind: "authored" | "preview" | "live" | "none";
   fieldDataRevision: string | null;
   fieldDataTimestamp: number | null;
   effectiveStep: number | null;

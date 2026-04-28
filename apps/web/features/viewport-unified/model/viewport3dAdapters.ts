@@ -255,7 +255,7 @@ export interface Viewport3DModelAdapterInput {
   message?: string | null;
   error?: string | null;
   pendingMeshBuild?: boolean;
-  sourceKind?: "preview" | "live" | "none";
+  sourceKind?: "authored" | "preview" | "live" | "none";
   fieldDataRevision?: string | null;
   fieldDataTimestamp?: number | null;
   effectiveStep?: number | null;

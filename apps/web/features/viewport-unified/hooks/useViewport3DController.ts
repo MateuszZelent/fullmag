@@ -74,7 +74,7 @@ export interface Viewport3DControllerModelInput {
   message?: string | null;
   error?: string | null;
   pendingMeshBuild?: boolean;
-  sourceKind?: "preview" | "live" | "none";
+  sourceKind?: "authored" | "preview" | "live" | "none";
   fieldDataTimestamp?: number | null;
   effectiveStep?: number | null;
   authoring?: Viewport3DAuthoringModel | null;

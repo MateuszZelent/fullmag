@@ -62,15 +62,11 @@ export function buildVisibleLayers(input: BuildVisibleLayersInput): RenderLayer[
     partRenderDataById,
     meshEntityViewState,
     objectViewMode,
-    vectorDomainFilter: effectiveVectorDomainFilter,
-    ferromagnetVisibilityMode,
     selectedObjectId,
     selectedEntityId,
     focusedEntityId,
     airSegmentVisible,
-    showArrows: showArrows,
   } = input;
-  const showArrowsEnabled = showArrows ?? true;
 
   if (meshParts.length === 0) return [];
 
@@ -95,7 +91,6 @@ export function buildVisibleLayers(input: BuildVisibleLayersInput): RenderLayer[
     null;
 
   const hasSelection = Boolean(selectedAirPartId || selectedObjectIdForHighlight || preferredCameraPartId);
-  const isAirboxOnly = effectiveVectorDomainFilter === "airbox_only" && showArrowsEnabled;
 
   for (const part of meshParts) {
     const baseViewState = meshEntityViewState[part.id] ?? defaultMeshEntityViewState(part);
@@ -121,9 +116,6 @@ export function buildVisibleLayers(input: BuildVisibleLayersInput): RenderLayer[
           : baseViewState.opacity,
     };
 
-    const magneticHiddenInAirboxOnly =
-      isAirboxOnly && part.role === "magnetic_object" && ferromagnetVisibilityMode === "hide";
-
     const explicitlySelected =
       (selectedAirPartId != null && part.id === selectedAirPartId) ||
       (preferredCameraPartId != null && part.id === preferredCameraPartId);
@@ -137,20 +129,12 @@ export function buildVisibleLayers(input: BuildVisibleLayersInput): RenderLayer[
         ? isSelected && (viewState.visible || selectionKeepsVisible)
         : viewState.visible || selectionKeepsVisible;
 
-    if (!visibleForMode || magneticHiddenInAirboxOnly) continue;
-
-    const resolvedViewState: MeshEntityViewState =
-      isAirboxOnly && part.role === "magnetic_object" && ferromagnetVisibilityMode === "ghost"
-        ? {
-            ...viewState,
-            opacity: Math.min(viewState.opacity, 22),
-          }
-        : viewState;
+    if (!visibleForMode) continue;
 
     const data = partRenderDataById.get(part.id);
     layers.push({
       part,
-      viewState: resolvedViewState,
+      viewState,
       boundaryFaceIndices: data?.boundaryFaceIndices ?? null,
       elementIndices: data?.elementIndices ?? null,
       nodeMask: data?.nodeMask ?? null,
@@ -159,14 +143,8 @@ export function buildVisibleLayers(input: BuildVisibleLayersInput): RenderLayer[
       isMagnetic: part.role === "magnetic_object",
       isSelected,
       isDimmed,
-      meshColor:
-        isAirboxOnly && part.role === "magnetic_object" && ferromagnetVisibilityMode === "ghost"
-          ? "#94a3b8"
-          : partMeshTint(part),
-      edgeColor:
-        isAirboxOnly && part.role === "magnetic_object" && ferromagnetVisibilityMode === "ghost"
-          ? "#cbd5e1"
-          : partEdgeTint(part, isSelected, isDimmed),
+      meshColor: partMeshTint(part),
+      edgeColor: partEdgeTint(part, isSelected, isDimmed),
     });
   }
 

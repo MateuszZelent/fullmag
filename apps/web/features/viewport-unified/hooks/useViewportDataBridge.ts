@@ -860,6 +860,7 @@ export function useViewportDataBridge() {
     ctx.meshEntityViewState,
     ctx.meshOpacity,
     ctx.meshParts,
+    ctx.meshRenderMode,
     ctx.selectedQuantity,
     femDiscretization,
     femLayerState.showMesh,

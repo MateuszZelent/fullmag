@@ -82,6 +82,26 @@ describe("resolveViewportSelectedObjectId", () => {
 });
 
 describe("selectViewportVectorField", () => {
+  it("uses authored magnetization before stale live or preview vectors", () => {
+    const authoredVectors = new Float64Array([0, 1, 0]);
+    const previewVectors = new Float64Array([0, 0, 1]);
+    const liveVectors = new Float64Array([1, 0, 0]);
+    const result = selectViewportVectorField({
+      activeQuantityId: "m",
+      requestedPreviewQuantity: "m",
+      previewControlsActive: true,
+      renderPreview: makePreview({ quantity: "m", vector_field_values: previewVectors }),
+      authoredField: authoredVectors,
+      liveField: liveVectors,
+      liveFieldSourceStep: 99,
+      previewSourceStep: 1,
+      isGlobalScalarQuantity: () => false,
+    });
+
+    expect(result.source).toBe("authored");
+    expect(result.vectors).toBe(authoredVectors);
+  });
+
   it("prefers preview vectors when the requested preview still targets the active quantity", () => {
     const previewVectors = new Float64Array([0, 1, 0]);
     const liveVectors = new Float64Array([1, 0, 0]);

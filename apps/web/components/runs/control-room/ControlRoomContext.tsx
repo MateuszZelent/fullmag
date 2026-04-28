@@ -2402,10 +2402,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     selectedFieldFrame,
   ]);
 
+  const authoredField = authoredMagnetizationPreview?.vectors ?? null;
   const selectedLiveField =
-    authoredMagnetizationPreview?.vectors
-      ? authoredMagnetizationPreview.vectors
-      : selectedScopedBinaryFieldFrame?.key === scopedFieldTransportKey
+    selectedScopedBinaryFieldFrame?.key === scopedFieldTransportKey
       ? selectedScopedBinaryFieldFrame.values
       : selectedFieldTopologyMismatch
       ? null
@@ -2420,6 +2419,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       requestedPreviewQuantity,
       previewControlsActive,
       renderPreview,
+      authoredField,
       liveField: selectedLiveField,
       liveFieldSourceStep,
       previewSourceStep,
@@ -2427,6 +2427,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     });
   }, [
     activeQuantityId,
+    authoredField,
     isGlobalScalarQuantity,
     liveFieldSourceStep,
     previewControlsActive,

@@ -111,6 +111,18 @@ describe("ribbon viewport commands", () => {
     expect(onSetMeshRenderMode).not.toHaveBeenCalled();
   });
 
+  it("dispatches global mesh render mode changes for texture mesh display controls", () => {
+    const onSetMeshRenderMode = vi.fn();
+    const ctx = context({ onSetMeshRenderMode });
+
+    executeRibbonCommand(ctx, {
+      id: "viewport.set-global-render-mode",
+      renderMode: "points",
+    });
+
+    expect(onSetMeshRenderMode).toHaveBeenCalledWith("points");
+  });
+
   it("dispatches selected render mode changes for object override", () => {
     const onSetSelectedObjectRenderMode = vi.fn();
     const ctx = context({ onSetSelectedObjectRenderMode });
