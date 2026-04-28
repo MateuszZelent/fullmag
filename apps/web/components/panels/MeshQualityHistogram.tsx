@@ -183,13 +183,13 @@ export default function MeshQualityHistogram({ femMesh }: MeshQualityHistogramPr
   if (!stats) {
     return (
       <Panel
-        title="Mesh Quality"
-        subtitle="No FEM mesh data available."
+        title="Surface Aspect Ratio"
+        subtitle="No FEM boundary-surface data available."
         panelId="mesh-quality"
         eyebrow="FEM"
       >
         <div className="p-4 text-[0.85rem] text-[var(--text-3)]">
-          Mesh quality histogram will appear once FEM topology is loaded.
+          Surface aspect-ratio histogram will appear once FEM boundary topology is loaded. Tetrahedral volume quality is shown in Mesh Statistics.
         </div>
       </Panel>
     );
@@ -202,8 +202,8 @@ export default function MeshQualityHistogram({ femMesh }: MeshQualityHistogramPr
 
   return (
     <Panel
-      title="Mesh Quality"
-      subtitle={`${total.toLocaleString()} boundary faces analyzed`}
+      title="Surface Aspect Ratio"
+      subtitle={`${total.toLocaleString()} boundary faces analyzed; not tetrahedral volume quality`}
       panelId="mesh-quality"
       eyebrow="FEM"
       actions={

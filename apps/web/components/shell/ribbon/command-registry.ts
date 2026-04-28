@@ -70,6 +70,7 @@ export interface RibbonCommandContext {
   onBuildMeshSelected?: () => void;
   onBuildMeshAll?: () => void;
   onOpenMeshInspector?: () => void;
+  onOpenMeshStatistics?: () => void;
   onOpenMeshQuality?: () => void;
   onOpenMeshSizeSettings?: () => void;
   onOpenMeshMethodSettings?: () => void;
@@ -249,6 +250,7 @@ export type RibbonCommand =
   | { id: "mesh.build-selected" }
   | { id: "mesh.build-all" }
   | { id: "mesh.open-inspector" }
+  | { id: "mesh.open-statistics" }
   | { id: "mesh.open-quality" }
   | { id: "mesh.open-size-settings" }
   | { id: "mesh.open-method-settings" }
@@ -417,6 +419,8 @@ export function canExecuteRibbonCommand(
       return supportsFemMeshActions(ctx) && !ctx.meshGenerating && typeof ctx.onBuildMeshAll === "function";
     case "mesh.open-inspector":
       return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshInspector === "function";
+    case "mesh.open-statistics":
+      return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshStatistics === "function";
     case "mesh.open-quality":
       return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshQuality === "function";
     case "mesh.open-size-settings":
@@ -654,6 +658,9 @@ export function executeRibbonCommand(
       return;
     case "mesh.open-inspector":
       ctx.onOpenMeshInspector?.();
+      return;
+    case "mesh.open-statistics":
+      ctx.onOpenMeshStatistics?.();
       return;
     case "mesh.open-quality":
       ctx.onOpenMeshQuality?.();

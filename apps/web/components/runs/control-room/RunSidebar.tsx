@@ -841,6 +841,7 @@ export default function RunSidebar() {
       case "mesh-view":
       case "mesh-size":
       case "mesh-algorithm":
+      case "mesh-statistics":
       case "mesh-quality":
       case "mesh-pipeline":
       case "universe-airbox-mesh":
@@ -848,6 +849,7 @@ export default function RunSidebar() {
       case "universe-mesh-view":
       case "universe-mesh-size":
       case "universe-mesh-algorithm":
+      case "universe-mesh-statistics":
       case "universe-mesh-quality":
       case "universe-mesh-pipeline": {
         if (!femDiscretization) return;

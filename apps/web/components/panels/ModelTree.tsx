@@ -1247,6 +1247,7 @@ export function buildFullmagModelTree(opts: {
           ? [{ id: "mesh-region-count", label: `${opts.meshManifestRegionCount} mesh region${opts.meshManifestRegionCount === 1 ? "" : "s"}`, icon: "layers" } satisfies TreeNodeData]
           : []),
         { id: "mesh-view", label: "Inspector", icon: "eye" },
+        { id: "mesh-statistics", label: "Statistics", icon: "bar-chart-3" },
         { id: "mesh-size", label: "Size", icon: "ruler" },
         { id: "mesh-quality", label: "Quality", icon: "gauge" },
         { id: "mesh-pipeline", label: "Pipeline", icon: "workflow" },
@@ -1883,6 +1884,7 @@ function _buildUniverseChildren(opts: {
           label: opts.meshFeOrder != null ? `Size · P${opts.meshFeOrder}` : "Size",
           icon: "📏",
         },
+        { id: "universe-mesh-statistics", label: "Statistics", icon: "bar-chart-3" },
         { id: "universe-mesh-quality", label: "Quality", icon: "📊" },
         { id: "universe-mesh-pipeline", label: "Pipeline", icon: "🧭" },
       ],

@@ -646,6 +646,11 @@ export default function MeshSettingsPanel({
               )}
             />
           ) : null}
+          {options.optimize === "" && options.optimizeIters > 1 ? (
+            <div className="rounded-xl border border-warning/25 bg-warning/10 px-3 py-2 text-[0.68rem] leading-5 text-warning/90">
+              Optimizer iterations are configured but no optimizer method is selected. The backend will ignore the iteration count until a method such as Netgen or Relocate3D is enabled.
+            </div>
+          ) : null}
           <InspectorField
             label="Smoothing steps"
             hint="Post-process smoothing for noisy tetrahedra."

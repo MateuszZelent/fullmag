@@ -64,6 +64,7 @@ export const PanelKey = {
   STUDY:               "study",
   UNIVERSE:            "universe",
   MESH:                "mesh",
+  MESH_STATISTICS:     "mesh-statistics",
   MESH_SETTINGS:       "mesh-settings",
   MESH_INFO:           "mesh-info",
   ANTENNA:             "antenna",
@@ -193,6 +194,11 @@ const RULES: RegistryRule[] = [
     compositeKeys: [PanelKey.MESH_SETTINGS],
   },
   {
+    kinds: ["universe.mesh.statistics"],
+    panelKey: PanelKey.MESH_STATISTICS,
+    props: passNodeId,
+  },
+  {
     kinds: ["universe.mesh.size", "universe.mesh.quality"],
     panelKey: PanelKey.MESH_INFO,
     props: noProps,
@@ -218,6 +224,11 @@ const RULES: RegistryRule[] = [
   },
 
   // ── Global mesh (fallback) ──
+  {
+    kinds: ["mesh.statistics"],
+    panelKey: PanelKey.MESH_STATISTICS,
+    props: passNodeId,
+  },
   {
     kinds: ["mesh.size", "mesh.algorithm", "mesh.quality"],
     panelKey: PanelKey.MESH_INFO,

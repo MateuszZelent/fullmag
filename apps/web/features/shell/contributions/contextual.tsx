@@ -21,15 +21,15 @@ function buildMeshQualityGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   return [
     {
       id: "ctx-mesh-quality",
-      title: "Mesh Quality",
+      title: "Mesh Statistics",
       actions: [
         {
-          id: "ctx-mesh-open-quality",
+          id: "ctx-mesh-open-statistics",
           icon: <BarChart3 size={20} />,
-          label: "Quality",
-          tooltip: "Open mesh quality diagnostics",
-          disabled: !ctx.can({ id: "mesh.open-quality" }),
-          action: () => ctx.run({ id: "mesh.open-quality" }),
+          label: "Statistics",
+          tooltip: "Open COMSOL-like mesh statistics",
+          disabled: !ctx.can({ id: "mesh.open-statistics" }),
+          action: () => ctx.run({ id: "mesh.open-statistics" }),
           iconColor: "text-emerald-400",
         },
         {

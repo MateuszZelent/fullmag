@@ -119,6 +119,12 @@ const STATIC_NODES: Record<string, StaticEntry> = {
     scope: "mesh_affecting",
     sourceOfTruth: "mesh_options",
   },
+  "universe-mesh-statistics": {
+    nodeKind: "universe.mesh.statistics",
+    domain: "build",
+    scope: "mesh_affecting",
+    sourceOfTruth: "mesh_options",
+  },
   "universe-mesh-quality": {
     nodeKind: "universe.mesh.quality",
     domain: "build",
@@ -277,6 +283,12 @@ const STATIC_NODES: Record<string, StaticEntry> = {
   },
   "mesh-quality": {
     nodeKind: "mesh.quality",
+    domain: "build",
+    scope: "mesh_affecting",
+    sourceOfTruth: "mesh_options",
+  },
+  "mesh-statistics": {
+    nodeKind: "mesh.statistics",
     domain: "build",
     scope: "mesh_affecting",
     sourceOfTruth: "mesh_options",

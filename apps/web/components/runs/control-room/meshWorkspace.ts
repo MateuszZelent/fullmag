@@ -167,6 +167,8 @@ export function meshWorkspaceNodeToDockTab(nodeId: string): FemDockTab | null {
   switch (nodeId) {
     case "universe-airbox-mesh":
       return "mesh";
+    case "universe-mesh-statistics":
+    case "mesh-statistics":
     case "universe-mesh-view":
     case "mesh-view":
       return "view";

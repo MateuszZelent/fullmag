@@ -51,6 +51,42 @@ class MeshQualityReport:
     element_gamma: list[float] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class MeshStatisticsScope:
+    """COMSOL-like statistics for one mesh scope."""
+
+    id: str
+    kind: str
+    label: str
+    role: str
+    marker: int | None
+    node_count: int
+    element_count: int
+    boundary_face_count: int
+    volume_min: float
+    volume_max: float
+    volume_mean: float
+    volume_std: float
+    volume_ratio: float | None
+    volume_total: float
+    inverted_count: int
+    degenerate_count: int
+    sicn: dict[str, object] | None = None
+    gamma: dict[str, object] | None = None
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class MeshStatisticsReport:
+    """Additive mesh statistics contract serialized next to quality summaries."""
+
+    mesh_name: str
+    quality_source: str
+    global_scope: MeshStatisticsScope
+    scopes: list[MeshStatisticsScope]
+    worst_elements: list[dict[str, object]] = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Mesh generation options
 # ---------------------------------------------------------------------------
@@ -624,7 +660,217 @@ class MeshData:
                 }
                 for marker, q in self.per_domain_quality.items()
             }
+        ir["mesh_statistics"] = _mesh_statistics_report_to_ir(
+            _build_mesh_statistics_report(self, mesh_name)
+        )
         return ir
+
+
+def _tetra_signed_volumes(mesh: MeshData) -> NDArray[np.float64]:
+    if mesh.elements.size == 0:
+        return np.zeros(0, dtype=np.float64)
+    p0 = mesh.nodes[mesh.elements[:, 0]]
+    p1 = mesh.nodes[mesh.elements[:, 1]]
+    p2 = mesh.nodes[mesh.elements[:, 2]]
+    p3 = mesh.nodes[mesh.elements[:, 3]]
+    return np.linalg.det(np.stack([p1 - p0, p2 - p0, p3 - p0], axis=2)) / 6.0
+
+
+def _quality_histogram_bins(counts: list[int], lo: float, hi: float) -> list[dict[str, object]]:
+    if not counts:
+        return []
+    width = (hi - lo) / len(counts)
+    return [
+        {
+            "lo": lo + width * index,
+            "hi": lo + width * (index + 1),
+            "count": int(count),
+        }
+        for index, count in enumerate(counts)
+    ]
+
+
+def _quality_metric_from_report(
+    report: MeshQualityReport | None,
+    metric: str,
+) -> dict[str, object] | None:
+    if report is None:
+        return None
+    if metric == "sicn":
+        return {
+            "min": report.sicn_min,
+            "p05": report.sicn_p5,
+            "mean": report.sicn_mean,
+            "max": report.sicn_max,
+            "histogram": _quality_histogram_bins(report.sicn_histogram, -1.0, 1.0),
+        }
+    if metric == "gamma":
+        return {
+            "min": report.gamma_min,
+            "p05": None,
+            "mean": report.gamma_mean,
+            "max": None,
+            "histogram": _quality_histogram_bins(report.gamma_histogram, 0.0, 1.0),
+        }
+    return None
+
+
+def _mesh_scope_statistics(
+    mesh: MeshData,
+    *,
+    scope_id: str,
+    kind: str,
+    label: str,
+    role: str,
+    marker: int | None,
+    element_mask: NDArray[np.bool_],
+    signed_volumes: NDArray[np.float64],
+    quality: MeshQualityReport | None,
+    boundary_face_count: int,
+) -> MeshStatisticsScope:
+    selected = np.asarray(element_mask, dtype=np.bool_)
+    abs_volumes = np.abs(signed_volumes[selected])
+    element_count = int(np.count_nonzero(selected))
+    if element_count > 0:
+        node_count = int(np.unique(mesh.elements[selected].reshape(-1)).size)
+    else:
+        node_count = 0
+    volume_min = float(np.min(abs_volumes)) if abs_volumes.size else 0.0
+    volume_max = float(np.max(abs_volumes)) if abs_volumes.size else 0.0
+    volume_mean = float(np.mean(abs_volumes)) if abs_volumes.size else 0.0
+    volume_std = float(np.std(abs_volumes)) if abs_volumes.size else 0.0
+    volume_total = float(np.sum(abs_volumes)) if abs_volumes.size else 0.0
+    volume_ratio = volume_max / volume_min if volume_min > 0.0 else None
+    inverted_count = int(np.count_nonzero(signed_volumes[selected] <= 0.0))
+    degenerate_count = int(np.count_nonzero(abs_volumes <= 0.0))
+    warnings: list[str] = []
+    if inverted_count:
+        warnings.append(f"{inverted_count} inverted tetrahedra")
+    if degenerate_count:
+        warnings.append(f"{degenerate_count} degenerate tetrahedra")
+    if volume_ratio is not None and volume_ratio > 1.0e5:
+        warnings.append("extreme element volume ratio")
+    if quality is not None and quality.sicn_p5 < 0.1:
+        warnings.append("worst 5% SICN below quality target")
+    if quality is not None and quality.gamma_min < 0.08:
+        warnings.append("minimum gamma below quality target")
+    return MeshStatisticsScope(
+        id=scope_id,
+        kind=kind,
+        label=label,
+        role=role,
+        marker=marker,
+        node_count=node_count,
+        element_count=element_count,
+        boundary_face_count=boundary_face_count,
+        volume_min=volume_min,
+        volume_max=volume_max,
+        volume_mean=volume_mean,
+        volume_std=volume_std,
+        volume_ratio=volume_ratio,
+        volume_total=volume_total,
+        inverted_count=inverted_count,
+        degenerate_count=degenerate_count,
+        sicn=_quality_metric_from_report(quality, "sicn"),
+        gamma=_quality_metric_from_report(quality, "gamma"),
+        warnings=warnings,
+    )
+
+
+def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatisticsReport:
+    signed_volumes = _tetra_signed_volumes(mesh)
+    all_mask = np.ones(mesh.n_elements, dtype=np.bool_)
+    global_scope = _mesh_scope_statistics(
+        mesh,
+        scope_id="global",
+        kind="global",
+        label="Complete mesh",
+        role="global",
+        marker=None,
+        element_mask=all_mask,
+        signed_volumes=signed_volumes,
+        quality=mesh.quality,
+        boundary_face_count=mesh.n_boundary_faces,
+    )
+    scopes: list[MeshStatisticsScope] = []
+    for marker in sorted(int(value) for value in np.unique(mesh.element_markers)):
+        marker_mask = mesh.element_markers == marker
+        quality = mesh.per_domain_quality.get(marker) if mesh.per_domain_quality else None
+        role = "air" if marker == 0 else "domain"
+        label = "Airbox" if marker == 0 else f"Domain {marker}"
+        scopes.append(
+            _mesh_scope_statistics(
+                mesh,
+                scope_id=f"marker:{marker}",
+                kind="airbox" if marker == 0 else "domain",
+                label=label,
+                role=role,
+                marker=marker,
+                element_mask=marker_mask,
+                signed_volumes=signed_volumes,
+                quality=quality,
+                boundary_face_count=0,
+            )
+        )
+    worst_elements: list[dict[str, object]] = []
+    if mesh.quality is not None and mesh.quality.element_gamma is not None:
+        gamma = np.asarray(mesh.quality.element_gamma, dtype=np.float64)
+        if gamma.size == mesh.n_elements and gamma.size:
+            count = min(10, gamma.size)
+            for element_index in np.argsort(gamma)[:count]:
+                elem = int(element_index)
+                worst_elements.append(
+                    {
+                        "element_index": elem,
+                        "marker": int(mesh.element_markers[elem]),
+                        "gamma": float(gamma[elem]),
+                        "volume": float(abs(signed_volumes[elem])),
+                        "centroid": np.mean(mesh.nodes[mesh.elements[elem]], axis=0).tolist(),
+                    }
+                )
+    return MeshStatisticsReport(
+        mesh_name=mesh_name,
+        quality_source="gmsh" if mesh.quality is not None else "topology",
+        global_scope=global_scope,
+        scopes=scopes,
+        worst_elements=worst_elements,
+    )
+
+
+def _mesh_statistics_scope_to_ir(scope: MeshStatisticsScope) -> dict[str, object]:
+    return {
+        "id": scope.id,
+        "kind": scope.kind,
+        "label": scope.label,
+        "role": scope.role,
+        "marker": scope.marker,
+        "node_count": scope.node_count,
+        "element_count": scope.element_count,
+        "boundary_face_count": scope.boundary_face_count,
+        "volume": {
+            "min": scope.volume_min,
+            "max": scope.volume_max,
+            "mean": scope.volume_mean,
+            "std": scope.volume_std,
+            "ratio": scope.volume_ratio,
+            "total": scope.volume_total,
+        },
+        "inverted_count": scope.inverted_count,
+        "degenerate_count": scope.degenerate_count,
+        "sicn": scope.sicn,
+        "gamma": scope.gamma,
+        "warnings": scope.warnings,
+    }
+
+
+def _mesh_statistics_report_to_ir(report: MeshStatisticsReport) -> dict[str, object]:
+    return {
+        "mesh_name": report.mesh_name,
+        "quality_source": report.quality_source,
+        "global": _mesh_statistics_scope_to_ir(report.global_scope),
+        "scopes": [_mesh_statistics_scope_to_ir(scope) for scope in report.scopes],
+        "worst_elements": report.worst_elements,
+    }
 
 
 def _infer_axis_aligned_periodic_pairs(
@@ -751,4 +997,3 @@ class SharedDomainMeshResult:
     component_surface_tags: dict[str, list[int]]
     interface_surface_tags: list[int]
     outer_boundary_surface_tags: list[int]
-

@@ -208,6 +208,11 @@ def _extract_quality_metrics(
     gamma = np.asarray(gmsh.model.mesh.getElementQualities(all_tags, "gamma"))
     vols = np.asarray(gmsh.model.mesh.getElementQualities(all_tags, "volume"))
     avg_q = gmsh.option.getNumber("Mesh.AvgQuality")
+    resolved_markers = (
+        np.asarray(element_markers, dtype=np.int32)
+        if element_markers is not None and len(element_markers) == len(all_tags)
+        else _extract_element_markers_for_tags(gmsh, all_tags)
+    )
 
     sicn_hist, _ = np.histogram(sicn, bins=20, range=(-1.0, 1.0))
     gamma_hist, _ = np.histogram(gamma, bins=20, range=(0.0, 1.0))
@@ -231,14 +236,46 @@ def _extract_quality_metrics(
         element_gamma=gamma.tolist() if opts.per_element_quality else None,
     ), (
         extract_per_domain_quality(
-            np.asarray(element_markers, dtype=np.int32),
+            resolved_markers,
             sicn,
             gamma,
             vols,
         )
-        if element_markers is not None and len(element_markers) == len(all_tags)
+        if resolved_markers is not None and len(resolved_markers) == len(all_tags)
         else None
     )
+
+
+def _extract_element_markers_for_tags(
+    gmsh: Any,
+    all_tags: list[int],
+) -> NDArray[np.int32] | None:
+    """Return physical-group markers aligned to ``all_tags`` order."""
+    if not all_tags:
+        return np.zeros(0, dtype=np.int32)
+    tag_to_marker: dict[int, int] = {}
+    try:
+        physical_groups = gmsh.model.getPhysicalGroups(dim=3)
+    except Exception:
+        physical_groups = []
+    if not physical_groups:
+        return None
+    for _dim, phys_tag in physical_groups:
+        try:
+            entities = gmsh.model.getEntitiesForPhysicalGroup(3, phys_tag)
+        except Exception:
+            continue
+        for entity in entities:
+            try:
+                _types, tag_blocks, _node_blocks = gmsh.model.mesh.getElements(3, entity)
+            except Exception:
+                continue
+            for block in tag_blocks:
+                for tag in block:
+                    tag_to_marker[int(tag)] = int(phys_tag)
+    if not tag_to_marker:
+        return None
+    return np.asarray([tag_to_marker.get(tag, 1) for tag in all_tags], dtype=np.int32)
 
 
 def _extract_gmsh_connectivity(
@@ -275,4 +312,3 @@ def _extract_gmsh_connectivity(
 # ---------------------------------------------------------------------------
 # Adaptive remeshing with PostView background size field
 # ---------------------------------------------------------------------------
-

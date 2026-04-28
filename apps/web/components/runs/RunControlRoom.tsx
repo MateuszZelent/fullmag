@@ -1180,6 +1180,11 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     ctx.handleViewModeChange("3D");
   }, [ctx, hasSharedAirboxDomain, openMeshNode]);
 
+  const handleOpenMeshStatistics = useCallback(() => {
+    openMeshNode(hasSharedAirboxDomain ? "mesh-statistics" : "universe-mesh-statistics");
+    ctx.handleViewModeChange("3D");
+  }, [ctx, hasSharedAirboxDomain, openMeshNode]);
+
   const handleOpenMeshQuality = useCallback(() => {
     openMeshNode(hasSharedAirboxDomain ? "mesh-quality" : "universe-mesh-quality");
     ctx.handleViewModeChange("3D");
@@ -1624,20 +1629,21 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       ctx.setFemViewportLayers((previous) => ({ ...previous, showMesh: patch.showMesh ?? previous.showMesh }));
     }
     if (typeof patch.showAirbox === "boolean") {
-      ctx.setAirMeshVisible(patch.showAirbox);
+      const nextVisible = patch.showAirbox;
+      ctx.setAirMeshVisible(nextVisible);
       ctx.setMeshEntityViewState((previous) => {
         let changed = false;
         const next = { ...previous };
         for (const part of airboxParts) {
           const current = next[part.id] ?? defaultMeshEntityViewState(part);
-          if (current.visible === patch.showAirbox) {
+          if (current.visible === nextVisible) {
             if (!next[part.id]) {
               next[part.id] = current;
               changed = true;
             }
             continue;
           }
-          next[part.id] = { ...current, visible: patch.showAirbox };
+          next[part.id] = { ...current, visible: nextVisible };
           changed = true;
         }
         return changed ? next : previous;
@@ -2002,6 +2008,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onBuildMeshSelected={() => void handleBuildMeshSelected()}
         onBuildMeshAll={() => void handleBuildMeshAll()}
         onOpenMeshInspector={handleOpenMeshInspector}
+        onOpenMeshStatistics={handleOpenMeshStatistics}
         onOpenMeshQuality={handleOpenMeshQuality}
         onOpenMeshSizeSettings={handleOpenMeshSize}
         onOpenMeshMethodSettings={handleOpenMeshMethod}

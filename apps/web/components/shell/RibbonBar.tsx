@@ -134,6 +134,7 @@ interface RibbonBarProps {
   onBuildMeshSelected?: () => void;
   onBuildMeshAll?: () => void;
   onOpenMeshInspector?: () => void;
+  onOpenMeshStatistics?: () => void;
   onOpenMeshQuality?: () => void;
   onOpenMeshSizeSettings?: () => void;
   onOpenMeshMethodSettings?: () => void;
@@ -271,6 +272,11 @@ function contextualTabsForSelection(p: RibbonBarProps): ContextualRibbonTab[] {
     tabs.push({ id: "work-plane", label: "Work Plane" });
   }
   if (
+    nodeId.includes("mesh-statistics")
+    || nodeId === "universe-mesh-statistics"
+  ) {
+    tabs.push({ id: "mesh-quality", label: "Mesh Statistics" });
+  } else if (
     nodeId.includes("mesh-quality")
     || nodeId === "mesh-pipeline"
     || nodeId === "universe-mesh-quality"

@@ -51,6 +51,7 @@ from fullmag.meshing.gmsh_bridge import (
     MESH_SIZE_PRESETS,
     MeshData,
     MeshOptions,
+    MeshQualityReport,
     SharedDomainMeshResult,
     SizeFieldData,
     _configure_gmsh_threads,
@@ -298,6 +299,58 @@ class MeshScaffoldTests(unittest.TestCase):
         np.testing.assert_array_equal(mesh.element_markers, loaded.element_markers)
         np.testing.assert_array_equal(mesh.boundary_faces, loaded.boundary_faces)
         np.testing.assert_array_equal(mesh.boundary_markers, loaded.boundary_markers)
+
+    def test_meshdata_to_ir_includes_mesh_statistics(self) -> None:
+        mesh = MeshData(
+            nodes=self._unit_tet_mesh().nodes,
+            elements=self._unit_tet_mesh().elements,
+            element_markers=np.asarray([0], dtype=np.int32),
+            boundary_faces=self._unit_tet_mesh().boundary_faces,
+            boundary_markers=self._unit_tet_mesh().boundary_markers,
+            quality=MeshQualityReport(
+                n_elements=1,
+                sicn_min=0.5,
+                sicn_max=0.5,
+                sicn_mean=0.5,
+                sicn_p5=0.5,
+                sicn_histogram=[0] * 20,
+                gamma_min=0.25,
+                gamma_mean=0.25,
+                gamma_histogram=[0] * 20,
+                volume_min=1.0 / 6.0,
+                volume_max=1.0 / 6.0,
+                volume_mean=1.0 / 6.0,
+                volume_std=0.0,
+                avg_quality=0.5,
+                element_gamma=[0.25],
+            ),
+            per_domain_quality={
+                0: MeshQualityReport(
+                    n_elements=1,
+                    sicn_min=0.5,
+                    sicn_max=0.5,
+                    sicn_mean=0.5,
+                    sicn_p5=0.5,
+                    sicn_histogram=[0] * 20,
+                    gamma_min=0.25,
+                    gamma_mean=0.25,
+                    gamma_histogram=[0] * 20,
+                    volume_min=1.0 / 6.0,
+                    volume_max=1.0 / 6.0,
+                    volume_mean=1.0 / 6.0,
+                    volume_std=0.0,
+                    avg_quality=0.5,
+                )
+            },
+        )
+
+        stats = mesh.to_ir("unit")["mesh_statistics"]
+
+        self.assertEqual(stats["mesh_name"], "unit")
+        self.assertEqual(stats["global"]["element_count"], 1)
+        self.assertEqual(stats["scopes"][0]["role"], "air")
+        self.assertEqual(stats["scopes"][0]["label"], "Airbox")
+        self.assertAlmostEqual(stats["global"]["volume"]["ratio"], 1.0)
 
     def test_remesh_cli_size_field_parser_builds_canonical_arrays(self) -> None:
         size_field = _size_field_from_dict(

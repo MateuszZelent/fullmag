@@ -25,6 +25,8 @@ from ._gmsh_types import (  # noqa: F401  — re-exports
     MeshData,
     MeshOptions,
     MeshQualityReport,
+    MeshStatisticsReport,
+    MeshStatisticsScope,
     SharedDomainMeshResult,
     SizeFieldData,
     resolve_mesh_size_controls,

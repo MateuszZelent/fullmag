@@ -15,6 +15,16 @@ from ._gmsh_types import (
 )
 
 
+def resolve_effective_algorithm_3d(opts: MeshOptions) -> tuple[int, str | None]:
+    """Return the actual Gmsh 3D algorithm and a fallback reason, if any."""
+    if opts.size_fields and opts.algorithm_3d == ALGO_3D_MMG3D:
+        return (
+            ALGO_3D_HXT,
+            "MMG3D is incompatible with active background size fields; using HXT",
+        )
+    return opts.algorithm_3d, None
+
+
 def _apply_mesh_options(
     gmsh: Any,
     hmax: float,
@@ -30,17 +40,15 @@ def _apply_mesh_options(
     """Apply MeshOptions to the Gmsh context before mesh.generate()."""
     emit_progress("Gmsh: applying mesh options")
     resolved_size_controls = resolve_mesh_size_controls(opts)
-    algorithm_3d = opts.algorithm_3d
-    if opts.size_fields and algorithm_3d == ALGO_3D_MMG3D:
+    algorithm_3d, algorithm_3d_fallback_reason = resolve_effective_algorithm_3d(opts)
+    if algorithm_3d_fallback_reason is not None:
         # MMG3D has proven unstable for imported/shared-domain workflows when a
         # background size field is active; it can abort with "unable to set mesh
         # size" before tetra generation starts. HXT remains stable here while
         # preserving the intended local sizing semantics.
         emit_progress(
-            "Gmsh: MMG3D is incompatible with active background size fields; "
-            "falling back to HXT for stable local sizing"
+            f"Gmsh: {algorithm_3d_fallback_reason} for stable local sizing"
         )
-        algorithm_3d = ALGO_3D_HXT
     # When an airbox is present, allow larger elements in the far field
     effective_hmax = (
         max(hmax, airbox_maximum_element_size)
@@ -634,4 +642,3 @@ def _configure_mesh_size_fields(
         gmsh.model.mesh.field.setAsBackgroundMesh(size_upper_field)
     elif size_lower_field is not None:
         gmsh.model.mesh.field.setAsBackgroundMesh(size_lower_field)
-

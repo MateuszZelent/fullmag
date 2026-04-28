@@ -5,6 +5,7 @@ import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { useViewport, useCommand, useModel } from "../runs/control-room/context-hooks";
 import { Button } from "../ui/button";
 import MeshSettingsPanel from "./MeshSettingsPanel";
+import MeshStatisticsPanel from "./settings/MeshStatisticsPanel";
 import { SidebarSection, InfoRow } from "./settings/primitives";
 import { humanizeToken, readBuilderContract } from "./settings/helpers";
 import GeometryPanel from "./settings/GeometryPanel";
@@ -240,6 +241,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
               case PanelKey.OBJECT_MESH:     return <ObjectMeshPanel nodeId={panelProps.nodeId as string} />;
               case PanelKey.REGION:          return <RegionPanel nodeId={panelProps.nodeId as string} />;
               case PanelKey.MESH:            return <MeshPanel />;
+              case PanelKey.MESH_STATISTICS: return <MeshStatisticsPanel />;
               case PanelKey.MESH_INFO:       return null;
               case PanelKey.OBJ_GEO_MESH:
                 return (

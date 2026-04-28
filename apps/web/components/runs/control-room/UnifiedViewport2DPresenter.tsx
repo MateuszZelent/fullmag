@@ -5,10 +5,7 @@ import type { ReactNode } from "react";
 
 import { Slice2DShell } from "@/src/features/slice2d";
 import type { Slice2DModel } from "@/src/features/slice2d";
-import type {
-  CrossSurfaceSelectionState,
-  WorkspaceSyncState,
-} from "@/src/features/workspaceSync";
+import type { CrossSurfaceSelectionState } from "@/src/features/workspaceSync";
 import type { FemMeshData, FemVectorDomainFilter } from "@/components/preview/FemMeshView3D";
 import MagnetizationSlice2D from "@/components/preview/MagnetizationSlice2D";
 import EmptyState from "../../ui/EmptyState";
@@ -41,7 +38,6 @@ const FemMeshSlice2D = dynamic(() => import("@/components/preview/FemMeshSlice2D
 export interface UnifiedViewport2DPresenterProps {
   slice2DModel?: Slice2DModel | null;
   workspaceSelection?: CrossSurfaceSelectionState | null;
-  workspaceSync?: WorkspaceSyncState;
   shouldUseSliceApi2D: boolean;
   hasSliceScalar: boolean;
   sliceLoading: boolean;
@@ -90,7 +86,6 @@ export interface UnifiedViewport2DPresenterProps {
 export default function UnifiedViewport2DPresenter({
   slice2DModel,
   workspaceSelection,
-  workspaceSync,
   shouldUseSliceApi2D,
   hasSliceScalar,
   sliceLoading,
@@ -148,11 +143,7 @@ export default function UnifiedViewport2DPresenter({
 
   const wrap = (content: ReactNode) =>
     slice2DModel ? (
-      <Slice2DShell
-        model={slice2DModel}
-        selection={workspaceSelection}
-        sync={workspaceSync}
-      >
+      <Slice2DShell model={slice2DModel} selection={workspaceSelection}>
         {content}
       </Slice2DShell>
     ) : content;

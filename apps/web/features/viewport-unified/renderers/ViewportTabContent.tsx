@@ -136,11 +136,10 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
     preferFemMesh?: boolean;
     femQuantityId?: string | null;
   } = {}): React.ReactNode => (
-    <UnifiedViewport2DPresenter
-      slice2DModel={bridge.slice2DModel}
-      workspaceSelection={bridge.workspaceSelection}
-      workspaceSync={workspaceSyncState}
-      shouldUseSliceApi2D={bridge.shouldUseSliceApi2D}
+      <UnifiedViewport2DPresenter
+        slice2DModel={bridge.slice2DModel}
+        workspaceSelection={bridge.workspaceSelection}
+        shouldUseSliceApi2D={bridge.shouldUseSliceApi2D}
       hasSliceScalar={bridge.hasSliceScalar}
       sliceLoading={bridge.slice2D.loading}
       sliceErrorMessage={bridge.slice2D.error?.message ?? null}

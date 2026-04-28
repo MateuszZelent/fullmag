@@ -31,6 +31,7 @@ export type NodeKind =
   | "universe.mesh.pipeline"
   | "universe.mesh.algorithm"
   | "universe.mesh.size"
+  | "universe.mesh.statistics"
   | "universe.mesh.quality"
   | "universe.role"
   // Objects & Geometry
@@ -75,6 +76,7 @@ export type NodeKind =
   | "mesh.root"
   | "mesh.size"
   | "mesh.algorithm"
+  | "mesh.statistics"
   | "mesh.quality"
   | "mesh.inspector"
   | "mesh.pipeline"

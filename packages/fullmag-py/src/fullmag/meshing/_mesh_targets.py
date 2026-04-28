@@ -381,6 +381,8 @@ class SharedDomainBuildReport:
     effective_airbox_target: ResolvedAirboxTarget
     effective_per_object_targets: dict[str, ResolvedSharedObjectTarget]
     used_size_field_kinds: list[str]
+    operation_statuses: list["MeshOperationStatus"] = field(default_factory=list)
+    thin_film_diagnostics: list["ThinFilmDiagnostic"] = field(default_factory=list)
     degraded: bool = False
 
     def to_dict(self) -> dict[str, object]:
@@ -406,7 +408,71 @@ class SharedDomainBuildReport:
                 for name, target in self.effective_per_object_targets.items()
             },
             "used_size_field_kinds": list(self.used_size_field_kinds),
+            "operation_statuses": [status.to_dict() for status in self.operation_statuses],
+            "thin_film_diagnostics": [
+                diagnostic.to_dict() for diagnostic in self.thin_film_diagnostics
+            ],
             "degraded": self.degraded,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MeshOperationStatus:
+    """Truth report for an operation requested during mesh build."""
+
+    kind: str
+    scope: str
+    requested: bool
+    status: str
+    requested_method: str | None = None
+    actual_method: str | None = None
+    reason: str | None = None
+    details: dict[str, object] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "scope": self.scope,
+            "requested": self.requested,
+            "status": self.status,
+            "requested_method": self.requested_method,
+            "actual_method": self.actual_method,
+            "reason": self.reason,
+            "details": dict(self.details),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ThinFilmDiagnostic:
+    """Per-object thin-film meshing diagnostic for shared-domain builds."""
+
+    geometry_name: str
+    scope: str
+    is_thin_film: bool
+    thickness: float | None
+    lateral_size: float | None
+    aspect_ratio: float | None
+    requested_layers: int | None
+    estimated_layers_from_hmax: int | None
+    hmax_to_thickness_ratio: float | None
+    requested_method: str | None
+    actual_method: str
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "geometry_name": self.geometry_name,
+            "scope": self.scope,
+            "is_thin_film": self.is_thin_film,
+            "thickness": self.thickness,
+            "lateral_size": self.lateral_size,
+            "aspect_ratio": self.aspect_ratio,
+            "requested_layers": self.requested_layers,
+            "estimated_layers_from_hmax": self.estimated_layers_from_hmax,
+            "hmax_to_thickness_ratio": self.hmax_to_thickness_ratio,
+            "requested_method": self.requested_method,
+            "actual_method": self.actual_method,
+            "warnings": list(self.warnings),
         }
 
 
